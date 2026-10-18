@@ -1,0 +1,25 @@
+{
+  "title": "Slop",
+  "summary": "A Steam-like store for AI-made apps and games, on desktop and phone. Open source required, free to download, donation-funded, and voted Slop or Not Slop by people who've used them.",
+  "authors": [
+    "Martin"
+  ],
+  "status": "concept",
+  "tags": [
+    "desktop + phone",
+    "store",
+    "AI",
+    "open source"
+  ],
+  "thumbnail": "thumb.svg",
+  "tryThis": [
+    "Click ★ Interested on anything to see the sign-in screen, then sign in with any provider",
+    "Switch the title bar to Linux and add TidyFiles to your library - you'll be offered a community build",
+    "Switch to Android or iOS to see the phone app",
+    "Open Pixel Dungeon Delver → Reviews to see the vote history chart, then vote 👍 or 👎",
+    "Browse Coming soon & beta, including a dead project",
+    "Publish: make it Private Slop or a Coming soon game (with the Slop Pulse check), and plant a problem for the scanner",
+    "Library: open Grandma's Recipe Box and share it - official teams are locked out",
+    "Teams and Humans: join a team, then request a quote from a creative and vote on their work"
+  ]
+}
