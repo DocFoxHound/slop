@@ -19,6 +19,7 @@ don't copy it into real code.
 | Per-country age policy (UK under-18 view), stage deadlines, dead projects | Done |
 | Releases: submit, fetch-and-hash, staff review, Ed25519-signed manifests | Done (phase 1: review is by a person) |
 | Revocation (kill switch), audit log, library | Done |
+| Rate limits per client IP (strictest on sign-in); hourly cleanup of expired sign-ins, sessions and tokens | Done |
 | Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
 | Web UI (`web/`): store, library, install controls, publishing, releases, device approval | Done |
 | Desktop app (`crates/slop-desktop`, Tauri 2) | Written; needs the Linux libraries below to build |

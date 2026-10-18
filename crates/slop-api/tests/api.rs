@@ -124,6 +124,8 @@ async fn test_app(db: PgPool) -> TestApp {
             slop_build_workflow: None,
             github_token: None,
         },
+        rate_limits: slop_api::ratelimit::Limits::default(),
+        client_ip_header: Some("x-test-client-ip".into()),
     };
     let state = AppState::new(db.clone(), config.clone()).unwrap();
     TestApp {
@@ -1638,4 +1640,94 @@ async fn attestations_are_looked_up_and_checked(db: PgPool) {
         .await
         .unwrap_err();
     assert!(err.contains("only supported for GitHub"), "{err}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rate limits and cleanup
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn sign_in_is_rate_limited_per_client(db: PgPool) {
+    let app = test_app(db).await;
+    let from = |ip: &str| {
+        req(Method::GET, "/v1/auth/github/start").header("x-test-client-ip", ip.to_string())
+    };
+    for _ in 0..20 {
+        assert!(
+            app.send(from("203.0.113.7"))
+                .await
+                .status()
+                .is_redirection()
+        );
+    }
+    let res = app.send(from("203.0.113.7")).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    let retry: u64 = res.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=3).contains(&retry), "{retry}");
+    assert_eq!(body_json(res).await["error"]["code"], "rate_limited");
+    // Another client, and reads from the same one, are fine.
+    assert!(
+        app.send(from("203.0.113.8"))
+            .await
+            .status()
+            .is_redirection()
+    );
+    let read = app
+        .send(req(Method::GET, "/v1/categories").header("x-test-client-ip", "203.0.113.7"))
+        .await;
+    assert_eq!(read.status(), StatusCode::OK);
+    // Health checks are never limited.
+    assert_ne!(
+        app.send(req(Method::GET, "/healthz")).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn cleanup_deletes_only_what_has_ended(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, live) = app.user("Live", "US").await;
+    let (_, _) = app.user("Revoked", "US").await;
+    let (_, _) = app.user("Idle", "US").await;
+    let (_, recent) = app.user("RecentlyRevoked", "US").await;
+    sqlx::query("update sessions s set revoked_at = now() - interval '8 days' from users u where u.id = s.user_id and u.display_name = 'Revoked'")
+        .execute(&app.db).await.unwrap();
+    sqlx::query("update sessions s set last_seen_at = now() - interval '15 days' from users u where u.id = s.user_id and u.display_name = 'Idle'")
+        .execute(&app.db).await.unwrap();
+    sqlx::query("update sessions s set revoked_at = now() - interval '1 day' from users u where u.id = s.user_id and u.display_name = 'RecentlyRevoked'")
+        .execute(&app.db).await.unwrap();
+    // An expired OAuth flow and a live one.
+    app.send(req(Method::GET, "/v1/auth/github/start")).await;
+    app.send(req(Method::GET, "/v1/auth/github/start")).await;
+    sqlx::query("update oauth_flows set expires_at = now() - interval '1 minute' where ctid = (select ctid from oauth_flows limit 1)")
+        .execute(&app.db).await.unwrap();
+
+    let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(deleted.sessions, 2, "{deleted:?}");
+    assert_eq!(deleted.oauth_flows, 1);
+    let left: i64 = sqlx::query_scalar("select count(*) from sessions")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(left, 2);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me").cookie(&live))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me").cookie(&recent))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // Nothing more to do the second time.
+    assert_eq!(
+        slop_api::cleanup::run_once(&app.db).await.unwrap(),
+        slop_api::cleanup::Deleted::default()
+    );
 }
