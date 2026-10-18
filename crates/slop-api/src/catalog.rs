@@ -29,6 +29,7 @@ pub fn routes() -> Router<AppState> {
         .route("/apps", get(list_apps).post(create_app))
         .route("/apps/{slug}", get(get_app).patch(update_app))
         .route("/me/apps", get(my_apps))
+        .route("/repos/license", get(detect_license))
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
@@ -394,6 +395,93 @@ async fn my_apps(
         .push_bind(user.id)
         .push(" order by a.updated_at desc");
     Ok(Json(qb.build_query_as().fetch_all(&state.db).await?))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Licence detection, for the Publish form
+
+#[derive(Deserialize)]
+struct LicenseQuery {
+    url: String,
+}
+
+#[derive(Serialize)]
+struct DetectedLicense {
+    /// SPDX ID, when the repository has a licence GitHub recognises.
+    spdx: Option<String>,
+    /// The licence's full name, or what GitHub found if it couldn't identify it.
+    name: Option<String>,
+    /// Why nothing was detected.
+    note: Option<String>,
+}
+
+/// Asks GitHub which licence a repository has (its LICENSE file). Signed-in makers only, since
+/// it uses the server's GitHub API allowance (and token, for private repositories).
+async fn detect_license(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Query(q): Query<LicenseQuery>,
+) -> ApiResult<Json<DetectedLicense>> {
+    let none = |note: &str| {
+        Json(DetectedLicense {
+            spdx: None,
+            name: None,
+            note: Some(note.to_string()),
+        })
+    };
+    let Ok(repo_url) = validate_repo_url(&q.url) else {
+        return Ok(none("enter the repository's https:// address first"));
+    };
+    let Some(repo) = slop_provenance::github_repo_path(&repo_url) else {
+        return Ok(none(
+            "licences can only be detected for GitHub repositories so far",
+        ));
+    };
+
+    #[derive(Deserialize)]
+    struct GithubLicense {
+        license: Option<LicenseInfo>,
+    }
+    #[derive(Deserialize)]
+    struct LicenseInfo {
+        spdx_id: Option<String>,
+        name: Option<String>,
+    }
+    let url = state
+        .config
+        .releases
+        .github_api_base
+        .join(&format!("repos/{repo}/license"))
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let res = crate::releases::github_get(&state, url)
+        .send()
+        .await
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    match res.status().as_u16() {
+        200 => {}
+        404 => {
+            return Ok(none(
+                "no licence file found (or the repository isn't visible to Slop)",
+            ));
+        }
+        code => {
+            return Ok(none(&format!(
+                "GitHub answered {code}; pick the licence yourself"
+            )));
+        }
+    }
+    let found: GithubLicense = res.json().await.map_err(|e| ApiError::Internal(e.into()))?;
+    let info = found.license;
+    // GitHub says NOASSERTION when there's a licence file it can't identify.
+    let spdx = info
+        .as_ref()
+        .and_then(|l| l.spdx_id.clone())
+        .filter(|id| id != "NOASSERTION" && validate_license(id).is_ok());
+    let name = info.and_then(|l| l.name);
+    let note = spdx.is_none().then(|| {
+        "there's a licence file, but GitHub couldn't tell which licence it is".to_string()
+    });
+    Ok(Json(DetectedLicense { spdx, name, note }))
 }
 
 // ---------------------------------------------------------------------------------------------

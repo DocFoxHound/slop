@@ -231,6 +231,12 @@ export const api = {
   updateApp: (slug: string, changes: AppChanges) =>
     request<AppDetail>("PATCH", `/v1/apps/${encodeURIComponent(slug)}`, changes),
   myApps: () => request<AppSummary[]>("GET", "/v1/me/apps"),
+  /** The licence GitHub finds in a repository, for the Publish form. */
+  detectLicense: (repoUrl: string) =>
+    request<{ spdx: string | null; name: string | null; note: string | null }>(
+      "GET",
+      `/v1/repos/license${query({ url: repoUrl })}`,
+    ),
   releases: (slug: string) => request<Release[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/releases`),
   submitRelease: (slug: string, release: NewRelease) =>
     request<Release>("POST", `/v1/apps/${encodeURIComponent(slug)}/releases`, release),
