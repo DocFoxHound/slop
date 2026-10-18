@@ -25,7 +25,8 @@ don't copy it into real code.
 | Desktop app (`crates/slop-desktop`, Tauri 2) | Written; needs the Linux libraries below to build |
 | Maker signatures: GitHub artifact attestations (Sigstore), verified by the API and again by the client | Done (GitHub repos) |
 | Scan step in the pipeline; scanning itself off for now (files marked "not scanned") | Placeholder (`docs/ARCHITECTURE.md` §6.7) |
-| Self-hosted scan service, Slop Build, maker keys for hand-built files, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
+| Slop Build: shared GitHub Actions recipe (`slop-build/`), OIDC-authenticated submissions, "Add Slop Build" setup | Written and linted; first real run needs a sample repo |
+| Self-hosted scan service, Slop Build for Godot/web/Electron/Python, maker keys for hand-built files, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
 
 ## Layout
 
@@ -41,6 +42,7 @@ crates/slop-desktop/    Desktop app (Tauri 2): web/ plus slop-client
   src/policy.rs         What a viewer may see, from the country policy table
   tests/api.rs          End-to-end tests (real Postgres, fake GitHub)
 web/                    The UI, shared by the website and the desktop app
+slop-build/             Slop Build: the shared build recipe (moves to its own repo)
 dev/                    Local Postgres and sample data
 docs/                   Design, architecture, security, legal and payment docs
 mockup/                 The original clickable mockup (reference only)
@@ -171,6 +173,8 @@ Integration tests create a fresh database per test on the server in `DATABASE_UR
 | `GET /v1/revocations` | anyone | Signed revocation list (valid 6 hours) |
 | `GET /v1/keys` | anyone | Slop's public signing key |
 | `GET /v1/server` | anyone | What this server checks (scanning, maker signatures) |
+| `POST /v1/slop-build/releases` | Slop Build (GitHub OIDC token) | A release built by the recipe |
+| `GET /v1/apps/{slug}/slop-build` | maker | Detected project type and the workflow to add |
 | `GET /v1/me/library`, `PUT`/`DELETE /v1/me/library/{slug}` | signed in | The library |
 | `POST /v1/auth/desktop/requests` | desktop app | Start desktop sign-in |
 | `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |

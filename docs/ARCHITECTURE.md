@@ -145,6 +145,15 @@
 
 **Makers who build by hand:** they can still attach files to their own release page and sign them with a registered key (§6.3). Labelled "**Uploaded by maker**". There's **no upload to Slop**: every build lives on the maker's release page, and **every public app needs public source**.
 
+**Built (2026-10-18):** the recipe is in `slop-build/` (Rust, Go and custom build commands for
+Windows, macOS and Linux; Godot, web, Electron/Tauri and Python next). It runs on the maker's
+pushes to their main branch and `v*` tags, signs with `actions/attest-build-provenance`, uploads
+to a release on the maker's repo, and submits to `POST /v1/slop-build/releases` with the run's
+GitHub OIDC token: Slop accepts it only from the recipe (`job_workflow_ref`), in the app's
+repository, at the commit being released. The **Add Slop Build** button opens GitHub's
+create-file page with the workflow filled in. Differences from the plan above: no Slop GitHub App
+yet (public repos only; detection uses the public API), and builds also run on `v*` tags.
+
 ### 6.3 From build to launched app
 
 ```

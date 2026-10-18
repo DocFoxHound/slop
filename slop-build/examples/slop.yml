@@ -1,0 +1,20 @@
+# .github/workflows/slop.yml in a maker's repo. Slop's "Add Slop Build" button fills this in.
+name: Slop Build
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  slop:
+    uses: DocFoxHound/slop-build/.github/workflows/build.yml@v1
+    with:
+      app: my-game
+      slop-url: https://slop.example
+      project-type: rust

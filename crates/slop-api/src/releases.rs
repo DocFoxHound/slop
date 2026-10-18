@@ -54,13 +54,13 @@ pub fn routes() -> Router<AppState> {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct NewFile {
-    platform: String,
-    kind: String,
-    url: String,
-    exec: Option<String>,
+pub(crate) struct NewFile {
+    pub platform: String,
+    pub kind: String,
+    pub url: String,
+    pub exec: Option<String>,
     #[serde(default)]
-    args: Vec<String>,
+    pub args: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -248,7 +248,7 @@ struct ReleaseFileInfo {
 }
 
 #[derive(Serialize)]
-struct ReleaseInfo {
+pub(crate) struct ReleaseInfo {
     id: Uuid,
     version: String,
     commit_sha: String,
@@ -280,13 +280,33 @@ async fn submit_release(
     Json(req): Json<NewRelease>,
 ) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
     let (app_id, repo_url) = owned_app(&state, &slug, &user).await?;
-    validate_version(&req.version)?;
-    validate_commit(&req.commit_sha)?;
-    let files = validate_files(
+    let release = create_release(
+        &state,
+        app_id,
         &repo_url,
+        user.id,
+        &req.version,
+        &req.commit_sha,
         req.files,
-        state.config.releases.allow_http_downloads,
-    )?;
+    )
+    .await?;
+    Ok((StatusCode::CREATED, Json(release)))
+}
+
+/// Checks and records a new release for fetching and review. Shared by makers' own submissions
+/// and Slop Build's (slop_build.rs), so both go through the same checks.
+pub(crate) async fn create_release(
+    state: &AppState,
+    app_id: Uuid,
+    repo_url: &str,
+    submitted_by: Uuid,
+    version: &str,
+    commit_sha: &str,
+    files: Vec<NewFile>,
+) -> ApiResult<ReleaseInfo> {
+    validate_version(version)?;
+    validate_commit(commit_sha)?;
+    let files = validate_files(repo_url, files, state.config.releases.allow_http_downloads)?;
 
     let pending: i64 = sqlx::query_scalar(
         "select count(*) from releases where app_id = $1 and status in ('fetching', 'awaiting_review')",
@@ -305,9 +325,9 @@ async fn submit_release(
     sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by) values ($1, $2, $3, $4, $5)")
         .bind(id)
         .bind(app_id)
-        .bind(&req.version)
-        .bind(&req.commit_sha)
-        .bind(user.id)
+        .bind(version)
+        .bind(commit_sha)
+        .bind(submitted_by)
         .execute(&mut *tx)
         .await
         .map_err(|err| {
@@ -334,9 +354,7 @@ async fn submit_release(
     }
     tx.commit().await?;
     state.fetch_wakeup.notify_one();
-
-    let release = load_release(&state, id).await?;
-    Ok((StatusCode::CREATED, Json(release)))
+    load_release(state, id).await
 }
 
 async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
@@ -613,7 +631,7 @@ async fn fetch_release(
     Ok(commit_verified)
 }
 
-fn github_get(state: &AppState, url: Url) -> reqwest::RequestBuilder {
+pub(crate) fn github_get(state: &AppState, url: Url) -> reqwest::RequestBuilder {
     let req = state
         .fetch_http
         .get(url)
@@ -671,10 +689,17 @@ pub async fn find_attestation(
         .await
         .map_err(|e| format!("unexpected attestation response from GitHub: {e}"))?;
 
+    // Attestations name the signing workflow as a URL: https://github.com/<recipe>@<ref>.
+    let recipe_prefix = state
+        .config
+        .releases
+        .slop_build_workflow
+        .as_ref()
+        .map(|w| format!("https://github.com/{w}@"));
     let expected = slop_provenance::Expected {
         repo_url,
         commit,
-        slop_build_workflow: state.config.releases.slop_build_workflow.as_deref(),
+        slop_build_workflow: recipe_prefix.as_deref(),
     };
     let mut last_problem = NO_ATTESTATION.to_string();
     for bundle in found.attestations.into_iter().filter_map(|a| a.bundle) {

@@ -5,7 +5,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 
 import { api, ApiError, type FileKind, type NewRelease, type Platform, type Release } from "../api";
-import { ErrorState, Loading } from "../components/ui";
+import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
@@ -80,6 +80,7 @@ export function Releases() {
         match.
       </p>
 
+      <SlopBuildSetup slug={slug} />
       <SigningHelp />
 
       <ReleaseForm repoUrl={app.data.repo_url} slug={slug} onSubmitted={releases.reload} />
@@ -185,12 +186,60 @@ steps:
     with:
       subject-path: dist/*`;
 
+/** Slop Build: one file in the maker's repo, and releases arrive by themselves (ARCHITECTURE §6.2). */
+function SlopBuildSetup({ slug }: { slug: string }) {
+  const setup = useLoad(() => api.slopBuildSetup(slug), [slug]);
+  if (setup.error?.status === 503) return null; // not set up on this server
+  return (
+    <section className="panel panel-pad help slop-build">
+      <h2>Let Slop Build do it</h2>
+      <p>
+        Add one file to your repository and every push to your main branch, or every <code>v*</code> tag, builds your app
+        for Windows, macOS and Linux on GitHub Actions, signs it, attaches it to a release, and sends it here for review. No
+        keys or secrets to set up.
+      </p>
+      {setup.loading && <p className="muted">Looking at your repository…</p>}
+      {setup.error && (
+        <p className="form-error" role="alert">
+          {setup.error.message}
+        </p>
+      )}
+      {setup.data && (
+        <>
+          {setup.data.note && <p className="notice">{setup.data.note}</p>}
+          {!setup.data.note && setup.data.supported && (
+            <p className="muted small">
+              Detected a <b>{setup.data.project_type === "rust" ? "Rust" : setup.data.project_type === "go" ? "Go" : "custom"}</b>{" "}
+              project.
+            </p>
+          )}
+          <p className="muted small">
+            <code>{setup.data.file_path}</code>
+          </p>
+          <pre>
+            <code>{setup.data.workflow}</code>
+          </pre>
+          {setup.data.create_url && (
+            <p>
+              <ExternalLink href={setup.data.create_url}>
+                <span className="btn slime">Add to my repository on GitHub</span>
+              </ExternalLink>{" "}
+              <span className="muted small">Opens GitHub with the file filled in; you just commit it.</span>
+            </p>
+          )}
+        </>
+      )}
+    </section>
+  );
+}
+
 /** Every build needs its maker's signature (docs/SECURITY.md §5.3). */
 function SigningHelp() {
   return (
     <details className="panel panel-pad help">
       <summary>
-        <b>Sign your builds</b> <span className="muted">— every build needs your signature before it can be approved</span>
+        <b>Or build and sign it yourself</b>{" "}
+        <span className="muted">— every build needs your signature before it can be approved</span>
       </summary>
       <p>
         Build your release files in GitHub Actions and add GitHub's attestation step. It signs each file with a short-lived

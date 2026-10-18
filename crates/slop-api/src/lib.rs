@@ -11,6 +11,7 @@ pub mod policy;
 pub mod ratelimit;
 pub mod releases;
 pub mod scan;
+pub mod slop_build;
 pub mod tokens;
 
 use std::{sync::Arc, time::Duration};
@@ -45,6 +46,8 @@ pub struct AppState {
     /// Checks makers' GitHub artifact attestations.
     pub provenance: Arc<slop_provenance::ProvenanceVerifier>,
     pub rate_limiter: Arc<ratelimit::RateLimiter>,
+    /// GitHub's OIDC signing keys, for Slop Build submissions.
+    pub oidc_keys: Arc<tokio::sync::RwLock<slop_build::OidcKeys>>,
 }
 
 impl AppState {
@@ -68,6 +71,7 @@ impl AppState {
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
             provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),
             rate_limiter,
+            oidc_keys: Arc::default(),
         })
     }
 }
@@ -84,7 +88,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(auth::routes())
         .merge(catalog::routes())
         .merge(releases::routes())
-        .merge(library::routes());
+        .merge(library::routes())
+        .merge(slop_build::routes());
 
     let mut router = Router::new()
         .route("/healthz", get(health))

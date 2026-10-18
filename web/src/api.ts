@@ -243,6 +243,16 @@ export const api = {
         throw err;
       },
     ),
+  slopBuildSetup: (slug: string) =>
+    request<{
+      supported: boolean;
+      project_type: "rust" | "go" | "custom";
+      detected: string | null;
+      note: string | null;
+      file_path: string;
+      workflow: string;
+      create_url: string | null;
+    }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
   addToLibrary: (slug: string) => request<void>("PUT", `/v1/me/library/${encodeURIComponent(slug)}`),
   removeFromLibrary: (slug: string) => request<void>("DELETE", `/v1/me/library/${encodeURIComponent(slug)}`),
