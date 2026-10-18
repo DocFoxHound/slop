@@ -6,8 +6,14 @@
   "build": {
     "frontendDist": "../../web/dist",
     "devUrl": "http://localhost:5173",
-    "beforeDevCommand": { "script": "npm run dev", "cwd": "../../web" },
-    "beforeBuildCommand": { "script": "npm run build", "cwd": "../../web" }
+    "beforeDevCommand": {
+      "script": "npm run dev",
+      "cwd": "../../web"
+    },
+    "beforeBuildCommand": {
+      "script": "npm run build",
+      "cwd": "../../web"
+    }
   },
   "app": {
     "windows": [
@@ -40,6 +46,24 @@
     "targets": "all",
     "category": "Utility",
     "shortDescription": "A store for open-source apps and games made with AI",
-    "icon": ["icons/32x32.png", "icons/128x128.png", "icons/128x128@2x.png", "icons/icon.icns", "icons/icon.ico"]
+    "icon": [
+      "icons/32x32.png",
+      "icons/128x128.png",
+      "icons/128x128@2x.png",
+      "icons/icon.icns",
+      "icons/icon.ico"
+    ]
+  },
+  "plugins": {
+    "updater": {
+      "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCOUQzODg5OUZDODgxQzYKUldUR2djaWZpVGlkYTluOTk5Vmh1bGFJTVljRGFYOGROMlF6cTZVSFVKWm9FUldubGdYaXZ3Z2cK",
+      "endpoints": [
+        "https://slop.188-68-41-241.sslip.io/v1/desktop/update/{{target}}/{{arch}}/{{current_version}}"
+      ],
+      "requireSignedVersion": true,
+      "windows": {
+        "installMode": "passive"
+      }
+    }
   }
 }

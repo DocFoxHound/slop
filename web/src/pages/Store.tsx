@@ -4,6 +4,7 @@ import { api } from "../api";
 import { Sidebar } from "../components/Layout";
 import { ErrorState, SectionHeader, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { isDesktop } from "../platform";
 
 /** Upcoming apps that are still alive, soonest deadline first. Dead projects are never promoted. */
 async function upcoming(limit: number) {
@@ -23,6 +24,10 @@ export function Store() {
   const soon = useLoad(() => upcoming(4), []);
   const categories = useLoad(() => api.categories(), []);
   const server = useLoad(() => api.server(), []);
+  const windowsApp = useLoad(
+    () => (isDesktop ? Promise.resolve(undefined) : api.desktopLatest("windows").catch(() => undefined)),
+    [],
+  );
 
   return (
     <div className="page">
@@ -58,6 +63,14 @@ export function Store() {
                 <b>Free to download.</b> Makers can take donations. Nothing is ever for sale.
               </li>
             </ul>
+            {windowsApp.data && (
+              <p className="get-app">
+                <a className="btn slime" href={windowsApp.data.url}>
+                  Download Slop for Windows
+                </a>{" "}
+                <span className="muted small">Version {windowsApp.data.version}. It keeps itself up to date.</span>
+              </p>
+            )}
           </section>
 
           <SectionHeader title="Coming soon & in beta" sub="Projects on their way to release">

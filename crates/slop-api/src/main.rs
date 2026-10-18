@@ -41,6 +41,9 @@ enum Command {
 
 #[derive(Subcommand)]
 enum KeysCommand {
+    /// Make a new key for signing desktop app updates. Prints the secret (for SLOP_UPDATER_KEY)
+    /// and the public key (for plugins.updater.pubkey in crates/slop-desktop/tauri.conf.json).
+    GenerateUpdater,
     /// Make a new Ed25519 signing key. Prints the secret (for SLOP_SIGNING_KEY) and the public key
     /// (for SLOP_TRUSTED_KEYS when building the desktop app).
     Generate,
@@ -109,6 +112,15 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve().await,
+        Command::Keys {
+            command: KeysCommand::GenerateUpdater,
+        } => {
+            let (secret, public) = slop_api::desktop_updates::generate_updater_key()?;
+            println!("SLOP_UPDATER_KEY={secret}");
+            println!("updater pubkey: {public}");
+            eprintln!("Keep SLOP_UPDATER_KEY secret: it signs every desktop update.");
+            Ok(())
+        }
         Command::Keys {
             command: KeysCommand::Generate,
         } => {

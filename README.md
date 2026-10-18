@@ -28,6 +28,12 @@ don't copy it into real code.
 | Slop Build: shared GitHub Actions recipe (`slop-build/`), OIDC-authenticated submissions, "Add Slop Build" setup | Written and linted; first real run needs a sample repo |
 | Self-hosted scan service, Slop Build for Godot/web/Electron/Python, maker keys for hand-built files, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
 
+## Test deployment
+
+Running at **https://slop.188-68-41-241.sslip.io**, updated automatically from `main`
+(`deploy/README.md`). The Windows app is built on every push and updates itself. Testing with
+private repositories: `docs/TESTING.md`.
+
 ## Layout
 
 ```
@@ -44,6 +50,7 @@ crates/slop-desktop/    Desktop app (Tauri 2): web/ plus slop-client
 web/                    The UI, shared by the website and the desktop app
 slop-build/             Slop Build: the shared build recipe (moves to its own repo)
 dev/                    Local Postgres and sample data
+deploy/                 The self-updating test deployment (systemd, Caddy, update script)
 docs/                   Design, architecture, security, legal and payment docs
 mockup/                 The original clickable mockup (reference only)
 ```
