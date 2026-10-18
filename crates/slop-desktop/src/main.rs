@@ -294,6 +294,8 @@ fn open_login(app: &AppHandle) {
         tauri::WebviewUrl::App("login.html".into()),
     )
     .title("Sign in to Slop")
+    .decorations(false)
+    .shadow(true)
     .inner_size(420.0, 560.0)
     .resizable(false)
     .maximizable(false)
