@@ -1,0 +1,9 @@
+[Unit]
+Description=Build and publish Slop's Linux desktop packages for commit %i
+After=slop-api.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/slop-deploy/current/desktop-linux/build.sh %i
+TimeoutStartSec=2h
+Nice=15

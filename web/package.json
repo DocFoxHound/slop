@@ -10,7 +10,9 @@
     "test": "vitest run",
     "desktop": "cd ../crates/slop-desktop && tauri dev",
     "desktop:build": "cd ../crates/slop-desktop && tauri build",
-    "desktop:build:windows": "cd ../crates/slop-desktop && tauri build --bundles nsis"
+    "desktop:build:windows": "cd ../crates/slop-desktop && tauri build --bundles nsis",
+    "desktop:build:deb": "cd ../crates/slop-desktop && tauri build --bundles deb",
+    "desktop:build:rpm": "cd ../crates/slop-desktop && tauri build --bundles rpm"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

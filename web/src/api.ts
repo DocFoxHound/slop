@@ -311,7 +311,7 @@ export const api = {
 
   providers: () => request<{ github: boolean }>("GET", "/v1/auth/providers"),
   /** The newest desktop app build for a platform (for the download button). */
-  desktopLatest: (platform: "windows" | "mac" | "linux") =>
+  desktopLatest: (platform: "windows" | "mac" | "linux-deb" | "linux-rpm") =>
     request<{ version: string; url: string }>("GET", `/v1/desktop/latest/${platform}`),
   /** What this server checks, so pages only claim what's true. */
   server: () => request<{ scanning: boolean; maker_signatures_required: boolean }>("GET", "/v1/server"),

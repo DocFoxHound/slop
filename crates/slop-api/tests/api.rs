@@ -2506,3 +2506,93 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
         StatusCode::NOT_FOUND
     );
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn linux_updates_follow_the_installed_package_format(db: PgPool) {
+    let dir = std::env::temp_dir().join(format!("slop-desktop-test-{}", Uuid::now_v7()));
+    let (secret, _) = slop_api::desktop_updates::generate_updater_key().unwrap();
+    let key = slop_api::desktop_updates::updater_key_from_base64(&secret).unwrap();
+    let base = test_app(db).await;
+    let mut config = base.config.clone();
+    config.desktop = slop_api::config::DesktopConfig {
+        dir: Some(dir.clone()),
+        updater_key: Some(key.clone()),
+        repo: Some("octo/slop".into()),
+    };
+    let router = router(AppState::new(base.db.clone(), config).unwrap()).unwrap();
+    let app = TestApp { router, ..base };
+
+    let file = dir.join("built.deb");
+    std::fs::create_dir_all(&dir).unwrap();
+    std::fs::write(&file, b"pretend .deb").unwrap();
+    let v = semver::Version::parse("0.1.30").unwrap();
+    let published = slop_api::desktop_updates::publish(
+        &app.db,
+        &dir,
+        &key,
+        "linux-deb",
+        &v,
+        BUILD_COMMIT,
+        &file,
+    )
+    .await
+    .unwrap();
+    assert_eq!(published.file_name, "Slop_0.1.30_amd64.deb");
+    assert!(
+        slop_api::desktop_updates::publish(
+            &app.db,
+            &dir,
+            &key,
+            "linux-deb",
+            &v,
+            BUILD_COMMIT,
+            &file
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        slop_api::desktop_updates::publish(&app.db, &dir, &key, "beos", &v, BUILD_COMMIT, &file)
+            .await
+            .is_err()
+    );
+
+    let check = |q: &str| {
+        req(
+            Method::GET,
+            format!("/v1/desktop/update/linux/x86_64/0.1.2{q}"),
+        )
+    };
+    let deb = body_json(app.send(check("?bundle=deb")).await).await;
+    assert_eq!(
+        deb["url"],
+        "http://localhost:8080/v1/desktop/files/Slop_0.1.30_amd64.deb"
+    );
+    // A .rpm or AppImage install isn't offered the .deb.
+    assert_eq!(
+        app.send(check("?bundle=rpm")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(check("?bundle=appimage")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(app.send(check("")).await.status(), StatusCode::NO_CONTENT);
+    // Windows checks ignore the bundle type.
+    assert_eq!(
+        app.send(req(
+            Method::GET,
+            "/v1/desktop/update/windows/x86_64/0.1.2?bundle=nsis"
+        ))
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let latest = body_json(
+        app.send(req(Method::GET, "/v1/desktop/latest/linux-deb"))
+            .await,
+    )
+    .await;
+    assert_eq!(latest["version"], "0.1.30");
+    std::fs::remove_dir_all(dir).unwrap();
+}

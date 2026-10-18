@@ -24,10 +24,18 @@ export function Store() {
   const soon = useLoad(() => upcoming(4), []);
   const categories = useLoad(() => api.categories(), []);
   const server = useLoad(() => api.server(), []);
-  const windowsApp = useLoad(
-    () => (isDesktop ? Promise.resolve(undefined) : api.desktopLatest("windows").catch(() => undefined)),
-    [],
-  );
+  const downloads = useLoad(async () => {
+    if (isDesktop) return [];
+    const platforms = [
+      { platform: "windows", label: "Windows" },
+      { platform: "linux-deb", label: "Ubuntu / Debian (.deb)" },
+      { platform: "linux-rpm", label: "RHEL / Rocky / Alma 10 (.rpm)" },
+    ] as const;
+    const found = await Promise.all(
+      platforms.map((p) => api.desktopLatest(p.platform).then((b) => ({ ...p, ...b }), () => null)),
+    );
+    return found.filter((d) => d !== null);
+  }, []);
 
   return (
     <div className="page">
@@ -63,13 +71,21 @@ export function Store() {
                 <b>Free to download.</b> Makers can take donations. Nothing is ever for sale.
               </li>
             </ul>
-            {windowsApp.data && (
-              <p className="get-app">
-                <a className="btn slime" href={windowsApp.data.url}>
-                  Download Slop for Windows
-                </a>{" "}
-                <span className="muted small">Version {windowsApp.data.version}. It keeps itself up to date.</span>
-              </p>
+            {downloads.data && downloads.data.length > 0 && (
+              <div className="get-app">
+                <div className="row-actions">
+                  {downloads.data.map((d, i) => (
+                    <a key={d.platform} className={`btn ${i === 0 ? "slime" : ""}`} href={d.url}>
+                      Download for {d.label}
+                    </a>
+                  ))}
+                </div>
+                <p className="muted small">
+                  Version {downloads.data[0].version}. The app keeps itself up to date.
+                  {downloads.data.some((d) => d.platform === "linux-rpm") &&
+                    " The .rpm needs EPEL enabled (sudo dnf install epel-release); RHEL 9 isn't supported."}
+                </p>
+              </div>
             )}
           </section>
 

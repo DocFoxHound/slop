@@ -1,0 +1,12 @@
+# Builds Slop's .deb. Ubuntu 22.04 has the oldest glibc (2.35) of the systems it targets, so the
+# package runs on Ubuntu 22.04+ and Debian 12+.
+FROM docker.io/library/ubuntu:22.04
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl wget file pkg-config cmake perl xz-utils \
+      libwebkit2gtk-4.1-dev libssl-dev libayatana-appindicator3-dev librsvg2-dev libxdo-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL https://nodejs.org/dist/v22.23.1/node-v22.23.1-linux-x64.tar.xz | tar -xJ -C /opt \
+    && ln -s /opt/node-v22.23.1-linux-x64/bin/* /usr/local/bin/
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --profile minimal
+ENV PATH=/root/.cargo/bin:$PATH

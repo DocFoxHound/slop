@@ -77,11 +77,14 @@ pub fn sign_build(
     Ok(STANDARD.encode(sig.to_string()))
 }
 
-fn platform_for_target(target: &str) -> Option<&'static str> {
-    match target {
-        "windows" => Some("windows"),
-        "darwin" | "macos" => Some("mac"),
-        "linux" => Some("linux"),
+/// The published platform for an update check: Tauri's target, plus on Linux the package format
+/// the app was installed from (`{{bundle_type}}`). AppImages aren't published.
+fn platform_for_target(target: &str, bundle: Option<&str>) -> Option<&'static str> {
+    match (target, bundle) {
+        ("windows", _) => Some("windows"),
+        ("darwin" | "macos", _) => Some("mac"),
+        ("linux", Some("deb")) => Some("linux-deb"),
+        ("linux", Some("rpm")) => Some("linux-rpm"),
         _ => None,
     }
 }
@@ -90,7 +93,8 @@ fn file_name_for(platform: &str, version: &str) -> String {
     match platform {
         "windows" => format!("Slop_{version}_x64-setup.exe"),
         "mac" => format!("Slop_{version}.app.tar.gz"),
-        _ => format!("Slop_{version}_amd64.AppImage"),
+        "linux-deb" => format!("Slop_{version}_amd64.deb"),
+        _ => format!("Slop-{version}-1.x86_64.rpm"),
     }
 }
 
@@ -115,11 +119,11 @@ struct UploadQuery {
     commit: String,
 }
 
-#[derive(Serialize)]
-struct Uploaded {
-    version: String,
-    file_name: String,
-    sha256: String,
+#[derive(Serialize, Debug)]
+pub struct Uploaded {
+    pub version: String,
+    pub file_name: String,
+    pub sha256: String,
 }
 
 async fn upload(
@@ -154,81 +158,120 @@ async fn upload(
             "doesn't match the commit this run built",
         ));
     }
-    if !matches!(q.platform.as_str(), "windows" | "mac" | "linux") {
+    if !PLATFORMS.contains(&q.platform.as_str()) {
         return Err(ApiError::invalid("platform", "unknown platform"));
     }
     let version = semver::Version::parse(&q.version)
         .map_err(|_| ApiError::invalid("version", "use a semantic version like 0.1.42"))?;
+    ensure_newer(&state.db, &q.platform, &version).await?;
 
-    // Only ever forward: an update must be newer than every build already published.
-    let existing: Vec<String> =
-        sqlx::query_scalar("select version from desktop_builds where platform = $1")
-            .bind(&q.platform)
-            .fetch_all(&state.db)
-            .await?;
-    if existing
-        .iter()
-        .filter_map(|v| semver::Version::parse(v).ok())
-        .any(|v| v >= version)
-    {
-        return Err(ApiError::Conflict(format!(
-            "version {version} isn't newer than what's published"
-        )));
-    }
-
-    // Stream to a temporary file, hashing as it goes.
+    // Stream to a temporary file in the builds folder, then publish it.
     std::fs::create_dir_all(&dir).map_err(|e| ApiError::Internal(e.into()))?;
-    let file_name = file_name_for(&q.platform, &version.to_string());
-    let tmp = dir.join(format!(".{file_name}.part"));
+    let tmp = dir.join(format!(".upload-{}.part", uuid::Uuid::now_v7()));
     let mut out = std::fs::File::create(&tmp).map_err(|e| ApiError::Internal(e.into()))?;
-    let mut hasher = Sha256::new();
     let mut size = 0usize;
     let mut stream = body.into_data_stream();
     while let Some(chunk) = stream.next().await {
-        let chunk =
-            chunk.map_err(|e| ApiError::invalid("body", format!("upload interrupted: {e}")))?;
+        let chunk = match chunk {
+            Ok(chunk) => chunk,
+            Err(e) => {
+                let _ = std::fs::remove_file(&tmp);
+                return Err(ApiError::invalid(
+                    "body",
+                    format!("upload interrupted: {e}"),
+                ));
+            }
+        };
         size += chunk.len();
         if size > MAX_BUILD_BYTES {
             let _ = std::fs::remove_file(&tmp);
             return Err(ApiError::invalid("body", "installer is too large"));
         }
-        hasher.update(&chunk);
         out.write_all(&chunk)
             .map_err(|e| ApiError::Internal(e.into()))?;
     }
     out.sync_all().map_err(|e| ApiError::Internal(e.into()))?;
-    if size == 0 {
-        let _ = std::fs::remove_file(&tmp);
+    let published = publish(&state.db, &dir, key, &q.platform, &version, &q.commit, &tmp).await;
+    let _ = std::fs::remove_file(&tmp);
+    Ok((StatusCode::CREATED, Json(published?)))
+}
+
+/// Platforms the desktop app is published for. Linux builds are per package format, because
+/// the updater installs the same kind of package the app was installed from.
+pub const PLATFORMS: [&str; 4] = ["windows", "mac", "linux-deb", "linux-rpm"];
+
+/// Updates only ever go forward.
+async fn ensure_newer(
+    db: &sqlx::PgPool,
+    platform: &str,
+    version: &semver::Version,
+) -> ApiResult<()> {
+    let existing: Vec<String> =
+        sqlx::query_scalar("select version from desktop_builds where platform = $1")
+            .bind(platform)
+            .fetch_all(db)
+            .await?;
+    if existing
+        .iter()
+        .filter_map(|v| semver::Version::parse(v).ok())
+        .any(|v| &v >= version)
+    {
+        return Err(ApiError::Conflict(format!(
+            "version {version} isn't newer than what's published"
+        )));
+    }
+    Ok(())
+}
+
+/// Signs and publishes a desktop build: copies `file` into `dir` under its published name and
+/// records it. Shared by CI uploads and `slop-api desktop publish` (builds made on this server).
+pub async fn publish(
+    db: &sqlx::PgPool,
+    dir: &std::path::Path,
+    key: &minisign::SecretKey,
+    platform: &str,
+    version: &semver::Version,
+    commit: &str,
+    file: &std::path::Path,
+) -> ApiResult<Uploaded> {
+    if !PLATFORMS.contains(&platform) {
+        return Err(ApiError::invalid("platform", "unknown platform"));
+    }
+    if commit.len() != 40 || !commit.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::invalid("commit", "use the full commit SHA"));
+    }
+    ensure_newer(db, platform, version).await?;
+    let data = std::fs::read(file).map_err(|e| ApiError::Internal(e.into()))?;
+    if data.is_empty() {
         return Err(ApiError::invalid("body", "empty upload"));
     }
-    let sha256 = hex::encode(hasher.finalize());
-    let data = std::fs::read(&tmp).map_err(|e| ApiError::Internal(e.into()))?;
-    let signature =
-        sign_build(key, &data, &file_name, &version.to_string()).map_err(ApiError::Internal)?;
-    std::fs::rename(&tmp, dir.join(&file_name)).map_err(|e| ApiError::Internal(e.into()))?;
-
+    let version = version.to_string();
+    let file_name = file_name_for(platform, &version);
+    let sha256 = hex::encode(Sha256::digest(&data));
+    let signature = sign_build(key, &data, &file_name, &version).map_err(ApiError::Internal)?;
+    std::fs::create_dir_all(dir).map_err(|e| ApiError::Internal(e.into()))?;
+    let staged = dir.join(format!(".{file_name}.part"));
+    std::fs::write(&staged, &data).map_err(|e| ApiError::Internal(e.into()))?;
+    std::fs::rename(&staged, dir.join(&file_name)).map_err(|e| ApiError::Internal(e.into()))?;
     sqlx::query(
         "insert into desktop_builds (platform, version, file_name, sha256, size_bytes, signature, commit_sha)
          values ($1, $2, $3, $4, $5, $6, $7)",
     )
-    .bind(&q.platform)
-    .bind(version.to_string())
+    .bind(platform)
+    .bind(&version)
     .bind(&file_name)
     .bind(&sha256)
-    .bind(size as i64)
+    .bind(data.len() as i64)
     .bind(&signature)
-    .bind(q.commit.to_ascii_lowercase())
-    .execute(&state.db)
+    .bind(commit.to_ascii_lowercase())
+    .execute(db)
     .await?;
-    tracing::info!(platform = %q.platform, %version, "desktop build published");
-    Ok((
-        StatusCode::CREATED,
-        Json(Uploaded {
-            version: version.to_string(),
-            file_name,
-            sha256,
-        }),
-    ))
+    tracing::info!(%platform, %version, "desktop build published");
+    Ok(Uploaded {
+        version,
+        file_name,
+        sha256,
+    })
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -265,11 +308,17 @@ fn file_url(state: &AppState, file_name: &str) -> String {
 }
 
 /// Tauri's dynamic update check: 204 when up to date, otherwise the newer build.
+#[derive(Deserialize)]
+struct UpdateQuery {
+    bundle: Option<String>,
+}
+
 async fn check_update(
     State(state): State<AppState>,
     Path((target, arch, current)): Path<(String, String, String)>,
+    Query(q): Query<UpdateQuery>,
 ) -> ApiResult<Response> {
-    let Some(platform) = platform_for_target(&target) else {
+    let Some(platform) = platform_for_target(&target, q.bundle.as_deref()) else {
         return Ok(StatusCode::NO_CONTENT.into_response());
     };
     if arch != "x86_64" {
