@@ -5,6 +5,7 @@ pub mod auth;
 pub mod catalog;
 pub mod cleanup;
 pub mod config;
+pub mod desktop_updates;
 pub mod error;
 pub mod library;
 pub mod policy;
@@ -90,7 +91,23 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(catalog::routes())
         .merge(releases::routes())
         .merge(library::routes())
-        .merge(slop_build::routes());
+        .merge(slop_build::routes())
+        .merge(desktop_updates::routes())
+        // Everything except the desktop build upload: small bodies, quick answers.
+        .layer(RequestBodyLimitLayer::new(64 * 1024))
+        .layer(TimeoutLayer::with_status_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Duration::from_secs(20),
+        ))
+        .merge(
+            desktop_updates::upload_routes()
+                .layer(axum::extract::DefaultBodyLimit::disable())
+                .layer(RequestBodyLimitLayer::new(desktop_updates::MAX_BUILD_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(600),
+                )),
+        );
 
     let not_found = || async {
         (
@@ -112,11 +129,6 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
             ratelimit::middleware,
-        ))
-        .layer(RequestBodyLimitLayer::new(64 * 1024))
-        .layer(TimeoutLayer::with_status_code(
-            StatusCode::SERVICE_UNAVAILABLE,
-            Duration::from_secs(20),
         ))
         .layer(header_layer(header::X_CONTENT_TYPE_OPTIONS, "nosniff"))
         .layer(header_layer(

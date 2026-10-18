@@ -9,7 +9,8 @@
     "typecheck": "tsc -b",
     "test": "vitest run",
     "desktop": "cd ../crates/slop-desktop && tauri dev",
-    "desktop:build": "cd ../crates/slop-desktop && tauri build"
+    "desktop:build": "cd ../crates/slop-desktop && tauri build",
+    "desktop:build:windows": "cd ../crates/slop-desktop && tauri build --bundles nsis"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",

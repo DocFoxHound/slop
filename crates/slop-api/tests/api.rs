@@ -161,6 +161,7 @@ async fn test_app(db: PgPool) -> TestApp {
             github_token: None,
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
+        desktop: Default::default(),
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
     };
@@ -2109,5 +2110,155 @@ async fn the_api_can_serve_the_website(db: PgPool) {
         app.send(req(Method::GET, "/healthz")).await.status(),
         StatusCode::NOT_FOUND
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Desktop app updates
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_builds_are_uploaded_signed_and_offered(db: PgPool) {
+    use base64::Engine;
+    let dir = std::env::temp_dir().join(format!("slop-desktop-test-{}", Uuid::now_v7()));
+    let (secret, public) = slop_api::desktop_updates::generate_updater_key().unwrap();
+    let base = test_app(db).await;
+    let mut config = base.config.clone();
+    config.desktop = slop_api::config::DesktopConfig {
+        dir: Some(dir.clone()),
+        updater_key: Some(slop_api::desktop_updates::updater_key_from_base64(&secret).unwrap()),
+        repo: Some("octo/slop".into()),
+    };
+    let router = router(AppState::new(base.db.clone(), config).unwrap()).unwrap();
+    let app = TestApp { router, ..base };
+
+    let ci = |overrides: Value| {
+        let mut claims = json!({
+            "repository": "octo/slop",
+            "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/heads/main",
+            "sha": BUILD_COMMIT,
+        });
+        for (k, v) in overrides.as_object().unwrap() {
+            claims[k] = v.clone();
+        }
+        github_token(&app, claims)
+    };
+    let upload = |token: String, version: &str, bytes: &'static [u8]| {
+        let uri =
+            format!("/v1/desktop/builds?platform=windows&version={version}&commit={BUILD_COMMIT}");
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri(uri)
+            .header(header::HOST, "localhost:8080")
+            .header("authorization", format!("Bearer {token}"))
+            .header("content-type", "application/octet-stream")
+            .body(Body::from(bytes))
+            .unwrap();
+        app.router.clone().oneshot(request)
+    };
+
+    // Nothing published yet.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/desktop/update/windows/x86_64/0.1.0"))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // Only the desktop workflow on main in Slop's repository may upload.
+    for bad in [
+        json!({ "repository": "mallory/slop", "job_workflow_ref": "mallory/slop/.github/workflows/desktop.yml@refs/heads/main" }),
+        json!({ "job_workflow_ref": "octo/slop/.github/workflows/other.yml@refs/heads/main" }),
+        json!({ "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/heads/feature" }),
+    ] {
+        assert_eq!(
+            upload(ci(bad.clone()), "0.1.5", b"x")
+                .await
+                .unwrap()
+                .status(),
+            StatusCode::FORBIDDEN,
+            "{bad}"
+        );
+    }
+
+    let installer: &'static [u8] = b"pretend this is Slop_0.1.5_x64-setup.exe";
+    let res = upload(ci(json!({})), "0.1.5", installer).await.unwrap();
+    assert_eq!(res.status(), StatusCode::CREATED);
+    // Versions only go forward.
+    assert_eq!(
+        upload(ci(json!({})), "0.1.5", b"again")
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        upload(ci(json!({})), "0.1.4", b"older")
+            .await
+            .unwrap()
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    // An older app is offered the update, signed the way Tauri checks it.
+    let res = app
+        .send(req(Method::GET, "/v1/desktop/update/windows/x86_64/0.1.2"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let update = body_json(res).await;
+    assert_eq!(update["version"], "0.1.5");
+    let url = update["url"].as_str().unwrap();
+    assert_eq!(
+        url,
+        "http://localhost:8080/v1/desktop/files/Slop_0.1.5_x64-setup.exe"
+    );
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let pk = minisign_verify::PublicKey::decode(
+        &String::from_utf8(b64.decode(&public).unwrap()).unwrap(),
+    )
+    .unwrap();
+    let sig_text =
+        String::from_utf8(b64.decode(update["signature"].as_str().unwrap()).unwrap()).unwrap();
+    let sig = minisign_verify::Signature::decode(&sig_text).unwrap();
+    pk.verify(installer, &sig, true).unwrap();
+    assert!(sig.trusted_comment().contains("version:0.1.5"));
+
+    // The download is the uploaded file.
+    let res = app
+        .send(req(
+            Method::GET,
+            "/v1/desktop/files/Slop_0.1.5_x64-setup.exe",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.into_body().collect().await.unwrap().to_bytes().as_ref(),
+        installer
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/desktop/files/..%2F..%2Fetc%2Fpasswd"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Up to date, other platforms and the website's download button.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/desktop/update/windows/x86_64/0.1.5"))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/desktop/update/linux/x86_64/0.1.0"))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let latest = body_json(
+        app.send(req(Method::GET, "/v1/desktop/latest/windows"))
+            .await,
+    )
+    .await;
+    assert_eq!(latest["version"], "0.1.5");
     std::fs::remove_dir_all(dir).unwrap();
 }

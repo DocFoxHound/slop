@@ -20,12 +20,37 @@ pub struct Config {
     pub catalog: CatalogRules,
     pub releases: ReleaseConfig,
     pub rate_limits: crate::ratelimit::Limits,
+    pub desktop: DesktopConfig,
     /// The built website (`web/dist`) to serve from the same origin. Unset: API only.
     pub web_dir: Option<std::path::PathBuf>,
     /// Header holding the client's IP, set by the load balancer (e.g. `x-forwarded-for`,
     /// `fly-client-ip`). Unset: the connection's peer address. Only set it when every request
     /// passes through a proxy that overwrites the header, or clients can pick their own IP.
     pub client_ip_header: Option<String>,
+}
+
+/// Updates for the Slop desktop app itself (desktop_updates.rs).
+#[derive(Clone, Default)]
+pub struct DesktopConfig {
+    /// Where uploaded builds are kept.
+    pub dir: Option<std::path::PathBuf>,
+    /// Signs builds for the app's updater (`slop-api keys generate-updater`).
+    pub updater_key: Option<minisign::SecretKey>,
+    /// Slop's own repository (`owner/repo`); only its desktop workflow on main may upload.
+    pub repo: Option<String>,
+}
+
+impl fmt::Debug for DesktopConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("DesktopConfig")
+            .field("dir", &self.dir)
+            .field(
+                "updater_key",
+                &self.updater_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("repo", &self.repo)
+            .finish()
+    }
 }
 
 /// Release fetching and signing.
@@ -206,6 +231,20 @@ impl Config {
                 auth_per_minute: int_var("SLOP_RATE_AUTH_PER_MIN", 20)?.max(1) as u32,
                 write_per_minute: int_var("SLOP_RATE_WRITE_PER_MIN", 60)?.max(1) as u32,
                 read_per_minute: int_var("SLOP_RATE_READ_PER_MIN", 600)?.max(1) as u32,
+            },
+            desktop: DesktopConfig {
+                dir: env::var("SLOP_DESKTOP_DIR")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from),
+                updater_key: match env::var("SLOP_UPDATER_KEY") {
+                    Ok(v) if !v.is_empty() => Some(
+                        crate::desktop_updates::updater_key_from_base64(&v)
+                            .context("SLOP_UPDATER_KEY isn't a valid updater key")?,
+                    ),
+                    _ => None,
+                },
+                repo: env::var("SLOP_DESKTOP_REPO").ok().filter(|s| !s.is_empty()),
             },
             web_dir: env::var("SLOP_WEB_DIR")
                 .ok()

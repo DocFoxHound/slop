@@ -1,0 +1,99 @@
+# Builds the Windows desktop app on every push to main and publishes it to the test server, which
+# signs it for the app's auto-updater (crates/slop-api/src/desktop_updates.rs). No secrets: the
+# upload is authenticated with this run's GitHub OIDC token.
+name: Desktop app
+
+on:
+  push:
+    branches: [main]
+    paths:
+      - "crates/**"
+      - "web/**"
+      - "Cargo.toml"
+      - "Cargo.lock"
+      - ".github/workflows/desktop.yml"
+  workflow_dispatch:
+
+permissions:
+  contents: read
+  id-token: write
+
+concurrency:
+  group: desktop-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  SLOP_URL: https://slop.188-68-41-241.sslip.io
+  VERSION: 0.1.${{ github.run_number }}
+
+jobs:
+  windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          persist-credentials: false
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      - name: Set the version
+        run: |
+          node -e '
+            const fs = require("fs");
+            const file = "crates/slop-desktop/tauri.conf.json";
+            const conf = JSON.parse(fs.readFileSync(file, "utf8"));
+            conf.version = process.env.VERSION;
+            fs.writeFileSync(file, JSON.stringify(conf, null, 2));
+          '
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build the installer
+        working-directory: web
+        env:
+          SLOP_API_URL: ${{ env.SLOP_URL }}/
+          # The test server's release-signing public key (not a secret).
+          SLOP_TRUSTED_KEYS: Y4ONcDe13CHu7blM2TpRSTcxuQ3Jc5yl2jrSLfJkav0=
+          # Private repositories can't make GitHub attestations (docs/TESTING.md).
+          SLOP_ALLOW_UNSIGNED: "true"
+        run: npm run desktop:build:windows
+
+      - name: Publish to Slop
+        run: |
+          exe="target/release/bundle/nsis/Slop_${VERSION}_x64-setup.exe"
+          test -f "$exe" || { echo "::error::no installer at $exe"; ls target/release/bundle/nsis; exit 1; }
+          token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$SLOP_URL" \
+            | node -e 'let s="";process.stdin.on("data",d=>s+=d).on("end",()=>console.log(JSON.parse(s).value))')
+          echo "::add-mask::$token"
+          curl -sS --fail-with-body -X POST \
+            "$SLOP_URL/v1/desktop/builds?platform=windows&version=$VERSION&commit=$GITHUB_SHA" \
+            -H "Authorization: Bearer $token" -H "Content-Type: application/octet-stream" \
+            --data-binary @"$exe"
+          echo
+          echo "Published Slop $VERSION for Windows."
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: Slop-${{ env.VERSION }}-windows
+          path: target/release/bundle/nsis/*.exe
+          retention-days: 7

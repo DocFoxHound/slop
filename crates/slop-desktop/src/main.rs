@@ -198,6 +198,44 @@ fn continue_signed_out(app: AppHandle) {
     show_main(&app);
 }
 
+/// Checks Slop for a newer version of this app and installs it (SECURITY §7: self-updates are
+/// signed; the updater refuses anything not signed with the key in tauri.conf.json, or signed
+/// for a different version than offered). Returns true when the app is about to restart.
+/// Skipped in debug builds, and gives up quickly when offline so the app still opens.
+async fn update_if_available(app: &AppHandle) -> bool {
+    use tauri_plugin_updater::UpdaterExt;
+    if cfg!(debug_assertions) {
+        return false;
+    }
+    let check = async {
+        let updater = app.updater()?;
+        updater.check().await
+    };
+    let update = match tokio::time::timeout(Duration::from_secs(10), check).await {
+        Ok(Ok(Some(update))) => update,
+        Ok(Ok(None)) => return false,
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "update check failed");
+            return false;
+        }
+        Err(_) => {
+            tracing::warn!("update check timed out");
+            return false;
+        }
+    };
+    tracing::info!(version = %update.version, "installing update");
+    // On Windows the installer shows its own progress and closes the app.
+    match update.download_and_install(|_, _| {}, || {}).await {
+        Ok(()) => {
+            app.restart();
+        }
+        Err(e) => {
+            tracing::error!(error = %e, "update failed; carrying on with this version");
+            false
+        }
+    }
+}
+
 // ---------------------------------------------------------------------------------------------
 // Windows: a small sign-in window first, then the store (docs: like Steam's launcher).
 
@@ -239,6 +277,10 @@ fn show_main(app: &AppHandle) {
 /// At launch: skip the sign-in window when a remembered sign-in still works. Offline, open the
 /// store anyway so installed games can be played; only a refused sign-in asks again.
 async fn startup(app: AppHandle) {
+    // Like Steam: update first, then sign in.
+    if update_if_available(&app).await {
+        return;
+    }
     let api = app.state::<Desktop>().api.clone();
     if !api.has_session() {
         open_login(&app);
@@ -394,6 +436,7 @@ fn main() {
         .init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let base = API_URL.parse().expect("SLOP_API_URL is a valid URL");
             let api = ApiClient::new(base, Arc::new(KeyringTokenStore::new(APP_ID)))?;

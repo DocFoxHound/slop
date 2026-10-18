@@ -59,13 +59,13 @@ fn recipe(state: &AppState) -> ApiResult<&str> {
 
 /// The GitHub Actions OIDC claims Slop relies on.
 #[derive(Debug, Deserialize)]
-struct GithubClaims {
+pub(crate) struct GithubClaims {
     /// `owner/repo`.
-    repository: String,
+    pub repository: String,
     /// The commit the run is building.
-    sha: String,
+    pub sha: String,
     /// The reusable workflow running, e.g. `org/slop-build/.github/workflows/build.yml@refs/tags/v1`.
-    job_workflow_ref: String,
+    pub job_workflow_ref: String,
 }
 
 async fn signing_keys(state: &AppState, kid: &str) -> ApiResult<DecodingKey> {
@@ -102,7 +102,7 @@ async fn signing_keys(state: &AppState, kid: &str) -> ApiResult<DecodingKey> {
 }
 
 /// Checks a GitHub Actions OIDC token: signature, issuer, audience (this Slop site) and expiry.
-async fn verify_github_token(state: &AppState, token: &str) -> ApiResult<GithubClaims> {
+pub(crate) async fn verify_github_token(state: &AppState, token: &str) -> ApiResult<GithubClaims> {
     let header = jsonwebtoken::decode_header(token).map_err(|_| ApiError::Unauthorized)?;
     if header.alg != Algorithm::RS256 {
         return Err(ApiError::Unauthorized);

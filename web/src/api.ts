@@ -262,6 +262,9 @@ export const api = {
     request<{ redirect_url: string }>("POST", `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`),
 
   providers: () => request<{ github: boolean }>("GET", "/v1/auth/providers"),
+  /** The newest desktop app build for a platform (for the download button). */
+  desktopLatest: (platform: "windows" | "mac" | "linux") =>
+    request<{ version: string; url: string }>("GET", `/v1/desktop/latest/${platform}`),
   /** What this server checks, so pages only claim what's true. */
   server: () => request<{ scanning: boolean; maker_signatures_required: boolean }>("GET", "/v1/server"),
   /** Full-page navigation target that starts GitHub sign-in. */
