@@ -361,7 +361,7 @@ pub(crate) async fn create_release(
     load_release(state, id).await
 }
 
-async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
+pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
     let row: (
         Uuid,
         String,

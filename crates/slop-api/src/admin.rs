@@ -396,3 +396,43 @@ pub async fn set_stage(
     tx.commit().await?;
     Ok(())
 }
+
+/// Gives or takes away admin rights. `who` is the account's ID, email or exact display name.
+pub async fn set_admin(db: &PgPool, who: &str, admin: bool, actor: &str) -> anyhow::Result<String> {
+    check_reviewer(actor)?;
+    let matches: Vec<(Uuid, String)> = sqlx::query_as(
+        "select id, display_name from users
+         where id::text = $1 or lower(email) = lower($1) or display_name = $1",
+    )
+    .bind(who.trim())
+    .fetch_all(db)
+    .await?;
+    let (id, name) = match matches.as_slice() {
+        [one] => one.clone(),
+        [] => bail!("no account matches {who:?}; sign in on the website first"),
+        many => bail!(
+            "{} accounts match {who:?}; use the account ID: {}",
+            many.len(),
+            many.iter()
+                .map(|(id, n)| format!("{id} ({n})"))
+                .collect::<Vec<_>>()
+                .join(", ")
+        ),
+    };
+    let mut tx = db.begin().await?;
+    sqlx::query("update users set is_admin = $2 where id = $1")
+        .bind(id)
+        .bind(admin)
+        .execute(&mut *tx)
+        .await?;
+    audit(
+        &mut tx,
+        actor,
+        if admin { "admin.grant" } else { "admin.revoke" },
+        &id.to_string(),
+        json!({ "name": name }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(name)
+}

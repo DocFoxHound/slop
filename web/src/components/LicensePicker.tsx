@@ -61,6 +61,8 @@ export function LicensePicker({
   const [other, setOther] = useState(value !== "" && !isKnown(value));
   // Once the maker picks a licence themselves, detection no longer overrides it.
   const chosen = useRef(value !== "");
+  // What detection last filled in, so a later repository without a licence can clear it.
+  const autoFilled = useRef<string | null>(null);
   const [hint, setHint] = useState<string>();
 
   useEffect(() => {
@@ -75,7 +77,15 @@ export function LicensePicker({
         (found) => {
           if (!current) return;
           const spdx = found.spdx;
+          const clearAutoFilled = () => {
+            if (!chosen.current && autoFilled.current !== null) {
+              autoFilled.current = null;
+              setOther(false);
+              onChange("");
+            }
+          };
           if (spdx && AMBIGUOUS.has(spdx)) {
+            clearAutoFilled();
             setHint(
               `Found ${found.name ?? spdx}. Choose "only" or "or later" to match the notice in your code.`,
             );
@@ -84,11 +94,13 @@ export function LicensePicker({
           if (spdx) {
             setHint(`Detected from your repository: ${found.name ?? spdx}.`);
             if (!chosen.current) {
+              autoFilled.current = spdx;
               setOther(!isKnown(spdx));
               onChange(spdx);
             }
             return;
           }
+          clearAutoFilled();
           setHint(found.note ? `No licence detected: ${found.note}.` : "No licence detected.");
         },
         () => current && setHint(undefined),

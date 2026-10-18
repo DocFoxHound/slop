@@ -35,7 +35,15 @@ systemctl --user start slop-deploy           # deploy now instead of waiting
 rm ~/slop-deploy/builds/failed-*             # retry a commit that failed
 ```
 
-Staff commands run against the deployment's database with its settings:
+Reviewing and moderating is done in the website's **Admin** panel (accounts with admin rights).
+Give an account admin rights from the server, after it has signed in once:
+
+```sh
+set -a; . ~/.config/slop/slop.env; set +a
+~/slop-deploy/current/slop-api admin grant "<display name, email or account ID>" --reviewer <you>
+```
+
+The same staff commands also work from the server:
 
 ```sh
 set -a; . ~/.config/slop/slop.env; set +a

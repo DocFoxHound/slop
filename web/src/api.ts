@@ -54,6 +54,35 @@ export interface Me {
   display_name: string;
   email: string | null;
   country_code: string;
+  is_admin: boolean;
+}
+
+export interface AdminAppRef {
+  slug: string;
+  title: string;
+  stage: AppStage;
+  status: AppStatus;
+  repo_url: string;
+  maker: string;
+}
+
+export interface AdminQueue {
+  releases: Array<Release & { app: AdminAppRef }>;
+  ready_to_list: Array<AdminAppRef & { approved_releases: number }>;
+  checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
+}
+
+export interface AdminApp extends AdminAppRef {
+  releases: Array<{ id: string; version: string; reviewed_at: string | null }>;
+}
+
+export interface AuditEntry {
+  id: number;
+  at: string;
+  actor: string;
+  action: string;
+  subject: string;
+  detail: Record<string, unknown>;
 }
 
 export interface Country {
@@ -260,6 +289,19 @@ export const api = {
       create_url: string | null;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
+  admin: {
+    queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
+    apps: (status?: AppStatus) => request<AdminApp[]>("GET", `/v1/admin/apps${query({ status })}`),
+    audit: () => request<AuditEntry[]>("GET", "/v1/admin/audit"),
+    approve: (id: string) => request<void>("POST", `/v1/admin/releases/${id}/approve`),
+    reject: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
+    revoke: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/revoke`, { reason }),
+    list: (slug: string) => request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/list`),
+    delist: (slug: string, reason: string) =>
+      request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/delist`, { reason }),
+    stage: (slug: string, stage: AppStage) =>
+      request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/stage`, { stage }),
+  },
   addToLibrary: (slug: string) => request<void>("PUT", `/v1/me/library/${encodeURIComponent(slug)}`),
   removeFromLibrary: (slug: string) => request<void>("DELETE", `/v1/me/library/${encodeURIComponent(slug)}`),
   desktopRequest: (id: string) =>

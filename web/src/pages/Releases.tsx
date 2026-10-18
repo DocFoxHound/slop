@@ -1,10 +1,11 @@
 // Makers' releases: submit builds from your own release page, and follow them through review
 // (docs/ARCHITECTURE.md §6.3-6.4). Slop never stores builds; it hashes them and signs a manifest.
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 
 import { api, ApiError, type FileKind, type NewRelease, type Platform, type Release } from "../api";
+import { PublishProgress } from "../components/PublishProgress";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -47,6 +48,14 @@ export function Releases() {
   const { me } = useSession();
   const app = useLoad(() => (me ? api.app(slug) : Promise.resolve(undefined)), [slug, me?.id]);
   const releases = useLoad(() => (me ? api.releases(slug) : Promise.resolve([])), [slug, me?.id]);
+  const server = useLoad(() => api.server(), []);
+  // While files are being checked, refresh every few seconds so progress moves on its own.
+  const checking = releases.data?.some((r) => r.status === "fetching");
+  useEffect(() => {
+    if (!checking) return;
+    const timer = setInterval(() => releases.reload(), 4000);
+    return () => clearInterval(timer);
+  }, [checking, releases.reload]);
   useDocumentTitle(app.data ? `${app.data.title} releases` : "Releases");
 
   if (me === undefined || app.loading) return <Loading />;
@@ -79,6 +88,10 @@ export function Releases() {
         the release, and Slop signs it. Players' apps then download from your release page and refuse any file that doesn't
         match.
       </p>
+
+      {releases.data && server.data && (
+        <PublishProgress app={app.data} releases={releases.data} server={server.data} />
+      )}
 
       <SlopBuildSetup slug={slug} />
       <SigningHelp />
