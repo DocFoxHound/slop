@@ -7,6 +7,7 @@
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
 
+import { WindowControls } from "./components/WindowControls";
 import { desktop, openExternal } from "./platform";
 import "./styles.css";
 
@@ -41,7 +42,10 @@ function LoginWindow() {
 
   return (
     <main className="login-window">
-      <div className="login-brand">
+      <div className="login-titlebar" data-tauri-drag-region>
+        <WindowControls minimal />
+      </div>
+      <div className="login-brand" data-tauri-drag-region>
         <img src="/logo.svg" alt="" width={64} height={64} />
         <div className="login-logo" aria-label="Slop">
           SL<b>O</b>P

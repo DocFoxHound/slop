@@ -5,6 +5,7 @@ import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { UpdateNotice } from "./UpdateNotice";
+import { WindowControls } from "./WindowControls";
 import { useSession } from "../session";
 
 const TABS = [
@@ -33,7 +34,8 @@ export function Layout() {
       <a className="skip" href="#main">
         Skip to content
       </a>
-      <nav className="nav" aria-label="Main">
+      {/* In the desktop app the window has no system title bar: drag it by the bar's empty space. */}
+      <nav className={`nav ${isDesktop ? "titlebar" : ""}`} aria-label="Main" data-tauri-drag-region>
         <Link className="logo" to="/" aria-label="Slop home">
           <img src="/logo.svg" alt="" width={28} height={28} />
           <span>
@@ -48,9 +50,10 @@ export function Layout() {
           ))}
           <AdminTab />
         </div>
-        <div className="grow" />
+        <div className="grow" data-tauri-drag-region />
         <SearchBox />
         <MeMenu />
+        <WindowControls />
       </nav>
 
       <UpdateNotice />

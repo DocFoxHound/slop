@@ -65,6 +65,16 @@ code { font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; background:
 .me .who b { display: block; font-size: 13px; }
 
 .view { flex: 1; overflow-y: auto; }
+/* Desktop app: the nav doubles as the title bar (the window is borderless). */
+.nav.titlebar { padding-right: 0; user-select: none; -webkit-user-select: none; }
+.window-controls { display: flex; align-self: stretch; margin-left: 4px; }
+.window-controls button { width: 46px; border: 0; background: transparent; color: var(--muted); cursor: pointer; display: grid; place-items: center; }
+.window-controls button:hover { background: var(--panel-3); color: var(--text); }
+.window-controls button.close:hover { background: #c42b1c; color: #fff; }
+.window-controls svg { width: 10px; height: 10px; fill: none; stroke: currentColor; stroke-width: 1.1; }
+.login-titlebar { position: absolute; top: 0; left: 0; right: 0; height: 36px; display: flex; justify-content: flex-end; }
+.login-titlebar .window-controls { margin: 0; }
+.login-titlebar .window-controls button { height: 36px; }
 .update-notice { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 20px; background: rgba(163, 230, 53, 0.08); border-bottom: 1px solid rgba(163, 230, 53, 0.3); font-size: 13px; }
 .view:focus { outline: none; }
 .page { max-width: 1240px; margin: 0 auto; padding: 24px 24px 60px; }
@@ -331,6 +341,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ---- desktop sign-in window (login.html) ----------------------------- */
 .login-window {
+  position: relative; user-select: none; -webkit-user-select: none;
   height: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 22px; padding: 36px 32px 20px;
   background: radial-gradient(circle at 50% 0, rgba(163, 230, 53, 0.14), transparent 60%), var(--bg);
   text-align: center; overflow: hidden;
