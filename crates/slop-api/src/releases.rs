@@ -46,6 +46,7 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/{slug}/manifest", get(latest_manifest))
         .route("/revocations", get(revocations))
         .route("/keys", get(keys))
+        .route("/server", get(server_info))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -241,6 +242,9 @@ struct ReleaseFileInfo {
     provenance: Option<slop_provenance::Provenance>,
     /// Why there's no verified maker signature.
     provenance_problem: Option<String>,
+    /// passed, note, on_hold, rejected, blocked, or skipped (scanning off).
+    scan_result: Option<String>,
+    scan_detail: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -352,7 +356,8 @@ async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
     .fetch_one(&state.db)
     .await?;
     let files = sqlx::query_as(
-        "select platform, kind, url, file_name, exec, args, size_bytes, sha256, provenance, provenance_problem
+        "select platform, kind, url, file_name, exec, args, size_bytes, sha256, provenance, provenance_problem,
+                scan_result, scan_detail
          from release_files where release_id = $1 order by platform",
     )
     .bind(id)
@@ -451,6 +456,21 @@ async fn revocations(State(state): State<AppState>) -> ApiResult<Json<Signed>> {
         Purpose::RevocationList,
         key,
     )))
+}
+
+#[derive(Serialize)]
+struct ServerInfo {
+    /// Whether uploads are scanned. Off on test servers; the UI must not claim otherwise.
+    scanning: bool,
+    maker_signatures_required: bool,
+}
+
+/// What this server checks, so the UI only claims what's true (LEGAL-GUIDANCE §5.5).
+async fn server_info(State(state): State<AppState>) -> Json<ServerInfo> {
+    Json(ServerInfo {
+        scanning: state.config.releases.scanner.is_on(),
+        maker_signatures_required: state.config.releases.require_maker_signature,
+    })
 }
 
 #[derive(Serialize)]
@@ -561,9 +581,21 @@ async fn fetch_release(
             Ok((bundle, provenance)) => (Some(bundle), Some(sqlx::types::Json(provenance)), None),
             Err(problem) => (None, None, Some(problem)),
         };
+        let verdict = state
+            .config
+            .releases
+            .scanner
+            .scan(&crate::scan::Target {
+                url: &url,
+                sha256: &sha256,
+                repo_url,
+                commit,
+            })
+            .await;
         sqlx::query(
             "update release_files
-             set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7
+             set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7,
+                 scan_result = $8, scan_detail = $9
              where release_id = $1 and platform = $2",
         )
         .bind(id)
@@ -573,6 +605,8 @@ async fn fetch_release(
         .bind(attestation)
         .bind(provenance)
         .bind(problem)
+        .bind(verdict.result.as_str())
+        .bind(verdict.detail)
         .execute(&state.db)
         .await?;
     }

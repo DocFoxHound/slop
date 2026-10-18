@@ -136,6 +136,9 @@ async fn main() -> anyhow::Result<()> {
                     if pending.is_empty() {
                         println!("Nothing waiting for review.");
                     }
+                    if !config.releases.scanner.is_on() {
+                        println!("Note: scanning is off on this server; files are NOT scanned.");
+                    }
                     for r in pending {
                         println!(
                             "{}  {} {}  commit {}{}  {}",
@@ -159,7 +162,7 @@ async fn main() -> anyhow::Result<()> {
                     admin::approve(
                         &db,
                         config.releases.signing_key.as_ref(),
-                        config.releases.require_maker_signature,
+                        admin::ReviewRules::from_config(&config),
                         release_id,
                         &reviewer,
                     )

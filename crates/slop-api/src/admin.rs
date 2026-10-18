@@ -85,14 +85,32 @@ struct FileRow {
     sha256: Option<String>,
     attestation: Option<String>,
     provenance_problem: Option<String>,
+    scan_result: Option<String>,
+    scan_detail: Option<String>,
 }
 
-/// Approves a release and signs its manifest. With `require_maker_signature`, every file must
-/// have a verified maker attestation (SECURITY §5.3).
+/// What approval requires, from the server's configuration.
+#[derive(Clone, Copy, Debug)]
+pub struct ReviewRules {
+    /// Every file needs a verified maker attestation (SECURITY §5.3).
+    pub require_maker_signature: bool,
+    pub scanner: crate::scan::Scanner,
+}
+
+impl ReviewRules {
+    pub fn from_config(config: &crate::config::Config) -> Self {
+        Self {
+            require_maker_signature: config.releases.require_maker_signature,
+            scanner: config.releases.scanner,
+        }
+    }
+}
+
+/// Approves a release and signs its manifest, if every file meets `rules`.
 pub async fn approve(
     db: &PgPool,
     key: Option<&slop_manifest::ed25519_dalek::SigningKey>,
-    require_maker_signature: bool,
+    rules: ReviewRules,
     release_id: Uuid,
     reviewer: &str,
 ) -> anyhow::Result<()> {
@@ -116,7 +134,8 @@ pub async fn approve(
     );
 
     let rows: Vec<FileRow> = sqlx::query_as(
-        "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem
+        "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem,
+                scan_result, scan_detail
          from release_files where release_id = $1 order by platform",
     )
     .bind(release_id)
@@ -127,7 +146,21 @@ pub async fn approve(
         let (Some(size), Some(sha256)) = (f.size_bytes, f.sha256) else {
             bail!("the {} build hasn't been hashed", f.platform);
         };
-        if require_maker_signature && f.attestation.is_none() {
+        let scan = f
+            .scan_result
+            .as_deref()
+            .and_then(crate::scan::ScanResult::parse);
+        match scan {
+            Some(result) if rules.scanner.approvable(result) => {}
+            Some(result) => bail!(
+                "the {} build's scan result is {}: {}",
+                f.platform,
+                result.as_str(),
+                f.scan_detail.as_deref().unwrap_or("no details")
+            ),
+            None => bail!("the {} build hasn't been through the scan step", f.platform),
+        }
+        if rules.require_maker_signature && f.attestation.is_none() {
             bail!(
                 "the {} build has no verified maker signature: {}",
                 f.platform,

@@ -121,6 +121,7 @@ async fn test_app(db: PgPool) -> TestApp {
             github_api_base: github_base.parse().unwrap(),
             allow_http_downloads: true,
             require_maker_signature: false,
+            scanner: slop_api::scan::Scanner::Off,
             slop_build_workflow: None,
             github_token: None,
         },
@@ -1233,6 +1234,14 @@ async fn a_bearer_token_is_not_a_cookie(db: PgPool) {
 // ---------------------------------------------------------------------------------------------
 // Releases, review and revocation
 
+/// Review rules for test releases, which have no maker attestation and aren't scanned.
+fn lax() -> admin::ReviewRules {
+    admin::ReviewRules {
+        require_maker_signature: false,
+        scanner: slop_api::scan::Scanner::Off,
+    }
+}
+
 /// A maker with an app whose repo is on the fake release host. Returns (maker cookie, slug).
 async fn maker_with_app(app: &TestApp, stage: &str) -> (Uuid, String) {
     let (maker_id, cookie) = app.user("Maker", "US").await;
@@ -1310,12 +1319,12 @@ async fn release_review_and_signed_manifest(db: PgPool) {
 
     let release_id: Uuid = id.parse().unwrap();
     assert!(
-        admin::approve(&app.db, Some(&app.signing_key), false, release_id, "")
+        admin::approve(&app.db, Some(&app.signing_key), lax(), release_id, "")
             .await
             .is_err(),
         "reviewer required"
     );
-    admin::approve(&app.db, Some(&app.signing_key), false, release_id, "rev")
+    admin::approve(&app.db, Some(&app.signing_key), lax(), release_id, "rev")
         .await
         .unwrap();
     admin::list_app(&app.db, "game", "rev").await.unwrap();
@@ -1469,7 +1478,7 @@ async fn a_missing_file_fails_the_release(db: PgPool) {
     // A failed release can't be approved.
     let id: Uuid = mine[0]["id"].as_str().unwrap().parse().unwrap();
     assert!(
-        admin::approve(&app.db, Some(&app.signing_key), false, id, "rev")
+        admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
             .await
             .is_err()
     );
@@ -1491,7 +1500,7 @@ async fn stages_need_an_approved_release(db: PgPool) {
     admin::approve(
         &app.db,
         Some(&app.signing_key),
-        false,
+        lax(),
         id.parse().unwrap(),
         "rev",
     )
@@ -1597,7 +1606,10 @@ async fn unsigned_builds_cant_be_approved(db: PgPool) {
     let err = admin::approve(
         &app.db,
         Some(&app.signing_key),
-        true,
+        admin::ReviewRules {
+            require_maker_signature: true,
+            ..lax()
+        },
         id.parse().unwrap(),
         "rev",
     )
@@ -1730,4 +1742,46 @@ async fn cleanup_deletes_only_what_has_ended(db: PgPool) {
         slop_api::cleanup::run_once(&app.db).await.unwrap(),
         slop_api::cleanup::Deleted::default()
     );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn unscanned_files_are_marked_and_the_server_says_so(db: PgPool) {
+    let app = test_app(db).await;
+    let info = body_json(app.send(req(Method::GET, "/v1/server")).await).await;
+    assert_eq!(info["scanning"], false);
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    submit_and_fetch(&app, &maker, "1.0.0").await;
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["files"][0]["scan_result"], "skipped");
+    assert!(
+        mine[0]["files"][0]["scan_detail"]
+            .as_str()
+            .unwrap()
+            .contains("scanning is off")
+    );
+
+    // A file the scan step never saw can't be approved.
+    sqlx::query("update release_files set scan_result = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let id: Uuid = mine[0]["id"].as_str().unwrap().parse().unwrap();
+    let err = admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("hasn't been through the scan step"), "{err}");
+    sqlx::query("update release_files set scan_result = 'rejected', scan_detail = 'loot box'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let err = admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("rejected: loot box"), "{err}");
 }

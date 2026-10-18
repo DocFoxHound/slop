@@ -209,6 +209,15 @@ Slop never holds the file, and the link is useless after a few minutes.
 2. The Pulse SDK in the game sends `start` and then heartbeats.
 3. The first valid `start` marks the account as **launched**, which allows voting. Playtime from the heartbeats feeds the vote weighting (`METRICS.md` §2).
 
+### 6.7 The scan step today (2026-10-18)
+Automated scanning is deferred; the plan is a **self-hosted scan service** (its own cloud account,
+no route back to the core, verdicts signed with its own key, SECURITY §5.2). The release pipeline
+already has the step (`crates/slop-api/src/scan.rs`): each file gets a result on DESIGN §10's scale
+(passed, note, on hold, rejected, blocked) or `skipped` when the server runs with `SLOP_SCANNER=off`.
+With scanning off, reviewers and makers see "not scanned", the store says so, and nothing claims a
+file was scanned. Adding the service means a new `Scanner` variant that sends the file's URL, hash,
+repository and commit, and checks the signed verdict.
+
 ## 7. Running it
 - **Separate environments:** production, staging and development, with separate keys. Staging uses Stripe's test mode.
 - **Infrastructure as code:** Terraform or OpenTofu for the cloud resources. Container images built in CI. Deploys go through staging first. No hand-configured servers, so **no Ansible needed**.

@@ -10,6 +10,7 @@ pub mod library;
 pub mod policy;
 pub mod ratelimit;
 pub mod releases;
+pub mod scan;
 pub mod tokens;
 
 use std::{sync::Arc, time::Duration};
