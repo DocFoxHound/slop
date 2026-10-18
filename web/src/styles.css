@@ -216,6 +216,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .field-error, .form-error { font-weight: 600; font-size: 12px; color: var(--bad); }
 .form-error { font-size: 13px; margin: 0; }
 .row-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; }
+.license-picker { display: flex; flex-direction: column; gap: 6px; font-weight: 600; font-size: 13px; }
+.license-picker select, .license-picker input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 9px 12px; font-weight: 400; width: 100%; }
 .tag-picker { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; margin: 0; }
 .tag-picker legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
 .tag-picker h4 { font-size: 11px; letter-spacing: 0.1em; color: var(--faint); text-transform: uppercase; margin-bottom: 6px; }

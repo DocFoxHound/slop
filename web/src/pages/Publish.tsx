@@ -5,6 +5,7 @@ import { useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { api, ApiError, type AppDetail, type AppKind, type AppStage, type Category, type NewApp } from "../api";
+import { LicensePicker } from "../components/LicensePicker";
 import { AppTile, ErrorState, Loading } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
@@ -258,18 +259,12 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           "Public, on GitHub, GitLab, Bitbucket or your own server.",
         )}
         <div className="row-2">
-          {field(
-            "license_spdx",
-            "Licence",
-            <input
-              value={form.license_spdx}
-              placeholder="MIT"
-              maxLength={64}
-              required
-              onChange={(e) => set("license_spdx", e.target.value)}
-            />,
-            "An OSI-approved licence's SPDX ID.",
-          )}
+          <LicensePicker
+            repoUrl={form.repo_url}
+            value={form.license_spdx}
+            onChange={(spdx) => set("license_spdx", spdx)}
+            error={error?.field === "license_spdx" ? error.message : undefined}
+          />
           {field(
             "min_age",
             "Age rating",

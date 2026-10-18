@@ -84,6 +84,14 @@ async fn fake_github() -> String {
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
+        .route(
+            "/repos/octo/game/license",
+            get(|| async { axum::Json(json!({ "license": { "spdx_id": "MIT", "name": "MIT License" } })) }),
+        )
+        .route(
+            "/repos/octo/odd/license",
+            get(|| async { axum::Json(json!({ "license": { "spdx_id": "NOASSERTION", "name": "Other" } })) }),
+        )
         // A private repository's release: its asset API redirects to a short-lived signed link.
         .route(
             "/repos/octo/game/releases/tags/{tag}",
@@ -2261,4 +2269,67 @@ async fn desktop_builds_are_uploaded_signed_and_offered(db: PgPool) {
     .await;
     assert_eq!(latest["version"], "0.1.5");
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+// ---------------------------------------------------------------------------------------------
+// Licence detection
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn licences_are_detected_from_github(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = app.user("Maker", "US").await;
+    let detect = |url: &str| {
+        req(
+            Method::GET,
+            format!(
+                "/v1/repos/license?url={}",
+                url::form_urlencoded::byte_serialize(url.as_bytes()).collect::<String>()
+            ),
+        )
+    };
+
+    assert_eq!(
+        app.send(detect("https://github.com/octo/game"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let found = body_json(
+        app.send(detect("https://github.com/octo/game").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(found["spdx"], "MIT");
+    assert_eq!(found["name"], "MIT License");
+    let odd = body_json(
+        app.send(detect("https://github.com/octo/odd").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(odd["spdx"].is_null());
+    assert!(odd["note"].as_str().unwrap().contains("couldn't tell"));
+    let missing = body_json(
+        app.send(detect("https://github.com/octo/none").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(
+        missing["note"]
+            .as_str()
+            .unwrap()
+            .contains("no licence file")
+    );
+    let gitlab = body_json(
+        app.send(detect("https://gitlab.com/octo/game").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(
+        gitlab["note"]
+            .as_str()
+            .unwrap()
+            .contains("GitHub repositories")
+    );
+    let junk = body_json(app.send(detect("not a url").cookie(&maker)).await).await;
+    assert!(junk["spdx"].is_null());
 }
