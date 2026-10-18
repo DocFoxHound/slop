@@ -238,14 +238,18 @@ async fn serve() -> anyhow::Result<()> {
     let bind = config.bind;
     let state = AppState::new(db, config)?;
     tokio::spawn(releases::run_fetcher(state.clone()));
+    tokio::spawn(slop_api::cleanup::run(state.clone()));
     let app = router(state)?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("binding {bind}"))?;
     tracing::info!(%bind, "Slop API listening");
-    axum::serve(listener, app)
-        .with_graceful_shutdown(shutdown())
-        .await?;
+    axum::serve(
+        listener,
+        app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .with_graceful_shutdown(shutdown())
+    .await?;
     Ok(())
 }
 

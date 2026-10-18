@@ -3,10 +3,12 @@
 pub mod admin;
 pub mod auth;
 pub mod catalog;
+pub mod cleanup;
 pub mod config;
 pub mod error;
 pub mod library;
 pub mod policy;
+pub mod ratelimit;
 pub mod releases;
 pub mod tokens;
 
@@ -41,6 +43,7 @@ pub struct AppState {
     pub fetch_wakeup: Arc<tokio::sync::Notify>,
     /// Checks makers' GitHub artifact attestations.
     pub provenance: Arc<slop_provenance::ProvenanceVerifier>,
+    pub rate_limiter: Arc<ratelimit::RateLimiter>,
 }
 
 impl AppState {
@@ -55,6 +58,7 @@ impl AppState {
             .redirect(reqwest::redirect::Policy::limited(5))
             .https_only(!config.releases.allow_http_downloads)
             .build()?;
+        let rate_limiter = Arc::new(ratelimit::RateLimiter::new(config.rate_limits));
         Ok(Self {
             db,
             config: Arc::new(config),
@@ -62,6 +66,7 @@ impl AppState {
             fetch_http,
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
             provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),
+            rate_limiter,
         })
     }
 }
@@ -90,6 +95,10 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             )
         })
         .layer(csrf)
+        .layer(axum::middleware::from_fn_with_state(
+            state.clone(),
+            ratelimit::middleware,
+        ))
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,

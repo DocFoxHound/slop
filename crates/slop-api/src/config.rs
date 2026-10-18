@@ -19,6 +19,11 @@ pub struct Config {
     pub country_header: Option<String>,
     pub catalog: CatalogRules,
     pub releases: ReleaseConfig,
+    pub rate_limits: crate::ratelimit::Limits,
+    /// Header holding the client's IP, set by the load balancer (e.g. `x-forwarded-for`,
+    /// `fly-client-ip`). Unset: the connection's peer address. Only set it when every request
+    /// passes through a proxy that overwrites the header, or clients can pick their own IP.
+    pub client_ip_header: Option<String>,
 }
 
 /// Release fetching and signing.
@@ -174,6 +179,15 @@ impl Config {
             country_header,
             catalog,
             releases,
+            rate_limits: crate::ratelimit::Limits {
+                auth_per_minute: int_var("SLOP_RATE_AUTH_PER_MIN", 20)?.max(1) as u32,
+                write_per_minute: int_var("SLOP_RATE_WRITE_PER_MIN", 60)?.max(1) as u32,
+                read_per_minute: int_var("SLOP_RATE_READ_PER_MIN", 600)?.max(1) as u32,
+            },
+            client_ip_header: env::var("SLOP_CLIENT_IP_HEADER")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(|s| s.to_ascii_lowercase()),
         })
     }
 
