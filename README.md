@@ -10,23 +10,27 @@ don't copy it into real code.
 
 ## Status
 
-Milestone 1 (Foundation + Catalog) is in progress.
-
 | Part | State |
 |---|---|
-| API server (`crates/slop-api`, Rust + axum + Postgres) | Started |
-| Identity: GitHub sign-in (PKCE), sign-up with 16+ confirmation and country, sessions, devices page | Done |
-| Catalog: categories, tags, store listing, search, store pages, makers' drafts | Done |
+| API server (`crates/slop-api`, Rust + axum + Postgres) | Working |
+| Identity: GitHub sign-in (PKCE), sign-up (16+, country), sessions, devices page | Done |
+| Desktop sign-in through the system browser (RFC 8252), rotating refresh tokens | Done |
+| Catalog: categories, tags, listing, search, store pages, makers' drafts | Done |
 | Per-country age policy (UK under-18 view), stage deadlines, dead projects | Done |
-| Web UI (`web/`, React + TypeScript): store, categories, tags, search, app pages, sign-in/up, account, Publish drafts | Done |
-| Desktop app (`crates/slop-desktop`, Tauri 2): shell around the web UI | Started; sign-in, install and launch still to build |
-| Publishing, Slop Build, scanning, Distribution, Ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
+| Releases: submit, fetch-and-hash, staff review, Ed25519-signed manifests | Done (phase 1: review is by a person) |
+| Revocation (kill switch), audit log, library | Done |
+| Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
+| Web UI (`web/`): store, library, install controls, publishing, releases, device approval | Done |
+| Desktop app (`crates/slop-desktop`, Tauri 2) | Written; needs the Linux libraries below to build |
+| Maker signatures (Sigstore), automated scanning, Slop Build, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
 
 ## Layout
 
 ```
-crates/slop-api/        API server
-crates/slop-desktop/    Desktop app (Tauri 2), wraps web/
+crates/slop-api/        API server, release fetcher and staff commands
+crates/slop-manifest/   Signed release manifests and revocation lists (shared)
+crates/slop-client/     Desktop client core: sign-in, verified installs, launch
+crates/slop-desktop/    Desktop app (Tauri 2): web/ plus slop-client
   migrations/           Postgres schema (run automatically at start-up)
   src/auth/             Identity: GitHub OAuth, sign-up, sessions
   src/catalog.rs        Catalog: categories, tags, apps
@@ -62,7 +66,7 @@ The desktop app is the same UI in a Tauri window. On Linux it needs WebKitGTK an
 libraries first ([Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)); on Fedora:
 
 ```sh
-sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel
+sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel dbus-devel
 ```
 
 Then, with the API running:
@@ -73,15 +77,41 @@ npm run desktop                  # dev window, hot reload
 npm run desktop:build            # installers in target/release/bundle/
 ```
 
-A packaged build talks to the API at `VITE_API_BASE` (set it when building), and the API must
-list the app's origin in `SLOP_CORS_ORIGINS`: `tauri://localhost` (macOS, Linux) and
-`http://tauri.localhost` (Windows). Update `connect-src` in
-`crates/slop-desktop/tauri.conf.json` to match. Desktop sign-in (system browser + loopback,
-`docs/SECURITY.md` §4.1) isn't built yet, so the desktop app browses signed out.
+The desktop app is built for one Slop site and one set of signing keys:
 
-Sign-in needs a GitHub OAuth app (GitHub → Settings → Developer settings → OAuth Apps) with the
-callback URL `<SLOP_PUBLIC_URL>/v1/auth/github/callback`. Without one the API runs with
-sign-in off.
+- `SLOP_API_URL`: the Slop site (default `http://localhost:5173/`, the dev website, which proxies
+  `/v1` to the API).
+- `SLOP_TRUSTED_KEYS`: Slop's public signing key(s), comma-separated. Without one, the app can
+  browse but won't install anything.
+
+The page never talks to the API directly in the desktop app: requests go through Rust, which holds
+the user's tokens in the OS secure store.
+
+## Releases and review
+
+1. Make a signing key once: `cargo run -p slop-api -- keys generate`. Put `SLOP_SIGNING_KEY` in
+   the API's `.env`, and `SLOP_TRUSTED_KEYS` in the environment when building the desktop app.
+2. A maker submits a release on **Publish → their app → Releases**: a version, the commit, and a
+   file URL per platform on their own release page. Slop downloads each file once to record its
+   size and SHA-256, and stores nothing else.
+3. Staff review it:
+
+   ```sh
+   cargo run -p slop-api -- review pending
+   cargo run -p slop-api -- review approve <release-id> --reviewer <you>   # signs the manifest
+   cargo run -p slop-api -- review reject <release-id> --reviewer <you> --reason "…"
+   cargo run -p slop-api -- review list <slug> --reviewer <you>            # put the app in the store
+   cargo run -p slop-api -- review stage <slug> beta --reviewer <you>
+   cargo run -p slop-api -- revoke <release-id> --reviewer <you> --reason "…"   # the kill switch
+   ```
+
+   Every decision goes into the append-only `audit_log` table.
+4. The desktop app downloads from the maker's release page, refuses anything that doesn't match
+   the signed manifest, installs into the user's library folder, and re-checks the signature, the
+   revocation list and the program's hash at every launch.
+
+For local testing with release files served over plain http, set `SLOP_ALLOW_HTTP_DOWNLOADS=true`
+on the API (never in production).
 
 ## Test
 
@@ -113,5 +143,14 @@ Integration tests create a fresh database per test on the server in `DATABASE_UR
 | `GET /v1/apps/{slug}` | anyone | Store page (makers also see their drafts) |
 | `POST /v1/apps`, `PATCH /v1/apps/{slug}` | maker | Create and edit drafts |
 | `GET /v1/me/apps` | signed in | Your apps, including drafts |
+| `GET /v1/apps/{slug}/releases`, `POST …` | anyone / maker | Approved releases (makers see all, with status); submit a release |
+| `GET /v1/apps/{slug}/manifest` | anyone | Newest approved release's signed manifest |
+| `GET /v1/revocations` | anyone | Signed revocation list (valid 6 hours) |
+| `GET /v1/keys` | anyone | Slop's public signing key |
+| `GET /v1/me/library`, `PUT`/`DELETE /v1/me/library/{slug}` | signed in | The library |
+| `POST /v1/auth/desktop/requests` | desktop app | Start desktop sign-in |
+| `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |
+| `POST /v1/auth/desktop/token` | desktop app | Code or refresh token → access + refresh tokens |
 
-Errors are `{"error": {"code", "message", "field"?}}`.
+Errors are `{"error": {"code", "message", "field"?}}`. The desktop app authenticates with
+`Authorization: Bearer <access token>`; the website with its session cookie.

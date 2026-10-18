@@ -4,10 +4,21 @@
   "description": "What the Slop UI may ask the desktop shell to do. Keep this list short (docs/SECURITY.md §7).",
   "windows": ["main"],
   "permissions": [
-    "core:default",
+    "core:event:allow-listen",
+    "core:event:allow-unlisten",
     {
       "identifier": "opener:allow-open-url",
       "allow": [{ "url": "https://*" }]
-    }
+    },
+    "allow-api-request",
+    "allow-session-status",
+    "allow-sign-in",
+    "allow-sign-out",
+    "allow-platform-info",
+    "allow-installed-apps",
+    "allow-install-app",
+    "allow-uninstall-app",
+    "allow-launch-app",
+    "allow-run-installer"
   ]
 }

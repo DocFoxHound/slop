@@ -39,3 +39,49 @@ export async function openExternal(url: string): Promise<void> {
     window.open(url, "_blank", "noopener,noreferrer");
   }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Desktop commands (crates/slop-desktop). Only call these when `isDesktop` is true.
+
+export interface InstalledApp {
+  slug: string;
+  title: string;
+  maker: string;
+  version: string;
+  release_id: string;
+  kind: "archive" | "installer" | "apk";
+  installed_at: string;
+}
+
+export interface DesktopError {
+  code: string;
+  message: string;
+}
+
+async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    return await invoke<T>(command, args);
+  } catch (err) {
+    const e = err as Partial<DesktopError>;
+    throw Object.assign(new Error(e.message ?? String(err)), { code: e.code ?? "unknown" });
+  }
+}
+
+export const desktop = {
+  sessionStatus: () => call<{ signed_in: boolean }>("session_status"),
+  /** Opens the system browser and resolves once the user has approved this device. */
+  signIn: () => call<void>("sign_in"),
+  signOut: () => call<void>("sign_out"),
+  platformInfo: () => call<{ platform: Os | null; can_install: boolean }>("platform_info"),
+  installed: () => call<InstalledApp[]>("installed_apps"),
+  install: (slug: string) => call<InstalledApp>("install_app", { slug }),
+  uninstall: (slug: string) => call<void>("uninstall_app", { slug }),
+  launch: (slug: string) => call<void>("launch_app", { slug }),
+  runInstaller: (slug: string) => call<void>("run_installer", { slug }),
+  /** Install progress events: bytes downloaded so far. Returns an unsubscribe function. */
+  onProgress: async (handler: (p: { slug: string; got: number; total: number }) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<{ slug: string; got: number; total: number }>("install-progress", (e) => handler(e.payload));
+  },
+};

@@ -1,7 +1,7 @@
 // Sign-in, sign-up and the account page (with the devices list, docs/SECURITY.md §4.2).
 
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate, useSearchParams } from "react-router";
+import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError } from "../api";
 import { ErrorState, Loading } from "../components/ui";
@@ -25,19 +25,13 @@ export function SignIn() {
   const [params] = useSearchParams();
   const returnTo = safeReturnTo(params.get("return_to"));
   const error = params.get("error");
+
+  if (isDesktop) return <DesktopSignIn returnTo={returnTo} />;
+  return <WebSignIn returnTo={returnTo} error={error} />;
+}
+
+function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null }) {
   const providers = useLoad(() => api.providers(), []);
-
-  if (isDesktop) {
-    return (
-      <div className="page narrow">
-        <div className="panel panel-pad">
-          <h1>Sign in</h1>
-          <p>Signing in from the desktop app is coming soon. You can browse the whole store without an account.</p>
-        </div>
-      </div>
-    );
-  }
-
   return (
     <div className="page narrow">
       <div className="panel panel-pad auth-card">
@@ -48,9 +42,7 @@ export function SignIn() {
             {SIGNIN_ERRORS[error] ?? "Sign-in failed. Please try again."}
           </p>
         )}
-        {providers.data?.github === false && (
-          <p className="notice">Sign-in isn't set up on this server yet.</p>
-        )}
+        {providers.data?.github === false && <p className="notice">Sign-in isn't set up on this server yet.</p>}
         <a
           className={`btn big provider ${providers.data?.github ? "" : "disabled"}`}
           href={providers.data?.github ? api.githubSignInUrl(returnTo) : undefined}
@@ -59,6 +51,140 @@ export function SignIn() {
           Continue with GitHub
         </a>
         <p className="faint small">More sign-in options (Google, Apple, Microsoft, Discord) are on the way.</p>
+      </div>
+    </div>
+  );
+}
+
+/** The desktop app signs in through the system browser, never inside its own window. */
+function DesktopSignIn({ returnTo }: { returnTo: string }) {
+  const navigate = useNavigate();
+  const { desktopSignIn } = useSession();
+  const [state, setState] = useState<"idle" | "waiting" | "failed">("idle");
+  const [message, setMessage] = useState("");
+
+  const start = async () => {
+    setState("waiting");
+    try {
+      await desktopSignIn();
+      navigate(returnTo, { replace: true });
+    } catch (err) {
+      setMessage(err instanceof Error ? err.message : String(err));
+      setState("failed");
+    }
+  };
+
+  return (
+    <div className="page narrow">
+      <div className="panel panel-pad auth-card">
+        <h1>Sign in to Slop</h1>
+        {state === "waiting" ? (
+          <>
+            <p aria-live="polite">
+              <b>Finish in your browser.</b> Sign in there and approve this device, then come back here.
+            </p>
+            <p className="muted small">This page continues on its own once you've approved it.</p>
+          </>
+        ) : (
+          <>
+            <p className="muted">
+              Your browser will open so you can sign in on the Slop website and approve this device. Slop never sees your
+              password, and this app never sees your website session.
+            </p>
+            {state === "failed" && (
+              <p className="form-error" role="alert">
+                {message || "Sign-in didn't finish."}
+              </p>
+            )}
+            <button className="btn big slime provider" onClick={() => void start()}>
+              Sign in with your browser
+            </button>
+          </>
+        )}
+      </div>
+    </div>
+  );
+}
+
+/**
+ * Website page the desktop app opens: the signed-in user approves the device, and the browser
+ * hands a one-time code back to the app on this computer (docs/SECURITY.md §4.1).
+ */
+export function DesktopApprove() {
+  const { id = "" } = useParams();
+  const location = useLocation();
+  const { me } = useSession();
+  useDocumentTitle("Approve the Slop app");
+  const request = useLoad(() => (me ? api.desktopRequest(id) : Promise.resolve(undefined)), [id, me?.id]);
+  const [state, setState] = useState<"ask" | "sending" | "done" | "cancelled">("ask");
+  const [error, setError] = useState<string>();
+
+  if (me === undefined) return <Loading />;
+  if (!me) return <Navigate to={`/signin?return_to=${encodeURIComponent(location.pathname)}`} replace />;
+  if (request.error) {
+    return (
+      <div className="page narrow">
+        <div className="panel panel-pad">
+          <h1>This sign-in link has expired</h1>
+          <p>Go back to the Slop app and choose Sign in again.</p>
+        </div>
+      </div>
+    );
+  }
+  if (!request.data) return <Loading />;
+
+  const approve = async () => {
+    setState("sending");
+    try {
+      const { redirect_url } = await api.approveDesktop(id);
+      setState("done");
+      // Hand the one-time code to the app listening on this computer.
+      window.location.assign(redirect_url);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+      setState("ask");
+    }
+  };
+
+  return (
+    <div className="page narrow">
+      <div className="panel panel-pad auth-card">
+        {state === "cancelled" ? (
+          <>
+            <h1>Not signed in</h1>
+            <p>The app wasn't given access. You can close this tab.</p>
+          </>
+        ) : state === "done" ? (
+          <>
+            <h1>Done</h1>
+            <p>Go back to the Slop app. You can close this tab.</p>
+          </>
+        ) : (
+          <>
+            <h1>Sign in to the Slop app?</h1>
+            <p>
+              <b>{request.data.device_name}</b> wants to sign in as <b>{me.display_name}</b>.
+            </p>
+            <p className="notice">
+              Only continue if you just chose <b>Sign in</b> in the Slop app on this computer. If you didn't, someone may be
+              trying to get into your account: choose <b>Don't allow</b>.
+            </p>
+            {error && (
+              <p className="form-error" role="alert">
+                {error}
+              </p>
+            )}
+            <div className="actions">
+              <button className="btn ghost" onClick={() => setState("cancelled")}>
+                Don't allow
+              </button>
+              <button className="btn slime" disabled={state === "sending"} onClick={() => void approve()}>
+                Allow
+              </button>
+            </div>
+            <p className="faint small">You can sign this device out at any time from your account page.</p>
+          </>
+        )}
       </div>
     </div>
   );
@@ -165,7 +291,7 @@ export function SignUp() {
 export function Account() {
   useDocumentTitle("Your account");
   const navigate = useNavigate();
-  const { me, signOut, canSignIn } = useSession();
+  const { me, signOut } = useSession();
   const sessions = useLoad(() => (me ? api.sessions() : Promise.resolve([])), [me?.id]);
 
   if (me === undefined) return <Loading />;
@@ -174,13 +300,9 @@ export function Account() {
       <div className="page narrow">
         <div className="panel panel-pad">
           <h1>Your account</h1>
-          {canSignIn ? (
-            <p>
-              <Link to="/signin?return_to=/account">Sign in</Link> to see your account.
-            </p>
-          ) : (
-            <p>Signing in from the desktop app is coming soon.</p>
-          )}
+          <p>
+            <Link to="/signin?return_to=/account">Sign in</Link> to see your account.
+          </p>
         </div>
       </div>
     );
@@ -211,7 +333,8 @@ export function Account() {
         {sessions.data?.map((s) => (
           <li key={s.id}>
             <div>
-              <b>{describeAgent(s.user_agent)}</b> {s.current && <span className="badge official">THIS DEVICE</span>}
+              <b>{s.kind === "desktop" ? (s.user_agent ?? "Slop app") : describeAgent(s.user_agent)}</b>{" "}
+              {s.current && <span className="badge official">THIS DEVICE</span>}
               <div className="muted small">
                 Signed in {formatDate(s.created_at)} · last used {formatDate(s.last_seen_at)}
               </div>

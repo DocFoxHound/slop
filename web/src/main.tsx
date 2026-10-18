@@ -4,7 +4,9 @@ import { createBrowserRouter, RouterProvider } from "react-router";
 
 import { Layout } from "./components/Layout";
 import { AppPage } from "./pages/AppPage";
-import { Account, SignIn, SignUp } from "./pages/Auth";
+import { Account, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
+import { Library } from "./pages/Library";
+import { Releases } from "./pages/Releases";
 import { Browse, CategoryPage, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
 import { Store } from "./pages/Store";
@@ -25,6 +27,9 @@ const router = createBrowserRouter([
       { path: "/publish", element: <Publish /> },
       { path: "/publish/new", element: <AppEditor /> },
       { path: "/publish/:slug", element: <AppEditor /> },
+      { path: "/publish/:slug/releases", element: <Releases /> },
+      { path: "/library", element: <Library /> },
+      { path: "/desktop-signin/:id", element: <DesktopApprove /> },
       { path: "/signin", element: <SignIn /> },
       { path: "/signup", element: <SignUp /> },
       { path: "/account", element: <Account /> },

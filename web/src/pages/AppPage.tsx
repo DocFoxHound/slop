@@ -6,7 +6,9 @@ import { Art, ErrorState, ExternalLink, Loading, StageBadge, StatusBadge } from 
 import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
-import { openExternal } from "../platform";
+import { InstallControls } from "../components/InstallControls";
+import { isDesktop, openExternal } from "../platform";
+import { useSession } from "../session";
 
 export function AppPage() {
   const { slug = "" } = useParams();
@@ -25,6 +27,9 @@ export function AppPage() {
 }
 
 function AppView({ app }: { app: AppDetail }) {
+  const { me } = useSession();
+  const library = useLoad(() => (me && !isDesktop ? api.library() : Promise.resolve([])), [me?.id]);
+  const inLibrary = library.data?.some((e) => e.slug === app.slug);
   const upcoming = app.stage !== "released";
   const deadline = deadlineText(app);
   const age = ageLabel(app.min_age);
@@ -96,9 +101,12 @@ function AppView({ app }: { app: AppDetail }) {
             ))}
           </div>
           {app.is_mine && (
-            <div>
+            <div className="row-actions">
               <Link className="btn" to={`/publish/${app.slug}`}>
-                ✎ Edit
+                ✎ Edit store page
+              </Link>
+              <Link className="btn" to={`/publish/${app.slug}/releases`}>
+                ⬆ Releases
               </Link>
             </div>
           )}
@@ -138,14 +146,11 @@ function AppView({ app }: { app: AppDetail }) {
         </div>
         <aside className="side-col">
           <div className="panel panel-pad install-box">
-            <h3>Install</h3>
-            <p className="muted">
-              {app.stage === "coming_soon"
-                ? "No builds yet. This is a Coming soon page."
-                : "Installing through Slop is coming soon. For now, get it from the maker's releases."}
-            </p>
-            {app.stage !== "coming_soon" && (
-              <ExternalLink href={`${app.repo_url}/releases`}>Maker's releases →</ExternalLink>
+            <h3>{app.stage === "coming_soon" ? "Coming soon" : "Get it"}</h3>
+            {app.stage === "coming_soon" ? (
+              <p className="muted">No builds yet. This is a Coming soon page.</p>
+            ) : (
+              <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
             )}
           </div>
           <div className="panel panel-pad trust">

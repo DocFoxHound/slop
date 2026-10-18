@@ -306,3 +306,50 @@ mod tests {
         }
     }
 }
+
+/// The refresh token in the OS secure store (SECURITY §4.2). If the store isn't available
+/// (e.g. no Secret Service on a minimal Linux desktop), the token is kept in memory only and
+/// the user signs in again next time; it's never written to a plain file.
+#[cfg(feature = "os-keyring")]
+pub struct KeyringTokenStore {
+    entry: Option<keyring::Entry>,
+    fallback: MemoryTokenStore,
+}
+
+#[cfg(feature = "os-keyring")]
+impl KeyringTokenStore {
+    pub fn new(service: &str) -> Self {
+        let entry = keyring::Entry::new(service, "refresh-token")
+            .inspect_err(|e| tracing::warn!(error = %e, "OS secure store unavailable; sign-in won't be remembered"))
+            .ok();
+        Self { entry, fallback: MemoryTokenStore::default() }
+    }
+}
+
+#[cfg(feature = "os-keyring")]
+impl TokenStore for KeyringTokenStore {
+    fn load(&self) -> Option<String> {
+        match &self.entry {
+            Some(entry) => entry.get_password().ok(),
+            None => self.fallback.load(),
+        }
+    }
+    fn save(&self, refresh_token: &str) {
+        match &self.entry {
+            Some(entry) => {
+                if let Err(e) = entry.set_password(refresh_token) {
+                    tracing::warn!(error = %e, "couldn't save the sign-in to the OS secure store");
+                }
+            }
+            None => self.fallback.save(refresh_token),
+        }
+    }
+    fn clear(&self) {
+        match &self.entry {
+            Some(entry) => {
+                let _ = entry.delete_credential();
+            }
+            None => self.fallback.clear(),
+        }
+    }
+}

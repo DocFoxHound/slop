@@ -6,7 +6,14 @@ import { useLoad } from "../hooks";
 import { useSession } from "../session";
 
 const TABS = [
-  { to: "/", label: "Store", icon: "🛒", end: true, match: (p: string) => !p.startsWith("/publish") && !p.startsWith("/account") },
+  {
+    to: "/",
+    label: "Store",
+    icon: "🛒",
+    end: true,
+    match: (p: string) => !["/publish", "/account", "/library"].some((prefix) => p.startsWith(prefix)),
+  },
+  { to: "/library", label: "Library", icon: "📚", end: false, match: (p: string) => p.startsWith("/library") },
   { to: "/publish", label: "Publish", icon: "⬆️", end: false, match: (p: string) => p.startsWith("/publish") },
 ];
 
@@ -88,11 +95,10 @@ function SearchBox() {
 }
 
 function MeMenu() {
-  const { me, canSignIn } = useSession();
+  const { me } = useSession();
   const location = useLocation();
   if (me === undefined) return <div className="me" />;
   if (!me) {
-    if (!canSignIn) return <div className="me" />;
     const returnTo = location.pathname + location.search;
     return (
       <div className="me">
