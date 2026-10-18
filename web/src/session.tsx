@@ -1,8 +1,8 @@
 // The signed-in user, shared across the app.
 //
 // - Website: a cookie session; signing in is a full-page trip to GitHub (see pages/Auth.tsx).
-// - Desktop app: tokens held by the Rust side; signing in opens the system browser, where the
-//   user approves this device (docs/SECURITY.md §4.1).
+// - Desktop app: tokens held by the Rust side. Signing in happens in the app's own small sign-in
+//   window (login.html / src/login.tsx) before the store opens, like Steam.
 
 import { createContext, useCallback, useContext, useEffect, useState, type ReactNode } from "react";
 
@@ -14,8 +14,6 @@ interface Session {
   me: Me | null | undefined;
   refresh: () => Promise<void>;
   signOut: () => Promise<void>;
-  /** Desktop only: open the browser and wait for the user to approve this device. */
-  desktopSignIn: () => Promise<void>;
 }
 
 const SessionContext = createContext<Session | null>(null);
@@ -42,17 +40,17 @@ export function SessionProvider({ children }: { children: ReactNode }) {
     setMe(null);
   }, []);
 
-  const desktopSignIn = useCallback(async () => {
-    await desktop.signIn();
-    await refresh();
-  }, [refresh]);
-
   useEffect(() => {
     void refresh();
+    if (!isDesktop) return;
+    // The sign-in window is a separate page; it tells this one when the session changes.
+    let unlisten: (() => void) | undefined;
+    void desktop.onSessionChanged(() => void refresh()).then((u) => (unlisten = u));
+    return () => unlisten?.();
   }, [refresh]);
 
   return (
-    <SessionContext.Provider value={{ me, refresh, signOut, desktopSignIn }}>{children}</SessionContext.Provider>
+    <SessionContext.Provider value={{ me, refresh, signOut }}>{children}</SessionContext.Provider>
   );
 }
 

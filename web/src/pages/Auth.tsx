@@ -1,13 +1,13 @@
 // Sign-in, sign-up and the account page (with the devices list, docs/SECURITY.md §4.2).
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError } from "../api";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
-import { isDesktop } from "../platform";
+import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
 
 const SIGNIN_ERRORS: Record<string, string> = {
@@ -26,7 +26,7 @@ export function SignIn() {
   const returnTo = safeReturnTo(params.get("return_to"));
   const error = params.get("error");
 
-  if (isDesktop) return <DesktopSignIn returnTo={returnTo} />;
+  if (isDesktop) return <DesktopSignIn />;
   return <WebSignIn returnTo={returnTo} error={error} />;
 }
 
@@ -56,51 +56,19 @@ function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null
   );
 }
 
-/** The desktop app signs in through the system browser, never inside its own window. */
-function DesktopSignIn({ returnTo }: { returnTo: string }) {
-  const navigate = useNavigate();
-  const { desktopSignIn } = useSession();
-  const [state, setState] = useState<"idle" | "waiting" | "failed">("idle");
-  const [message, setMessage] = useState("");
-
-  const start = async () => {
-    setState("waiting");
-    try {
-      await desktopSignIn();
-      navigate(returnTo, { replace: true });
-    } catch (err) {
-      setMessage(err instanceof Error ? err.message : String(err));
-      setState("failed");
-    }
-  };
-
+/** In the desktop app, signing in happens in the separate sign-in window. */
+function DesktopSignIn() {
+  useEffect(() => {
+    void desktop.showLogin();
+  }, []);
   return (
     <div className="page narrow">
       <div className="panel panel-pad auth-card">
         <h1>Sign in to Slop</h1>
-        {state === "waiting" ? (
-          <>
-            <p aria-live="polite">
-              <b>Finish in your browser.</b> Sign in there and approve this device, then come back here.
-            </p>
-            <p className="muted small">This page continues on its own once you've approved it.</p>
-          </>
-        ) : (
-          <>
-            <p className="muted">
-              Your browser will open so you can sign in on the Slop website and approve this device. Slop never sees your
-              password, and this app never sees your website session.
-            </p>
-            {state === "failed" && (
-              <p className="form-error" role="alert">
-                {message || "Sign-in didn't finish."}
-              </p>
-            )}
-            <button className="btn big slime provider" onClick={() => void start()}>
-              Sign in with your browser
-            </button>
-          </>
-        )}
+        <p className="muted">Continue in the sign-in window.</p>
+        <button className="btn" onClick={() => void desktop.showLogin()}>
+          Show the sign-in window
+        </button>
       </div>
     </div>
   );

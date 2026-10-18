@@ -16,6 +16,11 @@ export default defineConfig({
     proxy: { "/v1": { target: api, changeOrigin: false } },
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
-  build: { target: "es2022", sourcemap: true },
+  build: {
+    target: "es2022",
+    sourcemap: true,
+    // The desktop app's small sign-in window is its own page (crates/slop-desktop).
+    rollupOptions: { input: { main: "index.html", login: "login.html" } },
+  },
   test: { environment: "jsdom" },
 });

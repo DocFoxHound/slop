@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-continue-signed-out"
+description = "Enables the continue_signed_out command without any pre-configured scope."
+commands.allow = ["continue_signed_out"]
+
+[[permission]]
+identifier = "deny-continue-signed-out"
+description = "Denies the continue_signed_out command without any pre-configured scope."
+commands.deny = ["continue_signed_out"]
