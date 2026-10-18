@@ -1,0 +1,9 @@
+[Unit]
+Description=Deploy the newest Slop commit if it passes the tests
+After=slop-pg.service network-online.target
+
+[Service]
+Type=oneshot
+ExecStart=%h/slop-deploy/bin/update.sh
+TimeoutStartSec=45min
+Nice=10

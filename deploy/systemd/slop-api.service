@@ -1,0 +1,15 @@
+[Unit]
+Description=Slop API and website
+After=slop-pg.service network-online.target
+Wants=slop-pg.service
+
+[Service]
+EnvironmentFile=%h/.config/slop/slop.env
+ExecStart=%h/slop-deploy/current/slop-api serve
+Restart=on-failure
+RestartSec=5
+NoNewPrivileges=yes
+PrivateTmp=yes
+
+[Install]
+WantedBy=default.target

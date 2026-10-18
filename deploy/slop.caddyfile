@@ -1,0 +1,6 @@
+# Slop's test deployment: copy to /etc/caddy/Caddyfile.d/ and reload Caddy. Shares the server's
+# hostname (and certificate) on port 8443, leaving the main site alone.
+v2202610438319540065.happysrv.de:8443 {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8090
+}
