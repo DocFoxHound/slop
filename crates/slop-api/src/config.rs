@@ -20,6 +20,8 @@ pub struct Config {
     pub catalog: CatalogRules,
     pub releases: ReleaseConfig,
     pub rate_limits: crate::ratelimit::Limits,
+    /// The built website (`web/dist`) to serve from the same origin. Unset: API only.
+    pub web_dir: Option<std::path::PathBuf>,
     /// Header holding the client's IP, set by the load balancer (e.g. `x-forwarded-for`,
     /// `fly-client-ip`). Unset: the connection's peer address. Only set it when every request
     /// passes through a proxy that overwrites the header, or clients can pick their own IP.
@@ -205,6 +207,10 @@ impl Config {
                 write_per_minute: int_var("SLOP_RATE_WRITE_PER_MIN", 60)?.max(1) as u32,
                 read_per_minute: int_var("SLOP_RATE_READ_PER_MIN", 600)?.max(1) as u32,
             },
+            web_dir: env::var("SLOP_WEB_DIR")
+                .ok()
+                .filter(|s| !s.is_empty())
+                .map(std::path::PathBuf::from),
             client_ip_header: env::var("SLOP_CLIENT_IP_HEADER")
                 .ok()
                 .filter(|s| !s.is_empty())

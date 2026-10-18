@@ -5,6 +5,7 @@ use axum::{
     Router,
     body::Body,
     http::{Method, Request, StatusCode, header},
+    response::IntoResponse,
     response::Response,
     routing::{get, post},
 };
@@ -83,6 +84,26 @@ async fn fake_github() -> String {
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
+        // A private repository's release: its asset API redirects to a short-lived signed link.
+        .route(
+            "/repos/octo/game/releases/tags/{tag}",
+            get(|headers: axum::http::HeaderMap| async move {
+                let host = headers["host"].to_str().unwrap().to_string();
+                axum::Json(json!({ "assets": [{ "name": "game.zip", "url": format!("http://{host}/assets/1") }] }))
+            }),
+        )
+        .route(
+            "/assets/1",
+            get(|headers: axum::http::HeaderMap| async move {
+                let authorized = headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer gh-test-token");
+                let accepts_file = headers.get("accept").and_then(|v| v.to_str().ok()) == Some("application/octet-stream");
+                if authorized && accepts_file {
+                    (StatusCode::FOUND, [("location", "https://objects.example/signed?token=short-lived")]).into_response()
+                } else {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            }),
+        )
         .route(
             "/repos/octo/game/contents/",
             get(|| async { axum::Json(json!([{ "name": "Cargo.toml" }, { "name": "src" }])) }),
@@ -140,6 +161,7 @@ async fn test_app(db: PgPool) -> TestApp {
             github_token: None,
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
+        web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
     };
     let state = AppState::new(db.clone(), config.clone()).unwrap();
@@ -1989,4 +2011,103 @@ async fn slop_build_setup_detects_the_project(db: PgPool) {
         ),
         "{create}"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Private repositories
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn private_release_files_get_short_lived_links(db: PgPool) {
+    let app = test_app(db).await;
+    let url = "https://github.com/octo/game/releases/download/v1/game.zip";
+    // Without a GitHub token, files are fetched from their own URL.
+    assert_eq!(releases::download_link(&app.state, url).await.unwrap(), url);
+
+    // With one, GitHub's asset API hands out a signed link (and only with the token).
+    let mut config = app.config.clone();
+    config.releases.github_token = Some("gh-test-token".into());
+    let state = AppState::new(app.db.clone(), config).unwrap();
+    assert_eq!(
+        releases::download_link(&state, url).await.unwrap(),
+        "https://objects.example/signed?token=short-lived"
+    );
+    let missing = releases::download_link(
+        &state,
+        "https://github.com/octo/game/releases/download/v1/other.zip",
+    )
+    .await;
+    assert!(
+        missing
+            .unwrap_err()
+            .to_string()
+            .contains("no file named other.zip")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Serving the website
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_api_can_serve_the_website(db: PgPool) {
+    let dir = std::env::temp_dir().join(format!("slop-web-test-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(dir.join("assets")).unwrap();
+    std::fs::write(dir.join("index.html"), "<!doctype html><title>Slop</title>").unwrap();
+    std::fs::write(
+        dir.join("login.html"),
+        "<!doctype html><title>Sign in</title>",
+    )
+    .unwrap();
+    std::fs::write(dir.join("assets/app-1234.js"), "console.log(1)").unwrap();
+
+    let base = test_app(db).await;
+    let mut config = base.config.clone();
+    config.web_dir = Some(dir.clone());
+    let router = router(AppState::new(base.db.clone(), config.clone()).unwrap()).unwrap();
+    let app = TestApp { router, ..base };
+
+    let text = |res: Response| async move {
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap()
+    };
+    let home = app.send(req(Method::GET, "/")).await;
+    assert_eq!(home.status(), StatusCode::OK);
+    let csp = home.headers()["content-security-policy"]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        csp.contains("script-src 'self'") && csp.contains("frame-ancestors 'none'"),
+        "{csp}"
+    );
+    assert_eq!(home.headers()["cache-control"], "no-cache");
+    assert!(text(home).await.contains("<title>Slop</title>"));
+    // Browser-side routes get the app; real files are served as they are.
+    assert!(
+        text(app.send(req(Method::GET, "/app/some-game")).await)
+            .await
+            .contains("<title>Slop</title>")
+    );
+    assert!(
+        text(app.send(req(Method::GET, "/login.html")).await)
+            .await
+            .contains("Sign in")
+    );
+    let asset = app.send(req(Method::GET, "/assets/app-1234.js")).await;
+    assert_eq!(
+        asset.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    // The API is unchanged: JSON, strict CSP, and JSON 404s under /v1.
+    let api = app.send(req(Method::GET, "/v1/categories")).await;
+    assert_eq!(
+        api.headers()["content-security-policy"],
+        "default-src 'none'; frame-ancestors 'none'"
+    );
+    let missing = app.send(req(Method::GET, "/v1/nope")).await;
+    assert_eq!(missing.status(), StatusCode::NOT_FOUND);
+    assert_eq!(body_json(missing).await["error"]["code"], "not_found");
+    assert_ne!(
+        app.send(req(Method::GET, "/healthz")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

@@ -90,17 +90,65 @@ struct Subject {
 }
 
 pub struct ProvenanceVerifier {
-    root: TrustedRoot,
+    /// Sigstore's public-good instance: GitHub uses it for public repositories.
+    public_good: TrustedRoot,
+    /// GitHub's own Sigstore instance: used for private and internal repositories. It timestamps
+    /// signatures with its own timestamp authority instead of logging them publicly.
+    github: TrustedRoot,
 }
 
 impl ProvenanceVerifier {
-    /// Trusts Sigstore's public-good instance, which GitHub uses for public repositories. The
-    /// trusted root is the snapshot embedded in `sigstore-trust-root`; refreshing it over TUF is
-    /// a later step.
+    /// Trusts both instances GitHub signs attestations with. The trusted roots are the snapshots
+    /// embedded in `sigstore-trust-root`; refreshing them over TUF is a later step.
     pub fn public_good() -> Result<Self, ProvenanceError> {
-        let root = TrustedRoot::from_embedded(SigstoreInstance::PublicGood)
-            .map_err(|e| ProvenanceError::Signature(format!("Sigstore trusted root: {e}")))?;
-        Ok(Self { root })
+        let root = |instance| {
+            TrustedRoot::from_embedded(instance)
+                .map_err(|e| ProvenanceError::Signature(format!("Sigstore trusted root: {e}")))
+        };
+        Ok(Self {
+            public_good: root(SigstoreInstance::PublicGood)?,
+            github: root(SigstoreInstance::GitHub)?,
+        })
+    }
+
+    /// Cryptographic verification against either instance. Public-good signatures must be in
+    /// the transparency log; GitHub-instance signatures must carry a verified timestamp instead.
+    fn sigstore_verify(
+        &self,
+        artifact: ArtifactDigest,
+        bundle: &Bundle,
+        issuer: Option<&str>,
+    ) -> Result<sigstore_verify::VerificationResult, ProvenanceError> {
+        let with_issuer = |p: VerificationPolicy| match issuer {
+            Some(i) => p.require_issuer(i),
+            None => p,
+        };
+        let public = sigstore_verify::verify(
+            artifact.clone(),
+            bundle,
+            &with_issuer(VerificationPolicy::any_identity()),
+            &self.public_good,
+        );
+        match public {
+            Ok(result) if result.certificate_verified() && result.tlog_verified() => {
+                return Ok(result);
+            }
+            Ok(_) => {}
+            Err(_) => {}
+        }
+        let policy = with_issuer(
+            VerificationPolicy::any_identity()
+                .skip_tlog_unsafe()
+                .skip_sct(),
+        );
+        let result = sigstore_verify::verify(artifact, bundle, &policy, &self.github)
+            .map_err(|e| ProvenanceError::Signature(e.to_string()))?;
+        if !result.certificate_verified() || result.verified_timestamps().is_empty() {
+            return Err(ProvenanceError::Signature(
+                "certificate or signing time wasn't verified".into(),
+            ));
+        }
+        Ok(result)
     }
 
     /// Verifies an attestation for a file with this SHA-256 (lowercase hex).
@@ -193,14 +241,7 @@ impl ProvenanceVerifier {
         // 2. Full Sigstore verification: certificate chain, transparency log, signature, issuer.
         let artifact = ArtifactDigest::new(algorithm, digest.to_vec())
             .map_err(|e| ProvenanceError::Malformed(e.to_string()))?;
-        let policy = VerificationPolicy::any_identity().require_issuer(GITHUB_ACTIONS_ISSUER);
-        let result = sigstore_verify::verify(artifact, &bundle, &policy, &self.root)
-            .map_err(|e| ProvenanceError::Signature(e.to_string()))?;
-        if !result.certificate_verified() || !result.tlog_verified() {
-            return Err(ProvenanceError::Signature(
-                "certificate or transparency log wasn't verified".into(),
-            ));
-        }
+        let result = self.sigstore_verify(artifact, &bundle, Some(GITHUB_ACTIONS_ISSUER))?;
         let cert = result
             .certificate()
             .ok_or_else(|| ProvenanceError::Signature("no signing certificate".into()))?;
@@ -281,6 +322,34 @@ mod tests {
             None
         );
         assert_eq!(github_repo_path("https://github.com/octo/.."), None);
+    }
+
+    /// GitHub's own instance (private repositories): verified with GitHub's root and a timestamp.
+    #[test]
+    fn github_instance_signatures_verify() {
+        let v = ProvenanceVerifier::public_good().unwrap();
+        let json = include_str!("../tests/fixtures/github-private-attestation.sigstore.json");
+        let bundle = Bundle::from_json(json).unwrap();
+        let digest = |hex_digest: &str| {
+            ArtifactDigest::new(HashAlgorithm::Sha2256, hex::decode(hex_digest).unwrap()).unwrap()
+        };
+        let ok = v.sigstore_verify(
+            digest("76f1fe8593bf227cca2c089e3c16dc95014a8d3e89c5dd220530469ca043c428"),
+            &bundle,
+            None,
+        );
+        assert!(ok.is_ok(), "{:?}", ok.err());
+        assert!(!ok.unwrap().verified_timestamps().is_empty());
+        // Another file's hash doesn't verify.
+        let bad = v.sigstore_verify(digest(&"00".repeat(32)), &bundle, None);
+        assert!(bad.is_err());
+        // It isn't a GitHub Actions build, so the Actions issuer requirement fails.
+        let wrong_issuer = v.sigstore_verify(
+            digest("76f1fe8593bf227cca2c089e3c16dc95014a8d3e89c5dd220530469ca043c428"),
+            &bundle,
+            Some(GITHUB_ACTIONS_ISSUER),
+        );
+        assert!(wrong_issuer.is_err());
     }
 
     #[test]

@@ -161,6 +161,15 @@ async fn fake_api() -> (String, Arc<Fake>) {
         .route("/v1/me", get(me))
         .route("/v1/revocations", get(revocations))
         .route("/files/{name}", get(file))
+        // A private repository's file: refused at its own URL; Slop hands out a link instead.
+        .route("/private/{name}", get(|| async { StatusCode::NOT_FOUND }))
+        .route(
+            "/v1/apps/game/releases/{release}/download/{platform}",
+            get(|headers: HeaderMap| async move {
+                let host = headers["host"].to_str().unwrap().to_string();
+                Json(json!({ "url": format!("http://{host}/files/game.zip") }))
+            }),
+        )
         .with_state(fake.clone());
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -369,7 +378,7 @@ async fn install_verify_launch_and_revoke() {
 
     let seen = Mutex::new(0u64);
     let installed = lib
-        .install(&signed, Platform::Linux, |got, _| {
+        .install(&signed, Platform::Linux, None, |got, _| {
             *seen.lock().unwrap() = got
         })
         .await
@@ -401,7 +410,7 @@ async fn install_verify_launch_and_revoke() {
     ));
 
     // Reinstall, then revoke: the kill switch stops it, even offline from the saved list.
-    lib.install(&signed, Platform::Linux, |_, _| {})
+    lib.install(&signed, Platform::Linux, None, |_, _| {})
         .await
         .unwrap();
     fake.revoked.lock().unwrap().push("r1".into());
@@ -431,7 +440,7 @@ async fn a_changed_file_is_never_installed() {
     let dir = tempdir();
     let lib = library(&dir);
     let err = lib
-        .install(&signed, Platform::Linux, |_, _| {})
+        .install(&signed, Platform::Linux, None, |_, _| {})
         .await
         .unwrap_err();
     assert!(matches!(err, Error::Verify(_)), "{err}");
@@ -460,7 +469,7 @@ async fn forged_manifests_and_unsafe_archives_are_refused() {
         &SigningKey::from_bytes(&[1; 32]),
     );
     assert!(matches!(
-        lib.install(&forged, Platform::Linux, |_, _| {}).await,
+        lib.install(&forged, Platform::Linux, None, |_, _| {}).await,
         Err(Error::Verify(_))
     ));
 
@@ -475,7 +484,7 @@ async fn forged_manifests_and_unsafe_archives_are_refused() {
         .push(("evil.zip".into(), evil.clone()));
     let signed = manifest_for(&base, "evil.zip", &evil, "r2");
     assert!(matches!(
-        lib.install(&signed, Platform::Linux, |_, _| {}).await,
+        lib.install(&signed, Platform::Linux, None, |_, _| {}).await,
         Err(Error::Verify(_))
     ));
     assert!(
@@ -486,7 +495,8 @@ async fn forged_manifests_and_unsafe_archives_are_refused() {
     let zip = zip_of(&[("bin/game", GAME, 0o755)]);
     let signed = manifest_for(&base, "game.zip", &zip, "r3");
     assert!(matches!(
-        lib.install(&signed, Platform::Windows, |_, _| {}).await,
+        lib.install(&signed, Platform::Windows, None, |_, _| {})
+            .await,
         Err(Error::Install(_))
     ));
     std::fs::remove_dir_all(dir).unwrap();
@@ -508,7 +518,7 @@ async fn unsigned_builds_and_repo_switches_are_refused() {
         .allow_http_downloads(true);
     let signed = manifest_for(&base, "game.zip", &zip, "r1");
     let err = strict
-        .install(&signed, Platform::Linux, |_, _| {})
+        .install(&signed, Platform::Linux, None, |_, _| {})
         .await
         .unwrap_err();
     assert!(
@@ -526,7 +536,7 @@ async fn unsigned_builds_and_repo_switches_are_refused() {
     );
     let forged = slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key());
     let err = strict
-        .install(&forged, Platform::Linux, |_, _| {})
+        .install(&forged, Platform::Linux, None, |_, _| {})
         .await
         .unwrap_err();
     assert!(
@@ -536,7 +546,7 @@ async fn unsigned_builds_and_repo_switches_are_refused() {
 
     // Once installed from one repository, an update from another is refused.
     let lib = library(&dir);
-    lib.install(&signed, Platform::Linux, |_, _| {})
+    lib.install(&signed, Platform::Linux, None, |_, _| {})
         .await
         .unwrap();
     let mut moved: ReleaseManifest = serde_json::from_str(&signed.payload).unwrap();
@@ -544,12 +554,47 @@ async fn unsigned_builds_and_repo_switches_are_refused() {
     moved.release_id = "r2".into();
     let moved = slop_manifest::sign(&moved, Purpose::ReleaseManifest, &key());
     let err = lib
-        .install(&moved, Platform::Linux, |_, _| {})
+        .install(&moved, Platform::Linux, None, |_, _| {})
         .await
         .unwrap_err();
     assert!(
         matches!(err, Error::Verify(ref m) if m.contains("installed app came from")),
         "{err}"
     );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn private_files_are_fetched_through_a_slop_link() {
+    let (base, fake) = fake_api().await;
+    let zip = zip_of(&[("bin/game", GAME, 0o755)]);
+    fake.files
+        .lock()
+        .unwrap()
+        .push(("game.zip".into(), zip.clone()));
+    // The manifest points at the private URL, which refuses anonymous downloads.
+    let mut manifest: ReleaseManifest =
+        serde_json::from_str(&manifest_for(&base, "game.zip", &zip, "r1").payload).unwrap();
+    manifest.files[0].url = format!("{base}private/game.zip");
+    let signed = slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key());
+    let dir = tempdir();
+    let lib = library(&dir);
+
+    let err = lib
+        .install(&signed, Platform::Linux, None, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Install(ref m) if m.contains("404")),
+        "{err}"
+    );
+
+    let (api, _) = api_for(&base).await;
+    let installed = lib
+        .install(&signed, Platform::Linux, Some(&api), |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(installed.version, "1.0.0");
     std::fs::remove_dir_all(dir).unwrap();
 }

@@ -44,6 +44,10 @@ pub fn routes() -> Router<AppState> {
             get(list_releases).post(submit_release),
         )
         .route("/apps/{slug}/manifest", get(latest_manifest))
+        .route(
+            "/apps/{slug}/releases/{release_id}/download/{platform}",
+            get(file_download_link),
+        )
         .route("/revocations", get(revocations))
         .route("/keys", get(keys))
         .route("/server", get(server_info))
@@ -436,6 +440,123 @@ async fn latest_manifest(
     manifest.map(|m| Json(m.0)).ok_or(ApiError::NotFound)
 }
 
+// ---------------------------------------------------------------------------------------------
+// Downloads from private repositories (ARCHITECTURE §6.5)
+
+/// `(owner/repo, tag, file name)` of a GitHub release download URL.
+fn github_release_file(url: &str) -> Option<(String, String, String)> {
+    let rest = url.strip_prefix("https://github.com/")?;
+    let mut parts = rest.split('/');
+    let (owner, repo) = (parts.next()?, parts.next()?);
+    if parts.next()? != "releases" || parts.next()? != "download" {
+        return None;
+    }
+    let tag = percent_encoding::percent_decode_str(parts.next()?)
+        .decode_utf8()
+        .ok()?;
+    let name = percent_encoding::percent_decode_str(parts.next()?)
+        .decode_utf8()
+        .ok()?;
+    parts.next().is_none().then(|| {
+        (
+            format!("{owner}/{repo}"),
+            tag.into_owned(),
+            name.into_owned(),
+        )
+    })
+}
+
+/// Where to download a release file from. For a GitHub release with a `GITHUB_TOKEN` configured,
+/// a short-lived signed link from GitHub's API, which also works for private repositories;
+/// otherwise the file's own URL. Slop never relays the file itself.
+pub async fn download_link(state: &AppState, url: &str) -> anyhow::Result<String> {
+    let (Some(_), Some((repo, tag, name))) = (
+        &state.config.releases.github_token,
+        github_release_file(url),
+    ) else {
+        return Ok(url.to_string());
+    };
+    #[derive(Deserialize)]
+    struct Asset {
+        name: String,
+        url: String,
+    }
+    #[derive(Deserialize)]
+    struct Release {
+        assets: Vec<Asset>,
+    }
+    let api = &state.config.releases.github_api_base;
+    let tag_path = percent_encoding::utf8_percent_encode(&tag, percent_encoding::NON_ALPHANUMERIC);
+    let release: Release = github_get(
+        state,
+        api.join(&format!("repos/{repo}/releases/tags/{tag_path}"))?,
+    )
+    .send()
+    .await?
+    .error_for_status()
+    .context("finding the release on GitHub")?
+    .json()
+    .await?;
+    let asset = release
+        .assets
+        .into_iter()
+        .find(|a| a.name == name)
+        .ok_or_else(|| anyhow!("the release has no file named {name}"))?;
+    // The asset API answers with a redirect to a signed link that expires within minutes. Ask
+    // without following it (state.http doesn't follow redirects).
+    let res = github_request(
+        state,
+        &state.http,
+        Url::parse(&asset.url)?,
+        "application/octet-stream",
+    )
+    .send()
+    .await?;
+    if !res.status().is_redirection() {
+        bail!(
+            "GitHub didn't give a download link (HTTP {})",
+            res.status().as_u16()
+        );
+    }
+    let location = res
+        .headers()
+        .get(reqwest::header::LOCATION)
+        .and_then(|v| v.to_str().ok())
+        .ok_or_else(|| anyhow!("GitHub's redirect had no location"))?;
+    Ok(location.to_string())
+}
+
+#[derive(Serialize)]
+struct DownloadLink {
+    url: String,
+}
+
+/// A download link for one file of an approved release, for the desktop app when the file's own
+/// URL isn't public. The app still checks the file against the signed manifest.
+async fn file_download_link(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Path((slug, release_id, platform)): Path<(String, Uuid, String)>,
+) -> ApiResult<Json<DownloadLink>> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
+    let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
+    let url: Option<String> = sqlx::query_scalar(
+        "select f.url from release_files f join releases r on r.id = f.release_id
+         where r.id = $1 and r.app_id = $2 and r.status = 'approved' and f.platform = $3",
+    )
+    .bind(release_id)
+    .bind(app_id)
+    .bind(&platform)
+    .fetch_optional(&state.db)
+    .await?;
+    let url = url.ok_or(ApiError::NotFound)?;
+    let url = download_link(&state, &url)
+        .await
+        .map_err(ApiError::Internal)?;
+    Ok(Json(DownloadLink { url }))
+}
+
 /// The current revocation list, freshly signed (SECURITY §5.5).
 async fn revocations(State(state): State<AppState>) -> ApiResult<Json<Signed>> {
     let key = state
@@ -587,9 +708,12 @@ async fn fetch_release(
     .fetch_all(&state.db)
     .await?;
     for (platform, url) in files {
+        let source = download_link(state, &url)
+            .await
+            .with_context(|| format!("{platform} build"))?;
         let (size, sha256) = hash_download(
             &state.fetch_http,
-            &url,
+            &source,
             state.config.releases.max_file_bytes,
         )
         .await
@@ -632,10 +756,19 @@ async fn fetch_release(
 }
 
 pub(crate) fn github_get(state: &AppState, url: Url) -> reqwest::RequestBuilder {
-    let req = state
-        .fetch_http
+    github_request(state, &state.fetch_http, url, "application/vnd.github+json")
+}
+
+/// A GitHub API GET on a chosen client, with Slop's token if configured.
+fn github_request(
+    state: &AppState,
+    client: &reqwest::Client,
+    url: Url,
+    accept: &str,
+) -> reqwest::RequestBuilder {
+    let req = client
         .get(url)
-        .header("accept", "application/vnd.github+json")
+        .header("accept", accept)
         .header("user-agent", "slop-api");
     match &state.config.releases.github_token {
         Some(token) => req.bearer_auth(token),
@@ -812,6 +945,28 @@ mod tests {
                 false
             )
             .is_err()
+        );
+    }
+
+    #[test]
+    fn github_release_file_urls() {
+        assert_eq!(
+            github_release_file(
+                "https://github.com/octo/game/releases/download/v1.0/My%20Game.zip"
+            ),
+            Some(("octo/game".into(), "v1.0".into(), "My Game.zip".into()))
+        );
+        assert_eq!(
+            github_release_file("https://github.com/octo/game/archive/main.zip"),
+            None
+        );
+        assert_eq!(
+            github_release_file("https://git.example/octo/game/releases/download/v1/x.zip"),
+            None
+        );
+        assert_eq!(
+            github_release_file("https://github.com/octo/game/releases/download/v1/x.zip/extra"),
+            None
         );
     }
 

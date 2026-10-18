@@ -43,6 +43,14 @@ on:
         required: false
         type: string
         default: ""
+      sign:
+        description: >-
+          Sign each build with a GitHub artifact attestation (the maker's signature Slop requires).
+          Attestations in private repositories need GitHub Enterprise Cloud, so private test
+          setups turn this off and run Slop with SLOP_REQUIRE_MAKER_SIGNATURE=false.
+        required: false
+        type: boolean
+        default: true
       exec:
         description: >-
           custom only: the program to start, relative to output-dir. "{ext}" becomes .exe on
@@ -209,6 +217,7 @@ jobs:
           PY
 
       - name: Sign (maker's attestation)
+        if: inputs.sign
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: slop-dist/*.zip

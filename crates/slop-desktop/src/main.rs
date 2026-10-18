@@ -29,6 +29,12 @@ const API_URL: &str = match option_env!("SLOP_API_URL") {
     None => "http://localhost:5173/",
 };
 
+/// Set to `true` at build time to accept builds without a maker signature: only for private test
+/// setups whose repositories can't make GitHub attestations (see docs/TESTING.md).
+fn allow_unsigned() -> bool {
+    option_env!("SLOP_ALLOW_UNSIGNED") == Some("true")
+}
+
 /// Public keys whose signatures on release manifests and revocation lists this build trusts
 /// (comma-separated base64; see `slop-api keys generate`). Without any, nothing installs.
 const TRUSTED_KEYS: &str = match option_env!("SLOP_TRUSTED_KEYS") {
@@ -302,7 +308,7 @@ async fn install_app(
         .await?;
     let installed = desktop
         .library
-        .install(&signed, platform, |got, total| {
+        .install(&signed, platform, Some(&desktop.api), |got, total| {
             let _ = app.emit(
                 "install-progress",
                 Progress {
@@ -394,10 +400,11 @@ fn main() {
             let root = app.path().app_data_dir()?.join("library");
             // Plain-http downloads only in debug builds pointed at a local API.
             let allow_http = cfg!(debug_assertions) && API_URL.starts_with("http://localhost");
-            // Unsigned builds too, for the same local-development case (SECURITY §5.3 otherwise).
+            // Unsigned builds too, for the same local-development case, or when this build was
+            // made for a private test setup (SECURITY §5.3 otherwise).
             let library = Library::new(root, trusted_keys())?
                 .allow_http_downloads(allow_http)
-                .require_maker_signature(!allow_http);
+                .require_maker_signature(!allow_http && !allow_unsigned());
             app.manage(Desktop {
                 api,
                 library,
