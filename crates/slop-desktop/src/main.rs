@@ -142,16 +142,24 @@ async fn sign_in_start(desktop: State<'_, Desktop>) -> CommandResult<SignInStart
     };
     // Starting again replaces (and so cancels) any earlier sign-in.
     *desktop.pending_sign_in.lock().await = Some(pending);
-    Ok(SignInStarted { approve_url, browser_opened })
+    Ok(SignInStarted {
+        approve_url,
+        browser_opened,
+    })
 }
 
 /// Waits (up to 10 minutes) for the user to approve this device in the browser.
 #[tauri::command]
 async fn sign_in_finish(app: AppHandle, desktop: State<'_, Desktop>) -> CommandResult<()> {
-    let pending = desktop.pending_sign_in.lock().await.take().ok_or(CommandError {
-        code: "invalid",
-        message: "No sign-in in progress.".into(),
-    })?;
+    let pending = desktop
+        .pending_sign_in
+        .lock()
+        .await
+        .take()
+        .ok_or(CommandError {
+            code: "invalid",
+            message: "No sign-in in progress.".into(),
+        })?;
     pending
         .finish(&desktop.api, Duration::from_secs(600))
         .await?;
@@ -195,13 +203,17 @@ fn open_login(app: &AppHandle) {
         let _ = window.set_focus();
         return;
     }
-    let built = tauri::WebviewWindowBuilder::new(app, LOGIN_WINDOW, tauri::WebviewUrl::App("login.html".into()))
-        .title("Sign in to Slop")
-        .inner_size(420.0, 560.0)
-        .resizable(false)
-        .maximizable(false)
-        .center()
-        .build();
+    let built = tauri::WebviewWindowBuilder::new(
+        app,
+        LOGIN_WINDOW,
+        tauri::WebviewUrl::App("login.html".into()),
+    )
+    .title("Sign in to Slop")
+    .inner_size(420.0, 560.0)
+    .resizable(false)
+    .maximizable(false)
+    .center()
+    .build();
     if let Err(e) = built {
         tracing::error!(error = %e, "couldn't open the sign-in window; showing the store");
         show_main(app);
@@ -239,7 +251,9 @@ async fn startup(app: AppHandle) {
             show_main(&app);
         }
         Err(_) => {
-            tracing::warn!("Slop didn't answer at launch; opening the store with the saved sign-in");
+            tracing::warn!(
+                "Slop didn't answer at launch; opening the store with the saved sign-in"
+            );
             show_main(&app);
         }
     }
