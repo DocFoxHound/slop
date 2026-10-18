@@ -188,10 +188,13 @@ impl Library {
 
     /// Downloads, verifies and installs the build for `platform` from a signed manifest.
     /// `progress` gets (bytes so far, total bytes).
+    /// `links`: where to ask for a download link when the file's own URL isn't public (a private
+    /// repository, ARCHITECTURE §6.5). The file is checked against the manifest either way.
     pub async fn install(
         &self,
         signed: &Signed,
         platform: Platform,
+        links: Option<&ApiClient>,
         progress: impl Fn(u64, u64),
     ) -> Result<InstalledApp> {
         let manifest = self.verify_manifest(signed)?;
@@ -217,7 +220,7 @@ impl Library {
         fs::create_dir_all(&staging)?;
         let result = self
             .install_into(
-                &staging, signed, &manifest, &file, platform, provenance, &progress,
+                &staging, signed, &manifest, &file, platform, provenance, links, &progress,
             )
             .await;
         if let Err(err) = result {
@@ -305,11 +308,25 @@ impl Library {
         file: &slop_manifest::ManifestFile,
         platform: Platform,
         provenance: Option<slop_provenance::Provenance>,
+        links: Option<&ApiClient>,
         progress: &impl Fn(u64, u64),
     ) -> Result<()> {
         let download = staging.join("download");
-        self.download_verified(&file.url, file.size, &file.sha256, &download, progress)
-            .await?;
+        let link_path = format!(
+            "/v1/apps/{}/releases/{}/download/{}",
+            manifest.app_slug,
+            manifest.release_id,
+            platform.as_str()
+        );
+        self.download_verified(
+            &file.url,
+            links.map(|api| (api, link_path.as_str())),
+            file.size,
+            &file.sha256,
+            &download,
+            progress,
+        )
+        .await?;
 
         let app = staging.join("app");
         fs::create_dir_all(&app)?;
@@ -368,16 +385,24 @@ impl Library {
     async fn download_verified(
         &self,
         url: &str,
+        links: Option<(&ApiClient, &str)>,
         size: u64,
         sha256: &str,
         dest: &Path,
         progress: &impl Fn(u64, u64),
     ) -> Result<()> {
-        let url = url::Url::parse(url).map_err(|_| Error::Verify("bad download URL".into()))?;
-        if url.scheme() != "https" && !(self.allow_http && url.scheme() == "http") {
-            return Err(Error::Verify("downloads must use https".into()));
+        let mut res = self.http.get(self.download_url(url)?).send().await?;
+        // Private repositories: the release file isn't public, so ask Slop for a short-lived link.
+        if matches!(res.status().as_u16(), 401 | 403 | 404)
+            && let Some((api, path)) = links
+        {
+            #[derive(serde::Deserialize)]
+            struct Link {
+                url: String,
+            }
+            let link: Link = api.get_json(path).await?;
+            res = self.http.get(self.download_url(&link.url)?).send().await?;
         }
-        let mut res = self.http.get(url).send().await?;
         if !res.status().is_success() {
             return Err(Error::Install(format!(
                 "the maker's release file is unavailable (HTTP {})",
@@ -391,7 +416,7 @@ impl Library {
             got += chunk.len() as u64;
             if got > size {
                 return Err(Error::Verify(
-                    "the file changed after Slop scanned it (it's bigger)".into(),
+                    "the file changed after Slop checked it (it's bigger)".into(),
                 ));
             }
             hasher.update(&chunk);
@@ -401,10 +426,18 @@ impl Library {
         out.sync_all()?;
         if got != size || hex::encode(hasher.finalize()) != sha256 {
             return Err(Error::Verify(
-                "the file changed after Slop scanned it; not installing".into(),
+                "the file changed after Slop checked it; not installing".into(),
             ));
         }
         Ok(())
+    }
+
+    fn download_url(&self, url: &str) -> Result<url::Url> {
+        let url = url::Url::parse(url).map_err(|_| Error::Verify("bad download URL".into()))?;
+        if url.scheme() != "https" && !(self.allow_http && url.scheme() == "http") {
+            return Err(Error::Verify("downloads must use https".into()));
+        }
+        Ok(url)
     }
 
     pub fn uninstall(&self, slug: &str) -> Result<()> {

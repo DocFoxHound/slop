@@ -13,6 +13,7 @@ pub mod releases;
 pub mod scan;
 pub mod slop_build;
 pub mod tokens;
+pub mod web;
 
 use std::{sync::Arc, time::Duration};
 
@@ -91,15 +92,22 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(library::routes())
         .merge(slop_build::routes());
 
+    let not_found = || async {
+        (
+            StatusCode::NOT_FOUND,
+            Json(json!({ "error": { "code": "not_found", "message": "not found" } })),
+        )
+    };
     let mut router = Router::new()
         .route("/healthz", get(health))
-        .nest("/v1", v1)
-        .fallback(|| async {
-            (
-                StatusCode::NOT_FOUND,
-                Json(json!({ "error": { "code": "not_found", "message": "not found" } })),
-            )
-        })
+        .nest("/v1", v1.fallback(not_found));
+    // Optionally serve the built website (web/dist) from the same origin, so one process runs the
+    // whole site. Otherwise everything outside /v1 is a JSON 404.
+    router = match &state.config.web_dir {
+        Some(dir) => router.fallback_service(web::service(dir)),
+        None => router.fallback(not_found),
+    };
+    let mut router = router
         .layer(csrf)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),
