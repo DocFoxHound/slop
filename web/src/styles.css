@@ -65,6 +65,7 @@ code { font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; background:
 .me .who b { display: block; font-size: 13px; }
 
 .view { flex: 1; overflow-y: auto; }
+.update-notice { flex: none; display: flex; justify-content: space-between; align-items: center; gap: 12px; flex-wrap: wrap; padding: 8px 20px; background: rgba(163, 230, 53, 0.08); border-bottom: 1px solid rgba(163, 230, 53, 0.3); font-size: 13px; }
 .view:focus { outline: none; }
 .page { max-width: 1240px; margin: 0 auto; padding: 24px 24px 60px; }
 .page.narrow { max-width: 680px; }

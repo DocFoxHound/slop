@@ -23,8 +23,10 @@ signing key's public half, which desktop builds trust, is in `~/.config/slop/des
 
 `.github/workflows/desktop.yml` builds the Windows installer on every push to `main` that touches
 the app, and uploads it to the deployment with the run's GitHub OIDC token. The server signs it
-with the updater key (`SLOP_UPDATER_KEY`, only on the server). The app checks for updates each time
-it starts, installs them and restarts. The website's store page links the newest installer.
+with the updater key (`SLOP_UPDATER_KEY`, only on the server). The app checks for updates shortly
+after it starts and every 3 hours, and shows a notice ("Slop 0.1.N is available: Update and restart
+/ Later"); updates are never installed without the player choosing to. The website's store page
+links the newest installers.
 
 Linux packages are built here after each deploy that changes the app
 (`slop-desktop-linux@<commit>.service`, `deploy/desktop-linux/build.sh`), each in a container of the
