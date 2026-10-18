@@ -103,7 +103,17 @@ fn push_store_visible(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules, poli
 }
 
 /// Columns shared by every app summary query. `a` is `apps`.
-fn push_summary_columns(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules) {
+pub(crate) fn push_summary_columns(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules) {
+    push_summary_columns_with(qb, rules, "");
+}
+
+/// Like `push_summary_columns`, with `extra` columns (static SQL, e.g. `", l.added_at"`) added
+/// to the select list.
+pub(crate) fn push_summary_columns_with(
+    qb: &mut QueryBuilder<Postgres>,
+    rules: CatalogRules,
+    extra: &'static str,
+) {
     qb.push(
         "select a.slug, a.title, a.summary, a.kind, a.stage, a.status, a.min_age, a.updated_at,
                 coalesce(array(select t.slug from app_tags at join tags t on t.id = at.tag_id
@@ -120,7 +130,9 @@ fn push_summary_columns(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules) {
     .push_bind(rules.coming_soon_days)
     .push(") when 'beta' then a.stage_entered_at + make_interval(days => ")
     .push_bind(rules.beta_days)
-    .push(") end as stage_deadline from apps a");
+    .push(") end as stage_deadline")
+    .push(extra)
+    .push(" from apps a");
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -285,6 +297,26 @@ struct AppExtra {
     stage_entered_at: OffsetDateTime,
     last_commit_at: Option<OffsetDateTime>,
     store_visible: bool,
+}
+
+/// Finds an app the viewer may see: one in the store for them, or their own. Returns its ID and
+/// whether it's the viewer's. Anything else is "not found", so private apps can't be discovered.
+pub async fn visible_app(
+    state: &AppState,
+    slug: &str,
+    user: Option<&CurrentUser>,
+    policy: ViewerPolicy,
+) -> ApiResult<(Uuid, bool)> {
+    let mut qb = QueryBuilder::new("select a.id, a.maker_id, (");
+    push_store_visible(&mut qb, state.config.catalog, policy);
+    qb.push(") from apps a where a.slug = ").push_bind(slug);
+    let row: Option<(Uuid, Uuid, bool)> = qb.build_query_as().fetch_optional(&state.db).await?;
+    let (id, maker_id, store_visible) = row.ok_or(ApiError::NotFound)?;
+    let is_mine = user.is_some_and(|u| u.id == maker_id);
+    if !store_visible && !is_mine {
+        return Err(ApiError::NotFound);
+    }
+    Ok((id, is_mine))
 }
 
 /// Loads an app's store page. Makers always see their own apps; everyone else only sees apps

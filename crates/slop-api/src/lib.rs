@@ -1,10 +1,13 @@
 //! The Slop API: one modular application (docs/ARCHITECTURE.md §4).
 
+pub mod admin;
 pub mod auth;
 pub mod catalog;
 pub mod config;
 pub mod error;
+pub mod library;
 pub mod policy;
+pub mod releases;
 pub mod tokens;
 
 use std::{sync::Arc, time::Duration};
@@ -17,12 +20,8 @@ use axum::{
 use serde_json::json;
 use sqlx::PgPool;
 use tower_http::{
-    cors::{AllowOrigin, CorsLayer},
-    csrf::CsrfLayer,
-    limit::RequestBodyLimitLayer,
-    set_header::SetResponseHeaderLayer,
-    timeout::TimeoutLayer,
-    trace::TraceLayer,
+    csrf::CsrfLayer, limit::RequestBodyLimitLayer, set_header::SetResponseHeaderLayer,
+    timeout::TimeoutLayer, trace::TraceLayer,
 };
 
 use crate::config::Config;
@@ -33,7 +32,13 @@ pub static MIGRATOR: sqlx::migrate::Migrator = sqlx::migrate!();
 pub struct AppState {
     pub db: PgPool,
     pub config: Arc<Config>,
+    /// For calls to sign-in providers: short timeout, no redirects.
     pub http: reqwest::Client,
+    /// For fetching release files from makers' release pages: long timeout, a few redirects
+    /// (GitHub release downloads redirect to its file storage).
+    pub fetch_http: reqwest::Client,
+    /// Wakes the release fetcher when a release is submitted.
+    pub fetch_wakeup: Arc<tokio::sync::Notify>,
 }
 
 impl AppState {
@@ -42,10 +47,18 @@ impl AppState {
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
+        let fetch_http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(30 * 60))
+            .redirect(reqwest::redirect::Policy::limited(5))
+            .https_only(!config.releases.allow_http_downloads)
+            .build()?;
         Ok(Self {
             db,
             config: Arc::new(config),
             http,
+            fetch_http,
+            fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
         })
     }
 }
@@ -58,20 +71,11 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         csrf = csrf.add_trusted_origin(origin)?;
     }
 
-    // Read-only, cookie-less access for the packaged desktop app. Signed-in desktop requests
-    // will use tokens, not cookies (docs/SECURITY.md §4.1-4.2).
-    let cors_origins = state
-        .config
-        .cors_origins
-        .iter()
-        .map(|o| HeaderValue::from_str(o))
-        .collect::<Result<Vec<_>, _>>()?;
-    let cors = CorsLayer::new()
-        .allow_origin(AllowOrigin::list(cors_origins))
-        .allow_methods([axum::http::Method::GET])
-        .max_age(Duration::from_secs(3600));
-
-    let v1 = Router::new().merge(auth::routes()).merge(catalog::routes());
+    let v1 = Router::new()
+        .merge(auth::routes())
+        .merge(catalog::routes())
+        .merge(releases::routes())
+        .merge(library::routes());
 
     let mut router = Router::new()
         .route("/healthz", get(health))
@@ -83,7 +87,6 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             )
         })
         .layer(csrf)
-        .layer(cors)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,

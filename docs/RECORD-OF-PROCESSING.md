@@ -12,7 +12,12 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Provider account ID | `identities.provider_subject` | Sign-in | Contract | Life of account |
 | Last sign-in time | `identities.last_sign_in_at` | Security, devices page | Legitimate interest | Life of account |
 | Pending sign-up (name, email) | `pending_signups` | Finishing sign-up | Contract | 30 minutes, then deleted |
-| Session (hashed token, user agent, times) | `sessions` | Keeping the user signed in; devices page | Contract | Until expiry or revocation (30 days max) ⚖️ purge job still to build |
+| Session (hashed token, user agent, times) | `sessions` | Keeping the user signed in; devices page | Contract | Until expiry or revocation (30 days web, 180 days desktop) ⚖️ purge job still to build |
+| Desktop device name | `desktop_auth_requests.device_name`, `sessions.user_agent` | Approval page and devices page | Contract | 10 minutes for requests; sessions as above |
+| Desktop access and refresh tokens (hashed) | `access_tokens`, `refresh_tokens` | Keeping the desktop app signed in | Contract | 15 minutes / 30 days, then useless ⚖️ purge job still to build |
+| Library | `library_entries` | The user's library; later, recommendations | Contract | Until removed or account deleted |
+| Release submitter | `releases.submitted_by` | Who submitted a build (accountability) | Legitimate interest | Life of app + 6 years (scan records, LEGAL-GUIDANCE §15) |
+| Review decisions | `audit_log` | Record of review and moderation decisions | Legal obligation | 6 years (LEGAL-GUIDANCE §15) |
 
 **Not collected:** passwords, provider access tokens (used once at sign-in, never stored), date
 of birth, IP addresses in the database.
