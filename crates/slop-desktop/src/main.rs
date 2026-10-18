@@ -60,7 +60,10 @@ impl From<Error> for CommandError {
             Error::Revoked(_) => "revoked",
             Error::Io(_) => "io",
         };
-        Self { code, message: err.to_string() }
+        Self {
+            code,
+            message: err.to_string(),
+        }
     }
 }
 
@@ -73,7 +76,10 @@ fn method(name: &str) -> CommandResult<slop_client::Method> {
         "PUT" => Ok(slop_client::Method::PUT),
         "PATCH" => Ok(slop_client::Method::PATCH),
         "DELETE" => Ok(slop_client::Method::DELETE),
-        _ => Err(CommandError { code: "invalid", message: format!("unsupported method {name}") }),
+        _ => Err(CommandError {
+            code: "invalid",
+            message: format!("unsupported method {name}"),
+        }),
     }
 }
 
@@ -85,7 +91,10 @@ async fn api_request(
     path: String,
     body: Option<Value>,
 ) -> CommandResult<ApiResponse> {
-    Ok(desktop.api.request(method(&method_name)?, &path, body).await?)
+    Ok(desktop
+        .api
+        .request(method(&method_name)?, &path, body)
+        .await?)
 }
 
 #[derive(Serialize)]
@@ -95,22 +104,33 @@ struct SessionStatus {
 
 #[tauri::command]
 fn session_status(desktop: State<'_, Desktop>) -> SessionStatus {
-    SessionStatus { signed_in: desktop.api.has_session() }
+    SessionStatus {
+        signed_in: desktop.api.has_session(),
+    }
 }
 
 /// Opens the system browser to sign in, and waits (up to 10 minutes) for it to come back.
 #[tauri::command]
 async fn sign_in(desktop: State<'_, Desktop>) -> CommandResult<()> {
-    let device = format!("Slop for {}", desktop.platform.map_or("desktop", |p| match p {
-        Platform::Windows => "Windows",
-        Platform::Mac => "macOS",
-        Platform::Linux => "Linux",
-        Platform::Android => "Android",
-    }));
+    let device = format!(
+        "Slop for {}",
+        desktop.platform.map_or("desktop", |p| match p {
+            Platform::Windows => "Windows",
+            Platform::Mac => "macOS",
+            Platform::Linux => "Linux",
+            Platform::Android => "Android",
+        })
+    );
     let pending = signin::begin(&desktop.api, &device).await?;
-    tauri_plugin_opener::open_url(&pending.approve_url, None::<&str>)
-        .map_err(|e| CommandError { code: "browser", message: format!("couldn't open your browser: {e}") })?;
-    pending.finish(&desktop.api, Duration::from_secs(600)).await?;
+    tauri_plugin_opener::open_url(&pending.approve_url, None::<&str>).map_err(|e| {
+        CommandError {
+            code: "browser",
+            message: format!("couldn't open your browser: {e}"),
+        }
+    })?;
+    pending
+        .finish(&desktop.api, Duration::from_secs(600))
+        .await?;
     Ok(())
 }
 
@@ -127,7 +147,10 @@ struct PlatformInfo {
 
 #[tauri::command]
 fn platform_info(desktop: State<'_, Desktop>) -> PlatformInfo {
-    PlatformInfo { platform: desktop.platform, can_install: !TRUSTED_KEYS.trim().is_empty() }
+    PlatformInfo {
+        platform: desktop.platform,
+        can_install: !TRUSTED_KEYS.trim().is_empty(),
+    }
 }
 
 #[tauri::command]
@@ -144,22 +167,41 @@ struct Progress {
 
 /// Installs the newest approved release of an app, and adds it to the user's library.
 #[tauri::command]
-async fn install_app(app: AppHandle, desktop: State<'_, Desktop>, slug: String) -> CommandResult<InstalledApp> {
-    let platform = desktop
-        .platform
-        .ok_or_else(|| CommandError { code: "install", message: "Slop can't install apps on this system".into() })?;
-    let signed: Signed = desktop.api.get_json(&format!("/v1/apps/{}/manifest", urlencode(&slug))).await?;
+async fn install_app(
+    app: AppHandle,
+    desktop: State<'_, Desktop>,
+    slug: String,
+) -> CommandResult<InstalledApp> {
+    let platform = desktop.platform.ok_or_else(|| CommandError {
+        code: "install",
+        message: "Slop can't install apps on this system".into(),
+    })?;
+    let signed: Signed = desktop
+        .api
+        .get_json(&format!("/v1/apps/{}/manifest", urlencode(&slug)))
+        .await?;
     let installed = desktop
         .library
         .install(&signed, platform, |got, total| {
-            let _ = app.emit("install-progress", Progress { slug: slug.clone(), got, total });
+            let _ = app.emit(
+                "install-progress",
+                Progress {
+                    slug: slug.clone(),
+                    got,
+                    total,
+                },
+            );
         })
         .await?;
     if desktop.api.has_session() {
         // Best effort: the install works either way.
         let _ = desktop
             .api
-            .request(slop_client::Method::PUT, &format!("/v1/me/library/{}", urlencode(&slug)), None)
+            .request(
+                slop_client::Method::PUT,
+                &format!("/v1/me/library/{}", urlencode(&slug)),
+                None,
+            )
             .await;
     }
     Ok(installed)
@@ -174,10 +216,13 @@ fn uninstall_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()>
 #[tauri::command]
 async fn launch_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()> {
     let revocations = desktop.library.revocations_for_launch(&desktop.api).await;
-    let mut command = desktop.library.launch_command(&slug, revocations.as_ref())?;
-    let mut child = command
-        .spawn()
-        .map_err(|e| CommandError { code: "launch", message: format!("couldn't start the app: {e}") })?;
+    let mut command = desktop
+        .library
+        .launch_command(&slug, revocations.as_ref())?;
+    let mut child = command.spawn().map_err(|e| CommandError {
+        code: "launch",
+        message: format!("couldn't start the app: {e}"),
+    })?;
     // Reap the process when it exits.
     std::thread::spawn(move || {
         let _ = child.wait();
@@ -189,9 +234,13 @@ async fn launch_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<
 #[tauri::command]
 async fn run_installer(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()> {
     let revocations = desktop.library.revocations_for_launch(&desktop.api).await;
-    let path = desktop.library.installer_path(&slug, revocations.as_ref())?;
-    tauri_plugin_opener::open_path(&path, None::<&str>)
-        .map_err(|e| CommandError { code: "launch", message: format!("couldn't start the installer: {e}") })
+    let path = desktop
+        .library
+        .installer_path(&slug, revocations.as_ref())?;
+    tauri_plugin_opener::open_path(&path, None::<&str>).map_err(|e| CommandError {
+        code: "launch",
+        message: format!("couldn't start the installer: {e}"),
+    })
 }
 
 fn urlencode(s: &str) -> String {
@@ -203,7 +252,10 @@ fn trusted_keys() -> Vec<slop_manifest::ed25519_dalek::VerifyingKey> {
         .split(',')
         .map(str::trim)
         .filter(|k| !k.is_empty())
-        .map(|k| slop_manifest::verifying_key_from_base64(k).expect("SLOP_TRUSTED_KEYS holds an invalid key"))
+        .map(|k| {
+            slop_manifest::verifying_key_from_base64(k)
+                .expect("SLOP_TRUSTED_KEYS holds an invalid key")
+        })
         .collect()
 }
 
@@ -216,8 +268,15 @@ fn main() {
             let root = app.path().app_data_dir()?.join("library");
             // Plain-http downloads only in debug builds pointed at a local API.
             let allow_http = cfg!(debug_assertions) && API_URL.starts_with("http://localhost");
-            let library = Library::new(root, trusted_keys())?.allow_http_downloads(allow_http);
-            app.manage(Desktop { api, library, platform: Platform::current() });
+            // Unsigned builds too, for the same local-development case (SECURITY §5.3 otherwise).
+            let library = Library::new(root, trusted_keys())?
+                .allow_http_downloads(allow_http)
+                .require_maker_signature(!allow_http);
+            app.manage(Desktop {
+                api,
+                library,
+                platform: Platform::current(),
+            });
             Ok(())
         })
         .invoke_handler(tauri::generate_handler![

@@ -80,6 +80,8 @@ export function Releases() {
         match.
       </p>
 
+      <SigningHelp />
+
       <ReleaseForm repoUrl={app.data.repo_url} slug={slug} onSubmitted={releases.reload} />
 
       <h2 className="section-title">History</h2>
@@ -114,6 +116,11 @@ export function Releases() {
   );
 }
 
+/** `owner/repo/.github/workflows/build.yml` from a workflow URI. */
+export function workflowName(uri: string): string {
+  return uri.replace(/^https:\/\/github\.com\//, "").replace(/@.*$/, "");
+}
+
 function FileDetail({ file }: { file: Release["files"][number] }) {
   const label = PLATFORMS.find((p) => p.value === file.platform)?.label ?? file.platform;
   return (
@@ -132,8 +139,57 @@ function FileDetail({ file }: { file: Release["files"][number] }) {
             SHA-256 <code>{file.sha256.slice(0, 16)}…</code> · {file.size_bytes?.toLocaleString()} bytes
           </div>
         )}
+        {file.provenance ? (
+          <div className="small">
+            <span className="badge official">{file.provenance.built_by_slop_build ? "BUILT BY SLOP BUILD" : "SIGNED BY YOUR CI"}</span>{" "}
+            <span className="muted">
+              {workflowName(file.provenance.signer_workflow)}
+              {file.provenance.runner === "self-hosted" && " · self-hosted runner"}
+            </span>
+          </div>
+        ) : (
+          file.provenance_problem && (
+            <div className="small">
+              <span className="badge bad">NOT SIGNED</span> <span className="muted">{file.provenance_problem}</span>
+            </div>
+          )
+        )}
       </dd>
     </>
+  );
+}
+
+const WORKFLOW_SNIPPET = `permissions:
+  contents: write        # upload to your release
+  id-token: write        # get a signing certificate from Sigstore
+  attestations: write    # store the attestation on GitHub
+
+steps:
+  # … build your app into dist/ …
+  - uses: actions/attest-build-provenance@v2
+    with:
+      subject-path: dist/*`;
+
+/** Every build needs its maker's signature (docs/SECURITY.md §5.3). */
+function SigningHelp() {
+  return (
+    <details className="panel panel-pad help">
+      <summary>
+        <b>Sign your builds</b> <span className="muted">— every build needs your signature before it can be approved</span>
+      </summary>
+      <p>
+        Build your release files in GitHub Actions and add GitHub's attestation step. It signs each file with a short-lived
+        certificate tied to your repository, workflow and commit, and records it in Sigstore's public log. There's no key for
+        you to manage, and nobody who only has your Slop password can fake it.
+      </p>
+      <pre>
+        <code>{WORKFLOW_SNIPPET}</code>
+      </pre>
+      <p className="muted small">
+        Slop finds the attestation by each file's hash. The commit you enter below must be the one the workflow built. Slop
+        Build will set this up for you automatically. Only GitHub repositories are supported so far.
+      </p>
+    </details>
   );
 }
 

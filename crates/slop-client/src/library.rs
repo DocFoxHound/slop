@@ -40,6 +40,9 @@ pub struct InstallRecord {
     pub installed_at: String,
     /// SHA-256 of the program to launch, taken when it was unpacked.
     pub exec_sha256: Option<String>,
+    /// Who built it, from the maker's attestation, verified at install time.
+    #[serde(default)]
+    pub provenance: Option<slop_provenance::Provenance>,
 }
 
 /// An installed app, as the UI sees it.
@@ -52,6 +55,8 @@ pub struct InstalledApp {
     pub release_id: String,
     pub kind: FileKind,
     pub installed_at: String,
+    /// Verified maker attestation, if the build had one.
+    pub provenance: Option<slop_provenance::Provenance>,
 }
 
 pub struct Library {
@@ -59,6 +64,8 @@ pub struct Library {
     trusted: Vec<VerifyingKey>,
     http: reqwest::Client,
     allow_http: bool,
+    provenance: slop_provenance::ProvenanceVerifier,
+    require_maker_signature: bool,
 }
 
 fn valid_slug(slug: &str) -> bool {
@@ -94,12 +101,23 @@ impl Library {
         let root = root.into();
         fs::create_dir_all(root.join("apps"))?;
         fs::create_dir_all(root.join("staging"))?;
+        let provenance = slop_provenance::ProvenanceVerifier::public_good()
+            .map_err(|e| Error::Verify(e.to_string()))?;
         Ok(Self {
             root,
             trusted,
             http,
             allow_http: false,
+            provenance,
+            require_maker_signature: true,
         })
+    }
+
+    /// Whether builds must carry a verified maker signature (SECURITY §5.3). On by default; only
+    /// development builds against a local API turn it off.
+    pub fn require_maker_signature(mut self, require: bool) -> Self {
+        self.require_maker_signature = require;
+        self
     }
 
     /// Allows plain-http downloads. Only for local development against a dev API, and tests.
@@ -160,6 +178,7 @@ impl Library {
                     release_id: manifest.release_id,
                     kind,
                     installed_at: record.installed_at,
+                    provenance: record.provenance,
                 })
             })
             .collect();
@@ -190,13 +209,16 @@ impl Library {
                 "Android builds install on Android phones".into(),
             ));
         }
+        let provenance = self.check_maker_signature(&manifest, &file)?;
         let final_dir = self.app_dir(&manifest.app_slug)?;
 
         // A fresh staging folder for this attempt.
         let staging = self.root.join("staging").join(crate::random_token());
         fs::create_dir_all(&staging)?;
         let result = self
-            .install_into(&staging, signed, &manifest, &file, platform, &progress)
+            .install_into(
+                &staging, signed, &manifest, &file, platform, provenance, &progress,
+            )
             .await;
         if let Err(err) = result {
             let _ = fs::remove_dir_all(&staging);
@@ -230,9 +252,51 @@ impl Library {
             release_id: manifest.release_id,
             kind: file.kind,
             installed_at: record.installed_at,
+            provenance: record.provenance,
         })
     }
 
+    /// Checks the maker's signature on a build, before anything is downloaded.
+    fn check_maker_signature(
+        &self,
+        manifest: &ReleaseManifest,
+        file: &slop_manifest::ManifestFile,
+    ) -> Result<Option<slop_provenance::Provenance>> {
+        // An update must come from the same repository as what's installed: not even Slop can
+        // quietly repoint an installed app at someone else's code.
+        if let Ok((_, installed)) = self.record(&manifest.app_slug) {
+            let norm = |s: &str| {
+                s.trim_end_matches('/')
+                    .trim_end_matches(".git")
+                    .to_ascii_lowercase()
+            };
+            if norm(&installed.repo_url) != norm(&manifest.repo_url) {
+                return Err(Error::Verify(format!(
+                    "this update comes from {}, but the installed app came from {}; uninstall it first if you trust the change",
+                    manifest.repo_url, installed.repo_url
+                )));
+            }
+        }
+        match &file.attestation {
+            Some(bundle) => {
+                let expected = slop_provenance::Expected {
+                    repo_url: &manifest.repo_url,
+                    commit: &manifest.commit,
+                    slop_build_workflow: None,
+                };
+                self.provenance
+                    .verify_sha256(bundle, &file.sha256, expected)
+                    .map(Some)
+                    .map_err(|e| Error::Verify(format!("maker signature: {e}")))
+            }
+            None if self.require_maker_signature => Err(Error::Verify(
+                "this build has no maker signature, so it can't be installed".into(),
+            )),
+            None => Ok(None),
+        }
+    }
+
+    #[allow(clippy::too_many_arguments)] // private helper; each argument is distinct
     async fn install_into(
         &self,
         staging: &Path,
@@ -240,6 +304,7 @@ impl Library {
         manifest: &ReleaseManifest,
         file: &slop_manifest::ManifestFile,
         platform: Platform,
+        provenance: Option<slop_provenance::Provenance>,
         progress: &impl Fn(u64, u64),
     ) -> Result<()> {
         let download = staging.join("download");
@@ -288,6 +353,7 @@ impl Library {
             platform,
             installed_at: OffsetDateTime::now_utc().format(&Rfc3339).expect("formats"),
             exec_sha256,
+            provenance,
         };
         fs::write(
             app.join("install.json"),

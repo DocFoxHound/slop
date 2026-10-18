@@ -284,29 +284,6 @@ pub(crate) fn api_error(res: &ApiResponse) -> Error {
     }
 }
 
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[test]
-    fn only_api_paths_are_allowed() {
-        for ok in ["/v1/apps", "/v1/apps?q=a%20b", "/v1/apps/x/manifest"] {
-            assert!(checked_path(ok).is_ok(), "{ok}");
-        }
-        for bad in [
-            "/healthz",
-            "https://evil.example/v1/x",
-            "//evil.example/v1",
-            "/v1/../admin",
-            "/v1/a\nb",
-            "v1/apps",
-            "/v1/a#b",
-        ] {
-            assert!(checked_path(bad).is_err(), "{bad}");
-        }
-    }
-}
-
 /// The refresh token in the OS secure store (SECURITY §4.2). If the store isn't available
 /// (e.g. no Secret Service on a minimal Linux desktop), the token is kept in memory only and
 /// the user signs in again next time; it's never written to a plain file.
@@ -322,7 +299,10 @@ impl KeyringTokenStore {
         let entry = keyring::Entry::new(service, "refresh-token")
             .inspect_err(|e| tracing::warn!(error = %e, "OS secure store unavailable; sign-in won't be remembered"))
             .ok();
-        Self { entry, fallback: MemoryTokenStore::default() }
+        Self {
+            entry,
+            fallback: MemoryTokenStore::default(),
+        }
     }
 }
 
@@ -350,6 +330,29 @@ impl TokenStore for KeyringTokenStore {
                 let _ = entry.delete_credential();
             }
             None => self.fallback.clear(),
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn only_api_paths_are_allowed() {
+        for ok in ["/v1/apps", "/v1/apps?q=a%20b", "/v1/apps/x/manifest"] {
+            assert!(checked_path(ok).is_ok(), "{ok}");
+        }
+        for bad in [
+            "/healthz",
+            "https://evil.example/v1/x",
+            "//evil.example/v1",
+            "/v1/../admin",
+            "/v1/a\nb",
+            "v1/apps",
+            "/v1/a#b",
+        ] {
+            assert!(checked_path(bad).is_err(), "{bad}");
         }
     }
 }

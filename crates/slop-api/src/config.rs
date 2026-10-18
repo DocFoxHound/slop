@@ -33,6 +33,13 @@ pub struct ReleaseConfig {
     pub github_api_base: Url,
     /// Lets release files use plain http. Only for local development and tests.
     pub allow_http_downloads: bool,
+    /// Refuse to approve builds without a verified maker signature (SECURITY §5.3). Only turn this
+    /// off for local development.
+    pub require_maker_signature: bool,
+    /// Prefix of Slop Build's shared recipe workflow, for the "Built by Slop Build" label.
+    pub slop_build_workflow: Option<String>,
+    /// Optional GitHub token, for higher API rate limits when checking commits and attestations.
+    pub github_token: Option<String>,
 }
 
 impl fmt::Debug for ReleaseConfig {
@@ -45,6 +52,12 @@ impl fmt::Debug for ReleaseConfig {
             .field("max_file_bytes", &self.max_file_bytes)
             .field("github_api_base", &self.github_api_base.as_str())
             .field("allow_http_downloads", &self.allow_http_downloads)
+            .field("require_maker_signature", &self.require_maker_signature)
+            .field("slop_build_workflow", &self.slop_build_workflow)
+            .field(
+                "github_token",
+                &self.github_token.as_ref().map(|_| "<redacted>"),
+            )
             .finish()
     }
 }
@@ -145,6 +158,11 @@ impl Config {
                 .parse()
                 .context("GITHUB_API_BASE")?,
             allow_http_downloads: var_or("SLOP_ALLOW_HTTP_DOWNLOADS", "false") == "true",
+            require_maker_signature: var_or("SLOP_REQUIRE_MAKER_SIGNATURE", "true") != "false",
+            slop_build_workflow: env::var("SLOP_BUILD_WORKFLOW")
+                .ok()
+                .filter(|s| !s.is_empty()),
+            github_token: env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
         };
 
         Ok(Self {

@@ -159,6 +159,7 @@ async fn main() -> anyhow::Result<()> {
                     admin::approve(
                         &db,
                         config.releases.signing_key.as_ref(),
+                        config.releases.require_maker_signature,
                         release_id,
                         &reviewer,
                     )

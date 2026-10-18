@@ -74,6 +74,24 @@ async fn fake_github() -> String {
         .route(
             "/octo/game/releases/download/{tag}/{file}",
             get(|| async { BUILD_BYTES }),
+        )
+        // GitHub's attestations API: one repo has an attestation (for some other file), the rest
+        // have none.
+        .route(
+            "/repos/{owner}/{repo}/attestations/{digest}",
+            get(
+                |axum::extract::Path((owner, _repo, _digest)): axum::extract::Path<(String, String, String)>| async move {
+                    if owner == "sigstore" {
+                        let bundle: Value = serde_json::from_str(include_str!(
+                            "../../slop-provenance/tests/fixtures/github-actions-provenance.sigstore.json"
+                        ))
+                        .unwrap();
+                        (StatusCode::OK, axum::Json(json!({ "attestations": [{ "bundle": bundle }] })))
+                    } else {
+                        (StatusCode::NOT_FOUND, axum::Json(json!({ "message": "Not Found" })))
+                    }
+                },
+            ),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -102,6 +120,9 @@ async fn test_app(db: PgPool) -> TestApp {
             max_file_bytes: 1024,
             github_api_base: github_base.parse().unwrap(),
             allow_http_downloads: true,
+            require_maker_signature: false,
+            slop_build_workflow: None,
+            github_token: None,
         },
     };
     let state = AppState::new(db.clone(), config.clone()).unwrap();
@@ -1287,12 +1308,12 @@ async fn release_review_and_signed_manifest(db: PgPool) {
 
     let release_id: Uuid = id.parse().unwrap();
     assert!(
-        admin::approve(&app.db, Some(&app.signing_key), release_id, "")
+        admin::approve(&app.db, Some(&app.signing_key), false, release_id, "")
             .await
             .is_err(),
         "reviewer required"
     );
-    admin::approve(&app.db, Some(&app.signing_key), release_id, "rev")
+    admin::approve(&app.db, Some(&app.signing_key), false, release_id, "rev")
         .await
         .unwrap();
     admin::list_app(&app.db, "game", "rev").await.unwrap();
@@ -1446,7 +1467,7 @@ async fn a_missing_file_fails_the_release(db: PgPool) {
     // A failed release can't be approved.
     let id: Uuid = mine[0]["id"].as_str().unwrap().parse().unwrap();
     assert!(
-        admin::approve(&app.db, Some(&app.signing_key), id, "rev")
+        admin::approve(&app.db, Some(&app.signing_key), false, id, "rev")
             .await
             .is_err()
     );
@@ -1465,9 +1486,15 @@ async fn stages_need_an_approved_release(db: PgPool) {
             .is_err()
     );
     let id = submit_and_fetch(&app, &maker, "0.1.0").await;
-    admin::approve(&app.db, Some(&app.signing_key), id.parse().unwrap(), "rev")
-        .await
-        .unwrap();
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        false,
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
     admin::set_stage(&app.db, "game", slop_api::catalog::AppStage::Beta, "rev")
         .await
         .unwrap();
@@ -1542,4 +1569,73 @@ async fn library_add_list_remove(db: PgPool) {
     )
     .await;
     assert!(library.as_array().unwrap().is_empty());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker signatures
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn unsigned_builds_cant_be_approved(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+
+    // The fetch still works; the missing signature is recorded and shown to the maker.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["status"], "awaiting_review");
+    assert!(mine[0]["files"][0]["provenance"].is_null());
+    let problem = mine[0]["files"][0]["provenance_problem"].as_str().unwrap();
+    assert!(problem.contains("only supported for GitHub"), "{problem}");
+
+    // With signatures required (the default), approval is refused with that reason.
+    let err = admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        true,
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap_err()
+    .to_string();
+    assert!(err.contains("no verified maker signature"), "{err}");
+    let status: String = sqlx::query_scalar("select status::text from releases")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "awaiting_review");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn attestations_are_looked_up_and_checked(db: PgPool) {
+    let app = test_app(db).await;
+    let sha = "ab".repeat(32);
+    let commit = "f0b49a04e5a62250e0f60fb128004a73110fe311";
+
+    // No attestation on GitHub.
+    let err = releases::find_attestation(&app.state, "https://github.com/octo/game", commit, &sha)
+        .await
+        .unwrap_err();
+    assert!(err.contains("no build attestation found"), "{err}");
+
+    // A genuine attestation, but for a different file, doesn't count.
+    let err = releases::find_attestation(
+        &app.state,
+        "https://github.com/sigstore/sigstore-js",
+        commit,
+        &sha,
+    )
+    .await
+    .unwrap_err();
+    assert!(err.contains("doesn't name this file's hash"), "{err}");
+
+    // Repositories off GitHub can't be checked yet.
+    let err = releases::find_attestation(&app.state, "https://gitlab.com/octo/game", commit, &sha)
+        .await
+        .unwrap_err();
+    assert!(err.contains("only supported for GitHub"), "{err}");
 }

@@ -1,0 +1,17 @@
+[package]
+name = "slop-provenance"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+hex = "0.4.3"
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sigstore-verify = "0.15.0"
+thiserror = "2.0.21"
+
+[dev-dependencies]
+base64 = "0.23.1"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
