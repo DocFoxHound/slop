@@ -40,6 +40,8 @@ struct Desktop {
     api: ApiClient,
     library: Library,
     platform: Option<Platform>,
+    /// A browser sign-in waiting for approval (see `sign_in_start`).
+    pending_sign_in: tokio::sync::Mutex<Option<signin::PendingSignIn>>,
 }
 
 /// Errors as the UI sees them: a short code and a sentence to show.
@@ -109,9 +111,17 @@ fn session_status(desktop: State<'_, Desktop>) -> SessionStatus {
     }
 }
 
-/// Opens the system browser to sign in, and waits (up to 10 minutes) for it to come back.
+#[derive(Serialize)]
+struct SignInStarted {
+    /// The approval page. Shown to the user too, in case the browser didn't open.
+    approve_url: String,
+    browser_opened: bool,
+}
+
+/// Starts a browser sign-in: asks Slop for an approval page and tries to open it in the system
+/// browser. The UI then calls `sign_in_finish` to wait for the approval.
 #[tauri::command]
-async fn sign_in(desktop: State<'_, Desktop>) -> CommandResult<()> {
+async fn sign_in_start(desktop: State<'_, Desktop>) -> CommandResult<SignInStarted> {
     let device = format!(
         "Slop for {}",
         desktop.platform.map_or("desktop", |p| match p {
@@ -122,21 +132,117 @@ async fn sign_in(desktop: State<'_, Desktop>) -> CommandResult<()> {
         })
     );
     let pending = signin::begin(&desktop.api, &device).await?;
-    tauri_plugin_opener::open_url(&pending.approve_url, None::<&str>).map_err(|e| {
-        CommandError {
-            code: "browser",
-            message: format!("couldn't open your browser: {e}"),
+    let approve_url = pending.approve_url.clone();
+    let browser_opened = match tauri_plugin_opener::open_url(&approve_url, None::<&str>) {
+        Ok(()) => true,
+        Err(e) => {
+            tracing::warn!(error = %e, "couldn't open the browser for sign-in");
+            false
         }
+    };
+    // Starting again replaces (and so cancels) any earlier sign-in.
+    *desktop.pending_sign_in.lock().await = Some(pending);
+    Ok(SignInStarted { approve_url, browser_opened })
+}
+
+/// Waits (up to 10 minutes) for the user to approve this device in the browser.
+#[tauri::command]
+async fn sign_in_finish(app: AppHandle, desktop: State<'_, Desktop>) -> CommandResult<()> {
+    let pending = desktop.pending_sign_in.lock().await.take().ok_or(CommandError {
+        code: "invalid",
+        message: "No sign-in in progress.".into(),
     })?;
     pending
         .finish(&desktop.api, Duration::from_secs(600))
         .await?;
+    let _ = app.emit("session-changed", ());
+    show_main(&app);
     Ok(())
 }
 
+/// Signs out, then closes the store and shows the sign-in window, like Steam.
 #[tauri::command]
-async fn sign_out(desktop: State<'_, Desktop>) -> CommandResult<()> {
-    Ok(desktop.api.sign_out().await?)
+async fn sign_out(app: AppHandle, desktop: State<'_, Desktop>) -> CommandResult<()> {
+    desktop.api.sign_out().await?;
+    let _ = app.emit("session-changed", ());
+    open_login(&app);
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.hide();
+    }
+    Ok(())
+}
+
+/// Opens the sign-in window (from "Sign in" in the store).
+#[tauri::command]
+fn show_login(app: AppHandle) {
+    open_login(&app);
+}
+
+/// "Browse without signing in": the store opens signed out.
+#[tauri::command]
+fn continue_signed_out(app: AppHandle) {
+    show_main(&app);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Windows: a small sign-in window first, then the store (docs: like Steam's launcher).
+
+const LOGIN_WINDOW: &str = "login";
+
+fn open_login(app: &AppHandle) {
+    if let Some(window) = app.get_webview_window(LOGIN_WINDOW) {
+        let _ = window.show();
+        let _ = window.set_focus();
+        return;
+    }
+    let built = tauri::WebviewWindowBuilder::new(app, LOGIN_WINDOW, tauri::WebviewUrl::App("login.html".into()))
+        .title("Sign in to Slop")
+        .inner_size(420.0, 560.0)
+        .resizable(false)
+        .maximizable(false)
+        .center()
+        .build();
+    if let Err(e) = built {
+        tracing::error!(error = %e, "couldn't open the sign-in window; showing the store");
+        show_main(app);
+    }
+}
+
+fn show_main(app: &AppHandle) {
+    if let Some(main) = app.get_webview_window("main") {
+        let _ = main.show();
+        let _ = main.set_focus();
+    }
+    if let Some(login) = app.get_webview_window(LOGIN_WINDOW) {
+        let _ = login.close();
+    }
+}
+
+/// At launch: skip the sign-in window when a remembered sign-in still works. Offline, open the
+/// store anyway so installed games can be played; only a refused sign-in asks again.
+async fn startup(app: AppHandle) {
+    let api = app.state::<Desktop>().api.clone();
+    if !api.has_session() {
+        open_login(&app);
+        return;
+    }
+    let check = tokio::time::timeout(
+        Duration::from_secs(8),
+        api.request(slop_client::Method::GET, "/v1/me", None),
+    )
+    .await;
+    match check {
+        Ok(Ok(res)) if res.status == 401 => open_login(&app),
+        Ok(Ok(_)) => show_main(&app),
+        Ok(Err(e)) => {
+            tracing::warn!(error = %e, "offline at launch; opening the store with the saved sign-in");
+            show_main(&app);
+        }
+        Err(_) => {
+            tracing::warn!("Slop didn't answer at launch; opening the store with the saved sign-in");
+            show_main(&app);
+        }
+    }
 }
 
 #[derive(Serialize)]
@@ -260,6 +366,12 @@ fn trusted_keys() -> Vec<slop_manifest::ed25519_dalek::VerifyingKey> {
 }
 
 fn main() {
+    tracing_subscriber::fmt()
+        .with_env_filter(
+            tracing_subscriber::EnvFilter::try_from_default_env()
+                .unwrap_or_else(|_| "slop_desktop=info,slop_client=info".into()),
+        )
+        .init();
     tauri::Builder::default()
         .plugin(tauri_plugin_opener::init())
         .setup(|app| {
@@ -276,14 +388,33 @@ fn main() {
                 api,
                 library,
                 platform: Platform::current(),
+                pending_sign_in: tokio::sync::Mutex::new(None),
             });
+            tauri::async_runtime::spawn(startup(app.handle().clone()));
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            // Closing the sign-in window while the store is still hidden (at launch) quits, so
+            // the app never keeps running with no window.
+            if window.label() == LOGIN_WINDOW && matches!(event, tauri::WindowEvent::Destroyed) {
+                let app = window.app_handle();
+                let store_visible = app
+                    .get_webview_window("main")
+                    .and_then(|main| main.is_visible().ok())
+                    .unwrap_or(false);
+                if !store_visible {
+                    app.exit(0);
+                }
+            }
         })
         .invoke_handler(tauri::generate_handler![
             api_request,
             session_status,
-            sign_in,
+            sign_in_start,
+            sign_in_finish,
             sign_out,
+            show_login,
+            continue_signed_out,
             platform_info,
             installed_apps,
             install_app,

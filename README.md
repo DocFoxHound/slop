@@ -89,6 +89,16 @@ The desktop app is built for one Slop site and one set of signing keys:
 The page never talks to the API directly in the desktop app: requests go through Rust, which holds
 the user's tokens in the OS secure store.
 
+Like Steam, the app opens with a small sign-in window (`web/login.html`) before the store. If a
+remembered sign-in still works, the store opens straight away; offline, it opens anyway so installed
+apps can be played. Signing in happens in the system browser, where the user approves the device;
+the sign-in window also shows the link, in case no browser opens. Signing out closes the store and
+brings the sign-in window back. "Browse without signing in" opens the store signed out.
+
+Remembering sign-ins needs the OS secure store: Keychain on macOS, Credential Manager on Windows,
+and a Secret Service (GNOME Keyring or KWallet) on Linux. Without one the app still works but asks
+to sign in each time it starts; it never falls back to a plain file.
+
 ## Releases and review
 
 1. Make a signing key once: `cargo run -p slop-api -- keys generate`. Put `SLOP_SIGNING_KEY` in

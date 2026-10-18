@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
+import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
 
 const TABS = [
@@ -100,6 +101,15 @@ function MeMenu() {
   if (me === undefined) return <div className="me" />;
   if (!me) {
     const returnTo = location.pathname + location.search;
+    if (isDesktop) {
+      return (
+        <div className="me">
+          <button className="btn slime" onClick={() => void desktop.showLogin()}>
+            Sign in
+          </button>
+        </div>
+      );
+    }
     return (
       <div className="me">
         <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(returnTo)}`}>

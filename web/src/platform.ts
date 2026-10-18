@@ -58,21 +58,36 @@ export interface DesktopError {
   message: string;
 }
 
+/** Rust error messages start lowercase; show them as sentences. */
+export function sentence(message: string): string {
+  return message.charAt(0).toUpperCase() + message.slice(1);
+}
+
 async function call<T>(command: string, args?: Record<string, unknown>): Promise<T> {
   const { invoke } = await import("@tauri-apps/api/core");
   try {
     return await invoke<T>(command, args);
   } catch (err) {
     const e = err as Partial<DesktopError>;
-    throw Object.assign(new Error(e.message ?? String(err)), { code: e.code ?? "unknown" });
+    throw Object.assign(new Error(sentence(e.message ?? String(err))), { code: e.code ?? "unknown" });
   }
 }
 
 export const desktop = {
   sessionStatus: () => call<{ signed_in: boolean }>("session_status"),
-  /** Opens the system browser and resolves once the user has approved this device. */
-  signIn: () => call<void>("sign_in"),
+  /** Asks Slop for an approval page and tries to open it in the system browser. */
+  signInStart: () => call<{ approve_url: string; browser_opened: boolean }>("sign_in_start"),
+  /** Resolves once the user has approved this device; the app then opens the store. */
+  signInFinish: () => call<void>("sign_in_finish"),
+  /** Signs out; the app closes the store and shows the sign-in window. */
   signOut: () => call<void>("sign_out"),
+  showLogin: () => call<void>("show_login"),
+  continueSignedOut: () => call<void>("continue_signed_out"),
+  /** Fires when this device signs in or out (from any window). */
+  onSessionChanged: async (handler: () => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen("session-changed", () => handler());
+  },
   platformInfo: () => call<{ platform: Os | null; can_install: boolean }>("platform_info"),
   installed: () => call<InstalledApp[]>("installed_apps"),
   install: (slug: string) => call<InstalledApp>("install_app", { slug }),

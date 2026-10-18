@@ -279,3 +279,24 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---- desktop sign-in window (login.html) ----------------------------- */
+.login-window {
+  height: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 22px; padding: 36px 32px 20px;
+  background: radial-gradient(circle at 50% 0, rgba(163, 230, 53, 0.14), transparent 60%), var(--bg);
+  text-align: center; overflow: hidden;
+}
+.login-brand { display: flex; flex-direction: column; align-items: center; gap: 8px; }
+.login-brand p { margin: 0; font-size: 13px; }
+.login-logo { font-size: 32px; font-weight: 900; letter-spacing: -0.03em; }
+.login-logo b { color: var(--slime); }
+.login-body { display: flex; flex-direction: column; gap: 12px; flex: 1; justify-content: center; }
+.login-body p { margin: 0; }
+.login-primary { width: 100%; }
+.login-link { display: flex; gap: 6px; }
+.login-link input { flex: 1; min-width: 0; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; font-size: 12px; color: var(--muted); }
+.login-actions { display: flex; gap: 8px; justify-content: center; }
+.login-spinner { width: 28px; height: 28px; margin: 4px auto 0; border-radius: 50%; border: 3px solid var(--panel-3); border-top-color: var(--slime); animation: spin 0.9s linear infinite; }
+@keyframes spin { to { transform: rotate(360deg); } }
+.login-skip { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: underline; padding: 4px; }
+.login-skip:hover { color: var(--text); }

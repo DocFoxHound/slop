@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-show-login"
+description = "Enables the show_login command without any pre-configured scope."
+commands.allow = ["show_login"]
+
+[[permission]]
+identifier = "deny-show-login"
+description = "Denies the show_login command without any pre-configured scope."
+commands.deny = ["show_login"]

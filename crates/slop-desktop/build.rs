@@ -5,8 +5,11 @@ fn main() {
         tauri_build::AppManifest::new().commands(&[
             "api_request",
             "session_status",
-            "sign_in",
+            "sign_in_start",
+            "sign_in_finish",
             "sign_out",
+            "show_login",
+            "continue_signed_out",
             "platform_info",
             "installed_apps",
             "install_app",
