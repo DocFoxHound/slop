@@ -24,7 +24,8 @@ don't copy it into real code.
 | Web UI (`web/`): store, library, install controls, publishing, releases, device approval | Done |
 | Desktop app (`crates/slop-desktop`, Tauri 2) | Written; needs the Linux libraries below to build |
 | Maker signatures: GitHub artifact attestations (Sigstore), verified by the API and again by the client | Done (GitHub repos) |
-| Automated scanning, Slop Build, maker keys for hand-built files, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
+| Scan step in the pipeline; scanning itself off for now (files marked "not scanned") | Placeholder (`docs/ARCHITECTURE.md` §6.7) |
+| Self-hosted scan service, Slop Build, maker keys for hand-built files, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
 
 ## Layout
 
@@ -169,6 +170,7 @@ Integration tests create a fresh database per test on the server in `DATABASE_UR
 | `GET /v1/apps/{slug}/manifest` | anyone | Newest approved release's signed manifest |
 | `GET /v1/revocations` | anyone | Signed revocation list (valid 6 hours) |
 | `GET /v1/keys` | anyone | Slop's public signing key |
+| `GET /v1/server` | anyone | What this server checks (scanning, maker signatures) |
 | `GET /v1/me/library`, `PUT`/`DELETE /v1/me/library/{slug}` | signed in | The library |
 | `POST /v1/auth/desktop/requests` | desktop app | Start desktop sign-in |
 | `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |

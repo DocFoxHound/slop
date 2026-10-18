@@ -22,12 +22,18 @@ export function Store() {
   const fresh = useLoad(() => api.apps({ stage: "released", sort: "recent", limit: 8 }), []);
   const soon = useLoad(() => upcoming(4), []);
   const categories = useLoad(() => api.categories(), []);
+  const server = useLoad(() => api.server(), []);
 
   return (
     <div className="page">
       <div className="store">
         <Sidebar />
         <div>
+          {server.data && !server.data.scanning && (
+            <p className="notice" role="note">
+              <b>Test server.</b> Automatic scanning isn't running here yet, so uploads are not scanned.
+            </p>
+          )}
           <section className="intro panel">
             <h1>
               Apps and games made with AI. <span className="slime">Open source, every one.</span>
@@ -36,9 +42,18 @@ export function Store() {
               <li>
                 <b>Source you can read.</b> Every app links its code, under an open-source licence.
               </li>
-              <li>
-                <b>Scanned before it's listed.</b> Malware, stolen code and scams are checked on every upload.
-              </li>
+              {server.data?.scanning ? (
+                <li>
+                  <b>Scanned before it's listed.</b> Malware, stolen code and scams are checked on every upload.
+                </li>
+              ) : (
+                <li>
+                  <b>Reviewed before it's listed.</b>{" "}
+                  {server.data?.maker_signatures_required
+                    ? "Every build is signed by its maker and checked by a person."
+                    : "Every build is checked by a person."}
+                </li>
+              )}
               <li>
                 <b>Free to download.</b> Makers can take donations. Nothing is ever for sale.
               </li>

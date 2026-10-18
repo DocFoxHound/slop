@@ -102,6 +102,8 @@ export interface ReleaseFile {
   sha256: string | null;
   provenance: Provenance | null;
   provenance_problem: string | null;
+  scan_result: "passed" | "note" | "on_hold" | "rejected" | "blocked" | "skipped" | null;
+  scan_detail: string | null;
 }
 
 export interface Release {
@@ -250,6 +252,8 @@ export const api = {
     request<{ redirect_url: string }>("POST", `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`),
 
   providers: () => request<{ github: boolean }>("GET", "/v1/auth/providers"),
+  /** What this server checks, so pages only claim what's true. */
+  server: () => request<{ scanning: boolean; maker_signatures_required: boolean }>("GET", "/v1/server"),
   /** Full-page navigation target that starts GitHub sign-in. */
   githubSignInUrl: (returnTo: string) => `${API_BASE}/v1/auth/github/start${query({ return_to: returnTo })}`,
   signupInfo: () => request<SignupInfo>("GET", "/v1/auth/signup"),

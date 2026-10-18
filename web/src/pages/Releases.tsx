@@ -116,6 +116,15 @@ export function Releases() {
   );
 }
 
+const SCAN_BADGE: Record<NonNullable<Release["files"][number]["scan_result"]>, { label: string; badge: string }> = {
+  passed: { label: "SCAN PASSED", badge: "official" },
+  note: { label: "SCAN PASSED WITH NOTES", badge: "soon" },
+  on_hold: { label: "SCAN: ON HOLD", badge: "soon" },
+  rejected: { label: "SCAN: REJECTED", badge: "bad" },
+  blocked: { label: "SCAN: BLOCKED", badge: "bad" },
+  skipped: { label: "NOT SCANNED", badge: "neutral" },
+};
+
 /** `owner/repo/.github/workflows/build.yml` from a workflow URI. */
 export function workflowName(uri: string): string {
   return uri.replace(/^https:\/\/github\.com\//, "").replace(/@.*$/, "");
@@ -137,6 +146,12 @@ function FileDetail({ file }: { file: Release["files"][number] }) {
         {file.sha256 && (
           <div className="faint small">
             SHA-256 <code>{file.sha256.slice(0, 16)}…</code> · {file.size_bytes?.toLocaleString()} bytes
+          </div>
+        )}
+        {file.scan_result && (
+          <div className="small">
+            <span className={`badge ${SCAN_BADGE[file.scan_result].badge}`}>{SCAN_BADGE[file.scan_result].label}</span>{" "}
+            {file.scan_detail && <span className="muted">{file.scan_detail}</span>}
           </div>
         )}
         {file.provenance ? (

@@ -41,6 +41,8 @@ pub struct ReleaseConfig {
     /// Refuse to approve builds without a verified maker signature (SECURITY §5.3). Only turn this
     /// off for local development.
     pub require_maker_signature: bool,
+    /// The scan step. Only `Off` exists so far (see scan.rs).
+    pub scanner: crate::scan::Scanner,
     /// Prefix of Slop Build's shared recipe workflow, for the "Built by Slop Build" label.
     pub slop_build_workflow: Option<String>,
     /// Optional GitHub token, for higher API rate limits when checking commits and attestations.
@@ -58,6 +60,7 @@ impl fmt::Debug for ReleaseConfig {
             .field("github_api_base", &self.github_api_base.as_str())
             .field("allow_http_downloads", &self.allow_http_downloads)
             .field("require_maker_signature", &self.require_maker_signature)
+            .field("scanner", &self.scanner)
             .field("slop_build_workflow", &self.slop_build_workflow)
             .field(
                 "github_token",
@@ -164,6 +167,7 @@ impl Config {
                 .context("GITHUB_API_BASE")?,
             allow_http_downloads: var_or("SLOP_ALLOW_HTTP_DOWNLOADS", "false") == "true",
             require_maker_signature: var_or("SLOP_REQUIRE_MAKER_SIGNATURE", "true") != "false",
+            scanner: crate::scan::Scanner::from_setting(&var_or("SLOP_SCANNER", "off"))?,
             slop_build_workflow: env::var("SLOP_BUILD_WORKFLOW")
                 .ok()
                 .filter(|s| !s.is_empty()),
