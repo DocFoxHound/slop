@@ -387,6 +387,29 @@ async fn launch_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<
     let mut command = desktop
         .library
         .launch_command(&slug, revocations.as_ref())?;
+    // Slop Pulse: a signed-in launch gets a one-time token for the game to ping with
+    // (DESIGN §11). Best effort: the game starts either way.
+    if desktop.api.has_session() {
+        let path = format!("/v1/apps/{}/launch", urlencode(&slug));
+        let launched = tokio::time::timeout(
+            Duration::from_secs(3),
+            desktop.api.request(slop_client::Method::POST, &path, None),
+        )
+        .await;
+        if let Ok(Ok(res)) = launched
+            && res.status == 200
+        {
+            if let Some(token) = res.body["token"].as_str() {
+                command.env("SLOP_PULSE_TOKEN", token);
+            }
+            if let Some(url) = res.body["pulse_url"].as_str() {
+                command.env("SLOP_PULSE_URL", url);
+            }
+            if let Some(seconds) = res.body["heartbeat_seconds"].as_i64() {
+                command.env("SLOP_PULSE_INTERVAL", seconds.to_string());
+            }
+        }
+    }
     let mut child = command.spawn().map_err(|e| CommandError {
         code: "launch",
         message: format!("couldn't start the app: {e}"),

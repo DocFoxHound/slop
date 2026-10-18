@@ -31,6 +31,8 @@ function AppView({ app }: { app: AppDetail }) {
   const { me } = useSession();
   const library = useLoad(() => (me && !isDesktop ? api.library() : Promise.resolve([])), [me?.id]);
   const inLibrary = library.data?.some((e) => e.slug === app.slug);
+  const players = useLoad(() => (app.kind === "game" ? api.players(app.slug) : Promise.resolve(undefined)), [app.slug]);
+  const counted = players.data && (players.data.playing_now > 0 || players.data.peak_this_month > 0);
   const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
   const latest = releases.data?.find((r) => r.status === "approved");
   const provenance = latest && latest.files.every((f) => f.provenance) ? latest.files[0].provenance : null;
@@ -94,6 +96,12 @@ function AppView({ app }: { app: AppDetail }) {
                   </div>
                 </>
               )}
+            </div>
+          )}
+          {counted && players.data && (
+            <div className="playing" title="Counted by Slop Pulse: players who launched it from Slop">
+              <b>{players.data.playing_now.toLocaleString()}</b> playing now ·{" "}
+              {players.data.peak_this_month.toLocaleString()} peak this month
             </div>
           )}
           <p className="lede">{app.summary}</p>

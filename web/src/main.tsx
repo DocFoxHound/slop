@@ -5,6 +5,7 @@ import { createBrowserRouter, RouterProvider } from "react-router";
 import { Layout } from "./components/Layout";
 import { Admin } from "./pages/Admin";
 import { AppPage } from "./pages/AppPage";
+import { Guide } from "./pages/Guide";
 import { Account, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
 import { Library } from "./pages/Library";
 import { Releases } from "./pages/Releases";
@@ -26,6 +27,7 @@ const router = createBrowserRouter([
       { path: "/tag/:slug", element: <TagPage /> },
       { path: "/app/:slug", element: <AppPage /> },
       { path: "/publish", element: <Publish /> },
+      { path: "/publish/guide", element: <Guide /> },
       { path: "/publish/new", element: <AppEditor /> },
       { path: "/publish/:slug", element: <AppEditor /> },
       { path: "/publish/:slug/releases", element: <Releases /> },

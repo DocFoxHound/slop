@@ -19,9 +19,12 @@ function SignInFirst({ what }: { what: string }) {
           Any open-source app or game made with AI can go on Slop. Listing is free; Slop's only fee is 5% of donations,
           which go straight to the maker.
         </p>
-        <p>
+        <p className="row-actions">
           <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(what)}`}>
             Sign in to start
+          </Link>
+          <Link className="btn" to="/publish/guide">
+            How to publish
           </Link>
         </p>
       </div>
@@ -41,9 +44,14 @@ export function Publish() {
     <div className="page">
       <div className="title-row spread">
         <h1 className="page-title">Your apps</h1>
-        <Link className="btn slime" to="/publish/new">
-          + New app
-        </Link>
+        <div className="row-actions">
+          <Link className="btn" to="/publish/guide">
+            How to publish
+          </Link>
+          <Link className="btn slime" to="/publish/new">
+            + New app
+          </Link>
+        </div>
       </div>
       <p className="muted">
         Start with a draft store page. Linking your repo, Slop Build and scanning come next; once a draft passes, it goes in

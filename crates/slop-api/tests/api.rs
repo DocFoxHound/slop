@@ -2596,3 +2596,194 @@ async fn linux_updates_follow_the_installed_package_format(db: PgPool) {
     assert_eq!(latest["version"], "0.1.30");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+// ---------------------------------------------------------------------------------------------
+// Slop Pulse
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn pulse_counts_players_and_playtime(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "pulse-game", "released", "").await;
+    let (player_id, player) = app.user("Player", "US").await;
+
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/apps/pulse-game/launch"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let launch = || async {
+        body_json(
+            app.send(req(Method::POST, "/v1/apps/pulse-game/launch").cookie(&player))
+                .await,
+        )
+        .await
+    };
+    let first = launch().await;
+    assert_eq!(first["pulse_url"], "http://localhost:8080/v1/pulse");
+    assert_eq!(first["heartbeat_seconds"], 60);
+    let token = first["token"].as_str().unwrap().to_string();
+    let pulse = |path: &str, token: &str| {
+        req(Method::POST, format!("/v1/pulse/{path}")).json(json!({ "token": token }))
+    };
+
+    // Unknown tokens and heartbeats before start are refused.
+    assert_eq!(
+        app.send(pulse("start", "nope")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.send(pulse("heartbeat", &token)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.send(pulse("start", &token)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(pulse("start", &token)).await.status(),
+        StatusCode::NO_CONTENT,
+        "retries are fine"
+    );
+
+    // A second copy by the same player still counts as one player.
+    let second = launch().await["token"].as_str().unwrap().to_string();
+    app.send(pulse("start", &second)).await;
+    let players = body_json(
+        app.send(req(Method::GET, "/v1/apps/pulse-game/players").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(players["playing_now"], 1);
+
+    // Heartbeats add playtime, but not when sent too often.
+    assert_eq!(
+        app.send(pulse("heartbeat", &token)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let playtime = || async {
+        sqlx::query_scalar::<_, i64>(
+            "select playtime_seconds from user_app_usage where user_id = $1",
+        )
+        .bind(player_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    assert_eq!(playtime().await, 0);
+    sqlx::query("update pulse_sessions set last_beat_at = now() - interval '61 seconds' where token_hash = sha256($1::bytea)")
+        .bind(token.as_bytes())
+        .execute(&app.db)
+        .await
+        .unwrap();
+    app.send(pulse("heartbeat", &token)).await;
+    assert!((61..=63).contains(&playtime().await));
+    // A long gap is capped.
+    sqlx::query("update pulse_sessions set last_beat_at = now() - interval '9 minutes' where token_hash = sha256($1::bytea)")
+        .bind(token.as_bytes())
+        .execute(&app.db)
+        .await
+        .unwrap();
+    app.send(pulse("heartbeat", &token)).await;
+    assert!(
+        (241..=245).contains(&playtime().await),
+        "{}",
+        playtime().await
+    );
+    let days: i32 =
+        sqlx::query_scalar("select days_launched from user_app_usage where user_id = $1")
+            .bind(player_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(days, 1, "two launches on one day count as one day");
+
+    // Counts over time.
+    slop_api::pulse::sample(&app.db).await.unwrap();
+    slop_api::pulse::sample(&app.db).await.unwrap();
+    let rows: i64 = sqlx::query_scalar("select count(*) from pulse_counts")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(rows, 1, "one bucket per app per 5 minutes");
+    let players = body_json(
+        app.send(req(Method::GET, "/v1/apps/pulse-game/players").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(players["peak_this_month"], 1);
+    assert_eq!(players["daily_peaks"][0]["peak"], 1);
+    assert_eq!(
+        players["daily_peaks"][0]["day"].as_str().unwrap().len(),
+        10,
+        "YYYY-MM-DD"
+    );
+
+    // Ending both copies: nobody's playing; the token is used up.
+    app.send(pulse("end", &token)).await;
+    app.send(pulse("end", &second)).await;
+    let players = body_json(
+        app.send(req(Method::GET, "/v1/apps/pulse-game/players").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(players["playing_now"], 0);
+    assert_eq!(
+        app.send(pulse("heartbeat", &token)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // A token that wasn't started in time can't be.
+    let late = launch().await["token"].as_str().unwrap().to_string();
+    sqlx::query("update pulse_sessions set issued_at = now() - interval '16 minutes' where started_at is null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(pulse("start", &late)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // Raw sessions go after a day; the counts and playtime stay.
+    sqlx::query("update pulse_sessions set issued_at = now() - interval '25 hours'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        slop_api::pulse::delete_old_sessions(&app.db).await.unwrap(),
+        3
+    );
+    assert!(playtime().await > 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn players_can_turn_off_playtime_sharing(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "pulse-game", "released", "").await;
+    let (_, player) = app.user("Player", "US").await;
+    assert_eq!(
+        body_json(app.send(req(Method::GET, "/v1/me").cookie(&player)).await).await["share_playtime"],
+        true
+    );
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/me")
+                .cookie(&player)
+                .json(json!({ "share_playtime": false })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let launched = body_json(
+        app.send(req(Method::POST, "/v1/apps/pulse-game/launch").cookie(&player))
+            .await,
+    )
+    .await;
+    assert!(launched["token"].is_null());
+    let sessions: i64 = sqlx::query_scalar("select count(*) from pulse_sessions")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(sessions, 0);
+}

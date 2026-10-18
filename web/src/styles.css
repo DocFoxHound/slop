@@ -180,6 +180,10 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .app-head .hero-art .initial { font-size: 120px; }
 .app-side { display: flex; flex-direction: column; gap: 14px; }
 .lede { margin: 0; color: var(--text-2); font-size: 15px; }
+.playing { font-size: 13px; color: var(--muted); }
+.playing b { color: var(--good); }
+.panel label.check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
+.panel label.check input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--slime); }
 .stage-panel b { display: block; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; margin: 0; }
 .kv dt { color: var(--muted); }
@@ -286,6 +290,21 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
+
+/* ---- documents (publishing guide) ---------------------------------------- */
+.guide.page.narrow { max-width: 860px; }
+.doc { color: var(--text-2); line-height: 1.65; }
+.doc h1 { font-size: 32px; margin: 8px 0 16px; color: var(--text); }
+.doc h2 { font-size: 22px; margin: 36px 0 12px; color: var(--text); padding-top: 12px; border-top: 1px solid var(--line); }
+.doc h3 { font-size: 17px; margin: 24px 0 8px; color: var(--text); }
+.doc h4 { font-size: 15px; margin: 20px 0 6px; color: var(--text); }
+.doc h2, .doc h3, .doc h4 { scroll-margin-top: 16px; }
+.doc table { border-collapse: collapse; width: 100%; margin: 12px 0 16px; font-size: 13px; display: block; overflow-x: auto; }
+.doc th, .doc td { border: 1px solid var(--line); padding: 6px 10px; text-align: left; vertical-align: top; }
+.doc th { background: var(--panel-2); color: var(--text); }
+.doc blockquote { border-left: 3px solid var(--warn); background: rgba(251, 191, 36, 0.06); padding: 8px 14px; color: var(--text-2); border-radius: 0 8px 8px 0; }
+.doc pre { font-size: 12.5px; line-height: 1.5; }
+.doc li { margin: 4px 0; }
 
 /* ---- publishing progress and admin --------------------------------------- */
 .progress { margin-bottom: 16px; }

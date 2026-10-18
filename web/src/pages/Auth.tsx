@@ -259,7 +259,7 @@ export function SignUp() {
 export function Account() {
   useDocumentTitle("Your account");
   const navigate = useNavigate();
-  const { me, signOut } = useSession();
+  const { me, signOut, refresh } = useSession();
   const sessions = useLoad(() => (me ? api.sessions() : Promise.resolve([])), [me?.id]);
 
   if (me === undefined) return <Loading />;
@@ -293,6 +293,24 @@ export function Account() {
           <dt>Country</dt>
           <dd>{me.country_code}</dd>
         </dl>
+      </div>
+
+      <h2 className="section-title">Privacy</h2>
+      <div className="panel panel-pad">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={me.share_playtime}
+            onChange={(e) => void api.updateMe({ share_playtime: e.target.checked }).then(refresh)}
+          />{" "}
+          <span>
+            <b>Share my playtime</b>
+            <span className="muted small" style={{ display: "block" }}>
+              Games you launch from Slop can count you in their "playing now" numbers, and your playtime makes your
+              votes count more. Slop gets nothing but a launch token and a heartbeat; never what you do in the game.
+            </span>
+          </span>
+        </label>
       </div>
 
       <h2 className="section-title">Where you're signed in</h2>

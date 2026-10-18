@@ -62,6 +62,11 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "cleanup failed"),
         }
+        match crate::pulse::delete_old_sessions(&state.db).await {
+            Ok(n) if n > 0 => tracing::info!(deleted = n, "old pulse sessions"),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "pulse cleanup failed"),
+        }
         state.rate_limiter.prune();
         tokio::time::sleep(StdDuration::from_secs(3600)).await;
     }
