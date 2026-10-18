@@ -18,6 +18,7 @@ use slop_api::{
     tokens::pkce_challenge,
 };
 use sqlx::PgPool;
+use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower::ServiceExt;
 use uuid::Uuid;
 
@@ -82,6 +83,7 @@ async fn test_app(db: PgPool) -> TestApp {
             api_base: github_base.parse().unwrap(),
         }),
         trusted_origins: vec![],
+        cors_origins: vec!["tauri://localhost".into()],
         country_header: Some("x-country".into()),
         catalog: CatalogRules::default(),
     };
@@ -891,4 +893,62 @@ async fn responses_carry_security_headers(db: PgPool) {
     );
     let res = app.send(req(Method::GET, "/nope")).await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_app_can_read_cross_origin(db: PgPool) {
+    let app = test_app(db).await;
+    let res = app
+        .send(req(Method::GET, "/v1/categories").header("origin", "tauri://localhost"))
+        .await;
+    assert_eq!(
+        res.headers()["access-control-allow-origin"],
+        "tauri://localhost"
+    );
+    assert!(
+        res.headers()
+            .get("access-control-allow-credentials")
+            .is_none()
+    );
+    let res = app
+        .send(req(Method::GET, "/v1/categories").header("origin", "https://evil.example"))
+        .await;
+    assert!(res.headers().get("access-control-allow-origin").is_none());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn providers_and_stage_deadlines(db: PgPool) {
+    let app = test_app(db).await;
+    assert_eq!(
+        body_json(app.send(req(Method::GET, "/v1/auth/providers")).await).await["github"],
+        true
+    );
+
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "soon-app",
+        "coming_soon",
+        "stage_entered_at = date_trunc('second', now()) - interval '10 days'",
+    )
+    .await;
+    listed_with(&app, maker_id, "done-app", "released", "").await;
+    let expected: OffsetDateTime = sqlx::query_scalar(
+        "select stage_entered_at + interval '30 days' from apps where slug = 'soon-app'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    let res = app.send(req(Method::GET, "/v1/apps/soon-app")).await;
+    let deadline = body_json(res).await["stage_deadline"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        OffsetDateTime::parse(&deadline, &Rfc3339).unwrap(),
+        expected
+    );
+    let res = app.send(req(Method::GET, "/v1/apps/done-app")).await;
+    assert!(body_json(res).await["stage_deadline"].is_null());
 }

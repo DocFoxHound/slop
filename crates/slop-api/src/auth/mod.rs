@@ -29,6 +29,7 @@ const SIGNUP_LIFETIME: Duration = Duration::minutes(30);
 
 pub fn routes() -> Router<AppState> {
     Router::new()
+        .route("/auth/providers", get(providers))
         .route("/auth/github/start", get(github_start))
         .route("/auth/github/callback", get(github_callback))
         .route("/auth/signup", get(signup_info).post(signup))
@@ -62,6 +63,18 @@ fn callback_url(state: &AppState) -> String {
         .join("/v1/auth/github/callback")
         .expect("valid public URL")
         .into()
+}
+
+#[derive(Serialize)]
+struct Providers {
+    github: bool,
+}
+
+/// Which sign-in providers this server has set up.
+async fn providers(State(state): State<AppState>) -> Json<Providers> {
+    Json(Providers {
+        github: state.config.github.is_some(),
+    })
 }
 
 #[derive(Deserialize)]

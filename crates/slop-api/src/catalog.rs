@@ -112,7 +112,15 @@ fn push_summary_columns(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules) {
                  and a.last_commit_at < now() - make_interval(days => ",
     )
     .push_bind(rules.dead_after_days)
-    .push(")) as is_dead from apps a");
+    .push(
+        ")) as is_dead,
+         case a.stage
+             when 'coming_soon' then a.stage_entered_at + make_interval(days => ",
+    )
+    .push_bind(rules.coming_soon_days)
+    .push(") when 'beta' then a.stage_entered_at + make_interval(days => ")
+    .push_bind(rules.beta_days)
+    .push(") end as stage_deadline from apps a");
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -128,6 +136,9 @@ pub struct AppSummary {
     tags: Vec<String>,
     /// No commits for a while in Coming soon or Beta. Shown, but never recommended.
     is_dead: bool,
+    /// When a Coming soon or Beta app must reach its next stage. `None` once released.
+    #[serde(with = "time::serde::rfc3339::option")]
+    stage_deadline: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
 }

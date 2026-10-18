@@ -17,8 +17,12 @@ use axum::{
 use serde_json::json;
 use sqlx::PgPool;
 use tower_http::{
-    csrf::CsrfLayer, limit::RequestBodyLimitLayer, set_header::SetResponseHeaderLayer,
-    timeout::TimeoutLayer, trace::TraceLayer,
+    cors::{AllowOrigin, CorsLayer},
+    csrf::CsrfLayer,
+    limit::RequestBodyLimitLayer,
+    set_header::SetResponseHeaderLayer,
+    timeout::TimeoutLayer,
+    trace::TraceLayer,
 };
 
 use crate::config::Config;
@@ -54,6 +58,19 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         csrf = csrf.add_trusted_origin(origin)?;
     }
 
+    // Read-only, cookie-less access for the packaged desktop app. Signed-in desktop requests
+    // will use tokens, not cookies (docs/SECURITY.md §4.1-4.2).
+    let cors_origins = state
+        .config
+        .cors_origins
+        .iter()
+        .map(|o| HeaderValue::from_str(o))
+        .collect::<Result<Vec<_>, _>>()?;
+    let cors = CorsLayer::new()
+        .allow_origin(AllowOrigin::list(cors_origins))
+        .allow_methods([axum::http::Method::GET])
+        .max_age(Duration::from_secs(3600));
+
     let v1 = Router::new().merge(auth::routes()).merge(catalog::routes());
 
     let mut router = Router::new()
@@ -66,6 +83,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             )
         })
         .layer(csrf)
+        .layer(cors)
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,

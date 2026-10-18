@@ -15,6 +15,9 @@ pub struct Config {
     pub github: Option<GithubConfig>,
     /// Extra origins allowed to make state-changing requests (e.g. a dev server on another port).
     pub trusted_origins: Vec<String>,
+    /// Origins allowed to read the API cross-origin, without cookies: the packaged desktop app
+    /// (`tauri://localhost`, and `http://tauri.localhost` on Windows).
+    pub cors_origins: Vec<String>,
     /// Header set by the CDN or load balancer with the viewer's ISO country code.
     pub country_header: Option<String>,
     pub catalog: CatalogRules,
@@ -87,13 +90,8 @@ impl Config {
             _ => None,
         };
 
-        let trusted_origins = env::var("SLOP_TRUSTED_ORIGINS")
-            .unwrap_or_default()
-            .split(',')
-            .map(str::trim)
-            .filter(|s| !s.is_empty())
-            .map(String::from)
-            .collect();
+        let trusted_origins = list_var("SLOP_TRUSTED_ORIGINS");
+        let cors_origins = list_var("SLOP_CORS_ORIGINS");
 
         let country_header = env::var("SLOP_COUNTRY_HEADER")
             .ok()
@@ -112,6 +110,7 @@ impl Config {
             public_url,
             github,
             trusted_origins,
+            cors_origins,
             country_header,
             catalog,
         })
@@ -128,6 +127,16 @@ fn var_or(name: &str, default: &str) -> String {
         .ok()
         .filter(|s| !s.is_empty())
         .unwrap_or_else(|| default.to_string())
+}
+
+fn list_var(name: &str) -> Vec<String> {
+    env::var(name)
+        .unwrap_or_default()
+        .split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(String::from)
+        .collect()
 }
 
 fn int_var(name: &str, default: i32) -> anyhow::Result<i32> {
