@@ -43,8 +43,12 @@ pub struct ReleaseConfig {
     pub require_maker_signature: bool,
     /// The scan step. Only `Off` exists so far (see scan.rs).
     pub scanner: crate::scan::Scanner,
-    /// Prefix of Slop Build's shared recipe workflow, for the "Built by Slop Build" label.
+    /// Slop Build's recipe, as `owner/repo/.github/workflows/build.yml`. Unset: Slop Build is off.
     pub slop_build_workflow: Option<String>,
+    /// The recipe tag makers pin, e.g. `v1`.
+    pub slop_build_version: String,
+    /// Issuer of GitHub Actions OIDC tokens (its keys are at `<issuer>/.well-known/jwks`).
+    pub github_oidc_issuer: String,
     /// Optional GitHub token, for higher API rate limits when checking commits and attestations.
     pub github_token: Option<String>,
 }
@@ -62,6 +66,8 @@ impl fmt::Debug for ReleaseConfig {
             .field("require_maker_signature", &self.require_maker_signature)
             .field("scanner", &self.scanner)
             .field("slop_build_workflow", &self.slop_build_workflow)
+            .field("slop_build_version", &self.slop_build_version)
+            .field("github_oidc_issuer", &self.github_oidc_issuer)
             .field(
                 "github_token",
                 &self.github_token.as_ref().map(|_| "<redacted>"),
@@ -170,7 +176,18 @@ impl Config {
             scanner: crate::scan::Scanner::from_setting(&var_or("SLOP_SCANNER", "off"))?,
             slop_build_workflow: env::var("SLOP_BUILD_WORKFLOW")
                 .ok()
+                .map(|s| {
+                    s.trim()
+                        .trim_start_matches("https://github.com/")
+                        .trim_end_matches('@')
+                        .to_string()
+                })
                 .filter(|s| !s.is_empty()),
+            slop_build_version: var_or("SLOP_BUILD_VERSION", "v1"),
+            github_oidc_issuer: var_or(
+                "GITHUB_OIDC_ISSUER",
+                "https://token.actions.githubusercontent.com",
+            ),
             github_token: env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
         };
 

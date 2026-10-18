@@ -247,6 +247,9 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .help p { margin: 12px 0 0; }
 .help pre { background: var(--panel-2); border-radius: 8px; padding: 12px; overflow-x: auto; margin: 12px 0 0; }
 .help pre code { background: none; padding: 0; }
+.slop-build { display: flex; flex-direction: column; gap: 10px; border-color: rgba(163, 230, 53, 0.35); }
+.slop-build h2 { font-size: 18px; }
+.slop-build p, .slop-build pre { margin: 0; }
 
 /* ---- smaller windows ------------------------------------------------- */
 @media (max-width: 900px) {

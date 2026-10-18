@@ -75,6 +75,18 @@ async fn fake_github() -> String {
             "/octo/game/releases/download/{tag}/{file}",
             get(|| async { BUILD_BYTES }),
         )
+        // GitHub Actions' OIDC signing keys (a test key), and a repository for Slop Build setup.
+        .route(
+            "/.well-known/jwks",
+            get(|| async {
+                axum::Json(serde_json::from_str::<Value>(include_str!("fixtures/oidc-test-jwks.json")).unwrap())
+            }),
+        )
+        .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
+        .route(
+            "/repos/octo/game/contents/",
+            get(|| async { axum::Json(json!([{ "name": "Cargo.toml" }, { "name": "src" }])) }),
+        )
         // GitHub's attestations API: one repo has an attestation (for some other file), the rest
         // have none.
         .route(
@@ -122,7 +134,9 @@ async fn test_app(db: PgPool) -> TestApp {
             allow_http_downloads: true,
             require_maker_signature: false,
             scanner: slop_api::scan::Scanner::Off,
-            slop_build_workflow: None,
+            slop_build_workflow: Some("slop/slop-build/.github/workflows/build.yml".into()),
+            slop_build_version: "v1".into(),
+            github_oidc_issuer: github_base.trim_end_matches('/').to_string(),
             github_token: None,
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
@@ -1784,4 +1798,195 @@ async fn unscanned_files_are_marked_and_the_server_says_so(db: PgPool) {
         .unwrap_err()
         .to_string();
     assert!(err.contains("rejected: loot box"), "{err}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Slop Build
+
+const RECIPE_REF: &str = "slop/slop-build/.github/workflows/build.yml@refs/tags/v1";
+const BUILD_COMMIT: &str = "1111111111111111111111111111111111111111";
+
+/// A GitHub Actions OIDC token signed with the test key.
+fn github_token(app: &TestApp, overrides: Value) -> String {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let mut claims = json!({
+        "iss": app.config.releases.github_oidc_issuer,
+        "aud": "http://localhost:8080",
+        "iat": now, "nbf": now - 5, "exp": now + 300,
+        "repository": "octo/game",
+        "sha": BUILD_COMMIT,
+        "job_workflow_ref": RECIPE_REF,
+        "ref": "refs/heads/main",
+    });
+    for (k, v) in overrides.as_object().unwrap() {
+        claims[k] = v.clone();
+    }
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = Some("test-key".into());
+    let key = jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("fixtures/oidc-test-key.pem"))
+        .unwrap();
+    jsonwebtoken::encode(&header, &claims, &key).unwrap()
+}
+
+async fn github_app(app: &TestApp) -> (Uuid, String) {
+    let (maker_id, cookie) = app.user("Maker", "US").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx)
+         values ($1, 'game', 'Game', 'A game', 'game', 'beta', $2, 'https://github.com/octo/game', 'MIT')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    (maker_id, cookie)
+}
+
+fn ci_release() -> Value {
+    json!({
+        "app": "game", "version": "build.12", "tag": "slop-build-12", "commit": BUILD_COMMIT,
+        "files": [
+            { "platform": "linux", "file_name": "game-build.12-linux.zip", "exec": "game" },
+            { "platform": "windows", "file_name": "game-build.12-windows.zip", "exec": "game.exe" }
+        ]
+    })
+}
+
+async fn submit_ci(app: &TestApp, token: &str, body: Value) -> Response {
+    app.send(
+        req(Method::POST, "/v1/slop-build/releases")
+            .header("authorization", format!("Bearer {token}"))
+            .json(body),
+    )
+    .await
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_submits_releases_with_a_github_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = github_app(&app).await;
+    let res = submit_ci(&app, &github_token(&app, json!({})), ci_release()).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release = body_json(res).await;
+    assert_eq!(release["status"], "fetching");
+    assert_eq!(release["version"], "build.12");
+    // URLs are built by Slop from the app's repository.
+    let urls: Vec<&str> = release["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["url"].as_str().unwrap())
+        .collect();
+    assert!(urls.contains(
+        &"https://github.com/octo/game/releases/download/slop-build-12/game-build.12-linux.zip"
+    ));
+    let submitter: Uuid = sqlx::query_scalar("select submitted_by from releases")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(submitter, maker_id);
+    // The maker sees it like any other release.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine.as_array().unwrap().len(), 1);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_tokens_are_checked(db: PgPool) {
+    let app = test_app(db).await;
+    github_app(&app).await;
+    let cases = [
+        // Another workflow in the maker's repo can't submit.
+        (
+            json!({ "job_workflow_ref": "octo/game/.github/workflows/evil.yml@refs/heads/main" }),
+            StatusCode::FORBIDDEN,
+        ),
+        // A lookalike recipe path.
+        (
+            json!({ "job_workflow_ref": "slop/slop-build/.github/workflows/build.yml.evil@v1" }),
+            StatusCode::FORBIDDEN,
+        ),
+        // Someone else's repository can't release this app.
+        (
+            json!({ "repository": "mallory/game" }),
+            StatusCode::FORBIDDEN,
+        ),
+        // A token minted for another site.
+        (
+            json!({ "aud": "https://other.example" }),
+            StatusCode::UNAUTHORIZED,
+        ),
+        // Expired.
+        (
+            json!({ "exp": OffsetDateTime::now_utc().unix_timestamp() - 600 }),
+            StatusCode::UNAUTHORIZED,
+        ),
+        // A different commit than the one being released.
+        (
+            json!({ "sha": "2222222222222222222222222222222222222222" }),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ];
+    for (overrides, status) in cases {
+        let res = submit_ci(&app, &github_token(&app, overrides.clone()), ci_release()).await;
+        assert_eq!(res.status(), status, "{overrides}");
+    }
+    // No token, a garbage token, or one signed by an unknown key.
+    let res = app
+        .send(req(Method::POST, "/v1/slop-build/releases").json(ci_release()))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        submit_ci(&app, "not-a-jwt", ci_release()).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let mut forged = github_token(&app, json!({}));
+    forged.push('x');
+    assert_eq!(
+        submit_ci(&app, &forged, ci_release()).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let count: i64 = sqlx::query_scalar("select count(*) from releases")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(count, 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_setup_detects_the_project(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = github_app(&app).await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let setup = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(setup["supported"], true);
+    assert_eq!(setup["project_type"], "rust");
+    let workflow = setup["workflow"].as_str().unwrap();
+    assert!(
+        workflow.contains("uses: slop/slop-build/.github/workflows/build.yml@v1"),
+        "{workflow}"
+    );
+    assert!(workflow.contains("branches: [trunk]"));
+    assert!(workflow.contains("app: game"));
+    let create = setup["create_url"].as_str().unwrap();
+    assert!(
+        create.starts_with(
+            "https://github.com/octo/game/new/trunk?filename=.github%2Fworkflows%2Fslop.yml&value="
+        ),
+        "{create}"
+    );
 }
