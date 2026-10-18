@@ -17,6 +17,8 @@
 - **Tauri on every platform.**
 - **No staged rollouts.**
 
+**Decided 2026-10-18:** the **API server is written in Rust** (axum, sqlx), matching the Tauri core.
+
 ## 1. Goals and constraints
 
 | Goal | Consequence for the architecture |

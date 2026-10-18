@@ -52,7 +52,7 @@ Slop's whole promise is "AI-made software you can trust." That makes it a **soft
 ### 4.2 Sessions
 - Short-lived access tokens (≈15 min) and **rotating refresh tokens**. Reusing an old refresh token revokes the whole token family (a sign of theft).
 - Tokens are kept in the OS secure store (Keychain, Windows Credential Manager/DPAPI, Secret Service/libsecret, Android Keystore, iOS Keychain), never in plain files.
-- **Website:** `HttpOnly`, `Secure`, `SameSite=Lax` cookies plus CSRF tokens on state-changing requests.
+- **Website:** `HttpOnly`, `Secure`, `SameSite=Lax` cookies. State-changing requests from other sites are refused using the browser's `Sec-Fetch-Site` and `Origin` headers (the Go 1.25 / `tower-http` scheme), instead of per-request CSRF tokens (changed 2026-10-18).
 - **A devices page** lists every session and linked device, and can revoke each one.
 
 ### 4.3 Step-up authentication (for sensitive actions)
