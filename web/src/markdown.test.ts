@@ -31,3 +31,13 @@ describe("renderMarkdown", () => {
     expect(renderMarkdown("# Title")).toContain("<h3>Title</h3>");
   });
 });
+
+describe("renderDocument", () => {
+  it("gives headings anchors the guide's links use", async () => {
+    const { renderDocument } = await import("./markdown");
+    const html = renderDocument("## Slop Pulse (player counts)\n\n[jump](#slop-pulse-player-counts)\n\n<b>raw</b>");
+    expect(html).toContain('<h2 id="slop-pulse-player-counts">');
+    expect(html).toContain('href="#slop-pulse-player-counts"');
+    expect(html).not.toContain("<b>raw</b>");
+  });
+});

@@ -36,7 +36,7 @@ pub fn routes() -> Router<AppState> {
         .route("/auth/signup", get(signup_info).post(signup))
         .route("/auth/signout", post(signout))
         .route("/countries", get(countries))
-        .route("/me", get(me))
+        .route("/me", get(me).patch(crate::pulse::update_settings))
         .route("/me/sessions", get(list_sessions))
         .route("/me/sessions/{id}", delete(revoke_session))
         .merge(desktop::routes())
@@ -395,6 +395,7 @@ async fn signup(
         email,
         country_code,
         is_admin: false,
+        share_playtime: true,
     };
     Ok((
         StatusCode::CREATED,
@@ -429,11 +430,13 @@ struct Me {
     country_code: String,
     /// Slop staff: the UI shows the admin panel.
     is_admin: bool,
+    /// "Share my playtime" (PRIV-9).
+    share_playtime: bool,
 }
 
 async fn me(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Me>> {
     let me = sqlx::query_as(
-        "select id, display_name, email, country_code, is_admin from users where id = $1",
+        "select id, display_name, email, country_code, is_admin, share_playtime from users where id = $1",
     )
     .bind(user.id)
     .fetch_one(&state.db)

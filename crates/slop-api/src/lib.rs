@@ -10,6 +10,7 @@ pub mod desktop_updates;
 pub mod error;
 pub mod library;
 pub mod policy;
+pub mod pulse;
 pub mod ratelimit;
 pub mod releases;
 pub mod scan;
@@ -95,6 +96,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(slop_build::routes())
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
+        .merge(pulse::routes())
         // Everything except the desktop build upload: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(

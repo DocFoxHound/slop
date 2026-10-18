@@ -1,0 +1,10 @@
+# Slop
+
+> A store for open-source apps and games made with AI. Free to download, builds checked before
+> they're offered, rated by people who play them.
+
+## Publishing
+
+- [How to publish on Slop](/publishing.md): requirements, store pages, releases, Slop Build
+  (GitHub Actions), maker signatures, Slop Pulse player counts (with code for Python, JS, Rust,
+  Go, C# and Godot), and a step-by-step checklist for agents.

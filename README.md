@@ -20,6 +20,8 @@ don't copy it into real code.
 | Releases: submit, fetch-and-hash, staff review, Ed25519-signed manifests | Done (phase 1: review is by a person) |
 | Revocation (kill switch), audit log, library | Done |
 | Admin panel (review queue, listing, moderation, audit log) and makers' publishing progress | Done |
+| Slop Pulse (optional): launch tokens, heartbeats, playing now, monthly peaks, playtime; "Share my playtime" | Done |
+| Public publishing guide (`/publish/guide`, `/publishing.md`, `/llms.txt`) | Done |
 | Rate limits per client IP (strictest on sign-in); hourly cleanup of expired sign-ins, sessions and tokens | Done |
 | Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
 | Web UI (`web/`): store, library, install controls, publishing, releases, device approval | Done |
@@ -181,6 +183,10 @@ Integration tests create a fresh database per test on the server in `DATABASE_UR
 | `GET /v1/revocations` | anyone | Signed revocation list (valid 6 hours) |
 | `GET /v1/keys` | anyone | Slop's public signing key |
 | `GET /v1/server` | anyone | What this server checks (scanning, maker signatures) |
+| `POST /v1/apps/{slug}/launch` | signed in (desktop app) | Records a launch; issues a Pulse token |
+| `POST /v1/pulse/start`, `/heartbeat`, `/end` | the game (Pulse token) | Slop Pulse pings |
+| `GET /v1/apps/{slug}/players` | anyone | Playing now, peak this month, daily peaks |
+| `PATCH /v1/me` | signed in | Settings ("Share my playtime") |
 | `POST /v1/slop-build/releases` | Slop Build (GitHub OIDC token) | A release built by the recipe |
 | `GET /v1/apps/{slug}/slop-build` | maker | Detected project type and the workflow to add |
 | `GET /v1/me/library`, `PUT`/`DELETE /v1/me/library/{slug}` | signed in | The library |

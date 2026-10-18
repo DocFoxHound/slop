@@ -16,6 +16,10 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Desktop device name | `desktop_auth_requests.device_name`, `sessions.user_agent` | Approval page and devices page | Contract | 10 minutes for requests; sessions as above |
 | Desktop access and refresh tokens (hashed) | `access_tokens`, `refresh_tokens` | Keeping the desktop app signed in | Contract | Deleted by the hourly cleanup once expired (15 minutes / 30 days), or with their session |
 | Client IP address | Memory only (rate limiter) | Rate limiting | Legitimate interest | Never stored; forgotten once the client is idle |
+| "Share my playtime" setting | `users.share_playtime` | PRIV-9: whether launches get Pulse tokens | Contract | Life of account |
+| Pulse sessions (hashed token, app, user, times) | `pulse_sessions` | Live player counts | Legitimate interest (PRIV-9: EU consent question open) | Deleted within 24 hours |
+| Playtime and launch days per app | `user_app_usage` | Shown to the user; weights their votes (METRICS §2) | Contract / legitimate interest | Life of account |
+| Player counts per app per 5 minutes | `pulse_counts` | "Playing now" history and monthly peaks | Not personal data (counts only) | Kept |
 | Library | `library_entries` | The user's library; later, recommendations | Contract | Until removed or account deleted |
 | Release submitter | `releases.submitted_by` | Who submitted a build (accountability) | Legitimate interest | Life of app + 6 years (scan records, LEGAL-GUIDANCE §15) |
 | Review decisions | `audit_log` | Record of review and moderation decisions | Legal obligation | 6 years (LEGAL-GUIDANCE §15) |

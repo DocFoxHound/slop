@@ -335,6 +335,7 @@ async fn serve() -> anyhow::Result<()> {
     let state = AppState::new(db, config)?;
     tokio::spawn(releases::run_fetcher(state.clone()));
     tokio::spawn(slop_api::cleanup::run(state.clone()));
+    tokio::spawn(slop_api::pulse::run_sampler(state.clone()));
     let app = router(state)?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await

@@ -55,6 +55,7 @@ export interface Me {
   email: string | null;
   country_code: string;
   is_admin: boolean;
+  share_playtime: boolean;
 }
 
 export interface AdminAppRef {
@@ -322,6 +323,12 @@ export const api = {
     request<{ user: Me; return_to: string }>("POST", "/v1/auth/signup", body),
   signout: () => request<void>("POST", "/v1/auth/signout"),
   me: () => request<Me>("GET", "/v1/me"),
+  updateMe: (changes: { share_playtime?: boolean }) => request<void>("PATCH", "/v1/me", changes),
+  players: (slug: string) =>
+    request<{ playing_now: number; peak_this_month: number; daily_peaks: Array<{ day: string; peak: number }> }>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/players`,
+    ),
   sessions: () => request<SessionInfo[]>("GET", "/v1/me/sessions"),
   revokeSession: (id: string) => request<void>("DELETE", `/v1/me/sessions/${encodeURIComponent(id)}`),
 };

@@ -159,6 +159,7 @@ export function Sidebar({ active }: { active?: string }) {
       ))}
       <h4>Makers</h4>
       <Link to="/publish">⬆️ Publish your app</Link>
+      <Link to="/publish/guide">📖 How to publish</Link>
     </aside>
   );
 }

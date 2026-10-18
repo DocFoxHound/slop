@@ -102,7 +102,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 1. **Open source**, in a public repo (GitHub, GitLab, Bitbucket or self-hosted) under an OSI-approved license. Private Slop may use a private repo (§13).
 2. **At least one build** for at least one platform, on the **maker's own release page**. Normally it's made by **Slop Build**: the maker just verifies their account, links the repo, and accepts one ready-made pipeline file (`ARCHITECTURE.md` §6.2). The build is signed in the pipeline. App files are preferred, but an installer or APK is allowed. Coming soon pages are the only exception.
 3. **Passes every scan** (§10).
-4. **Games only:** includes **Slop Pulse** (§11).
+4. **Games:** **Slop Pulse** (§11) is recommended, not required (decided 2026-10-18).
 5. **Publisher Agreement** (`LEGAL.md` §11): owns the rights (including AI output), no loot boxes, no pay-to-win, no scams, no hidden telemetry, nothing unlocked by donations.
 
 **Tracked branch:** the publisher picks one branch as the official version. Each push to it runs Slop Build and **queues an update**. The update is scanned, signed by Slop, and then delivered to everyone who installed from that branch, all at once (no staged rollout).
@@ -160,7 +160,7 @@ Results are **passed**, **note**, **on hold** (fixable, e.g. a license mismatch 
   - Heartbeats must chain from a valid token and are rate-limited.
   - Spikes from new accounts are flagged.
   - Copies launched outside Slop simply aren't counted.
-- **Required for:** public games (Coming soon checks the source; Beta and Released run a live handshake). **Not required for** non-games or Private Slop.
+- **Optional** (decided 2026-10-18; it was planned as required for public games). Recommended for games: it powers "playing now", the monthly peak and playtime-weighted votes. The publishing guide (`web/public/publishing.md`) has the protocol and code for common languages.
 - **Privacy:** no device IDs or gameplay data. Extra payload fails the scan.
 
 ## 12. Money
