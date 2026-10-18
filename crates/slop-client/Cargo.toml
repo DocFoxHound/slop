@@ -1,0 +1,32 @@
+[package]
+name = "slop-client"
+version = "0.1.0"
+edition.workspace = true
+publish.workspace = true
+
+[dependencies]
+base64 = "0.23.1"
+hex = "0.4.3"
+rand = "0.10.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["json", "rustls"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+slop-manifest = { version = "0.1.0", path = "../slop-manifest" }
+thiserror = "2.0.21"
+time = { version = "0.3.55", features = ["formatting", "parsing"] }
+tokio = { version = "1.53.3", features = ["rt", "net", "io-util", "fs", "sync", "time", "macros", "process"] }
+tracing = "0.1.44"
+url = "2.5.8"
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
+
+[dev-dependencies]
+axum = "0.8.9"
+base64 = "0.23.1"
+hex = "0.4.3"
+rand = "0.10.3"
+reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
