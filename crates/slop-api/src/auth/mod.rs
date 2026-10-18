@@ -394,6 +394,7 @@ async fn signup(
         display_name,
         email,
         country_code,
+        is_admin: false,
     };
     Ok((
         StatusCode::CREATED,
@@ -426,14 +427,17 @@ struct Me {
     display_name: String,
     email: Option<String>,
     country_code: String,
+    /// Slop staff: the UI shows the admin panel.
+    is_admin: bool,
 }
 
 async fn me(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Me>> {
-    let me =
-        sqlx::query_as("select id, display_name, email, country_code from users where id = $1")
-            .bind(user.id)
-            .fetch_one(&state.db)
-            .await?;
+    let me = sqlx::query_as(
+        "select id, display_name, email, country_code, is_admin from users where id = $1",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(me))
 }
 

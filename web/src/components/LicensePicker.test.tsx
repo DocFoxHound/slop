@@ -43,6 +43,17 @@ describe("LicensePicker", () => {
     expect(screen.getByText(/Detected from your repository: Apache License 2.0/)).toBeTruthy();
   });
 
+  it("clears a detected licence when the repository changes to one without", async () => {
+    const spy = detected("MIT", "MIT License");
+    const view = render(<Harness repo="https://github.com/octo/game" />);
+    await settle();
+    expect(screen.getByTestId("value").textContent).toBe("MIT");
+    spy.mockResolvedValue({ spdx: null, name: null, note: "no licence file found" });
+    view.rerender(<Harness repo="https://github.com/octo/other" />);
+    await settle();
+    expect(screen.getByTestId("value").textContent).toBe("");
+  });
+
   it("never overrides a licence the maker chose", async () => {
     detected("MIT", "MIT License");
     render(<Harness repo="https://github.com/octo/game" initial="GPL-3.0-only" />);

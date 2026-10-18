@@ -1,6 +1,7 @@
 //! The Slop API: one modular application (docs/ARCHITECTURE.md §4).
 
 pub mod admin;
+pub mod admin_web;
 pub mod auth;
 pub mod catalog;
 pub mod cleanup;
@@ -93,6 +94,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(library::routes())
         .merge(slop_build::routes())
         .merge(desktop_updates::routes())
+        .merge(admin_web::routes())
         // Everything except the desktop build upload: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(

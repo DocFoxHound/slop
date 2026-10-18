@@ -29,6 +29,11 @@ enum Command {
         #[command(subcommand)]
         command: ReviewCommand,
     },
+    /// Give or take away admin rights (the website's admin panel).
+    Admin {
+        #[command(subcommand)]
+        command: AdminCommand,
+    },
     /// Revoke an approved release: it stops launching on every client (SECURITY §5.5).
     Revoke {
         release_id: Uuid,
@@ -36,6 +41,22 @@ enum Command {
         reviewer: String,
         #[arg(long)]
         reason: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum AdminCommand {
+    /// Make an account an admin. WHO is its ID, email or exact display name.
+    Grant {
+        who: String,
+        #[arg(long)]
+        reviewer: String,
+    },
+    /// Take admin rights away.
+    Revoke {
+        who: String,
+        #[arg(long)]
+        reviewer: String,
     },
 }
 
@@ -208,6 +229,20 @@ async fn main() -> anyhow::Result<()> {
                 } => {
                     admin::set_stage(&db, &slug, stage, &reviewer).await?;
                     println!("{slug} moved to {stage:?}.");
+                }
+            }
+            Ok(())
+        }
+        Command::Admin { command } => {
+            let (_, db) = connect().await?;
+            match command {
+                AdminCommand::Grant { who, reviewer } => {
+                    let name = admin::set_admin(&db, &who, true, &reviewer).await?;
+                    println!("{name} is now an admin.");
+                }
+                AdminCommand::Revoke { who, reviewer } => {
+                    let name = admin::set_admin(&db, &who, false, &reviewer).await?;
+                    println!("{name} is no longer an admin.");
                 }
             }
             Ok(())

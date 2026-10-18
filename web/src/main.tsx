@@ -3,6 +3,7 @@ import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
 
 import { Layout } from "./components/Layout";
+import { Admin } from "./pages/Admin";
 import { AppPage } from "./pages/AppPage";
 import { Account, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
 import { Library } from "./pages/Library";
@@ -29,6 +30,7 @@ const router = createBrowserRouter([
       { path: "/publish/:slug", element: <AppEditor /> },
       { path: "/publish/:slug/releases", element: <Releases /> },
       { path: "/library", element: <Library /> },
+      { path: "/admin", element: <Admin /> },
       { path: "/desktop-signin/:id", element: <DesktopApprove /> },
       { path: "/signin", element: <SignIn /> },
       { path: "/signup", element: <SignUp /> },

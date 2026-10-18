@@ -286,6 +286,28 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
   *, *::before, *::after { transition: none !important; animation: none !important; }
 }
 
+/* ---- publishing progress and admin --------------------------------------- */
+.progress { margin-bottom: 16px; }
+.progress h2 { font-size: 18px; margin-bottom: 12px; }
+.steps { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.step { display: grid; grid-template-columns: 28px 1fr; gap: 10px; align-items: start; }
+.step-icon { width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-weight: 900; font-size: 13px; background: var(--panel-3); color: var(--muted); }
+.step.done .step-icon { background: var(--slime-soft); color: var(--slime); }
+.step.active .step-icon { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
+.step.problem .step-icon { background: rgba(248, 113, 113, 0.16); color: var(--bad); }
+.step-state { font-size: 11px; font-weight: 700; letter-spacing: 0.03em; color: var(--muted); text-transform: uppercase; margin-left: 6px; }
+.step.done .step-state { color: var(--slime); }
+.step.active .step-state { color: var(--warn); }
+.step.problem .step-state { color: var(--bad); }
+.maker-app { display: flex; flex-direction: column; gap: 8px; }
+.badge.warn { background: rgba(251, 191, 36, 0.14); color: var(--warn); }
+.reason-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
+.reason-form input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; min-width: 240px; }
+.admin .row-actions { margin-top: 8px; }
+.audit { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 16px; }
+.audit th, .audit td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }
+.audit th { color: var(--muted); font-weight: 600; }
+
 /* ---- desktop sign-in window (login.html) ----------------------------- */
 .login-window {
   height: 100%; display: flex; flex-direction: column; align-items: stretch; gap: 22px; padding: 36px 32px 20px;

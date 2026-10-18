@@ -2333,3 +2333,176 @@ async fn licences_are_detected_from_github(db: PgPool) {
     let junk = body_json(app.send(detect("not a url").cookie(&maker)).await).await;
     assert!(junk["spdx"].is_null());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Admin panel
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let (admin_id, admin) = app.user("Ada Admin", "US").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+
+    // Not an admin: the admin API doesn't exist.
+    for path in ["/v1/admin/queue", "/v1/admin/apps", "/v1/admin/audit"] {
+        assert_eq!(
+            app.send(req(Method::GET, path).cookie(&maker))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+        assert_eq!(
+            app.send(req(Method::GET, path)).await.status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/admin/releases/{id}/approve")).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        body_json(app.send(req(Method::GET, "/v1/me").cookie(&admin)).await).await["is_admin"],
+        false
+    );
+
+    let name = admin::set_admin(&app.db, &admin_id.to_string(), true, "test")
+        .await
+        .unwrap();
+    assert_eq!(name, "Ada Admin");
+    assert_eq!(
+        body_json(app.send(req(Method::GET, "/v1/me").cookie(&admin)).await).await["is_admin"],
+        true
+    );
+
+    // The queue shows the release with its files and the app it belongs to.
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["releases"][0]["id"], id.as_str());
+    assert_eq!(queue["releases"][0]["status"], "awaiting_review");
+    assert_eq!(queue["releases"][0]["app"]["slug"], "game");
+    assert_eq!(queue["releases"][0]["files"][0]["scan_result"], "skipped");
+    assert_eq!(queue["checks"]["signing_key"], true);
+    assert!(queue["ready_to_list"].as_array().unwrap().is_empty());
+
+    // A beta app can't be listed before a release is approved; the refusal says why.
+    let res = app
+        .send(req(Method::POST, "/v1/admin/apps/game/list").cookie(&admin))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("approve a release")
+    );
+
+    // Approve, then list.
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/releases/{id}/approve")).cookie(&admin))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert!(queue["releases"].as_array().unwrap().is_empty());
+    assert_eq!(queue["ready_to_list"][0]["slug"], "game");
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/admin/apps/game/list").cookie(&admin))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/game").header("x-country", "US"))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+
+    // Moderation: stage, delist, withdraw.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/apps/game/stage")
+                .cookie(&admin)
+                .json(json!({ "stage": "released" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let apps = body_json(
+        app.send(req(Method::GET, "/v1/admin/apps?status=listed").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(apps[0]["stage"], "released");
+    assert_eq!(apps[0]["releases"][0]["id"], id.as_str());
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/releases/{id}/revoke"))
+                .cookie(&admin)
+                .json(json!({ "reason": "" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "a reason is required");
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/releases/{id}/revoke"))
+                .cookie(&admin)
+                .json(json!({ "reason": "Test withdrawal" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/apps/game/delist")
+                .cookie(&admin)
+                .json(json!({ "reason": "Test delisting" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Every action is in the audit log under the admin's name.
+    let log = body_json(
+        app.send(req(Method::GET, "/v1/admin/audit").cookie(&admin))
+            .await,
+    )
+    .await;
+    let actions: Vec<&str> = log
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["action"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        actions,
+        [
+            "app.delist",
+            "release.revoke",
+            "app.stage",
+            "app.list",
+            "release.approve",
+            "admin.grant"
+        ]
+    );
+    assert!(log[0]["actor"].as_str().unwrap().starts_with("Ada Admin ("));
+
+    // Rights can be taken away again.
+    admin::set_admin(&app.db, "Ada Admin", false, "test")
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}

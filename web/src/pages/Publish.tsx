@@ -57,7 +57,12 @@ export function Publish() {
       )}
       <div className="shelf">
         {mine.data?.map((a) => (
-          <AppTile app={a} key={a.slug} />
+          <div key={a.slug} className="maker-app">
+            <AppTile app={a} />
+            <Link className="btn small" to={`/publish/${a.slug}/releases`}>
+              Releases &amp; progress
+            </Link>
+          </div>
         ))}
       </div>
     </div>

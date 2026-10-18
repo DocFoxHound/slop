@@ -12,7 +12,7 @@ const TABS = [
     label: "Store",
     icon: "🛒",
     end: true,
-    match: (p: string) => !["/publish", "/account", "/library"].some((prefix) => p.startsWith(prefix)),
+    match: (p: string) => !["/publish", "/account", "/library", "/admin"].some((prefix) => p.startsWith(prefix)),
   },
   { to: "/library", label: "Library", icon: "📚", end: false, match: (p: string) => p.startsWith("/library") },
   { to: "/publish", label: "Publish", icon: "⬆️", end: false, match: (p: string) => p.startsWith("/publish") },
@@ -45,6 +45,7 @@ export function Layout() {
               {t.label.toUpperCase()}
             </NavLink>
           ))}
+          <AdminTab />
         </div>
         <div className="grow" />
         <SearchBox />
@@ -67,6 +68,17 @@ export function Layout() {
         </NavLink>
       </nav>
     </div>
+  );
+}
+
+/** Shown only to Slop staff. */
+function AdminTab() {
+  const { me } = useSession();
+  if (!me?.is_admin) return null;
+  return (
+    <NavLink to="/admin" className={({ isActive }) => (isActive ? "on" : "")}>
+      ADMIN
+    </NavLink>
   );
 }
 
