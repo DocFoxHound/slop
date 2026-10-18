@@ -15,12 +15,38 @@ pub struct Config {
     pub github: Option<GithubConfig>,
     /// Extra origins allowed to make state-changing requests (e.g. a dev server on another port).
     pub trusted_origins: Vec<String>,
-    /// Origins allowed to read the API cross-origin, without cookies: the packaged desktop app
-    /// (`tauri://localhost`, and `http://tauri.localhost` on Windows).
-    pub cors_origins: Vec<String>,
     /// Header set by the CDN or load balancer with the viewer's ISO country code.
     pub country_header: Option<String>,
     pub catalog: CatalogRules,
+    pub releases: ReleaseConfig,
+}
+
+/// Release fetching and signing.
+#[derive(Clone)]
+pub struct ReleaseConfig {
+    /// Slop's manifest signing key (base64 Ed25519 secret). Without it, nothing can be approved.
+    /// Production keeps this in a KMS (SECURITY §8.3); see `slop-api keys generate`.
+    pub signing_key: Option<slop_manifest::ed25519_dalek::SigningKey>,
+    /// Largest release file Slop will fetch and hash. GitHub's own limit is 2 GiB per file.
+    pub max_file_bytes: u64,
+    /// GitHub REST API, for checking that a release's commit exists in the linked repo.
+    pub github_api_base: Url,
+    /// Lets release files use plain http. Only for local development and tests.
+    pub allow_http_downloads: bool,
+}
+
+impl fmt::Debug for ReleaseConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("ReleaseConfig")
+            .field(
+                "signing_key",
+                &self.signing_key.as_ref().map(|_| "<redacted>"),
+            )
+            .field("max_file_bytes", &self.max_file_bytes)
+            .field("github_api_base", &self.github_api_base.as_str())
+            .field("allow_http_downloads", &self.allow_http_downloads)
+            .finish()
+    }
 }
 
 #[derive(Clone)]
@@ -91,7 +117,6 @@ impl Config {
         };
 
         let trusted_origins = list_var("SLOP_TRUSTED_ORIGINS");
-        let cors_origins = list_var("SLOP_CORS_ORIGINS");
 
         let country_header = env::var("SLOP_COUNTRY_HEADER")
             .ok()
@@ -104,15 +129,33 @@ impl Config {
             beta_days: int_var("SLOP_BETA_DAYS", defaults.beta_days)?,
         };
 
+        let signing_key = match env::var("SLOP_SIGNING_KEY") {
+            Ok(v) if !v.is_empty() => Some(
+                slop_manifest::signing_key_from_base64(&v)
+                    .context("SLOP_SIGNING_KEY must be a base64 32-byte Ed25519 key")?,
+            ),
+            _ => None,
+        };
+        let releases = ReleaseConfig {
+            signing_key,
+            max_file_bytes: var_or("SLOP_MAX_FILE_BYTES", "2147483648")
+                .parse()
+                .context("SLOP_MAX_FILE_BYTES")?,
+            github_api_base: var_or("GITHUB_API_BASE", "https://api.github.com/")
+                .parse()
+                .context("GITHUB_API_BASE")?,
+            allow_http_downloads: var_or("SLOP_ALLOW_HTTP_DOWNLOADS", "false") == "true",
+        };
+
         Ok(Self {
             bind,
             database_url,
             public_url,
             github,
             trusted_origins,
-            cors_origins,
             country_header,
             catalog,
+            releases,
         })
     }
 

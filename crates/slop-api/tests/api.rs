@@ -11,10 +11,10 @@ use axum::{
 use http_body_util::BodyExt;
 use serde_json::{Value, json};
 use slop_api::{
-    AppState,
+    AppState, admin,
     auth::session,
-    config::{CatalogRules, Config, GithubConfig},
-    router,
+    config::{CatalogRules, Config, GithubConfig, ReleaseConfig},
+    releases, router,
     tokens::pkce_challenge,
 };
 use sqlx::PgPool;
@@ -29,7 +29,14 @@ struct TestApp {
     router: Router,
     db: PgPool,
     config: Config,
+    state: AppState,
+    /// Base URL of the fake GitHub, which also serves makers' release files.
+    fake_base: String,
+    signing_key: slop_manifest::ed25519_dalek::SigningKey,
 }
+
+/// The bytes the fake release page serves for every build.
+const BUILD_BYTES: &[u8] = b"pretend this is a zip of a game";
 
 /// A fake GitHub: any code except "bad-code" gives a token for user 42.
 async fn fake_github() -> String {
@@ -63,6 +70,10 @@ async fn fake_github() -> String {
                     { "email": "octo@example.com", "primary": true, "verified": true }
                 ]))
             }),
+        )
+        .route(
+            "/octo/game/releases/download/{tag}/{file}",
+            get(|| async { BUILD_BYTES }),
         );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -72,6 +83,7 @@ async fn fake_github() -> String {
 
 async fn test_app(db: PgPool) -> TestApp {
     let github_base = fake_github().await;
+    let signing_key = slop_manifest::ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
     let config = Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         database_url: String::new(),
@@ -83,15 +95,23 @@ async fn test_app(db: PgPool) -> TestApp {
             api_base: github_base.parse().unwrap(),
         }),
         trusted_origins: vec![],
-        cors_origins: vec!["tauri://localhost".into()],
         country_header: Some("x-country".into()),
         catalog: CatalogRules::default(),
+        releases: ReleaseConfig {
+            signing_key: Some(signing_key.clone()),
+            max_file_bytes: 1024,
+            github_api_base: github_base.parse().unwrap(),
+            allow_http_downloads: true,
+        },
     };
     let state = AppState::new(db.clone(), config.clone()).unwrap();
     TestApp {
-        router: router(state).unwrap(),
+        router: router(state.clone()).unwrap(),
         db,
         config,
+        state,
+        fake_base: github_base,
+        signing_key,
     }
 }
 
@@ -896,27 +916,6 @@ async fn responses_carry_security_headers(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn desktop_app_can_read_cross_origin(db: PgPool) {
-    let app = test_app(db).await;
-    let res = app
-        .send(req(Method::GET, "/v1/categories").header("origin", "tauri://localhost"))
-        .await;
-    assert_eq!(
-        res.headers()["access-control-allow-origin"],
-        "tauri://localhost"
-    );
-    assert!(
-        res.headers()
-            .get("access-control-allow-credentials")
-            .is_none()
-    );
-    let res = app
-        .send(req(Method::GET, "/v1/categories").header("origin", "https://evil.example"))
-        .await;
-    assert!(res.headers().get("access-control-allow-origin").is_none());
-}
-
-#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn providers_and_stage_deadlines(db: PgPool) {
     let app = test_app(db).await;
     assert_eq!(
@@ -951,4 +950,596 @@ async fn providers_and_stage_deadlines(db: PgPool) {
     );
     let res = app.send(req(Method::GET, "/v1/apps/done-app")).await;
     assert!(body_json(res).await["stage_deadline"].is_null());
+}
+
+// ---------------------------------------------------------------------------------------------
+// Desktop sign-in
+
+/// Runs the desktop flow up to the token response: the app's request, the website approval and
+/// the code exchange. Returns the token JSON.
+async fn desktop_sign_in(app: &TestApp, web_cookie: &str) -> Value {
+    let verifier = "v".repeat(43);
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/requests").json(json!({
+            "code_challenge": pkce_challenge(&verifier),
+            "redirect_port": 49152,
+            "state": "state-state-state-1",
+            "device_name": "Slop for Linux"
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let created = body_json(res).await;
+    let id = created["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        created["approve_url"],
+        format!("http://localhost:8080/desktop-signin/{id}")
+    );
+
+    let info = body_json(
+        app.send(req(Method::GET, format!("/v1/auth/desktop/requests/{id}")).cookie(web_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(info["device_name"], "Slop for Linux");
+
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/auth/desktop/requests/{id}/approve"),
+            )
+            .cookie(web_cookie),
+        )
+        .await;
+    let redirect = body_json(res).await["redirect_url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(redirect.starts_with("http://127.0.0.1:49152/callback?"));
+    assert_eq!(query_param(&redirect, "state"), "state-state-state-1");
+    let code = query_param(&redirect, "code");
+
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "authorization_code", "code": code, "code_verifier": verifier
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    body_json(res).await
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_sign_in_and_refresh(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Octo", "US").await;
+    let tokens = desktop_sign_in(&app, &web).await;
+    assert_eq!(tokens["expires_in"], 900);
+    let access = tokens["access_token"].as_str().unwrap();
+
+    let me = app
+        .send(req(Method::GET, "/v1/me").header("authorization", format!("Bearer {access}")))
+        .await;
+    assert_eq!(body_json(me).await["display_name"], "Octo");
+    // The website lists the desktop app as a device.
+    let sessions = body_json(
+        app.send(req(Method::GET, "/v1/me/sessions").cookie(&web))
+            .await,
+    )
+    .await;
+    assert!(
+        sessions
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|s| s["kind"] == "desktop" && s["user_agent"] == "Slop for Linux")
+    );
+
+    // Refresh rotates both tokens.
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let rotated = body_json(res).await;
+    assert_ne!(rotated["refresh_token"], tokens["refresh_token"]);
+    let new_access = rotated["access_token"].as_str().unwrap().to_string();
+    let ok = app
+        .send(req(Method::GET, "/v1/me").header("authorization", format!("Bearer {new_access}")))
+        .await;
+    assert_eq!(ok.status(), StatusCode::OK);
+
+    // Replaying the old refresh token is treated as theft: the whole session ends.
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let gone = app
+        .send(req(Method::GET, "/v1/me").header("authorization", format!("Bearer {new_access}")))
+        .await;
+    assert_eq!(gone.status(), StatusCode::UNAUTHORIZED);
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": rotated["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_codes_need_the_verifier_and_work_once(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Octo", "US").await;
+    let verifier = "w".repeat(43);
+    let created = body_json(
+        app.send(req(Method::POST, "/v1/auth/desktop/requests").json(json!({
+            "code_challenge": pkce_challenge(&verifier), "redirect_port": 50000,
+            "state": "another-long-state", "device_name": "Laptop"
+        })))
+        .await,
+    )
+    .await;
+    let id = created["id"].as_str().unwrap();
+
+    // Approving needs a signed-in website session.
+    let res = app
+        .send(req(
+            Method::POST,
+            format!("/v1/auth/desktop/requests/{id}/approve"),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/auth/desktop/requests/{id}/approve"),
+            )
+            .cookie(&web),
+        )
+        .await;
+    let code = query_param(
+        body_json(res).await["redirect_url"].as_str().unwrap(),
+        "code",
+    );
+    // Approving twice isn't possible.
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/auth/desktop/requests/{id}/approve"),
+            )
+            .cookie(&web),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // A wrong verifier burns the code.
+    let bad = json!({ "grant_type": "authorization_code", "code": code, "code_verifier": "x".repeat(43) });
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/auth/desktop/token").json(bad))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let good =
+        json!({ "grant_type": "authorization_code", "code": code, "code_verifier": verifier });
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/auth/desktop/token").json(good))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Bad requests are rejected up front.
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/requests").json(json!({
+            "code_challenge": "short", "redirect_port": 50000, "state": "another-long-state", "device_name": "Laptop"
+        })))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "code_challenge");
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/requests").json(json!({
+            "code_challenge": pkce_challenge(&verifier), "redirect_port": 80, "state": "another-long-state", "device_name": "Laptop"
+        })))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "redirect_port");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn revoking_a_desktop_device_signs_it_out(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Octo", "US").await;
+    let tokens = desktop_sign_in(&app, &web).await;
+    let bearer = format!("Bearer {}", tokens["access_token"].as_str().unwrap());
+    let sessions = body_json(
+        app.send(req(Method::GET, "/v1/me/sessions").cookie(&web))
+            .await,
+    )
+    .await;
+    let desktop = sessions
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "desktop")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+
+    let res = app
+        .send(req(Method::DELETE, format!("/v1/me/sessions/{desktop}")).cookie(&web))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me").header("authorization", bearer))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_bearer_token_is_not_a_cookie(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Octo", "US").await;
+    // A website cookie value sent as a bearer token is refused, and vice versa.
+    let cookie_value = web.split_once('=').unwrap().1.to_string();
+    let res = app
+        .send(req(Method::GET, "/v1/me").header("authorization", format!("Bearer {cookie_value}")))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let tokens = desktop_sign_in(&app, &web).await;
+    let res = app
+        .send(req(Method::GET, "/v1/me").cookie(format!(
+            "slop_session={}",
+            tokens["access_token"].as_str().unwrap()
+        )))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Releases, review and revocation
+
+/// A maker with an app whose repo is on the fake release host. Returns (maker cookie, slug).
+async fn maker_with_app(app: &TestApp, stage: &str) -> (Uuid, String) {
+    let (maker_id, cookie) = app.user("Maker", "US").await;
+    let repo = format!("{}octo/game", app.fake_base);
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx)
+         values ($1, 'game', 'Game', 'A game', 'game', '{stage}', $2, $3, 'MIT')"
+    )))
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .bind(&repo)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    (maker_id, cookie)
+}
+
+fn release_body(app: &TestApp, version: &str, file: &str) -> Value {
+    json!({
+        "version": version,
+        "commit_sha": "a".repeat(40),
+        "files": [{
+            "platform": "linux",
+            "kind": "archive",
+            "url": format!("{}octo/game/releases/download/v1/{file}", app.fake_base),
+            "exec": "bin/game",
+            "args": ["--fullscreen"]
+        }]
+    })
+}
+
+async fn submit_and_fetch(app: &TestApp, cookie: &str, version: &str) -> String {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(cookie)
+                .json(release_body(app, version, "game-linux.zip")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release = body_json(res).await;
+    assert_eq!(release["status"], "fetching");
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    release["id"].as_str().unwrap().to_string()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn release_review_and_signed_manifest(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+
+    // Fetched and hashed, waiting for a person.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["status"], "awaiting_review");
+    let expected_sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(BUILD_BYTES));
+    assert_eq!(mine[0]["files"][0]["sha256"], expected_sha);
+    assert_eq!(mine[0]["files"][0]["size_bytes"], BUILD_BYTES.len());
+    assert_eq!(mine[0]["files"][0]["file_name"], "game-linux.zip");
+    let pending = admin::pending(&app.db).await.unwrap();
+    assert_eq!(pending.len(), 1);
+
+    // Nothing to install yet; the store can't list a beta app without an approved release.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/game/manifest").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(admin::list_app(&app.db, "game", "rev").await.is_err());
+
+    let release_id: Uuid = id.parse().unwrap();
+    assert!(
+        admin::approve(&app.db, Some(&app.signing_key), release_id, "")
+            .await
+            .is_err(),
+        "reviewer required"
+    );
+    admin::approve(&app.db, Some(&app.signing_key), release_id, "rev")
+        .await
+        .unwrap();
+    admin::list_app(&app.db, "game", "rev").await.unwrap();
+
+    // Anyone can now fetch the signed manifest, and it verifies with Slop's key.
+    let res = app
+        .send(req(Method::GET, "/v1/apps/game/manifest").header("x-country", "US"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let signed: slop_manifest::Signed = serde_json::from_value(body_json(res).await).unwrap();
+    let manifest: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    assert_eq!(manifest.version, "1.0.0");
+    assert_eq!(manifest.maker, "Maker");
+    assert_eq!(manifest.release_id, id);
+    let file = manifest.file_for(slop_manifest::Platform::Linux).unwrap();
+    assert_eq!(file.sha256, expected_sha);
+    assert_eq!(file.size, BUILD_BYTES.len() as u64);
+    assert_eq!(file.launch.as_ref().unwrap().exec, "bin/game");
+    assert_eq!(file.launch.as_ref().unwrap().args, ["--fullscreen"]);
+
+    // The public sees approved releases only.
+    let public = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(public.as_array().unwrap().len(), 1);
+
+    // Revoking takes it off the manifest endpoint and puts it on the signed revocation list.
+    admin::revoke(&app.db, release_id, "rev", "Malware found by re-scan")
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/game/manifest").header("x-country", "US"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let signed: slop_manifest::Signed = serde_json::from_value(
+        body_json(app.send(req(Method::GET, "/v1/revocations")).await).await,
+    )
+    .unwrap();
+    let list: slop_manifest::RevocationList = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::RevocationList,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    assert_eq!(
+        list.is_revoked(&id).unwrap().reason,
+        "Malware found by re-scan"
+    );
+    assert!(!list.is_expired(OffsetDateTime::now_utc()));
+
+    // Every decision is in the audit log, which can't be edited.
+    let actions: Vec<String> = sqlx::query_scalar("select action from audit_log order by id")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(actions, ["release.approve", "app.list", "release.revoke"]);
+    assert!(
+        sqlx::query("delete from audit_log")
+            .execute(&app.db)
+            .await
+            .is_err()
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn releases_are_checked_on_submit(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&stranger)
+                .json(release_body(&app, "1.0.0", "x.zip")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    let cases: Vec<(&str, Value)> = vec![
+        ("version", json!("not a version")),
+        ("commit_sha", json!("main")),
+    ];
+    for (field, value) in cases {
+        let mut body = release_body(&app, "1.0.0", "x.zip");
+        body[field] = value;
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/game/releases")
+                    .cookie(&maker)
+                    .json(body),
+            )
+            .await;
+        assert_eq!(body_json(res).await["error"]["field"], field);
+    }
+    for file in [
+        json!({ "platform": "linux", "kind": "archive", "url": "https://evil.example/x.zip", "exec": "game" }),
+        json!({ "platform": "linux", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base) }),
+        json!({ "platform": "linux", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base), "exec": "../../bin/sh" }),
+        json!({ "platform": "linux", "kind": "apk", "url": format!("{}octo/game/releases/download/v1/x.apk", app.fake_base) }),
+        json!({ "platform": "beos", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base), "exec": "g" }),
+    ] {
+        let mut body = release_body(&app, "1.0.0", "x.zip");
+        body["files"] = json!([file]);
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/game/releases")
+                    .cookie(&maker)
+                    .json(body),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{file}");
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_missing_file_fails_the_release(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let mut body = release_body(&app, "1.0.0", "x.zip");
+    body["files"][0]["url"] = json!(format!("{}octo/game/missing/x.zip", app.fake_base));
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(body),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    releases::fetch_next(&app.state).await.unwrap();
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["status"], "failed");
+    assert!(
+        mine[0]["status_reason"].as_str().unwrap().contains("404"),
+        "{}",
+        mine[0]["status_reason"]
+    );
+    // A failed release can't be approved.
+    let id: Uuid = mine[0]["id"].as_str().unwrap().parse().unwrap();
+    assert!(
+        admin::approve(&app.db, Some(&app.signing_key), id, "rev")
+            .await
+            .is_err()
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn stages_need_an_approved_release(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "coming_soon").await;
+    // A Coming soon page can be listed without a build...
+    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    // ...but can't move to beta until a release is approved.
+    assert!(
+        admin::set_stage(&app.db, "game", slop_api::catalog::AppStage::Beta, "rev")
+            .await
+            .is_err()
+    );
+    let id = submit_and_fetch(&app, &maker, "0.1.0").await;
+    admin::approve(&app.db, Some(&app.signing_key), id.parse().unwrap(), "rev")
+        .await
+        .unwrap();
+    admin::set_stage(&app.db, "game", slop_api::catalog::AppStage::Beta, "rev")
+        .await
+        .unwrap();
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/game").header("x-country", "US"))
+            .await,
+    )
+    .await;
+    assert_eq!(page["stage"], "beta");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn library_add_list_remove(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "listed-game", "released", "").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx)
+         values ($1, 'secret-draft', 'Draft', 'Draft', 'game', 'beta', $2, 'https://github.com/x/y', 'MIT')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let (_, player) = app.user("Player", "US").await;
+
+    assert_eq!(
+        app.send(req(Method::PUT, "/v1/me/library/listed-game"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(req(Method::PUT, "/v1/me/library/listed-game").cookie(&player))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    // Adding twice is fine; someone else's draft can't be added.
+    assert_eq!(
+        app.send(req(Method::PUT, "/v1/me/library/listed-game").cookie(&player))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::PUT, "/v1/me/library/secret-draft").cookie(&player))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let library = body_json(
+        app.send(req(Method::GET, "/v1/me/library").cookie(&player))
+            .await,
+    )
+    .await;
+    assert_eq!(library.as_array().unwrap().len(), 1);
+    assert_eq!(library[0]["slug"], "listed-game");
+    assert!(library[0]["added_at"].is_string());
+
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/library/listed-game").cookie(&player))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let library = body_json(
+        app.send(req(Method::GET, "/v1/me/library").cookie(&player))
+            .await,
+    )
+    .await;
+    assert!(library.as_array().unwrap().is_empty());
 }

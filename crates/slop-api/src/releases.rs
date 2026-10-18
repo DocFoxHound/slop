@@ -1,0 +1,678 @@
+//! Releases: makers submit them, Slop fetches and hashes their files, a reviewer approves them
+//! and Slop signs the manifest (docs/ARCHITECTURE.md §6.3, docs/SECURITY.md §5).
+//!
+//! Builds stay on the maker's release page. Slop downloads each file once to hash it, keeps
+//! nothing but the hash and size, and the client later downloads from the same URL and checks
+//! the hash against Slop's signed manifest.
+
+use std::time::Duration as StdDuration;
+
+use anyhow::{Context, anyhow, bail};
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    routing::get,
+};
+use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
+use slop_manifest::{
+    FileKind, Platform, Purpose, REVOCATIONS_SCHEMA, RevocationList, Revoked, Signed,
+    is_safe_relative_path,
+};
+use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
+use url::Url;
+use uuid::Uuid;
+
+use crate::{
+    AppState,
+    auth::session::{CurrentUser, MaybeUser},
+    catalog,
+    error::{ApiError, ApiResult, is_unique_violation},
+    policy::ViewerPolicy,
+};
+
+/// How long a signed revocation list is valid. Clients refresh at least this often.
+pub const REVOCATION_LIST_LIFETIME: Duration = Duration::hours(6);
+/// A fetch that started this long ago is presumed dead and retried.
+const FETCH_LEASE: Duration = Duration::minutes(30);
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route(
+            "/apps/{slug}/releases",
+            get(list_releases).post(submit_release),
+        )
+        .route("/apps/{slug}/manifest", get(latest_manifest))
+        .route("/revocations", get(revocations))
+        .route("/keys", get(keys))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Submitting
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewFile {
+    platform: String,
+    kind: String,
+    url: String,
+    exec: Option<String>,
+    #[serde(default)]
+    args: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NewRelease {
+    version: String,
+    commit_sha: String,
+    files: Vec<NewFile>,
+}
+
+struct CheckedFile {
+    platform: Platform,
+    kind: FileKind,
+    url: String,
+    file_name: String,
+    exec: Option<String>,
+    args: Vec<String>,
+}
+
+fn validate_version(v: &str) -> ApiResult<()> {
+    let ok = (1..=40).contains(&v.len())
+        && v.chars().next().is_some_and(|c| c.is_ascii_alphanumeric())
+        && v.chars()
+            .all(|c| c.is_ascii_alphanumeric() || "._+-".contains(c));
+    if !ok {
+        return Err(ApiError::invalid(
+            "version",
+            "use up to 40 letters, numbers, dots and dashes, like 1.2.0",
+        ));
+    }
+    Ok(())
+}
+
+fn validate_commit(sha: &str) -> ApiResult<()> {
+    if sha.len() != 40
+        || !sha
+            .bytes()
+            .all(|b| b.is_ascii_digit() || (b'a'..=b'f').contains(&b))
+    {
+        return Err(ApiError::invalid(
+            "commit_sha",
+            "use the full 40-character commit SHA, in lowercase",
+        ));
+    }
+    Ok(())
+}
+
+fn is_github(url: &Url) -> bool {
+    url.host_str() == Some("github.com")
+}
+
+/// Release files must live on the maker's own release page (ARCHITECTURE §6.4): for GitHub,
+/// under `<repo>/releases/download/`; elsewhere, on the repo's own host.
+fn validate_file_url(repo_url: &str, value: &str, allow_http: bool) -> ApiResult<(String, String)> {
+    let invalid = |msg: &str| ApiError::invalid("files", msg.to_string());
+    let url = Url::parse(value.trim()).map_err(|_| invalid("a file URL isn't valid"))?;
+    let repo = Url::parse(repo_url).map_err(|_| invalid("the app's repository URL isn't valid"))?;
+    let scheme_ok = url.scheme() == "https" || (allow_http && url.scheme() == "http");
+    if !scheme_ok
+        || !url.username().is_empty()
+        || url.password().is_some()
+        || url.fragment().is_some()
+    {
+        return Err(invalid("file URLs must be plain https links"));
+    }
+    if is_github(&repo) {
+        let prefix = format!("{}/releases/download/", repo_url.trim_end_matches('/'));
+        if !url.as_str().starts_with(&prefix) || url.query().is_some() {
+            return Err(invalid(
+                "files must be on this repository's GitHub releases page",
+            ));
+        }
+    } else if url.host_str() != repo.host_str()
+        || url.port_or_known_default() != repo.port_or_known_default()
+    {
+        return Err(invalid("files must be on the same site as the repository"));
+    }
+    let file_name = url
+        .path_segments()
+        .and_then(|mut s| s.next_back())
+        .filter(|n| !n.is_empty())
+        .ok_or_else(|| invalid("a file URL has no file name"))?;
+    let file_name = percent_encoding::percent_decode_str(file_name)
+        .decode_utf8()
+        .map_err(|_| invalid("a file name isn't valid text"))?;
+    if file_name.contains('/')
+        || file_name.contains('\\')
+        || file_name.chars().any(char::is_control)
+    {
+        return Err(invalid("a file name isn't valid"));
+    }
+    let file_name = file_name.into_owned();
+    Ok((url.into(), file_name))
+}
+
+fn validate_files(
+    repo_url: &str,
+    files: Vec<NewFile>,
+    allow_http: bool,
+) -> ApiResult<Vec<CheckedFile>> {
+    if files.is_empty() || files.len() > Platform::ALL.len() {
+        return Err(ApiError::invalid(
+            "files",
+            "add one build per platform, up to four",
+        ));
+    }
+    let mut checked: Vec<CheckedFile> = Vec::new();
+    for f in files {
+        let platform = Platform::parse(&f.platform)
+            .ok_or_else(|| ApiError::invalid("files", "unknown platform"))?;
+        if checked.iter().any(|c| c.platform == platform) {
+            return Err(ApiError::invalid("files", "one build per platform"));
+        }
+        let kind = FileKind::parse(&f.kind)
+            .ok_or_else(|| ApiError::invalid("files", "unknown build type"))?;
+        match (platform, kind) {
+            (Platform::Android, FileKind::Apk) => {}
+            (Platform::Android, _) | (_, FileKind::Apk) => {
+                return Err(ApiError::invalid(
+                    "files",
+                    "Android builds are APKs, and APKs are only for Android",
+                ));
+            }
+            _ => {}
+        }
+        let exec = match (
+            kind,
+            f.exec.as_deref().map(str::trim).filter(|e| !e.is_empty()),
+        ) {
+            (FileKind::Archive, Some(exec)) if is_safe_relative_path(exec) => {
+                Some(exec.to_string())
+            }
+            (FileKind::Archive, _) => {
+                return Err(ApiError::invalid(
+                    "files",
+                    "archives need the path of the program to start, inside the archive, like bin/game",
+                ));
+            }
+            (_, None) => None,
+            (_, Some(_)) => {
+                return Err(ApiError::invalid(
+                    "files",
+                    "only archives have a program path",
+                ));
+            }
+        };
+        if f.args.len() > 16
+            || f.args
+                .iter()
+                .any(|a| a.len() > 200 || a.chars().any(char::is_control))
+        {
+            return Err(ApiError::invalid("files", "launch arguments are too long"));
+        }
+        let (url, file_name) = validate_file_url(repo_url, &f.url, allow_http)?;
+        checked.push(CheckedFile {
+            platform,
+            kind,
+            url,
+            file_name,
+            exec,
+            args: f.args,
+        });
+    }
+    Ok(checked)
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ReleaseFileInfo {
+    platform: String,
+    kind: String,
+    url: String,
+    file_name: String,
+    exec: Option<String>,
+    args: Vec<String>,
+    size_bytes: Option<i64>,
+    sha256: Option<String>,
+}
+
+#[derive(Serialize)]
+struct ReleaseInfo {
+    id: Uuid,
+    version: String,
+    commit_sha: String,
+    status: String,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    status_reason: Option<String>,
+    commit_verified: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+    files: Vec<ReleaseFileInfo>,
+}
+
+async fn owned_app(state: &AppState, slug: &str, user: &CurrentUser) -> ApiResult<(Uuid, String)> {
+    let row: Option<(Uuid, Uuid, String)> =
+        sqlx::query_as("select id, maker_id, repo_url from apps where slug = $1")
+            .bind(slug)
+            .fetch_optional(&state.db)
+            .await?;
+    match row {
+        Some((id, maker, repo)) if maker == user.id => Ok((id, repo)),
+        _ => Err(ApiError::NotFound),
+    }
+}
+
+async fn submit_release(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+    Json(req): Json<NewRelease>,
+) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
+    let (app_id, repo_url) = owned_app(&state, &slug, &user).await?;
+    validate_version(&req.version)?;
+    validate_commit(&req.commit_sha)?;
+    let files = validate_files(
+        &repo_url,
+        req.files,
+        state.config.releases.allow_http_downloads,
+    )?;
+
+    let pending: i64 = sqlx::query_scalar(
+        "select count(*) from releases where app_id = $1 and status in ('fetching', 'awaiting_review')",
+    )
+    .bind(app_id)
+    .fetch_one(&state.db)
+    .await?;
+    if pending >= 3 {
+        return Err(ApiError::Conflict(
+            "three releases are already waiting for review".into(),
+        ));
+    }
+
+    let id = Uuid::now_v7();
+    let mut tx = state.db.begin().await?;
+    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by) values ($1, $2, $3, $4, $5)")
+        .bind(id)
+        .bind(app_id)
+        .bind(&req.version)
+        .bind(&req.commit_sha)
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| {
+            if is_unique_violation(&err) {
+                ApiError::invalid("version", "this version already exists")
+            } else {
+                err.into()
+            }
+        })?;
+    for f in &files {
+        sqlx::query(
+            "insert into release_files (release_id, platform, kind, url, file_name, exec, args)
+             values ($1, $2, $3, $4, $5, $6, $7)",
+        )
+        .bind(id)
+        .bind(f.platform.as_str())
+        .bind(f.kind.as_str())
+        .bind(&f.url)
+        .bind(&f.file_name)
+        .bind(&f.exec)
+        .bind(&f.args)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    state.fetch_wakeup.notify_one();
+
+    let release = load_release(&state, id).await?;
+    Ok((StatusCode::CREATED, Json(release)))
+}
+
+async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
+    let row: (
+        Uuid,
+        String,
+        String,
+        String,
+        Option<String>,
+        bool,
+        OffsetDateTime,
+    ) = sqlx::query_as(
+        "select id, version, commit_sha, status::text, status_reason, commit_verified, created_at
+         from releases where id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    let files = sqlx::query_as(
+        "select platform, kind, url, file_name, exec, args, size_bytes, sha256
+         from release_files where release_id = $1 order by platform",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(ReleaseInfo {
+        id: row.0,
+        version: row.1,
+        commit_sha: row.2,
+        status: row.3,
+        status_reason: row.4,
+        commit_verified: row.5,
+        created_at: row.6,
+        files,
+    })
+}
+
+/// Makers see every release with its status; everyone else sees approved releases.
+async fn list_releases(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Vec<ReleaseInfo>>> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
+    let (app_id, is_mine) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "select id from releases where app_id = $1 and ($2 or status = 'approved') order by created_at desc limit 50",
+    )
+    .bind(app_id)
+    .bind(is_mine)
+    .fetch_all(&state.db)
+    .await?;
+    let mut out = Vec::with_capacity(ids.len());
+    for id in ids {
+        out.push(load_release(&state, id).await?);
+    }
+    Ok(Json(out))
+}
+
+/// The newest approved release's signed manifest, for installing.
+async fn latest_manifest(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Signed>> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
+    let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
+    let manifest: Option<sqlx::types::Json<Signed>> = sqlx::query_scalar(
+        "select signed_manifest from releases
+         where app_id = $1 and status = 'approved' and signed_manifest is not null
+         order by reviewed_at desc limit 1",
+    )
+    .bind(app_id)
+    .fetch_optional(&state.db)
+    .await?;
+    manifest.map(|m| Json(m.0)).ok_or(ApiError::NotFound)
+}
+
+/// The current revocation list, freshly signed (SECURITY §5.5).
+async fn revocations(State(state): State<AppState>) -> ApiResult<Json<Signed>> {
+    let key = state
+        .config
+        .releases
+        .signing_key
+        .as_ref()
+        .ok_or(ApiError::Unavailable("release signing isn't set up"))?;
+    let rows: Vec<(Uuid, String, Option<String>, OffsetDateTime)> = sqlx::query_as(
+        "select r.id, a.slug, r.status_reason, r.revoked_at from releases r join apps a on a.id = r.app_id
+         where r.status = 'revoked' order by r.revoked_at",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let now = OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .expect("valid");
+    let list = RevocationList {
+        schema: REVOCATIONS_SCHEMA,
+        issued_at: now.format(&Rfc3339).expect("formats"),
+        expires_at: (now + REVOCATION_LIST_LIFETIME)
+            .format(&Rfc3339)
+            .expect("formats"),
+        revoked: rows
+            .into_iter()
+            .map(|(id, slug, reason, at)| Revoked {
+                release_id: id.to_string(),
+                app_slug: slug,
+                reason: reason.unwrap_or_default(),
+                revoked_at: at.format(&Rfc3339).expect("formats"),
+            })
+            .collect(),
+    };
+    Ok(Json(slop_manifest::sign(
+        &list,
+        Purpose::RevocationList,
+        key,
+    )))
+}
+
+#[derive(Serialize)]
+struct PublicKey {
+    key_id: String,
+    public_key: String,
+}
+
+/// Slop's current public signing key. Clients pin keys at build time; this is for transparency.
+async fn keys(State(state): State<AppState>) -> Json<Vec<PublicKey>> {
+    Json(
+        state
+            .config
+            .releases
+            .signing_key
+            .iter()
+            .map(|k| PublicKey {
+                key_id: slop_manifest::key_id(&k.verifying_key()),
+                public_key: slop_manifest::verifying_key_to_base64(&k.verifying_key()),
+            })
+            .collect(),
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fetching (the semi-automatic first step of scanning)
+
+/// Runs forever: picks up releases waiting to be fetched and hashes their files.
+pub async fn run_fetcher(state: AppState) {
+    loop {
+        match fetch_next(&state).await {
+            Ok(true) => continue,
+            Ok(false) => {}
+            Err(err) => tracing::error!(error = ?err, "release fetcher"),
+        }
+        tokio::select! {
+            _ = state.fetch_wakeup.notified() => {}
+            _ = tokio::time::sleep(StdDuration::from_secs(30)) => {}
+        }
+    }
+}
+
+/// Fetches one release, if one is waiting. Returns whether it did any work.
+pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
+    let claimed: Option<(Uuid, String, String)> = sqlx::query_as(
+        "update releases r set fetch_started_at = now()
+         from apps a
+         where a.id = r.app_id and r.id = (
+             select id from releases
+             where status = 'fetching' and (fetch_started_at is null or fetch_started_at < now() - $1)
+             order by created_at limit 1 for update skip locked)
+         returning r.id, r.commit_sha, a.repo_url",
+    )
+    .bind(FETCH_LEASE)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((id, commit, repo_url)) = claimed else {
+        return Ok(false);
+    };
+
+    match fetch_release(state, id, &commit, &repo_url).await {
+        Ok(commit_verified) => {
+            sqlx::query(
+                "update releases set status = 'awaiting_review', commit_verified = $2
+                 where id = $1 and status = 'fetching'",
+            )
+            .bind(id)
+            .bind(commit_verified)
+            .execute(&state.db)
+            .await?;
+            tracing::info!(release = %id, "release fetched; awaiting review");
+        }
+        Err(err) => {
+            tracing::warn!(release = %id, error = %err, "release fetch failed");
+            sqlx::query("update releases set status = 'failed', status_reason = $2 where id = $1 and status = 'fetching'")
+                .bind(id)
+                .bind(format!("{err:#}"))
+                .execute(&state.db)
+                .await?;
+        }
+    }
+    Ok(true)
+}
+
+async fn fetch_release(
+    state: &AppState,
+    id: Uuid,
+    commit: &str,
+    repo_url: &str,
+) -> anyhow::Result<bool> {
+    let commit_verified = check_commit(state, repo_url, commit).await?;
+    let files: Vec<(String, String)> = sqlx::query_as(
+        "select platform, url from release_files where release_id = $1 order by platform",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
+    for (platform, url) in files {
+        let (size, sha256) = hash_download(
+            &state.fetch_http,
+            &url,
+            state.config.releases.max_file_bytes,
+        )
+        .await
+        .with_context(|| format!("{platform} build"))?;
+        sqlx::query("update release_files set size_bytes = $3, sha256 = $4 where release_id = $1 and platform = $2")
+            .bind(id)
+            .bind(&platform)
+            .bind(size as i64)
+            .bind(&sha256)
+            .execute(&state.db)
+            .await?;
+    }
+    Ok(commit_verified)
+}
+
+/// For GitHub repos, checks the commit exists (SECURITY §5.1). Other hosts are checked by the
+/// reviewer for now; returns false for them.
+async fn check_commit(state: &AppState, repo_url: &str, commit: &str) -> anyhow::Result<bool> {
+    let repo = Url::parse(repo_url)?;
+    if !is_github(&repo) {
+        return Ok(false);
+    }
+    let path = repo.path().trim_matches('/').trim_end_matches(".git");
+    let url = state
+        .config
+        .releases
+        .github_api_base
+        .join(&format!("repos/{path}/commits/{commit}"))?;
+    let res = state
+        .fetch_http
+        .get(url)
+        .header("accept", "application/vnd.github+json")
+        .header("user-agent", "slop-api")
+        .send()
+        .await
+        .context("checking the commit on GitHub")?;
+    match res.status().as_u16() {
+        200 => Ok(true),
+        404 | 422 => bail!("commit {commit} isn't in {repo_url}"),
+        code => bail!("GitHub answered {code} when checking the commit"),
+    }
+}
+
+/// Streams a file, hashing as it goes. Nothing is written to disk.
+pub async fn hash_download(
+    http: &reqwest::Client,
+    url: &str,
+    max: u64,
+) -> anyhow::Result<(u64, String)> {
+    let res = http.get(url).send().await.context("download failed")?;
+    if !res.status().is_success() {
+        bail!("download failed: HTTP {}", res.status().as_u16());
+    }
+    if res.content_length().is_some_and(|len| len > max) {
+        bail!("file is larger than the {max}-byte limit");
+    }
+    let mut hasher = Sha256::new();
+    let mut size: u64 = 0;
+    let mut res = res;
+    while let Some(chunk) = res.chunk().await.context("download interrupted")? {
+        size += chunk.len() as u64;
+        if size > max {
+            return Err(anyhow!("file is larger than the {max}-byte limit"));
+        }
+        hasher.update(&chunk);
+    }
+    if size == 0 {
+        bail!("file is empty");
+    }
+    Ok((size, hex::encode(hasher.finalize())))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const REPO: &str = "https://github.com/octo/game";
+
+    #[test]
+    fn file_urls_must_be_on_the_makers_release_page() {
+        let (url, name) = validate_file_url(
+            REPO,
+            "https://github.com/octo/game/releases/download/v1/Game%20Linux.zip",
+            false,
+        )
+        .unwrap();
+        assert_eq!(
+            url,
+            "https://github.com/octo/game/releases/download/v1/Game%20Linux.zip"
+        );
+        assert_eq!(name, "Game Linux.zip");
+        for bad in [
+            "https://github.com/evil/game/releases/download/v1/x.zip",
+            "https://github.com/octo/game-evil/releases/download/v1/x.zip",
+            "https://evil.example/octo/game/releases/download/v1/x.zip",
+            "http://github.com/octo/game/releases/download/v1/x.zip",
+            "https://github.com/octo/game/releases/download/v1/x.zip?redirect=evil",
+        ] {
+            assert!(validate_file_url(REPO, bad, false).is_err(), "{bad}");
+        }
+        // Self-hosted: same host as the repo.
+        assert!(
+            validate_file_url(
+                "https://git.example/me/app",
+                "https://git.example/me/app/-/releases/x.zip",
+                false
+            )
+            .is_ok()
+        );
+        assert!(
+            validate_file_url(
+                "https://git.example/me/app",
+                "https://cdn.example/x.zip",
+                false
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn versions_and_commits() {
+        assert!(validate_version("1.2.0-beta.1").is_ok());
+        assert!(validate_version("-1").is_err());
+        assert!(validate_version("1 2").is_err());
+        assert!(validate_commit(&"a".repeat(40)).is_ok());
+        assert!(validate_commit(&"A".repeat(40)).is_err());
+        assert!(validate_commit("abc").is_err());
+    }
+}

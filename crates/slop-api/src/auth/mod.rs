@@ -1,5 +1,6 @@
 //! Identity: sign-in with GitHub, sign-up, sign-out and the devices page (SECURITY §4).
 
+pub mod desktop;
 pub mod github;
 pub mod session;
 
@@ -38,6 +39,7 @@ pub fn routes() -> Router<AppState> {
         .route("/me", get(me))
         .route("/me/sessions", get(list_sessions))
         .route("/me/sessions/{id}", delete(revoke_session))
+        .merge(desktop::routes())
 }
 
 /// Only same-site relative paths, so sign-in can't be used as an open redirect.
@@ -438,6 +440,8 @@ async fn me(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<
 #[derive(Serialize, sqlx::FromRow)]
 struct SessionInfo {
     id: Uuid,
+    /// "web" or "desktop".
+    kind: String,
     user_agent: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
@@ -450,16 +454,19 @@ async fn list_sessions(
     State(state): State<AppState>,
     user: CurrentUser,
 ) -> ApiResult<Json<Vec<SessionInfo>>> {
-    let sessions = sqlx::query_as(
-        "select id, user_agent, created_at, last_seen_at, id = $2 as current from sessions
-         where user_id = $1 and revoked_at is null and expires_at > now() and last_seen_at > now() - $3
-         order by last_seen_at desc",
-    )
-    .bind(user.id)
-    .bind(user.session_id)
-    .bind(session::IDLE_TIMEOUT)
-    .fetch_all(&state.db)
-    .await?;
+    let sql = format!(
+        "select s.id, s.kind, s.user_agent, s.created_at, s.last_seen_at, s.id = $4 as current
+         from sessions s where s.user_id = $3 and {}
+         order by s.last_seen_at desc",
+        session::live_session_sql("$1", "$2")
+    );
+    let sessions = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(session::IDLE_TIMEOUT)
+        .bind(session::DESKTOP_IDLE_TIMEOUT)
+        .bind(user.id)
+        .bind(user.session_id)
+        .fetch_all(&state.db)
+        .await?;
     Ok(Json(sessions))
 }
 

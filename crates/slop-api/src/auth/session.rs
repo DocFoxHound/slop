@@ -1,7 +1,14 @@
-//! Website sessions (SECURITY §4.2): an opaque random token in an `HttpOnly`, `SameSite=Lax`
-//! cookie, stored hashed. Sessions expire 30 days after sign-in, or after 7 days unused.
+//! Sessions (SECURITY §4.2).
+//!
+//! - **Website:** an opaque random token in an `HttpOnly`, `SameSite=Lax` cookie, stored hashed.
+//!   Expires 30 days after sign-in, or after 7 days unused.
+//! - **Desktop app:** a short-lived bearer access token plus a rotating refresh token (see
+//!   `desktop.rs`). Expires 180 days after sign-in, or after 30 days unused.
 
-use axum::{extract::FromRequestParts, http::request::Parts};
+use axum::{
+    extract::FromRequestParts,
+    http::{HeaderMap, header::AUTHORIZATION, request::Parts},
+};
 use axum_extra::extract::{
     CookieJar,
     cookie::{Cookie, SameSite},
@@ -19,6 +26,16 @@ use crate::{
 
 pub const ABSOLUTE_LIFETIME: Duration = Duration::days(30);
 pub const IDLE_TIMEOUT: Duration = Duration::days(7);
+pub const DESKTOP_ABSOLUTE_LIFETIME: Duration = Duration::days(180);
+pub const DESKTOP_IDLE_TIMEOUT: Duration = Duration::days(30);
+
+/// SQL condition for a live session `s`, given `$idle` and `$desktop_idle` placeholders.
+pub fn live_session_sql(idle: &str, desktop_idle: &str) -> String {
+    format!(
+        "s.revoked_at is null and s.expires_at > now()
+         and s.last_seen_at > now() - case s.kind when 'desktop' then {desktop_idle} else {idle} end"
+    )
+}
 /// `last_seen_at` is only written when it is older than this, to avoid a write per request.
 const TOUCH_INTERVAL: Duration = Duration::minutes(5);
 
@@ -91,52 +108,75 @@ pub fn removal_cookie(config: &Config, name: &'static str) -> Cookie<'static> {
     build_cookie(config, name, String::new(), Duration::ZERO)
 }
 
-async fn lookup(state: &AppState, jar: &CookieJar) -> ApiResult<Option<CurrentUser>> {
-    let Some(cookie) = jar.get(cookie_name(&state.config)) else {
-        return Ok(None);
-    };
-    let user: Option<(CurrentUser, bool)> =
-        sqlx::query_as::<_, (Uuid, Uuid, String, String, bool)>(
-            "select u.id, s.id, u.display_name, u.country_code, s.last_seen_at < now() - $2
-         from sessions s join users u on u.id = s.user_id
-         where s.token_hash = $1 and s.revoked_at is null
-           and s.expires_at > now() and s.last_seen_at > now() - $3",
-        )
-        .bind(hash_token(cookie.value()))
-        .bind(TOUCH_INTERVAL)
-        .bind(IDLE_TIMEOUT)
-        .fetch_optional(&state.db)
-        .await?
-        .map(|(id, session_id, display_name, country_code, stale)| {
-            (
-                CurrentUser {
-                    id,
-                    session_id,
-                    display_name,
-                    country_code,
-                },
-                stale,
-            )
-        });
+/// The bearer token from an `Authorization: Bearer …` header.
+fn bearer(headers: &HeaderMap) -> Option<&str> {
+    headers
+        .get(AUTHORIZATION)?
+        .to_str()
+        .ok()?
+        .strip_prefix("Bearer ")
+        .map(str::trim)
+        .filter(|t| !t.is_empty())
+}
 
-    let Some((user, stale)) = user else {
+/// Finds the session for a request: a desktop bearer token if present, else the website cookie.
+async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<CurrentUser>> {
+    let live = live_session_sql("$2", "$3");
+    let (sql, token) = if let Some(token) = bearer(headers) {
+        (
+            format!(
+                "select u.id, s.id, u.display_name, u.country_code, s.last_seen_at < now() - $4
+                 from access_tokens t join sessions s on s.id = t.session_id join users u on u.id = s.user_id
+                 where t.token_hash = $1 and t.expires_at > now() and s.kind = 'desktop' and {live}"
+            ),
+            token.to_string(),
+        )
+    } else {
+        let jar = CookieJar::from_headers(headers);
+        let Some(cookie) = jar.get(cookie_name(&state.config)) else {
+            return Ok(None);
+        };
+        (
+            format!(
+                "select u.id, s.id, u.display_name, u.country_code, s.last_seen_at < now() - $4
+                 from sessions s join users u on u.id = s.user_id
+                 where s.token_hash = $1 and s.kind = 'web' and {live}"
+            ),
+            cookie.value().to_string(),
+        )
+    };
+
+    let row: Option<(Uuid, Uuid, String, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
+        .bind(hash_token(&token))
+        .bind(IDLE_TIMEOUT)
+        .bind(DESKTOP_IDLE_TIMEOUT)
+        .bind(TOUCH_INTERVAL)
+        .fetch_optional(&state.db)
+        .await?;
+    let Some((id, session_id, display_name, country_code, stale)) = row else {
         return Ok(None);
     };
     if stale {
         sqlx::query("update sessions set last_seen_at = now() where id = $1")
-            .bind(user.session_id)
+            .bind(session_id)
             .execute(&state.db)
             .await?;
     }
-    Ok(Some(user))
+    Ok(Some(CurrentUser {
+        id,
+        session_id,
+        display_name,
+        country_code,
+    }))
 }
 
 impl FromRequestParts<AppState> for CurrentUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
-        let jar = CookieJar::from_headers(&parts.headers);
-        lookup(state, &jar).await?.ok_or(ApiError::Unauthorized)
+        lookup(state, &parts.headers)
+            .await?
+            .ok_or(ApiError::Unauthorized)
     }
 }
 
@@ -144,7 +184,6 @@ impl FromRequestParts<AppState> for MaybeUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
-        let jar = CookieJar::from_headers(&parts.headers);
-        Ok(Self(lookup(state, &jar).await?))
+        Ok(Self(lookup(state, &parts.headers).await?))
     }
 }

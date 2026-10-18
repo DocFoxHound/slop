@@ -1,9 +1,101 @@
 use std::time::Duration;
 
 use anyhow::Context;
-use slop_api::{AppState, MIGRATOR, config::Config, router};
-use sqlx::postgres::PgPoolOptions;
+use clap::{Parser, Subcommand};
+use slop_api::{AppState, MIGRATOR, admin, catalog::AppStage, config::Config, releases, router};
+use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing_subscriber::EnvFilter;
+use uuid::Uuid;
+
+/// The Slop API server, plus the staff commands for reviewing releases.
+#[derive(Parser)]
+#[command(version)]
+struct Cli {
+    #[command(subcommand)]
+    command: Option<Command>,
+}
+
+#[derive(Subcommand)]
+enum Command {
+    /// Run the API server and the release fetcher (the default).
+    Serve,
+    /// Signing keys.
+    Keys {
+        #[command(subcommand)]
+        command: KeysCommand,
+    },
+    /// Review releases and listings.
+    Review {
+        #[command(subcommand)]
+        command: ReviewCommand,
+    },
+    /// Revoke an approved release: it stops launching on every client (SECURITY §5.5).
+    Revoke {
+        release_id: Uuid,
+        #[arg(long)]
+        reviewer: String,
+        #[arg(long)]
+        reason: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum KeysCommand {
+    /// Make a new Ed25519 signing key. Prints the secret (for SLOP_SIGNING_KEY) and the public key
+    /// (for SLOP_TRUSTED_KEYS when building the desktop app).
+    Generate,
+}
+
+#[derive(Subcommand)]
+enum ReviewCommand {
+    /// Releases waiting for review.
+    Pending,
+    /// Approve a release and sign its manifest.
+    Approve {
+        release_id: Uuid,
+        #[arg(long)]
+        reviewer: String,
+    },
+    /// Reject a release. The reason is shown to the maker.
+    Reject {
+        release_id: Uuid,
+        #[arg(long)]
+        reviewer: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Put a reviewed app in the store.
+    List {
+        slug: String,
+        #[arg(long)]
+        reviewer: String,
+    },
+    /// Take an app out of the store.
+    Delist {
+        slug: String,
+        #[arg(long)]
+        reviewer: String,
+        #[arg(long)]
+        reason: String,
+    },
+    /// Move an app to coming-soon, beta or released.
+    Stage {
+        slug: String,
+        #[arg(value_parser = parse_stage)]
+        stage: AppStage,
+        #[arg(long)]
+        reviewer: String,
+    },
+}
+
+fn parse_stage(s: &str) -> Result<AppStage, String> {
+    match s {
+        "coming-soon" | "coming_soon" => Ok(AppStage::ComingSoon),
+        "beta" => Ok(AppStage::Beta),
+        "released" => Ok(AppStage::Released),
+        _ => Err("use coming-soon, beta or released".into()),
+    }
+}
 
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
@@ -14,11 +106,113 @@ async fn main() -> anyhow::Result<()> {
         )
         .init();
 
-    let config = Config::from_env()?;
-    if config.github.is_none() {
-        tracing::warn!("GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET not set: sign-in is off");
+    let cli = Cli::parse();
+    match cli.command.unwrap_or(Command::Serve) {
+        Command::Serve => serve().await,
+        Command::Keys {
+            command: KeysCommand::Generate,
+        } => {
+            let key =
+                slop_manifest::ed25519_dalek::SigningKey::from_bytes(&rand::random::<[u8; 32]>());
+            println!(
+                "SLOP_SIGNING_KEY={}",
+                slop_manifest::signing_key_to_base64(&key)
+            );
+            println!(
+                "SLOP_TRUSTED_KEYS={}",
+                slop_manifest::verifying_key_to_base64(&key.verifying_key())
+            );
+            println!("key id: {}", slop_manifest::key_id(&key.verifying_key()));
+            eprintln!(
+                "Keep SLOP_SIGNING_KEY secret. Production keys belong in a KMS (docs/SECURITY.md §5.3)."
+            );
+            Ok(())
+        }
+        Command::Review { command } => {
+            let (config, db) = connect().await?;
+            match command {
+                ReviewCommand::Pending => {
+                    let pending = admin::pending(&db).await?;
+                    if pending.is_empty() {
+                        println!("Nothing waiting for review.");
+                    }
+                    for r in pending {
+                        println!(
+                            "{}  {} {}  commit {}{}  {}",
+                            r.id,
+                            r.app_slug,
+                            r.version,
+                            &r.commit_sha[..12],
+                            if r.commit_verified {
+                                " (found in repo)"
+                            } else {
+                                " (NOT checked)"
+                            },
+                            r.repo_url
+                        );
+                    }
+                }
+                ReviewCommand::Approve {
+                    release_id,
+                    reviewer,
+                } => {
+                    admin::approve(
+                        &db,
+                        config.releases.signing_key.as_ref(),
+                        release_id,
+                        &reviewer,
+                    )
+                    .await?;
+                    println!("Approved and signed {release_id}.");
+                }
+                ReviewCommand::Reject {
+                    release_id,
+                    reviewer,
+                    reason,
+                } => {
+                    admin::reject(&db, release_id, &reviewer, &reason).await?;
+                    println!("Rejected {release_id}.");
+                }
+                ReviewCommand::List { slug, reviewer } => {
+                    admin::list_app(&db, &slug, &reviewer).await?;
+                    println!("{slug} is in the store.");
+                }
+                ReviewCommand::Delist {
+                    slug,
+                    reviewer,
+                    reason,
+                } => {
+                    admin::delist_app(&db, &slug, &reviewer, &reason).await?;
+                    println!("{slug} is out of the store.");
+                }
+                ReviewCommand::Stage {
+                    slug,
+                    stage,
+                    reviewer,
+                } => {
+                    admin::set_stage(&db, &slug, stage, &reviewer).await?;
+                    println!("{slug} moved to {stage:?}.");
+                }
+            }
+            Ok(())
+        }
+        Command::Revoke {
+            release_id,
+            reviewer,
+            reason,
+        } => {
+            let (_, db) = connect().await?;
+            admin::revoke(&db, release_id, &reviewer, &reason).await?;
+            println!(
+                "Revoked {release_id}. Clients stop launching it at their next revocation check."
+            );
+            Ok(())
+        }
     }
+}
 
+async fn connect() -> anyhow::Result<(Config, PgPool)> {
+    let config = Config::from_env()?;
     let db = PgPoolOptions::new()
         .max_connections(10)
         .acquire_timeout(Duration::from_secs(5))
@@ -26,9 +220,24 @@ async fn main() -> anyhow::Result<()> {
         .await
         .context("connecting to Postgres")?;
     MIGRATOR.run(&db).await.context("running migrations")?;
+    Ok((config, db))
+}
+
+async fn serve() -> anyhow::Result<()> {
+    let (config, db) = connect().await?;
+    if config.github.is_none() {
+        tracing::warn!("GITHUB_CLIENT_ID / GITHUB_CLIENT_SECRET not set: sign-in is off");
+    }
+    if config.releases.signing_key.is_none() {
+        tracing::warn!(
+            "SLOP_SIGNING_KEY not set: releases can't be approved and there's no revocation list"
+        );
+    }
 
     let bind = config.bind;
-    let app = router(AppState::new(db, config)?)?;
+    let state = AppState::new(db, config)?;
+    tokio::spawn(releases::run_fetcher(state.clone()));
+    let app = router(state)?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("binding {bind}"))?;
