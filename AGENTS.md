@@ -10,7 +10,12 @@ lawyer before anyone builds them.
   application (`docs/ARCHITECTURE.md` §4): each module is a Rust module with its own `routes()`.
 - **Database:** PostgreSQL only. Schema changes are new files in `crates/slop-api/migrations/`;
   never edit a migration that has been committed.
-- **Clients:** Tauri 2 + a TypeScript web UI (not started).
+- **UI:** `web/`, React 19 + TypeScript + Vite + React Router. One UI for the website and the
+  desktop app. Check `isDesktop` (`web/src/platform.ts`) for the few differences; links that
+  leave Slop go through `openExternal` / `ExternalLink`, so the desktop app opens the system
+  browser instead of navigating its own window.
+- **Desktop:** `crates/slop-desktop`, Tauri 2. Keep its capabilities (`capabilities/`) minimal;
+  every new command the UI may call is attack surface (`docs/SECURITY.md` §7).
 
 ## Rules
 
@@ -25,7 +30,12 @@ lawyer before anyone builds them.
 - **SQL:** bind every value. Build dynamic queries with `QueryBuilder` and `push_bind`, never by
   formatting user input into SQL.
 - **Never link accounts because an email matches** (`docs/SECURITY.md` §4.1).
-- Wording: say "scanned", never "safe" (`docs/LEGAL.md` §12).
+- Wording: say "scanned", never "safe" (`docs/LEGAL.md` §12). Don't show trust claims (scans,
+  checks passed, build verification) until the feature behind them exists.
+- **User-written Markdown** is rendered only through `web/src/markdown.ts` (raw HTML off, no
+  images). Never put user content in `dangerouslySetInnerHTML` any other way.
+- **Accessibility:** WCAG 2.2 AA (`docs/LEGAL-GUIDANCE.md` A11Y-1): labelled controls, keyboard
+  use, visible focus, no colour-only meaning.
 - Don't copy the mockup's fake data or shortcuts into real code.
 
 ## Before you finish
@@ -34,6 +44,7 @@ lawyer before anyone builds them.
 cargo fmt
 cargo clippy --all-targets          # no warnings
 DATABASE_URL=postgres://slop:slop@127.0.0.1:5433/slop cargo test
+cd web && npm test && npm run typecheck
 ```
 
 Add tests for new behaviour, especially who may see or change what. Commit only when the user

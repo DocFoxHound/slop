@@ -1,0 +1,42 @@
+import { StrictMode } from "react";
+import { createRoot } from "react-dom/client";
+import { createBrowserRouter, RouterProvider } from "react-router";
+
+import { Layout } from "./components/Layout";
+import { AppPage } from "./pages/AppPage";
+import { Account, SignIn, SignUp } from "./pages/Auth";
+import { Browse, CategoryPage, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
+import { AppEditor, Publish } from "./pages/Publish";
+import { Store } from "./pages/Store";
+import { SessionProvider } from "./session";
+import "./styles.css";
+
+const router = createBrowserRouter([
+  {
+    element: <Layout />,
+    children: [
+      { path: "/", element: <Store /> },
+      { path: "/search", element: <Search /> },
+      { path: "/upcoming", element: <Upcoming /> },
+      { path: "/browse", element: <Browse /> },
+      { path: "/browse/:slug", element: <CategoryPage /> },
+      { path: "/tag/:slug", element: <TagPage /> },
+      { path: "/app/:slug", element: <AppPage /> },
+      { path: "/publish", element: <Publish /> },
+      { path: "/publish/new", element: <AppEditor /> },
+      { path: "/publish/:slug", element: <AppEditor /> },
+      { path: "/signin", element: <SignIn /> },
+      { path: "/signup", element: <SignUp /> },
+      { path: "/account", element: <Account /> },
+      { path: "*", element: <NotFound /> },
+    ],
+  },
+]);
+
+createRoot(document.getElementById("root")!).render(
+  <StrictMode>
+    <SessionProvider>
+      <RouterProvider router={router} />
+    </SessionProvider>
+  </StrictMode>,
+);
