@@ -17,6 +17,8 @@
     "allow-sign-out",
     "allow-show-login",
     "allow-continue-signed-out",
+    "allow-update-status",
+    "allow-install-update",
     "allow-platform-info",
     "allow-installed-apps",
     "allow-install-app",

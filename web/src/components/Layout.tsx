@@ -4,6 +4,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
+import { UpdateNotice } from "./UpdateNotice";
 import { useSession } from "../session";
 
 const TABS = [
@@ -52,6 +53,7 @@ export function Layout() {
         <MeMenu />
       </nav>
 
+      <UpdateNotice />
       <main className="view" id="main" ref={view} tabIndex={-1}>
         <Outlet />
       </main>

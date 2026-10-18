@@ -10,6 +10,8 @@ fn main() {
             "sign_out",
             "show_login",
             "continue_signed_out",
+            "update_status",
+            "install_update",
             "platform_info",
             "installed_apps",
             "install_app",

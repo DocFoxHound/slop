@@ -53,6 +53,12 @@ export interface InstalledApp {
   installed_at: string;
 }
 
+export interface UpdateInfo {
+  version: string;
+  current_version: string;
+  notes: string | null;
+}
+
 export interface DesktopError {
   code: string;
   message: string;
@@ -83,6 +89,14 @@ export const desktop = {
   signOut: () => call<void>("sign_out"),
   showLogin: () => call<void>("show_login"),
   continueSignedOut: () => call<void>("continue_signed_out"),
+  /** A newer version of the app, if one has been found. */
+  updateStatus: () => call<UpdateInfo | null>("update_status"),
+  /** Downloads, verifies and installs the update, then restarts. Only when the player asks. */
+  installUpdate: () => call<void>("install_update"),
+  onUpdateAvailable: async (handler: (u: UpdateInfo) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<UpdateInfo>("update-available", (e) => handler(e.payload));
+  },
   /** Fires when this device signs in or out (from any window). */
   onSessionChanged: async (handler: () => void) => {
     const { listen } = await import("@tauri-apps/api/event");

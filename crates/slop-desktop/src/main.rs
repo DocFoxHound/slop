@@ -48,6 +48,8 @@ struct Desktop {
     platform: Option<Platform>,
     /// A browser sign-in waiting for approval (see `sign_in_start`).
     pending_sign_in: tokio::sync::Mutex<Option<signin::PendingSignIn>>,
+    /// A newer version, once one has been found.
+    update: tokio::sync::Mutex<Option<UpdateInfo>>,
 }
 
 /// Errors as the UI sees them: a short code and a sentence to show.
@@ -198,42 +200,81 @@ fn continue_signed_out(app: AppHandle) {
     show_main(&app);
 }
 
-/// Checks Slop for a newer version of this app and installs it (SECURITY §7: self-updates are
-/// signed; the updater refuses anything not signed with the key in tauri.conf.json, or signed
-/// for a different version than offered). Returns true when the app is about to restart.
-/// Skipped in debug builds, and gives up quickly when offline so the app still opens.
-async fn update_if_available(app: &AppHandle) -> bool {
+// ---------------------------------------------------------------------------------------------
+// Updates: never forced. The app checks quietly and tells the UI, which shows a dismissible notice;
+// the update is only installed when the player chooses it (SECURITY §7: signed and verified).
+
+/// How often to look for a new version while the app is open.
+const UPDATE_CHECK_EVERY: Duration = Duration::from_secs(3 * 60 * 60);
+
+#[derive(Clone, Serialize)]
+struct UpdateInfo {
+    version: String,
+    current_version: String,
+    notes: Option<String>,
+}
+
+/// Asks Slop whether a newer version exists. `None` when up to date, offline, or in debug builds.
+async fn check_for_update(app: &AppHandle) -> Option<tauri_plugin_updater::Update> {
     use tauri_plugin_updater::UpdaterExt;
     if cfg!(debug_assertions) {
-        return false;
+        return None;
     }
-    let check = async {
-        let updater = app.updater()?;
-        updater.check().await
-    };
-    let update = match tokio::time::timeout(Duration::from_secs(10), check).await {
-        Ok(Ok(Some(update))) => update,
-        Ok(Ok(None)) => return false,
+    let check = async { app.updater()?.check().await };
+    match tokio::time::timeout(Duration::from_secs(20), check).await {
+        Ok(Ok(update)) => update,
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "update check failed");
-            return false;
+            None
         }
         Err(_) => {
             tracing::warn!("update check timed out");
-            return false;
-        }
-    };
-    tracing::info!(version = %update.version, "installing update");
-    // On Windows the installer shows its own progress and closes the app.
-    match update.download_and_install(|_, _| {}, || {}).await {
-        Ok(()) => {
-            app.restart();
-        }
-        Err(e) => {
-            tracing::error!(error = %e, "update failed; carrying on with this version");
-            false
+            None
         }
     }
+}
+
+/// Runs for the life of the app: checks soon after launch, then every few hours, and tells the
+/// windows when a newer version is available.
+async fn watch_for_updates(app: AppHandle) {
+    tokio::time::sleep(Duration::from_secs(5)).await;
+    loop {
+        if let Some(update) = check_for_update(&app).await {
+            let info = UpdateInfo {
+                version: update.version.clone(),
+                current_version: update.current_version.clone(),
+                notes: update.body.clone(),
+            };
+            tracing::info!(version = %info.version, "update available");
+            *app.state::<Desktop>().update.lock().await = Some(info.clone());
+            let _ = app.emit("update-available", info);
+        }
+        tokio::time::sleep(UPDATE_CHECK_EVERY).await;
+    }
+}
+
+/// The newest version found, if any (for windows that open after the check).
+#[tauri::command]
+async fn update_status(desktop: State<'_, Desktop>) -> CommandResult<Option<UpdateInfo>> {
+    Ok(desktop.update.lock().await.clone())
+}
+
+/// The player chose to update: download, verify, install and restart.
+#[tauri::command]
+async fn install_update(app: AppHandle) -> CommandResult<()> {
+    let update = check_for_update(&app).await.ok_or(CommandError {
+        code: "update",
+        message: "No update is available right now.".into(),
+    })?;
+    update
+        .download_and_install(|_, _| {}, || {})
+        .await
+        .map_err(|e| CommandError {
+            code: "update",
+            message: format!("couldn't install the update: {e}"),
+        })?;
+    // On Windows the installer has already closed the app; elsewhere, start the new version.
+    app.restart();
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -277,10 +318,7 @@ fn show_main(app: &AppHandle) {
 /// At launch: skip the sign-in window when a remembered sign-in still works. Offline, open the
 /// store anyway so installed games can be played; only a refused sign-in asks again.
 async fn startup(app: AppHandle) {
-    // Like Steam: update first, then sign in.
-    if update_if_available(&app).await {
-        return;
-    }
+    tauri::async_runtime::spawn(watch_for_updates(app.clone()));
     let api = app.state::<Desktop>().api.clone();
     if !api.has_session() {
         open_login(&app);
@@ -476,6 +514,7 @@ fn main() {
                 library,
                 platform: Platform::current(),
                 pending_sign_in: tokio::sync::Mutex::new(None),
+                update: tokio::sync::Mutex::new(None),
             });
             tauri::async_runtime::spawn(startup(app.handle().clone()));
             Ok(())
@@ -502,6 +541,8 @@ fn main() {
             sign_out,
             show_login,
             continue_signed_out,
+            update_status,
+            install_update,
             platform_info,
             installed_apps,
             install_app,
