@@ -29,6 +29,11 @@ enum Command {
         #[command(subcommand)]
         command: ReviewCommand,
     },
+    /// Desktop app builds made on this server.
+    Desktop {
+        #[command(subcommand)]
+        command: DesktopCommand,
+    },
     /// Give or take away admin rights (the website's admin panel).
     Admin {
         #[command(subcommand)]
@@ -41,6 +46,22 @@ enum Command {
         reviewer: String,
         #[arg(long)]
         reason: String,
+    },
+}
+
+#[derive(Subcommand)]
+enum DesktopCommand {
+    /// Sign and publish a build for the app's auto-updater.
+    Publish {
+        /// windows, mac, linux-deb or linux-rpm.
+        #[arg(long)]
+        platform: String,
+        #[arg(long)]
+        version: String,
+        /// The full commit SHA it was built from.
+        #[arg(long)]
+        commit: String,
+        file: std::path::PathBuf,
     },
 }
 
@@ -231,6 +252,31 @@ async fn main() -> anyhow::Result<()> {
                     println!("{slug} moved to {stage:?}.");
                 }
             }
+            Ok(())
+        }
+        Command::Desktop {
+            command:
+                DesktopCommand::Publish {
+                    platform,
+                    version,
+                    commit,
+                    file,
+                },
+        } => {
+            let (config, db) = connect().await?;
+            let (Some(dir), Some(key)) = (&config.desktop.dir, &config.desktop.updater_key) else {
+                anyhow::bail!("set SLOP_DESKTOP_DIR and SLOP_UPDATER_KEY first");
+            };
+            let version = semver::Version::parse(&version)?;
+            let published = slop_api::desktop_updates::publish(
+                &db, dir, key, &platform, &version, &commit, &file,
+            )
+            .await
+            .map_err(|e| anyhow::anyhow!("{e}"))?;
+            println!(
+                "Published {} {} ({})",
+                platform, published.version, published.file_name
+            );
             Ok(())
         }
         Command::Admin { command } => {

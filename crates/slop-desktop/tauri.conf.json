@@ -52,13 +52,23 @@
       "icons/128x128@2x.png",
       "icons/icon.icns",
       "icons/icon.ico"
-    ]
+    ],
+    "linux": {
+      "rpm": {
+        "depends": [
+          "webkit2gtk4.1",
+          "gtk3"
+        ]
+      }
+    },
+    "publisher": "IronPoint Development",
+    "homepage": "https://slop.188-68-41-241.sslip.io"
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCOUQzODg5OUZDODgxQzYKUldUR2djaWZpVGlkYTluOTk5Vmh1bGFJTVljRGFYOGROMlF6cTZVSFVKWm9FUldubGdYaXZ3Z2cK",
       "endpoints": [
-        "https://slop.188-68-41-241.sslip.io/v1/desktop/update/{{target}}/{{arch}}/{{current_version}}"
+        "https://slop.188-68-41-241.sslip.io/v1/desktop/update/{{target}}/{{arch}}/{{current_version}}?bundle={{bundle_type}}"
       ],
       "requireSignedVersion": true,
       "windows": {

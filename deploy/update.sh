@@ -42,6 +42,7 @@ rm -rf "$build" && mkdir -p "$build"
 cp target/release/slop-api "$build/"
 cp -r web/dist "$build/web"
 cp deploy/update.sh "$build/update.sh"
+cp -r deploy/desktop-linux "$build/desktop-linux"
 
 previous=$(readlink "$ROOT/current" 2>/dev/null || true)
 ln -sfn "$build" "$ROOT/current.new" && mv -T "$ROOT/current.new" "$ROOT/current"
@@ -52,6 +53,11 @@ for _ in $(seq 30); do
     log "live: ${target:0:12}"
     # The deploy script updates itself from the deployed commit.
     install -m 755 "$build/update.sh" "$ROOT/bin/update.sh.new" && mv "$ROOT/bin/update.sh.new" "$ROOT/bin/update.sh"
+    # Linux desktop packages: rebuild (in the background) when the app changed.
+    last_desktop=$(cat "$ROOT/desktop-linux-built" 2>/dev/null || true)
+    if [ -z "$last_desktop" ] || ! git -C "$REPO" diff --quiet "$last_desktop" "$target" -- crates web Cargo.toml Cargo.lock deploy/desktop-linux 2>/dev/null; then
+      systemctl --user start --no-block "slop-desktop-linux@$target.service" || log "couldn't start the Linux desktop build"
+    fi
     # Keep the last three builds.
     ls -1dt "$ROOT"/builds/*/ | tail -n +4 | xargs -r rm -rf
     exit 0

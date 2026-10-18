@@ -26,6 +26,13 @@ the app, and uploads it to the deployment with the run's GitHub OIDC token. The 
 with the updater key (`SLOP_UPDATER_KEY`, only on the server). The app checks for updates each time
 it starts, installs them and restarts. The website's store page links the newest installer.
 
+Linux packages are built here after each deploy that changes the app
+(`slop-desktop-linux@<commit>.service`, `deploy/desktop-linux/build.sh`), each in a container of the
+oldest system it supports: a `.deb` on Ubuntu 22.04 (for Ubuntu 22.04+ and Debian 12+) and an
+`.rpm` on Rocky Linux 10 (for RHEL/Rocky/Alma 10 with EPEL enabled; EL9 lacks WebKitGTK 4.1, which
+Tauri 2 needs). They're published with `slop-api desktop publish`. All platforms share one version
+number: `0.1.<number of commits>`.
+
 ## Day to day
 
 ```sh
@@ -53,7 +60,7 @@ set -a; . ~/.config/slop/slop.env; set +a
 ## Setting it up again
 
 ```sh
-cp deploy/systemd/* ~/.config/systemd/user/ && systemctl --user daemon-reload
+cp deploy/systemd/* ~/.config/systemd/user/ && systemctl --user daemon-reload  # incl. slop-desktop-linux@.service
 install -m 755 deploy/update.sh ~/slop-deploy/bin/update.sh
 cp deploy/slop.caddyfile /etc/caddy/Caddyfile.d/ && caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl --user enable --now slop-api.service slop-deploy.timer

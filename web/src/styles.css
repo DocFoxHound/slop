@@ -129,7 +129,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .intro h1 { font-size: 26px; letter-spacing: -0.02em; max-width: 26ch; margin-bottom: 14px; }
 .intro ul { margin: 0; padding: 0; list-style: none; display: grid; grid-template-columns: repeat(auto-fit, minmax(200px, 1fr)); gap: 12px; color: var(--text-2); font-size: 13px; }
 .intro b { display: block; color: var(--text); }
-.intro .get-app { margin: 16px 0 0; }
+.intro .get-app { margin: 16px 0 0; display: flex; flex-direction: column; gap: 8px; }
+.intro .get-app p { margin: 0; }
 
 .shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; transition: transform 0.12s, border-color 0.12s; text-decoration: none !important; color: inherit; display: flex; flex-direction: column; }

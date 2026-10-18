@@ -24,7 +24,6 @@ concurrency:
 
 env:
   SLOP_URL: https://slop.188-68-41-241.sslip.io
-  VERSION: 0.1.${{ github.run_number }}
 
 jobs:
   windows:
@@ -37,6 +36,11 @@ jobs:
       - uses: actions/checkout@v4
         with:
           persist-credentials: false
+          # Full history: the version is the commit count, shared with the Linux builds.
+          fetch-depth: 0
+
+      - name: Choose the version
+        run: echo "VERSION=0.1.$(git rev-list --count HEAD)" >> "$GITHUB_ENV"
 
       - uses: actions/setup-node@v4
         with:
