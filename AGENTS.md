@@ -14,8 +14,16 @@ lawyer before anyone builds them.
   desktop app. Check `isDesktop` (`web/src/platform.ts`) for the few differences; links that
   leave Slop go through `openExternal` / `ExternalLink`, so the desktop app opens the system
   browser instead of navigating its own window.
+- **Signed documents:** `crates/slop-manifest` defines release manifests and revocation lists and
+  how they're signed. The API and the client must both use it; never hand-roll a format.
+- **Client core:** `crates/slop-client` does everything security-sensitive on the player's
+  device (tokens, sign-in, download verification, unpacking, launch checks) and is tested without
+  Tauri. Put logic there, not in `slop-desktop`.
 - **Desktop:** `crates/slop-desktop`, Tauri 2. Keep its capabilities (`capabilities/`) minimal;
-  every new command the UI may call is attack surface (`docs/SECURITY.md` §7).
+  every new command the UI may call is attack surface (`docs/SECURITY.md` §7). New commands must
+  be added to `build.rs` and granted in `capabilities/default.json`.
+- **Staff actions** are `slop-api` subcommands (`src/admin.rs`), each written to `audit_log`.
+  There is no web admin.
 
 ## Rules
 

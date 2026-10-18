@@ -1,5 +1,7 @@
 // Typed client for the Slop API (crates/slop-api). Types mirror the Rust response structs.
 
+import { isDesktop } from "./platform";
+
 export type AppKind = "game" | "app";
 export type AppStage = "coming_soon" | "beta" | "released";
 export type AppStatus = "draft" | "listed" | "delisted";
@@ -68,10 +70,47 @@ export interface SignupInfo {
 
 export interface SessionInfo {
   id: string;
+  kind: "web" | "desktop";
   user_agent: string | null;
   created_at: string;
   last_seen_at: string;
   current: boolean;
+}
+
+export type Platform = "windows" | "mac" | "linux" | "android";
+export type FileKind = "archive" | "installer" | "apk";
+export type ReleaseStatus = "fetching" | "awaiting_review" | "approved" | "rejected" | "failed" | "revoked";
+
+export interface ReleaseFile {
+  platform: Platform;
+  kind: FileKind;
+  url: string;
+  file_name: string;
+  exec: string | null;
+  args: string[];
+  size_bytes: number | null;
+  sha256: string | null;
+}
+
+export interface Release {
+  id: string;
+  version: string;
+  commit_sha: string;
+  status: ReleaseStatus;
+  status_reason?: string;
+  commit_verified: boolean;
+  created_at: string;
+  files: ReleaseFile[];
+}
+
+export interface NewRelease {
+  version: string;
+  commit_sha: string;
+  files: Array<{ platform: Platform; kind: FileKind; url: string; exec?: string; args?: string[] }>;
+}
+
+export interface LibraryEntry extends AppSummary {
+  added_at: string;
 }
 
 export interface NewApp {
@@ -112,11 +151,8 @@ export class ApiError extends Error {
   }
 }
 
-/**
- * Where the API lives. The website and the desktop app in development use the same origin
- * (Vite proxies /v1). A packaged desktop app sets VITE_API_BASE at build time.
- */
-export const API_BASE: string = (import.meta.env.VITE_API_BASE as string | undefined) ?? "";
+/** The website calls its own origin; in development Vite proxies /v1 to the API. */
+export const API_BASE = "";
 
 export function query(params: object): string {
   const search = new URLSearchParams();
@@ -127,7 +163,25 @@ export function query(params: object): string {
   return s ? `?${s}` : "";
 }
 
+/** In the desktop app, requests go through Rust, which holds the user's tokens. */
+async function desktopRequest(method: string, path: string, body?: unknown): Promise<{ status: number; body: unknown }> {
+  const { invoke } = await import("@tauri-apps/api/core");
+  try {
+    return await invoke<{ status: number; body: unknown }>("api_request", { methodName: method, path, body: body ?? null });
+  } catch (err) {
+    const e = err as { code?: string; message?: string };
+    throw new ApiError(0, e.code ?? "network", e.message ?? "Can't reach Slop. Check your connection and try again.");
+  }
+}
+
 async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+  if (isDesktop) {
+    const res = await desktopRequest(method, path, body);
+    if (res.status >= 200 && res.status < 300) return res.body as T;
+    const err = (res.body as { error?: { code?: string; message?: string; field?: string } } | null)?.error;
+    throw new ApiError(res.status, err?.code ?? "http", err?.message ?? `Request failed (${res.status})`, err?.field);
+  }
+
   const init: RequestInit = {
     method,
     headers: { Accept: "application/json" },
@@ -163,6 +217,25 @@ export const api = {
   updateApp: (slug: string, changes: AppChanges) =>
     request<AppDetail>("PATCH", `/v1/apps/${encodeURIComponent(slug)}`, changes),
   myApps: () => request<AppSummary[]>("GET", "/v1/me/apps"),
+  releases: (slug: string) => request<Release[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/releases`),
+  submitRelease: (slug: string, release: NewRelease) =>
+    request<Release>("POST", `/v1/apps/${encodeURIComponent(slug)}/releases`, release),
+  /** Whether an approved, signed build exists (the manifest itself is checked in Rust). */
+  hasBuild: (slug: string) =>
+    request<unknown>("GET", `/v1/apps/${encodeURIComponent(slug)}/manifest`).then(
+      () => true,
+      (err: unknown) => {
+        if (err instanceof ApiError && err.status === 404) return false;
+        throw err;
+      },
+    ),
+  library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
+  addToLibrary: (slug: string) => request<void>("PUT", `/v1/me/library/${encodeURIComponent(slug)}`),
+  removeFromLibrary: (slug: string) => request<void>("DELETE", `/v1/me/library/${encodeURIComponent(slug)}`),
+  desktopRequest: (id: string) =>
+    request<{ device_name: string; expires_at: string }>("GET", `/v1/auth/desktop/requests/${encodeURIComponent(id)}`),
+  approveDesktop: (id: string) =>
+    request<{ redirect_url: string }>("POST", `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`),
 
   providers: () => request<{ github: boolean }>("GET", "/v1/auth/providers"),
   /** Full-page navigation target that starts GitHub sign-in. */

@@ -8,6 +8,7 @@ pub mod api;
 pub mod library;
 pub mod signin;
 
+pub use reqwest::Method;
 pub use slop_manifest;
 
 #[derive(Debug, thiserror::Error)]

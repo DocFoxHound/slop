@@ -10,7 +10,6 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 
 function SignInFirst({ what }: { what: string }) {
-  const { canSignIn } = useSession();
   return (
     <div className="page narrow">
       <div className="panel panel-pad">
@@ -19,15 +18,11 @@ function SignInFirst({ what }: { what: string }) {
           Any open-source app or game made with AI can go on Slop. Listing is free; Slop's only fee is 5% of donations,
           which go straight to the maker.
         </p>
-        {canSignIn ? (
-          <p>
-            <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(what)}`}>
-              Sign in to start
-            </Link>
-          </p>
-        ) : (
-          <p className="muted">Signing in from the desktop app is coming soon. Use the website to publish for now.</p>
-        )}
+        <p>
+          <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(what)}`}>
+            Sign in to start
+          </Link>
+        </p>
       </div>
     </div>
   );
