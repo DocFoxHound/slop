@@ -111,6 +111,8 @@ Every release carries **two signatures**, and the client requires both:
    - **Files attached by hand:** a signing key registered to the maker's account. Registering or changing it needs step-up auth (§4.3), a 72-hour delay and an email to the maker.
 2. **Slop's signature** on the release manifest, added only after the maker's signature is verified and every scan has passed.
 
+**Built (2026-10-18):** GitHub artifact attestations are verified with `sigstore-verify` against Sigstore's public-good root (certificate chain, transparency log, signature, issuer `token.actions.githubusercontent.com`), then checked to name the file's SHA-256 and the app's repository and the release's commit (`crates/slop-provenance`). The API refuses approval without one; the attestation travels in the signed manifest and the client re-verifies it, and refuses updates from a different repository than the installed app's. Not built yet: the maker-registered key for hand-attached files, refreshing the Sigstore root over TUF, and private repositories (GitHub's own Sigstore instance).
+
 Slop's own keys use a **TUF-style** scheme (The Update Framework), so that no single key compromise is catastrophic:
 
 | Role | Signs | Key storage |

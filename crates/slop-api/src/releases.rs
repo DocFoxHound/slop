@@ -236,6 +236,11 @@ struct ReleaseFileInfo {
     args: Vec<String>,
     size_bytes: Option<i64>,
     sha256: Option<String>,
+    /// Who built it, from the maker's verified attestation.
+    #[sqlx(json(nullable))]
+    provenance: Option<slop_provenance::Provenance>,
+    /// Why there's no verified maker signature.
+    provenance_problem: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -347,7 +352,7 @@ async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
     .fetch_one(&state.db)
     .await?;
     let files = sqlx::query_as(
-        "select platform, kind, url, file_name, exec, args, size_bytes, sha256
+        "select platform, kind, url, file_name, exec, args, size_bytes, sha256, provenance, provenance_problem
          from release_files where release_id = $1 order by platform",
     )
     .bind(id)
@@ -551,16 +556,105 @@ async fn fetch_release(
         )
         .await
         .with_context(|| format!("{platform} build"))?;
-        sqlx::query("update release_files set size_bytes = $3, sha256 = $4 where release_id = $1 and platform = $2")
-            .bind(id)
-            .bind(&platform)
-            .bind(size as i64)
-            .bind(&sha256)
-            .execute(&state.db)
-            .await?;
+        let signature = find_attestation(state, repo_url, commit, &sha256).await;
+        let (attestation, provenance, problem) = match signature {
+            Ok((bundle, provenance)) => (Some(bundle), Some(sqlx::types::Json(provenance)), None),
+            Err(problem) => (None, None, Some(problem)),
+        };
+        sqlx::query(
+            "update release_files
+             set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7
+             where release_id = $1 and platform = $2",
+        )
+        .bind(id)
+        .bind(&platform)
+        .bind(size as i64)
+        .bind(&sha256)
+        .bind(attestation)
+        .bind(provenance)
+        .bind(problem)
+        .execute(&state.db)
+        .await?;
     }
     Ok(commit_verified)
 }
+
+fn github_get(state: &AppState, url: Url) -> reqwest::RequestBuilder {
+    let req = state
+        .fetch_http
+        .get(url)
+        .header("accept", "application/vnd.github+json")
+        .header("user-agent", "slop-api");
+    match &state.config.releases.github_token {
+        Some(token) => req.bearer_auth(token),
+        None => req,
+    }
+}
+
+/// Finds and verifies the maker's GitHub artifact attestation for a file (SECURITY §5.3).
+/// Returns the attestation bundle and what it proves, or a sentence saying what's missing.
+pub async fn find_attestation(
+    state: &AppState,
+    repo_url: &str,
+    commit: &str,
+    sha256: &str,
+) -> Result<(String, slop_provenance::Provenance), String> {
+    let Some(repo_path) = slop_provenance::github_repo_path(repo_url) else {
+        return Err(
+            "maker signatures are only supported for GitHub repositories so far".to_string(),
+        );
+    };
+    let url = state
+        .config
+        .releases
+        .github_api_base
+        .join(&format!("repos/{repo_path}/attestations/sha256:{sha256}"))
+        .map_err(|e| e.to_string())?;
+    let res = github_get(state, url)
+        .send()
+        .await
+        .map_err(|e| format!("couldn't reach GitHub to find the attestation: {e}"))?;
+    if res.status().as_u16() == 404 {
+        return Err(NO_ATTESTATION.to_string());
+    }
+    if !res.status().is_success() {
+        return Err(format!(
+            "GitHub answered {} when looking for the attestation",
+            res.status().as_u16()
+        ));
+    }
+    #[derive(Deserialize)]
+    struct Attestations {
+        #[serde(default)]
+        attestations: Vec<Attestation>,
+    }
+    #[derive(Deserialize)]
+    struct Attestation {
+        bundle: Option<serde_json::Value>,
+    }
+    let found: Attestations = res
+        .json()
+        .await
+        .map_err(|e| format!("unexpected attestation response from GitHub: {e}"))?;
+
+    let expected = slop_provenance::Expected {
+        repo_url,
+        commit,
+        slop_build_workflow: state.config.releases.slop_build_workflow.as_deref(),
+    };
+    let mut last_problem = NO_ATTESTATION.to_string();
+    for bundle in found.attestations.into_iter().filter_map(|a| a.bundle) {
+        let json = bundle.to_string();
+        match state.provenance.verify_sha256(&json, sha256, expected) {
+            Ok(provenance) => return Ok((json, provenance)),
+            Err(err) => last_problem = err.to_string(),
+        }
+    }
+    Err(last_problem)
+}
+
+const NO_ATTESTATION: &str = "no build attestation found for this file. Build it in GitHub Actions and \
+    sign it with actions/attest-build-provenance (Slop Build does this for you)";
 
 /// For GitHub repos, checks the commit exists (SECURITY §5.1). Other hosts are checked by the
 /// reviewer for now; returns false for them.
@@ -575,11 +669,7 @@ async fn check_commit(state: &AppState, repo_url: &str, commit: &str) -> anyhow:
         .releases
         .github_api_base
         .join(&format!("repos/{path}/commits/{commit}"))?;
-    let res = state
-        .fetch_http
-        .get(url)
-        .header("accept", "application/vnd.github+json")
-        .header("user-agent", "slop-api")
+    let res = github_get(state, url)
         .send()
         .await
         .context("checking the commit on GitHub")?;

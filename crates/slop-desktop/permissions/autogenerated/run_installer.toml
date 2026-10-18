@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-run-installer"
+description = "Enables the run_installer command without any pre-configured scope."
+commands.allow = ["run_installer"]
+
+[[permission]]
+identifier = "deny-run-installer"
+description = "Denies the run_installer command without any pre-configured scope."
+commands.deny = ["run_installer"]

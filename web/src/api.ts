@@ -81,6 +81,16 @@ export type Platform = "windows" | "mac" | "linux" | "android";
 export type FileKind = "archive" | "installer" | "apk";
 export type ReleaseStatus = "fetching" | "awaiting_review" | "approved" | "rejected" | "failed" | "revoked";
 
+/** Who built a file, proven by the maker's GitHub artifact attestation. */
+export interface Provenance {
+  source_repo: string;
+  commit: string;
+  signer_workflow: string;
+  built_by_slop_build: boolean;
+  runner: string | null;
+  run_url: string | null;
+}
+
 export interface ReleaseFile {
   platform: Platform;
   kind: FileKind;
@@ -90,6 +100,8 @@ export interface ReleaseFile {
   args: string[];
   size_bytes: number | null;
   sha256: string | null;
+  provenance: Provenance | null;
+  provenance_problem: string | null;
 }
 
 export interface Release {

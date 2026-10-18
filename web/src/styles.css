@@ -242,6 +242,11 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .file-row legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
 .actions.spread { justify-content: space-between; }
 .form h2 { font-size: 18px; }
+.help { margin-bottom: 16px; }
+.help summary { cursor: pointer; }
+.help p { margin: 12px 0 0; }
+.help pre { background: var(--panel-2); border-radius: 8px; padding: 12px; overflow-x: auto; margin: 12px 0 0; }
+.help pre code { background: none; padding: 0; }
 
 /* ---- smaller windows ------------------------------------------------- */
 @media (max-width: 900px) {

@@ -22,13 +22,15 @@ don't copy it into real code.
 | Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
 | Web UI (`web/`): store, library, install controls, publishing, releases, device approval | Done |
 | Desktop app (`crates/slop-desktop`, Tauri 2) | Written; needs the Linux libraries below to build |
-| Maker signatures (Sigstore), automated scanning, Slop Build, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
+| Maker signatures: GitHub artifact attestations (Sigstore), verified by the API and again by the client | Done (GitHub repos) |
+| Automated scanning, Slop Build, maker keys for hand-built files, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
 
 ## Layout
 
 ```
 crates/slop-api/        API server, release fetcher and staff commands
 crates/slop-manifest/   Signed release manifests and revocation lists (shared)
+crates/slop-provenance/ Maker signatures: GitHub artifact attestation checks (shared)
 crates/slop-client/     Desktop client core: sign-in, verified installs, launch
 crates/slop-desktop/    Desktop app (Tauri 2): web/ plus slop-client
   migrations/           Postgres schema (run automatically at start-up)
@@ -91,9 +93,13 @@ the user's tokens in the OS secure store.
 
 1. Make a signing key once: `cargo run -p slop-api -- keys generate`. Put `SLOP_SIGNING_KEY` in
    the API's `.env`, and `SLOP_TRUSTED_KEYS` in the environment when building the desktop app.
-2. A maker submits a release on **Publish → their app → Releases**: a version, the commit, and a
-   file URL per platform on their own release page. Slop downloads each file once to record its
-   size and SHA-256, and stores nothing else.
+2. A maker builds their files in GitHub Actions and signs them with
+   `actions/attest-build-provenance` (the Releases page shows the snippet), then submits a release
+   on **Publish → their app → Releases**: a version, the commit, and a file URL per platform on
+   their own release page. Slop downloads each file once to record its size and SHA-256, stores
+   nothing else, and looks up and verifies each file's attestation: it must be signed through
+   Sigstore by GitHub Actions, name the file's hash, and come from the app's repository at the
+   release's commit. Approval is refused for any file without one.
 3. Staff review it:
 
    ```sh
@@ -110,8 +116,13 @@ the user's tokens in the OS secure store.
    the signed manifest, installs into the user's library folder, and re-checks the signature, the
    revocation list and the program's hash at every launch.
 
-For local testing with release files served over plain http, set `SLOP_ALLOW_HTTP_DOWNLOADS=true`
-on the API (never in production).
+The desktop app checks the attestation again itself before downloading, and refuses an update
+whose source repository differs from the installed app's, so even a compromised Slop server can't
+push a build the maker didn't sign.
+
+For local testing with release files served over plain http and without attestations, set
+`SLOP_ALLOW_HTTP_DOWNLOADS=true` and `SLOP_REQUIRE_MAKER_SIGNATURE=false` on the API (never in
+production). Debug builds of the desktop app pointed at `localhost` relax the same two checks.
 
 ## Test
 

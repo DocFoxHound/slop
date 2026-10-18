@@ -330,16 +330,21 @@ fn manifest_for(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signe
                 exec: "bin/game".into(),
                 args: vec!["hello".into()],
             }),
+            attestation: None,
         }],
         approved_at: "2026-10-18T00:00:00Z".into(),
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
 
+/// A library that accepts unsigned builds: these tests are about Slop's signature and the
+/// download checks. Maker signatures are covered in `unsigned_builds_and_repo_switches_are_refused`
+/// and the slop-provenance tests.
 fn library(dir: &std::path::Path) -> Library {
     Library::new(dir, vec![key().verifying_key()])
         .unwrap()
         .allow_http_downloads(true)
+        .require_maker_signature(false)
 }
 
 fn tempdir() -> std::path::PathBuf {
@@ -484,5 +489,67 @@ async fn forged_manifests_and_unsafe_archives_are_refused() {
         lib.install(&signed, Platform::Windows, |_, _| {}).await,
         Err(Error::Install(_))
     ));
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[tokio::test]
+async fn unsigned_builds_and_repo_switches_are_refused() {
+    let (base, fake) = fake_api().await;
+    let zip = zip_of(&[("bin/game", GAME, 0o755)]);
+    fake.files
+        .lock()
+        .unwrap()
+        .push(("game.zip".into(), zip.clone()));
+    let dir = tempdir();
+
+    // By default a build must carry the maker's signature.
+    let strict = Library::new(&dir, vec![key().verifying_key()])
+        .unwrap()
+        .allow_http_downloads(true);
+    let signed = manifest_for(&base, "game.zip", &zip, "r1");
+    let err = strict
+        .install(&signed, Platform::Linux, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Verify(ref m) if m.contains("maker signature")),
+        "{err}"
+    );
+
+    // A forged attestation is refused too.
+    let mut manifest: ReleaseManifest = serde_json::from_str(&signed.payload).unwrap();
+    manifest.files[0].attestation = Some(
+        include_str!(
+            "../../slop-provenance/tests/fixtures/github-actions-provenance.sigstore.json"
+        )
+        .into(),
+    );
+    let forged = slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key());
+    let err = strict
+        .install(&forged, Platform::Linux, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Verify(ref m) if m.contains("maker signature")),
+        "{err}"
+    );
+
+    // Once installed from one repository, an update from another is refused.
+    let lib = library(&dir);
+    lib.install(&signed, Platform::Linux, |_, _| {})
+        .await
+        .unwrap();
+    let mut moved: ReleaseManifest = serde_json::from_str(&signed.payload).unwrap();
+    moved.repo_url = "https://github.com/someone-else/game".into();
+    moved.release_id = "r2".into();
+    let moved = slop_manifest::sign(&moved, Purpose::ReleaseManifest, &key());
+    let err = lib
+        .install(&moved, Platform::Linux, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(err, Error::Verify(ref m) if m.contains("installed app came from")),
+        "{err}"
+    );
     std::fs::remove_dir_all(dir).unwrap();
 }

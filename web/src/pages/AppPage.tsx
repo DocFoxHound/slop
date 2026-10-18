@@ -7,6 +7,7 @@ import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../f
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
+import { workflowName } from "./Releases";
 import { isDesktop, openExternal } from "../platform";
 import { useSession } from "../session";
 
@@ -30,6 +31,9 @@ function AppView({ app }: { app: AppDetail }) {
   const { me } = useSession();
   const library = useLoad(() => (me && !isDesktop ? api.library() : Promise.resolve([])), [me?.id]);
   const inLibrary = library.data?.some((e) => e.slug === app.slug);
+  const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
+  const latest = releases.data?.find((r) => r.status === "approved");
+  const provenance = latest && latest.files.every((f) => f.provenance) ? latest.files[0].provenance : null;
   const upcoming = app.stage !== "released";
   const deadline = deadlineText(app);
   const age = ageLabel(app.min_age);
@@ -154,6 +158,20 @@ function AppView({ app }: { app: AppDetail }) {
             )}
           </div>
           <div className="panel panel-pad trust">
+            {provenance && (
+              <div className="trust-row">
+                <span className="ic">⇄</span>
+                <span>
+                  <b>{provenance.built_by_slop_build ? "Built by Slop Build from source" : "Built from source"}</b> · signed by{" "}
+                  {provenance.run_url ? (
+                    <ExternalLink href={provenance.run_url}>{workflowName(provenance.signer_workflow)}</ExternalLink>
+                  ) : (
+                    workflowName(provenance.signer_workflow)
+                  )}{" "}
+                  at <code>{provenance.commit.slice(0, 7)}</code>
+                </span>
+              </div>
+            )}
             <div className="trust-row">
               <span className="ic">{"{ }"}</span>
               <span>

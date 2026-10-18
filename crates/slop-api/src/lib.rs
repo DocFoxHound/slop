@@ -39,6 +39,8 @@ pub struct AppState {
     pub fetch_http: reqwest::Client,
     /// Wakes the release fetcher when a release is submitted.
     pub fetch_wakeup: Arc<tokio::sync::Notify>,
+    /// Checks makers' GitHub artifact attestations.
+    pub provenance: Arc<slop_provenance::ProvenanceVerifier>,
 }
 
 impl AppState {
@@ -59,6 +61,7 @@ impl AppState {
             http,
             fetch_http,
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
+            provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),
         })
     }
 }

@@ -83,12 +83,16 @@ struct FileRow {
     args: Vec<String>,
     size_bytes: Option<i64>,
     sha256: Option<String>,
+    attestation: Option<String>,
+    provenance_problem: Option<String>,
 }
 
-/// Approves a release and signs its manifest.
+/// Approves a release and signs its manifest. With `require_maker_signature`, every file must
+/// have a verified maker attestation (SECURITY §5.3).
 pub async fn approve(
     db: &PgPool,
     key: Option<&slop_manifest::ed25519_dalek::SigningKey>,
+    require_maker_signature: bool,
     release_id: Uuid,
     reviewer: &str,
 ) -> anyhow::Result<()> {
@@ -112,7 +116,7 @@ pub async fn approve(
     );
 
     let rows: Vec<FileRow> = sqlx::query_as(
-        "select platform, kind, url, file_name, exec, args, size_bytes, sha256
+        "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem
          from release_files where release_id = $1 order by platform",
     )
     .bind(release_id)
@@ -123,6 +127,13 @@ pub async fn approve(
         let (Some(size), Some(sha256)) = (f.size_bytes, f.sha256) else {
             bail!("the {} build hasn't been hashed", f.platform);
         };
+        if require_maker_signature && f.attestation.is_none() {
+            bail!(
+                "the {} build has no verified maker signature: {}",
+                f.platform,
+                f.provenance_problem.as_deref().unwrap_or("not checked")
+            );
+        }
         files.push(ManifestFile {
             platform: Platform::parse(&f.platform).context("bad platform")?,
             kind: FileKind::parse(&f.kind).context("bad kind")?,
@@ -131,6 +142,7 @@ pub async fn approve(
             size: size as u64,
             sha256,
             launch: f.exec.map(|exec| Launch { exec, args: f.args }),
+            attestation: f.attestation,
         });
     }
     ensure!(!files.is_empty(), "release has no files");

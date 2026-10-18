@@ -117,6 +117,11 @@ pub struct ManifestFile {
     pub sha256: String,
     /// How to start the app. Present for archives.
     pub launch: Option<Launch>,
+    /// The maker's signature: a GitHub artifact attestation (Sigstore bundle JSON) naming this
+    /// file's SHA-256, the app's repository and the release's commit. Clients verify it
+    /// themselves before installing (SECURITY §5.3).
+    #[serde(default)]
+    pub attestation: Option<String>,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -319,6 +324,7 @@ mod tests {
                     exec: "bin/game".into(),
                     args: vec![],
                 }),
+                attestation: None,
             }],
             approved_at: "2026-10-18T00:00:00Z".into(),
         }
