@@ -309,9 +309,9 @@ fn open_login(app: &AppHandle) {
 
 /// On Windows, closing the store hides it to the notification area (the tray), like Steam:
 /// Slop keeps running so it can tell you about updates, and the tray icon brings it back.
-/// Minimizing still goes to the taskbar. Elsewhere, closing quits.
-const CLOSE_TO_TRAY: bool = cfg!(windows);
-
+/// Minimizing still goes to the taskbar. Elsewhere, closing quits: the tray needs an
+/// appindicator library on Linux, which not every distro has.
+#[cfg(windows)]
 fn make_tray(app: &tauri::App) -> tauri::Result<()> {
     use tauri::{
         menu::{Menu, MenuItem},
@@ -574,15 +574,16 @@ fn main() {
                 pending_sign_in: tokio::sync::Mutex::new(None),
                 update: tokio::sync::Mutex::new(None),
             });
-            if CLOSE_TO_TRAY && let Err(e) = make_tray(app) {
+            #[cfg(windows)]
+            if let Err(e) = make_tray(app) {
                 tracing::error!(error = %e, "couldn't add the tray icon");
             }
             tauri::async_runtime::spawn(startup(app.handle().clone()));
             Ok(())
         })
         .on_window_event(|window, event| {
+            #[cfg(windows)]
             if let tauri::WindowEvent::CloseRequested { api, .. } = event
-                && CLOSE_TO_TRAY
                 && window.label() == "main"
                 && window.app_handle().tray_by_id("slop").is_some()
             {
