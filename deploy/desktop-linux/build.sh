@@ -43,11 +43,14 @@ for kind in "${KINDS[@]}"; do
         const c = JSON.parse(fs.readFileSync(f, \"utf8\")); c.version = process.env.VERSION;
         fs.writeFileSync(f, JSON.stringify(c, null, 2));"
       cd web && npm ci --no-audit --no-fund --silent
+      # The cache keeps earlier builds; clear their packages so only this version is published.
+      rm -rf "/cache/target/release/bundle/$KIND"
       npm run --silent "desktop:build:$KIND"
-      cp /cache/target/release/bundle/$KIND/*.$KIND /out/
+      cp /cache/target/release/bundle/$KIND/*"$VERSION"*.$KIND /out/
     ' || { log "$kind build failed"; rm -rf "$src"; exit 1; }
   rm -rf "$src"
-  pkg=$(ls "$out"/*."$kind" | head -1)
+  pkg=$(ls "$out"/*"$VERSION"*."$kind")
+  [ "$(echo "$pkg" | wc -l)" = 1 ] || { log "expected one $kind package for $VERSION, found: $pkg"; exit 1; }
   "$ROOT/current/slop-api" desktop publish --platform "linux-$kind" --version "$VERSION" --commit "$COMMIT" "$pkg"
 done
 echo "$COMMIT" > "$ROOT/desktop-linux-built"
