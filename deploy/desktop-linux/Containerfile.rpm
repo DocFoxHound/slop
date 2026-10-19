@@ -4,7 +4,8 @@ FROM docker.io/rockylinux/rockylinux:10
 RUN dnf -y install epel-release dnf-plugins-core && dnf config-manager --set-enabled crb \
     && dnf -y install gcc gcc-c++ make cmake perl curl wget file pkgconf-pkg-config xz \
        webkit2gtk4.1-devel openssl-devel librsvg2-devel gtk3-devel libsoup3-devel \
-    && (dnf -y install libxdo-devel libappindicator-gtk3-devel || true) \
+    && dnf -y install libayatana-appindicator-gtk3-devel \
+    && (dnf -y install libxdo-devel || true) \
     && dnf clean all
 RUN curl -fsSL https://nodejs.org/dist/v22.23.1/node-v22.23.1-linux-x64.tar.xz | tar -xJ -C /opt \
     && ln -s /opt/node-v22.23.1-linux-x64/bin/* /usr/local/bin/
