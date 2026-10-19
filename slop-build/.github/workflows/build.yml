@@ -3,9 +3,10 @@
 # Makers call this reusable workflow from a ~15-line file in their repo (see examples/). It runs
 # on the maker's own GitHub Actions minutes and:
 #   1. builds the app for each platform on GitHub-hosted runners,
-#   2. zips each build and signs it with a GitHub artifact attestation (Sigstore), which records
-#      that this recipe built it from the maker's repo at this commit,
-#   3. attaches the zips to a release on the maker's repo (Slop stores no builds),
+#   2. packs each build (Windows: a .zip; Linux: a .tar.gz plus .deb and .rpm packages) and
+#      signs every file with a GitHub artifact attestation (Sigstore), which records that this
+#      recipe built it from the maker's repo at this commit,
+#   3. attaches the files to a release on the maker's repo (Slop stores no builds),
 #   4. tells Slop, using the run's GitHub OIDC token instead of any secret.
 #
 # This recipe is trusted by every app built with it. Changes need two-person review, releases are
@@ -29,10 +30,17 @@ on:
         required: true
         type: string
       platforms:
-        description: Comma-separated platforms to build, from windows, mac and linux.
+        description: Comma-separated platforms to build, from windows and linux.
         required: false
         type: string
-        default: windows,mac,linux
+        default: windows,linux
+      linux-packages:
+        description: >-
+          Comma-separated Linux packages to make besides the .tar.gz, from deb and rpm. Slop uses
+          the ones your store page lists and ignores the rest.
+        required: false
+        type: string
+        default: deb,rpm
       build-command:
         description: "custom only: the command that builds the app (run with bash)."
         required: false
@@ -114,7 +122,7 @@ jobs:
         run: |
           python3 - <<'PY' >> "$GITHUB_OUTPUT"
           import json, os
-          runners = {"windows": "windows-latest", "mac": "macos-latest", "linux": "ubuntu-latest"}
+          runners = {"windows": "windows-latest", "linux": "ubuntu-latest"}
           wanted = [p.strip() for p in os.environ["PLATFORMS"].split(",") if p.strip()]
           bad = [p for p in wanted if p not in runners]
           if bad or not wanted:
@@ -193,40 +201,113 @@ jobs:
           PLATFORM: ${{ matrix.platform }}
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
+          mkdir -p slop-dist/out
           python3 - <<'PY'
-          # Zip the build, keeping the program's execute permission, and describe it for Slop.
-          import json, os, stat, zipfile
+          # Windows: a .zip. Linux: a .tar.gz. Both keep the program's execute permission.
+          import json, os, stat, tarfile, zipfile
           app, platform, version, exe = (os.environ[k] for k in ("APP", "PLATFORM", "VERSION", "SLOP_EXEC"))
-          name = f"{app}-{version}-{platform}.zip"
           root = os.path.join("slop-dist", "app")
-          with zipfile.ZipFile(os.path.join("slop-dist", name), "w", zipfile.ZIP_DEFLATED) as z:
-              for folder, _, files in os.walk(root):
-                  for f in sorted(files):
-                      path = os.path.join(folder, f)
-                      rel = os.path.relpath(path, root).replace(os.sep, "/")
-                      if os.path.islink(path):
-                          raise SystemExit(f"::error::symbolic links can't be shipped: {rel}")
+          entries = []
+          for folder, _, files in os.walk(root):
+              for f in sorted(files):
+                  path = os.path.join(folder, f)
+                  rel = os.path.relpath(path, root).replace(os.sep, "/")
+                  if os.path.islink(path):
+                      raise SystemExit(f"::error::symbolic links can't be shipped: {rel}")
+                  mode = 0o755 if (rel == exe or os.stat(path).st_mode & stat.S_IXUSR) else 0o644
+                  entries.append((path, rel, mode))
+          if platform == "windows":
+              name = f"{app}-{version}-windows.zip"
+              with zipfile.ZipFile(os.path.join("slop-dist", "out", name), "w", zipfile.ZIP_DEFLATED) as z:
+                  for path, rel, mode in entries:
                       info = zipfile.ZipInfo.from_file(path, rel)
-                      mode = 0o755 if (rel == exe or os.stat(path).st_mode & stat.S_IXUSR) else 0o644
                       info.external_attr = (stat.S_IFREG | mode) << 16
                       with open(path, "rb") as fh:
                           z.writestr(info, fh.read(), zipfile.ZIP_DEFLATED)
-          with open(os.path.join("slop-dist", f"{platform}.json"), "w") as fh:
-              json.dump({"platform": platform, "file_name": name, "exec": exe}, fh)
-          print(f"packaged {name}")
+          else:
+              name = f"{app}-{version}-linux-x86_64.tar.gz"
+              with tarfile.open(os.path.join("slop-dist", "out", name), "w:gz", format=tarfile.PAX_FORMAT) as t:
+                  for path, rel, mode in entries:
+                      info = t.gettarinfo(path, rel)
+                      info.mode, info.uid, info.gid, info.uname, info.gname = mode, 0, 0, "", ""
+                      with open(path, "rb") as fh:
+                          t.addfile(info, fh)
+          files = [{"platform": platform, "file_name": name, "exec": exe}]
+          with open(os.path.join("slop-dist", "files.json"), "w") as fh:
+              json.dump(files, fh)
+          print(f"packed {name}")
           PY
+
+      - name: Linux packages (.deb, .rpm)
+        if: matrix.platform == 'linux'
+        env:
+          APP: ${{ inputs.app }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          PACKAGES: ${{ inputs.linux-packages }}
+          REPO_URL: ${{ github.server_url }}/${{ github.repository }}
+        run: |
+          # The app goes in /opt/<app>, with /usr/bin/<app> starting it.
+          [[ "$PACKAGES" =~ ^((deb|rpm)(,(deb|rpm))*)?$ ]] || { echo "::error::linux-packages takes deb and/or rpm"; exit 1; }
+          # Package versions must start with a digit (build.12 becomes 0.0~build.12).
+          pkgver="$VERSION"; [[ "$pkgver" =~ ^[0-9] ]] || pkgver="0.0~$pkgver"
+          stage=$(mktemp -d)
+          chmod 755 "$stage"
+          mkdir -p "$stage/opt/$APP" "$stage/usr/bin"
+          cp -R slop-dist/app/. "$stage/opt/$APP/"
+          chmod -R u+rwX,go+rX,go-w "$stage/opt"
+          chmod 755 "$stage/opt/$APP/$SLOP_EXEC"
+          ln -s "/opt/$APP/$SLOP_EXEC" "$stage/usr/bin/$APP"
+          if [[ ",$PACKAGES," == *",deb,"* ]]; then
+            mkdir -p "$stage/DEBIAN"
+            printf 'Package: %s\nVersion: %s\nArchitecture: amd64\nMaintainer: %s\nHomepage: %s\nDescription: %s, built by Slop Build\n' \
+              "$APP" "$pkgver" "$GITHUB_REPOSITORY_OWNER" "$REPO_URL" "$APP" > "$stage/DEBIAN/control"
+            # File names use the plain version: GitHub renames uploads with characters like "~".
+            name="${APP}_${VERSION}_amd64.deb"
+            dpkg-deb --root-owner-group --build "$stage" "slop-dist/out/$name"
+            rm -rf "$stage/DEBIAN"
+            jq --arg n "$name" '. + [{"platform": "linux-deb", "file_name": $n}]' slop-dist/files.json > f && mv f slop-dist/files.json
+          fi
+          if [[ ",$PACKAGES," == *",rpm,"* ]]; then
+            command -v rpmbuild >/dev/null || { sudo apt-get update -qq && sudo apt-get install -y -qq rpm; }
+            rpmver="${pkgver//-/_}"; rpmver="${rpmver//\~/_}"
+            top=$(mktemp -d)
+            cat > "$top/app.spec" <<SPEC
+          Name: $APP
+          Version: $rpmver
+          Release: 1
+          Summary: $APP, built by Slop Build
+          License: see $REPO_URL
+          URL: $REPO_URL
+          AutoReqProv: no
+          %description
+          $APP, built by Slop Build from $REPO_URL.
+          %install
+          cp -a $stage/. %{buildroot}/
+          %files
+          /opt/$APP
+          /usr/bin/$APP
+          SPEC
+            rpmbuild -bb --define "_topdir $top" --define "_build_id_links none" --target x86_64 "$top/app.spec"
+            name="${APP}-${VERSION}.x86_64.rpm"
+            cp "$top/RPMS/x86_64/${APP}-${rpmver}-1.x86_64.rpm" "slop-dist/out/$name"
+            jq --arg n "$name" '. + [{"platform": "linux-rpm", "file_name": $n}]' slop-dist/files.json > f && mv f slop-dist/files.json
+          fi
+          ls -l slop-dist/out
 
       - name: Sign (maker's attestation)
         if: inputs.sign
         uses: actions/attest-build-provenance@v2
         with:
-          subject-path: slop-dist/*.zip
+          subject-path: slop-dist/out/*
 
       - name: Attach to the release
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
-        run: gh release upload "$TAG" slop-dist/*.zip --repo "$GITHUB_REPOSITORY" --clobber
+        run: gh release upload "$TAG" slop-dist/out/* --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Describe the files for Slop
+        run: mv slop-dist/files.json "slop-dist/${{ matrix.platform }}.json"
 
       - uses: actions/upload-artifact@v4
         with:
@@ -262,7 +343,7 @@ jobs:
           echo "::add-mask::$token"
           python3 - <<'PY' > body.json
           import glob, json, os
-          files = [json.load(open(p)) for p in sorted(glob.glob("slop-files/*.json"))]
+          files = [f for p in sorted(glob.glob("slop-files/*.json")) for f in json.load(open(p))]
           print(json.dumps({"app": os.environ["APP"], "version": os.environ["VERSION"], "tag": os.environ["TAG"],
                             "commit": os.environ["GITHUB_SHA"], "files": files}))
           PY

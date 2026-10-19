@@ -340,9 +340,16 @@ impl Library {
                         Error::Verify("the manifest has no valid program to start".into())
                     })?;
                 let files = app.join("files");
-                let zip_path = download.clone();
+                let archive_path = download.clone();
                 let files_clone = files.clone();
-                tokio::task::spawn_blocking(move || extract_zip(&zip_path, &files_clone))
+                let tarball = is_tar_gz(&file.file_name);
+                tokio::task::spawn_blocking(move || {
+                    if tarball {
+                        extract_tar_gz(&archive_path, &files_clone)
+                    } else {
+                        extract_zip(&archive_path, &files_clone)
+                    }
+                })
                     .await
                     .map_err(|e| Error::Install(e.to_string()))??;
                 let exec = files.join(&launch.exec);
@@ -638,6 +645,86 @@ fn extract_zip(zip_path: &Path, dest: &Path) -> Result<()> {
         }
         #[cfg(unix)]
         if let Some(mode) = entry.unix_mode() {
+            use std::os::unix::fs::PermissionsExt;
+            // Keep the exec bits, drop setuid/setgid/sticky and group/world write.
+            fs::set_permissions(&out, fs::Permissions::from_mode(mode & 0o755))?;
+        }
+    }
+    Ok(())
+}
+
+/// Archives are zips, except `.tar.gz`/`.tgz` (the usual Linux format, which keeps the
+/// program's execute permission).
+fn is_tar_gz(file_name: &str) -> bool {
+    let name = file_name.to_ascii_lowercase();
+    name.ends_with(".tar.gz") || name.ends_with(".tgz")
+}
+
+/// Unpacks a `.tar.gz` with the same rules as `extract_zip`: plain files and folders only,
+/// every path inside `dest`, and a cap on the unpacked size.
+fn extract_tar_gz(path: &Path, dest: &Path) -> Result<()> {
+    const MAX_TOTAL: u64 = 16 * 1024 * 1024 * 1024;
+    const MAX_ENTRIES: usize = 200_000;
+    let bad = |msg: &str| Error::Verify(format!("the archive is unsafe: {msg}"));
+
+    let gz = flate2::read::GzDecoder::new(io::BufReader::new(fs::File::open(path)?));
+    let mut archive = tar::Archive::new(gz);
+    fs::create_dir_all(dest)?;
+    let mut total: u64 = 0;
+    let entries = archive.entries().map_err(|_| bad("not a .tar.gz file"))?;
+    for (count, entry) in entries.enumerate() {
+        if count >= MAX_ENTRIES {
+            return Err(bad("too many files"));
+        }
+        let mut entry = entry.map_err(|_| bad("damaged entry"))?;
+        let kind = entry.header().entry_type();
+        if kind.is_pax_global_extensions() {
+            continue;
+        }
+        if !(kind.is_file() || kind.is_dir()) {
+            return Err(bad("contains a link or special file"));
+        }
+        let rel = entry
+            .path()
+            .map_err(|_| bad("a path isn't valid"))?
+            .into_owned();
+        let mut clean = PathBuf::new();
+        for part in rel.components() {
+            match part {
+                std::path::Component::Normal(p) => clean.push(p),
+                std::path::Component::CurDir => {}
+                _ => return Err(bad("a path points outside the app's folder")),
+            }
+        }
+        if clean.as_os_str().is_empty() {
+            continue;
+        }
+        let out = dest.join(&clean);
+        if kind.is_dir() {
+            fs::create_dir_all(&out)?;
+            continue;
+        }
+        if let Some(parent) = out.parent() {
+            fs::create_dir_all(parent)?;
+        }
+        let mut file = fs::OpenOptions::new()
+            .write(true)
+            .create_new(true)
+            .open(&out)?;
+        let mut buf = [0u8; 64 * 1024];
+        loop {
+            let n = entry.read(&mut buf).map_err(|_| bad("damaged data"))?;
+            if n == 0 {
+                break;
+            }
+            total += n as u64;
+            if total > MAX_TOTAL {
+                return Err(bad("unpacks to more than 16 GB"));
+            }
+            file.write_all(&buf[..n])?;
+        }
+        #[cfg(unix)]
+        if let Ok(mode) = entry.header().mode() {
             use std::os::unix::fs::PermissionsExt;
             // Keep the exec bits, drop setuid/setgid/sticky and group/world write.
             fs::set_permissions(&out, fs::Permissions::from_mode(mode & 0o755))?;

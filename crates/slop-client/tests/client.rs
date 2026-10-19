@@ -598,3 +598,66 @@ async fn private_files_are_fetched_through_a_slop_link() {
     assert_eq!(installed.version, "1.0.0");
     std::fs::remove_dir_all(dir).unwrap();
 }
+
+fn tar_gz_of(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
+    let mut gz = flate2::write::GzEncoder::new(Vec::new(), flate2::Compression::fast());
+    {
+        let mut tar = tar::Builder::new(&mut gz);
+        for (name, data, mode) in entries {
+            let mut header = tar::Header::new_gnu();
+            header.set_size(data.len() as u64);
+            header.set_mode(*mode);
+            header.set_entry_type(tar::EntryType::Regular);
+            // Write the name directly, so tests can build archives the builder would refuse.
+            let raw = &mut header.as_old_mut().name;
+            raw[..name.len()].copy_from_slice(name.as_bytes());
+            header.set_cksum();
+            tar.append(&header, *data).unwrap();
+        }
+        tar.finish().unwrap();
+    }
+    gz.finish().unwrap()
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn tar_gz_builds_install_and_launch() {
+    let (base, fake) = fake_api().await;
+    let tgz = tar_gz_of(&[("bin/game", GAME, 0o755), ("data/readme.txt", b"hi", 0o644)]);
+    fake.files
+        .lock()
+        .unwrap()
+        .push(("game-linux.tar.gz".into(), tgz.clone()));
+    let signed = manifest_for(&base, "game-linux.tar.gz", &tgz, "r1");
+    let dir = tempdir();
+    let lib = library(&dir);
+    let (api, _) = api_for(&base).await;
+    lib.install(&signed, Platform::Linux, None, |_, _| {})
+        .await
+        .unwrap();
+    let revocations = lib.revocations_for_launch(&api).await;
+    let status = lib
+        .launch_command("game", revocations.as_ref())
+        .unwrap()
+        .status()
+        .unwrap();
+    assert!(status.success());
+    let out = std::fs::read_to_string(dir.join("apps/game/files/out.txt")).unwrap();
+    assert_eq!(out.trim(), "launched with hello");
+
+    // A path that climbs out of the app's folder is refused, and nothing is installed.
+    let evil = tar_gz_of(&[("../escape", b"x", 0o644), ("bin/game", GAME, 0o755)]);
+    fake.files
+        .lock()
+        .unwrap()
+        .push(("evil.tar.gz".into(), evil.clone()));
+    let dir = tempdir();
+    let lib = library(&dir);
+    let err = lib
+        .install(&manifest_for(&base, "evil.tar.gz", &evil, "r2"), Platform::Linux, None, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("unsafe"), "{err}");
+    assert!(!dir.join("apps/escape").exists() && !dir.join("escape").exists());
+    assert!(lib.installed().is_empty());
+}

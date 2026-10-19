@@ -1,7 +1,7 @@
 import type { MouseEvent } from "react";
 import { Link, useParams } from "react-router";
 
-import { api, type AppDetail } from "../api";
+import { api, type AppDetail, type AppPlatform } from "../api";
 import { Art, ErrorState, ExternalLink, Loading, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -36,6 +36,7 @@ function AppView({ app }: { app: AppDetail }) {
   const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
   const latest = releases.data?.find((r) => r.status === "approved");
   const provenance = latest && latest.files.every((f) => f.provenance) ? latest.files[0].provenance : null;
+  const packages = latest?.files.filter((f) => f.platform === "linux-deb" || f.platform === "linux-rpm") ?? [];
   const upcoming = app.stage !== "released";
   const deadline = deadlineText(app);
   const age = ageLabel(app.min_age);
@@ -133,6 +134,12 @@ function AppView({ app }: { app: AppDetail }) {
             </dd>
             <dt>Stage</dt>
             <dd>{STAGE_LABEL[app.stage]}</dd>
+            {app.platforms.length > 0 && (
+              <>
+                <dt>Runs on</dt>
+                <dd>{runsOn(app.platforms)}</dd>
+              </>
+            )}
             {app.last_commit_at && (
               <>
                 <dt>Last commit</dt>
@@ -163,6 +170,18 @@ function AppView({ app }: { app: AppDetail }) {
               <p className="muted">No builds yet. This is a Coming soon page.</p>
             ) : (
               <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
+            )}
+            {packages.length > 0 && (
+              <p className="muted small packages">
+                Linux packages:{" "}
+                {packages.map((f, i) => (
+                  <span key={f.platform}>
+                    {i > 0 && " · "}
+                    <ExternalLink href={f.url}>{f.platform === "linux-deb" ? ".deb" : ".rpm"}</ExternalLink>
+                  </span>
+                ))}{" "}
+                <span className="faint">(installed by your system, not by Slop)</span>
+              </p>
             )}
           </div>
           <div className="panel panel-pad trust">
@@ -197,4 +216,14 @@ function AppView({ app }: { app: AppDetail }) {
       </div>
     </div>
   );
+}
+
+function runsOn(platforms: AppPlatform[]): string {
+  const parts: string[] = [];
+  if (platforms.includes("windows")) parts.push("Windows");
+  if (platforms.includes("linux")) {
+    const pkgs = [platforms.includes("linux-deb") && ".deb", platforms.includes("linux-rpm") && ".rpm"].filter(Boolean);
+    parts.push(pkgs.length ? `Linux (also as ${pkgs.join(" and ")})` : "Linux");
+  }
+  return parts.join(" · ");
 }

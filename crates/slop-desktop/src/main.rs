@@ -135,7 +135,7 @@ async fn sign_in_start(desktop: State<'_, Desktop>) -> CommandResult<SignInStart
         desktop.platform.map_or("desktop", |p| match p {
             Platform::Windows => "Windows",
             Platform::Mac => "macOS",
-            Platform::Linux => "Linux",
+            Platform::Linux | Platform::LinuxDeb | Platform::LinuxRpm => "Linux",
             Platform::Android => "Android",
         })
     );

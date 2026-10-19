@@ -7,6 +7,7 @@ import { Link, useParams } from "react-router";
 import {
   api,
   ApiError,
+  type AppPlatform,
   type FileKind,
   type GithubRelease,
   type NewRelease,
@@ -31,26 +32,32 @@ const STATUS: Record<Release["status"], { label: string; badge: string; help: st
 
 const PLATFORMS: Array<{ value: Platform; label: string }> = [
   { value: "windows", label: "Windows" },
-  { value: "mac", label: "macOS" },
   { value: "linux", label: "Linux" },
+  { value: "linux-deb", label: "Linux .deb" },
+  { value: "linux-rpm", label: "Linux .rpm" },
+  { value: "mac", label: "macOS" },
   { value: "android", label: "Android" },
 ];
 
+/** What each platform's build is (the server checks the same, releases.rs). */
+const BUILD: Record<AppPlatform, { kind: FileKind; extensions: string[]; describe: string }> = {
+  windows: { kind: "archive", extensions: [".zip"], describe: "a .zip of the app's files" },
+  linux: { kind: "archive", extensions: [".tar.gz", ".tgz"], describe: "a .tar.gz of the app's files" },
+  "linux-deb": { kind: "installer", extensions: [".deb"], describe: "a .deb package" },
+  "linux-rpm": { kind: "installer", extensions: [".rpm"], describe: "an .rpm package" },
+};
+
+export function fitsPlatform(platform: AppPlatform, fileName: string): boolean {
+  const name = fileName.toLowerCase();
+  return BUILD[platform].extensions.some((e) => name.endsWith(e));
+}
+
 interface FileRow {
-  platform: Platform;
-  kind: FileKind;
+  platform: AppPlatform;
   url: string;
   exec: string;
   args: string;
 }
-
-const newRow = (platform: Platform = "windows"): FileRow => ({
-  platform,
-  kind: platform === "android" ? "apk" : "archive",
-  url: "",
-  exec: "",
-  args: "",
-});
 
 export function Releases() {
   const { slug = "" } = useParams();
@@ -109,10 +116,18 @@ export function Releases() {
         <PublishProgress app={app.data} releases={releases.data} server={server.data} />
       )}
 
-      {isGithub ? (
-        <ReleasePicker slug={slug} onSubmitted={onSubmitted} />
+      {app.data.platforms.length === 0 ? (
+        <section className="panel panel-pad">
+          <h2>Submit a release</h2>
+          <p className="notice">
+            First choose what your app runs on (Windows, Linux or both) on its store page.{" "}
+            <Link to={`/publish/${slug}`}>Edit store page</Link>
+          </p>
+        </section>
+      ) : isGithub ? (
+        <ReleasePicker slug={slug} platforms={app.data.platforms} onSubmitted={onSubmitted} />
       ) : (
-        <ReleaseForm repoUrl={app.data.repo_url} slug={slug} onSubmitted={onSubmitted} />
+        <ReleaseForm repoUrl={app.data.repo_url} slug={slug} platforms={app.data.platforms} onSubmitted={onSubmitted} />
       )}
 
       <UpdatesPanel key={settingsNonce} slug={slug} />
@@ -120,12 +135,12 @@ export function Releases() {
       <SlopBuildSetup slug={slug} />
       <SigningHelp />
 
-      {isGithub && (
+      {isGithub && app.data.platforms.length > 0 && (
         <details className="panel panel-pad help">
           <summary>
-            <b>Enter a release by hand</b> <span className="muted">— for files that aren't on a GitHub release</span>
+            <b>Enter a release by hand</b> <span className="muted">— if picking doesn't fit</span>
           </summary>
-          <ReleaseForm repoUrl={app.data.repo_url} slug={slug} onSubmitted={onSubmitted} />
+          <ReleaseForm repoUrl={app.data.repo_url} slug={slug} platforms={app.data.platforms} onSubmitted={onSubmitted} />
         </details>
       )}
 
@@ -244,7 +259,8 @@ function SlopBuildSetup({ slug }: { slug: string }) {
       <h2>Let Slop Build do it</h2>
       <p>
         Add one file to your repository and every push to your main branch, or every <code>v*</code> tag, builds your app
-        for Windows, macOS and Linux on GitHub Actions, signs it, attaches it to a release, and sends it here for review. No
+        for Windows and Linux on GitHub Actions (a .zip, a .tar.gz and .deb/.rpm packages), signs it, attaches it to a
+        release, and sends it here. No
         keys or secrets to set up.
       </p>
       {setup.loading && <p className="muted">Looking at your repository…</p>}
@@ -306,27 +322,26 @@ function SigningHelp() {
   );
 }
 
-function ReleaseForm({ repoUrl, slug, onSubmitted }: { repoUrl: string; slug: string; onSubmitted: () => void }) {
+function ReleaseForm({
+  repoUrl,
+  slug,
+  platforms,
+  onSubmitted,
+}: {
+  repoUrl: string;
+  slug: string;
+  platforms: AppPlatform[];
+  onSubmitted: () => void;
+}) {
+  const blank = () => platforms.map((platform): FileRow => ({ platform, url: "", exec: "", args: "" }));
   const [version, setVersion] = useState("");
   const [commit, setCommit] = useState("");
-  const [rows, setRows] = useState<FileRow[]>([newRow()]);
+  const [rows, setRows] = useState<FileRow[]>(blank);
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
 
-  const update = (i: number, change: Partial<FileRow>) =>
-    setRows((rs) =>
-      rs.map((r, j) => {
-        if (j !== i) return r;
-        const next = { ...r, ...change };
-        if (change.platform === "android") next.kind = "apk";
-        else if (change.platform && next.kind === "apk") next.kind = "archive";
-        return next;
-      }),
-    );
-
-  const used = new Set(rows.map((r) => r.platform));
-  const nextPlatform = PLATFORMS.find((p) => !used.has(p.value))?.value;
+  const update = (i: number, change: Partial<FileRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...change } : r)));
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -337,9 +352,9 @@ function ReleaseForm({ repoUrl, slug, onSubmitted }: { repoUrl: string; slug: st
       commit_sha: commit.trim().toLowerCase(),
       files: rows.map((r) => ({
         platform: r.platform,
-        kind: r.kind,
+        kind: BUILD[r.platform].kind,
         url: r.url.trim(),
-        ...(r.kind === "archive" ? { exec: r.exec.trim() } : {}),
+        ...(BUILD[r.platform].kind === "archive" ? { exec: r.exec.trim() } : {}),
         args: r.args.trim() ? r.args.trim().split(/\s+/) : [],
       })),
     };
@@ -348,7 +363,7 @@ function ReleaseForm({ repoUrl, slug, onSubmitted }: { repoUrl: string; slug: st
       setDone(true);
       setVersion("");
       setCommit("");
-      setRows([newRow()]);
+      setRows(blank());
       onSubmitted();
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
@@ -389,56 +404,38 @@ function ReleaseForm({ repoUrl, slug, onSubmitted }: { repoUrl: string; slug: st
       </div>
 
       {rows.map((row, i) => (
-        <fieldset key={i} className="file-row">
-          <legend>Build {i + 1}</legend>
-          <div className="row-2">
-            <label>
-              Platform
-              <select value={row.platform} onChange={(e) => update(i, { platform: e.target.value as Platform })}>
-                {PLATFORMS.map((p) => (
-                  <option key={p.value} value={p.value} disabled={p.value !== row.platform && used.has(p.value)}>
-                    {p.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <label>
-              Type
-              <select
-                value={row.kind}
-                disabled={row.platform === "android"}
-                onChange={(e) => update(i, { kind: e.target.value as FileKind })}
-              >
-                {row.platform === "android" ? (
-                  <option value="apk">APK</option>
-                ) : (
-                  <>
-                    <option value="archive">Zip of the app's files (preferred)</option>
-                    <option value="installer">Installer</option>
-                  </>
-                )}
-              </select>
-            </label>
-          </div>
+        <fieldset key={row.platform} className="file-row">
+          <legend>
+            {PLATFORM_LABEL[row.platform]} <span className="muted small">— {BUILD[row.platform].describe}</span>
+          </legend>
           <label>
             File URL
             <input
               type="url"
               value={row.url}
               required
-              placeholder={isGithub ? `${repoUrl}/releases/download/v1.0.0/app-${row.platform}.zip` : "https://…"}
+              placeholder={
+                isGithub
+                  ? `${repoUrl}/releases/download/v1.0.0/app${BUILD[row.platform].extensions[0]}`
+                  : "https://…"
+              }
               onChange={(e) => update(i, { url: e.target.value })}
             />
             <span className="hint">
               {isGithub ? "A file on this repository's GitHub releases page." : "On the same site as your repository."}
             </span>
           </label>
-          {row.kind === "archive" && (
+          {BUILD[row.platform].kind === "archive" && (
             <div className="row-2">
               <label>
                 Program to start
-                <input value={row.exec} required placeholder="bin/my-game" onChange={(e) => update(i, { exec: e.target.value })} />
-                <span className="hint">Path inside the zip.</span>
+                <input
+                  value={row.exec}
+                  required
+                  placeholder={row.platform === "windows" ? "my-game.exe" : "bin/my-game"}
+                  onChange={(e) => update(i, { exec: e.target.value })}
+                />
+                <span className="hint">Path inside the archive.</span>
               </label>
               <label>
                 Arguments (optional)
@@ -446,33 +443,16 @@ function ReleaseForm({ repoUrl, slug, onSubmitted }: { repoUrl: string; slug: st
               </label>
             </div>
           )}
-          {rows.length > 1 && (
-            <button type="button" className="btn small ghost" onClick={() => setRows(rows.filter((_, j) => j !== i))}>
-              Remove this build
-            </button>
-          )}
         </fieldset>
       ))}
-      {error?.field === "files" && (
+      {error && (error.field === "files" || !error.field) && (
         <p className="form-error" role="alert">
           {error.message}
         </p>
       )}
-      {error && !error.field && (
-        <p className="form-error" role="alert">
-          {error.message}
-        </p>
-      )}
-      <div className="actions spread">
-        {nextPlatform ? (
-          <button type="button" className="btn ghost" onClick={() => setRows([...rows, newRow(nextPlatform)])}>
-            + Add another platform
-          </button>
-        ) : (
-          <span />
-        )}
+      <div className="actions">
         <button className="btn slime" disabled={busy}>
-          {busy ? "Submitting…" : "Submit for review"}
+          {busy ? "Submitting…" : "Submit"}
         </button>
       </div>
     </form>
@@ -485,30 +465,31 @@ interface PickRow {
   include: boolean;
   name: string;
   url: string;
-  platform: Platform;
-  kind: FileKind;
+  platform: AppPlatform;
   exec: string;
 }
 
-function pickRows(release: GithubRelease): PickRow[] {
-  const taken = new Set<Platform>();
+/** Starts from Slop's guesses: the first file that fits each of the app's platforms is ticked. */
+export function pickRows(release: GithubRelease, platforms: AppPlatform[]): PickRow[] {
+  const taken = new Set<AppPlatform>();
   return release.assets.map((a) => {
-    // One file per platform: the first guess for a platform is included, the rest start unticked.
-    const include = a.platform !== null && !taken.has(a.platform);
-    if (a.platform) taken.add(a.platform);
-    return {
-      include,
-      name: a.name,
-      url: a.url,
-      platform: a.platform ?? "windows",
-      kind: a.kind ?? "archive",
-      exec: "",
-    };
+    const guess = platforms.find((p) => p === a.platform) ?? platforms.find((p) => fitsPlatform(p, a.name));
+    const include = guess !== undefined && !taken.has(guess);
+    if (guess) taken.add(guess);
+    return { include, name: a.name, url: a.url, platform: guess ?? platforms[0], exec: "" };
   });
 }
 
 /** "Pick a release": the repository's GitHub releases, so makers don't type versions, commits or links. */
-function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () => void }) {
+function ReleasePicker({
+  slug,
+  platforms,
+  onSubmitted,
+}: {
+  slug: string;
+  platforms: AppPlatform[];
+  onSubmitted: () => void;
+}) {
   const list = useLoad(() => api.githubReleases(slug), [slug]);
   const [tag, setTag] = useState("");
   const [rows, setRows] = useState<PickRow[]>([]);
@@ -523,7 +504,7 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
     setError(undefined);
     setDone(undefined);
     const r = releases.find((x) => x.tag === t);
-    setRows(r ? pickRows(r) : []);
+    setRows(r ? pickRows(r, platforms) : []);
   };
   // Start on the newest release that hasn't been sent yet.
   useEffect(() => {
@@ -532,19 +513,12 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
     if (first) choose(first.tag);
   }, [list.data]);
 
-  const update = (i: number, change: Partial<PickRow>) =>
-    setRows((rs) =>
-      rs.map((r, j) => {
-        if (j !== i) return r;
-        const next = { ...r, ...change };
-        if (change.platform === "android") next.kind = "apk";
-        else if (change.platform && next.kind === "apk") next.kind = "archive";
-        return next;
-      }),
-    );
+  const update = (i: number, change: Partial<PickRow>) => setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...change } : r)));
   const included = rows.filter((r) => r.include);
-  const platforms = included.map((r) => r.platform);
-  const duplicate = platforms.find((p, i) => platforms.indexOf(p) !== i);
+  const chosenPlatforms = included.map((r) => r.platform);
+  const duplicate = chosenPlatforms.find((p, i) => chosenPlatforms.indexOf(p) !== i);
+  const missing = platforms.filter((p) => !chosenPlatforms.includes(p));
+  const wrongType = included.find((r) => !fitsPlatform(r.platform, r.name));
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -555,7 +529,12 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
       await api.submitGithubRelease(
         slug,
         chosen.tag,
-        included.map((r) => ({ platform: r.platform, kind: r.kind, url: r.url, ...(r.kind === "archive" ? { exec: r.exec.trim() } : {}) })),
+        included.map((r) => ({
+          platform: r.platform,
+          kind: BUILD[r.platform].kind,
+          url: r.url,
+          ...(BUILD[r.platform].kind === "archive" ? { exec: r.exec.trim() } : {}),
+        })),
       );
       setDone(chosen.version);
       list.reload();
@@ -573,8 +552,8 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
     <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
       <h2>Submit a release</h2>
       <p className="muted small">
-        Make a release on GitHub with your builds attached (a zip per platform, or an installer), then pick it here. Slop
-        reads the version from its tag and the commit from GitHub.
+        Make a release on GitHub with your builds attached, then pick it here. Slop reads the version from its tag and the
+        commit from GitHub. Each release needs: {platforms.map((p) => `${PLATFORM_LABEL[p]} (${BUILD[p].describe})`).join(", ")}.
       </p>
       {done && (
         <p className="notice" role="status">
@@ -620,7 +599,11 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
             <ExternalLink href={chosen.html_url}>see it on GitHub</ExternalLink>
           </p>
           {rows.length === 0 && <p className="notice">This release has no files attached. Add your builds to it on GitHub.</p>}
-          {rows.length > 0 && <p className="small"><b>Which files are builds?</b> Tick one per platform.</p>}
+          {rows.length > 0 && (
+            <p className="small">
+              <b>Which files are builds?</b> Tick one for each platform.
+            </p>
+          )}
           {rows.map((row, i) => (
             <fieldset key={row.name} className={`file-row pick-row ${row.include ? "" : "off"}`}>
               <label className="check">
@@ -628,40 +611,23 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
                 <code>{row.name}</code>
               </label>
               {row.include && (
-                <div className="row-2">
-                  <label>
-                    Platform
-                    <select value={row.platform} onChange={(e) => update(i, { platform: e.target.value as Platform })}>
-                      {PLATFORMS.map((p) => (
-                        <option key={p.value} value={p.value}>
-                          {p.label}
-                        </option>
-                      ))}
-                    </select>
-                  </label>
-                  <label>
-                    Type
-                    <select
-                      value={row.kind}
-                      disabled={row.platform === "android"}
-                      onChange={(e) => update(i, { kind: e.target.value as FileKind })}
-                    >
-                      {row.platform === "android" ? (
-                        <option value="apk">APK</option>
-                      ) : (
-                        <>
-                          <option value="archive">Zip of the app's files</option>
-                          <option value="installer">Installer</option>
-                        </>
-                      )}
-                    </select>
-                  </label>
-                </div>
+                <label>
+                  Build for
+                  <select value={row.platform} onChange={(e) => update(i, { platform: e.target.value as AppPlatform })}>
+                    {platforms.map((p) => (
+                      <option key={p} value={p}>
+                        {PLATFORM_LABEL[p]}
+                      </option>
+                    ))}
+                  </select>
+                </label>
               )}
-              {row.include && row.kind === "archive" && !row.name.toLowerCase().endsWith(".zip") && (
-                <p className="form-error">Slop can only unpack .zip files. Attach a .zip of this build to the release instead.</p>
+              {row.include && !fitsPlatform(row.platform, row.name) && (
+                <p className="form-error">
+                  The {PLATFORM_LABEL[row.platform]} build must be {BUILD[row.platform].describe}.
+                </p>
               )}
-              {row.include && row.kind === "archive" && (
+              {row.include && BUILD[row.platform].kind === "archive" && (
                 <label>
                   Program to start
                   <input value={row.exec} required placeholder="my-game.exe or bin/my-game" onChange={(e) => update(i, { exec: e.target.value })} />
@@ -671,13 +637,22 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
             </fieldset>
           ))}
           {duplicate && <p className="form-error">Pick one file for {PLATFORM_LABEL[duplicate]}.</p>}
+          {rows.length > 0 && missing.length > 0 && (
+            <p className="notice">
+              Still needed: {missing.map((p) => `${PLATFORM_LABEL[p]} (${BUILD[p].describe})`).join(", ")}. If the release
+              doesn't have it, attach it on GitHub and pick the release again.
+            </p>
+          )}
           {error && (
             <p className="form-error" role="alert">
               {error.message}
             </p>
           )}
           <div className="actions">
-            <button className="btn slime" disabled={busy || included.length === 0 || Boolean(duplicate)}>
+            <button
+              className="btn slime"
+              disabled={busy || included.length === 0 || Boolean(duplicate) || missing.length > 0 || Boolean(wrongType)}
+            >
               {busy ? "Sending…" : `Send version ${chosen.version}`}
             </button>
           </div>

@@ -37,6 +37,7 @@ export interface AppDetail extends AppSummary {
   description_md: string;
   repo_url: string;
   license_spdx: string;
+  platforms: AppPlatform[];
   maker: { display_name: string };
   stage_entered_at: string;
   last_commit_at: string | null;
@@ -109,7 +110,9 @@ export interface SessionInfo {
   current: boolean;
 }
 
-export type Platform = "windows" | "mac" | "linux" | "android";
+export type Platform = "windows" | "mac" | "linux" | "android" | "linux-deb" | "linux-rpm";
+/** What an app's store page says it runs on: the builds every release must include. */
+export type AppPlatform = "windows" | "linux" | "linux-deb" | "linux-rpm";
 export type FileKind = "archive" | "installer" | "apk";
 export type ReleaseStatus = "fetching" | "awaiting_review" | "approved" | "rejected" | "failed" | "revoked";
 
@@ -198,6 +201,7 @@ export interface NewApp {
   license_spdx: string;
   min_age: number;
   tags: string[];
+  platforms: AppPlatform[];
 }
 
 export type AppChanges = Partial<Omit<NewApp, "slug" | "kind" | "stage">>;

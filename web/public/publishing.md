@@ -34,15 +34,22 @@ It's written so that a person or an AI agent can follow it from start to finish.
 1. **Open source.** A public Git repository (GitHub, GitLab, Bitbucket or self-hosted) with an
    [OSI-approved licence](https://opensource.org/licenses) in a `LICENSE` file. Slop detects the
    licence from your repository when you create your store page.
-2. **A build on your own release page.** Slop stores no builds. Each platform's build is a file
-   attached to a release in your repository:
-   - **Preferred: a `.zip` of your app's files** with the program to start inside it, for example
-     `bin/my-game` or `MyGame.exe`. Slop unpacks it into the player's library folder and starts
-     that program. On Linux and macOS, keep the program's executable permission in the zip (Slop
-     also sets it on the program you name).
-   - **Or an installer** (`.exe`, `.msi`, `.deb`, `.rpm`…) if your app really needs one. Players
-     are asked before it runs.
-   - **Android:** an `.apk`.
+2. **Builds on your own release page, for the platforms you choose.** Slop stores no builds. On
+   your store page you tick what your app runs on, **Windows**, **Linux** or both, and every
+   release must then include exactly these files, attached to a release in your repository:
+
+   | You tick | Every release needs |
+   |---|---|
+   | Windows | A **`.zip`** of the app's files, with the program to start inside it (e.g. `MyGame.exe`) |
+   | Linux | A **`.tar.gz`** of the app's files, with the program to start inside it (e.g. `bin/my-game`), **plus** the packages you tick: |
+   | &nbsp;&nbsp;Linux `.deb` | A **`.deb`** package (Debian, Ubuntu, Mint) |
+   | &nbsp;&nbsp;Linux `.rpm` | An **`.rpm`** package (Fedora, RHEL, Rocky, Alma) |
+
+   Linux needs at least one package: `.deb`, `.rpm` or both. The Slop app installs the `.zip` or
+   `.tar.gz` into the player's library folder and starts the program you name; keep its
+   executable permission in the `.tar.gz` (Slop also sets it). The `.deb`/`.rpm` are offered on
+   your store page for players who prefer a system package. macOS and Android aren't offered yet.
+   Slop Build makes all of these files for you.
    - **Where the files must be:** on GitHub, under
      `https://github.com/<owner>/<repo>/releases/download/<tag>/<file>`. On other hosts, on the same
      site as the repository.
@@ -97,6 +104,7 @@ Go to **Publish → New app** and fill in:
 | Stage | Coming soon, Beta or Released |
 | Source repository | `https://github.com/<owner>/<repo>` (or your GitLab, Bitbucket or own server) |
 | Licence | Detected from the repository; pick one or choose Other for any SPDX ID |
+| Runs on | Windows and/or Linux; for Linux, also `.deb` and/or `.rpm` (see the table above) |
 | Age rating | Everyone, 3+, 7+, 12+, 16+ or 18+ |
 | Tags | Up to 10 |
 
@@ -110,15 +118,13 @@ progress**) and use one of the options below.
 
 #### Option A: pick a GitHub release (simplest)
 
-1. On GitHub, open **Releases → Draft a new release**. Give it a tag such as `v1.0.0`, attach a
-   build for each platform (a `.zip` of the app's files, an installer, or an `.apk`), and publish
-   it. Don't mark it as a pre-release if you want Slop to pick up later ones by itself.
+1. On GitHub, open **Releases → Draft a new release**. Give it a tag such as `v1.0.0`, attach
+   the files your store page asks for (see the table above), and publish it. Don't mark it as a pre-release if you want Slop to pick up later ones by itself.
 2. On Slop's Releases page, under **Submit a release**, choose that release. Slop reads the
    version from the tag (`v1.0.0` → `1.0.0`) and finds the commit the tag points at.
-3. Tick the files that are builds, one per platform. Slop guesses the platform and type from each
-   file's name (`.exe`/`.msi` → Windows installer, `.dmg` → macOS, `.apk` → Android, a `.zip`
-   with `windows`, `macos` or `linux` in its name → that platform); correct anything it got
-   wrong. For each zip, enter the program to start, as its path inside the zip.
+3. Tick one file for each platform. Slop matches them by type (`.zip` → Windows, `.tar.gz` →
+   Linux, `.deb`, `.rpm`) and tells you if one is missing. For the `.zip` and `.tar.gz`, enter
+   the program to start, as its path inside the archive.
 4. Choose **Send version …**.
 
 **Later versions arrive by themselves.** With **Pick up new GitHub releases** on (the default, in
@@ -132,8 +138,8 @@ couldn't find so you can pick the release by hand.
 #### Option B: Slop Build
 
 Slop Build is a shared GitHub Actions workflow. Add one file to your repository and every push to
-your main branch (or every `v*` tag) builds your app for Windows, macOS and Linux, zips and signs
-each build, attaches them to a release on your repository, and sends the release to Slop. No keys
+your main branch (or every `v*` tag) builds your app for Windows and Linux, packs it (a `.zip`
+for Windows; a `.tar.gz`, `.deb` and `.rpm` for Linux), signs every file, attaches them to a release on your repository, and sends the release to Slop. No keys
 or secrets.
 
 On the Releases page, choose **Add to my repository on GitHub**: it opens GitHub with the file
@@ -167,9 +173,10 @@ jobs:
 | `app` | Your app's store address on Slop (required) |
 | `slop-url` | The Slop site (required) |
 | `project-type` | `rust` (`cargo build --release`, ships the first binary), `go` (`go build`, binary named after the repository) or `custom` (required) |
-| `platforms` | Comma-separated, from `windows,mac,linux` (default: all three) |
+| `platforms` | Comma-separated, from `windows,linux` (default: both). Match your store page. |
+| `linux-packages` | Comma-separated, from `deb,rpm` (default: both). Slop uses the ones your store page lists. Packages install the app in `/opt/<app>` with `/usr/bin/<app>` starting it. |
 | `build-command` | `custom` only: the command that builds your app (run with bash) |
-| `output-dir` | `custom` only: the folder the build produces; it's zipped as-is |
+| `output-dir` | `custom` only: the folder the build produces; it's packed as-is |
 | `exec` | `custom` only: the program to start, relative to `output-dir`; `{ext}` becomes `.exe` on Windows |
 | `sign` | `true` by default; set `false` for private repositories without GitHub Enterprise |
 
@@ -189,7 +196,8 @@ Builds made by Slop Build are labelled **Built by Slop Build from source**.
 
 #### Option C: build and submit yourself
 
-1. Build each platform and zip it (or use an installer or `.apk`).
+1. Build each platform and pack it as your store page asks (Windows `.zip`; Linux `.tar.gz` plus
+   `.deb`/`.rpm`).
 2. Sign the files in GitHub Actions with
    [`actions/attest-build-provenance`](https://github.com/actions/attest-build-provenance):
 
@@ -453,7 +461,7 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    checkout, with a single command. Note the program's path relative to the build folder.
 3. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
    language and call it once at startup. Send nothing but the token.
-4. Either publish a GitHub release with a build per platform attached (Option A; zips need the
+4. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
    program path, which the owner enters on Slop), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
    owner will use, `slop-url` set to the Slop site, and `project-type` set to `rust`, `go` or
    `custom` (with `build-command`, `output-dir` and `exec`). For private repositories without
@@ -473,12 +481,16 @@ Facts an agent may need:
 - Store addresses: 3–60 lowercase letters, numbers and single dashes.
 - Versions: up to 40 characters of letters, numbers, `.`, `_`, `+` and `-`, starting with a letter
   or number (e.g. `1.2.0`, `build.17`).
-- Platforms: `windows`, `mac`, `linux`, `android`; one build each per release.
-- Build types: `archive` (a `.zip`, not `.tar.gz` or `.7z`; needs the program path), `installer`,
-  `apk` (Android only).
+- Store page platforms (the `platforms` field): `windows`, `linux`, `linux-deb`, `linux-rpm`.
+  `linux` needs `linux-deb` and/or `linux-rpm`. Every release includes one file for each, and no
+  others.
+- Files by platform: `windows` → `archive`, a `.zip`; `linux` → `archive`, a `.tar.gz` (or
+  `.tgz`); `linux-deb` → `installer`, a `.deb`; `linux-rpm` → `installer`, an `.rpm`. Archives
+  need the program path; packages don't.
 - A release can't reuse a version. Up to three releases can wait for review at once.
 - Tags become versions with a leading `v` removed when a digit follows (`v1.2.0` → `1.2.0`).
-- The program path inside a zip must be relative, use `/`, and not contain `..`.
+- The program path inside an archive must be relative, use `/`, and not contain `..`. Archives
+  may not contain symbolic links.
 
 ## Questions
 
