@@ -603,6 +603,7 @@ img.pixelated { image-rendering: pixelated; object-fit: contain !important; }
 .pay-table td:nth-child(2) { text-align: right; padding-right: 10px; }
 
 @media (max-width: 720px) {
+  .works { grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; }
   .person-banner { height: 110px; }
   .person-head { padding: 0 14px 14px; }
   .person-head-side { align-items: flex-start; max-width: none; }

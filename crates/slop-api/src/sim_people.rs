@@ -541,18 +541,25 @@ fn glyph(skill: &str) -> &'static str {
 }
 
 /// A picture for the sandbox's portfolios, made on the spot (no files to host).
+fn escape(text: &str) -> String {
+    text.replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+}
+
 fn svg_picture(path: &str, w: u32, h: u32, color: &str, mark: &str, title: &str) -> Picture {
     let svg = format!(
         "<svg xmlns='http://www.w3.org/2000/svg' width='{w}' height='{h}' viewBox='0 0 {w} {h}'>\
          <defs><linearGradient id='g' x1='0' y1='0' x2='1' y2='1'><stop offset='0' stop-color='{color}'/>\
          <stop offset='1' stop-color='#151a21'/></linearGradient></defs>\
          <rect width='100%' height='100%' fill='url(#g)'/>\
-         <text x='50%' y='52%' font-size='{}' text-anchor='middle' dominant-baseline='middle' fill='#ffffffcc' font-family='sans-serif'>{mark}</text>\
+         <text x='50%' y='52%' font-size='{}' text-anchor='middle' dominant-baseline='middle' fill='#ffffffcc' font-family='sans-serif'>{}</text>\
          <text x='24' y='{}' font-size='{}' fill='#ffffffdd' font-family='sans-serif'>{}</text></svg>",
         h / 3,
+        escape(mark),
         h - 24,
         (h / 14).max(12),
-        title.replace('&', "&amp;").replace('<', "&lt;"),
+        escape(title),
     );
     let url = format!(
         "data:image/svg+xml;base64,{}",

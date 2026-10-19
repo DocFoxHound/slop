@@ -1,7 +1,7 @@
 import type { MouseEvent } from "react";
 import { Link, useParams } from "react-router";
 
-import { api, type AppDetail, type AppPlatform } from "../api";
+import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
 import { Gallery } from "../components/Gallery";
 import { RatingPanel } from "../components/RatingPanel";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
@@ -116,10 +116,16 @@ function AppView({ app }: { app: AppDetail }) {
                 ✋ MADE WITH PEOPLE
               </span>
               <span className="small">
-                {app.credits.map((c, i) => (
-                  <span key={`${c.handle}-${i}`}>
+                {creditsByRole(app.credits).map(([role, people], i) => (
+                  <span key={role}>
                     {i > 0 && " · "}
-                    {c.role} by <Link to={`/people/${c.handle}`}>{c.name}</Link>
+                    {role} by{" "}
+                    {people.map((c, k) => (
+                      <span key={c.handle}>
+                        {k > 0 && (k === people.length - 1 ? " and " : ", ")}
+                        <Link to={`/people/${c.handle}`}>{c.name}</Link>
+                      </span>
+                    ))}
                   </span>
                 ))}
               </span>
@@ -260,6 +266,17 @@ function SimilarShelves({ slug, kind }: { slug: string; kind: AppDetail["kind"] 
       ))}
     </div>
   );
+}
+
+/** "Art by A and B · Music by C": each creative once per role, in the order they were credited. */
+export function creditsByRole(credits: Credit[]): Array<[string, Credit[]]> {
+  const roles: Array<[string, Credit[]]> = [];
+  for (const c of credits) {
+    let entry = roles.find(([r]) => r === c.role);
+    if (!entry) roles.push((entry = [c.role, []]));
+    if (!entry[1].some((x) => x.handle === c.handle)) entry[1].push(c);
+  }
+  return roles;
 }
 
 function runsOn(platforms: AppPlatform[]): string {
