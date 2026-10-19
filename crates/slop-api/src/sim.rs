@@ -1507,11 +1507,13 @@ async fn sim_users(State(state): State<AppState>) -> ApiResult<Json<Vec<SimUserR
     }
     Ok(Json(
         sqlx::query_as(
-            "select u.id, u.display_name, s.personas, u.country_code::text,
-                    (select count(*) from library_entries l where l.user_id = u.id) as library,
-                    (select count(*) from votes v where v.user_id = u.id) as votes
-             from sim_users s join users u on u.id = s.user_id
-             order by s.personas, u.display_name limit 300",
+            "select id, display_name, personas, country_code, library, votes from (
+                 select u.id, u.display_name, s.personas, u.country_code::text,
+                        (select count(*) from library_entries l where l.user_id = u.id) as library,
+                        (select count(*) from votes v where v.user_id = u.id) as votes,
+                        row_number() over (partition by s.personas order by u.country_code = 'GB', u.display_name) as n
+                 from sim_users s join users u on u.id = s.user_id) x
+             where n <= 3 order by personas, display_name",
         )
         .fetch_all(&state.db)
         .await?,
