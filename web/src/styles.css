@@ -368,3 +368,6 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .updates-panel { gap: 10px; }
 .updates-status { margin: -4px 0 4px 28px; }
 .link-button { background: none; border: 0; padding: 0; color: var(--slime); cursor: pointer; font: inherit; text-decoration: underline; }
+.platform-picker { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.platform-picker legend { font-weight: 700; margin-bottom: 4px; }
+.platform-picker .sub-options { margin-left: 28px; display: flex; flex-direction: column; gap: 6px; }

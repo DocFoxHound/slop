@@ -131,7 +131,9 @@ pub(crate) async fn verify_github_token(state: &AppState, token: &str) -> ApiRes
 struct CiFile {
     platform: String,
     file_name: String,
-    exec: String,
+    /// The program to start, for zips and .tar.gz; packages (.deb, .rpm) have none.
+    #[serde(default)]
+    exec: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -180,12 +182,12 @@ async fn submit_from_ci(
         ));
     }
 
-    let app: Option<(Uuid, Uuid, String)> =
-        sqlx::query_as("select id, maker_id, repo_url from apps where slug = $1")
+    let app: Option<(Uuid, Uuid, String, Vec<String>)> =
+        sqlx::query_as("select id, maker_id, repo_url, platforms from apps where slug = $1")
             .bind(&req.app)
             .fetch_optional(&state.db)
             .await?;
-    let (app_id, maker_id, repo_url) = app.ok_or(ApiError::NotFound)?;
+    let (app_id, maker_id, repo_url, platforms) = app.ok_or(ApiError::NotFound)?;
     // The run must be in the app's own repository.
     let repo_path = slop_provenance::github_repo_path(&repo_url);
     if !repo_path.is_some_and(|p| p.eq_ignore_ascii_case(&claims.repository)) {
@@ -205,15 +207,21 @@ async fn submit_from_ci(
     let files = req
         .files
         .into_iter()
+        // Slop Build makes every Linux package by default; keep the ones the store page lists.
+        .filter(|f| !f.platform.starts_with("linux-") || platforms.contains(&f.platform))
         .map(|f| NewFile {
             url: format!(
                 "{base}/releases/download/{}/{}",
                 path_segment(&req.tag),
                 path_segment(&f.file_name)
             ),
+            kind: if f.platform.starts_with("linux-") {
+                "installer".into()
+            } else {
+                "archive".into()
+            },
             platform: f.platform,
-            kind: "archive".into(),
-            exec: Some(f.exec),
+            exec: f.exec,
             args: vec![],
         })
         .collect();

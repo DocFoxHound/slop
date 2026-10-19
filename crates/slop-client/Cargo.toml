@@ -6,6 +6,7 @@ publish.workspace = true
 
 [dependencies]
 base64 = "0.23.1"
+flate2 = "1"
 hex = "0.4.3"
 keyring = { version = "4.2.0", optional = true }
 rand = "0.10.3"
@@ -15,6 +16,7 @@ serde_json = "1.0.154"
 sha2 = "0.11.1"
 slop-manifest = { version = "0.1.0", path = "../slop-manifest" }
 slop-provenance = { version = "0.1.0", path = "../slop-provenance" }
+tar = "0.4"
 thiserror = "2.0.21"
 time = { version = "0.3.55", features = ["formatting", "parsing"] }
 tokio = { version = "1.53.3", features = ["rt", "net", "io-util", "fs", "sync", "time", "macros", "process"] }
@@ -25,11 +27,13 @@ zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 [dev-dependencies]
 axum = "0.8.9"
 base64 = "0.23.1"
+flate2 = "1"
 hex = "0.4.3"
 rand = "0.10.3"
 reqwest = { version = "0.13.5", default-features = false, features = ["rustls"] }
 serde_json = "1.0.154"
 sha2 = "0.11.1"
+tar = "0.4"
 tokio = { version = "1.53.3", features = ["rt-multi-thread", "macros"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 

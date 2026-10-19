@@ -278,6 +278,8 @@ struct AppDetail {
     description_md: String,
     repo_url: String,
     license_spdx: String,
+    /// The builds every release must include: windows, linux, linux-deb, linux-rpm.
+    platforms: Vec<String>,
     maker: Maker,
     #[serde(with = "time::serde::rfc3339")]
     stage_entered_at: OffsetDateTime,
@@ -294,6 +296,7 @@ struct AppExtra {
     description_md: String,
     repo_url: String,
     license_spdx: String,
+    platforms: Vec<String>,
     maker_name: String,
     stage_entered_at: OffsetDateTime,
     last_commit_at: Option<OffsetDateTime>,
@@ -330,7 +333,7 @@ async fn load_detail(
 ) -> ApiResult<AppDetail> {
     let rules = state.config.catalog;
     let mut qb = QueryBuilder::new(
-        "select a.id, a.maker_id, a.description_md, a.repo_url, a.license_spdx, u.display_name as maker_name,
+        "select a.id, a.maker_id, a.description_md, a.repo_url, a.license_spdx, a.platforms, u.display_name as maker_name,
                 a.stage_entered_at, a.last_commit_at, (",
     );
     push_store_visible(&mut qb, rules, policy);
@@ -363,6 +366,7 @@ async fn load_detail(
         description_md: extra.description_md,
         repo_url: extra.repo_url,
         license_spdx: extra.license_spdx,
+        platforms: extra.platforms,
         maker: Maker {
             display_name: extra.maker_name,
         },
@@ -502,6 +506,7 @@ struct NewApp {
     min_age: i16,
     #[serde(default)]
     tags: Vec<String>,
+    platforms: Vec<String>,
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -516,6 +521,7 @@ struct AppChanges {
     license_spdx: Option<String>,
     min_age: Option<i16>,
     tags: Option<Vec<String>>,
+    platforms: Option<Vec<String>>,
 }
 
 const MAX_TAGS: usize = 10;
@@ -599,6 +605,30 @@ fn validate_license(value: &str) -> ApiResult<String> {
     Ok(value.to_string())
 }
 
+/// Windows and/or Linux; Linux comes as a .tar.gz plus at least one package format.
+pub(crate) fn validate_platforms(value: &[String]) -> ApiResult<Vec<String>> {
+    let invalid = |msg: &str| ApiError::invalid("platforms", msg.to_string());
+    const ORDER: [&str; 4] = ["windows", "linux", "linux-deb", "linux-rpm"];
+    if let Some(bad) = value.iter().find(|p| !ORDER.contains(&p.as_str())) {
+        return Err(invalid(&format!("unknown platform: {bad}")));
+    }
+    let has = |p: &str| value.iter().any(|v| v == p);
+    if !has("windows") && !has("linux") {
+        return Err(invalid("choose Windows, Linux or both"));
+    }
+    if has("linux") && !has("linux-deb") && !has("linux-rpm") {
+        return Err(invalid("Linux apps need a .deb or .rpm package, or both"));
+    }
+    if !has("linux") && (has("linux-deb") || has("linux-rpm")) {
+        return Err(invalid("packages come with Linux"));
+    }
+    Ok(ORDER
+        .iter()
+        .filter(|p| has(p))
+        .map(|p| p.to_string())
+        .collect())
+}
+
 fn validate_min_age(value: i16) -> ApiResult<i16> {
     if ![0, 3, 7, 12, 16, 18].contains(&value) {
         return Err(ApiError::invalid("min_age", "use 0, 3, 7, 12, 16 or 18"));
@@ -657,13 +687,15 @@ async fn create_app(
     let repo_url = validate_repo_url(&req.repo_url)?;
     let license = validate_license(&req.license_spdx)?;
     let min_age = validate_min_age(req.min_age)?;
+    let platforms = validate_platforms(&req.platforms)?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
 
     let app_id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
     sqlx::query(
-        "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
+                           platforms)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -676,6 +708,7 @@ async fn create_app(
     .bind(&repo_url)
     .bind(&license)
     .bind(min_age)
+    .bind(&platforms)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -741,6 +774,10 @@ async fn update_app(
         qb.push(", min_age = ")
             .push_bind(validate_min_age(min_age)?);
     }
+    if let Some(platforms) = &changes.platforms {
+        qb.push(", platforms = ")
+            .push_bind(validate_platforms(platforms)?);
+    }
     qb.push(" where id = ").push_bind(app_id);
     qb.build().execute(&mut *tx).await?;
 
@@ -757,6 +794,21 @@ async fn update_app(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn platforms() {
+        let v =
+            |p: &[&str]| validate_platforms(&p.iter().map(|s| s.to_string()).collect::<Vec<_>>());
+        assert_eq!(
+            v(&["linux-rpm", "windows", "linux"]).unwrap(),
+            ["windows", "linux", "linux-rpm"]
+        );
+        assert!(v(&["windows"]).is_ok());
+        assert!(v(&[]).is_err());
+        assert!(v(&["linux"]).is_err(), "Linux needs a package");
+        assert!(v(&["windows", "linux-deb"]).is_err(), "packages need Linux");
+        assert!(v(&["mac"]).is_err());
+    }
 
     #[test]
     fn slugs() {

@@ -156,25 +156,14 @@ pub fn version_from_tag(tag: &str) -> &str {
 /// A first guess at what a release file is, from its name: (platform, kind).
 pub fn guess_file(name: &str) -> Option<(&'static str, &'static str)> {
     let n = name.to_ascii_lowercase();
-    let has = |words: &[&str]| words.iter().any(|w| n.contains(w));
-    if n.ends_with(".apk") {
-        Some(("android", "apk"))
-    } else if n.ends_with(".msi") || n.ends_with(".exe") {
-        Some(("windows", "installer"))
-    } else if n.ends_with(".dmg") || n.ends_with(".pkg") {
-        Some(("mac", "installer"))
-    } else if n.ends_with(".deb") || n.ends_with(".rpm") || n.ends_with(".appimage") {
-        Some(("linux", "installer"))
+    if n.ends_with(".deb") {
+        Some(("linux-deb", "installer"))
+    } else if n.ends_with(".rpm") {
+        Some(("linux-rpm", "installer"))
+    } else if n.ends_with(".tar.gz") || n.ends_with(".tgz") {
+        Some(("linux", "archive"))
     } else if n.ends_with(".zip") {
-        if has(&["windows", "win64", "win32", "-win", "_win", ".win"]) {
-            Some(("windows", "archive"))
-        } else if has(&["macos", "darwin", "osx", "-mac", "_mac", ".mac", "apple"]) {
-            Some(("mac", "archive"))
-        } else if has(&["linux"]) {
-            Some(("linux", "archive"))
-        } else {
-            None
-        }
+        Some(("windows", "archive"))
     } else {
         None
     }
@@ -686,12 +675,20 @@ mod tests {
 
     #[test]
     fn guesses() {
-        assert_eq!(guess_file("Game-Setup.exe"), Some(("windows", "installer")));
         assert_eq!(guess_file("game-windows.zip"), Some(("windows", "archive")));
-        assert_eq!(guess_file("game-1.0-macos.zip"), Some(("mac", "archive")));
-        assert_eq!(guess_file("game_linux_x64.zip"), Some(("linux", "archive")));
-        assert_eq!(guess_file("game.apk"), Some(("android", "apk")));
-        assert_eq!(guess_file("game.zip"), None);
+        assert_eq!(
+            guess_file("game-linux-x86_64.tar.gz"),
+            Some(("linux", "archive"))
+        );
+        assert_eq!(
+            guess_file("game_1.0_amd64.deb"),
+            Some(("linux-deb", "installer"))
+        );
+        assert_eq!(
+            guess_file("game-1.0.x86_64.rpm"),
+            Some(("linux-rpm", "installer"))
+        );
+        assert_eq!(guess_file("Game-Setup.exe"), None);
         assert_eq!(guess_file("checksums.txt"), None);
     }
 

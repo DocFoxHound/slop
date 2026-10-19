@@ -31,12 +31,26 @@ pub const REVOCATIONS_SCHEMA: u32 = 1;
 pub enum Platform {
     Windows,
     Mac,
+    /// Linux: a `.tar.gz` (or `.zip`) of the app's files, which the Slop app installs and runs.
     Linux,
     Android,
+    /// A Debian/Ubuntu package of the same Linux build, for players who prefer one.
+    #[serde(rename = "linux-deb")]
+    LinuxDeb,
+    /// A Fedora/RHEL package of the same Linux build.
+    #[serde(rename = "linux-rpm")]
+    LinuxRpm,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 4] = [Self::Windows, Self::Mac, Self::Linux, Self::Android];
+    pub const ALL: [Platform; 6] = [
+        Self::Windows,
+        Self::Mac,
+        Self::Linux,
+        Self::Android,
+        Self::LinuxDeb,
+        Self::LinuxRpm,
+    ];
 
     pub fn as_str(self) -> &'static str {
         match self {
@@ -44,6 +58,8 @@ impl Platform {
             Self::Mac => "mac",
             Self::Linux => "linux",
             Self::Android => "android",
+            Self::LinuxDeb => "linux-deb",
+            Self::LinuxRpm => "linux-rpm",
         }
     }
 

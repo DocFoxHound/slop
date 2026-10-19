@@ -344,7 +344,8 @@ fn new_app(slug: &str) -> Value {
         "repo_url": "https://github.com/octo/pixel-dungeon",
         "license_spdx": "MIT",
         "min_age": 12,
-        "tags": ["roguelike", "retro"]
+        "tags": ["roguelike", "retro"],
+        "platforms": ["windows", "linux", "linux-deb"]
     })
 }
 
@@ -1328,8 +1329,8 @@ async fn maker_with_app(app: &TestApp, stage: &str) -> (Uuid, String) {
     let (maker_id, cookie) = app.user("Maker", "US").await;
     let repo = format!("{}octo/game", app.fake_base);
     sqlx::query(sqlx::AssertSqlSafe(format!(
-        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx)
-         values ($1, 'game', 'Game', 'A game', 'game', '{stage}', $2, $3, 'MIT')"
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms)
+         values ($1, 'game', 'Game', 'A game', 'game', '{stage}', $2, $3, 'MIT', '{{windows}}')"
     )))
     .bind(Uuid::now_v7())
     .bind(maker_id)
@@ -1345,7 +1346,7 @@ fn release_body(app: &TestApp, version: &str, file: &str) -> Value {
         "version": version,
         "commit_sha": "a".repeat(40),
         "files": [{
-            "platform": "linux",
+            "platform": "windows",
             "kind": "archive",
             "url": format!("{}octo/game/releases/download/v1/{file}", app.fake_base),
             "exec": "bin/game",
@@ -1359,7 +1360,7 @@ async fn submit_and_fetch(app: &TestApp, cookie: &str, version: &str) -> String 
         .send(
             req(Method::POST, "/v1/apps/game/releases")
                 .cookie(cookie)
-                .json(release_body(app, version, "game-linux.zip")),
+                .json(release_body(app, version, "game-windows.zip")),
         )
         .await;
     assert_eq!(res.status(), StatusCode::CREATED);
@@ -1385,7 +1386,7 @@ async fn release_review_and_signed_manifest(db: PgPool) {
     let expected_sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(BUILD_BYTES));
     assert_eq!(mine[0]["files"][0]["sha256"], expected_sha);
     assert_eq!(mine[0]["files"][0]["size_bytes"], BUILD_BYTES.len());
-    assert_eq!(mine[0]["files"][0]["file_name"], "game-linux.zip");
+    assert_eq!(mine[0]["files"][0]["file_name"], "game-windows.zip");
     let pending = admin::pending(&app.db).await.unwrap();
     assert_eq!(pending.len(), 1);
 
@@ -1425,7 +1426,7 @@ async fn release_review_and_signed_manifest(db: PgPool) {
     assert_eq!(manifest.version, "1.0.0");
     assert_eq!(manifest.maker, "Maker");
     assert_eq!(manifest.release_id, id);
-    let file = manifest.file_for(slop_manifest::Platform::Linux).unwrap();
+    let file = manifest.file_for(slop_manifest::Platform::Windows).unwrap();
     assert_eq!(file.sha256, expected_sha);
     assert_eq!(file.size, BUILD_BYTES.len() as u64);
     assert_eq!(file.launch.as_ref().unwrap().exec, "bin/game");
@@ -1511,10 +1512,14 @@ async fn releases_are_checked_on_submit(db: PgPool) {
         assert_eq!(body_json(res).await["error"]["field"], field);
     }
     for file in [
-        json!({ "platform": "linux", "kind": "archive", "url": "https://evil.example/x.zip", "exec": "game" }),
-        json!({ "platform": "linux", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base) }),
-        json!({ "platform": "linux", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base), "exec": "../../bin/sh" }),
-        json!({ "platform": "linux", "kind": "apk", "url": format!("{}octo/game/releases/download/v1/x.apk", app.fake_base) }),
+        json!({ "platform": "windows", "kind": "archive", "url": "https://evil.example/x.zip", "exec": "game" }),
+        json!({ "platform": "windows", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base) }),
+        json!({ "platform": "windows", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base), "exec": "../../bin/sh" }),
+        json!({ "platform": "windows", "kind": "apk", "url": format!("{}octo/game/releases/download/v1/x.apk", app.fake_base) }),
+        // Wrong file type for the platform, and a platform the store page doesn't list.
+        json!({ "platform": "windows", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.tar.gz", app.fake_base), "exec": "g" }),
+        json!({ "platform": "windows", "kind": "installer", "url": format!("{}octo/game/releases/download/v1/setup.exe", app.fake_base) }),
+        json!({ "platform": "linux", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.tar.gz", app.fake_base), "exec": "g" }),
         json!({ "platform": "beos", "kind": "archive", "url": format!("{}octo/game/releases/download/v1/x.zip", app.fake_base), "exec": "g" }),
     ] {
         let mut body = release_body(&app, "1.0.0", "x.zip");
@@ -1898,8 +1903,9 @@ fn github_token(app: &TestApp, overrides: Value) -> String {
 async fn github_app(app: &TestApp) -> (Uuid, String) {
     let (maker_id, cookie) = app.user("Maker", "US").await;
     sqlx::query(
-        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx)
-         values ($1, 'game', 'Game', 'A game', 'game', 'beta', $2, 'https://github.com/octo/game', 'MIT')",
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms)
+         values ($1, 'game', 'Game', 'A game', 'game', 'beta', $2, 'https://github.com/octo/game', 'MIT',
+                 '{windows,linux,linux-deb}')",
     )
     .bind(Uuid::now_v7())
     .bind(maker_id)
@@ -1913,7 +1919,10 @@ fn ci_release() -> Value {
     json!({
         "app": "game", "version": "build.12", "tag": "slop-build-12", "commit": BUILD_COMMIT,
         "files": [
-            { "platform": "linux", "file_name": "game-build.12-linux.zip", "exec": "game" },
+            { "platform": "linux", "file_name": "game-build.12-linux.tar.gz", "exec": "game" },
+            { "platform": "linux-deb", "file_name": "game_build.12_amd64.deb" },
+            // The store page doesn't list .rpm, so this one is left out.
+            { "platform": "linux-rpm", "file_name": "game-build.12.x86_64.rpm" },
             { "platform": "windows", "file_name": "game-build.12-windows.zip", "exec": "game.exe" }
         ]
     })
@@ -1932,6 +1941,18 @@ async fn submit_ci(app: &TestApp, token: &str, body: Value) -> Response {
 async fn slop_build_submits_releases_with_a_github_token(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = github_app(&app).await;
+    // The store page lists Windows and Linux (.tar.gz and .deb): a release without them all is
+    // refused, saying what's missing.
+    let mut partial = ci_release();
+    partial["files"] = json!([partial["files"][3].clone()]);
+    let res = submit_ci(&app, &github_token(&app, json!({})), partial).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Linux and Linux .deb")
+    );
     let res = submit_ci(&app, &github_token(&app, json!({})), ci_release()).await;
     assert_eq!(res.status(), StatusCode::CREATED);
     let release = body_json(res).await;
@@ -1945,8 +1966,17 @@ async fn slop_build_submits_releases_with_a_github_token(db: PgPool) {
         .map(|f| f["url"].as_str().unwrap())
         .collect();
     assert!(urls.contains(
-        &"https://github.com/octo/game/releases/download/slop-build-12/game-build.12-linux.zip"
+        &"https://github.com/octo/game/releases/download/slop-build-12/game-build.12-linux.tar.gz"
     ));
+    let deb = release["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["platform"] == "linux-deb")
+        .unwrap();
+    assert_eq!(deb["kind"], "installer");
+    assert!(deb["exec"].is_null());
+    assert_eq!(release["files"].as_array().unwrap().len(), 3, "no .rpm");
     let submitter: Uuid = sqlx::query_scalar("select submitted_by from releases")
         .fetch_one(&app.db)
         .await
@@ -2943,6 +2973,10 @@ async fn updates_are_approved_automatically_after_a_person_approves_one(db: PgPo
 async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) {
     let app = test_app(db).await;
     let (_, maker) = github_app(&app).await;
+    sqlx::query("update apps set platforms = '{windows}'")
+        .execute(&app.db)
+        .await
+        .unwrap();
 
     // Pick: newest first, drafts left out, files guessed from their names.
     let picks = body_json(
@@ -2962,7 +2996,7 @@ async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) 
     );
     assert_eq!(assets[0]["platform"], "windows");
     assert_eq!(assets[0]["kind"], "archive");
-    assert_eq!(assets[1]["kind"], "installer");
+    assert!(assets[1]["platform"].is_null(), "an .exe isn't guessed");
     assert!(assets[2]["platform"].is_null());
 
     // Submitting the older release: the version comes from the tag, the commit from GitHub.
@@ -2984,7 +3018,27 @@ async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) 
     assert_eq!(release["version"], "1.0.0");
     assert_eq!(release["commit_sha"], "1".repeat(40));
 
-    // Archives must be zips: the desktop app can't unpack anything else.
+    // Each platform has its file type, and only the store page's platforms are accepted.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases/from-github")
+                .cookie(&maker)
+                .json(json!({
+                    "tag": "v1.1.0",
+                    "files": [{
+                        "platform": "windows", "kind": "archive", "exec": "game.exe",
+                        "url": "https://github.com/octo/game/releases/download/v1.1.0/game-windows.tar.gz"
+                    }]
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("must be a .zip")
+    );
     let res = app
         .send(
             req(Method::POST, "/v1/apps/game/releases/from-github")
@@ -3003,7 +3057,7 @@ async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) 
         body_json(res).await["error"]["message"]
             .as_str()
             .unwrap()
-            .contains(".zip")
+            .contains("doesn't list Linux")
     );
 
     // The watcher sees v1.1.0 is newer and submits it from the 1.0.0 pattern.

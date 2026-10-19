@@ -8,6 +8,7 @@ import {
   ApiError,
   type AppDetail,
   type AppKind,
+  type AppPlatform,
   type AppStage,
   type AppSummary,
   type Category,
@@ -154,6 +155,7 @@ const EMPTY: NewApp = {
   license_spdx: "",
   min_age: 0,
   tags: [],
+  platforms: [],
 };
 
 function slugify(title: string): string {
@@ -198,6 +200,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           license_spdx: existing.license_spdx,
           min_age: existing.min_age,
           tags: existing.tags,
+          platforms: existing.platforms,
         }
       : EMPTY,
   );
@@ -223,6 +226,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             license_spdx: form.license_spdx,
             min_age: form.min_age,
             tags: form.tags,
+            platforms: form.platforms,
           })
         : await api.createApp(form);
       navigate(`/app/${saved.slug}`);
@@ -358,6 +362,8 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           )}
         </div>
 
+        <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
+
         <fieldset className="tag-picker">
           <legend>
             Tags <span className="muted">({form.tags.length}/10)</span>
@@ -406,5 +412,66 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
         </div>
       </form>
     </div>
+  );
+}
+
+/** Windows and/or Linux. Linux builds come as a .tar.gz plus a .deb and/or .rpm package. */
+function PlatformPicker({
+  value,
+  onChange,
+  error,
+}: {
+  value: AppPlatform[];
+  onChange: (p: AppPlatform[]) => void;
+  error?: string;
+}) {
+  const has = (p: AppPlatform) => value.includes(p);
+  const toggle = (p: AppPlatform, on: boolean) => {
+    let next = on ? [...value, p] : value.filter((x) => x !== p);
+    if (p === "linux" && on && !next.includes("linux-deb") && !next.includes("linux-rpm")) next.push("linux-deb");
+    if (p === "linux" && !on) next = next.filter((x) => x !== "linux-deb" && x !== "linux-rpm");
+    onChange(next);
+  };
+  const linuxNeedsPackage = has("linux") && !has("linux-deb") && !has("linux-rpm");
+  return (
+    <fieldset className="platform-picker">
+      <legend>Runs on</legend>
+      <p className="hint">Every release must include a build for each one you tick.</p>
+      <label className="check">
+        <input type="checkbox" checked={has("windows")} onChange={(e) => toggle("windows", e.target.checked)} />
+        <span>
+          <b>Windows</b> <span className="muted small">— a .zip of the app's files</span>
+        </span>
+      </label>
+      <label className="check">
+        <input type="checkbox" checked={has("linux")} onChange={(e) => toggle("linux", e.target.checked)} />
+        <span>
+          <b>Linux</b> <span className="muted small">— a .tar.gz of the app's files, which the Slop app installs</span>
+        </span>
+      </label>
+      {has("linux") && (
+        <div className="sub-options">
+          <span className="small">Plus a package, for players who prefer one (at least one):</span>
+          <label className="check">
+            <input type="checkbox" checked={has("linux-deb")} onChange={(e) => toggle("linux-deb", e.target.checked)} />
+            <span>
+              <b>.deb</b> <span className="muted small">— Debian, Ubuntu, Mint</span>
+            </span>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={has("linux-rpm")} onChange={(e) => toggle("linux-rpm", e.target.checked)} />
+            <span>
+              <b>.rpm</b> <span className="muted small">— Fedora, RHEL, Rocky, Alma</span>
+            </span>
+          </label>
+        </div>
+      )}
+      {linuxNeedsPackage && <span className="field-error">Pick .deb, .rpm or both.</span>}
+      {error && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </fieldset>
   );
 }

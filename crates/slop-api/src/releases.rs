@@ -160,16 +160,48 @@ fn validate_file_url(repo_url: &str, value: &str, allow_http: bool) -> ApiResult
     Ok((url.into(), file_name))
 }
 
+/// What each build must be, by platform (migrations/0012_platforms.sql).
+fn expected_file(platform: Platform) -> (FileKind, &'static [&'static str], &'static str) {
+    match platform {
+        Platform::Windows => (FileKind::Archive, &[".zip"], "a .zip of the app's files"),
+        Platform::Linux => (
+            FileKind::Archive,
+            &[".tar.gz", ".tgz"],
+            "a .tar.gz of the app's files",
+        ),
+        Platform::LinuxDeb => (FileKind::Installer, &[".deb"], "a .deb package"),
+        Platform::LinuxRpm => (FileKind::Installer, &[".rpm"], "an .rpm package"),
+        Platform::Mac => (FileKind::Archive, &[".zip"], "a .zip of the app"),
+        Platform::Android => (FileKind::Apk, &[".apk"], "an .apk"),
+    }
+}
+
+fn platform_label(platform: Platform) -> &'static str {
+    match platform {
+        Platform::Windows => "Windows",
+        Platform::Linux => "Linux",
+        Platform::LinuxDeb => "Linux .deb",
+        Platform::LinuxRpm => "Linux .rpm",
+        Platform::Mac => "macOS",
+        Platform::Android => "Android",
+    }
+}
+
+/// `required` is the app's platforms from its store page: a release brings exactly those builds.
 fn validate_files(
     repo_url: &str,
     files: Vec<NewFile>,
     allow_http: bool,
+    required: &[String],
 ) -> ApiResult<Vec<CheckedFile>> {
-    if files.is_empty() || files.len() > Platform::ALL.len() {
+    if required.is_empty() {
         return Err(ApiError::invalid(
             "files",
-            "add one build per platform, up to four",
+            "choose your app's platforms on its store page first (Edit page)",
         ));
+    }
+    if files.is_empty() || files.len() > Platform::ALL.len() {
+        return Err(ApiError::invalid("files", "add one build per platform"));
     }
     let mut checked: Vec<CheckedFile> = Vec::new();
     for f in files {
@@ -177,6 +209,15 @@ fn validate_files(
             .ok_or_else(|| ApiError::invalid("files", "unknown platform"))?;
         if checked.iter().any(|c| c.platform == platform) {
             return Err(ApiError::invalid("files", "one build per platform"));
+        }
+        if !required.iter().any(|r| r == platform.as_str()) {
+            return Err(ApiError::invalid(
+                "files",
+                format!(
+                    "your store page doesn't list {}; add it there first, or leave this file out",
+                    platform_label(platform)
+                ),
+            ));
         }
         let kind = FileKind::parse(&f.kind)
             .ok_or_else(|| ApiError::invalid("files", "unknown build type"))?;
@@ -219,12 +260,14 @@ fn validate_files(
             return Err(ApiError::invalid("files", "launch arguments are too long"));
         }
         let (url, file_name) = validate_file_url(repo_url, &f.url, allow_http)?;
-        // The desktop app unpacks zips only (slop-client library.rs).
-        if kind == FileKind::Archive && !file_name.to_ascii_lowercase().ends_with(".zip") {
+        let (want_kind, extensions, description) = expected_file(platform);
+        let lower = file_name.to_ascii_lowercase();
+        if kind != want_kind || !extensions.iter().any(|e| lower.ends_with(e)) {
             return Err(ApiError::invalid(
                 "files",
                 format!(
-                    "{file_name}: archives must be .zip files; Slop can't unpack other kinds yet"
+                    "{file_name}: the {} build must be {description}",
+                    platform_label(platform)
                 ),
             ));
         }
@@ -236,6 +279,26 @@ fn validate_files(
             exec,
             args: f.args,
         });
+    }
+    let missing: Vec<&str> = required
+        .iter()
+        .filter_map(|r| Platform::parse(r))
+        .filter(|p| !checked.iter().any(|c| c.platform == *p))
+        .map(platform_label)
+        .collect();
+    if !missing.is_empty() {
+        return Err(ApiError::invalid(
+            "files",
+            format!(
+                "your store page lists {} too; add {}",
+                missing.join(" and "),
+                if missing.len() == 1 {
+                    "that build"
+                } else {
+                    "those builds"
+                }
+            ),
+        ));
     }
     Ok(checked)
 }
@@ -327,7 +390,16 @@ pub(crate) async fn create_release(
 ) -> ApiResult<ReleaseInfo> {
     validate_version(version)?;
     validate_commit(commit_sha)?;
-    let files = validate_files(repo_url, files, state.config.releases.allow_http_downloads)?;
+    let required: Vec<String> = sqlx::query_scalar("select platforms from apps where id = $1")
+        .bind(app_id)
+        .fetch_one(&state.db)
+        .await?;
+    let files = validate_files(
+        repo_url,
+        files,
+        state.config.releases.allow_http_downloads,
+        &required,
+    )?;
 
     let pending: i64 = sqlx::query_scalar(
         "select count(*) from releases where app_id = $1 and status in ('fetching', 'awaiting_review')",
