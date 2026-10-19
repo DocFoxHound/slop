@@ -118,18 +118,55 @@ Go to **Publish → New app** and fill in:
 
 It's saved as a draft that only you can see.
 
-Then, on **Edit store page**, add pictures (optional, but pages with them get far more clicks):
+### Pictures and videos (optional, but pages with them get far more clicks)
 
-| | Notes |
+Slop doesn't host pictures. They live **in your repository**, in a `.slop/` folder at the top
+level, listed in `.slop/media.json`:
+
+```
+.slop/
+  media.json
+  thumbnail.png
+  screenshots/
+    title.png
+    level-1.png
+    trailer-poster.png
+```
+
+```json
+{
+  "thumbnail": "thumbnail.png",
+  "gallery": [
+    { "image": "screenshots/title.png", "caption": "The title screen" },
+    { "image": "screenshots/level-1.png" },
+    { "youtube": "https://www.youtube.com/watch?v=VIDEO_ID", "poster": "screenshots/trailer-poster.png", "caption": "Trailer" }
+  ]
+}
+```
+
+| Key | Notes |
 |---|---|
-| Thumbnail | Your tile in the store. Best at **920×430** (at least 460×215); other shapes are cropped from the middle |
-| Screenshots | Shown as a carousel at the top of your page. Up to 1920×1080 (bigger ones are scaled down), at least 320×180 |
-| Videos | YouTube links, in the same carousel. Nothing loads from YouTube until a player presses play |
+| `thumbnail` | Optional. Your tile in the store. Best at **920×430** (at least 460×215); other shapes are cropped from the middle |
+| `gallery` | Optional. Up to **20** items, each either `image` (a screenshot) or `youtube` (a video link) |
+| `image` | A picture at least 320×180 |
+| `youtube` | A YouTube link (`watch?v=`, `youtu.be/`, `shorts/` or `embed/`) |
+| `poster` | Optional, videos only: a picture shown until someone presses play. Without one, the page shows a plain card |
+| `caption` | Optional, one line of up to 200 characters |
 
-PNG, JPEG, WebP or GIF, up to 8 MB each, and up to 12 screenshots and videos together. Slop
-re-encodes every picture, which removes its metadata (camera, location). Pictures go live as soon
-as you add them, like the rest of the store page. No sexually explicit content, here or anywhere
-on Slop.
+Rules:
+
+- Paths are relative to `.slop/`, using letters, numbers, `.`, `_`, `-` and `/` (no spaces, no `..`).
+- Pictures are PNG, JPEG, WebP or GIF, up to 8 MB each, and at most 8192 pixels on a side.
+- Each image or video can appear once.
+- The repository must be public on GitHub so players can see the pictures.
+- Slop reads `.slop/media.json` when you press **Check my repository now** (under **Edit store
+  page**), and again at every release's commit. It links to the files **at that commit**, so
+  later pushes don't change what players see until Slop reads them again.
+- **Every new set of pictures is reviewed** before it shows, and before your app first goes in the
+  store. The previous set stays up meanwhile. No sexually explicit content, here or anywhere on
+  Slop.
+- You choose the **order** players see the gallery in on **Edit store page**. That isn't reviewed,
+  and pictures added later go at the end. The order in `media.json` is only the starting order.
 
 ### 3. Submit a release
 
@@ -515,14 +552,17 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
 5. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
-   same store address, the repository URL, licence, type, stage, age rating and tags. Then,
-   on **Edit store page**, upload a 920×430 thumbnail and some screenshots (an agent can make
-   these from the running app if the owner wants; Slop has no upload API for agents).
+   same store address, the repository URL, licence, type, stage, age rating and tags.
 6. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
 7. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the
    first release is approved and the app is in the store. Later releases are picked up and
    approved automatically if they pass every check.
+8. Optional but recommended, ideally before step 6: add `.slop/media.json` with a 920×430
+   thumbnail and some screenshots (see **Pictures and videos**), push it, and have the owner press **Check my
+   repository now** under **Edit store page**. An agent can capture screenshots from the
+   running app if the owner wants. Leave the gallery order to the owner; they set it on the
+   website.
 
 Facts an agent may need:
 

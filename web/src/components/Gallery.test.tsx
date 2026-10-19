@@ -36,3 +36,18 @@ describe("Gallery", () => {
     expect(container.innerHTML).toBe("");
   });
 });
+
+describe("Gallery videos without a poster", () => {
+  afterEach(cleanup);
+
+  it("shows a plain card until play", () => {
+    const { container } = render(
+      <Gallery
+        items={[{ id: "v", kind: "video", url: null, youtube_id: "dQw4w9WgXcQ", caption: "Trailer", width: null, height: null }]}
+        title="Dungeon"
+      />,
+    );
+    expect(container.querySelector("img")).toBeNull();
+    expect(container.querySelector(".play-card")?.textContent).toBe("Trailer");
+  });
+});

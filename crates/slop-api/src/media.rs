@@ -1,259 +1,293 @@
-//! Store-page pictures and videos (decided 2026-10-19).
+//! Store-page pictures and videos, from the maker's repository (decided 2026-10-19).
 //!
-//! A maker sets a **thumbnail** (the store tile) and a **gallery** of screenshots and YouTube
-//! videos, shown as a carousel on the app's page. Like the rest of the store page, changes go
-//! live straight away.
+//! Slop doesn't host them. A maker lists them in `.slop/media.json` in their repository:
 //!
-//! Every picture is decoded and re-encoded here (SECURITY §8): only PNG, JPEG, WebP and GIF are
-//! accepted, what's stored is a fresh PNG or JPEG without the original's metadata (camera,
-//! location), and it's served with a sandboxing CSP and `nosniff`. Videos stay on YouTube; Slop
-//! keeps a copy of the poster so the page loads nothing from YouTube until someone presses play.
+//! ```json
+//! {
+//!   "thumbnail": "thumbnail.png",
+//!   "gallery": [
+//!     { "image": "screenshots/title.png", "caption": "The title screen" },
+//!     { "youtube": "https://youtu.be/…", "poster": "screenshots/trailer.png" }
+//!   ]
+//! }
+//! ```
 //!
-//! Pictures are served by an unguessable ID to anyone who has it (the desktop app's pages can't
-//! send the session cookie), except for delisted apps. The ID is only ever handed to viewers who
-//! may see the app.
+//! Slop reads that file **at one commit** (the default branch's newest when the maker presses
+//! "check", or a release's commit when one is fetched), downloads each picture once to check it
+//! (format, size, dimensions, SHA-256), and keeps links to the files **at that commit**. Git
+//! content at a commit can't change, so the pictures people see are the ones that were reviewed.
+//!
+//! Every new set of pictures waits for review, by a person or an AI reviewer (review.rs); the
+//! store keeps showing the last approved set meanwhile. A set with the same pictures and
+//! captions as the shown or waiting one isn't new, so nothing is reviewed twice.
+//!
+//! The maker puts the gallery in order on the website (`apps.media_order`); that isn't reviewed,
+//! since it only moves pictures that were. New items go after the ones already placed.
+//!
+//! Files come from raw.githubusercontent.com, which isn't the GitHub API: only finding the
+//! newest commit uses an API request. Players' browsers load the pictures from GitHub too.
+//! Videos stay on YouTube; the page only loads YouTube's player when someone presses play.
 
-use std::io::Cursor;
+use std::{collections::HashMap, io::Cursor};
 
+use anyhow::Context;
 use axum::{
     Json, Router,
-    extract::{DefaultBodyLimit, Path, State},
-    http::{HeaderValue, StatusCode, header},
-    response::{IntoResponse, Response},
-    routing::{delete, get, put},
+    extract::{Path, State},
+    routing::{get, post, put},
 };
-use base64::{Engine, engine::general_purpose::STANDARD};
-use image::{DynamicImage, ImageFormat, ImageReader, imageops::FilterType};
+use image::{ImageFormat, ImageReader};
 use serde::{Deserialize, Serialize};
-use sqlx::PgConnection;
+use serde_json::json;
+use sha2::{Digest, Sha256};
+use time::OffsetDateTime;
 use url::Url;
 use uuid::Uuid;
 
 use crate::{
-    AppState,
+    AppState, admin,
     auth::session::CurrentUser,
     error::{ApiError, ApiResult},
     updates::owned,
 };
 
-/// The largest picture a maker can upload, before re-encoding.
-pub const MAX_IMAGE_BYTES: usize = 8 * 1024 * 1024;
-/// Upload bodies: the picture as base64 (4/3 of its size) in a small JSON object.
-pub const MAX_UPLOAD_BODY: usize = MAX_IMAGE_BYTES / 3 * 4 + 16 * 1024;
+/// Where the list lives in the repository; picture paths are relative to its folder.
+pub const MANIFEST_DIR: &str = ".slop";
+pub const MANIFEST_PATH: &str = ".slop/media.json";
+const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
+/// The largest picture Slop accepts.
+pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 /// Screenshots and videos in one app's gallery.
-pub const MAX_GALLERY: i64 = 12;
+pub const MAX_GALLERY: usize = 20;
 const MAX_CAPTION: usize = 200;
-
-/// The store tile's size: Steam's capsule shape, at twice the size it's shown.
-const THUMB: (u32, u32) = (920, 430);
-/// Screenshots are scaled down to fit this.
-const SHOT_MAX: (u32, u32) = (1920, 1080);
+/// The store tile is shown at 460×215 (Steam's capsule shape); best at twice that.
+const THUMB_MIN: (u32, u32) = (460, 215);
 const SHOT_MIN: (u32, u32) = (320, 180);
+const MAX_SIDE: u32 = 8192;
 
-/// Reading pictures and the maker's gallery changes that don't upload anything.
 pub fn routes() -> Router<AppState> {
     Router::new()
-        .route("/media/{id}", get(serve))
-        .route("/apps/{slug}/thumbnail", delete(remove_thumbnail))
-        .route("/apps/{slug}/gallery/order", put(reorder))
-        .route(
-            "/apps/{slug}/gallery/{id}",
-            delete(remove_item).patch(edit_item),
-        )
-}
-
-/// Uploads, with a body limit big enough for a picture.
-pub fn upload_routes() -> Router<AppState> {
-    Router::new()
-        .route("/apps/{slug}/thumbnail", put(set_thumbnail))
-        .route("/apps/{slug}/gallery", axum::routing::post(add_item))
-        .layer(DefaultBodyLimit::max(MAX_UPLOAD_BODY))
+        .route("/apps/{slug}/media", get(overview))
+        .route("/apps/{slug}/media/check", post(check))
+        .route("/apps/{slug}/media/order", put(set_order))
 }
 
 // ---------------------------------------------------------------------------------------------
-// What the store page shows
+// What's stored
 
-/// One screenshot or video in an app's gallery.
-#[derive(Serialize, sqlx::FromRow)]
-pub struct GalleryItem {
-    pub id: Uuid,
-    /// image or video.
-    pub kind: String,
-    /// The picture, or the video's poster.
+/// A picture Slop checked, linked at the commit it was read at.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Picture {
+    /// Inside `.slop/`.
+    pub path: String,
     pub url: String,
-    pub youtube_id: Option<String>,
-    pub caption: Option<String>,
-    pub width: i32,
-    pub height: i32,
+    pub sha256: String,
+    pub width: u32,
+    pub height: u32,
+    /// png, jpeg, webp or gif.
+    pub format: String,
 }
 
-/// An app's gallery, in order.
-pub async fn gallery(state: &AppState, app_id: Uuid) -> sqlx::Result<Vec<GalleryItem>> {
-    sqlx::query_as(
-        "select id, role as kind, $2 || id::text as url, youtube_id, caption, width, height
-         from app_media where app_id = $1 and role <> 'thumbnail' order by position, created_at",
-    )
-    .bind(app_id)
-    .bind(state.config.media_base())
-    .fetch_all(&state.db)
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+#[serde(tag = "kind", rename_all = "snake_case")]
+pub enum Item {
+    Image {
+        #[serde(flatten)]
+        picture: Picture,
+        caption: Option<String>,
+    },
+    Video {
+        youtube_id: String,
+        /// The maker's poster from the repository; without one, the page shows a plain card.
+        poster: Option<Picture>,
+        caption: Option<String>,
+    },
+}
+
+impl Item {
+    /// Identifies the item for the maker's order: `image:<path>` or `video:<youtube id>`.
+    pub fn key(&self) -> String {
+        match self {
+            Item::Image { picture, .. } => format!("image:{}", picture.path),
+            Item::Video { youtube_id, .. } => format!("video:{youtube_id}"),
+        }
+    }
+}
+
+/// Puts a gallery in the maker's order; items they haven't placed keep media.json's order, after.
+pub fn arrange(items: &mut [Item], order: &[String]) {
+    let rank = |item: &Item| {
+        let key = item.key();
+        order.iter().position(|k| *k == key).unwrap_or(usize::MAX)
+    };
+    // Stable: unplaced items keep their relative order.
+    items.sort_by_key(rank);
+}
+
+/// A set of pictures, as makers and reviewers see it.
+#[derive(Serialize, sqlx::FromRow)]
+pub struct MediaSet {
+    pub id: Uuid,
+    pub commit_sha: String,
+    #[sqlx(json(nullable))]
+    pub thumbnail: Option<Picture>,
+    #[sqlx(json)]
+    pub gallery: Vec<Item>,
+    pub status: String,
+    pub status_reason: Option<String>,
+    pub source: String,
+    #[serde(with = "time::serde::rfc3339")]
+    pub created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub reviewed_at: Option<OffsetDateTime>,
+}
+
+pub const SET_COLUMNS: &str =
+    "id, commit_sha, thumbnail, gallery, status, status_reason, source, created_at, reviewed_at";
+
+pub async fn load_set(db: &sqlx::PgPool, id: Uuid) -> sqlx::Result<MediaSet> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select {SET_COLUMNS} from media_sets where id = $1"
+    )))
+    .bind(id)
+    .fetch_one(db)
     .await
 }
 
-async fn serve(State(state): State<AppState>, Path(id): Path<Uuid>) -> ApiResult<Response> {
-    let row: Option<(String, Vec<u8>)> = sqlx::query_as(
-        "select m.content_type, m.bytes from app_media m join apps a on a.id = m.app_id
-         where m.id = $1 and a.status <> 'delisted'",
+/// One screenshot or video on an app's page.
+#[derive(Serialize)]
+pub struct GalleryItem {
+    pub id: String,
+    /// image or video.
+    pub kind: &'static str,
+    /// The picture, or the video's poster (none: a plain card).
+    pub url: Option<String>,
+    pub youtube_id: Option<String>,
+    pub caption: Option<String>,
+    pub width: Option<u32>,
+    pub height: Option<u32>,
+}
+
+/// The approved gallery the store shows for an app.
+pub async fn gallery(state: &AppState, app_id: Uuid) -> sqlx::Result<Vec<GalleryItem>> {
+    let row: Option<(Uuid, sqlx::types::Json<Vec<Item>>, Vec<String>)> = sqlx::query_as(
+        "select ms.id, ms.gallery, a.media_order from apps a join media_sets ms on ms.id = a.media_set_id
+         where a.id = $1",
     )
-    .bind(id)
+    .bind(app_id)
     .fetch_optional(&state.db)
     .await?;
-    let (content_type, bytes) = row.ok_or(ApiError::NotFound)?;
-    // A new picture always gets a new ID, so this one never changes. `private`: a delisted app's
-    // pictures shouldn't live on in shared caches.
-    let headers = [
-        (
-            header::CONTENT_TYPE,
-            HeaderValue::from_str(&content_type).map_err(anyhow::Error::from)?,
-        ),
-        (
-            header::CACHE_CONTROL,
-            HeaderValue::from_static("private, max-age=31536000, immutable"),
-        ),
-        (
-            header::CONTENT_SECURITY_POLICY,
-            HeaderValue::from_static("default-src 'none'; sandbox"),
-        ),
-        (
-            header::CONTENT_DISPOSITION,
-            HeaderValue::from_static("inline"),
-        ),
-        // Pages on other origins (the desktop app's) may show it.
-        (
-            header::HeaderName::from_static("cross-origin-resource-policy"),
-            HeaderValue::from_static("cross-origin"),
-        ),
-    ];
-    Ok((headers, bytes).into_response())
+    let Some((set, mut items, order)) = row else {
+        return Ok(vec![]);
+    };
+    arrange(&mut items.0, &order);
+    Ok(items
+        .0
+        .into_iter()
+        .enumerate()
+        .map(|(i, item)| {
+            let id = format!("{set}-{i}");
+            match item {
+                Item::Image { picture, caption } => GalleryItem {
+                    id,
+                    kind: "image",
+                    url: Some(picture.url),
+                    youtube_id: None,
+                    caption,
+                    width: Some(picture.width),
+                    height: Some(picture.height),
+                },
+                Item::Video {
+                    youtube_id,
+                    poster,
+                    caption,
+                } => GalleryItem {
+                    id,
+                    kind: "video",
+                    url: poster.as_ref().map(|p| p.url.clone()),
+                    youtube_id: Some(youtube_id),
+                    caption,
+                    width: poster.as_ref().map(|p| p.width),
+                    height: poster.as_ref().map(|p| p.height),
+                },
+            }
+        })
+        .collect())
 }
 
 // ---------------------------------------------------------------------------------------------
-// Pictures
+// Reading .slop/media.json
 
-struct Picture {
-    content_type: &'static str,
-    bytes: Vec<u8>,
-    width: u32,
-    height: u32,
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Manifest {
+    thumbnail: Option<String>,
+    #[serde(default)]
+    gallery: Vec<ManifestItem>,
 }
 
-#[derive(Clone, Copy)]
-enum Fit {
-    /// Cropped to fill exactly this size: the store tile.
-    Fill(u32, u32),
-    /// Scaled down to fit inside the first size; refused below the second.
-    Within((u32, u32), (u32, u32)),
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ManifestItem {
+    image: Option<String>,
+    youtube: Option<String>,
+    poster: Option<String>,
+    caption: Option<String>,
 }
 
-fn decode_base64(field: &'static str, data: &str) -> ApiResult<Vec<u8>> {
-    let data = data.trim();
-    // Accept a data: URL as well as bare base64.
-    let data = data
-        .split_once(";base64,")
-        .map_or(data, |(_, rest)| rest)
-        .trim();
-    let bytes = STANDARD
-        .decode(data)
-        .map_err(|_| ApiError::invalid(field, "the picture didn't arrive intact; try again"))?;
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err(ApiError::invalid(field, "pictures can be up to 8 MB"));
+/// Why a repository's pictures couldn't be used, in words for the maker.
+#[derive(Debug)]
+pub struct Problem(pub String);
+
+impl<E: std::fmt::Display> From<E> for Problem {
+    fn from(err: E) -> Self {
+        Self(err.to_string())
     }
-    Ok(bytes)
 }
 
-/// Decodes a picture in one of the accepted formats and re-encodes it to `fit`. Runs on a
-/// blocking thread: decoding a large picture takes a while.
-async fn process(field: &'static str, bytes: Vec<u8>, fit: Fit) -> ApiResult<Picture> {
-    tokio::task::spawn_blocking(move || process_now(field, &bytes, fit))
-        .await
-        .map_err(anyhow::Error::from)?
+macro_rules! problem {
+    ($($arg:tt)*) => { return Err(Problem(format!($($arg)*))) };
 }
 
-fn process_now(field: &'static str, bytes: &[u8], fit: Fit) -> ApiResult<Picture> {
-    let unreadable = || ApiError::invalid(field, "that isn't a PNG, JPEG, WebP or GIF picture");
-    let mut reader = ImageReader::new(Cursor::new(bytes))
-        .with_guessed_format()
-        .map_err(|_| unreadable())?;
-    if !matches!(
-        reader.format(),
-        Some(ImageFormat::Png | ImageFormat::Jpeg | ImageFormat::WebP | ImageFormat::Gif)
-    ) {
-        return Err(unreadable());
+/// A picture path inside `.slop/`: plain letters, digits, `.`, `_`, `-` and `/`, no `..`.
+fn clean_path(path: &str) -> Result<String, Problem> {
+    let path = path.trim().trim_start_matches("./");
+    let ok = !path.is_empty()
+        && path.len() <= 200
+        && !path.starts_with('/')
+        && path
+            .bytes()
+            .all(|b| b.is_ascii_alphanumeric() || matches!(b, b'.' | b'_' | b'-' | b'/'))
+        && path
+            .split('/')
+            .all(|s| !s.is_empty() && s != "." && s != "..");
+    if !ok {
+        problem!(
+            "\"{path}\" isn't a usable path: use a path inside .slop/ with letters, numbers, dots, dashes and slashes (e.g. \"screenshots/1.png\")"
+        );
     }
-    let mut limits = image::Limits::default();
-    limits.max_image_width = Some(8192);
-    limits.max_image_height = Some(8192);
-    limits.max_alloc = Some(512 * 1024 * 1024);
-    reader.limits(limits);
-    let img = reader.decode().map_err(|_| unreadable())?;
-    let (w, h) = (img.width(), img.height());
-
-    let img = match fit {
-        Fit::Fill(tw, th) => {
-            if w < tw / 2 || h < th / 2 {
-                return Err(ApiError::invalid(
-                    field,
-                    format!(
-                        "the thumbnail needs to be at least {}×{} (best: {tw}×{th})",
-                        tw / 2,
-                        th / 2
-                    ),
-                ));
-            }
-            img.resize_to_fill(tw, th, FilterType::Lanczos3)
-        }
-        Fit::Within((mw, mh), (minw, minh)) => {
-            if w < minw || h < minh {
-                return Err(ApiError::invalid(
-                    field,
-                    format!("pictures need to be at least {minw}×{minh}"),
-                ));
-            }
-            if w > mw || h > mh {
-                img.resize(mw, mh, FilterType::Lanczos3)
-            } else {
-                img
-            }
-        }
-    };
-    encode(&img).map_err(|e| ApiError::Internal(e.into()))
+    let lower = path.to_ascii_lowercase();
+    if ![".png", ".jpg", ".jpeg", ".webp", ".gif"]
+        .iter()
+        .any(|ext| lower.ends_with(ext))
+    {
+        problem!("\"{path}\" isn't a picture: use .png, .jpg, .webp or .gif");
+    }
+    Ok(path.to_string())
 }
 
-/// PNG when the picture has transparency (pixel art, logos), JPEG otherwise.
-fn encode(img: &DynamicImage) -> image::ImageResult<Picture> {
-    let mut out = Vec::new();
-    let transparent = img.color().has_alpha() && img.to_rgba8().pixels().any(|p| p.0[3] < 255);
-    let content_type = if transparent {
-        img.to_rgba8()
-            .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)?;
-        "image/png"
-    } else {
-        let rgb = img.to_rgb8();
-        image::codecs::jpeg::JpegEncoder::new_with_quality(&mut out, 88).encode_image(&rgb)?;
-        "image/jpeg"
+fn clean_caption(caption: Option<&str>) -> Result<Option<String>, Problem> {
+    let Some(c) = caption.map(str::trim).filter(|c| !c.is_empty()) else {
+        return Ok(None);
     };
-    Ok(Picture {
-        content_type,
-        bytes: out,
-        width: img.width(),
-        height: img.height(),
-    })
+    if c.chars().count() > MAX_CAPTION || c.chars().any(char::is_control) {
+        problem!("captions are one line of up to {MAX_CAPTION} characters: \"{c}\"");
+    }
+    Ok(Some(c.to_string()))
 }
-
-// ---------------------------------------------------------------------------------------------
-// YouTube
 
 /// The video ID in a YouTube link: watch?v=, youtu.be/, /embed/, /shorts/ and /live/ forms.
-fn youtube_id(link: &str) -> Option<String> {
+pub fn youtube_id(link: &str) -> Option<String> {
     let url: Url = link.trim().parse().ok()?;
     if !matches!(url.scheme(), "https" | "http") {
         return None;
@@ -282,309 +316,567 @@ fn youtube_id(link: &str) -> Option<String> {
     valid.then_some(id)
 }
 
-/// Fetches the video's poster, which also shows that the video exists.
-async fn youtube_poster(state: &AppState, id: &str) -> ApiResult<Picture> {
-    let missing = || ApiError::invalid("url", "couldn't find that YouTube video; is it public?");
-    let url = state
+/// Downloads a file, refusing anything over `max` bytes. None when it isn't there.
+async fn download(state: &AppState, url: Url, max: u64) -> anyhow::Result<Option<Vec<u8>>> {
+    let mut res = state
+        .fetch_http
+        .get(url)
+        .header("user-agent", "slop-api")
+        .send()
+        .await?;
+    if res.status() == reqwest::StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    let res_ok = res.status().is_success();
+    anyhow::ensure!(res_ok, "the file host answered {}", res.status());
+    if res.content_length().is_some_and(|n| n > max) {
+        anyhow::bail!("too big");
+    }
+    let mut body = Vec::new();
+    while let Some(chunk) = res.chunk().await? {
+        body.extend_from_slice(&chunk);
+        anyhow::ensure!(body.len() as u64 <= max, "too big");
+    }
+    Ok(Some(body))
+}
+
+/// Checks a picture's format and size from its header. Pictures are never decoded in full or
+/// re-served by Slop; browsers load them from the repository.
+fn inspect(path: &str, bytes: &[u8], min: (u32, u32)) -> Result<(String, u32, u32), Problem> {
+    let reader = ImageReader::new(Cursor::new(bytes))
+        .with_guessed_format()
+        .map_err(|_| Problem(format!("{path} isn't a picture Slop can read")))?;
+    let format = match reader.format() {
+        Some(ImageFormat::Png) => "png",
+        Some(ImageFormat::Jpeg) => "jpeg",
+        Some(ImageFormat::WebP) => "webp",
+        Some(ImageFormat::Gif) => "gif",
+        _ => problem!("{path} isn't a PNG, JPEG, WebP or GIF picture"),
+    };
+    let (w, h) = reader
+        .into_dimensions()
+        .map_err(|_| Problem(format!("{path} is damaged or not really a {format}")))?;
+    if w > MAX_SIDE || h > MAX_SIDE {
+        problem!("{path} is {w}×{h}; pictures can be up to {MAX_SIDE} pixels on each side");
+    }
+    if w < min.0 || h < min.1 {
+        problem!(
+            "{path} is {w}×{h}; it needs to be at least {}×{}",
+            min.0,
+            min.1
+        );
+    }
+    Ok((format.to_string(), w, h))
+}
+
+struct Reader<'a> {
+    state: &'a AppState,
+    /// `<raw base><owner>/<repo>/<commit>/.slop/`
+    base: Url,
+    seen: HashMap<String, Picture>,
+}
+
+impl Reader<'_> {
+    async fn picture(&mut self, path: &str, min: (u32, u32)) -> Result<Picture, Problem> {
+        let path = clean_path(path)?;
+        if let Some(p) = self.seen.get(&path) {
+            inspect_dims(p, min)?;
+            return Ok(p.clone());
+        }
+        let url = self.base.join(&path)?;
+        let bytes = match download(self.state, url.clone(), MAX_IMAGE_BYTES).await {
+            Ok(Some(b)) => b,
+            Ok(None) => problem!("{MANIFEST_DIR}/{path} isn't in the repository at that commit"),
+            Err(e) if e.to_string() == "too big" => {
+                problem!("{path} is over 8 MB")
+            }
+            Err(e) => problem!("couldn't download {path}: {e:#}"),
+        };
+        let (format, width, height) = inspect(&path, &bytes, min)?;
+        let picture = Picture {
+            path: path.clone(),
+            url: url.to_string(),
+            sha256: hex::encode(Sha256::digest(&bytes)),
+            width,
+            height,
+            format,
+        };
+        self.seen.insert(path, picture.clone());
+        Ok(picture)
+    }
+}
+
+fn inspect_dims(p: &Picture, min: (u32, u32)) -> Result<(), Problem> {
+    if p.width < min.0 || p.height < min.1 {
+        problem!(
+            "{} is {}×{}; it needs to be at least {}×{}",
+            p.path,
+            p.width,
+            p.height,
+            min.0,
+            min.1
+        );
+    }
+    Ok(())
+}
+
+/// What a check found.
+#[derive(Debug, PartialEq, Eq)]
+pub enum Outcome {
+    /// There's no `.slop/media.json` at that commit; the shown pictures stay as they are.
+    NoManifest,
+    /// Same pictures as the ones shown or already waiting.
+    Unchanged,
+    /// A new set is waiting for review.
+    Pending(Uuid),
+}
+
+/// The newest commit on the repository's default branch.
+async fn head_commit(state: &AppState, repo_path: &str) -> Result<String, Problem> {
+    #[derive(Deserialize)]
+    struct Commit {
+        sha: String,
+    }
+    let commit: Option<Commit> =
+        crate::updates::gh_json(state, &format!("repos/{repo_path}/commits/HEAD"))
+            .await
+            .map_err(|e| Problem(format!("couldn't ask GitHub for the newest commit: {e:#}")))?;
+    match commit {
+        Some(c) => Ok(c.sha.to_ascii_lowercase()),
+        None => problem!(
+            "GitHub can't find the repository; it has to be public for its pictures to show"
+        ),
+    }
+}
+
+/// Reads `.slop/media.json` at `commit` (default: the default branch's newest), and if it
+/// lists something new, stores it as a set waiting for review. Records the result on the app.
+pub async fn refresh(
+    state: &AppState,
+    app_id: Uuid,
+    repo_url: &str,
+    commit: Option<&str>,
+    source: &str,
+) -> Result<Outcome, Problem> {
+    let result = read_and_store(state, app_id, repo_url, commit, source).await;
+    let problem = result.as_ref().err().map(|p| p.0.clone());
+    sqlx::query("update apps set media_checked_at = now(), media_problem = $2 where id = $1")
+        .bind(app_id)
+        .bind(problem)
+        .execute(&state.db)
+        .await
+        .map_err(|e| Problem(e.to_string()))?;
+    result
+}
+
+async fn read_and_store(
+    state: &AppState,
+    app_id: Uuid,
+    repo_url: &str,
+    commit: Option<&str>,
+    source: &str,
+) -> Result<Outcome, Problem> {
+    let Some(repo_path) = slop_provenance::github_repo_path(repo_url) else {
+        problem!("pictures from the repository only work for GitHub repositories so far");
+    };
+    let commit = match commit {
+        Some(c) => c.to_ascii_lowercase(),
+        None => head_commit(state, &repo_path).await?,
+    };
+    let base = state
         .config
         .media
-        .youtube_image_base
-        .join(&format!("vi/{id}/hqdefault.jpg"))
-        .map_err(anyhow::Error::from)?;
-    let res = state.http.get(url).send().await.map_err(|err| {
-        tracing::warn!(error = %err, "YouTube poster");
-        ApiError::Unavailable("couldn't reach YouTube; try again in a minute")
-    })?;
-    if !res.status().is_success() {
-        return Err(missing());
-    }
-    let bytes = res.bytes().await.map_err(|_| missing())?;
-    if bytes.len() > MAX_IMAGE_BYTES {
-        return Err(missing());
-    }
-    process("url", bytes.to_vec(), Fit::Within(SHOT_MAX, (1, 1)))
-        .await
-        .map_err(|_| missing())
-}
-
-// ---------------------------------------------------------------------------------------------
-// Changes
-
-#[derive(Deserialize)]
-struct ThumbnailUpload {
-    /// The picture, base64 (or a data: URL).
-    image: String,
-}
-
-#[derive(Serialize)]
-struct ThumbnailSet {
-    thumbnail_url: String,
-}
-
-async fn touch(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<()> {
-    sqlx::query("update apps set updated_at = now() where id = $1")
-        .bind(app_id)
-        .execute(conn)
-        .await?;
-    Ok(())
-}
-
-async fn set_thumbnail(
-    State(state): State<AppState>,
-    user: CurrentUser,
-    Path(slug): Path<String>,
-    Json(body): Json<ThumbnailUpload>,
-) -> ApiResult<Json<ThumbnailSet>> {
-    let (app_id, _) = owned(&state, &slug, &user).await?;
-    let bytes = decode_base64("image", &body.image)?;
-    let pic = process("image", bytes, Fit::Fill(THUMB.0, THUMB.1)).await?;
-    let id = Uuid::new_v4();
-    let mut tx = state.db.begin().await?;
-    sqlx::query("delete from app_media where app_id = $1 and role = 'thumbnail'")
-        .bind(app_id)
-        .execute(&mut *tx)
-        .await?;
-    insert(&mut tx, id, app_id, "thumbnail", 0, None, None, &pic).await?;
-    touch(&mut tx, app_id).await?;
-    tx.commit().await?;
-    Ok(Json(ThumbnailSet {
-        thumbnail_url: format!("{}{id}", state.config.media_base()),
-    }))
-}
-
-async fn remove_thumbnail(
-    State(state): State<AppState>,
-    user: CurrentUser,
-    Path(slug): Path<String>,
-) -> ApiResult<StatusCode> {
-    let (app_id, _) = owned(&state, &slug, &user).await?;
-    let mut tx = state.db.begin().await?;
-    sqlx::query("delete from app_media where app_id = $1 and role = 'thumbnail'")
-        .bind(app_id)
-        .execute(&mut *tx)
-        .await?;
-    touch(&mut tx, app_id).await?;
-    tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
-}
-
-#[allow(clippy::too_many_arguments)]
-async fn insert(
-    conn: &mut PgConnection,
-    id: Uuid,
-    app_id: Uuid,
-    role: &str,
-    position: i16,
-    youtube_id: Option<&str>,
-    caption: Option<&str>,
-    pic: &Picture,
-) -> sqlx::Result<()> {
-    sqlx::query(
-        "insert into app_media (id, app_id, role, position, youtube_id, caption, content_type, bytes, width, height)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
-    )
-    .bind(id)
-    .bind(app_id)
-    .bind(role)
-    .bind(position)
-    .bind(youtube_id)
-    .bind(caption)
-    .bind(pic.content_type)
-    .bind(&pic.bytes)
-    .bind(pic.width as i32)
-    .bind(pic.height as i32)
-    .execute(conn)
-    .await?;
-    Ok(())
-}
-
-fn validate_caption(caption: Option<&str>) -> ApiResult<Option<String>> {
-    let Some(caption) = caption.map(str::trim).filter(|c| !c.is_empty()) else {
-        return Ok(None);
+        .github_raw_base
+        .join(&format!("{repo_path}/{commit}/{MANIFEST_DIR}/"))?;
+    let manifest = match download(state, base.join("media.json")?, MAX_MANIFEST_BYTES).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Ok(Outcome::NoManifest),
+        Err(e) => problem!("couldn't download {MANIFEST_PATH}: {e:#}"),
     };
-    if caption.chars().count() > MAX_CAPTION {
-        return Err(ApiError::invalid(
-            "caption",
-            format!("captions can be up to {MAX_CAPTION} characters"),
-        ));
-    }
-    Ok(Some(caption.to_string()))
-}
-
-#[derive(Deserialize)]
-#[serde(tag = "kind", rename_all = "snake_case")]
-enum NewItem {
-    Image {
-        image: String,
-        caption: Option<String>,
-    },
-    Video {
-        /// A YouTube link.
-        url: String,
-        caption: Option<String>,
-    },
-}
-
-async fn add_item(
-    State(state): State<AppState>,
-    user: CurrentUser,
-    Path(slug): Path<String>,
-    Json(item): Json<NewItem>,
-) -> ApiResult<(StatusCode, Json<Vec<GalleryItem>>)> {
-    let (app_id, _) = owned(&state, &slug, &user).await?;
-    let count: i64 = sqlx::query_scalar(
-        "select count(*) from app_media where app_id = $1 and role <> 'thumbnail'",
-    )
-    .bind(app_id)
-    .fetch_one(&state.db)
-    .await?;
-    if count >= MAX_GALLERY {
-        return Err(ApiError::Conflict(format!(
-            "the gallery holds up to {MAX_GALLERY} screenshots and videos; remove one first"
-        )));
+    let manifest: Manifest = serde_json::from_slice(&manifest)
+        .map_err(|e| Problem(format!("{MANIFEST_PATH} isn't valid: {e}")))?;
+    if manifest.gallery.len() > MAX_GALLERY {
+        problem!(
+            "{MANIFEST_PATH} lists {} gallery items; the most is {MAX_GALLERY}",
+            manifest.gallery.len()
+        );
     }
 
-    let (role, youtube, caption, pic) = match item {
-        NewItem::Image { image, caption } => {
-            let caption = validate_caption(caption.as_deref())?;
-            let bytes = decode_base64("image", &image)?;
-            let pic = process("image", bytes, Fit::Within(SHOT_MAX, SHOT_MIN)).await?;
-            ("image", None, caption, pic)
-        }
-        NewItem::Video { url, caption } => {
-            let caption = validate_caption(caption.as_deref())?;
-            let id = youtube_id(&url).ok_or_else(|| {
-                ApiError::invalid(
-                    "url",
-                    "paste a YouTube link, like https://www.youtube.com/watch?v=…",
-                )
-            })?;
-            let pic = youtube_poster(&state, &id).await?;
-            ("video", Some(id), caption, pic)
-        }
+    let mut reader = Reader {
+        state,
+        base,
+        seen: HashMap::new(),
     };
+    let thumbnail = match &manifest.thumbnail {
+        Some(path) => Some(reader.picture(path, THUMB_MIN).await?),
+        None => None,
+    };
+    let mut gallery = Vec::with_capacity(manifest.gallery.len());
+    for (i, item) in manifest.gallery.iter().enumerate() {
+        let n = i + 1;
+        let caption = clean_caption(item.caption.as_deref())?;
+        gallery.push(match (&item.image, &item.youtube) {
+            (Some(path), None) => {
+                if item.poster.is_some() {
+                    problem!("gallery item {n}: \"poster\" is only for videos");
+                }
+                Item::Image {
+                    picture: reader.picture(path, SHOT_MIN).await?,
+                    caption,
+                }
+            }
+            (None, Some(link)) => {
+                let Some(youtube_id) = youtube_id(link) else {
+                    problem!("gallery item {n}: \"{link}\" isn't a YouTube video link");
+                };
+                let poster = match &item.poster {
+                    Some(path) => Some(reader.picture(path, SHOT_MIN).await?),
+                    None => None,
+                };
+                Item::Video {
+                    youtube_id,
+                    poster,
+                    caption,
+                }
+            }
+            _ => problem!("gallery item {n} needs either \"image\" or \"youtube\""),
+        });
+    }
 
+    let mut keys: Vec<String> = gallery.iter().map(Item::key).collect();
+    keys.sort();
+    if let Some(dup) = keys.windows(2).find(|w| w[0] == w[1]) {
+        problem!(
+            "{MANIFEST_PATH} lists {} twice",
+            dup[0].split_once(':').map_or("", |(_, v)| v)
+        );
+    }
+
+    let fingerprint = fingerprint(thumbnail.as_ref(), &gallery);
     let mut tx = state.db.begin().await?;
-    // Lock the app so two uploads at once can't both take the last place.
     sqlx::query("select 1 from apps where id = $1 for update")
         .bind(app_id)
         .execute(&mut *tx)
         .await?;
-    let (count, next): (i64, i16) = sqlx::query_as(
-        "select count(*), coalesce(max(position) + 1, 0)::smallint from app_media
-         where app_id = $1 and role <> 'thumbnail'",
+    let live: Option<String> = sqlx::query_scalar(
+        "select ms.fingerprint from apps a join media_sets ms on ms.id = a.media_set_id where a.id = $1",
     )
     .bind(app_id)
-    .fetch_one(&mut *tx)
+    .fetch_optional(&mut *tx)
     .await?;
-    if count >= MAX_GALLERY {
-        return Err(ApiError::Conflict(format!(
-            "the gallery holds up to {MAX_GALLERY} screenshots and videos; remove one first"
-        )));
-    }
-    insert(
-        &mut tx,
-        Uuid::new_v4(),
-        app_id,
-        role,
-        next,
-        youtube.as_deref(),
-        caption.as_deref(),
-        &pic,
+    let pending: Option<(Uuid, String)> = sqlx::query_as(
+        "select id, fingerprint from media_sets where app_id = $1 and status = 'pending'",
     )
+    .bind(app_id)
+    .fetch_optional(&mut *tx)
     .await?;
-    touch(&mut tx, app_id).await?;
-    tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(gallery(&state, app_id).await?)))
-}
-
-#[derive(Deserialize)]
-struct ItemEdit {
-    caption: Option<String>,
-}
-
-async fn edit_item(
-    State(state): State<AppState>,
-    user: CurrentUser,
-    Path((slug, id)): Path<(String, Uuid)>,
-    Json(edit): Json<ItemEdit>,
-) -> ApiResult<Json<Vec<GalleryItem>>> {
-    let (app_id, _) = owned(&state, &slug, &user).await?;
-    let caption = validate_caption(edit.caption.as_deref())?;
-    let done = sqlx::query(
-        "update app_media set caption = $3 where id = $1 and app_id = $2 and role <> 'thumbnail'",
+    if pending.as_ref().is_some_and(|(_, f)| *f == fingerprint) {
+        return Ok(Outcome::Unchanged);
+    }
+    // Anything waiting is out of date now.
+    sqlx::query(
+        "update media_sets set status = 'superseded', status_reason = 'replaced by newer pictures'
+         where app_id = $1 and status = 'pending'",
+    )
+    .bind(app_id)
+    .execute(&mut *tx)
+    .await?;
+    if live.as_deref() == Some(fingerprint.as_str()) {
+        tx.commit().await?;
+        return Ok(Outcome::Unchanged);
+    }
+    // The same pictures were turned down (after the shown ones): don't queue them again.
+    let rejected: Option<String> = sqlx::query_scalar(
+        "select ms.status_reason from media_sets ms join apps a on a.id = ms.app_id
+         where ms.app_id = $1 and ms.status = 'rejected' and ms.fingerprint = $2
+           and (a.media_set_id is null
+                or ms.created_at > (select created_at from media_sets where id = a.media_set_id))
+         order by ms.created_at desc limit 1",
+    )
+    .bind(app_id)
+    .bind(&fingerprint)
+    .fetch_optional(&mut *tx)
+    .await?
+    .flatten();
+    if let Some(reason) = rejected {
+        tx.commit().await?;
+        problem!("these are the pictures that were turned down: {reason}");
+    }
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into media_sets (id, app_id, commit_sha, thumbnail, gallery, fingerprint, source)
+         values ($1, $2, $3, $4, $5, $6, $7)",
     )
     .bind(id)
     .bind(app_id)
-    .bind(caption)
-    .execute(&state.db)
+    .bind(&commit)
+    .bind(thumbnail.map(sqlx::types::Json))
+    .bind(sqlx::types::Json(&gallery))
+    .bind(&fingerprint)
+    .bind(source)
+    .execute(&mut *tx)
     .await?;
-    if done.rows_affected() == 0 {
-        return Err(ApiError::NotFound);
-    }
-    Ok(Json(gallery(&state, app_id).await?))
+    tx.commit().await?;
+    Ok(Outcome::Pending(id))
 }
 
-async fn remove_item(
+/// What the pictures are, regardless of which commit they were read at or their order.
+fn fingerprint(thumbnail: Option<&Picture>, gallery: &[Item]) -> String {
+    let pic = |p: &Picture| json!([p.path, p.sha256]);
+    let mut sorted: Vec<&Item> = gallery.iter().collect();
+    sorted.sort_by_key(|i| i.key());
+    let items: Vec<_> = sorted
+        .into_iter()
+        .map(|item| match item {
+            Item::Image { picture, caption } => json!(["image", pic(picture), caption]),
+            Item::Video {
+                youtube_id,
+                poster,
+                caption,
+            } => json!(["video", youtube_id, poster.as_ref().map(pic), caption]),
+        })
+        .collect();
+    let value = json!([thumbnail.map(pic), items]);
+    hex::encode(Sha256::digest(value.to_string().as_bytes()))
+}
+
+/// After a release is fetched: reads the pictures at its commit. Never fails the release.
+pub async fn refresh_for_release(state: &AppState, app_id: Uuid, repo_url: &str, commit: &str) {
+    if slop_provenance::github_repo_path(repo_url).is_none() {
+        return;
+    }
+    match refresh(state, app_id, repo_url, Some(commit), "release").await {
+        Ok(Outcome::Pending(set)) => {
+            tracing::info!(%app_id, %set, "new pictures waiting for review")
+        }
+        Ok(_) => {}
+        Err(Problem(problem)) => tracing::info!(%app_id, %problem, "pictures not read"),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Review (admin_web.rs and review.rs call these)
+
+pub async fn approve_set(db: &sqlx::PgPool, id: Uuid, reviewer: &str) -> anyhow::Result<()> {
+    let mut tx = db.begin().await?;
+    let row: Option<(Uuid, String, String)> = sqlx::query_as(
+        "select ms.app_id, ms.status, a.slug from media_sets ms join apps a on a.id = ms.app_id
+         where ms.id = $1 for update of ms",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (app_id, status, slug) = row.context("no such set of pictures")?;
+    anyhow::ensure!(
+        status == "pending",
+        "these pictures aren't waiting for review ({status})"
+    );
+    sqlx::query(
+        "update media_sets set status = 'approved', reviewed_by = $2, reviewed_at = now() where id = $1",
+    )
+    .bind(id)
+    .bind(reviewer)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("update apps set media_set_id = $2, updated_at = now() where id = $1")
+        .bind(app_id)
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    admin::audit(
+        &mut tx,
+        reviewer,
+        "media.approve",
+        &slug,
+        json!({ "set": id }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+pub async fn reject_set(
+    db: &sqlx::PgPool,
+    id: Uuid,
+    reviewer: &str,
+    reason: &str,
+) -> anyhow::Result<()> {
+    let reason = reason.trim();
+    anyhow::ensure!(!reason.is_empty(), "say why, for the maker");
+    let mut tx = db.begin().await?;
+    let row: Option<(String, String)> = sqlx::query_as(
+        "select ms.status, a.slug from media_sets ms join apps a on a.id = ms.app_id
+         where ms.id = $1 for update of ms",
+    )
+    .bind(id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (status, slug) = row.context("no such set of pictures")?;
+    anyhow::ensure!(
+        status == "pending",
+        "these pictures aren't waiting for review ({status})"
+    );
+    sqlx::query(
+        "update media_sets set status = 'rejected', status_reason = $3, reviewed_by = $2, reviewed_at = now()
+         where id = $1",
+    )
+    .bind(id)
+    .bind(reviewer)
+    .bind(reason)
+    .execute(&mut *tx)
+    .await?;
+    admin::audit(
+        &mut tx,
+        reviewer,
+        "media.reject",
+        &slug,
+        json!({ "set": id, "reason": reason }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Whether an app has pictures waiting for review (it can't be listed until they're reviewed).
+pub async fn has_pending(conn: &mut sqlx::PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "select exists (select 1 from media_sets where app_id = $1 and status = 'pending')",
+    )
+    .bind(app_id)
+    .fetch_one(conn)
+    .await
+}
+
+// ---------------------------------------------------------------------------------------------
+// The maker's view
+
+#[derive(Serialize)]
+struct Overview {
+    /// The pictures the store shows.
+    live: Option<MediaSet>,
+    /// Newer pictures waiting for review.
+    pending: Option<MediaSet>,
+    /// The newest set that was turned down, if nothing newer was found since.
+    rejected: Option<MediaSet>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    checked_at: Option<OffsetDateTime>,
+    /// What was wrong the last time Slop read the repository.
+    problem: Option<String>,
+    /// Only GitHub repositories so far.
+    supported: bool,
+    manifest_path: &'static str,
+    /// The maker's gallery order (item keys); `live` and `pending` are already in it.
+    order: Vec<String>,
+    /// The result of a check, when this answers one: pending, unchanged or none.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    result: Option<&'static str>,
+}
+
+async fn load_overview(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiResult<Overview> {
+    let (live, checked_at, problem, order): (
+        Option<Uuid>,
+        Option<OffsetDateTime>,
+        Option<String>,
+        Vec<String>,
+    ) = sqlx::query_as(
+        "select media_set_id, media_checked_at, media_problem, media_order from apps where id = $1",
+    )
+    .bind(app_id)
+    .fetch_one(&state.db)
+    .await?;
+    let live = match live {
+        Some(id) => Some(load_set(&state.db, id).await?),
+        None => None,
+    };
+    let in_order = |set: Option<MediaSet>| {
+        set.map(|mut s| {
+            arrange(&mut s.gallery, &order);
+            s
+        })
+    };
+    let newest = |status: &'static str| {
+        sqlx::query_as::<_, MediaSet>(sqlx::AssertSqlSafe(format!(
+            "select {SET_COLUMNS} from media_sets where app_id = $1 and status = $2
+             order by created_at desc limit 1"
+        )))
+        .bind(app_id)
+        .bind(status)
+        .fetch_optional(&state.db)
+    };
+    let live = in_order(live);
+    let pending = in_order(newest("pending").await?);
+    let rejected = newest("rejected")
+        .await?
+        .filter(|r| pending.is_none() && live.as_ref().is_none_or(|l| l.created_at < r.created_at));
+    Ok(Overview {
+        live,
+        pending,
+        rejected,
+        checked_at,
+        problem,
+        supported: slop_provenance::github_repo_path(repo_url).is_some(),
+        manifest_path: MANIFEST_PATH,
+        order,
+        result: None,
+    })
+}
+
+async fn overview(
     State(state): State<AppState>,
     user: CurrentUser,
-    Path((slug, id)): Path<(String, Uuid)>,
-) -> ApiResult<Json<Vec<GalleryItem>>> {
-    let (app_id, _) = owned(&state, &slug, &user).await?;
-    let mut tx = state.db.begin().await?;
-    let done =
-        sqlx::query("delete from app_media where id = $1 and app_id = $2 and role <> 'thumbnail'")
-            .bind(id)
-            .bind(app_id)
-            .execute(&mut *tx)
-            .await?;
-    if done.rows_affected() == 0 {
-        return Err(ApiError::NotFound);
-    }
-    touch(&mut tx, app_id).await?;
-    tx.commit().await?;
-    Ok(Json(gallery(&state, app_id).await?))
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Overview>> {
+    let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    Ok(Json(load_overview(&state, app_id, &repo_url).await?))
+}
+
+/// "Check my repository now": reads the default branch's newest commit.
+async fn check(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Overview>> {
+    let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    let result = match refresh(&state, app_id, &repo_url, None, "maker").await {
+        Ok(Outcome::Pending(_)) => "pending",
+        Ok(Outcome::Unchanged) => "unchanged",
+        Ok(Outcome::NoManifest) => "none",
+        Err(_) => "problem",
+    };
+    let mut overview = load_overview(&state, app_id, &repo_url).await?;
+    overview.result = Some(result);
+    Ok(Json(overview))
 }
 
 #[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct Order {
-    /// Every gallery item's ID, in the new order.
-    ids: Vec<Uuid>,
+    /// Item keys, first to last.
+    keys: Vec<String>,
 }
 
-async fn reorder(
+/// The maker puts the gallery in order. Not reviewed: it only moves reviewed pictures.
+async fn set_order(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(slug): Path<String>,
     Json(order): Json<Order>,
-) -> ApiResult<Json<Vec<GalleryItem>>> {
-    let (app_id, _) = owned(&state, &slug, &user).await?;
-    let mut tx = state.db.begin().await?;
-    let mut current: Vec<Uuid> = sqlx::query_scalar(
-        "select id from app_media where app_id = $1 and role <> 'thumbnail' for update",
-    )
-    .bind(app_id)
-    .fetch_all(&mut *tx)
-    .await?;
-    let mut wanted = order.ids.clone();
-    current.sort();
-    wanted.sort();
-    if current != wanted {
-        return Err(ApiError::invalid(
-            "ids",
-            "the gallery changed; reload and try again",
-        ));
+) -> ApiResult<Json<Overview>> {
+    let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    if order.keys.len() > MAX_GALLERY * 2
+        || order
+            .keys
+            .iter()
+            .any(|k| k.len() > 220 || !(k.starts_with("image:") || k.starts_with("video:")))
+    {
+        return Err(ApiError::invalid("keys", "that isn't a gallery order"));
     }
-    for (position, id) in order.ids.iter().enumerate() {
-        sqlx::query("update app_media set position = $2 where id = $1")
-            .bind(id)
-            .bind(position as i16)
-            .execute(&mut *tx)
-            .await?;
-    }
-    touch(&mut tx, app_id).await?;
-    tx.commit().await?;
-    Ok(Json(gallery(&state, app_id).await?))
+    sqlx::query("update apps set media_order = $2, updated_at = now() where id = $1")
+        .bind(app_id)
+        .bind(&order.keys)
+        .execute(&state.db)
+        .await?;
+    Ok(Json(load_overview(&state, app_id, &repo_url).await?))
 }
 
 #[cfg(test)]
@@ -593,7 +885,6 @@ mod tests {
 
     #[test]
     fn youtube_links() {
-        let id = |s: &str| youtube_id(s);
         for link in [
             "https://www.youtube.com/watch?v=dQw4w9WgXcQ",
             "https://youtube.com/watch?feature=share&v=dQw4w9WgXcQ&t=10",
@@ -603,7 +894,7 @@ mod tests {
             "https://www.youtube-nocookie.com/embed/dQw4w9WgXcQ",
             "https://www.youtube.com/shorts/dQw4w9WgXcQ",
         ] {
-            assert_eq!(id(link).as_deref(), Some("dQw4w9WgXcQ"), "{link}");
+            assert_eq!(youtube_id(link).as_deref(), Some("dQw4w9WgXcQ"), "{link}");
         }
         for link in [
             "https://vimeo.com/123",
@@ -612,41 +903,75 @@ mod tests {
             "https://evil.example/watch?v=dQw4w9WgXcQ",
             "javascript:alert(1)",
         ] {
-            assert_eq!(id(link), None, "{link}");
+            assert_eq!(youtube_id(link), None, "{link}");
         }
     }
 
-    fn png(w: u32, h: u32, alpha: u8) -> Vec<u8> {
-        let img = image::RgbaImage::from_pixel(w, h, image::Rgba([200, 40, 90, alpha]));
-        let mut out = Vec::new();
-        img.write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
-            .unwrap();
-        out
+    #[test]
+    fn the_makers_order_comes_first() {
+        let video = |id: &str| Item::Video {
+            youtube_id: id.into(),
+            poster: None,
+            caption: None,
+        };
+        let mut items = vec![
+            video("aaaaaaaaaaa"),
+            video("bbbbbbbbbbb"),
+            video("ccccccccccc"),
+        ];
+        arrange(
+            &mut items,
+            &[
+                "video:ccccccccccc".into(),
+                "video:gone0000000".into(),
+                "video:aaaaaaaaaaa".into(),
+            ],
+        );
+        let keys: Vec<_> = items.iter().map(Item::key).collect();
+        assert_eq!(
+            keys,
+            [
+                "video:ccccccccccc",
+                "video:aaaaaaaaaaa",
+                "video:bbbbbbbbbbb"
+            ]
+        );
+        // The order doesn't change what's reviewed.
+        let reversed: Vec<_> = items.iter().rev().cloned().collect();
+        assert_eq!(fingerprint(None, &items), fingerprint(None, &reversed));
     }
 
     #[test]
-    fn pictures_are_reencoded_to_fit() {
-        let thumb = process_now("image", &png(1000, 1000, 255), Fit::Fill(920, 430)).unwrap();
-        assert_eq!((thumb.width, thumb.height), (920, 430));
-        assert_eq!(thumb.content_type, "image/jpeg");
+    fn paths_stay_inside_the_folder() {
+        assert_eq!(clean_path("./shots/1.png").unwrap(), "shots/1.png");
+        for bad in [
+            "../secret.png",
+            "/etc/x.png",
+            "shots//1.png",
+            "a b.png",
+            "shots/../../x.png",
+            "notes.txt",
+            "x.svg",
+            "%2e%2e/x.png",
+        ] {
+            assert!(clean_path(bad).is_err(), "{bad}");
+        }
+    }
 
-        let shot = process_now(
-            "image",
-            &png(3840, 1080, 128),
-            Fit::Within(SHOT_MAX, SHOT_MIN),
-        )
-        .unwrap();
-        assert_eq!((shot.width, shot.height), (1920, 540));
-        assert_eq!(shot.content_type, "image/png", "transparency is kept");
-
-        assert!(
-            process_now(
-                "image",
-                &png(100, 100, 255),
-                Fit::Within(SHOT_MAX, SHOT_MIN)
-            )
-            .is_err()
+    #[test]
+    fn pictures_are_checked_from_their_header() {
+        let png = |w, h| {
+            let mut out = Vec::new();
+            image::RgbImage::new(w, h)
+                .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+                .unwrap();
+            out
+        };
+        assert_eq!(
+            inspect("t.png", &png(920, 430), THUMB_MIN).unwrap(),
+            ("png".to_string(), 920, 430)
         );
-        assert!(process_now("image", b"<svg onload=alert(1)>", Fit::Fill(920, 430)).is_err());
+        assert!(inspect("t.png", &png(400, 200), THUMB_MIN).is_err());
+        assert!(inspect("x.png", b"<svg onload=alert(1)>", SHOT_MIN).is_err());
     }
 }

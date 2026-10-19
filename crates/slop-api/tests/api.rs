@@ -84,10 +84,15 @@ async fn fake_github() -> String {
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
-        // YouTube's video posters (media.rs).
+        // GitHub's raw files (media.rs): whatever a test put in RAW_FILES.
         .route(
-            "/vi/dQw4w9WgXcQ/hqdefault.jpg",
-            get(|| async { ([(header::CONTENT_TYPE, "image/jpeg")], picture(480, 360, false)).into_response() }),
+            "/raw/{*path}",
+            get(|axum::extract::Path(path): axum::extract::Path<String>| async move {
+                match RAW_FILES.lock().unwrap().get(&path) {
+                    Some(bytes) => (StatusCode::OK, bytes.clone()).into_response(),
+                    None => StatusCode::NOT_FOUND.into_response(),
+                }
+            }),
         )
         .route(
             "/repos/octo/game/license",
@@ -247,7 +252,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
         media: slop_api::config::MediaConfig {
-            youtube_image_base: github_base.parse().unwrap(),
+            github_raw_base: format!("{github_base}raw/").parse().unwrap(),
         },
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
@@ -3598,212 +3603,527 @@ async fn trending_puts_the_most_played_first(db: PgPool) {
 // ---------------------------------------------------------------------------------------------
 // Store-page pictures and videos, and similar apps
 
-/// A picture of the given size, noisy so it doesn't compress to almost nothing.
-fn picture(w: u32, h: u32, alpha: bool) -> Vec<u8> {
-    let mut seed = 12345u32;
-    let img = image::RgbaImage::from_fn(w, h, |_, _| {
-        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
-        let [r, g, b, _] = seed.to_le_bytes();
-        image::Rgba([r, g, b, if alpha { 100 } else { 255 }])
-    });
+/// Files the fake GitHub serves from /raw/<owner>/<repo>/<commit>/<path>.
+static RAW_FILES: std::sync::LazyLock<
+    std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
+> = std::sync::LazyLock::new(Default::default);
+
+fn put_raw(commit: &str, path: &str, bytes: Vec<u8>) {
+    RAW_FILES
+        .lock()
+        .unwrap()
+        .insert(format!("octo/game/{commit}/.slop/{path}"), bytes);
+}
+
+fn png(w: u32, h: u32) -> Vec<u8> {
     let mut out = Vec::new();
-    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+    image::RgbImage::from_pixel(w, h, image::Rgb([30, 160, 90]))
+        .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
         .unwrap();
     out
 }
 
-fn b64(bytes: &[u8]) -> String {
-    use base64::Engine;
-    base64::engine::general_purpose::STANDARD.encode(bytes)
+/// A draft on octo/game whose repository has a thumbnail, two screenshots and a video at `commit`.
+async fn app_with_pictures(app: &TestApp, maker: Uuid, slug: &str, commit: &str) -> Uuid {
+    listed_with(
+        app,
+        maker,
+        slug,
+        "coming_soon",
+        "status = 'draft', repo_url = 'https://github.com/octo/game'",
+    )
+    .await;
+    put_raw(commit, "thumb.png", png(920, 430));
+    put_raw(commit, "shots/a.png", png(640, 360));
+    put_raw(commit, "shots/b.png", png(1280, 720));
+    put_raw(
+        commit,
+        "media.json",
+        json!({
+            "thumbnail": "thumb.png",
+            "gallery": [
+                { "image": "shots/a.png", "caption": "Level one" },
+                { "youtube": "https://youtu.be/dQw4w9WgXcQ" },
+                { "image": "./shots/b.png" }
+            ]
+        })
+        .to_string()
+        .into_bytes(),
+    );
+    sqlx::query_scalar("select id from apps where slug = $1")
+        .bind(slug)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+async fn make_admin(app: &TestApp, name: &str) -> (Uuid, String) {
+    let (id, cookie) = app.user(name, "US").await;
+    admin::set_admin(&app.db, &id.to_string(), true, "test")
+        .await
+        .unwrap();
+    (id, cookie)
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn makers_set_a_thumbnail_and_a_gallery(db: PgPool) {
+async fn pictures_come_from_the_repository_and_wait_for_review(db: PgPool) {
     let app = test_app(db).await;
     let (maker, cookie) = app.user("Maker", "US").await;
     let (_, other) = app.user("Other", "US").await;
-    listed_with(&app, maker, "pretty", "released", "").await;
-    let big = picture(1200, 700, false);
-    assert!(big.len() > 64 * 1024, "bigger than the usual body limit");
+    let (_, admin_cookie) = make_admin(&app, "Admin").await;
+    // "Check" reads the default branch's newest commit, which the fake GitHub says is b…b.
+    let head = "b".repeat(40);
+    app_with_pictures(&app, maker, "pics", &head).await;
 
-    // Only the maker; anyone else gets "not found".
     let res = app
-        .send(
-            req(Method::PUT, "/v1/apps/pretty/thumbnail")
-                .cookie(&other)
-                .json(json!({ "image": b64(&big) })),
-        )
+        .send(req(Method::POST, "/v1/apps/pics/media/check").cookie(&other))
         .await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
-    // Not a picture.
     let res = app
-        .send(
-            req(Method::PUT, "/v1/apps/pretty/thumbnail")
-                .cookie(&cookie)
-                .json(json!({ "image": b64(b"<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>") })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-
-    let res = app
-        .send(
-            req(Method::PUT, "/v1/apps/pretty/thumbnail")
-                .cookie(&cookie)
-                .json(json!({ "image": format!("data:image/png;base64,{}", b64(&big)) })),
-        )
+        .send(req(Method::POST, "/v1/apps/pics/media/check").cookie(&cookie))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    let thumb = body_json(res).await["thumbnail_url"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    assert!(thumb.starts_with("http://localhost:8080/v1/media/"));
-    let page = body_json(app.send(req(Method::GET, "/v1/apps?sort=recent")).await).await;
-    assert_eq!(page["apps"][0]["thumbnail_url"], thumb.as_str());
-
-    // Served as a fresh JPEG, cropped to the tile's shape, unable to run anything.
-    let path = thumb.trim_start_matches("http://localhost:8080");
-    let res = app.send(req(Method::GET, path)).await;
-    assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/jpeg");
+    let body = body_json(res).await;
+    assert_eq!(body["result"], "pending");
+    assert_eq!(body["live"], Value::Null);
+    let pending = &body["pending"];
+    let set_id = pending["id"].as_str().unwrap().to_string();
     assert_eq!(
-        res.headers()[header::CONTENT_SECURITY_POLICY],
-        "default-src 'none'; sandbox"
+        pending["thumbnail"]["url"],
+        format!("{}raw/octo/game/{head}/.slop/thumb.png", app.fake_base)
     );
-    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
-    let bytes = res.into_body().collect().await.unwrap().to_bytes();
-    let img = image::load_from_memory(&bytes).unwrap();
-    assert_eq!((img.width(), img.height()), (920, 430));
+    assert_eq!(pending["thumbnail"]["width"], 920);
+    let kinds: Vec<_> = pending["gallery"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["image", "video", "image"]);
+    assert_eq!(pending["gallery"][2]["path"], "shots/b.png");
+    assert_eq!(pending["gallery"][1]["poster"], Value::Null);
 
-    // The gallery: a screenshot (transparency kept) and a YouTube video.
+    // Nothing shows until it's reviewed, and the app can't be listed meanwhile.
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/pics").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(page["thumbnail_url"], Value::Null);
+    assert_eq!(page["gallery"], json!([]));
+    let res = app
+        .send(req(Method::POST, "/v1/admin/apps/pics/list").cookie(&admin_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["media"][0]["id"], set_id.as_str());
+    assert_eq!(queue["ready_to_list"][0]["pictures_pending"], true);
+
+    // Checking again finds nothing new.
+    let body = body_json(
+        app.send(req(Method::POST, "/v1/apps/pics/media/check").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(body["result"], "unchanged");
+    assert_eq!(body["pending"]["id"], set_id.as_str());
+
+    // Turned down: the maker sees why, and the same pictures aren't queued again.
     let res = app
         .send(
-            req(Method::POST, "/v1/apps/pretty/gallery")
-                .cookie(&cookie)
-                .json(json!({ "kind": "image", "image": b64(&picture(640, 360, true)), "caption": "Level one" })),
+            req(Method::POST, format!("/v1/admin/media/{set_id}/reject"))
+                .cookie(&admin_cookie)
+                .json(json!({ "reason": "The second screenshot is from another game." })),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::CREATED);
-    for (link, status) in [
-        ("https://vimeo.com/1234", StatusCode::UNPROCESSABLE_ENTITY),
-        // A video YouTube doesn't have.
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let body = body_json(
+        app.send(req(Method::POST, "/v1/apps/pics/media/check").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(body["result"], "problem");
+    assert!(body["problem"].as_str().unwrap().contains("another game"));
+    assert_eq!(
+        body["rejected"]["status_reason"],
+        "The second screenshot is from another game."
+    );
+
+    // A release at a new commit with different pictures: a new set to review.
+    let next = "c".repeat(40);
+    let app_id: Uuid = sqlx::query_scalar("select id from apps where slug = 'pics'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    app_with_pictures_files(&next);
+    let outcome = slop_api::media::refresh(
+        &app.state,
+        app_id,
+        "https://github.com/octo/game",
+        Some(&next),
+        "release",
+    )
+    .await
+    .unwrap();
+    let slop_api::media::Outcome::Pending(new_set) = outcome else {
+        panic!("expected new pictures, got {outcome:?}");
+    };
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/media/{new_set}/approve")).cookie(&admin_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/pics").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        page["thumbnail_url"],
+        format!("{}raw/octo/game/{next}/.slop/thumb.png", app.fake_base)
+    );
+    let order = |page: &Value| -> Vec<String> {
+        page["gallery"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|i| {
+                i["youtube_id"].as_str().map_or_else(
+                    || {
+                        i["url"]
+                            .as_str()
+                            .unwrap()
+                            .rsplit('/')
+                            .next()
+                            .unwrap()
+                            .to_string()
+                    },
+                    String::from,
+                )
+            })
+            .collect()
+    };
+    assert_eq!(order(&page), ["a.png", "b.png"]);
+
+    // The maker puts the gallery in order on the website; that isn't reviewed.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/pics/media/order")
+                .cookie(&cookie)
+                .json(json!({ "keys": ["image:shots/b.png", "image:shots/a.png"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(res).await["live"]["gallery"][0]["path"],
+        "shots/b.png"
+    );
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/pics").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(order(&page), ["b.png", "a.png"]);
+
+    let res = app
+        .send(req(Method::POST, "/v1/admin/apps/pics/list").cookie(&admin_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let listed = list_slugs(&app, req(Method::GET, "/v1/apps")).await;
+    assert_eq!(listed, ["pics"]);
+}
+
+/// At `commit`: the thumbnail and two screenshots, no video.
+fn app_with_pictures_files(commit: &str) {
+    put_raw(commit, "thumb.png", png(920, 430));
+    put_raw(commit, "shots/a.png", png(640, 360));
+    put_raw(commit, "shots/b.png", png(640, 360));
+    put_raw(
+        commit,
+        "media.json",
+        json!({ "thumbnail": "thumb.png", "gallery": [{ "image": "shots/a.png" }, { "image": "shots/b.png" }] })
+            .to_string()
+            .into_bytes(),
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bad_picture_lists_are_explained(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    let app_id = app_with_pictures(&app, maker, "oops", &"d".repeat(40)).await;
+    let check = |commit: String, manifest: Value| {
+        put_raw(&commit, "media.json", manifest.to_string().into_bytes());
+        let state = app.state.clone();
+        async move {
+            slop_api::media::refresh(
+                &state,
+                app_id,
+                "https://github.com/octo/game",
+                Some(&commit),
+                "maker",
+            )
+            .await
+            .unwrap_err()
+            .0
+        }
+    };
+    let e = "e".repeat(40);
+    put_raw(&e, "small.png", png(300, 100));
+    put_raw(&e, "big.png", png(640, 360));
+    for (manifest, expect) in [
         (
-            "https://youtu.be/aaaaaaaaaaa",
-            StatusCode::UNPROCESSABLE_ENTITY,
+            json!({ "gallery": [{ "image": "../../etc/passwd.png" }] }),
+            "isn't a usable path",
         ),
-        ("https://youtu.be/dQw4w9WgXcQ?si=x", StatusCode::CREATED),
+        (
+            json!({ "gallery": [{ "image": "missing.png" }] }),
+            "isn't in the repository",
+        ),
+        (json!({ "thumbnail": "small.png" }), "at least 460×215"),
+        (
+            json!({ "gallery": [{ "youtube": "https://vimeo.com/1" }] }),
+            "isn't a YouTube video link",
+        ),
+        (
+            json!({ "gallery": [{ "image": "big.png" }, { "image": "big.png" }] }),
+            "twice",
+        ),
+        (json!({ "galery": [] }), "isn't valid"),
+        (
+            json!({ "gallery": (0..21).map(|_| json!({ "image": "big.png" })).collect::<Vec<_>>() }),
+            "the most is 20",
+        ),
     ] {
+        let problem = check(e.clone(), manifest.clone()).await;
+        assert!(problem.contains(expect), "{manifest}: {problem}");
+    }
+    let stored: Option<String> = sqlx::query_scalar("select media_problem from apps where id = $1")
+        .bind(app_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(stored.unwrap().contains("the most is 20"));
+    // No .slop/media.json at all: nothing changes, and that's not a problem.
+    let outcome = slop_api::media::refresh(
+        &app.state,
+        app_id,
+        "https://github.com/octo/game",
+        Some(&"f".repeat(40)),
+        "maker",
+    )
+    .await
+    .unwrap();
+    assert_eq!(outcome, slop_api::media::Outcome::NoManifest);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ai_reviewers_use_admin_tokens(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, maker_cookie) = app.user("Maker", "US").await;
+    let (admin_id, admin_cookie) = make_admin(&app, "Admin").await;
+    app_with_pictures(&app, maker, "robot", &"b".repeat(40)).await;
+    app.send(req(Method::POST, "/v1/apps/robot/media/check").cookie(&maker_cookie))
+        .await;
+
+    // Only admins, signed in themselves, make tokens.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/tokens")
+                .cookie(&maker_cookie)
+                .json(json!({ "name": "Claude", "scope": "review" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let mut tokens = vec![];
+    for scope in ["read", "review"] {
         let res = app
             .send(
-                req(Method::POST, "/v1/apps/pretty/gallery")
-                    .cookie(&cookie)
-                    .json(json!({ "kind": "video", "url": link })),
+                req(Method::POST, "/v1/admin/tokens")
+                    .cookie(&admin_cookie)
+                    .json(json!({ "name": format!("Claude {scope}"), "scope": scope, "days": 30 })),
             )
             .await;
-        assert_eq!(res.status(), status, "{link}");
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let body = body_json(res).await;
+        assert!(body["token"].as_str().unwrap().starts_with("slopadm_"));
+        tokens.push(format!("Bearer {}", body["token"].as_str().unwrap()));
     }
-    let detail = body_json(app.send(req(Method::GET, "/v1/apps/pretty")).await).await;
-    let gallery = detail["gallery"].as_array().unwrap();
-    assert_eq!(gallery.len(), 2);
-    assert_eq!(gallery[0]["kind"], "image");
-    assert_eq!(gallery[0]["caption"], "Level one");
-    assert_eq!(gallery[1]["kind"], "video");
-    assert_eq!(gallery[1]["youtube_id"], "dQw4w9WgXcQ");
-    let shot = gallery[0]["url"]
-        .as_str()
-        .unwrap()
-        .trim_start_matches("http://localhost:8080");
-    let res = app.send(req(Method::GET, shot)).await;
-    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
-    let (shot_id, video_id) = (
-        gallery[0]["id"].as_str().unwrap().to_string(),
-        gallery[1]["id"].as_str().unwrap().to_string(),
-    );
-
-    // Reorder, recaption, remove.
+    let (read, review) = (tokens[0].clone(), tokens[1].clone());
     let res = app
         .send(
-            req(Method::PUT, "/v1/apps/pretty/gallery/order")
-                .cookie(&cookie)
-                .json(json!({ "ids": [video_id, shot_id] })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_json(res).await[0]["kind"], "video");
-    let res = app
-        .send(
-            req(Method::PUT, "/v1/apps/pretty/gallery/order")
-                .cookie(&cookie)
-                .json(json!({ "ids": [video_id] })),
+            req(Method::POST, "/v1/admin/tokens")
+                .header("authorization", review.clone())
+                .json(json!({ "name": "child", "scope": "review" })),
         )
         .await;
     assert_eq!(
         res.status(),
-        StatusCode::UNPROCESSABLE_ENTITY,
-        "every item, once"
+        StatusCode::NOT_FOUND,
+        "tokens can't make tokens"
     );
     let res = app
-        .send(
-            req(Method::PATCH, format!("/v1/apps/pretty/gallery/{video_id}"))
-                .cookie(&cookie)
-                .json(json!({ "caption": "Trailer" })),
-        )
-        .await;
-    assert_eq!(body_json(res).await[0]["caption"], "Trailer");
-    let res = app
-        .send(req(Method::DELETE, format!("/v1/apps/pretty/gallery/{shot_id}")).cookie(&other))
+        .send(req(Method::GET, "/v1/admin/review").header("authorization", "Bearer slopadm_nope"))
         .await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // The feed: everything waiting, with the app and the requests that decide it.
     let res = app
-        .send(req(Method::DELETE, format!("/v1/apps/pretty/gallery/{shot_id}")).cookie(&cookie))
+        .send(req(Method::GET, "/v1/admin/review").header("authorization", read.clone()))
         .await;
-    assert_eq!(body_json(res).await.as_array().unwrap().len(), 1);
+    assert_eq!(res.status(), StatusCode::OK);
+    let feed = body_json(res).await;
+    assert_eq!(feed["can_decide"], false);
+    let item = feed["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "media")
+        .unwrap()
+        .clone();
+    assert_eq!(item["app"]["slug"], "robot");
+    assert_eq!(item["app"]["description_md"], "");
     assert_eq!(
-        app.send(req(Method::GET, shot)).await.status(),
+        item["detail"]["pictures"]["gallery"]
+            .as_array()
+            .unwrap()
+            .len(),
+        3
+    );
+    let set_id = item["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        item["approve"]["path"],
+        format!("/v1/admin/media/{set_id}/approve")
+    );
+    let guide = app
+        .send(req(Method::GET, "/v1/admin/review/guide").header("authorization", read.clone()))
+        .await;
+    assert_eq!(guide.status(), StatusCode::OK);
+    let text = String::from_utf8(
+        guide
+            .into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .to_vec(),
+    )
+    .unwrap();
+    assert!(
+        text.contains("relative to\nhttp://localhost:8080")
+            || text.contains("relative to http://localhost:8080"),
+        "{text}"
+    );
+    assert!(!text.contains("{origin}"));
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/review/guide"))
+            .await
+            .status(),
         StatusCode::NOT_FOUND
     );
 
-    // The gallery has room for 12.
-    for _ in 0..11 {
-        let res = app
-            .send(
-                req(Method::POST, "/v1/apps/pretty/gallery")
-                    .cookie(&cookie)
-                    .json(json!({ "kind": "image", "image": b64(&picture(320, 180, false)) })),
-            )
-            .await;
-        assert_eq!(res.status(), StatusCode::CREATED);
-    }
+    // A read token can leave notes but not decide.
     let res = app
         .send(
-            req(Method::POST, "/v1/apps/pretty/gallery")
-                .cookie(&cookie)
-                .json(json!({ "kind": "image", "image": b64(&picture(320, 180, false)) })),
+            req(Method::POST, format!("/v1/admin/media/{set_id}/approve"))
+                .header("authorization", read.clone()),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::CONFLICT);
-
-    // A delisted app's pictures stop being served.
-    sqlx::query("update apps set status = 'delisted' where slug = 'pretty'")
-        .execute(&app.db)
-        .await
-        .unwrap();
-    assert_eq!(
-        app.send(req(Method::GET, path)).await.status(),
-        StatusCode::NOT_FOUND
-    );
-
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
     let res = app
-        .send(req(Method::DELETE, "/v1/apps/pretty/thumbnail").cookie(&cookie))
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/review/media/{set_id}/notes"),
+            )
+            .header("authorization", read.clone())
+            .json(json!({ "verdict": "unsure", "note": "Can't watch the video." })),
+        )
         .await;
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    let mine = body_json(
-        app.send(req(Method::GET, "/v1/me/apps").cookie(&cookie))
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
             .await,
     )
     .await;
-    assert_eq!(mine[0]["thumbnail_url"], Value::Null);
+    let note = &queue["media"][0]["notes"][0];
+    assert_eq!(note["verdict"], "unsure");
+    assert!(
+        note["author"]
+            .as_str()
+            .unwrap()
+            .starts_with("AI reviewer \"Claude read\" for Admin")
+    );
+
+    // A review token decides, and the audit log says who.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/media/{set_id}/approve"))
+                .header("authorization", review.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let actor: String =
+        sqlx::query_scalar("select actor from audit_log where action = 'media.approve'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(
+        actor.starts_with("AI reviewer \"Claude review\""),
+        "{actor}"
+    );
+    let feed = body_json(
+        app.send(
+            req(Method::GET, "/v1/admin/review?kind=listing")
+                .header("authorization", review.clone()),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        feed["items"][0]["approve"]["path"],
+        "/v1/admin/apps/robot/list"
+    );
+
+    // Revoked, or its admin no longer an admin: the token stops working.
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/admin/tokens").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    let read_id = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["scope"] == "read")
+        .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/tokens/{read_id}/revoke")).cookie(&admin_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/review").header("authorization", read))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    admin::set_admin(&app.db, &admin_id.to_string(), false, "test")
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/review").header("authorization", review))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

@@ -6,6 +6,9 @@
 //!
 //! SECURITY §8.4 asks for hardware-key sign-in and short-lived access for staff; until passkeys
 //! exist, admin rights are granted only from the server and every use is audited.
+//!
+//! Admins can also make API tokens for AI reviewers (review.rs). A token acts for its admin on
+//! these routes only, is named in the audit log, and with the `read` scope can't decide anything.
 
 use axum::{
     Json, Router,
@@ -24,7 +27,9 @@ use crate::{
     catalog::{AppStage, AppStatus},
     error::{ApiError, ApiResult},
     manage::{self, ChangeInfo},
+    media,
     releases::{self, ReleaseInfo},
+    review::{self, Note},
 };
 
 pub fn routes() -> Router<AppState> {
@@ -40,18 +45,45 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/apps/{slug}/stage", post(set_stage))
         .route("/admin/changes/{id}/approve", post(approve_change))
         .route("/admin/changes/{id}/reject", post(reject_change))
+        .route("/admin/media/{id}/approve", post(approve_media))
+        .route("/admin/media/{id}/reject", post(reject_media))
 }
 
-/// A signed-in admin. Anyone else gets 404, so the admin API can't be discovered.
+/// A signed-in admin, or an admin's API token. Anyone else gets 404, so the admin API can't be
+/// discovered.
 pub struct AdminUser {
     /// How the audit log names them.
-    actor: String,
+    pub actor: String,
+    pub user_id: Uuid,
+    /// Set when the request came with an admin API token rather than a session.
+    pub token: Option<crate::review::TokenUse>,
+}
+
+impl AdminUser {
+    /// Approving, rejecting and moderating: not for `read` tokens.
+    pub fn may_decide(&self) -> ApiResult<()> {
+        match &self.token {
+            Some(t) if !t.can_decide => Err(ApiError::Forbidden),
+            _ => Ok(()),
+        }
+    }
+
+    /// Managing tokens: only an admin signed in themselves.
+    pub fn signed_in(&self) -> ApiResult<()> {
+        match self.token {
+            Some(_) => Err(ApiError::NotFound),
+            None => Ok(()),
+        }
+    }
 }
 
 impl FromRequestParts<AppState> for AdminUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
+        if let Some(found) = crate::review::admin_from_token(state, &parts.headers).await? {
+            return Ok(found);
+        }
         let user = CurrentUser::from_request_parts(parts, state)
             .await
             .map_err(|_| ApiError::NotFound)?;
@@ -64,6 +96,8 @@ impl FromRequestParts<AppState> for AdminUser {
         }
         Ok(Self {
             actor: format!("{} ({})", user.display_name, user.id),
+            user_id: user.id,
+            token: None,
         })
     }
 }
@@ -74,7 +108,7 @@ fn refused(err: anyhow::Error) -> ApiError {
 }
 
 #[derive(Serialize, sqlx::FromRow)]
-struct AppRef {
+pub(crate) struct AppRef {
     slug: String,
     title: String,
     stage: AppStage,
@@ -88,6 +122,19 @@ struct QueuedRelease {
     app: AppRef,
     #[serde(flatten)]
     release: ReleaseInfo,
+    notes: Vec<Note>,
+}
+
+#[derive(Serialize)]
+pub(crate) struct QueuedMedia {
+    app: AppRef,
+    #[serde(flatten)]
+    pub set: media::MediaSet,
+    /// What the store shows now, to compare with.
+    pub live: Option<media::MediaSet>,
+    pub notes: Vec<Note>,
+    #[serde(skip)]
+    pub app_id: Uuid,
 }
 
 #[derive(Serialize)]
@@ -97,6 +144,7 @@ struct QueuedChange {
     change: ChangeInfo,
     /// The version players get now, for a change of release.
     players_get: Option<String>,
+    notes: Vec<Note>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -105,6 +153,13 @@ struct ReadyApp {
     #[serde(flatten)]
     app: AppRef,
     approved_releases: i64,
+    /// New pictures wait for review before the app can be listed.
+    pictures_pending: bool,
+    #[sqlx(skip)]
+    notes: Vec<Note>,
+    #[sqlx(skip)]
+    #[serde(skip)]
+    id: Uuid,
 }
 
 #[derive(Serialize)]
@@ -121,6 +176,8 @@ struct Queue {
     releases: Vec<QueuedRelease>,
     /// Makers' changes that would have players download something different; oldest first.
     changes: Vec<QueuedChange>,
+    /// New store-page pictures; oldest first.
+    media: Vec<QueuedMedia>,
     /// Drafts that could go in the store: Coming soon pages, or apps with an approved release.
     ready_to_list: Vec<ReadyApp>,
     checks: ServerChecks,
@@ -147,11 +204,13 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         releases.push(QueuedRelease {
             app,
             release: releases::load_release(&state, id).await?,
+            notes: review::notes(&state.db, "release", id).await?,
         });
     }
-    let ready_to_list = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+    let mut ready_to_list: Vec<ReadyApp> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select {APP_COLUMNS},
-                (select count(*) from releases r where r.app_id = a.id and r.status = 'approved') as approved_releases
+                (select count(*) from releases r where r.app_id = a.id and r.status = 'approved') as approved_releases,
+                exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending
          from apps a join users u on u.id = a.maker_id
          where a.status = 'draft'
            and (a.stage = 'coming_soon' or exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved'))
@@ -159,6 +218,13 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
     )))
     .fetch_all(&state.db)
     .await?;
+    for app in &mut ready_to_list {
+        app.id = sqlx::query_scalar("select id from apps where slug = $1")
+            .bind(&app.app.slug)
+            .fetch_one(&state.db)
+            .await?;
+        app.notes = review::notes(&state.db, "listing", app.id).await?;
+    }
     let mut conn = state.db.acquire().await?;
     let pending: Vec<(Uuid, Uuid)> = sqlx::query_as(
         "select id, app_id from app_changes where status = 'pending' order by created_at limit 100",
@@ -185,12 +251,15 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
             app,
             change,
             players_get,
+            notes: review::notes(&state.db, "change", id).await?,
         });
     }
+    let media = queued_media(&state).await?;
     let cfg = &state.config.releases;
     Ok(Json(Queue {
         releases,
         changes,
+        media,
         ready_to_list,
         checks: ServerChecks {
             scanning: cfg.scanner.is_on(),
@@ -320,6 +389,7 @@ async fn approve(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     let cfg = &state.config;
     admin::approve(
         &state.db,
@@ -339,6 +409,7 @@ async fn reject(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     admin::reject(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -351,6 +422,7 @@ async fn revoke(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     admin::revoke(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -362,6 +434,7 @@ async fn list_app(
     admin: AdminUser,
     Path(slug): Path<String>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     admin::list_app(&state.db, &slug, &admin.actor)
         .await
         .map_err(refused)?;
@@ -374,6 +447,7 @@ async fn delist_app(
     Path(slug): Path<String>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     admin::delist_app(&state.db, &slug, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -386,6 +460,7 @@ async fn set_stage(
     Path(slug): Path<String>,
     Json(body): Json<Stage>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     admin::set_stage(&state.db, &slug, body.stage, &admin.actor)
         .await
         .map_err(refused)?;
@@ -397,6 +472,7 @@ async fn approve_change(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     manage::approve_change(&state.db, id, &admin.actor)
         .await
         .map_err(refused)?;
@@ -410,7 +486,70 @@ async fn reject_change(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
     manage::reject_change(&state.db, id, &admin.actor, &body.reason)
+        .await
+        .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Pictures waiting for review, each with what the store shows now. Oldest first.
+pub(crate) async fn queued_media(state: &AppState) -> ApiResult<Vec<QueuedMedia>> {
+    let rows: Vec<(Uuid, Uuid, Option<Uuid>, Vec<String>)> = sqlx::query_as(
+        "select ms.id, ms.app_id, a.media_set_id, a.media_order from media_sets ms join apps a on a.id = ms.app_id
+         where ms.status = 'pending' order by ms.created_at limit 100",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    let mut out = Vec::with_capacity(rows.len());
+    for (id, app_id, live, order) in rows {
+        let app: AppRef = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select {APP_COLUMNS} from apps a join users u on u.id = a.maker_id where a.id = $1"
+        )))
+        .bind(app_id)
+        .fetch_one(&state.db)
+        .await?;
+        let mut set = media::load_set(&state.db, id).await?;
+        media::arrange(&mut set.gallery, &order);
+        let live = match live {
+            Some(l) => {
+                let mut l = media::load_set(&state.db, l).await?;
+                media::arrange(&mut l.gallery, &order);
+                Some(l)
+            }
+            None => None,
+        };
+        out.push(QueuedMedia {
+            app,
+            app_id,
+            set,
+            live,
+            notes: review::notes(&state.db, "media", id).await?,
+        });
+    }
+    Ok(out)
+}
+
+async fn approve_media(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
+    media::approve_set(&state.db, id, &admin.actor)
+        .await
+        .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reject_media(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<Reason>,
+) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
+    media::reject_set(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
     Ok(StatusCode::NO_CONTENT)

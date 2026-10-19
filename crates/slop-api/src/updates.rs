@@ -235,7 +235,7 @@ fn github_path(repo_url: &str) -> ApiResult<String> {
     })
 }
 
-async fn gh_json<T: serde::de::DeserializeOwned>(
+pub(crate) async fn gh_json<T: serde::de::DeserializeOwned>(
     state: &AppState,
     path: &str,
 ) -> anyhow::Result<Option<T>> {
