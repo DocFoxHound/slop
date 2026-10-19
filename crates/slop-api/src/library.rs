@@ -43,7 +43,7 @@ struct Row {
 /// launch what they installed (DESIGN §8: existing installs keep working).
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<Entry>>> {
     let mut qb = QueryBuilder::new("");
-    catalog::push_summary_columns_with(&mut qb, state.config.catalog, ", l.added_at");
+    catalog::push_summary_columns_with(&mut qb, &state.config, ", l.added_at");
     qb.push(" join library_entries l on l.app_id = a.id where l.user_id = ")
         .push_bind(user.id)
         .push(" order by l.added_at desc");

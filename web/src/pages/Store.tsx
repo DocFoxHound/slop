@@ -4,6 +4,8 @@ import { api } from "../api";
 import { Sidebar } from "../components/Layout";
 import { ErrorState, SectionHeader, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { isDesktop } from "../platform";
+import { useSession } from "../session";
 
 /** Upcoming apps that are still alive, soonest deadline first. Dead projects are never promoted. */
 async function upcoming(limit: number) {
@@ -19,6 +21,7 @@ async function upcoming(limit: number) {
 
 export function Store() {
   useDocumentTitle(undefined);
+  const { me } = useSession();
   const fresh = useLoad(() => api.apps({ stage: "released", sort: "recent", limit: 8 }), []);
   const soon = useLoad(() => upcoming(4), []);
   const categories = useLoad(() => api.categories(), []);
@@ -41,6 +44,8 @@ export function Store() {
               <b>Test server.</b> Automatic scanning isn't running here yet, so uploads are not scanned.
             </p>
           )}
+          {/* What Slop is: for visitors who haven't signed in, and never in the desktop app. */}
+          {me === null && !isDesktop && (
           <section className="intro panel">
             <h1>
               Apps and games made with AI. <span className="slime">Open source, every one.</span>
@@ -66,6 +71,7 @@ export function Store() {
               </li>
             </ul>
           </section>
+          )}
 
           <SectionHeader title="Trending" sub="Most played this week" />
           {trending.error ? (

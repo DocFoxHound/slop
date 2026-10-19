@@ -18,7 +18,7 @@ use uuid::Uuid;
 use crate::{
     AppState,
     auth::session::{CurrentUser, MaybeUser},
-    config::CatalogRules,
+    config::{CatalogRules, Config},
     error::{ApiError, ApiResult, is_unique_violation},
     policy::ViewerPolicy,
 };
@@ -28,6 +28,7 @@ pub fn routes() -> Router<AppState> {
         .route("/categories", get(list_categories))
         .route("/apps", get(list_apps).post(create_app))
         .route("/apps/{slug}", get(get_app).patch(update_app))
+        .route("/apps/{slug}/similar", get(similar_apps))
         .route("/me/apps", get(my_apps))
         .route("/repos/license", get(detect_license))
 }
@@ -104,21 +105,27 @@ fn push_store_visible(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules, poli
 }
 
 /// Columns shared by every app summary query. `a` is `apps`.
-pub(crate) fn push_summary_columns(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules) {
-    push_summary_columns_with(qb, rules, "");
+pub(crate) fn push_summary_columns(qb: &mut QueryBuilder<Postgres>, config: &Config) {
+    push_summary_columns_with(qb, config, "");
 }
 
 /// Like `push_summary_columns`, with `extra` columns (static SQL, e.g. `", l.added_at"`) added
 /// to the select list.
 pub(crate) fn push_summary_columns_with(
     qb: &mut QueryBuilder<Postgres>,
-    rules: CatalogRules,
+    config: &Config,
     extra: &'static str,
 ) {
+    let rules = config.catalog;
     qb.push(
         "select a.slug, a.title, a.summary, a.kind, a.stage, a.status, a.min_age, a.updated_at,
                 coalesce(array(select t.slug from app_tags at join tags t on t.id = at.tag_id
                                where at.app_id = a.id order by t.slug), '{}') as tags,
+                (select ",
+    )
+    .push_bind(config.media_base())
+    .push(
+        " || m.id::text from app_media m where m.app_id = a.id and m.role = 'thumbnail') as thumbnail_url,
                 (a.stage <> 'released' and a.last_commit_at is not null
                  and a.last_commit_at < now() - make_interval(days => ",
     )
@@ -147,6 +154,8 @@ pub struct AppSummary {
     status: AppStatus,
     min_age: i16,
     tags: Vec<String>,
+    /// The maker's store tile, if they set one (media.rs).
+    thumbnail_url: Option<String>,
     /// No commits for a while in Coming soon or Beta. Shown, but never recommended.
     is_dead: bool,
     /// When a Coming soon or Beta app must reach its next stage. `None` once released.
@@ -190,6 +199,10 @@ struct AppPage {
 
 const MAX_PAGE: i64 = 50;
 
+/// Most players at once over the last 7 days (Slop Pulse). `a` is `apps`.
+const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p
+     where p.app_id = a.id and p.bucket > now() - interval '7 days')";
+
 async fn list_apps(
     State(state): State<AppState>,
     MaybeUser(user): MaybeUser,
@@ -206,7 +219,7 @@ async fn list_apps(
     }
 
     let mut qb = QueryBuilder::new("");
-    push_summary_columns(&mut qb, rules);
+    push_summary_columns(&mut qb, &state.config);
     qb.push(" where ");
     push_store_visible(&mut qb, rules, policy);
     if let Some(q) = search {
@@ -250,11 +263,9 @@ async fn list_apps(
             qb.push(" order by lower(a.title), a.slug");
         }
         (Sort::Trending, _) => {
-            qb.push(
-                " order by (select coalesce(max(p.players), 0) from pulse_counts p
-                            where p.app_id = a.id and p.bucket > now() - interval '7 days') desc,
-                           a.updated_at desc, a.slug",
-            );
+            qb.push(" order by ")
+                .push(PLAYERS_THIS_WEEK)
+                .push(" desc, a.updated_at desc, a.slug");
         }
         _ => {
             qb.push(" order by a.updated_at desc, a.slug");
@@ -270,6 +281,102 @@ async fn list_apps(
     let next_offset = (apps.len() as i64 > limit).then_some(offset + limit);
     apps.truncate(limit as usize);
     Ok(Json(AppPage { apps, next_offset }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Similar apps, for an app's page
+
+#[derive(Serialize)]
+struct Similar {
+    /// Shares the most tags, nudged by how much it's played.
+    like_this: Vec<AppSummary>,
+    /// The same kind (game or app), most played this week.
+    popular: Vec<AppSummary>,
+    /// The same kind and few players yet: a different handful each day.
+    discover: Vec<AppSummary>,
+}
+
+const SIMILAR_EACH: i64 = 6;
+
+/// Three shelves for an app's page. Each app appears once, never the app itself, and never a
+/// dead project (DESIGN §8: dead projects are never recommended).
+async fn similar_apps(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Similar>> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
+    let (app_id, _) = visible_app(&state, &slug, user.as_ref(), policy).await?;
+    let kind: AppKind = sqlx::query_scalar("select kind from apps where id = $1")
+        .bind(app_id)
+        .fetch_one(&state.db)
+        .await?;
+    let rules = state.config.catalog;
+
+    // Everything shown so far, so the shelves don't repeat each other.
+    let mut seen: Vec<String> = vec![slug.clone()];
+    let base = |qb: &mut QueryBuilder<Postgres>, seen: &[String]| {
+        push_summary_columns(qb, &state.config);
+        qb.push(" where ");
+        push_store_visible(qb, rules, policy);
+        qb.push(" and not (a.stage <> 'released' and a.last_commit_at is not null and a.last_commit_at < now() - make_interval(days => ")
+            .push_bind(rules.dead_after_days)
+            .push(")) and a.slug <> all(")
+            .push_bind(seen.to_vec())
+            .push(")");
+    };
+
+    // Tag overlap as a cosine (sharing 3 of 3 tags beats 3 of 12), a little for being the same
+    // kind, and a little for being played, so a popular match wins a tie.
+    let mut qb = QueryBuilder::new("");
+    base(&mut qb, &seen);
+    qb.push(" and exists (select 1 from app_tags x join app_tags y on y.tag_id = x.tag_id where x.app_id = a.id and y.app_id = ")
+        .push_bind(app_id)
+        .push(") order by (select count(*) from app_tags x join app_tags y on y.tag_id = x.tag_id where x.app_id = a.id and y.app_id = ")
+        .push_bind(app_id)
+        .push(")::float8 / sqrt(greatest(1, (select count(*) from app_tags x where x.app_id = a.id)) * greatest(1, (select count(*) from app_tags y where y.app_id = ")
+        .push_bind(app_id)
+        .push("))) + case when a.kind = ")
+        .push_bind(kind)
+        .push(" then 0.25 else 0 end + ln(1 + ")
+        .push(PLAYERS_THIS_WEEK)
+        .push(") * 0.05 desc, a.updated_at desc limit ")
+        .push_bind(SIMILAR_EACH);
+    let like_this: Vec<AppSummary> = qb.build_query_as().fetch_all(&state.db).await?;
+    seen.extend(like_this.iter().map(|a| a.slug.clone()));
+
+    let mut qb = QueryBuilder::new("");
+    base(&mut qb, &seen);
+    qb.push(" and a.stage <> 'coming_soon' and a.kind = ")
+        .push_bind(kind)
+        .push(" and ")
+        .push(PLAYERS_THIS_WEEK)
+        .push(" > 0 order by ")
+        .push(PLAYERS_THIS_WEEK)
+        .push(" desc, a.updated_at desc limit ")
+        .push_bind(SIMILAR_EACH);
+    let popular: Vec<AppSummary> = qb.build_query_as().fetch_all(&state.db).await?;
+    seen.extend(popular.iter().map(|a| a.slug.clone()));
+
+    // Least played first, shuffled per day and per page so every app gets its turn.
+    let mut qb = QueryBuilder::new("");
+    base(&mut qb, &seen);
+    qb.push(" and a.kind = ")
+        .push_bind(kind)
+        .push(" order by least(")
+        .push(PLAYERS_THIS_WEEK)
+        .push(", 10), md5(a.id::text || current_date::text || ")
+        .push_bind(&slug)
+        .push(") limit ")
+        .push_bind(SIMILAR_EACH);
+    let discover: Vec<AppSummary> = qb.build_query_as().fetch_all(&state.db).await?;
+
+    Ok(Json(Similar {
+        like_this,
+        popular,
+        discover,
+    }))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -295,6 +402,8 @@ struct AppDetail {
     #[serde(with = "time::serde::rfc3339::option")]
     last_commit_at: Option<OffsetDateTime>,
     tag_details: Vec<TagRef>,
+    /// Screenshots and videos, in the maker's order.
+    gallery: Vec<crate::media::GalleryItem>,
     is_mine: bool,
 }
 
@@ -360,7 +469,7 @@ async fn load_detail(
     }
 
     let mut qb = QueryBuilder::new("");
-    push_summary_columns(&mut qb, rules);
+    push_summary_columns(&mut qb, &state.config);
     qb.push(" where a.id = ").push_bind(extra.id);
     let summary: AppSummary = qb.build_query_as().fetch_one(&state.db).await?;
     let tag_details = sqlx::query_as(
@@ -382,6 +491,7 @@ async fn load_detail(
         stage_entered_at: extra.stage_entered_at,
         last_commit_at: extra.last_commit_at,
         tag_details,
+        gallery: crate::media::gallery(state, extra.id).await?,
         is_mine,
     })
 }
@@ -403,7 +513,7 @@ async fn my_apps(
     user: CurrentUser,
 ) -> ApiResult<Json<Vec<AppSummary>>> {
     let mut qb = QueryBuilder::new("");
-    push_summary_columns(&mut qb, state.config.catalog);
+    push_summary_columns(&mut qb, &state.config);
     qb.push(" where a.maker_id = ")
         .push_bind(user.id)
         .push(" order by a.updated_at desc");

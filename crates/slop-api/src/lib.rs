@@ -11,6 +11,7 @@ pub mod error;
 pub mod github_app;
 pub mod library;
 pub mod manage;
+pub mod media;
 pub mod policy;
 pub mod pulse;
 pub mod ratelimit;
@@ -105,17 +106,29 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(slop_build::routes())
         .merge(updates::routes())
         .merge(manage::routes())
+        .merge(media::routes())
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
         .merge(pulse::routes())
-        // Everything except the desktop build upload: small bodies, quick answers.
+        // Everything except uploads and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
             Duration::from_secs(20),
         ))
         .merge(
+            media::upload_routes()
+                .layer(RequestBodyLimitLayer::new(media::MAX_UPLOAD_BODY))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(60),
+                )),
+        )
+        .merge(
             github_app::webhook_routes()
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    github_app::MAX_WEBHOOK_BYTES,
+                ))
                 .layer(RequestBodyLimitLayer::new(github_app::MAX_WEBHOOK_BYTES))
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::SERVICE_UNAVAILABLE,

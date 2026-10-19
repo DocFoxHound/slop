@@ -28,9 +28,30 @@ export interface AppSummary {
   status?: AppStatus;
   min_age: number;
   tags: string[];
+  /** The maker's store tile (920×430), if they set one. */
+  thumbnail_url: string | null;
   is_dead: boolean;
   stage_deadline: string | null;
   updated_at: string;
+}
+
+/** A screenshot or video on an app's page (crates/slop-api/src/media.rs). */
+export interface GalleryItem {
+  id: string;
+  kind: "image" | "video";
+  /** The picture, or the video's poster. */
+  url: string;
+  youtube_id: string | null;
+  caption: string | null;
+  width: number;
+  height: number;
+}
+
+/** Shelves for an app's page. */
+export interface SimilarApps {
+  like_this: AppSummary[];
+  popular: AppSummary[];
+  discover: AppSummary[];
 }
 
 export interface AppDetail extends AppSummary {
@@ -42,6 +63,7 @@ export interface AppDetail extends AppSummary {
   stage_entered_at: string;
   last_commit_at: string | null;
   tag_details: TagRef[];
+  gallery: GalleryItem[];
   is_mine: boolean;
 }
 
@@ -339,6 +361,21 @@ export const api = {
   updateApp: (slug: string, changes: AppChanges) =>
     request<AppDetail>("PATCH", `/v1/apps/${encodeURIComponent(slug)}`, changes),
   myApps: () => request<AppSummary[]>("GET", "/v1/me/apps"),
+  similar: (slug: string) => request<SimilarApps>("GET", `/v1/apps/${encodeURIComponent(slug)}/similar`),
+  /** Pictures go up as data: URLs; the server re-encodes them. */
+  setThumbnail: (slug: string, image: string) =>
+    request<{ thumbnail_url: string }>("PUT", `/v1/apps/${encodeURIComponent(slug)}/thumbnail`, { image }),
+  removeThumbnail: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/thumbnail`),
+  addToGallery: (
+    slug: string,
+    item: { kind: "image"; image: string; caption?: string } | { kind: "video"; url: string; caption?: string },
+  ) => request<GalleryItem[]>("POST", `/v1/apps/${encodeURIComponent(slug)}/gallery`, item),
+  captionGalleryItem: (slug: string, id: string, caption: string) =>
+    request<GalleryItem[]>("PATCH", `/v1/apps/${encodeURIComponent(slug)}/gallery/${encodeURIComponent(id)}`, { caption }),
+  removeFromGallery: (slug: string, id: string) =>
+    request<GalleryItem[]>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/gallery/${encodeURIComponent(id)}`),
+  reorderGallery: (slug: string, ids: string[]) =>
+    request<GalleryItem[]>("PUT", `/v1/apps/${encodeURIComponent(slug)}/gallery/order`, { ids }),
   /** The licence GitHub finds in a repository, for the Publish form. */
   detectLicense: (repoUrl: string) =>
     request<{ spdx: string | null; name: string | null; note: string | null }>(

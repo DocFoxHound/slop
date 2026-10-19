@@ -178,6 +178,7 @@ The client installs software, so it's a prime target:
 - Input validation and output encoding. Store pages and reviews are **Markdown rendered with a strict allowlist** (no raw HTML).
 - **Security headers:** a CSP with nonces, HSTS (preload), `frame-ancestors 'none'`, Referrer-Policy, Permissions-Policy.
 - Uploads (portfolio images, screenshots) are re-encoded, stripped of metadata and served from a **separate domain** (stops script injection through uploaded files).
+  - **Built (2026-10-19), store-page thumbnails and screenshots** (`crates/slop-api/src/media.rs`): only PNG, JPEG, WebP and GIF are decoded (size-limited), and what's stored and served is a fresh PNG or JPEG Slop encoded, without the original's metadata. Served with `Content-Security-Policy: default-src 'none'; sandbox`, `nosniff` and an exact image type. Still to do: the **separate domain**; for now pictures come from the main origin. Videos are YouTube links; Slop keeps the poster, and the page only loads YouTube's privacy-enhanced player (the one allowed `frame-src`) when someone presses play.
 
 ### 8.2 Webhooks (GitHub, payment processor)
 - Verify signatures (HMAC / the processor's signing secret) and timestamps, and reject replays.

@@ -8,7 +8,23 @@ import { ApiError } from "../api";
 import { ageLabel, artFor, deadlineText } from "../format";
 import { openExternal } from "../platform";
 
-export function Art({ app, withName = true, className = "" }: { app: Pick<AppSummary, "slug" | "title">; withName?: boolean; className?: string }) {
+/** The maker's thumbnail, or a colour made from the app's address with its initial. */
+export function Art({
+  app,
+  withName = true,
+  className = "",
+}: {
+  app: Pick<AppSummary, "slug" | "title"> & { thumbnail_url?: string | null };
+  withName?: boolean;
+  className?: string;
+}) {
+  if (app.thumbnail_url) {
+    return (
+      <div className={`art has-image ${className}`} aria-hidden="true">
+        <img src={app.thumbnail_url} alt="" loading="lazy" decoding="async" />
+      </div>
+    );
+  }
   const { from, to } = artFor(app.slug);
   return (
     <div className={`art ${className}`} style={{ background: `linear-gradient(135deg, ${from}, ${to})` }} aria-hidden="true">
