@@ -31,7 +31,7 @@ links the newest installers.
 Linux packages are built here after each deploy that changes the app
 (`slop-desktop-linux@<commit>.service`, `deploy/desktop-linux/build.sh`), each in a container of the
 oldest system it supports: a `.deb` on Ubuntu 22.04 (for Ubuntu 22.04+ and Debian 12+) and an
-`.rpm` on Rocky Linux 10 (for RHEL/Rocky/Alma 10 with EPEL enabled; EL9 lacks WebKitGTK 4.1, which
+`.rpm` on Rocky Linux 10 (for RHEL/Rocky/Alma 10 with EPEL and CRB enabled; EL9 lacks WebKitGTK 4.1, which
 Tauri 2 needs). They're published with `slop-api desktop publish`. All platforms share one version
 number: `0.1.<number of commits>`.
 

@@ -83,7 +83,7 @@ export function Store() {
                 <p className="muted small">
                   Version {downloads.data[0].version}. The app keeps itself up to date.
                   {downloads.data.some((d) => d.platform === "linux-rpm") &&
-                    " The .rpm needs EPEL enabled (sudo dnf install epel-release); RHEL 9 isn't supported."}
+                    " The .rpm needs EPEL and CRB enabled (sudo dnf install epel-release && sudo dnf config-manager --set-enabled crb); RHEL 9 isn't supported."}
                 </p>
               </div>
             )}
