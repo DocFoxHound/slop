@@ -196,3 +196,14 @@ Integration tests create a fresh database per test on the server in `DATABASE_UR
 
 Errors are `{"error": {"code", "message", "field"?}}`. The desktop app authenticates with
 `Authorization: Bearer <access token>`; the website with its session cookie.
+
+## License
+
+Copyright © 2026 IronPoint Development LLC.
+
+Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT)
+at your option.
+
+Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
+this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
+any additional terms or conditions.
