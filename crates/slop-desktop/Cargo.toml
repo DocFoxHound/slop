@@ -8,7 +8,7 @@ publish.workspace = true
 serde = { version = "1.0.229", features = ["derive"] }
 serde_json = "1.0.154"
 slop-client = { version = "0.1.0", path = "../slop-client", features = ["os-keyring"] }
-tauri = { version = "2", features = ["tray-icon"] }
+tauri = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
 tauri-plugin-updater = "2"
@@ -16,6 +16,10 @@ tokio = { version = "1.53.3", features = ["rt", "sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"
+
+# The tray (close to tray) is Windows-only: on Linux it needs an appindicator library.
+[target.'cfg(windows)'.dependencies]
+tauri = { version = "2", features = ["tray-icon"] }
 
 [build-dependencies]
 tauri-build = "2"
