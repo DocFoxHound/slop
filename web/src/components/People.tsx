@@ -153,7 +153,7 @@ export function WorkTile({ w, onOpen }: { w: Work; onOpen?: (w: Work) => void })
       )}
       <figcaption>
         <b>{label}</b>
-        {w.skill && <span className="faint"> · {w.skill.name}</span>}
+        {w.skill && <span className="faint">{w.skill.name}</span>}
         {w.caption && <span className="muted small">{w.caption}</span>}
       </figcaption>
     </figure>
