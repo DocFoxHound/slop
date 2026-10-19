@@ -24,8 +24,21 @@ const PAGE_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 
 async fn page_headers(req: Request, next: Next) -> Response {
     // Vite fingerprints everything under /assets/, so those never change.
     let immutable = req.uri().path().starts_with("/assets/");
+    // Plain-text documents for tools and AI agents (publishing.md, llms.txt) are UTF-8.
+    let path = req.uri().path();
+    let text_type = if path.ends_with(".md") {
+        Some("text/markdown; charset=utf-8")
+    } else if path.ends_with(".txt") {
+        Some("text/plain; charset=utf-8")
+    } else {
+        None
+    };
     let mut res = next.run(req).await;
+    let ok = res.status().is_success();
     let headers = res.headers_mut();
+    if let (Some(kind), true) = (text_type, ok) {
+        headers.insert(header::CONTENT_TYPE, HeaderValue::from_static(kind));
+    }
     headers.insert(
         header::CONTENT_SECURITY_POLICY,
         HeaderValue::from_static(PAGE_CSP),
@@ -42,9 +55,15 @@ async fn page_headers(req: Request, next: Next) -> Response {
 }
 
 /// Files from `dir`, with `index.html` for any other path (the UI routes in the browser).
+/// `/publish/guide` gets `guide.html`, the same page with the guide already in it, so tools
+/// that don't run JavaScript can read it.
 pub fn service<S: Clone + Send + Sync + 'static>(dir: &Path) -> Router<S> {
-    let files = ServeDir::new(dir).fallback(ServeFile::new(dir.join("index.html")));
+    let index = dir.join("index.html");
+    let files = ServeDir::new(dir).fallback(ServeFile::new(&index));
+    let guide = dir.join("guide.html");
+    let guide = if guide.exists() { guide } else { index };
     Router::new()
+        .route_service("/publish/guide", ServeFile::new(guide))
         .fallback_service(files)
         .layer(middleware::from_fn(page_headers))
 }
