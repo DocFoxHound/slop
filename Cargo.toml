@@ -8,3 +8,5 @@ default-members = ["crates/slop-api", "crates/slop-manifest", "crates/slop-clien
 [workspace.package]
 edition = "2024"
 publish = false
+license = "MIT OR Apache-2.0"
+authors = ["IronPoint Development LLC"]
