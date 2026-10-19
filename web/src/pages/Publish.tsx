@@ -16,6 +16,7 @@ import {
   type Release,
 } from "../api";
 import { LicensePicker } from "../components/LicensePicker";
+import { MediaEditor } from "../components/MediaEditor";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
 import { ErrorState, Loading } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -426,7 +427,9 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             {busy ? "Saving…" : existing ? "Save changes" : "Create draft"}
           </button>
         </div>
+        {!existing && <p className="muted small">You can add a thumbnail, screenshots and videos once the draft is created.</p>}
       </form>
+      {existing && <MediaEditor app={existing} />}
     </div>
   );
 }

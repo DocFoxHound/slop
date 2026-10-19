@@ -2,7 +2,8 @@ import type { MouseEvent } from "react";
 import { Link, useParams } from "react-router";
 
 import { api, type AppDetail, type AppPlatform } from "../api";
-import { Art, ErrorState, ExternalLink, Loading, StageBadge, StatusBadge } from "../components/ui";
+import { Gallery } from "../components/Gallery";
+import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
@@ -41,6 +42,7 @@ function AppView({ app }: { app: AppDetail }) {
   const deadline = deadlineText(app);
   const age = ageLabel(app.min_age);
   const firstCategory = app.kind === "game" ? { slug: "games", name: "Games" } : null;
+  const hasGallery = app.gallery.length > 0;
 
   // Links inside the maker's Markdown leave Slop.
   const onDescriptionClick = (e: MouseEvent) => {
@@ -68,8 +70,9 @@ function AppView({ app }: { app: AppDetail }) {
       )}
 
       <div className="app-head">
-        <Art app={app} withName={false} className="hero-art" />
+        {hasGallery ? <Gallery items={app.gallery} title={app.title} /> : <Art app={app} withName={false} className="hero-art" />}
         <div className="app-side">
+          {hasGallery && app.thumbnail_url && <Art app={app} withName={false} className="capsule" />}
           <div>
             <div className="title-row">
               <h1>{app.title}</h1>
@@ -116,7 +119,7 @@ function AppView({ app }: { app: AppDetail }) {
           {app.is_mine && (
             <div className="row-actions">
               <Link className="btn" to={`/publish/${app.slug}`}>
-                ✎ Edit store page
+                ✎ Edit store page &amp; media
               </Link>
               <Link className="btn" to={`/publish/${app.slug}/releases`}>
                 ⬆ Releases
@@ -214,6 +217,30 @@ function AppView({ app }: { app: AppDetail }) {
           </div>
         </aside>
       </div>
+
+      <SimilarShelves slug={app.slug} kind={app.kind} />
+    </div>
+  );
+}
+
+/** More like this (tags), what's popular, and something new to discover. Empty shelves are left out. */
+function SimilarShelves({ slug, kind }: { slug: string; kind: AppDetail["kind"] }) {
+  const similar = useLoad(() => api.similar(slug), [slug]);
+  if (!similar.data) return null;
+  const things = kind === "game" ? "games" : "apps";
+  const shelves = [
+    { title: "More like this", sub: "Shares the most tags", apps: similar.data.like_this },
+    { title: "Popular right now", sub: `The most played ${things} this week`, apps: similar.data.popular },
+    { title: "Discover something new", sub: `Fresh ${things} that haven't been found yet`, apps: similar.data.discover },
+  ].filter((s) => s.apps.length > 0);
+  return (
+    <div className="similar">
+      {shelves.map((s) => (
+        <section key={s.title}>
+          <SectionHeader title={s.title} sub={s.sub} />
+          <Shelf apps={s.apps} empty={null} />
+        </section>
+      ))}
     </div>
   );
 }

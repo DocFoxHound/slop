@@ -118,6 +118,19 @@ Go to **Publish → New app** and fill in:
 
 It's saved as a draft that only you can see.
 
+Then, on **Edit store page**, add pictures (optional, but pages with them get far more clicks):
+
+| | Notes |
+|---|---|
+| Thumbnail | Your tile in the store. Best at **920×430** (at least 460×215); other shapes are cropped from the middle |
+| Screenshots | Shown as a carousel at the top of your page. Up to 1920×1080 (bigger ones are scaled down), at least 320×180 |
+| Videos | YouTube links, in the same carousel. Nothing loads from YouTube until a player presses play |
+
+PNG, JPEG, WebP or GIF, up to 8 MB each, and up to 12 screenshots and videos together. Slop
+re-encodes every picture, which removes its metadata (camera, location). Pictures go live as soon
+as you add them, like the rest of the store page. No sexually explicit content, here or anywhere
+on Slop.
+
 ### 3. Submit a release
 
 A release is one version of your app. On Slop it's a **GitHub release** on your repository with
@@ -502,7 +515,9 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
 5. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
-   same store address, the repository URL, licence, type, stage, age rating and tags.
+   same store address, the repository URL, licence, type, stage, age rating and tags. Then,
+   on **Edit store page**, upload a 920×430 thumbnail and some screenshots (an agent can make
+   these from the running app if the owner wants; Slop has no upload API for agents).
 6. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
 7. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the

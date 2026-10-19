@@ -84,6 +84,11 @@ async fn fake_github() -> String {
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
+        // YouTube's video posters (media.rs).
+        .route(
+            "/vi/dQw4w9WgXcQ/hqdefault.jpg",
+            get(|| async { ([(header::CONTENT_TYPE, "image/jpeg")], picture(480, 360, false)).into_response() }),
+        )
         .route(
             "/repos/octo/game/license",
             get(|| async { axum::Json(json!({ "license": { "spdx_id": "MIT", "name": "MIT License" } })) }),
@@ -241,6 +246,9 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
+        media: slop_api::config::MediaConfig {
+            youtube_image_base: github_base.parse().unwrap(),
+        },
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
     };
@@ -3585,4 +3593,277 @@ async fn trending_puts_the_most_played_first(db: PgPool) {
         list_slugs(&app, req(Method::GET, "/v1/apps?sort=trending")).await,
         ["busy", "quiet", "old-hit"]
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Store-page pictures and videos, and similar apps
+
+/// A picture of the given size, noisy so it doesn't compress to almost nothing.
+fn picture(w: u32, h: u32, alpha: bool) -> Vec<u8> {
+    let mut seed = 12345u32;
+    let img = image::RgbaImage::from_fn(w, h, |_, _| {
+        seed = seed.wrapping_mul(1_103_515_245).wrapping_add(12345);
+        let [r, g, b, _] = seed.to_le_bytes();
+        image::Rgba([r, g, b, if alpha { 100 } else { 255 }])
+    });
+    let mut out = Vec::new();
+    img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+        .unwrap();
+    out
+}
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_set_a_thumbnail_and_a_gallery(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, cookie) = app.user("Maker", "US").await;
+    let (_, other) = app.user("Other", "US").await;
+    listed_with(&app, maker, "pretty", "released", "").await;
+    let big = picture(1200, 700, false);
+    assert!(big.len() > 64 * 1024, "bigger than the usual body limit");
+
+    // Only the maker; anyone else gets "not found".
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/pretty/thumbnail")
+                .cookie(&other)
+                .json(json!({ "image": b64(&big) })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Not a picture.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/pretty/thumbnail")
+                .cookie(&cookie)
+                .json(json!({ "image": b64(b"<svg xmlns='http://www.w3.org/2000/svg' onload='alert(1)'/>") })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/pretty/thumbnail")
+                .cookie(&cookie)
+                .json(json!({ "image": format!("data:image/png;base64,{}", b64(&big)) })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let thumb = body_json(res).await["thumbnail_url"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(thumb.starts_with("http://localhost:8080/v1/media/"));
+    let page = body_json(app.send(req(Method::GET, "/v1/apps?sort=recent")).await).await;
+    assert_eq!(page["apps"][0]["thumbnail_url"], thumb.as_str());
+
+    // Served as a fresh JPEG, cropped to the tile's shape, unable to run anything.
+    let path = thumb.trim_start_matches("http://localhost:8080");
+    let res = app.send(req(Method::GET, path)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/jpeg");
+    assert_eq!(
+        res.headers()[header::CONTENT_SECURITY_POLICY],
+        "default-src 'none'; sandbox"
+    );
+    assert_eq!(res.headers()["x-content-type-options"], "nosniff");
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let img = image::load_from_memory(&bytes).unwrap();
+    assert_eq!((img.width(), img.height()), (920, 430));
+
+    // The gallery: a screenshot (transparency kept) and a YouTube video.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/pretty/gallery")
+                .cookie(&cookie)
+                .json(json!({ "kind": "image", "image": b64(&picture(640, 360, true)), "caption": "Level one" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    for (link, status) in [
+        ("https://vimeo.com/1234", StatusCode::UNPROCESSABLE_ENTITY),
+        // A video YouTube doesn't have.
+        (
+            "https://youtu.be/aaaaaaaaaaa",
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        ("https://youtu.be/dQw4w9WgXcQ?si=x", StatusCode::CREATED),
+    ] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/pretty/gallery")
+                    .cookie(&cookie)
+                    .json(json!({ "kind": "video", "url": link })),
+            )
+            .await;
+        assert_eq!(res.status(), status, "{link}");
+    }
+    let detail = body_json(app.send(req(Method::GET, "/v1/apps/pretty")).await).await;
+    let gallery = detail["gallery"].as_array().unwrap();
+    assert_eq!(gallery.len(), 2);
+    assert_eq!(gallery[0]["kind"], "image");
+    assert_eq!(gallery[0]["caption"], "Level one");
+    assert_eq!(gallery[1]["kind"], "video");
+    assert_eq!(gallery[1]["youtube_id"], "dQw4w9WgXcQ");
+    let shot = gallery[0]["url"]
+        .as_str()
+        .unwrap()
+        .trim_start_matches("http://localhost:8080");
+    let res = app.send(req(Method::GET, shot)).await;
+    assert_eq!(res.headers()[header::CONTENT_TYPE], "image/png");
+    let (shot_id, video_id) = (
+        gallery[0]["id"].as_str().unwrap().to_string(),
+        gallery[1]["id"].as_str().unwrap().to_string(),
+    );
+
+    // Reorder, recaption, remove.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/pretty/gallery/order")
+                .cookie(&cookie)
+                .json(json!({ "ids": [video_id, shot_id] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await[0]["kind"], "video");
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/pretty/gallery/order")
+                .cookie(&cookie)
+                .json(json!({ "ids": [video_id] })),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "every item, once"
+    );
+    let res = app
+        .send(
+            req(Method::PATCH, format!("/v1/apps/pretty/gallery/{video_id}"))
+                .cookie(&cookie)
+                .json(json!({ "caption": "Trailer" })),
+        )
+        .await;
+    assert_eq!(body_json(res).await[0]["caption"], "Trailer");
+    let res = app
+        .send(req(Method::DELETE, format!("/v1/apps/pretty/gallery/{shot_id}")).cookie(&other))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let res = app
+        .send(req(Method::DELETE, format!("/v1/apps/pretty/gallery/{shot_id}")).cookie(&cookie))
+        .await;
+    assert_eq!(body_json(res).await.as_array().unwrap().len(), 1);
+    assert_eq!(
+        app.send(req(Method::GET, shot)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // The gallery has room for 12.
+    for _ in 0..11 {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/pretty/gallery")
+                    .cookie(&cookie)
+                    .json(json!({ "kind": "image", "image": b64(&picture(320, 180, false)) })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/pretty/gallery")
+                .cookie(&cookie)
+                .json(json!({ "kind": "image", "image": b64(&picture(320, 180, false)) })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // A delisted app's pictures stop being served.
+    sqlx::query("update apps set status = 'delisted' where slug = 'pretty'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, path)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    let res = app
+        .send(req(Method::DELETE, "/v1/apps/pretty/thumbnail").cookie(&cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/apps").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["thumbnail_url"], Value::Null);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn similar_apps_mix_tags_popularity_and_discovery(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    let tagged = [
+        ("dungeon", vec!["roguelike", "pixel-art", "retro"]),
+        ("twin", vec!["roguelike", "pixel-art", "retro"]),
+        ("cousin", vec!["roguelike", "cozy"]),
+        ("stranger", vec!["racing"]),
+        ("hit", vec!["racing"]),
+        ("gem", vec![]),
+        ("zombie", vec!["roguelike", "pixel-art", "retro"]),
+    ];
+    for (slug, tags) in &tagged {
+        listed_with(&app, maker, slug, "released", "").await;
+        for tag in tags {
+            sqlx::query(
+                "insert into app_tags (app_id, tag_id)
+                 select a.id, t.id from apps a, tags t where a.slug = $1 and t.slug = $2",
+            )
+            .bind(slug)
+            .bind(tag)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        }
+    }
+    // A dead project is never recommended, however well it matches.
+    sqlx::query(
+        "update apps set stage = 'beta', last_commit_at = now() - interval '200 days' where slug = 'zombie'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into pulse_counts (app_id, bucket, players) select id, now() - interval '1 hour', 500 from apps where slug = 'hit'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    let res = app.send(req(Method::GET, "/v1/apps/dungeon/similar")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    let slugs = |k: &str| -> Vec<String> {
+        body[k]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["slug"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(slugs("like_this"), ["twin", "cousin"]);
+    assert_eq!(slugs("popular"), ["hit"]);
+    let mut discover = slugs("discover");
+    discover.sort();
+    assert_eq!(discover, ["gem", "stranger"]);
+
+    let res = app.send(req(Method::GET, "/v1/apps/nope/similar")).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 }

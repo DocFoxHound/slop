@@ -16,10 +16,11 @@ use axum::{
 use tower_http::services::{ServeDir, ServeFile};
 
 /// Pages may load only Slop's own scripts, styles, images and API. Inline styles are allowed
-/// because the UI sets per-app colours with `style`; inline scripts are not.
+/// because the UI sets per-app colours with `style`; inline scripts are not. The one frame is
+/// YouTube's privacy-enhanced player, loaded when someone plays a store-page video.
 const PAGE_CSP: &str = "default-src 'self'; script-src 'self'; style-src 'self' 'unsafe-inline'; \
     img-src 'self' data:; connect-src 'self'; font-src 'self'; object-src 'none'; base-uri 'none'; \
-    form-action 'self'; frame-ancestors 'none'";
+    frame-src https://www.youtube-nocookie.com; form-action 'self'; frame-ancestors 'none'";
 
 async fn page_headers(req: Request, next: Next) -> Response {
     // Vite fingerprints everything under /assets/, so those never change.

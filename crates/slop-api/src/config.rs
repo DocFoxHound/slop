@@ -21,6 +21,7 @@ pub struct Config {
     pub releases: ReleaseConfig,
     pub rate_limits: crate::ratelimit::Limits,
     pub desktop: DesktopConfig,
+    pub media: MediaConfig,
     /// The built website (`web/dist`) to serve from the same origin. Unset: API only.
     pub web_dir: Option<std::path::PathBuf>,
     /// Header holding the client's IP, set by the load balancer (e.g. `x-forwarded-for`,
@@ -50,6 +51,21 @@ impl fmt::Debug for DesktopConfig {
             )
             .field("repo", &self.repo)
             .finish()
+    }
+}
+
+/// Store-page pictures and videos (media.rs).
+#[derive(Clone, Debug)]
+pub struct MediaConfig {
+    /// Where YouTube keeps video posters (`vi/<id>/hqdefault.jpg`). Changed only by tests.
+    pub youtube_image_base: Url,
+}
+
+impl Default for MediaConfig {
+    fn default() -> Self {
+        Self {
+            youtube_image_base: "https://i.ytimg.com/".parse().expect("valid URL"),
+        }
     }
 }
 
@@ -291,6 +307,11 @@ impl Config {
                 },
                 repo: env::var("SLOP_DESKTOP_REPO").ok().filter(|s| !s.is_empty()),
             },
+            media: MediaConfig {
+                youtube_image_base: var_or("SLOP_YOUTUBE_IMAGE_BASE", "https://i.ytimg.com/")
+                    .parse()
+                    .context("SLOP_YOUTUBE_IMAGE_BASE")?,
+            },
             web_dir: env::var("SLOP_WEB_DIR")
                 .ok()
                 .filter(|s| !s.is_empty())
@@ -305,6 +326,12 @@ impl Config {
     /// Cookies are `Secure` (and use the `__Host-` prefix) whenever the site is served over HTTPS.
     pub fn secure_cookies(&self) -> bool {
         self.public_url.scheme() == "https"
+    }
+
+    /// Where uploaded pictures are served: `<base><id>`. Absolute, because the desktop app's
+    /// pages aren't on Slop's origin.
+    pub fn media_base(&self) -> String {
+        format!("{}v1/media/", self.public_url)
     }
 }
 
