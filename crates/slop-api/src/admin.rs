@@ -309,7 +309,9 @@ pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result
     if stage != AppStage::ComingSoon {
         ensure!(
             has_approved_release(&mut tx, id).await?,
-            "approve a release before listing a {stage:?} app"
+            "approve a release before listing a {stage:?} app: it has no approved release yet. \
+             The maker submits one from Releases & progress, then it waits under Releases for \
+             review. A Coming soon page can be listed without one."
         );
     }
     sqlx::query("update apps set status = 'listed', updated_at = now() where id = $1")
@@ -375,7 +377,7 @@ pub async fn set_stage(
     if stage != AppStage::ComingSoon {
         ensure!(
             has_approved_release(&mut tx, id).await?,
-            "approve a release first"
+            "approve a release first: Beta and Released apps need an approved release"
         );
     }
     sqlx::query(

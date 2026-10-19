@@ -1,12 +1,22 @@
-// Makers' side: their apps, and the draft editor. Putting a draft in the store needs the
-// publishing pipeline (repo link, Slop Build, scans), which comes next.
+// Makers' side: their apps with where each one is on its way into the store, and the draft editor.
 
-import { useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
-import { api, ApiError, type AppDetail, type AppKind, type AppStage, type Category, type NewApp } from "../api";
+import {
+  api,
+  ApiError,
+  type AppDetail,
+  type AppKind,
+  type AppStage,
+  type AppSummary,
+  type Category,
+  type NewApp,
+  type Release,
+} from "../api";
 import { LicensePicker } from "../components/LicensePicker";
-import { AppTile, ErrorState, Loading } from "../components/ui";
+import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
+import { ErrorState, Loading } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 
@@ -35,7 +45,15 @@ function SignInFirst({ what }: { what: string }) {
 export function Publish() {
   useDocumentTitle("Publish");
   const { me } = useSession();
-  const mine = useLoad(() => (me ? api.myApps() : Promise.resolve([])), [me?.id]);
+  const mine = useLoad(() => (me ? loadStatuses() : Promise.resolve([])), [me?.id]);
+
+  // While something is moving (files being fetched, a review pending), check again now and then.
+  const moving = mine.data?.some((a) => a.current.state === "active") ?? false;
+  useEffect(() => {
+    if (!moving) return;
+    const timer = setInterval(mine.reload, 20_000);
+    return () => clearInterval(timer);
+  }, [moving, mine.reload]);
 
   if (me === undefined) return <Loading />;
   if (!me) return <SignInFirst what="/publish" />;
@@ -54,8 +72,8 @@ export function Publish() {
         </div>
       </div>
       <p className="muted">
-        Start with a draft store page. Linking your repo, Slop Build and scanning come next; once a draft passes, it goes in
-        the store.
+        Each app goes through the same steps: a store page, a release, file checks, a review by a person, then the store.
+        This is where each one is.
       </p>
       {mine.error && <ErrorState error={mine.error} onRetry={mine.reload} />}
       {mine.data && mine.data.length === 0 && (
@@ -63,18 +81,66 @@ export function Publish() {
           You haven't made anything yet. <Link to="/publish/new">Create your first draft</Link>.
         </div>
       )}
-      <div className="shelf">
-        {mine.data?.map((a) => (
-          <div key={a.slug} className="maker-app">
-            <AppTile app={a} />
-            <Link className="btn small" to={`/publish/${a.slug}/releases`}>
-              Releases &amp; progress
-            </Link>
-          </div>
+      {!mine.data && !mine.error && <Loading />}
+      <ul className="status-list">
+        {mine.data?.map(({ app, latest, current }) => (
+          <li key={app.slug} className="panel panel-pad status-row">
+            <div className={`step ${current.state}`}>
+              <span className="step-icon" aria-hidden="true">
+                {STEP_ICON[current.state]}
+              </span>
+              <div>
+                <div className="title-row">
+                  <Link to={`/app/${app.slug}`}>
+                    <b>{app.title}</b>
+                  </Link>
+                  <span className="badge neutral">{STAGE_LABEL[app.stage]}</span>
+                  {latest && <span className="muted small">v{latest.version}</span>}
+                </div>
+                <div className="small">
+                  {statusHeadline(current)} <span className="step-state">{STEP_LABEL[current.state]}</span>
+                </div>
+                <div className="muted small">{current.detail}</div>
+              </div>
+            </div>
+            <div className="row-actions">
+              <Link className="btn small" to={`/publish/${app.slug}`}>
+                Edit page
+              </Link>
+              <Link className="btn small slime" to={`/publish/${app.slug}/releases`}>
+                Releases &amp; progress
+              </Link>
+            </div>
+          </li>
         ))}
-      </div>
+      </ul>
     </div>
   );
+}
+
+const STAGE_LABEL: Record<AppStage, string> = { coming_soon: "Coming soon", beta: "Beta", released: "Released" };
+
+interface AppStatusRow {
+  app: AppSummary;
+  latest: Release | undefined;
+  current: Step;
+}
+
+async function loadStatuses(): Promise<AppStatusRow[]> {
+  const [apps, server] = await Promise.all([api.myApps(), api.server()]);
+  return Promise.all(
+    apps.map(async (app) => {
+      const releases = await api.releases(app.slug);
+      return { app, latest: releases[0], current: currentStep(progressSteps(app, releases, server)) };
+    }),
+  );
+}
+
+function statusHeadline(step: Step): string {
+  if (step.state === "problem") return `Stuck at: ${step.title}`;
+  if (step.state === "done") return "In the store";
+  if (step.title === "Release") return "Next: submit a release";
+  return `Waiting on: ${step.title}`;
 }
 
 const EMPTY: NewApp = {

@@ -2391,6 +2391,13 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
     assert_eq!(queue["releases"][0]["files"][0]["scan_result"], "skipped");
     assert_eq!(queue["checks"]["signing_key"], true);
     assert!(queue["ready_to_list"].as_array().unwrap().is_empty());
+    let apps = body_json(
+        app.send(req(Method::GET, "/v1/admin/apps").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(apps[0]["pending_releases"], 1);
+    assert!(apps[0]["releases"].as_array().unwrap().is_empty());
 
     // A beta app can't be listed before a release is approved; the refusal says why.
     let res = app
@@ -2445,6 +2452,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
     .await;
     assert_eq!(apps[0]["stage"], "released");
     assert_eq!(apps[0]["releases"][0]["id"], id.as_str());
+    assert_eq!(apps[0]["pending_releases"], 0);
     let res = app
         .send(
             req(Method::POST, format!("/v1/admin/releases/{id}/revoke"))

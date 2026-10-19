@@ -3,7 +3,7 @@
 
 import type { ReactNode } from "react";
 
-import type { AppDetail, Release } from "../api";
+import type { AppSummary, Release } from "../api";
 
 type State = "done" | "active" | "problem" | "waiting" | "skipped";
 
@@ -24,7 +24,7 @@ const STATE_LABEL: Record<State, string> = {
 
 /** The steps, from the app's own data. Exported for tests. */
 export function progressSteps(
-  app: AppDetail,
+  app: Pick<AppSummary, "stage" | "status">,
   releases: Release[],
   server: { scanning: boolean; maker_signatures_required: boolean },
 ): Step[] {
@@ -111,8 +111,20 @@ export function progressSteps(
   return steps;
 }
 
+/** The step an app is stuck on or waiting for: the first one that needs attention, else the
+ *  first one under way or not reached yet. Once every step is done, the last one. */
+export function currentStep(steps: Step[]): Step {
+  return (
+    steps.find((s) => s.state === "problem") ??
+    steps.find((s) => s.state === "active" || s.state === "waiting") ??
+    steps[steps.length - 1]
+  );
+}
+
+export { ICON as STEP_ICON, STATE_LABEL as STEP_LABEL };
+
 export function PublishProgress(props: {
-  app: AppDetail;
+  app: Pick<AppSummary, "stage" | "status">;
   releases: Release[];
   server: { scanning: boolean; maker_signatures_required: boolean };
 }) {

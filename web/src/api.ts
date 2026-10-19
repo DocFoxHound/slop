@@ -75,6 +75,8 @@ export interface AdminQueue {
 
 export interface AdminApp extends AdminAppRef {
   releases: Array<{ id: string; version: string; reviewed_at: string | null }>;
+  /** Releases still being checked or waiting for review. */
+  pending_releases: number;
 }
 
 export interface AuditEntry {

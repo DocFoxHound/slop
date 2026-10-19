@@ -171,6 +171,9 @@ struct ModeratedApp {
     app: AppRef,
     /// Approved releases, newest first, for withdrawing one.
     releases: Vec<ApprovedRelease>,
+    /// Releases still being checked or waiting for review: what listing a Beta or Released app
+    /// is waiting on when it has no approved release yet.
+    pending_releases: i64,
 }
 
 #[derive(Deserialize)]
@@ -219,7 +222,18 @@ async fn apps(
         .bind(id)
         .fetch_all(&state.db)
         .await?;
-        out.push(ModeratedApp { app, releases });
+        let pending_releases = sqlx::query_scalar(
+            "select count(*) from releases
+             where app_id = $1 and status in ('fetching', 'awaiting_review')",
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
+        out.push(ModeratedApp {
+            app,
+            releases,
+            pending_releases,
+        });
     }
     Ok(Json(out))
 }

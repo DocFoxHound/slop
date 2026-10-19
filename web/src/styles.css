@@ -330,7 +330,6 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .step.done .step-state { color: var(--slime); }
 .step.active .step-state { color: var(--warn); }
 .step.problem .step-state { color: var(--bad); }
-.maker-app { display: flex; flex-direction: column; gap: 8px; }
 .badge.warn { background: rgba(251, 191, 36, 0.14); color: var(--warn); }
 .reason-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .reason-form input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; min-width: 240px; }
@@ -360,3 +359,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 @keyframes spin { to { transform: rotate(360deg); } }
 .login-skip { background: none; border: 0; color: var(--muted); font-size: 12px; cursor: pointer; text-decoration: underline; padding: 4px; }
 .login-skip:hover { color: var(--text); }
+.status-list { list-style: none; margin: 14px 0 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.status-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
+.status-row .step { flex: 1 1 320px; min-width: 0; }
+.status-row .step-state { margin-left: 4px; }
