@@ -687,8 +687,8 @@ export function UpdatesPanel({ slug }: { slug: string }) {
         <span>
           <b>Pick up new GitHub releases</b>
           <span className="muted small" style={{ display: "block" }}>
-            When you publish a new release on GitHub (not a draft or pre-release), Slop sends it for you within about 10
-            minutes. It expects the same files as last time, with the new version in their names.
+            When you publish a new release on GitHub (not a draft or pre-release), Slop sends it for you, usually within
+            10 minutes (longer for apps that haven't updated in a while). It expects the same files as last time, with the new version in their names.
           </span>
         </span>
       </label>
@@ -701,6 +701,22 @@ export function UpdatesPanel({ slug }: { slug: string }) {
         </p>
       )}
       {s.watch_problem && <p className="notice">{s.watch_problem}</p>}
+      {s.watch_releases && s.github_app && (
+        <div className="muted small updates-status">
+          {s.github_app.installed ? (
+            <>
+              <span className="badge official">GITHUB APP INSTALLED</span> GitHub tells Slop the moment you publish a
+              release, so it's picked up within a minute.
+            </>
+          ) : (
+            <>
+              <b>Faster pickup:</b> install Slop's GitHub App on this repository and GitHub tells Slop the moment you
+              publish a release, instead of Slop checking every so often. It only reads your releases and code.{" "}
+              <ExternalLink href={s.github_app.install_url}>Install on GitHub</ExternalLink>
+            </>
+          )}
+        </div>
+      )}
       <label className="check">
         <input type="checkbox" checked={s.auto_update} onChange={(e) => void change({ auto_update: e.target.checked })} />
         <span>

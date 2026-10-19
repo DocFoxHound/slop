@@ -8,6 +8,7 @@ pub mod cleanup;
 pub mod config;
 pub mod desktop_updates;
 pub mod error;
+pub mod github_app;
 pub mod library;
 pub mod manage;
 pub mod policy;
@@ -56,6 +57,8 @@ pub struct AppState {
     pub rate_limiter: Arc<ratelimit::RateLimiter>,
     /// GitHub's OIDC signing keys, for Slop Build submissions.
     pub oidc_keys: Arc<tokio::sync::RwLock<slop_build::OidcKeys>>,
+    /// Slop's GitHub App installation tokens.
+    pub github_app_tokens: Arc<github_app::TokenCache>,
 }
 
 impl AppState {
@@ -81,6 +84,7 @@ impl AppState {
             provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),
             rate_limiter,
             oidc_keys: Arc::default(),
+            github_app_tokens: Arc::default(),
         })
     }
 }
@@ -110,6 +114,14 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             StatusCode::SERVICE_UNAVAILABLE,
             Duration::from_secs(20),
         ))
+        .merge(
+            github_app::webhook_routes()
+                .layer(RequestBodyLimitLayer::new(github_app::MAX_WEBHOOK_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(20),
+                )),
+        )
         .merge(
             desktop_updates::upload_routes()
                 .layer(axum::extract::DefaultBodyLimit::disable())

@@ -59,6 +59,36 @@ set -a; . ~/.config/slop/slop.env; set +a
 ~/slop-deploy/current/slop-api review pending
 ```
 
+## GitHub App
+
+Slop's GitHub App lets GitHub tell Slop when a maker publishes a release (a webhook), and gives
+requests about each repository that has it installed their own API allowance. Without it Slop
+polls on the shared `GITHUB_TOKEN`, which runs out at around 800 watched apps.
+
+1. On GitHub: **Settings → Developer settings → GitHub Apps → New GitHub App**.
+   - **Homepage URL:** the site, e.g. `https://slop.example`.
+   - **Webhook URL:** `https://slop.example/v1/github/webhook`, **Active**. **Webhook secret:** a
+     long random string (`openssl rand -hex 32`).
+   - **Repository permissions:** Contents **Read-only**, Metadata **Read-only**. Nothing else.
+   - **Subscribe to events:** **Release**. (Installation events are always sent.)
+   - **Where can this GitHub App be installed?** **Any account**, so makers can install it.
+2. After creating it, note the **App ID** and the App's public name (in its public link,
+   `github.com/apps/<name>`). Under **Private keys**, generate one; a `.pem` file downloads.
+3. On the server: put the `.pem` at `~/.config/slop/github-app.pem` (`chmod 600`), and add to
+   `slop.env`:
+
+   ```sh
+   GITHUB_APP_ID=123456
+   GITHUB_APP_SLUG=<name>
+   GITHUB_APP_PRIVATE_KEY_FILE=/home/brian/.config/slop/github-app.pem
+   GITHUB_APP_WEBHOOK_SECRET=<the secret>
+   ```
+
+   then `systemctl --user restart slop-api`. GitHub's **Advanced** tab on the App shows each
+   webhook delivery and Slop's answer (204 means handled).
+
+Makers see an **Install on GitHub** link in their app's **Updates** box once it's configured.
+
 ## Setting it up again
 
 ```sh

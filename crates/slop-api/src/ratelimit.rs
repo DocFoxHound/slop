@@ -128,7 +128,8 @@ fn prune(buckets: &mut HashMap<(Class, IpAddr), Bucket>, limits: &Limits, now: I
 }
 
 fn classify(method: &Method, path: &str) -> Option<Class> {
-    if path == "/healthz" {
+    // GitHub's webhooks all come from a few of its addresses; each is checked by its signature.
+    if path == "/healthz" || path == "/v1/github/webhook" {
         return None;
     }
     if path.starts_with("/v1/auth/") && path != "/v1/auth/providers" {

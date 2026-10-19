@@ -4,7 +4,6 @@ import { api } from "../api";
 import { Sidebar } from "../components/Layout";
 import { ErrorState, SectionHeader, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
-import { isDesktop } from "../platform";
 
 /** Upcoming apps that are still alive, soonest deadline first. Dead projects are never promoted. */
 async function upcoming(limit: number) {
@@ -24,18 +23,13 @@ export function Store() {
   const soon = useLoad(() => upcoming(4), []);
   const categories = useLoad(() => api.categories(), []);
   const server = useLoad(() => api.server(), []);
-  const downloads = useLoad(async () => {
-    if (isDesktop) return [];
-    const platforms = [
-      { platform: "windows", label: "Windows" },
-      { platform: "linux-deb", label: "Ubuntu / Debian (.deb)" },
-      { platform: "linux-rpm", label: "RHEL / Rocky / Alma 10 (.rpm)" },
-    ] as const;
-    const found = await Promise.all(
-      platforms.map((p) => api.desktopLatest(p.platform).then((b) => ({ ...p, ...b }), () => null)),
-    );
-    return found.filter((d) => d !== null);
-  }, []);
+  const trending = useLoad(
+    () =>
+      api
+        .apps({ sort: "trending", limit: 12 })
+        .then((page) => page.apps.filter((a) => a.stage !== "coming_soon" && !a.is_dead).slice(0, 8)),
+    [],
+  );
 
   return (
     <div className="page">
@@ -71,23 +65,14 @@ export function Store() {
                 <b>Free to download.</b> Makers can take donations. Nothing is ever for sale.
               </li>
             </ul>
-            {downloads.data && downloads.data.length > 0 && (
-              <div className="get-app">
-                <div className="row-actions">
-                  {downloads.data.map((d, i) => (
-                    <a key={d.platform} className={`btn ${i === 0 ? "slime" : ""}`} href={d.url}>
-                      Download for {d.label}
-                    </a>
-                  ))}
-                </div>
-                <p className="muted small">
-                  Version {downloads.data[0].version}. The app keeps itself up to date.
-                  {downloads.data.some((d) => d.platform === "linux-rpm") &&
-                    " The .rpm needs EPEL and CRB enabled (sudo dnf install epel-release && sudo dnf config-manager --set-enabled crb); RHEL 9 isn't supported."}
-                </p>
-              </div>
-            )}
           </section>
+
+          <SectionHeader title="Trending" sub="Most played this week" />
+          {trending.error ? (
+            <ErrorState error={trending.error} onRetry={trending.reload} />
+          ) : (
+            <Shelf apps={trending.data} empty="Nothing to play yet." />
+          )}
 
           <SectionHeader title="Coming soon & in beta" sub="Projects on their way to release">
             <Link to="/upcoming" className="sub">

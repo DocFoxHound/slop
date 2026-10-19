@@ -136,7 +136,10 @@ progress**) and use one of the options below.
 4. Choose **Send version …**.
 
 **Later versions arrive by themselves.** With **Pick up new GitHub releases** on (the default, in
-the **Updates** box), Slop checks your repository about every 10 minutes. When you publish a new
+the **Updates** box), Slop checks your repository every 10 minutes if you've released something
+in the last week, and less often (up to every two hours) for quieter apps. For pickup within a
+minute, install **Slop's GitHub App** on the repository (the link is in the **Updates** box): GitHub
+then tells Slop the moment you publish a release. The App only reads releases and code. When you publish a new
 release (not a draft or pre-release), Slop submits it using your previous release as the pattern:
 the same platforms and programs, with files whose names are the old ones with the new version in
 place of the old (`game-1.0.0-windows.zip` → `game-1.1.0-windows.zip`), or exactly the same

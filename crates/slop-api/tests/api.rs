@@ -131,14 +131,44 @@ async fn fake_github() -> String {
                 ]))
             }),
         )
+        // Answers "not modified" to a request carrying its ETag, as GitHub does.
         .route(
             "/repos/octo/game/releases/latest",
-            get(|| async {
-                axum::Json(json!({
-                    "tag_name": "v1.1.0", "draft": false, "prerelease": false,
-                    "published_at": "2026-10-01T00:00:00Z", "html_url": "https://github.com/octo/game/releases/tag/v1.1.0",
-                    "assets": [{ "name": "game-1.1.0-windows.zip", "size": 10 }]
-                }))
+            get(|headers: axum::http::HeaderMap| async move {
+                let etag = "\"latest-v1.1.0\"";
+                if headers.get("if-none-match").and_then(|v| v.to_str().ok()) == Some(etag) {
+                    return StatusCode::NOT_MODIFIED.into_response();
+                }
+                (
+                    [("etag", etag)],
+                    axum::Json(json!({
+                        "tag_name": "v1.1.0", "draft": false, "prerelease": false,
+                        "published_at": "2026-10-01T00:00:00Z", "html_url": "https://github.com/octo/game/releases/tag/v1.1.0",
+                        "assets": [{ "name": "game-1.1.0-windows.zip", "size": 10 }]
+                    })),
+                )
+                    .into_response()
+            }),
+        )
+        // Slop's GitHub App: installation 77 gets a token, which one private repository needs.
+        .route(
+            "/app/installations/{id}/access_tokens",
+            post(|axum::extract::Path(id): axum::extract::Path<i64>, headers: axum::http::HeaderMap| async move {
+                let signed = headers.get("authorization").and_then(|v| v.to_str().ok()).is_some_and(|v| v.starts_with("Bearer ey"));
+                if id != 77 || !signed {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                (StatusCode::CREATED, axum::Json(json!({ "token": "ghs_install", "expires_at": "2099-01-01T00:00:00Z" }))).into_response()
+            }),
+        )
+        .route(
+            "/repos/octo/hooked/license",
+            get(|headers: axum::http::HeaderMap| async move {
+                if headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer ghs_install") {
+                    axum::Json(json!({ "license": { "spdx_id": "MIT", "name": "MIT License" } })).into_response()
+                } else {
+                    StatusCode::NOT_FOUND.into_response()
+                }
             }),
         )
         .route(
@@ -177,6 +207,10 @@ async fn fake_github() -> String {
 }
 
 async fn test_app(db: PgPool) -> TestApp {
+    test_app_with(db, |_| {}).await
+}
+
+async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp {
     let github_base = fake_github().await;
     let signing_key = slop_manifest::ed25519_dalek::SigningKey::from_bytes(&[7; 32]);
     let config = Config {
@@ -203,12 +237,15 @@ async fn test_app(db: PgPool) -> TestApp {
             slop_build_version: "v1".into(),
             github_oidc_issuer: github_base.trim_end_matches('/').to_string(),
             github_token: None,
+            github_app: None,
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
     };
+    let mut config = config;
+    adjust(&mut config);
     let state = AppState::new(db.clone(), config.clone()).unwrap();
     TestApp {
         router: router(state.clone()).unwrap(),
@@ -3084,6 +3121,30 @@ async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) 
     assert!(settings["watch_problem"].is_null());
     assert!(settings["watch_note"].is_null());
 
+    // The next check sends the ETag, and GitHub's "not modified" means nothing to do, even
+    // with the release gone from Slop.
+    sqlx::query("delete from releases where version = '1.1.0'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update apps set watch_checked_at = null, watch_last_tag = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    // Checked a moment ago and recently updated: not due again yet.
+    sqlx::query("update apps set watch_etag = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    // Without the ETag, and due, it's submitted again.
+    sqlx::query("update apps set watch_checked_at = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 1);
+
     // Turning watching off stops it.
     sqlx::query("delete from releases where version = '1.1.0'")
         .execute(&app.db)
@@ -3357,5 +3418,171 @@ async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
         .await
         .status(),
         StatusCode::NOT_FOUND
+    );
+}
+
+fn signed_webhook(event: &str, body: Value, secret: &str) -> Req {
+    use hmac::{KeyInit, Mac};
+    let bytes = serde_json::to_vec(&body).unwrap();
+    let mut mac = hmac::Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(&bytes);
+    let signature = format!("sha256={}", hex::encode(mac.finalize().into_bytes()));
+    req(Method::POST, "/v1/github/webhook")
+        .header("x-github-event", event.to_string())
+        .header("x-hub-signature-256", signature)
+        .json(body)
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_github_app_gets_webhooks_and_its_own_tokens(db: PgPool) {
+    let app = test_app_with(db, |config| {
+        config.releases.github_app = Some(slop_api::config::GithubAppConfig {
+            app_id: "123".into(),
+            slug: "slop-test".into(),
+            private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
+                "fixtures/github-app-test-key.pem"
+            ))
+            .unwrap(),
+            webhook_secret: "hook-secret".into(),
+        });
+    })
+    .await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let license = |cookie: String| {
+        let app = &app;
+        async move {
+            body_json(
+                app.send(
+                    req(
+                        Method::GET,
+                        "/v1/repos/license?url=https://github.com/octo/hooked",
+                    )
+                    .cookie(&cookie),
+                )
+                .await,
+            )
+            .await
+        }
+    };
+    // A private repository Slop can't see yet.
+    assert!(license(maker.clone()).await["spdx"].is_null());
+
+    // A webhook with the wrong signature is refused.
+    let install = json!({
+        "action": "created",
+        "installation": { "id": 77 },
+        "repositories": [{ "full_name": "octo/Hooked" }]
+    });
+    let res = app
+        .send(signed_webhook("installation", install.clone(), "wrong"))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    // The maker installs the App: requests about that repository now use its token.
+    let res = app
+        .send(signed_webhook("installation", install, "hook-secret"))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(license(maker.clone()).await["spdx"], "MIT");
+
+    // The store page shows it's installed, with the install link for other repositories.
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms, watch_checked_at)
+         values ($1, 'hooked', 'Hooked', 'A game', 'game', 'beta', $2, 'https://github.com/octo/hooked', 'MIT', '{windows}', now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let settings = body_json(
+        app.send(req(Method::GET, "/v1/apps/hooked/update-settings").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(settings["github_app"]["installed"], true);
+    assert_eq!(
+        settings["github_app"]["install_url"],
+        "https://github.com/apps/slop-test/installations/new"
+    );
+
+    // A published release wakes the watcher for that repository's apps.
+    let res = app
+        .send(signed_webhook(
+            "release",
+            json!({
+                "action": "published",
+                "installation": { "id": 77 },
+                "repository": { "full_name": "octo/hooked" },
+                "release": { "tag_name": "v2.0.0" }
+            }),
+            "hook-secret",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let checked: Option<time::OffsetDateTime> =
+        sqlx::query_scalar("select watch_checked_at from apps where slug = 'hooked'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(checked.is_none());
+
+    // Removing the repository from the installation goes back to the shared token.
+    let res = app
+        .send(signed_webhook(
+            "installation_repositories",
+            json!({
+                "action": "removed",
+                "installation": { "id": 77 },
+                "repositories_removed": [{ "full_name": "octo/hooked" }]
+            }),
+            "hook-secret",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(license(maker.clone()).await["spdx"].is_null());
+    let settings = body_json(
+        app.send(req(Method::GET, "/v1/apps/hooked/update-settings").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(settings["github_app"]["installed"], false);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn trending_puts_the_most_played_first(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker, "quiet", "released", "updated_at = now()").await;
+    listed_with(
+        &app,
+        maker,
+        "busy",
+        "released",
+        "updated_at = now() - interval '1 day'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "old-hit",
+        "released",
+        "updated_at = now() - interval '2 days'",
+    )
+    .await;
+    for (slug, players, ago) in [("busy", 40, "1 hour"), ("old-hit", 900, "30 days")] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "insert into pulse_counts (app_id, bucket, players)
+             select id, now() - interval '{ago}', $2 from apps where slug = $1"
+        )))
+        .bind(slug)
+        .bind(players)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // This week's players first; a hit from last month counts for nothing now.
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?sort=trending")).await,
+        ["busy", "quiet", "old-hit"]
     );
 }

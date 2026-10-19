@@ -78,6 +78,46 @@ pub struct ReleaseConfig {
     pub github_oidc_issuer: String,
     /// Optional GitHub token, for higher API rate limits when checking commits and attestations.
     pub github_token: Option<String>,
+    /// Slop's GitHub App, when configured (github_app.rs).
+    pub github_app: Option<GithubAppConfig>,
+}
+
+/// Slop's GitHub App: makers install it on a repository so GitHub sends release webhooks and
+/// requests about that repository use the installation's own API allowance.
+#[derive(Clone)]
+pub struct GithubAppConfig {
+    pub app_id: String,
+    /// The App's public name, for its install link: github.com/apps/<slug>.
+    pub slug: String,
+    /// Signs the short-lived JWTs that ask GitHub for installation tokens.
+    pub private_key: jsonwebtoken::EncodingKey,
+    /// Proves webhooks come from GitHub (X-Hub-Signature-256).
+    pub webhook_secret: String,
+}
+
+impl GithubAppConfig {
+    /// From GITHUB_APP_ID, GITHUB_APP_SLUG, GITHUB_APP_PRIVATE_KEY_FILE and
+    /// GITHUB_APP_WEBHOOK_SECRET; None unless all four are set.
+    fn from_env() -> anyhow::Result<Option<Self>> {
+        let get = |k: &str| env::var(k).ok().filter(|s| !s.trim().is_empty());
+        let (Some(app_id), Some(slug), Some(key_file), Some(webhook_secret)) = (
+            get("GITHUB_APP_ID"),
+            get("GITHUB_APP_SLUG"),
+            get("GITHUB_APP_PRIVATE_KEY_FILE"),
+            get("GITHUB_APP_WEBHOOK_SECRET"),
+        ) else {
+            return Ok(None);
+        };
+        let pem = std::fs::read(&key_file).with_context(|| format!("reading {key_file}"))?;
+        let private_key = jsonwebtoken::EncodingKey::from_rsa_pem(&pem)
+            .context("GITHUB_APP_PRIVATE_KEY_FILE must be the App's .pem private key")?;
+        Ok(Some(Self {
+            app_id: app_id.trim().to_string(),
+            slug: slug.trim().to_string(),
+            private_key,
+            webhook_secret,
+        }))
+    }
 }
 
 impl fmt::Debug for ReleaseConfig {
@@ -98,6 +138,10 @@ impl fmt::Debug for ReleaseConfig {
             .field(
                 "github_token",
                 &self.github_token.as_ref().map(|_| "<redacted>"),
+            )
+            .field(
+                "github_app",
+                &self.github_app.as_ref().map(|a| (&a.app_id, &a.slug)),
             )
             .finish()
     }
@@ -216,6 +260,7 @@ impl Config {
                 "https://token.actions.githubusercontent.com",
             ),
             github_token: env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
+            github_app: GithubAppConfig::from_env()?,
         };
 
         Ok(Self {

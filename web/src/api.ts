@@ -212,6 +212,8 @@ export interface GithubRelease {
 }
 
 export interface UpdateSettings {
+  /** Slop's GitHub App on this repository; absent when Slop has no App set up. */
+  github_app?: { installed: boolean; install_url: string } | null;
   watch_releases: boolean;
   auto_update: boolean;
   auto_approval_ready: boolean;
@@ -254,7 +256,7 @@ export interface AppQuery {
   category?: string;
   stage?: AppStage;
   kind?: AppKind;
-  sort?: "recent" | "title" | "relevance";
+  sort?: "recent" | "title" | "relevance" | "trending";
   limit?: number;
   offset?: number;
 }

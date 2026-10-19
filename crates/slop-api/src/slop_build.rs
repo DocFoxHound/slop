@@ -423,6 +423,7 @@ async fn github_json<T: serde::de::DeserializeOwned>(
         .join(path)
         .map_err(|e| ApiError::Internal(e.into()))?;
     let res = releases::github_get(state, url)
+        .await
         .send()
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
