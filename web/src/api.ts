@@ -30,6 +30,10 @@ export interface AppSummary {
   tags: string[];
   /** The maker's store tile (920×430), if they set one. */
   thumbnail_url: string | null;
+  /** Current 👍/👎 votes. */
+  vote_count: number;
+  /** Weighted % Not Slop; null below the minimum number of votes. */
+  not_slop_percent: number | null;
   is_dead: boolean;
   stage_deadline: string | null;
   updated_at: string;
@@ -142,6 +146,47 @@ export interface Me {
   country_code: string;
   is_admin: boolean;
   share_playtime: boolean;
+  /** "Recommendations based on my activity". */
+  personalize: boolean;
+}
+
+/** % Not Slop at one point (crates/slop-api/src/votes.rs). */
+export interface Tally {
+  not_slop: number;
+  slop: number;
+  not_slop_weight: number;
+  slop_weight: number;
+  percent: number | null;
+  percent_weighted: number | null;
+  label: string | null;
+}
+
+export interface Ratings extends Tally {
+  monthly: Array<Tally & { month: string }>;
+  daily: Array<{ day: string; not_slop: number; slop: number; changed: number; withdrawn: number }>;
+  open: boolean;
+  min_votes: number;
+  mine?: { vote: "not_slop" | "slop" | null; can_vote: boolean; reason: string | null; weight: number };
+}
+
+export interface ForYouCard extends AppSummary {
+  pick: "match" | "discover" | "popular";
+  reason: string;
+}
+
+export interface ForYou {
+  personalized: boolean;
+  based_on: string[];
+  items: ForYouCard[];
+}
+
+export interface SimUser {
+  id: string;
+  display_name: string;
+  personas: string;
+  country_code: string;
+  library: number;
+  votes: number;
 }
 
 export interface AdminAppRef {
@@ -504,7 +549,14 @@ export const api = {
   desktopLatest: (platform: "windows" | "mac" | "linux-deb" | "linux-rpm") =>
     request<{ version: string; url: string }>("GET", `/v1/desktop/latest/${platform}`),
   /** What this server checks, so pages only claim what's true. */
-  server: () => request<{ scanning: boolean; maker_signatures_required: boolean }>("GET", "/v1/server"),
+  server: () =>
+    request<{ scanning: boolean; maker_signatures_required: boolean; simulation: boolean }>("GET", "/v1/server"),
+  ratings: (slug: string) => request<Ratings>("GET", `/v1/apps/${encodeURIComponent(slug)}/ratings`),
+  vote: (slug: string, vote: "not_slop" | "slop" | null) =>
+    request<Ratings>("POST", `/v1/apps/${encodeURIComponent(slug)}/vote`, { vote }),
+  forYou: () => request<ForYou>("GET", "/v1/me/for-you"),
+  simUsers: () => request<SimUser[]>("GET", "/v1/sim/users"),
+  simLogin: (id: string) => request<void>("POST", `/v1/sim/login/${encodeURIComponent(id)}`),
   /** Full-page navigation target that starts GitHub sign-in. */
   githubSignInUrl: (returnTo: string) => `${API_BASE}/v1/auth/github/start${query({ return_to: returnTo })}`,
   signupInfo: () => request<SignupInfo>("GET", "/v1/auth/signup"),
@@ -512,7 +564,7 @@ export const api = {
     request<{ user: Me; return_to: string }>("POST", "/v1/auth/signup", body),
   signout: () => request<void>("POST", "/v1/auth/signout"),
   me: () => request<Me>("GET", "/v1/me"),
-  updateMe: (changes: { share_playtime?: boolean }) => request<void>("PATCH", "/v1/me", changes),
+  updateMe: (changes: { share_playtime?: boolean; personalize?: boolean }) => request<void>("PATCH", "/v1/me", changes),
   players: (slug: string) =>
     request<{ playing_now: number; peak_this_month: number; daily_peaks: Array<{ day: string; peak: number }> }>(
       "GET",

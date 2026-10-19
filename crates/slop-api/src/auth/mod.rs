@@ -389,6 +389,13 @@ async fn signup(
     let jar = jar
         .remove(removal_cookie(&state.config, SIGNUP_COOKIE))
         .add(cookie);
+    // Recommendations default to on, except where the under-18 view applies (PRIV-6).
+    let under18: Option<bool> = sqlx::query_scalar(
+        "select under18_view_default from country_policies where country_code = $1",
+    )
+    .bind(&country_code)
+    .fetch_optional(&state.db)
+    .await?;
     let user = Me {
         id: user_id,
         display_name,
@@ -396,6 +403,7 @@ async fn signup(
         country_code,
         is_admin: false,
         share_playtime: true,
+        personalize: under18 == Some(false),
     };
     Ok((
         StatusCode::CREATED,
@@ -432,15 +440,26 @@ struct Me {
     is_admin: bool,
     /// "Share my playtime" (PRIV-9).
     share_playtime: bool,
+    /// "Recommendations based on my activity" (LEGAL §7), with its default applied.
+    #[sqlx(skip)]
+    personalize: bool,
 }
 
-async fn me(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Me>> {
-    let me = sqlx::query_as(
+async fn me(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    headers: axum::http::HeaderMap,
+) -> ApiResult<Json<Me>> {
+    let mut me: Me = sqlx::query_as(
         "select id, display_name, email, country_code, is_admin, share_playtime from users where id = $1",
     )
     .bind(user.id)
     .fetch_one(&state.db)
     .await?;
+    let policy =
+        crate::policy::ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers)
+            .await?;
+    me.personalize = crate::foryou::personalized(&state.db, user.id, policy).await?;
     Ok(Json(me))
 }
 

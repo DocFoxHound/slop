@@ -203,18 +203,18 @@ async fn end(State(state): State<AppState>, Json(body): Json<TokenBody>) -> ApiR
 }
 
 #[derive(Serialize, sqlx::FromRow)]
-struct DayPeak {
+pub struct DayPeak {
     /// YYYY-MM-DD (UTC).
-    day: String,
-    peak: i32,
+    pub day: String,
+    pub peak: i32,
 }
 
 #[derive(Serialize)]
-struct Players {
-    playing_now: i64,
-    peak_this_month: i64,
+pub struct Players {
+    pub playing_now: i64,
+    pub peak_this_month: i64,
     /// The busiest moment of each of the last 30 days.
-    daily_peaks: Vec<DayPeak>,
+    pub daily_peaks: Vec<DayPeak>,
 }
 
 /// Distinct players with a recent heartbeat, per app.
@@ -229,19 +229,24 @@ async fn players(
 ) -> ApiResult<Json<Players>> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
+    Ok(Json(player_stats(&state.db, app_id).await?))
+}
+
+/// Players now (live heartbeats), this month's peak and each day's peak for 30 days.
+pub async fn player_stats(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Players> {
     let playing_now: i64 = sqlx::query_scalar(
         "select count(distinct user_id) from pulse_sessions
          where app_id = $1 and started_at is not null and ended_at is null and last_beat_at > now() - $2",
     )
     .bind(app_id)
     .bind(LIVE_WINDOW)
-    .fetch_one(&state.db)
+    .fetch_one(db)
     .await?;
     let month_peak: Option<i32> = sqlx::query_scalar(
         "select max(players) from pulse_counts where app_id = $1 and bucket >= date_trunc('month', now())",
     )
     .bind(app_id)
-    .fetch_one(&state.db)
+    .fetch_one(db)
     .await?;
     let daily_peaks = sqlx::query_as(
         "select to_char((bucket at time zone 'UTC')::date, 'YYYY-MM-DD') as day, max(players) as peak from pulse_counts
@@ -249,13 +254,13 @@ async fn players(
          group by 1 order by 1",
     )
     .bind(app_id)
-    .fetch_all(&state.db)
+    .fetch_all(db)
     .await?;
-    Ok(Json(Players {
+    Ok(Players {
         playing_now,
         peak_this_month: i64::from(month_peak.unwrap_or(0)).max(playing_now),
         daily_peaks,
-    }))
+    })
 }
 
 /// Records the current player count of every app into its 5-minute bucket. Idempotent, so
@@ -300,6 +305,8 @@ pub async fn run_sampler(state: AppState) {
 #[serde(deny_unknown_fields)]
 pub(crate) struct Settings {
     share_playtime: Option<bool>,
+    /// "Recommendations based on my activity" (foryou.rs).
+    personalize: Option<bool>,
 }
 
 /// `PATCH /v1/me`: the user's own settings.
@@ -312,6 +319,13 @@ pub(crate) async fn update_settings(
         sqlx::query("update users set share_playtime = $2 where id = $1")
             .bind(user.id)
             .bind(share)
+            .execute(&state.db)
+            .await?;
+    }
+    if let Some(on) = body.personalize {
+        sqlx::query("update users set personalize = $2 where id = $1")
+            .bind(user.id)
+            .bind(on)
             .execute(&state.db)
             .await?;
     }

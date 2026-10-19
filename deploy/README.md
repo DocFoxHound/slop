@@ -9,6 +9,7 @@ itself from GitHub.
 |---|---|
 | `slop-pg.service` | Postgres in podman (`~/.config/containers/systemd/slop-pg.container`); data in the `slop-pg-data` volume. Dev and the deployment share the server; the deployment uses its own `slop_prod` database and role |
 | `slop-api.service` | The API, the website (`SLOP_WEB_DIR`) and the release fetcher, on `127.0.0.1:8090` |
+| `slop-sim.service`, `slop-sim-pulse.service` | The simulation sandbox (`docs/SIMULATION.md`): the same build on the `slop_sim` database at `sim.188-68-41-241.sslip.io` (`127.0.0.1:8092`), and its simulated live players. Settings in `~/.config/slop/slop-sim.env`. Restarted with each deploy |
 | `slop-deploy.timer` → `slop-deploy.service` | Every two minutes, `update.sh`: if `main` has a new commit, run the tests, build, switch over, restart, and roll back if it isn't healthy. A failing commit is skipped (marked in `~/slop-deploy/builds/failed-<sha>`) until the next push |
 
 Caddy (`/etc/caddy/Caddyfile.d/slop.caddyfile`) serves it with a Let's Encrypt certificate. The
@@ -96,6 +97,10 @@ cp deploy/systemd/* ~/.config/systemd/user/ && systemctl --user daemon-reload  #
 install -m 755 deploy/update.sh ~/slop-deploy/bin/update.sh
 cp deploy/slop.caddyfile /etc/caddy/Caddyfile.d/ && caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl --user enable --now slop-api.service slop-deploy.timer
+# Optional: the simulation sandbox (docs/SIMULATION.md)
+podman exec slop-pg psql -U slop -c 'create database slop_sim'
+systemctl --user enable --now slop-sim.service slop-sim-pulse.service
+slop-api simulate generate   # with DATABASE_URL pointing at slop_sim
 ```
 
 plus `~/.config/slop/slop.env` (see `.env.example`; make keys with `slop-api keys generate` and

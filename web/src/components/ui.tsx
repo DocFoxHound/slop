@@ -47,7 +47,8 @@ export function StatusBadge({ app }: { app: Pick<AppSummary, "status"> }) {
   return null;
 }
 
-export function AppTile({ app }: { app: AppSummary }) {
+/** A store tile. `reason` says why it's recommended ("Because you like …"). */
+export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
   const deadline = deadlineText(app);
   const age = ageLabel(app.min_age);
   return (
@@ -60,7 +61,13 @@ export function AppTile({ app }: { app: AppSummary }) {
         </span>
       </div>
       <div className="tile-body">
+        {reason && <span className="why">{reason}</span>}
         <span className="d">{app.summary}</span>
+        {app.not_slop_percent !== null && (
+          <span className={`tile-rating ${app.not_slop_percent >= 70 ? "good" : app.not_slop_percent < 40 ? "bad" : "mixed"}`}>
+            {app.not_slop_percent}% Not Slop <span className="faint">· {app.vote_count.toLocaleString()} votes</span>
+          </span>
+        )}
         {deadline && !app.is_dead && <div className="tile-stat">{deadline}</div>}
         <div className="tile-foot">
           <div className="chips">
@@ -77,13 +84,13 @@ export function AppTile({ app }: { app: AppSummary }) {
   );
 }
 
-export function Shelf({ apps, empty }: { apps: AppSummary[] | undefined; empty: ReactNode }) {
+export function Shelf({ apps, empty }: { apps: Array<AppSummary & { reason?: string }> | undefined; empty: ReactNode }) {
   if (!apps) return <div className="shelf">{[0, 1, 2, 3].map((i) => <div className="tile skeleton" key={i} />)}</div>;
   if (apps.length === 0) return <div className="empty-state">{empty}</div>;
   return (
     <div className="shelf">
       {apps.map((a) => (
-        <AppTile app={a} key={a.slug} />
+        <AppTile app={a} key={a.slug} reason={a.reason} />
       ))}
     </div>
   );

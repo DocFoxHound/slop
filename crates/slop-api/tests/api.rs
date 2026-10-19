@@ -256,6 +256,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         },
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
+        simulation: false,
     };
     let mut config = config;
     adjust(&mut config);
@@ -4186,4 +4187,308 @@ async fn similar_apps_mix_tags_popularity_and_discovery(db: PgPool) {
 
     let res = app.send(req(Method::GET, "/v1/apps/nope/similar")).await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ratings, For you, and the simulation
+
+async fn tag_app(app: &TestApp, slug: &str, tags: &[&str]) {
+    for tag in tags {
+        sqlx::query(
+            "insert into app_tags (app_id, tag_id) select a.id, t.id from apps a, tags t where a.slug = $1 and t.slug = $2",
+        )
+        .bind(slug)
+        .bind(tag)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn only_players_vote_and_ratings_add_up(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, maker_cookie) = app.user("Maker", "US").await;
+    listed_with(&app, maker, "voted", "released", "").await;
+    listed_with(&app, maker, "early", "beta", "").await;
+    let (player, cookie) = app.user("Player", "US").await;
+    let vote = |cookie: String, slug: &'static str, v: Value| {
+        let r = req(Method::POST, format!("/v1/apps/{slug}/vote"))
+            .cookie(&cookie)
+            .json(json!({ "vote": v }));
+        async { app.send(r).await }
+    };
+
+    // Not launched yet: can't vote; the page says why.
+    let res = vote(cookie.clone(), "voted", json!("not_slop")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/voted/ratings").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(ratings["mine"]["can_vote"], false);
+    assert!(
+        ratings["mine"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("Launch it")
+    );
+
+    for slug in ["voted", "early"] {
+        let res = app
+            .send(req(Method::POST, format!("/v1/apps/{slug}/launch")).cookie(&cookie))
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+    // Voting opens at release; makers can't vote on their own apps.
+    assert_eq!(
+        vote(cookie.clone(), "early", json!("slop")).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        vote(maker_cookie.clone(), "voted", json!("slop"))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        vote(cookie.clone(), "voted", json!("meh")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    let res = vote(cookie.clone(), "voted", json!("not_slop")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let r = body_json(res).await;
+    assert_eq!(r["not_slop"], 1);
+    assert_eq!(r["percent"], Value::Null, "below the minimum");
+    assert_eq!(r["mine"]["vote"], "not_slop");
+    // Changed, then withdrawn: three events, no current vote.
+    vote(cookie.clone(), "voted", json!("slop")).await;
+    let r = body_json(vote(cookie.clone(), "voted", Value::Null).await).await;
+    assert_eq!(
+        (r["not_slop"].as_i64(), r["slop"].as_i64()),
+        (Some(0), Some(0))
+    );
+    assert_eq!(r["mine"]["vote"], Value::Null);
+    let events: Vec<(i16, Option<i16>)> = sqlx::query_as(
+        "select vote, prev_vote from vote_events where user_id = $1 order by created_at, id",
+    )
+    .bind(player)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(events, [(1, None), (-1, Some(1)), (0, Some(-1))]);
+    assert_eq!(r["daily"][0]["changed"], 1);
+    assert_eq!(r["daily"][0]["withdrawn"], 1);
+
+    // Five voters: a percentage and a label, weighted by playtime.
+    for (i, (v, hours)) in [
+        ("not_slop", 10),
+        ("not_slop", 10),
+        ("not_slop", 0),
+        ("slop", 0),
+        ("slop", 0),
+    ]
+    .into_iter()
+    .enumerate()
+    {
+        let (id, c) = app.user(&format!("Voter {i}"), "US").await;
+        app.send(req(Method::POST, "/v1/apps/voted/launch").cookie(&c))
+            .await;
+        sqlx::query("update user_app_usage set playtime_seconds = $3 where user_id = $1 and app_id = (select id from apps where slug = $2)")
+            .bind(id)
+            .bind("voted")
+            .bind(hours * 3600_i64)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(vote(c, "voted", json!(v)).await.status(), StatusCode::OK);
+    }
+    let r = body_json(app.send(req(Method::GET, "/v1/apps/voted/ratings")).await).await;
+    assert_eq!(r["percent"], 60, "3 of 5");
+    // Two votes weigh 1 (10 hours); three weigh ≈0.29 (one launch day): (2 + 0.29) / (2 + 0.87).
+    assert_eq!(r["percent_weighted"], 80);
+    assert_eq!(r["label"], "Very Not Slop");
+    let months = r["monthly"].as_array().unwrap();
+    assert_eq!(months.last().unwrap()["not_slop"], 3);
+    assert_eq!(months.last().unwrap()["percent_weighted"], 80);
+    let listed = body_json(app.send(req(Method::GET, "/v1/apps?sort=title")).await).await;
+    let tile = listed["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["slug"] == "voted")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (
+            tile["vote_count"].as_i64(),
+            tile["not_slop_percent"].as_i64()
+        ),
+        (Some(5), Some(80))
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn for_you_follows_activity_and_can_be_switched_off(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    for (slug, tags) in [
+        ("rogue-a", &["roguelike", "pixel-art"][..]),
+        ("rogue-b", &["roguelike", "dark"][..]),
+        ("rogue-c", &["roguelike", "retro"][..]),
+        ("rogue-d", &["roguelike", "pixel-art", "retro"][..]),
+        ("cozy-farm", &["cozy", "simulation"][..]),
+        ("racer", &["racing", "chaotic"][..]),
+        ("dev-kit", &["developer-tools", "automation"][..]),
+        ("notes", &["note-taking", "productivity"][..]),
+        ("adult", &["roguelike", "dark"][..]),
+    ] {
+        listed_with(&app, maker, slug, "released", "").await;
+        tag_app(&app, slug, tags).await;
+    }
+    sqlx::query("update apps set min_age = 18 where slug = 'adult'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update apps set kind = 'app' where slug in ('dev-kit', 'notes')")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (_, cookie) = app.user("Fan", "US").await;
+    for slug in ["rogue-a", "rogue-b"] {
+        app.send(req(Method::PUT, format!("/v1/me/library/{slug}")).cookie(&cookie))
+            .await;
+    }
+
+    let res = app
+        .send(req(Method::GET, "/v1/me/for-you").cookie(&cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let feed = body_json(res).await;
+    assert_eq!(feed["personalized"], true);
+    assert_eq!(feed["based_on"][0], "Roguelike");
+    let items = feed["items"].as_array().unwrap();
+    let slugs: Vec<&str> = items.iter().map(|i| i["slug"].as_str().unwrap()).collect();
+    assert!(
+        !slugs.contains(&"rogue-a") && !slugs.contains(&"rogue-b"),
+        "not what they have: {slugs:?}"
+    );
+    // The three roguelikes they don't have come first (US accounts see 18+ apps too).
+    let mut top: Vec<&str> = slugs[..3].to_vec();
+    top.sort();
+    assert_eq!(
+        top,
+        ["adult", "rogue-c", "rogue-d"],
+        "best matches first: {slugs:?}"
+    );
+    assert!(
+        items[0]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("Because you like Roguelike")
+    );
+    assert_eq!(
+        items[3]["pick"], "discover",
+        "every fourth card is a discovery"
+    );
+    assert!(
+        items[3]["reason"]
+            .as_str()
+            .unwrap()
+            .starts_with("Something different")
+    );
+
+    // Switched off: the same feed as everyone.
+    app.send(
+        req(Method::PATCH, "/v1/me")
+            .cookie(&cookie)
+            .json(json!({ "personalize": false })),
+    )
+    .await;
+    let feed = body_json(
+        app.send(req(Method::GET, "/v1/me/for-you").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(feed["personalized"], false);
+    assert!(
+        feed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["pick"] == "popular")
+    );
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&cookie)).await).await;
+    assert_eq!(me["personalize"], false);
+
+    // UK accounts start in the under-18 view: not personal by default, and no 18+ apps.
+    let (_, uk) = app.user("UK fan", "GB").await;
+    app.send(req(Method::PUT, "/v1/me/library/rogue-a").cookie(&uk))
+        .await;
+    let feed = body_json(
+        app.send(req(Method::GET, "/v1/me/for-you").cookie(&uk))
+            .await,
+    )
+    .await;
+    assert_eq!(feed["personalized"], false);
+    assert!(
+        feed["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|i| i["slug"] != "adult")
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/for-you")).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
+    let app = test_app(db).await;
+    let made = slop_api::sim::generate(
+        &app.db,
+        slop_api::sim::Settings {
+            apps: 160,
+            users: 400,
+            days: 75,
+            seed: 11,
+        },
+    )
+    .await
+    .unwrap();
+    assert!(made.vote_events > 300, "{made:?}");
+    let r = slop_api::sim::report(&app.db, &app.config, 300, 5)
+        .await
+        .unwrap();
+    // Never recommended.
+    assert_eq!(
+        (r.shown_dead, r.shown_in_library_or_played, r.shown_own_apps),
+        (0, 0, 0)
+    );
+    assert_eq!((r.under_18_personal, r.under_18_shown_18_plus), (0, 0));
+    // Better than popular, which is better than random; a quarter is discovery.
+    assert!(r.for_you.hit_rate > r.popular_baseline.hit_rate, "{r:#?}");
+    assert!(
+        r.popular_baseline.hit_rate > r.random_baseline.hit_rate,
+        "{r:#?}"
+    );
+    assert!((0.2..=0.3).contains(&r.discovery_share), "{r:#?}");
+    assert!(r.discovery_fit < r.match_fit);
+    // 👎 and 👍 move the feed.
+    assert!(
+        r.dislike_roguelike_share_after < r.dislike_roguelike_share_before,
+        "{r:#?}"
+    );
+    assert!(r.like_tool_share_after > r.like_tool_share_before, "{r:#?}");
+    assert!(r.gamer_with_tools_tool_share > 0.05, "{r:#?}");
+    // The numbers add up.
+    assert!(r.ratings_checked > 20);
+    assert_eq!(r.ratings_matching, r.ratings_checked);
+    assert_eq!(r.monthly_matching_now, r.ratings_checked);
+    assert!(r.rating_truth_correlation > 0.4, "{r:#?}");
+    assert_eq!(r.players_matching, r.players_checked);
 }

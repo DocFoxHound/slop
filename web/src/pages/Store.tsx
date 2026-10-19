@@ -73,6 +73,8 @@ export function Store() {
           </section>
           )}
 
+          {me && <ForYouShelf />}
+
           <SectionHeader title="Trending" sub="Most played this week" />
           {trending.error ? (
             <ErrorState error={trending.error} onRetry={trending.reload} />
@@ -121,5 +123,27 @@ export function Store() {
         </div>
       </div>
     </div>
+  );
+}
+
+/** Recommendations from the user's own activity, with discovery mixed in (foryou.rs). */
+function ForYouShelf() {
+  const feed = useLoad(() => api.forYou(), []);
+  if (feed.error) return null;
+  const f = feed.data;
+  const sub = !f
+    ? undefined
+    : f.personalized
+      ? `Based on ${f.based_on.join(", ")}, plus something different every fourth`
+      : "Popular, well rated and new. Add apps to your library and play them for picks of your own.";
+  return (
+    <>
+      <SectionHeader title="For you" sub={sub}>
+        <Link to="/account" className="sub">
+          Settings
+        </Link>
+      </SectionHeader>
+      <Shelf apps={f?.items} empty="Nothing to recommend yet." />
+    </>
   );
 }
