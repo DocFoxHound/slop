@@ -28,7 +28,7 @@ export function Sim() {
     try {
       await api.simLogin(u.id);
       await refresh();
-      navigate("/");
+      navigate(u.personas.startsWith("People:") ? "/people/jobs" : "/");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     }
@@ -36,7 +36,9 @@ export function Sim() {
   const shown = users.data.filter((u) => `${u.personas} ${u.display_name}`.toLowerCase().includes(filter.toLowerCase()));
   // "roguelike fan:1,developer:0.35" → "roguelike fan + a little developer"
   const describe = (p: string) =>
-    p
+    p.startsWith("People:")
+      ? p
+      : p
       .split(",")
       .map((part) => {
         const [name, w] = part.split(":");
@@ -50,7 +52,8 @@ export function Sim() {
       <p className="muted">
         Each simulated user has a hidden taste (one or two personas) that decided what they added, played and voted for.
         Pick one to see the store, <b>For you</b> and ratings as they do. UK accounts start with personal recommendations
-        off, as real ones do.
+        off, as real ones do. To try People, view as a <b>People: maker</b> (hiring) or a <b>People: creative</b> (working): you
+        land on their jobs, in every state from inquiry to problem.
       </p>
       <div className="filters">
         <label>
@@ -65,7 +68,9 @@ export function Sim() {
             <div>
               <b>{describe(u.personas)}</b>
               <div className="muted small">
-                {u.display_name} · {u.country_code} · {u.library} in library · {u.votes} votes
+                {u.personas.startsWith("People:")
+                  ? `${u.display_name} · ${u.country_code} · ${u.library} jobs`
+                  : `${u.display_name} · ${u.country_code} · ${u.library} in library · ${u.votes} votes`}
               </div>
             </div>
             <button className="btn small slime" onClick={() => void viewAs(u)}>
