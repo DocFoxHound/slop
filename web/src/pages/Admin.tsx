@@ -187,6 +187,78 @@ function QueueTab() {
         ))}
       </ul>
 
+      <h2 className="section-title">Changes to review ({q.changes.length})</h2>
+      <p className="muted small">
+        Makers asking to change what players download: holding players at a different release, or moving the app to
+        another repository. Approving makes the change straight away.
+      </p>
+      {q.changes.length === 0 && <div className="empty-state">No changes waiting.</div>}
+      <ul className="release-list">
+        {q.changes.map((c) => (
+          <li key={c.id} className="panel panel-pad">
+            <div className="title-row spread">
+              <div className="title-row">
+                <Link to={`/app/${c.app.slug}`}>
+                  <b>{c.app.title}</b>
+                </Link>
+                <span className="muted">by {c.app.maker}</span>
+                <span className="badge soon">{c.kind === "repo" ? "MOVE REPOSITORY" : "SWITCH RELEASE"}</span>
+              </div>
+              <span className="muted small">{formatDate(c.created_at)}</span>
+            </div>
+            <dl className="kv">
+              {c.kind === "repo" ? (
+                <>
+                  <dt>From</dt>
+                  <dd>
+                    <ExternalLink href={c.app.repo_url}>{c.app.repo_url.replace(/^https:\/\//, "")}</ExternalLink>
+                  </dd>
+                  <dt>To</dt>
+                  <dd>
+                    <ExternalLink href={c.repo_url ?? ""}>{(c.repo_url ?? "").replace(/^https:\/\//, "")}</ExternalLink>
+                  </dd>
+                </>
+              ) : (
+                <>
+                  <dt>Players get</dt>
+                  <dd>{c.players_get ? `v${c.players_get}` : "nothing yet"}</dd>
+                  <dt>Change to</dt>
+                  <dd>{c.release_id ? `v${c.release_version} (held there)` : "the newest approved release"}</dd>
+                </>
+              )}
+              {c.note && (
+                <>
+                  <dt>Maker says</dt>
+                  <dd>{c.note}</dd>
+                </>
+              )}
+            </dl>
+            {c.kind === "repo" && (
+              <p className="muted small">
+                Check the new repository belongs to the same maker and project. Its first release will come back here for
+                review.
+              </p>
+            )}
+            <div className="row-actions">
+              <button
+                className="btn slime small"
+                disabled={busy !== undefined}
+                onClick={() => void run(c.id, () => api.admin.approveChange(c.id))}
+              >
+                {busy === c.id ? "Approving…" : "Approve"}
+              </button>
+              <ReasonButton
+                label="Turn down"
+                placeholder="Reason, shown to the maker"
+                danger
+                disabled={busy !== undefined}
+                onSubmit={(reason) => void run(c.id, () => api.admin.rejectChange(c.id, reason))}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+
       <h2 className="section-title">Ready for the store ({q.ready_to_list.length})</h2>
       {q.ready_to_list.length === 0 && <div className="empty-state">No drafts are ready to list.</div>}
       <ul className="release-list">

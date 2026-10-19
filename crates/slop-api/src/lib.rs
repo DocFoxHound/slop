@@ -9,6 +9,7 @@ pub mod config;
 pub mod desktop_updates;
 pub mod error;
 pub mod library;
+pub mod manage;
 pub mod policy;
 pub mod pulse;
 pub mod ratelimit;
@@ -99,6 +100,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(library::routes())
         .merge(slop_build::routes())
         .merge(updates::routes())
+        .merge(manage::routes())
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
         .merge(pulse::routes())

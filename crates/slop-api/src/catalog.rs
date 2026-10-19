@@ -571,7 +571,7 @@ fn validate_text(
 }
 
 /// Public `https` repo URLs only (DESIGN §8: GitHub, GitLab, Bitbucket or self-hosted).
-fn validate_repo_url(value: &str) -> ApiResult<String> {
+pub(crate) fn validate_repo_url(value: &str) -> ApiResult<String> {
     let invalid = || ApiError::invalid("repo_url", "use the https:// address of the repository");
     let url = Url::parse(value.trim()).map_err(|_| invalid())?;
     if url.scheme() != "https"
@@ -734,14 +734,14 @@ async fn update_app(
     Json(changes): Json<AppChanges>,
 ) -> ApiResult<Json<AppDetail>> {
     let mut tx = state.db.begin().await?;
-    let owner: Option<(Uuid, Uuid)> =
-        sqlx::query_as("select id, maker_id from apps where slug = $1 for update")
+    let owner: Option<(Uuid, Uuid, String)> =
+        sqlx::query_as("select id, maker_id, repo_url from apps where slug = $1 for update")
             .bind(&slug)
             .fetch_optional(&mut *tx)
             .await?;
     // Someone else's app looks the same as a missing one, so drafts can't be discovered.
-    let app_id = match owner {
-        Some((id, maker_id)) if maker_id == user.id => id,
+    let (app_id, current_repo) = match owner {
+        Some((id, maker_id, repo)) if maker_id == user.id => (id, repo),
         _ => return Err(ApiError::NotFound),
     };
 
@@ -763,8 +763,18 @@ async fn update_app(
         )?);
     }
     if let Some(repo_url) = &changes.repo_url {
-        qb.push(", repo_url = ")
-            .push_bind(validate_repo_url(repo_url)?);
+        let repo_url = validate_repo_url(repo_url)?;
+        // Once players have the app, moving it is checked first (manage.rs).
+        if crate::manage::repo_locked(&mut tx, app_id).await?
+            && !crate::manage::same_repo(&repo_url, &current_repo)
+        {
+            return Err(ApiError::Conflict(
+                "players already have this app, so moving it to another repository is reviewed \
+                 first: request the move from Manage"
+                    .into(),
+            ));
+        }
+        qb.push(", repo_url = ").push_bind(repo_url);
     }
     if let Some(license) = &changes.license_spdx {
         qb.push(", license_spdx = ")

@@ -350,8 +350,8 @@ impl Library {
                         extract_zip(&archive_path, &files_clone)
                     }
                 })
-                    .await
-                    .map_err(|e| Error::Install(e.to_string()))??;
+                .await
+                .map_err(|e| Error::Install(e.to_string()))??;
                 let exec = files.join(&launch.exec);
                 if !fs::symlink_metadata(&exec).is_ok_and(|m| m.is_file()) {
                     return Err(Error::Install(format!(

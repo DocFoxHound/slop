@@ -105,6 +105,9 @@ export function Publish() {
               </div>
             </div>
             <div className="row-actions">
+              <Link className="btn small" to={`/publish/${app.slug}/manage`}>
+                Manage
+              </Link>
               <Link className="btn small" to={`/publish/${app.slug}`}>
                 Edit page
               </Link>
@@ -204,6 +207,11 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
         }
       : EMPTY,
   );
+  // Once players have the app, moving it to another repository is reviewed first (Manage).
+  const repoLocked = useLoad(
+    () => (existing ? api.manage(existing.slug).then((m) => m.repo_locked) : Promise.resolve(false)),
+    [existing?.slug],
+  ).data;
   const [slugTouched, setSlugTouched] = useState(Boolean(existing));
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
@@ -237,7 +245,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
     }
   };
 
-  const field = (name: keyof NewApp, label: string, input: ReactNode, hint?: string) => (
+  const field = (name: keyof NewApp, label: string, input: ReactNode, hint?: ReactNode) => (
     <label>
       {label}
       {input}
@@ -337,9 +345,17 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             value={form.repo_url}
             placeholder="https://github.com/you/your-app"
             required
+            readOnly={repoLocked}
             onChange={(e) => set("repo_url", e.target.value)}
           />,
-          "Public, on GitHub, GitLab, Bitbucket or your own server.",
+          repoLocked && existing ? (
+            <>
+              Players already have this app, so moving it is checked by a person first.{" "}
+              <Link to={`/publish/${existing.slug}/manage`}>Request a move from Manage</Link>.
+            </>
+          ) : (
+            "Public, on GitHub, GitLab, Bitbucket or your own server."
+          ),
         )}
         <div className="row-2">
           <LicensePicker

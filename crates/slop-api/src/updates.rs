@@ -55,26 +55,32 @@ pub fn routes() -> Router<AppState> {
 
 /// Whether the app's next release may be approved without a person, and if not, why.
 pub async fn auto_approval(db: &sqlx::PgPool, app_id: Uuid) -> anyhow::Result<Result<(), String>> {
-    let (enabled, approved_at, setback): (bool, Option<OffsetDateTime>, bool) = sqlx::query_as(
-        "select a.auto_update,
+    let (enabled, approved_at, setback, moved): (bool, Option<OffsetDateTime>, bool, bool) =
+        sqlx::query_as(
+            "select a.auto_update,
                 h.at,
                 exists (select 1 from releases r where r.app_id = a.id and h.at is not null and (
                     (r.status = 'revoked' and r.revoked_at > h.at) or
-                    (r.status = 'rejected' and r.reviewed_at > h.at)))
+                    (r.status = 'rejected' and r.reviewed_at > h.at))),
+                a.repo_changed_at is not null
          from apps a
          left join lateral (
+             -- The last approval by a person, since the app last moved repository.
              select max(reviewed_at) as at from releases r
              where r.app_id = a.id and r.status in ('approved', 'revoked')
                and coalesce(r.reviewed_by, '') <> $2
+               and (a.repo_changed_at is null or r.reviewed_at > a.repo_changed_at)
          ) h on true
          where a.id = $1",
-    )
-    .bind(app_id)
-    .bind(AUTO_REVIEWER)
-    .fetch_one(db)
-    .await?;
+        )
+        .bind(app_id)
+        .bind(AUTO_REVIEWER)
+        .fetch_one(db)
+        .await?;
     Ok(if !enabled {
         Err("automatic updates are off for this app".into())
+    } else if approved_at.is_none() && moved {
+        Err("the app moved repository, so its next release is reviewed by a person".into())
     } else if approved_at.is_none() {
         Err("an app's first release is always reviewed by a person".into())
     } else if setback {
@@ -263,7 +269,11 @@ fn download_url(repo_url: &str, tag: &str, name: &str) -> String {
     )
 }
 
-async fn owned(state: &AppState, slug: &str, user: &CurrentUser) -> ApiResult<(Uuid, String)> {
+pub(crate) async fn owned(
+    state: &AppState,
+    slug: &str,
+    user: &CurrentUser,
+) -> ApiResult<(Uuid, String)> {
     let row: Option<(Uuid, Uuid, String)> =
         sqlx::query_as("select id, maker_id, repo_url from apps where slug = $1")
             .bind(slug)

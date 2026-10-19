@@ -4,8 +4,16 @@ Slop is a store for apps and games made with AI: open source, checked before the
 free to download, and rated by the people who play them. This page covers everything needed to
 publish: what Slop asks of your project, how to set it up, and what happens after you submit.
 
+> **Using an AI coding assistant?** Tell it to read this page (the plain-text copy is at
+> `/publishing.md` on this site). It can work out what's required and what's optional, and set
+> your project up for publishing on Slop. For example: *"Read this page, tell me what's required
+> and what's optional for publishing on Slop, then set up my project so it's ready to deploy
+> there."*
+
 It's written so that a person or an AI agent can follow it from start to finish. Agents: the
-[checklist for agents](#checklist-for-agents) near the end lists every step in order.
+[checklist for agents](#checklist-for-agents) near the end lists every step in order, and
+[What Slop asks of your project](#what-slop-asks-of-your-project) says what's required and what's
+optional.
 
 > **This is a test server.** Builds aren't automatically scanned yet and maker signatures aren't
 > required. Each app's first release is reviewed by a person. Things marked *(coming)* below are planned
@@ -244,6 +252,28 @@ harmful; it then stops launching for everyone.
 
 **Where things stand:** **Publish** lists each of your apps with the step it's waiting on or
 stuck at. **Releases & progress** has the full checklist and every release's history.
+
+### 5. Managing your app
+
+Each app has a **Manage** page (Publish → **Manage**):
+
+- **What players get.** By default players get the newest approved release. You can instead hold
+  them at any approved release, to roll back a bad update or to wait before sending a new one out,
+  and switch back later. New releases are still checked and approved while you hold; they just
+  don't go out until you switch.
+- **Repository.** Before anyone has your app you can change it freely. Once players have it, a
+  move to another repository is always checked by a person, and the first release from the new
+  repository is reviewed by a person too. Players who installed from the old repository reinstall
+  before their Slop app takes updates from the new one.
+- **Updates.** The same **Pick up new GitHub releases** and **Approve updates automatically**
+  settings as on Releases & progress.
+- **Requests.** Every change you asked for, with its decision and any reason. You can cancel
+  one that's still waiting.
+
+Changes that would have players download something different are checked before they happen.
+Switching to another approved release follows the same rule as updates: it goes through straight
+away when automatic approval applies (the release already passed every check), otherwise a person
+looks. Everything else, like the store page, platforms and settings, changes straight away.
 
 ## Slop Pulse (player counts)
 

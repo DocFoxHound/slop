@@ -304,6 +304,10 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 
 /* ---- documents (publishing guide) ---------------------------------------- */
 .guide.page.narrow { max-width: 860px; }
+.ai-notice { border-color: var(--slime); background: var(--slime-soft); margin-bottom: 20px; }
+.ai-notice p { margin: 6px 0; }
+.ai-prompt { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; }
+.ai-prompt code { flex: 1; display: block; padding: 8px 10px; line-height: 1.5; white-space: normal; }
 .doc { color: var(--text-2); line-height: 1.65; }
 .doc h1 { font-size: 32px; margin: 8px 0 16px; color: var(--text); }
 .doc h2 { font-size: 22px; margin: 36px 0 12px; color: var(--text); padding-top: 12px; border-top: 1px solid var(--line); }
@@ -371,3 +375,6 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .platform-picker { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .platform-picker legend { font-weight: 700; margin-bottom: 4px; }
 .platform-picker .sub-options { margin-left: 28px; display: flex; flex-direction: column; gap: 6px; }
+.choice-list { display: flex; flex-direction: column; gap: 10px; }
+.form .choice-list label.check { align-items: flex-start; }
+.form .choice-list label.check input { margin-top: 2px; flex: none; }

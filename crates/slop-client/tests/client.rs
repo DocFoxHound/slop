@@ -654,7 +654,12 @@ async fn tar_gz_builds_install_and_launch() {
     let dir = tempdir();
     let lib = library(&dir);
     let err = lib
-        .install(&manifest_for(&base, "evil.tar.gz", &evil, "r2"), Platform::Linux, None, |_, _| {})
+        .install(
+            &manifest_for(&base, "evil.tar.gz", &evil, "r2"),
+            Platform::Linux,
+            None,
+            |_, _| {},
+        )
         .await
         .unwrap_err();
     assert!(err.to_string().contains("unsafe"), "{err}");
