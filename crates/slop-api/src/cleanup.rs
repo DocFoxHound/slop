@@ -1,4 +1,5 @@
-//! Deletes what's no longer needed (LEGAL-GUIDANCE PRIV-1, §15: keep as little as possible).
+//! Deletes what's no longer needed (LEGAL-GUIDANCE PRIV-1, §15: keep as little as possible), and
+//! completes People jobs whose 7-day window has passed.
 //!
 //! Runs hourly in every API instance; the deletes are idempotent, so instances overlapping is
 //! harmless.
@@ -66,6 +67,11 @@ pub async fn run(state: crate::AppState) {
             Ok(n) if n > 0 => tracing::info!(deleted = n, "old pulse sessions"),
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "pulse cleanup failed"),
+        }
+        match crate::people::jobs::auto_complete(&state.db, time::OffsetDateTime::now_utc()).await {
+            Ok(n) if n > 0 => tracing::info!(completed = n, "people jobs completed after 7 days"),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "people auto-complete failed"),
         }
         state.rate_limiter.prune();
         tokio::time::sleep(StdDuration::from_secs(3600)).await;

@@ -2,7 +2,7 @@
 
 **Status:** Concept · clickable mockup in this folder
 **Last updated:** 2026-10-17
-**Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) (how it's built) · [`PAYMENTS.md`](PAYMENTS.md) (donations and Humans payments) · [`SECURITY.md`](SECURITY.md) (security and trust) · [`METRICS.md`](METRICS.md) (donation & vote history) · [`LEGAL.md`](LEGAL.md) (legal framework)
+**Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) (how it's built) · [`PAYMENTS.md`](PAYMENTS.md) (donations and People payments) · [`SECURITY.md`](SECURITY.md) (security and trust) · [`METRICS.md`](METRICS.md) (donation & vote history) · [`LEGAL.md`](LEGAL.md) (legal framework)
 
 ---
 
@@ -22,7 +22,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 | **Players / users** | A place to find scanned AI-made apps and games, with honest ratings and community fixes |
 | **Publishers** | Free distribution, donations, a player count, and a community that fixes and ports their work |
 | **Modders / porters** | First-class branches; their builds show up for players on platforms the publisher doesn't support |
-| **Creatives (Humans)** | A directory where developers hire them to replace AI-generated assets with crafted ones |
+| **Creatives (People)** | A directory where developers hire them to replace AI-generated assets with crafted ones |
 | **Groups (Teams)** | Player communities, and verified developer studios |
 
 ## 3. Platforms
@@ -36,7 +36,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 ## 4. Accounts
 
 - Sign in with **Google, Apple, Microsoft, GitHub or Discord**. Slop stores no passwords and only receives a name and email.
-- **Accounts are 16+ everywhere.** UK users (detected from IP, billing, app-store and stated country) start in an **under-18 view**: 18+ content is hidden, and only connections can message them. A real age check unlocks 18+ content. Donating and Humans jobs are 18+ everywhere (`LEGAL.md` §6).
+- **Accounts are 16+ everywhere.** UK users (detected from IP, billing, app-store and stated country) start in an **under-18 view**: 18+ content is hidden, and only connections can message them. A real age check unlocks 18+ content. Donating and People jobs are 18+ everywhere (`LEGAL.md` §6).
 - Browsing works signed out. Anything personal requires an account: library, Interested, votes, donations, reports, publishing, teams.
 - **One account = one vote per app = one Slop Pulse count per game.** This is the main defence against botting.
 - Users can link devices (computer and phones) to their account.
@@ -94,6 +94,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 | 0–19 | Overwhelmingly Slop |
 
 - **Ratings over time:** a monthly chart of % Not Slop shows whether updates and branches are improving the app.
+- **Since the new work:** apps that hired creatives through Slop also show % Not Slop from votes since the first release with that work (§15.4). Hiring never changes how votes count.
 - Voting opens at **full release**. Coming soon and beta pages show Interested counts instead.
 
 ## 8. Publishing
@@ -195,19 +196,70 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 
   Verification is re-checked regularly. If any of these stop being true, the badge is removed.
 
-## 15. Humans (creative marketplace)
+## 15. People (creative marketplace)
 
-- A **separate section** from the store, where individuals and studios advertise creative services to developers: 2D art, pixel art, 3D modelling, animation, music, sound design, writing, UI/UX, voice acting, localization, playtesting.
-- **Profile:** portfolio, services and prices, turnaround, availability, location, the apps they've worked on, and a **required AI-use disclosure** (No AI / AI-assisted / Mostly AI-generated).
-- **Rated with the same 👍 Not Slop / 👎 Slop buttons**, but **only by verified clients** who completed a job through Slop.
-- **Flow:** request a quote → the creative sends price, terms and a Service Agreement → the client pays the creative directly (Stripe, `PAYMENTS.md` §7) → delivery → the client has **7 days** to mark the job complete, after which it completes automatically → the client can vote.
-- **Slop doesn't settle disputes** (decided). The contract is between the creative and the client. Refunds are the creative's decision. Slop only acts on rule-breaking such as scams or fraud (`LEGAL.md` §4).
-- **Contact:** creatives and clients talk directly through Slop chat (§19).
-- Filters: skill, taking work now, AI use, studios only.
+**Decided 2026-10-19.** People is a **separate section** from the store. Artists, composers, sound designers, writers, voice actors, testers and studios offer services to makers. It's the one place on Slop where something is **sold**: a creative's work to a maker (`LEGAL.md` §4). The aim is that hiring a real person through Slop is **easier than any other way**: one offer, one tap to pay, credit on the app page when it's done.
+
+### 15.1 Profiles (different from app pages)
+A creative's page is built to sell a service, so it isn't an app page with a different header:
+- **Header:** name, "Individual" or "Studio · N people", headline, location, skills, "Taking work" or "Fully booked", typical turnaround, and the **AI-use disclosure** (required: No AI / AI-assisted / Mostly AI-generated, with an optional note). Whether they're a **business (trader)** is shown too (`LEGAL-GUIDANCE.md` HUM-1).
+- **Rating:** % Not Slop from **verified clients only** (a completed job through Slop), shown from 3 reviews, with the count.
+- **Portfolio:** pictures, videos (YouTube) and **audio tracks** for composers. Like app pictures, Slop doesn't host them: they live in a public GitHub repository, listed in `.slop/portfolio.json`, read at one commit, checked, and **reviewed before they show** (§15.6). A first profile goes live when its first portfolio is approved.
+- **Services:** up to 8 packages (name, what's included, starting price, typical days, skill). "Hire" on a package starts a request with it filled in.
+- **Verified reviews:** each one says ✓ Verified client, the project and what was made, and the client's 👍/👎 with text. The creative can reply once, publicly.
+- **Worked on:** the apps that credit them (§15.4).
+- **Customisation:** an accent colour (from a palette that keeps contrast readable), a banner and avatar from their portfolio, the **order of the sections** (portfolio, services, reviews, worked on, about), the portfolio order, an About section (Markdown, through the safe renderer), and up to 5 links (website, ArtStation, Bandcamp…), shown with their domain.
+- **Directory (`/people`):** filters for skill, taking work now, AI use, studios only. Default order is a **daily shuffle**, so nobody is buried. "Best rated" and "Most clients" are sorts the viewer picks (HUM-10).
+
+### 15.2 Hiring, start to finish
+Every job belongs to **one of the maker's projects**, at any stage (coming soon, beta or released; public or private). That's what lets the work be credited.
+
+| Step | Who | What they see and do |
+|---|---|---|
+| 1. Get paid set-up | Creative, once | "Get paid": Stripe's own sign-up, a few minutes. Until it's done, the profile says "Not taking paid work yet". |
+| 2. Request | Maker | **Hire** (on a package or the profile) → pick the project → say what they need (and a hoped-for date). |
+| 3. Offer | Creative | The offer is pre-filled from the package: **what you'll get, price, payment (half now, half on delivery by default), due date, revisions, who owns it, open-source use, credit**. They adjust and send. Or decline. |
+| 4. Accept | Maker | A **one-screen summary in plain words**, with the full Service Agreement one tap away. **Accept & pay $X** (the first, largest number is what they pay). Or "Ask for changes" with a note, or decline. |
+| 5. Work | Creative | Starts once the first payment is in (or straight away for "all on delivery"). |
+| 6. Deliver | Creative | **Mark delivered** with a note and links to the files. |
+| 7. Finish | Maker | **Looks good** (paying the rest, if any), or **Ask for a revision** while revisions are left. After **7 days** with no answer, the job completes on its own. |
+| 8. After | Both | The maker can review the creative. The creative is credited on the app page, and the app appears on their profile. |
+
+- **Job records, not chat:** the request, offer, notes on changes, delivery and revision notes are short texts that are **part of the contract record** (kept for contract claims, `LEGAL-GUIDANCE.md` §15). Free conversation belongs in end-to-end encrypted chat (§19), which isn't built yet.
+- **Cancelling:** before acceptance, either side can decline. After it, the creative can cancel (and refunds from their Stripe dashboard). EU/UK consumers get the legal **withdrawal button** (HUM-3). Slop doesn't decide disputes.
+
+### 15.3 The contract
+The **default Service Agreement** (`crates/slop-api/src/service_agreement.md`, versioned) is filled in from the offer. Both sides see the same plain summary:
+- **What:** title and scope.
+- **Price and payment:** up front, **half now and half on delivery (default)**, or all on delivery.
+- **Due date and revisions.**
+- **Who owns it:** **"You own it"** (copyright is transferred to the maker on full payment; the creative may show it in their portfolio) or **"Licence for this project"** (the maker may use, change and publish it in the named project, forever; the creative keeps the copyright).
+- **Open source:** whether the work may be published **under the project's open-source licence** (anyone can reuse it), or stays **all rights reserved** inside the repository. Asked plainly, because every public Slop app has public source.
+- **Credit:** shown on the project's page (on by default).
+- **AI use** for this job, and the creative's promise that it's true and that they have the rights to what they deliver.
+- **Refunds:** the creative's policy (default: full refund before work starts; after that, for undelivered parts).
+- **Law:** the creative's country, without removing the client's consumer rights where they live.
+
+"Accept" is the signature (US E-SIGN, EU eIDAS simple electronic signature). Slop stores the exact text both sides agreed to, its hash, the template version, and who accepted when.
+
+### 15.4 What a project gets: credit, a badge, and "since the new work"
+Hiring people **never changes how votes count**. A rating is what players say (`LEGAL.md` §5.5). Instead:
+- **Credits** on the app page: "Art by @creative · Music by @composer", linking to their profiles.
+- **✋ Made with people badge** on the app page and store tiles, plus a store filter and shelf, once the app has at least one **completed, fully paid** job through Slop of $10 or more. It counts jobs, not money spent, so a small pixel-art job counts the same as a big one.
+- **"Since the new work" rating** on the app's ratings panel: % Not Slop from votes cast or changed **since the first release after the job completed**, beside the overall rating. Old 👎 votes about AI art no longer hide that the app improved, honestly, because only newer votes are in it.
+- These count only for jobs done through Slop, which is the reason to stay: creatives can always take work elsewhere.
+
+### 15.5 Money in one line
+The maker pays the creative **directly** (Stripe, the creative's own account). Slop takes **5%** as its platform fee, out of what the creative receives, and never holds the money. Details: `PAYMENTS.md` §7.
+
+### 15.6 Review and safety
+- New portfolios and portfolio changes wait for review in the admin panel, like app pictures, and AI reviewers can see and decide them (`review.rs`).
+- 18+ to sell or hire (confirmed on first use). Rules from `LEGAL-GUIDANCE.md` §4 (trader declaration, withdrawal, independence of creatives) apply.
+- **Slop doesn't settle disputes.** It acts on rule-breaking (scams, fraud, repeated non-delivery).
 
 ## 16. Reporting & moderation
 
-- Every app, branch, review and Humans profile has a **Report** button. Reasons: malware, license violation, illegal content, scam, pay-to-win/loot boxes, source doesn't match build, misleading page, broken build, other.
+- Every app, branch, review and People profile has a **Report** button. Reasons: malware, license violation, illegal content, scam, pay-to-win/loot boxes, source doesn't match build, misleading page, broken build, other.
 - Serious reports (malware, illegal content, scams, source mismatch) trigger an **automatic re-scan** and a **human review within 24 hours**.
 
 ## 17. Decisions and open questions
@@ -218,7 +270,7 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 2. **Dead projects:** 90 days without commits, only for Coming soon and Beta.
 3. **Private Slop:** private repos are allowed (GitHub, GitLab, Bitbucket, self-hosted).
 4. **Votes:** weighted by playtime, with weighted and unweighted both shown. Public on profiles by default.
-5. **Money:** Stripe, with Slop never holding money. Donors pay card fees. Donors anonymous by default. No wallet or top-ups. No Slop dispute resolution for Humans, and a 7-day completion window. Monthly **server donations**.
+5. **Money:** Stripe, with Slop never holding money. Donors pay card fees. Donors anonymous by default. No wallet or top-ups. No Slop dispute resolution for People, and a 7-day completion window. Monthly **server donations**.
 6. **Builds:** made by **Slop Build** on GitHub's free runners and kept on the maker's release page. Slop stores no builds or source. The pipeline signs, then Slop signs after scanning. No staged rollouts. Steam-style installs into a library folder (`ARCHITECTURE.md` §6).
 7. **Platform:** Tauri everywhere, one cloud provider, PostgreSQL only, small budget.
 8. **Accounts:** 16+ everywhere. UK accounts start in an under-18 view, and an age check unlocks 18+ content. No VPN detection. A 24-hour human review of serious reports.
@@ -243,11 +295,11 @@ All data is invented. Sign-in, scans, installs, Pulse handshakes, donations, rep
 
 A Steam-style communication system. Not designed in detail yet.
 - **Friends and direct messages** between users, plus **group chats** for player teams.
-- **Humans conversations:** each quote or job gets its own thread between the creative and the client, with the Service Agreement and the delivery and completion steps shown in the thread. This is how creatives contact their clients.
+- **People conversations:** each quote or job gets its own thread between the creative and the client, with the Service Agreement and the delivery and completion steps shown in the thread. This is how creatives contact their clients.
 - **History backups are on by default** (opt-out). They're encrypted with a key only the user holds, so they stay end-to-end (`SECURITY.md` §8.5).
 - **Privacy (decided):** messages are between people and **end-to-end encrypted**, so Slop can't read them (`SECURITY.md` §8.5). Link warnings run in the recipient's app. Moderators only see messages that a participant reports. Chat is in the Slop app only, not the website.
 - **Safety:**
-  - **UK under-18 view:** only connections (friends, team members, Humans job partners) can message the user, and the "anyone" setting is locked off.
+  - **UK under-18 view:** only connections (friends, team members, People job partners) can message the user, and the "anyone" setting is locked off.
   - Block and report buttons.
   - Warnings on off-platform payment requests and on links to unknown sites.
   - Only users who are friends or share a job or team can message each other, unless a user allows messages from anyone.

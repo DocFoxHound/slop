@@ -37,7 +37,7 @@ function AppView({ app }: { app: AppDetail }) {
   const counted = players.data && (players.data.playing_now > 0 || players.data.peak_this_month > 0);
   const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
   const latest = releases.data?.find((r) => r.status === "approved");
-  const provenance = latest && latest.files.every((f) => f.provenance) ? latest.files[0].provenance : null;
+  const provenance = latest && latest.files.length > 0 && latest.files.every((f) => f.provenance) ? latest.files[0].provenance : null;
   const packages = latest?.files.filter((f) => f.platform === "linux-deb" || f.platform === "linux-rpm") ?? [];
   const upcoming = app.stage !== "released";
   const deadline = deadlineText(app);
@@ -110,6 +110,21 @@ function AppView({ app }: { app: AppDetail }) {
             </div>
           )}
           <p className="lede">{app.summary}</p>
+          {app.credits.length > 0 && (
+            <div className="credits">
+              <span className="badge official" title="This app's maker hired these creatives through People">
+                ✋ MADE WITH PEOPLE
+              </span>
+              <span className="small">
+                {app.credits.map((c, i) => (
+                  <span key={`${c.handle}-${i}`}>
+                    {i > 0 && " · "}
+                    {c.role} by <Link to={`/people/${c.handle}`}>{c.name}</Link>
+                  </span>
+                ))}
+              </span>
+            </div>
+          )}
           <div className="chips">
             {app.tag_details.map((t) => (
               <Link className="chip" key={t.slug} to={`/tag/${t.slug}`}>

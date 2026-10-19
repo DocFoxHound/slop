@@ -11,8 +11,11 @@ import { Library } from "./pages/Library";
 import { Releases } from "./pages/Releases";
 import { Manage } from "./pages/Manage";
 import { Download } from "./pages/Download";
-import { Browse, CategoryPage, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
+import { Browse, CategoryPage, MadeWithPeople, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
+import { JobPage, MyJobs } from "./pages/Jobs";
+import { People, PersonPage } from "./pages/People";
+import { PeopleEdit } from "./pages/PeopleEdit";
 import { Sim } from "./pages/Sim";
 import { Store } from "./pages/Store";
 import { SessionProvider } from "./session";
@@ -42,6 +45,12 @@ const router = createBrowserRouter([
       { path: "/signin", element: <SignIn /> },
       { path: "/signup", element: <SignUp /> },
       { path: "/account", element: <Account /> },
+      { path: "/people", element: <People /> },
+      { path: "/people/me", element: <PeopleEdit /> },
+      { path: "/people/jobs", element: <MyJobs /> },
+      { path: "/people/:handle", element: <PersonPage /> },
+      { path: "/jobs/:id", element: <JobPage /> },
+      { path: "/made-with-people", element: <MadeWithPeople /> },
       { path: "/sim", element: <Sim /> },
       { path: "*", element: <NotFound /> },
     ],

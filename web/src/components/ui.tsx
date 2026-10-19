@@ -62,6 +62,11 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
       </div>
       <div className="tile-body">
         {reason && <span className="why">{reason}</span>}
+        {app.made_with_people && (
+          <span className="made-with-people" title="Made with creatives hired through People">
+            ✋ Made with people
+          </span>
+        )}
         <span className="d">{app.summary}</span>
         {app.not_slop_percent !== null && (
           <span className={`tile-rating ${app.not_slop_percent >= 70 ? "good" : app.not_slop_percent < 40 ? "bad" : "mixed"}`}>

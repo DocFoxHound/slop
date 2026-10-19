@@ -7,7 +7,7 @@
 ---
 
 Slop keeps a detailed history of:
-- **Money:** donations, server donations and Humans payments, plus their refunds. (Donations aren't purchases; see `LEGAL.md` §3.2.)
+- **Money:** donations, server donations and People payments, plus their refunds. (Donations aren't purchases; see `LEGAL.md` §3.2.)
 - **Likes/dislikes:** 👍 Not Slop / 👎 Slop votes, including every time someone changes their vote.
 
 **Database: PostgreSQL only** (decided 2026-10-17). Gameplay data isn't collected. Slop Pulse stays as described in DESIGN §11.
@@ -21,7 +21,7 @@ These records mirror Stripe (`PAYMENTS.md` §8). Slop holds no balances, so this
 |---|---|
 | Donation | donor, app (or branch), amount the maker receives, total charged, Slop fee, card fee, currency, whether the donor shared their name with the maker (private), message, time |
 | Server donation | the same, plus the recurring setup it belongs to, which charge in the series it is, and the cancellation time |
-| Humans payment | client, creative, job, milestone, amount, fee, status |
+| People payment | client, creative, job, milestone, amount, fee, status |
 | Refund / dispute | the original payment, amount, who started it (maker/creative, or a card dispute), time |
 
 ### 1.2 Vote history

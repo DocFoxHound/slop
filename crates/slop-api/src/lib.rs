@@ -13,6 +13,7 @@ pub mod github_app;
 pub mod library;
 pub mod manage;
 pub mod media;
+pub mod people;
 pub mod policy;
 pub mod pulse;
 pub mod ratelimit;
@@ -20,6 +21,7 @@ pub mod releases;
 pub mod review;
 pub mod scan;
 pub mod sim;
+pub mod sim_people;
 pub mod slop_build;
 pub mod tokens;
 pub mod updates;
@@ -118,6 +120,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(votes::routes())
         .merge(foryou::routes())
         .merge(sim::routes())
+        .merge(people::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(

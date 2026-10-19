@@ -254,6 +254,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         media: slop_api::config::MediaConfig {
             github_raw_base: format!("{github_base}raw/").parse().unwrap(),
         },
+        payments: Default::default(),
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
         simulation: false,
@@ -4491,4 +4492,1011 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
     assert_eq!(r.monthly_matching_now, r.ratings_checked);
     assert!(r.rating_truth_correlation > 0.4, "{r:#?}");
     assert_eq!(r.players_matching, r.players_checked);
+
+    // People: creatives, jobs in every state, payments through the real code.
+    let p = &r.people;
+    assert!(made.people.jobs > 40, "{made:?}");
+    assert_eq!(
+        p.live_profiles as usize,
+        slop_api::sim_people::CREATIVES.len()
+    );
+    assert_eq!(
+        p.portfolios_waiting_for_review as usize,
+        slop_api::sim_people::WAITING.len()
+    );
+    for status in [
+        "requested",
+        "offered",
+        "in_progress",
+        "completed",
+        "declined",
+    ] {
+        assert!(p.jobs_by_status.contains_key(status), "{p:#?}");
+    }
+    assert_eq!(p.fees_not_5_percent, 0);
+    assert_eq!(p.credit_rule_violations, 0, "{p:#?}");
+    assert!(p.credited_jobs > 5, "{p:#?}");
+    assert!(p.completed_automatically > 0, "{p:#?}");
+    assert_eq!((p.reviews_not_completed, p.reviews_not_by_client), (0, 0));
+    assert_eq!(p.overall_rating_untouched, p.badge_apps);
+    // Too few reviews per creative at this size to score ratings; the sandbox report does.
+    assert!(p.reviews > 30, "{p:#?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// People: creatives, jobs, payments, credits (DESIGN §15)
+
+fn profile(handle: &str, trader: bool) -> Value {
+    json!({
+        "handle": handle,
+        "name": "Vera Okafor",
+        "kind": "individual",
+        "headline": "Pixel art and tiny animations",
+        "skills": ["pixel-art", "music"],
+        "ai_use": "none",
+        "trader": trader,
+        "taking_work": true,
+        "turnaround": "1–2 weeks",
+        "accent": "grape",
+        "sections": ["services", "portfolio"],
+        "links": [{ "label": "", "url": "https://www.artstation.com/vera" }],
+        "services": [
+            { "name": "Sprite sheet", "description": "One character, 4 directions", "price_minor": 12000, "currency": "usd", "days": 7, "skill": "pixel-art" }
+        ],
+    })
+}
+
+/// A creative whose profile is live (portfolio approved) and who can be paid (simulated).
+async fn live_creative(app: &TestApp, handle: &str, country: &str, trader: bool) -> (Uuid, String) {
+    let (id, cookie) = app.user(handle, country).await;
+    let mut p = profile(handle, trader);
+    p["confirm_adult"] = json!(true);
+    let res = app
+        .send(req(Method::PUT, "/v1/me/creative").cookie(&cookie).json(p))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let set = Uuid::now_v7();
+    sqlx::query(
+        "insert into portfolio_sets (id, creative_id, repo_url, commit_sha, works, fingerprint, status, source)
+         values ($1, $2, 'https://github.com/x/y', repeat('c', 40), '[]', 'f', 'approved', 'sim')",
+    )
+    .bind(set)
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update creatives set portfolio_set_id = $2 where user_id = $1")
+        .bind(id)
+        .bind(set)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/me/creative/stripe").cookie(&cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
+    (id, cookie)
+}
+
+fn sprite_offer(payment: &str) -> Value {
+    json!({
+        "title": "Knight sprite sheet",
+        "scope_md": "4 directions × 8 frames.",
+        "price_minor": 12001,
+        "currency": "usd",
+        "payment": payment,
+        "due_date": (OffsetDateTime::now_utc().date() + time::Duration::days(14)).to_string(),
+        "revisions": 1,
+        "rights": "transfer",
+        "open_source": false,
+        "credit": true,
+        "ai_use": "none"
+    })
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn creatives_go_live_with_a_reviewed_portfolio(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, cookie) = app.user("Composer", "US").await;
+    let (_, other) = app.user("Visitor", "US").await;
+    let (_, admin_cookie) = make_admin(&app, "Admin").await;
+
+    // Adults only, confirmed once.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/creative")
+                .cookie(&cookie)
+                .json(profile("loopsmith", true)),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let mut p = profile("loopsmith", true);
+    p["confirm_adult"] = json!(true);
+    let res = app
+        .send(req(Method::PUT, "/v1/me/creative").cookie(&cookie).json(p))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let me = body_json(res).await;
+    assert_eq!(me["live"], false);
+    assert_eq!(
+        me["sections"],
+        json!(["services", "portfolio", "reviews", "worked_on", "about"])
+    );
+    assert_eq!(me["links"][0]["label"], "www.artstation.com");
+    assert_eq!(me["services"][0]["id"].as_str().unwrap().len(), 8);
+    assert_eq!(me["payments"], "off");
+    // Handles are unique; bad links and unknown skills are refused.
+    let (_, rival) = app.user("Rival", "US").await;
+    let mut p = profile("loopsmith", false);
+    p["confirm_adult"] = json!(true);
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/creative")
+                .cookie(&rival)
+                .json(p.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    p["handle"] = json!("rival");
+    p["links"] = json!([{ "label": "x", "url": "javascript:alert(1)" }]);
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/creative")
+                .cookie(&rival)
+                .json(p.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Not live yet: only its owner sees it.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/people/loopsmith").cookie(&other))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let own = body_json(
+        app.send(req(Method::GET, "/v1/people/loopsmith").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(own["status"], "waiting");
+
+    // The portfolio comes from the repository: pictures, a video and a track.
+    let head = "b".repeat(40);
+    put_raw(&head, "portfolio/avatar.png", png(256, 256));
+    put_raw(&head, "portfolio/knight.png", png(64, 64));
+    put_raw(
+        &head,
+        "portfolio/theme.ogg",
+        b"OggS\0\x02rest of a track".to_vec(),
+    );
+    put_raw(
+        &head,
+        "portfolio/fake.mp3",
+        b"<html>not audio</html>".to_vec(),
+    );
+    put_raw(
+        &head,
+        "portfolio.json",
+        json!({
+            "avatar": "portfolio/avatar.png",
+            "works": [
+                { "image": "portfolio/knight.png", "title": "Knight", "skill": "pixel-art" },
+                { "audio": "portfolio/fake.mp3", "title": "Theme" }
+            ]
+        })
+        .to_string()
+        .into_bytes(),
+    );
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/creative/portfolio/check")
+                .cookie(&cookie)
+                .json(json!({ "repo_url": "https://github.com/octo/game" })),
+        )
+        .await;
+    let body = body_json(res).await;
+    assert_eq!(body["result"], "problem");
+    assert!(
+        body["problem"].as_str().unwrap().contains("isn't an MP3"),
+        "{body}"
+    );
+
+    put_raw(
+        &head,
+        "portfolio.json",
+        json!({
+            "avatar": "portfolio/avatar.png",
+            "works": [
+                { "image": "portfolio/knight.png", "title": "Knight", "skill": "pixel-art" },
+                { "audio": "portfolio/theme.ogg", "poster": "portfolio/knight.png", "title": "Main theme", "skill": "music" },
+                { "youtube": "https://youtu.be/dQw4w9WgXcQ", "title": "Reel" }
+            ]
+        })
+        .to_string()
+        .into_bytes(),
+    );
+    let body = body_json(
+        app.send(
+            req(Method::POST, "/v1/me/creative/portfolio/check")
+                .cookie(&cookie)
+                .json(json!({})),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(body["result"], "pending", "{body}");
+    let set = body["pending"]["id"].as_str().unwrap().to_string();
+    assert_eq!(body["pending"]["works"][1]["audio"]["format"], "ogg");
+
+    // Reviewed like store pictures, by people or AI reviewers.
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["portfolios"][0]["set"]["id"], set.as_str());
+    let feed = body_json(
+        app.send(req(Method::GET, "/v1/admin/review?kind=portfolio").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(feed["items"][0]["creative"]["handle"], "loopsmith");
+    assert_eq!(
+        feed["items"][0]["approve"]["path"],
+        format!("/v1/admin/portfolio/{set}/approve")
+    );
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/portfolio/{set}/approve")).cookie(&admin_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Live: in the directory and on its own page, in the creative's order.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/creative/portfolio/order")
+                .cookie(&cookie)
+                .json(json!({ "keys": ["audio:portfolio/theme.ogg"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let dir = body_json(app.send(req(Method::GET, "/v1/people?skill=music")).await).await;
+    assert_eq!(dir["people"][0]["handle"], "loopsmith");
+    assert_eq!(
+        dir["people"][0]["can_hire"], false,
+        "payments are off on this server"
+    );
+    assert_eq!(dir["people"][0]["from_price"]["minor"], 12000);
+    let none = body_json(app.send(req(Method::GET, "/v1/people?skill=voice")).await).await;
+    assert_eq!(none["people"], json!([]));
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/people/loopsmith").cookie(&other))
+            .await,
+    )
+    .await;
+    assert_eq!(page["status"], "live");
+    assert_eq!(page["is_me"], false);
+    assert_eq!(page["accent"], "grape");
+    assert_eq!(page["works"][0]["kind"], "audio");
+    assert_eq!(
+        page["works"][0]["audio_url"],
+        format!(
+            "{}raw/octo/game/{head}/.slop/portfolio/theme.ogg",
+            app.fake_base
+        )
+    );
+    assert_eq!(page["works"][2]["youtube_id"], "dQw4w9WgXcQ");
+    assert_eq!(page["links"][0]["domain"], "artstation.com");
+    assert_eq!(page["rating"]["percent"], Value::Null);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn hiring_runs_from_request_to_credit(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (creative, creative_cookie) = live_creative(&app, "vera", "US", true).await;
+    // A consumer in Germany hiring a trader: the withdrawal right applies.
+    let (client, client_cookie) = app.user("Tavern Dev", "DE").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    listed_with(&app, client, "tiny-tavern", "released", "").await;
+    listed_with(&app, creative, "veras-own", "released", "").await;
+
+    // The project must be the client's own; adults only.
+    let hire = |slug: &str, adult: bool| json!({ "app_slug": slug, "skill": "pixel-art", "request_md": "A knight, please.", "confirm_adult": adult });
+    let res = app
+        .send(
+            req(Method::POST, "/v1/people/vera/hire")
+                .cookie(&client_cookie)
+                .json(hire("tiny-tavern", false)),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/people/vera/hire")
+                .cookie(&client_cookie)
+                .json(hire("veras-own", true)),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/people/vera/hire")
+                .cookie(&creative_cookie)
+                .json(hire("veras-own", true)),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "can't hire yourself");
+    let res = app
+        .send(
+            req(Method::POST, "/v1/people/vera/hire")
+                .cookie(&client_cookie)
+                .json(hire("tiny-tavern", true)),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let job = body_json(res).await;
+    let id = job["id"].as_str().unwrap().to_string();
+    assert_eq!(job["status"], "requested");
+    assert_eq!(job["actions"], json!(["decline"]));
+    let url = |step: &str| format!("/v1/jobs/{id}/{step}");
+
+    // Only the two sides can see it.
+    assert_eq!(
+        app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/jobs").cookie(&creative_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["as_creative"][0]["needs_you"], true);
+    assert_eq!(mine["waiting_on_you"], 1);
+
+    // The creative offers; the client can't, and bad offers are refused.
+    assert_eq!(
+        app.send(
+            req(Method::POST, url("offer"))
+                .cookie(&client_cookie)
+                .json(sprite_offer("split"))
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    let mut bad = sprite_offer("split");
+    bad["price_minor"] = json!(500);
+    assert_eq!(
+        app.send(
+            req(Method::POST, url("offer"))
+                .cookie(&creative_cookie)
+                .json(bad)
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let job = body_json(
+        app.send(
+            req(Method::POST, url("offer"))
+                .cookie(&creative_cookie)
+                .json(sprite_offer("split")),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(job["creative_receives_minor"], 12001 - 600);
+    // The client sees the plain summary and the agreement they'd accept.
+    let job = body_json(
+        app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(job["status"], "offered");
+    assert!(
+        job["summary"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|l| l == "Payment: $60.01 when you accept, $60 when the work is delivered")
+    );
+    assert!(
+        job["agreement"]["text"]
+            .as_str()
+            .unwrap()
+            .contains("within 14 days")
+    );
+    assert_eq!(job["agreement"]["sha256"], Value::Null);
+    assert_eq!(
+        job["creative_receives_minor"],
+        Value::Null,
+        "that's for the creative"
+    );
+
+    // Asking for changes sends it back; the new offer must be the one accepted.
+    let res = app
+        .send(
+            req(Method::POST, url("changes"))
+                .cookie(&client_cookie)
+                .json(json!({ "note": "Could it be 2 revisions?" })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["status"], "requested");
+    let mut o = sprite_offer("split");
+    o["revisions"] = json!(2);
+    app.send(
+        req(Method::POST, url("offer"))
+            .cookie(&creative_cookie)
+            .json(o),
+    )
+    .await;
+    let res = app
+        .send(
+            req(Method::POST, url("accept"))
+                .cookie(&client_cookie)
+                .json(json!({ "offer_count": 1 })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let job = body_json(
+        app.send(
+            req(Method::POST, url("accept"))
+                .cookie(&client_cookie)
+                .json(json!({ "offer_count": 2, "start_now": true })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(job["status"], "awaiting_payment");
+    assert_eq!(job["agreement"]["sha256"].as_str().unwrap().len(), 64);
+    assert_eq!(job["withdrawal"]["open"], true);
+    assert_eq!(job["withdrawal"]["started_early"], true);
+    assert!(
+        job["actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("withdraw"))
+    );
+    assert_eq!(job["payments"][0]["status"], "due");
+    assert_eq!(job["payments"][1]["status"], "waiting");
+
+    // The first half (simulated here) starts the work. Slop's fee is 5% of it.
+    let paid = body_json(
+        app.send(req(Method::POST, url("pay")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(paid["url"], Value::Null);
+    assert_eq!(paid["job"]["status"], "in_progress");
+    assert_eq!(paid["job"]["paid_minor"], 6001);
+    let fee: i32 =
+        sqlx::query_scalar("select slop_fee_minor from payments where kind = 'people_job'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(fee, 300);
+    assert_eq!(
+        app.send(req(Method::POST, url("pay")).cookie(&client_cookie))
+            .await
+            .status(),
+        StatusCode::CONFLICT,
+        "nothing due"
+    );
+
+    // Delivered: the rest is due; "looks good" means paying it.
+    assert_eq!(
+        app.send(
+            req(Method::POST, url("deliver"))
+                .cookie(&client_cookie)
+                .json(json!({ "note": "x" }))
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    let job = body_json(
+        app.send(
+            req(Method::POST, url("deliver"))
+                .cookie(&creative_cookie)
+                .json(json!({ "note": "Here!", "links": ["https://drive.example/knight.zip"] })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(job["status"], "delivered");
+    let job = body_json(
+        app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(job["actions"], json!(["pay", "revision", "withdraw"]));
+    assert!(job["auto_complete_at"].is_string());
+    assert_eq!(
+        app.send(req(Method::POST, url("complete")).cookie(&client_cookie))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let job = body_json(
+        app.send(
+            req(Method::POST, url("revision"))
+                .cookie(&client_cookie)
+                .json(json!({ "note": "Bigger sword" })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (job["status"].as_str(), job["revisions_left"].as_i64()),
+        (Some("in_progress"), Some(1))
+    );
+    assert_eq!(job["payments"][1]["status"], "waiting");
+    app.send(
+        req(Method::POST, url("deliver"))
+            .cookie(&creative_cookie)
+            .json(json!({ "links": ["https://drive.example/knight2.zip"] })),
+    )
+    .await;
+    let paid = body_json(
+        app.send(req(Method::POST, url("pay")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(paid["job"]["status"], "completed");
+    assert_eq!(paid["job"]["credited"], true);
+    assert_eq!(paid["job"]["paid_minor"], 12001);
+
+    // The project is credited and badged; the rating isn't touched (HUM-13).
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tiny-tavern")).await).await;
+    assert_eq!(page["made_with_people"], true);
+    assert_eq!(page["credits"][0]["role"], "Art");
+    assert_eq!(page["credits"][0]["handle"], "vera");
+    let only = list_slugs(&app, req(Method::GET, "/v1/apps?made_with_people=true")).await;
+    assert_eq!(only, ["tiny-tavern"]);
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/tiny-tavern/ratings"))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        ratings["since_new_work"]["since"],
+        Value::Null,
+        "no release with the work yet"
+    );
+    assert_eq!(ratings["since_new_work"]["credits"], json!(["Vera Okafor"]));
+
+    // After the next release, "since the new work" counts only newer votes.
+    let tavern: Uuid = sqlx::query_scalar("select id from apps where slug = 'tiny-tavern'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let old = OffsetDateTime::now_utc() - time::Duration::days(30);
+    let mut voters = Vec::new();
+    for i in 0..8 {
+        let (u, _) = app.user(&format!("Player {i}"), "US").await;
+        sqlx::query("insert into user_app_usage (user_id, app_id, days_launched, playtime_seconds) values ($1, $2, 3, 0)")
+            .bind(u).bind(tavern).execute(&app.db).await.unwrap();
+        voters.push(u);
+    }
+    for u in &voters[..5] {
+        slop_api::votes::cast(&app.db, *u, tavern, -1, Some(old))
+            .await
+            .unwrap();
+    }
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at)
+         values ($1, $2, '2.0.0', repeat('d', 40), 'approved', $3, now())",
+    )
+    .bind(Uuid::now_v7())
+    .bind(tavern)
+    .bind(client)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    for u in &voters[3..8] {
+        slop_api::votes::cast(&app.db, *u, tavern, 1, None)
+            .await
+            .unwrap();
+    }
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/tiny-tavern/ratings"))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (ratings["not_slop"].as_i64(), ratings["slop"].as_i64()),
+        (Some(5), Some(3)),
+        "the overall rating is every vote"
+    );
+    assert_eq!(ratings["since_new_work"]["version"], "2.0.0");
+    assert_eq!(ratings["since_new_work"]["not_slop"], 5);
+    assert_eq!(ratings["since_new_work"]["slop"], 0);
+    assert_eq!(ratings["since_new_work"]["percent"], 100);
+
+    // Only the client reviews, once the job is complete; the creative replies.
+    assert_eq!(
+        app.send(
+            req(Method::PUT, url("review"))
+                .cookie(&creative_cookie)
+                .json(json!({ "vote": "slop" }))
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    let job = body_json(
+        app.send(
+            req(Method::PUT, url("review"))
+                .cookie(&client_cookie)
+                .json(json!({ "vote": "not_slop", "body": "Lovely knight." })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(job["review"]["vote"], "not_slop");
+    let res = app
+        .send(
+            req(Method::PUT, format!("/v1/people/reviews/{id}/reply"))
+                .cookie(&creative_cookie)
+                .json(json!({ "reply": "Thank you!" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        app.send(
+            req(Method::PUT, format!("/v1/people/reviews/{id}/reply"))
+                .cookie(&stranger)
+                .json(json!({ "reply": "x" }))
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let page = body_json(app.send(req(Method::GET, "/v1/people/vera")).await).await;
+    assert_eq!(page["reviews"][0]["work"], "Knight sprite sheet");
+    assert_eq!(page["reviews"][0]["reply"], "Thank you!");
+    assert_eq!(page["reviews"][0]["project"], "tiny-tavern");
+    assert_eq!(page["worked_on"][0]["slug"], "tiny-tavern");
+    assert_eq!(page["worked_on"][0]["role"], "Art");
+    assert_eq!(page["clients"], 1);
+
+    // A second job, delivered and left alone for 7 days, completes on its own.
+    let job2 = body_json(app.send(req(Method::POST, "/v1/people/vera/hire").cookie(&client_cookie).json(json!({ "app_slug": "tiny-tavern", "skill": "music", "request_md": "A tavern tune.", "client_is_business": true }))).await).await;
+    let id2 = job2["id"].as_str().unwrap().to_string();
+    app.send(
+        req(Method::POST, format!("/v1/jobs/{id2}/offer"))
+            .cookie(&creative_cookie)
+            .json(sprite_offer("upfront")),
+    )
+    .await;
+    let job2 = body_json(
+        app.send(
+            req(Method::POST, format!("/v1/jobs/{id2}/accept"))
+                .cookie(&client_cookie)
+                .json(json!({ "offer_count": 1 })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        job2["withdrawal"],
+        Value::Null,
+        "hiring as a business: no consumer withdrawal"
+    );
+    app.send(req(Method::POST, format!("/v1/jobs/{id2}/pay")).cookie(&client_cookie))
+        .await;
+    app.send(
+        req(Method::POST, format!("/v1/jobs/{id2}/deliver"))
+            .cookie(&creative_cookie)
+            .json(json!({ "note": "Attached." })),
+    )
+    .await;
+    let n = slop_api::people::jobs::auto_complete(
+        &app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(8),
+    )
+    .await
+    .unwrap();
+    assert_eq!(n, 1);
+    let job2 = body_json(
+        app.send(req(Method::GET, format!("/v1/jobs/{id2}")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(job2["status"], "completed");
+    assert_eq!(job2["completed_automatically"], true);
+    assert_eq!(job2["credited"], true);
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tiny-tavern")).await).await;
+    assert_eq!(page["credits"].as_array().unwrap().len(), 2);
+    assert_eq!(page["credits"][1]["role"], "Music");
+
+    // A third: withdrawn by the consumer within 14 days.
+    let job3 = body_json(
+        app.send(
+            req(Method::POST, "/v1/people/vera/hire")
+                .cookie(&client_cookie)
+                .json(hire("tiny-tavern", true)),
+        )
+        .await,
+    )
+    .await;
+    let id3 = job3["id"].as_str().unwrap().to_string();
+    app.send(
+        req(Method::POST, format!("/v1/jobs/{id3}/offer"))
+            .cookie(&creative_cookie)
+            .json(sprite_offer("on_delivery")),
+    )
+    .await;
+    let job3 = body_json(
+        app.send(
+            req(Method::POST, format!("/v1/jobs/{id3}/accept"))
+                .cookie(&client_cookie)
+                .json(json!({ "offer_count": 1 })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        job3["status"], "in_progress",
+        "nothing to pay until delivery"
+    );
+    let job3 = body_json(
+        app.send(req(Method::POST, format!("/v1/jobs/{id3}/withdraw")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(job3["status"], "withdrawn");
+    assert_eq!(job3["actions"], json!([]));
+    let credited: i64 =
+        sqlx::query_scalar("select count(*) from jobs where credited_at is not null")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(credited, 2);
+}
+
+/// A fake Stripe: accounts, account links and Checkout sessions on connected accounts.
+async fn fake_stripe() -> String {
+    use std::sync::{Arc, Mutex};
+    type Sessions = Arc<Mutex<std::collections::HashMap<String, Value>>>;
+    let sessions: Sessions = Arc::default();
+    let create = {
+        let sessions = sessions.clone();
+        move |headers: axum::http::HeaderMap, body: String| {
+            let sessions = sessions.clone();
+            async move {
+                assert_eq!(headers["authorization"], "Bearer sk_test_slop");
+                assert_eq!(headers["stripe-account"], "acct_vera");
+                let form: std::collections::HashMap<String, String> =
+                    url::form_urlencoded::parse(body.as_bytes())
+                        .into_owned()
+                        .collect();
+                let id = format!("cs_{}", sessions.lock().unwrap().len() + 1);
+                let session = json!({
+                    "id": id, "status": "open", "payment_status": "unpaid",
+                    "url": format!("https://checkout.stripe.example/{id}"),
+                    "amount_total": form["line_items[0][price_data][unit_amount]"].parse::<i64>().unwrap(),
+                    "application_fee": form["payment_intent_data[application_fee_amount]"].parse::<i64>().unwrap(),
+                    "metadata": { "job_payment_id": form["metadata[job_payment_id]"], "payer": form["metadata[payer]"] },
+                });
+                sessions.lock().unwrap().insert(id, session.clone());
+                axum::Json(session)
+            }
+        }
+    };
+    let get_session = {
+        let sessions = sessions.clone();
+        move |axum::extract::Path(id): axum::extract::Path<String>| {
+            let sessions = sessions.clone();
+            async move {
+                let s = sessions.lock().unwrap().get(&id).cloned().unwrap();
+                let mut s = s.clone();
+                s["payment_intent"] = json!({ "latest_charge": format!("ch_{id}"), "application_fee_amount": s["application_fee"] });
+                axum::Json(s)
+            }
+        }
+    };
+    let pay = {
+        let sessions = sessions.clone();
+        move |axum::extract::Path(id): axum::extract::Path<String>| {
+            let sessions = sessions.clone();
+            async move {
+                let mut all = sessions.lock().unwrap();
+                let s = all.get_mut(&id).unwrap();
+                s["status"] = json!("complete");
+                s["payment_status"] = json!("paid");
+                StatusCode::OK
+            }
+        }
+    };
+    let app = Router::new()
+        .route("/v1/accounts", post(|| async { axum::Json(json!({ "id": "acct_vera" })) }))
+        .route(
+            "/v1/accounts/{id}",
+            get(|| async { axum::Json(json!({ "id": "acct_vera", "charges_enabled": true, "details_submitted": true })) }),
+        )
+        .route(
+            "/v1/account_links",
+            post(|body: String| async move {
+                assert!(body.contains("account=acct_vera"), "{body}");
+                axum::Json(json!({ "url": "https://connect.stripe.example/setup/acct_vera" }))
+            }),
+        )
+        .route("/v1/checkout/sessions", post(create))
+        .route("/v1/checkout/sessions/{id}", get(get_session))
+        .route("/test/pay/{id}", post(pay))
+        .route(
+            "/v1/charges/{id}",
+            get(|axum::extract::Path(id): axum::extract::Path<String>| async move {
+                axum::Json(json!({ "id": id, "amount_refunded": 2000 }))
+            }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+fn stripe_signed(body: &Value, secret: &str) -> (String, String) {
+    use hmac::{Hmac, KeyInit, Mac};
+    let body = body.to_string();
+    let t = OffsetDateTime::now_utc().unix_timestamp();
+    let mut mac = Hmac::<sha2::Sha256>::new_from_slice(secret.as_bytes()).unwrap();
+    mac.update(format!("{t}.{body}").as_bytes());
+    (
+        body,
+        format!("t={t},v1={}", hex::encode(mac.finalize().into_bytes())),
+    )
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgPool) {
+    let stripe_base = fake_stripe().await;
+    let app = test_app_with(db, |c| {
+        c.payments.stripe = Some(slop_api::config::StripeConfig {
+            secret_key: "sk_test_slop".into(),
+            webhook_secret: "whsec_slop".into(),
+            api_base: stripe_base.parse().unwrap(),
+        })
+    })
+    .await;
+    let (creative, cookie) = app.user("vera", "US").await;
+    let mut p = profile("vera", false);
+    p["confirm_adult"] = json!(true);
+    app.send(req(Method::PUT, "/v1/me/creative").cookie(&cookie).json(p))
+        .await;
+    sqlx::query(
+        "insert into portfolio_sets (id, creative_id, repo_url, commit_sha, works, fingerprint, status, source)
+         values ($1, $2, 'https://github.com/x/y', repeat('c', 40), '[]', 'f', 'approved', 'sim')",
+    )
+    .bind(Uuid::nil()).bind(creative).execute(&app.db).await.unwrap();
+    sqlx::query("update creatives set portfolio_set_id = $1 where user_id = $2")
+        .bind(Uuid::nil())
+        .bind(creative)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // "Get paid" sends the creative to Stripe's own sign-up.
+    let on = body_json(
+        app.send(req(Method::POST, "/v1/me/creative/stripe").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(on["url"], "https://connect.stripe.example/setup/acct_vera");
+    assert_eq!(on["status"], "pending");
+    let back = body_json(
+        app.send(req(Method::POST, "/v1/me/creative/stripe/refresh").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(back["status"], "active");
+
+    let (client, client_cookie) = app.user("Client", "US").await;
+    listed_with(&app, client, "tavern", "beta", "").await;
+    let job = body_json(app.send(req(Method::POST, "/v1/people/vera/hire").cookie(&client_cookie).json(json!({ "app_slug": "tavern", "skill": "pixel-art", "request_md": "Knight", "confirm_adult": true }))).await).await;
+    let id = job["id"].as_str().unwrap().to_string();
+    app.send(
+        req(Method::POST, format!("/v1/jobs/{id}/offer"))
+            .cookie(&cookie)
+            .json(sprite_offer("upfront")),
+    )
+    .await;
+    app.send(
+        req(Method::POST, format!("/v1/jobs/{id}/accept"))
+            .cookie(&client_cookie)
+            .json(json!({ "offer_count": 1 })),
+    )
+    .await;
+
+    // Pay: a Checkout session on the creative's account, with Slop's 5% fee; pressing again
+    // reuses it.
+    let paid = body_json(
+        app.send(req(Method::POST, format!("/v1/jobs/{id}/pay")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(paid["url"], "https://checkout.stripe.example/cs_1");
+    assert_eq!(paid["job"]["status"], "awaiting_payment");
+    let again = body_json(
+        app.send(req(Method::POST, format!("/v1/jobs/{id}/pay")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(again["url"], "https://checkout.stripe.example/cs_1");
+
+    // The client pays on Stripe; the webhook must be signed.
+    reqwest::Client::new()
+        .post(format!("{stripe_base}test/pay/cs_1"))
+        .send()
+        .await
+        .unwrap();
+    let event = json!({ "id": "evt_1", "type": "checkout.session.completed", "account": "acct_vera", "data": { "object": { "id": "cs_1" } } });
+    let (body, sig) = stripe_signed(&event, "whsec_wrong");
+    let hook = |body: String, sig: String| {
+        Request::builder()
+            .method(Method::POST)
+            .uri("/v1/stripe/webhook")
+            .header(header::HOST, "localhost:8080")
+            .header("stripe-signature", sig)
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let res = app.router.clone().oneshot(hook(body, sig)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    let (body, sig) = stripe_signed(&event, "whsec_slop");
+    let res = app
+        .router
+        .clone()
+        .oneshot(hook(body.clone(), sig.clone()))
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app.router.clone().oneshot(hook(body, sig)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK, "the same event again is fine");
+    let job = body_json(
+        app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(job["status"], "in_progress");
+    let rows: Vec<(String, i32, i32, String, bool)> = sqlx::query_as(
+        "select stripe_object_id, amount_minor, slop_fee_minor, stripe_account_id, simulated from payments",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [(
+            "ch_cs_1".to_string(),
+            12001,
+            600,
+            "acct_vera".to_string(),
+            false
+        )]
+    );
+
+    // The creative refunds part of it from their Stripe dashboard; Slop records it.
+    let event = json!({ "id": "evt_2", "type": "charge.refunded", "account": "acct_vera", "data": { "object": { "id": "ch_cs_1" } } });
+    let (body, sig) = stripe_signed(&event, "whsec_slop");
+    let res = app.router.clone().oneshot(hook(body, sig)).await.unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let job = body_json(
+        app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(job["refunded_minor"], 2000);
+    assert!(
+        job["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "refunded")
+    );
 }

@@ -36,6 +36,8 @@
         "script-src": "'self'",
         "style-src": "'self' 'unsafe-inline'",
         "img-src": "'self' data: https: http://localhost:5173",
+        "media-src": "https://raw.githubusercontent.com",
+        "frame-src": "https://www.youtube-nocookie.com",
         "connect-src": "'self' ipc: http://ipc.localhost ws://localhost:5173",
         "frame-ancestors": "'none'",
         "object-src": "'none'",

@@ -409,6 +409,19 @@ async fn serve() -> anyhow::Result<()> {
             .context("SLOP_SIMULATION is only allowed on a sandbox database")?;
         tracing::warn!(database = %name, "simulation sandbox: anyone can view as a simulated user");
     }
+    // Simulated People payments only on the sandbox or a plain-http development server.
+    if config.payments.simulated && config.payments.stripe.is_none() && !config.simulation {
+        anyhow::ensure!(
+            !config.secure_cookies(),
+            "SLOP_PAYMENTS=simulated is only for development servers (http), never a public site"
+        );
+        tracing::warn!("People payments are simulated: no money moves");
+    }
+    if config.payments.stripe.is_none() && !config.payments.simulated {
+        tracing::warn!(
+            "STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET not set: People payments are off"
+        );
+    }
     let bind = config.bind;
     let state = AppState::new(db, config)?;
     tokio::spawn(releases::run_fetcher(state.clone()));

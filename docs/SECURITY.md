@@ -15,7 +15,7 @@ Slop's whole promise is "AI-made software you can trust." That makes it a **soft
 | **Players' devices** | Slop installs and launches executables on them |
 | **The release signing keys** | They decide what every client will trust and install |
 | **Publisher and creative accounts** | They can push updates and have donations and payments sent to them |
-| **Money** | Donations and Humans payments. They go straight to makers' own Stripe accounts, so the risk is someone **redirecting** them, not stealing a Slop balance (`PAYMENTS.md`). |
+| **Money** | Donations and People payments. They go straight to makers' own Stripe accounts, so the risk is someone **redirecting** them, not stealing a Slop balance (`PAYMENTS.md`). |
 | **Personal data** | Names, emails, linked devices, tax details, messages |
 | **Integrity of ratings and Pulse** | They decide what people find and trust |
 | **Private Slop** | Users expect it to stay private |
@@ -26,7 +26,7 @@ Slop's whole promise is "AI-made software you can trust." That makes it a **soft
 |---|---|---|
 | **Malware author** posing as a maker | Infect players | Upload an app that hides its behaviour from the scanners, or turns malicious after an update |
 | **Account / repo hijacker** | Push a malicious update to a popular app | Phishing the maker, stolen GitHub tokens, compromised dependencies |
-| **Fraudster** | Cash out stolen cards, scam players | Card testing, laundering through donations, fake Humans jobs (`PAYMENTS.md` §9) |
+| **Fraudster** | Cash out stolen cards, scam players | Card testing, laundering through donations, fake People jobs (`PAYMENTS.md` §9) |
 | **Rating manipulator** | Boost their app or bury a rival | Bot accounts, faked launches, review bombing |
 | **Curious or malicious user** | Read someone else's Private Slop, data or messages | Guessing IDs, broken permission checks |
 | **Insider / compromised admin** | Anything above, at scale | Misused admin tools or credentials |
@@ -172,7 +172,7 @@ The client installs software, so it's a prime target:
 
 ### 8.1 Web and API
 - Follow the **OWASP ASVS** (level 2 overall, level 3 for payments and publishing).
-- **Authorization on every request, on the server.** This is the biggest web risk for Private Slop, chat and Humans messages, and payment records: every object read checks the caller's rights. Use non-guessable IDs (UUIDv7/ULID) as well, but never *instead of* checks. Postgres row-level security acts as a backstop.
+- **Authorization on every request, on the server.** This is the biggest web risk for Private Slop, chat and People messages, and payment records: every object read checks the caller's rights. Use non-guessable IDs (UUIDv7/ULID) as well, but never *instead of* checks. Postgres row-level security acts as a backstop.
 - Rate limits per account, IP and endpoint. Stricter for sign-in, voting, donations, reports and messages.
   - **Built (2026-10-18):** per-IP token buckets for sign-in (20/min), writes (60/min) and reads (600/min), in memory per API instance (`crates/slop-api/src/ratelimit.rs`). Still to do: per-account limits for voting, donations, reports and messages as those features land, and a shared limiter once Slop runs several instances.
 - Input validation and output encoding. Store pages and reviews are **Markdown rendered with a strict allowlist** (no raw HTML).
@@ -216,7 +216,7 @@ Slop **can't** read chat messages (`LEGAL.md` §4.6).
 - **Attachments:** encrypted on the device before upload. Slop stores only the encrypted file, with a size limit and automatic deletion after 30 days. Slop can't see what's in them.
 - **What Slop still sees (metadata):** who is in a chat, when messages are sent, and their sizes. Keep the minimum and delete it quickly (e.g. delivery records after 30 days).
 - **Website:** browser encryption is weaker, because the page's code is delivered fresh by the server each time. **Chat runs in the Slop app only** (desktop and phone). The website shows "open the Slop app to chat".
-- **Humans job threads** are encrypted too. Each side keeps its own copy and can export it, for example for a dispute between them.
+- **People job threads** are encrypted too. Each side keeps its own copy and can export it, for example for a dispute between them.
 
 ## 9. Payment security
 More detail in `PAYMENTS.md`.
@@ -237,8 +237,8 @@ More detail in `PAYMENTS.md`.
   - Pulse heartbeats are aggregated within 24 hours and the raw events deleted.
   - Logs are kept 30–90 days.
   - Payment records are kept for the legal minimum (`METRICS.md` §6).
-- **Encryption:** TLS 1.2+ everywhere, encryption at rest, and **field-level encryption** for tax IDs and Humans contact details.
-- **Age:** accounts are **16+** everywhere (decided). Donations and Humans jobs are 18+.
+- **Encryption:** TLS 1.2+ everywhere, encryption at rest, and **field-level encryption** for tax IDs and People contact details.
+- **Age:** accounts are **16+** everywhere (decided). Donations and People jobs are 18+.
   - UK users are found from several signals (IP, billing, app-store and stated country). Slop stores only the resulting country. No VPN detection.
   - UK accounts start in an **under-18 view**: 18+ content hidden, messages from connections only.
   - A third-party age check unlocks 18+ content. Slop stores only "passed", the date and the method, never ID or face images (`LEGAL.md` §6).
@@ -253,7 +253,7 @@ More detail in `PAYMENTS.md`.
 | **Review bombing** | Detect sudden spikes not tied to an update. Mark the period on the rating chart (like Steam's "off-topic review activity") instead of deleting votes. |
 | **Faked Pulse counts** | Signed single-use launch tokens, one count per account, rate-limited heartbeats, spike detection (DESIGN §11). Accept that Pulse is *approximate*. It's never used for money. |
 | **Impersonation** (fake "official" apps, copied store pages) | Verification for official teams, checks for similar names and icons, licence/code matching in scans |
-| **Phishing and scams in reviews, profiles, Humans and chat** | Check links in reviews and profiles against known-bad domains. **Chat is end-to-end encrypted** (§8.5): link warnings and "pay me off-platform" warnings run **in the recipient's app**, plus one-click reporting. |
+| **Phishing and scams in reviews, profiles, People and chat** | Check links in reviews and profiles against known-bad domains. **Chat is end-to-end encrypted** (§8.5): link warnings and "pay me off-platform" warnings run **in the recipient's app**, plus one-click reporting. |
 | **Illegal content** | Hash matching against known abuse imagery (e.g. PhotoDNA-type services) on all uploads. Mandatory reporting to authorities where required (e.g. NCMEC in the US). Text, image and audio classifiers. Human review. ⚖️ |
 | **Non-consensual intimate images and deepfakes** | A dedicated request form. Removal within **48 hours** of a valid request (US TAKE IT DOWN Act), plus steps to catch identical copies (hash matching of removed images). `LEGAL.md` §5.11. |
 | **Sexually explicit content** (banned) | The content scan checks images. Matches are rejected, with human review on request. Repeat offenders lose publishing rights. |

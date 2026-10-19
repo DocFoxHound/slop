@@ -45,3 +45,20 @@ export function artFor(slug: string): { from: string; to: string } {
 export function ageLabel(minAge: number): string | null {
   return minAge > 0 ? `${minAge}+` : null;
 }
+
+const SYMBOL: Record<string, string> = { usd: "$", eur: "€", gbp: "£" };
+
+/** "$120", "$120.01", "£12,345" — the same as the server's job texts. */
+export function money(minor: number, currency: string): string {
+  const whole = Math.trunc(minor / 100).toLocaleString("en-US");
+  const cents = Math.abs(minor % 100);
+  return `${SYMBOL[currency] ?? "$"}${whole}${cents ? `.${String(cents).padStart(2, "0")}` : ""}`;
+}
+
+/** "120.5" → 12050; null when it isn't an amount. */
+export function toMinor(text: string): number | null {
+  const t = text.trim().replace(/[$€£,\s]/g, "");
+  if (!/^\d+(\.\d{1,2})?$/.test(t)) return null;
+  const [whole, frac = ""] = t.split(".");
+  return Number(whole) * 100 + Number(frac.padEnd(2, "0"));
+}

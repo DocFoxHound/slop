@@ -5,6 +5,7 @@
 import { useState } from "react";
 
 import { api, ApiError, type Ratings } from "../api";
+import { formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { LineChart, UpDownBars } from "./Charts";
 
@@ -34,6 +35,44 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
       <div className="muted small">
         weighted by playtime · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()}{" "}
         👍 / {ratings.slop.toLocaleString()} 👎)
+      </div>
+    </div>
+  );
+}
+
+/** Votes since the first release with work hired through People (DESIGN §15.4). The rating above
+ * stays every vote: hiring people never changes how votes count. */
+export function SinceNewWork({ s, min }: { s: NonNullable<Ratings["since_new_work"]>; min: number }) {
+  const who = s.credits.join(", ");
+  if (!s.since) {
+    return (
+      <p className="since-work muted small">
+        ✋ New work by {who} is coming: a "since the new work" rating starts with the next release.
+      </p>
+    );
+  }
+  const total = (s.not_slop ?? 0) + (s.slop ?? 0);
+  return (
+    <div className="since-work">
+      <b>Since the new work</b>{" "}
+      <span className="muted small">
+        (by {who}, from version {s.version} on {formatDate(s.since)})
+      </span>
+      <div>
+        {s.percent_weighted !== null && s.percent_weighted !== undefined ? (
+          <>
+            <span className={`rating-mid ${s.percent_weighted >= 70 ? "good" : s.percent_weighted < 40 ? "bad" : "mixed"}`}>
+              {s.percent_weighted}% Not Slop
+            </span>{" "}
+            <span className="muted small">
+              {s.label} · {total} vote{total === 1 ? "" : "s"} cast or changed since
+            </span>
+          </>
+        ) : (
+          <span className="muted small">
+            {total} vote{total === 1 ? "" : "s"} since; a rating shows from {min}.
+          </span>
+        )}
       </div>
     </div>
   );
@@ -69,6 +108,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
     <section className="panel panel-pad rating-panel" aria-label="Ratings">
       <h2>Slop or Not Slop?</h2>
       <RatingSummary ratings={r} />
+      {r.since_new_work && <SinceNewWork s={r.since_new_work} min={r.min_votes} />}
 
       {!r.open ? (
         <p className="muted small">Voting opens when the app is released.</p>

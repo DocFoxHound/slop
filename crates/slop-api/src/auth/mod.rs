@@ -404,6 +404,7 @@ async fn signup(
         is_admin: false,
         share_playtime: true,
         personalize: under18 == Some(false),
+        adult_confirmed: false,
     };
     Ok((
         StatusCode::CREATED,
@@ -443,6 +444,8 @@ struct Me {
     /// "Recommendations based on my activity" (LEGAL §7), with its default applied.
     #[sqlx(skip)]
     personalize: bool,
+    /// Confirmed 18+ for People (LEGAL §6), so the UI only asks once.
+    adult_confirmed: bool,
 }
 
 async fn me(
@@ -451,7 +454,9 @@ async fn me(
     headers: axum::http::HeaderMap,
 ) -> ApiResult<Json<Me>> {
     let mut me: Me = sqlx::query_as(
-        "select id, display_name, email, country_code, is_admin, share_playtime from users where id = $1",
+        "select id, display_name, email, country_code, is_admin, share_playtime,
+                adult_confirmed_at is not null as adult_confirmed
+         from users where id = $1",
     )
     .bind(user.id)
     .fetch_one(&state.db)

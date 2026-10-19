@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 
 import type { Ratings } from "../api";
 import { LineChart } from "./Charts";
-import { RatingSummary } from "./RatingPanel";
+import { RatingSummary, SinceNewWork } from "./RatingPanel";
 
 const base: Ratings = {
   not_slop: 3,
@@ -17,6 +17,7 @@ const base: Ratings = {
   daily: [],
   open: true,
   min_votes: 5,
+  since_new_work: null,
 };
 
 describe("RatingSummary", () => {
@@ -56,5 +57,26 @@ describe("LineChart", () => {
     fireEvent.click(screen.getByText("Show numbers"));
     const row = [...container.querySelectorAll("tr")].find((r) => r.textContent?.startsWith("2026-09"));
     expect(row?.textContent).toContain("—");
+  });
+});
+
+describe("SinceNewWork", () => {
+  afterEach(cleanup);
+
+  it("waits for the release with the new work", () => {
+    render(<SinceNewWork s={{ since: null, version: null, credits: ["Vera"] }} min={5} />);
+    expect(screen.getByText(/New work by Vera is coming/)).toBeTruthy();
+  });
+
+  it("shows the rating from votes since that release", () => {
+    render(
+      <SinceNewWork
+        s={{ since: "2026-10-01T00:00:00Z", version: "2.0.0", credits: ["Vera", "Loopsmith"], not_slop: 9, slop: 1, percent_weighted: 90, label: "Very Not Slop" }}
+        min={5}
+      />,
+    );
+    expect(screen.getByText("90% Not Slop")).toBeTruthy();
+    expect(screen.getByText(/by Vera, Loopsmith, from version 2.0.0/)).toBeTruthy();
+    expect(screen.getByText(/10 votes cast or changed since/)).toBeTruthy();
   });
 });

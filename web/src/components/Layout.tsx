@@ -14,7 +14,14 @@ const TABS = [
     label: "Store",
     icon: "🛒",
     end: true,
-    match: (p: string) => !["/publish", "/account", "/library", "/admin"].some((prefix) => p.startsWith(prefix)),
+    match: (p: string) => !["/publish", "/account", "/library", "/admin", "/people", "/jobs"].some((prefix) => p.startsWith(prefix)),
+  },
+  {
+    to: "/people",
+    label: "People",
+    icon: "🎨",
+    end: false,
+    match: (p: string) => p.startsWith("/people") || p.startsWith("/jobs"),
   },
   { to: "/library", label: "Library", icon: "📚", end: false, match: (p: string) => p.startsWith("/library") },
   { to: "/publish", label: "Publish", icon: "⬆️", end: false, match: (p: string) => p.startsWith("/publish") },
@@ -162,6 +169,7 @@ export function Sidebar({ active }: { active?: string }) {
       <h4>Discover</h4>
       <Link to="/upcoming">🔭 Coming soon &amp; beta</Link>
       <Link to="/search">✨ Everything</Link>
+      <Link to="/made-with-people">✋ Made with people</Link>
       <h4>Browse</h4>
       <Link to="/browse">🧭 All categories</Link>
       {categories.data?.map((c: Category) => (
@@ -172,6 +180,7 @@ export function Sidebar({ active }: { active?: string }) {
       <h4>Makers</h4>
       <Link to="/publish">⬆️ Publish your app</Link>
       <Link to="/publish/guide">📖 How to publish</Link>
+      <Link to="/people">🎨 Hire artists &amp; composers</Link>
     </aside>
   );
 }

@@ -269,6 +269,7 @@ async fn add_note(
         "change" => "app_changes",
         "media" => "media_sets",
         "listing" => "apps",
+        "portfolio" => "portfolio_sets",
         _ => return Err(ApiError::NotFound),
     };
     let exists: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -375,14 +376,19 @@ impl Action {
 
 #[derive(Serialize)]
 struct Item {
-    /// release, change, media or listing.
+    /// release, change, media, listing or portfolio.
     kind: &'static str,
     id: Uuid,
     /// One line on what's being decided.
     question: String,
     #[serde(with = "time::serde::rfc3339")]
     waiting_since: OffsetDateTime,
-    app: AppContext,
+    /// The app it's about (absent for portfolios).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    app: Option<AppContext>,
+    /// The creative it's about (portfolios only).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    creative: Option<Value>,
     /// The release (files, checks), change request, or pictures.
     detail: Value,
     notes: Vec<Note>,
@@ -405,7 +411,7 @@ struct Feed {
 
 #[derive(Deserialize)]
 struct FeedQuery {
-    /// Only this kind: release, change, media or listing.
+    /// Only this kind: release, change, media, listing or portfolio.
     kind: Option<String>,
 }
 
@@ -441,7 +447,8 @@ async fn feed(
                 id,
                 question: format!("Approve version {version} of {}?", app.title),
                 waiting_since: at,
-                app,
+                app: Some(app),
+                creative: None,
                 detail,
                 notes: notes(&state.db, "release", id).await?,
                 approve: Action::post(format!("/v1/admin/releases/{id}/approve")),
@@ -483,7 +490,8 @@ async fn feed(
                 id,
                 question,
                 waiting_since,
-                app,
+                app: Some(app),
+                creative: None,
                 detail,
                 notes: notes(&state.db, "change", id).await?,
                 approve: Action::post(format!("/v1/admin/changes/{id}/approve")),
@@ -506,7 +514,8 @@ async fn feed(
                 id,
                 question: format!("Show these pictures and videos on {}'s page?", app.title),
                 waiting_since,
-                app,
+                app: Some(app),
+                creative: None,
                 detail,
                 notes: queued.notes,
                 approve: Action::post(format!("/v1/admin/media/{id}/approve")),
@@ -544,12 +553,43 @@ async fn feed(
                 id,
                 question: format!("Put {} in the store?", app.title),
                 waiting_since: at,
-                app,
+                app: Some(app),
+                creative: None,
                 detail: json!({ "approved_releases": approved, "thumbnail_url": thumbnail, "gallery": shown }),
                 notes: notes(&state.db, "listing", id).await?,
                 approve: Action::post(format!("/v1/admin/apps/{slug}/list")),
                 reject: None,
                 note: note_action("listing", id),
+            });
+        }
+    }
+
+    if want("portfolio") {
+        for queued in crate::people::portfolio::queued(&state).await? {
+            let id = queued.set.id;
+            let waiting_since = queued.set.created_at;
+            items.push(Item {
+                kind: "portfolio",
+                id,
+                question: format!(
+                    "Show this portfolio on {}'s People profile (@{})?",
+                    queued.name, queued.handle
+                ),
+                waiting_since,
+                app: None,
+                creative: Some(json!({
+                    "handle": queued.handle,
+                    "name": queued.name,
+                    "ai_use": queued.ai_use,
+                    "page": format!("/people/{}", queued.handle),
+                })),
+                detail: json!({ "portfolio": queued.set, "shown_now": queued.live }),
+                notes: queued.notes,
+                approve: Action::post(format!("/v1/admin/portfolio/{id}/approve")),
+                reject: Some(Action::with_reason(format!(
+                    "/v1/admin/portfolio/{id}/reject"
+                ))),
+                note: note_action("portfolio", id),
             });
         }
     }

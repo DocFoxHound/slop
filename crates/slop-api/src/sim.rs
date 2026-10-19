@@ -345,6 +345,7 @@ pub struct Generated {
     pub vote_events: usize,
     pub current_votes: usize,
     pub player_buckets: usize,
+    pub people: crate::sim_people::PeopleGenerated,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -357,8 +358,18 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         start + Duration::days(day) + Duration::seconds((rng.f() * 86_000.0) as i64)
     };
 
-    // Makers.
-    let makers: Vec<Uuid> = (0..40).map(|_| Uuid::now_v7()).collect();
+    // Makers: mostly in the US, some in the UK and Germany (People's consumer rules differ).
+    let maker_rows: Vec<(Uuid, String, &'static str)> = (0..40)
+        .map(|i| {
+            let country = match i % 7 {
+                5 => "GB",
+                6 => "DE",
+                _ => "US",
+            };
+            (Uuid::now_v7(), format!("Sim maker {}", i + 1), country)
+        })
+        .collect();
+    let makers: Vec<Uuid> = maker_rows.iter().map(|m| m.0).collect();
 
     // Apps: each built around a persona's tags, plus a little noise.
     let all_tags: Vec<String> = sqlx::query_scalar("select slug from tags order by slug")
@@ -449,6 +460,23 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
             pulse: persona.kind == AppKind::Game && rng.chance(0.7),
             maker: *rng.pick(&makers),
         });
+    }
+
+    // People: creatives and jobs. Work shipped in an update changes the app's true quality.
+    let app_info: Vec<crate::sim_people::AppInfo> = apps
+        .iter()
+        .map(|a| crate::sim_people::AppInfo {
+            kind: a.kind,
+            stage: a.stage,
+            created_day: a.created_day,
+            quality: a.quality,
+            update: a.update,
+            maker: makers.iter().position(|m| *m == a.maker).unwrap_or(0),
+        })
+        .collect();
+    let (people_plan, hired_updates) = crate::sim_people::plan(&mut rng, &app_info, settings.days);
+    for (a, day, q) in &hired_updates {
+        apps[*a].update = Some((*day, *q));
     }
 
     // Users: one or two personas; about a third are gamers who also use a few tools.
@@ -610,7 +638,18 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
 
     // Write it all.
     let mut tx = db.begin().await?;
+    sqlx::query("update creatives set portfolio_set_id = null")
+        .execute(&mut *tx)
+        .await?;
     for table in [
+        "creative_reviews",
+        "job_events",
+        "payments",
+        "job_payments",
+        "jobs",
+        "stripe_events",
+        "portfolio_sets",
+        "creatives",
         "vote_events",
         "votes",
         "pulse_sessions",
@@ -632,7 +671,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .execute(&mut *tx)
         .await?;
     sqlx::query("delete from apps").execute(&mut *tx).await?;
-    sqlx::query("drop table if exists sim_users, sim_apps")
+    sqlx::query("drop table if exists sim_users, sim_apps, sim_creatives")
         .execute(&mut *tx)
         .await?;
     sqlx::query("delete from sessions where user_id in (select id from users where display_name like 'Sim %' or display_name like 'Sim maker %')")
@@ -655,10 +694,9 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .execute(&mut *tx)
     .await?;
 
-    let rows: Vec<(Uuid, String, &str)> = makers
+    let rows: Vec<(Uuid, String, &str)> = maker_rows
         .iter()
-        .enumerate()
-        .map(|(i, id)| (*id, format!("Sim maker {}", i + 1), "US"))
+        .cloned()
         .chain(users.iter().map(|u| (u.id, u.name.clone(), u.country)))
         .collect();
     bulk(
@@ -888,6 +926,35 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .await?;
     tx.commit().await?;
 
+    let updates: Vec<(usize, i64)> = apps
+        .iter()
+        .enumerate()
+        .filter_map(|(i, a)| a.update.map(|(d, _)| (i, d)))
+        .collect();
+    let people = crate::sim_people::write(
+        db,
+        &mut rng,
+        &people_plan,
+        &apps.iter().map(|a| a.id).collect::<Vec<_>>(),
+        &apps
+            .iter()
+            .map(|a| {
+                a.slug
+                    .split('-')
+                    .map(capitalize)
+                    .collect::<Vec<_>>()
+                    .join(" ")
+            })
+            .collect::<Vec<_>>(),
+        &apps.iter().map(|a| a.slug.clone()).collect::<Vec<_>>(),
+        &maker_rows,
+        &app_info.iter().map(|a| a.maker).collect::<Vec<_>>(),
+        &updates,
+        start,
+        now,
+    )
+    .await?;
+
     Ok(Generated {
         apps: apps.len(),
         users: users.len(),
@@ -897,6 +964,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         vote_events: events.len(),
         current_votes: current.len(),
         player_buckets: buckets.len(),
+        people,
     })
 }
 
@@ -1050,6 +1118,8 @@ pub struct Report {
     pub players_matching: usize,
     pub players_now_total: i64,
     pub apps_with_30_day_history: usize,
+    /// People: creatives, jobs, payments, credits and "since the new work" (sim_people.rs).
+    pub people: crate::sim_people::PeopleReport,
 }
 
 struct Truth {
@@ -1460,10 +1530,11 @@ pub async fn report(
     )
     .fetch_one(db)
     .await? as usize;
+    r.people = crate::sim_people::report(db).await?;
     Ok(r)
 }
 
-fn correlation(pairs: &[(f64, f64)]) -> f64 {
+pub fn correlation(pairs: &[(f64, f64)]) -> f64 {
     let n = pairs.len() as f64;
     if n < 3.0 {
         return 0.0;
