@@ -73,6 +73,15 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "people auto-complete failed"),
         }
+        match crate::people::jobs::forget_conversations(&state.db, time::OffsetDateTime::now_utc())
+            .await
+        {
+            Ok(n) if n > 0 => {
+                tracing::info!(messages = n, "job conversation text deleted after 30 days")
+            }
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "forgetting job conversations failed"),
+        }
         state.rate_limiter.prune();
         tokio::time::sleep(StdDuration::from_secs(3600)).await;
     }

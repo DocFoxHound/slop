@@ -33,6 +33,11 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Portfolio links (files stay in the creative's repository) | `portfolio_sets` | Showing reviewed work on the People page | Contract | Life of the profile |
 | Jobs: request, offer, agreed Service Agreement, steps and their notes, delivery links | `jobs`, `job_events` | The contract record between creative and client (HUM-16, HUM-17) | Contract; legal obligation (records) | Life of the account + 6 years |
 | People payments and refunds (payer, amounts, fee, Stripe IDs) | `job_payments`, `payments`, `stripe_events` | Mirror of Stripe charges, reconciliation, fraud checks (PAYMENTS §8–9) | Contract; legal obligation (accounting) | 6 years (tax and accounting) |
+| Job conversations (text) | `job_messages.body` | Relaying the recorded conversation and letting both sides download it | Contract | While open + 30 days after closing, then deleted |
+| Job conversation fingerprints | `job_messages.sha256` | Proving a side's copy is unchanged (not the content) | Legitimate interest (evidence for both sides) | With the job record |
+| A side's own conversation copy, submitted for a problem or dispute | `job_evidence` | Mediation of a problem or review dispute | Legitimate interest; provided by that side | With the job record |
+| Changes to Agreement, problems, proposals, mediator suggestions | `job_changes`, `job_problems`, `job_problem_proposals` | The contract record and mediation (HUM-16, HUM-19) | Contract | Life of the account + 6 years |
+| Review disputes (statements, decision, reason) | `review_disputes`, `creative_reviews.hidden_reason`, `mediator_note` | Deciding disputes on the rules, with a statement of reasons (DSA Art. 17) | Legal obligation / legitimate interest | Life of the review + 6 years |
 | Reviews of creatives and replies | `creative_reviews` | Verified-client ratings on People pages (LEGAL §4.5) | Legitimate interest (right to object, GDPR Art. 21) | Life of the profile; removed with the reviewer's account |
 
 **Not collected:** passwords, provider access tokens (used once at sign-in, never stored), date

@@ -40,6 +40,13 @@ unweighted, over time) and **player counts** against a truth we know. The code i
   - Payments go through the real `payment_succeeded_at`, marked **simulated**; credits come from
     the real `maybe_credit`. Clients review most completed jobs, 👍 likelier the better the
     creative.
+  - A fifth of requests are **inquiries**, and the creative opens a recorded conversation (with
+    fingerprints from the real code). About a third of offers ask for a **sign-off**. Some jobs get
+    a **Change to Agreement** (accepted and paid, offered, or requested). Deliveries with money owed
+    are **previews**, and the real code sends the **final files** after payment. Some jobs have a
+    **problem** (agreed refunds, a mediator's suggestion still open, or closed unresolved), and
+    creatives dispute some bad reviews (kept, noted, removed or pending). The real cleanup deletes
+    the text of conversations closed over 30 days ago, keeping the fingerprints.
 
 The truth lives in `sim_users`, `sim_apps` and `sim_creatives`. Only the report reads it; the real
 code never does.
@@ -81,6 +88,9 @@ smaller simulation on every test run and checks the guarantees below.
 | `people.reviews_not_completed` / `reviews_not_by_client` | Reviews that shouldn't exist | 0 and 0 |
 | `people.overall_rating_untouched` | Badged apps whose rating is still every vote (HUM-13) | All of `badge_apps` |
 | `people.creative_rating_truth_correlation` | Creatives' % Not Slop against their true quality | Clearly positive; `no_ai_average_percent` above `heavy_ai_average_percent` |
+| `people.conversations_failing_verification` | Copies rebuilt from the sandbox that don't match the fingerprints | 0 |
+| `people.final_files_before_payment` | Final files sent before the delivery payment | 0 |
+| `people.hidden_reviews_counted` | Creatives whose rating counts a removed review | 0 |
 | `people.since_new_work_moved_right_way` | "Since the new work" moved the way the hired work moved quality, compared with the votes before | Most of `hired_updates_checked` |
 
 ## The sandbox site

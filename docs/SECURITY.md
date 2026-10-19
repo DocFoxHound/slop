@@ -216,7 +216,7 @@ Slop **can't** read chat messages (`LEGAL.md` §4.6).
 - **Attachments:** encrypted on the device before upload. Slop stores only the encrypted file, with a size limit and automatic deletion after 30 days. Slop can't see what's in them.
 - **What Slop still sees (metadata):** who is in a chat, when messages are sent, and their sizes. Keep the minimum and delete it quickly (e.g. delivery records after 30 days).
 - **Website:** browser encryption is weaker, because the page's code is delivered fresh by the server each time. **Chat runs in the Slop app only** (desktop and phone). The website shows "open the Slop app to chat".
-- **People job threads** are encrypted too. Each side keeps its own copy and can export it, for example for a dispute between them.
+- **People job conversations** (decided 2026-10-19, `DESIGN.md` §15.5) aren't end-to-end encrypted: they're recorded, which both sides are told. Slop holds the text only while open and 30 days after closing, then keeps SHA-256 fingerprints that prove each side's downloaded copy is unchanged. Staff read one only from a copy a side submits for a problem or review dispute, and every mediator look at a job record is audit-logged.
 
 ## 9. Payment security
 More detail in `PAYMENTS.md`.

@@ -318,6 +318,7 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
 
 function Review({ r, canReply, onSaved }: { r: CreativePage["reviews"][number]; canReply: boolean; onSaved: () => void }) {
   const [editing, setEditing] = useState(false);
+  const [disputing, setDisputing] = useState(false);
   const [text, setText] = useState(r.reply ?? "");
   const [error, setError] = useState<string>();
   const save = async (e: FormEvent) => {
@@ -348,6 +349,11 @@ function Review({ r, canReply, onSaved }: { r: CreativePage["reviews"][number]; 
         · {formatDate(r.created_at)}
       </div>
       {r.body && <p>{r.body}</p>}
+      {r.mediator_note && (
+        <div className="mediator-note">
+          <b>Mediator's note</b> {r.mediator_note}
+        </div>
+      )}
       {r.reply && !editing && (
         <div className="review-reply">
           <b>Reply</b> {r.reply}
@@ -369,11 +375,75 @@ function Review({ r, canReply, onSaved }: { r: CreativePage["reviews"][number]; 
             </div>
           </form>
         ) : (
-          <button type="button" className="link-btn small" onClick={() => setEditing(true)}>
-            {r.reply ? "Edit your reply" : "Reply"}
-          </button>
+          <span className="row-actions">
+            <button type="button" className="link-btn small" onClick={() => setEditing(true)}>
+              {r.reply ? "Edit your reply" : "Reply"}
+            </button>
+            {r.dispute === null && (
+              <button type="button" className="link-btn small" onClick={() => setDisputing(true)}>
+                Dispute this review
+              </button>
+            )}
+            {r.dispute && <span className="muted small">Dispute: {DISPUTE_STATUS[r.dispute]}</span>}
+          </span>
         ))}
+      {disputing && <DisputeForm jobId={r.job_id} onDone={() => { setDisputing(false); onSaved(); }} />}
     </article>
+  );
+}
+
+const DISPUTE_STATUS: Record<string, string> = {
+  pending: "waiting for a mediator",
+  removed: "removed",
+  noted: "kept, with a mediator's note",
+  kept: "kept",
+};
+
+const DISPUTE_REASONS: Array<[string, string]> = [
+  ["false_fact", "It states something the job record shows is false"],
+  ["extortion", "It was used as a threat (\"more for free or I'll leave a bad review\")"],
+  ["not_about_job", "It isn't about the work on this job"],
+  ["rules", "It breaks the rules: insults, threats or private information"],
+];
+
+function DisputeForm({ jobId, onDone }: { jobId: string; onDone: () => void }) {
+  const [reason, setReason] = useState("false_fact");
+  const [statement, setStatement] = useState("");
+  const [error, setError] = useState<string>();
+  return (
+    <form
+      className="form dispute-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        api.people.disputeReview(jobId, reason, statement).then(onDone, (err: unknown) =>
+          setError(err instanceof ApiError ? err.message : String(err)),
+        );
+      }}
+    >
+      <p className="muted small">
+        A mediator checks the review against Slop's rules and the job record. Reviews aren't removed for being negative: an honest opinion
+        stays, and your reply is your answer to it.
+      </p>
+      <fieldset className="choice-list">
+        <legend>Why</legend>
+        {DISPUTE_REASONS.map(([v, label]) => (
+          <label className="check" key={v}>
+            <input type="radio" name={`reason-${jobId}`} checked={reason === v} onChange={() => setReason(v)} /> {label}
+          </label>
+        ))}
+      </fieldset>
+      <label>
+        Explain, pointing to the job record
+        <textarea value={statement} rows={4} maxLength={2000} required onChange={(e) => setStatement(e.target.value)} />
+      </label>
+      {error && <p className="form-error">{error}</p>}
+      <div className="row-actions">
+        <button className="btn slime small">Send to a mediator</button>
+        <button type="button" className="btn small" onClick={onDone}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }
 
@@ -399,6 +469,7 @@ function HireForm({
   const [wantedBy, setWantedBy] = useState("");
   const [business, setBusiness] = useState(false);
   const [adult, setAdult] = useState(false);
+  const [exact, setExact] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
 
@@ -416,8 +487,7 @@ function HireForm({
   }
   const apps = projects.data ?? [];
   const chosenProject = project || apps[0]?.slug || "";
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
+  const send = async (inquiry: boolean) => {
     setBusy(true);
     setError(undefined);
     try {
@@ -428,6 +498,8 @@ function HireForm({
         request_md: request,
         wanted_by: wantedBy || undefined,
         client_is_business: business,
+        inquiry,
+        exact_wording_ack: exact,
         confirm_adult: adult,
       });
       navigate(`/jobs/${job.id}`);
@@ -438,7 +510,14 @@ function HireForm({
   };
 
   return (
-    <form className="panel panel-pad form hire-form" onSubmit={submit} aria-label={`Hire ${p.name}`}>
+    <form
+      className="panel panel-pad form hire-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        void send(false);
+      }}
+      aria-label={`Hire ${p.name}`}
+    >
       <h2>Hire {p.name}</h2>
       {projects.data && apps.length === 0 ? (
         <p>
@@ -488,17 +567,25 @@ function HireForm({
               ))}
             </select>
           </label>
+          <div className="exact-warning" role="note">
+            <b>Write exactly what you need.</b> Once you accept an offer, {p.name} is expected to deliver exactly what it says: nothing
+            more and nothing less. Anything you leave out isn't part of the work, and any change afterwards is new work with its own price
+            and date. Be precise: sizes, quantities, formats, style, references, deadlines.
+          </div>
           <label>
-            What do you need?
+            What do you need, exactly?
             <textarea
               value={request}
               onChange={(e) => setRequest(e.target.value)}
               rows={5}
               maxLength={4000}
               required
-              placeholder="Style, how many, sizes or lengths, references, anything they should know."
+              placeholder="For example: 1 character, 4 directions (up, down, left, right), walk cycle of 8 frames each, 32×32 pixels, transparent PNG sheets, palette like the attached reference."
             />
-            <span className="hint">This is part of the job's record. {p.name} replies with an offer you can accept, change or decline.</span>
+            <span className="hint">
+              This becomes part of the job's record. Not sure how to word it? Use <b>Ask about it first</b>: {p.name} reviews it, can open a
+              conversation to talk it through, and then sends an offer.
+            </span>
           </label>
           <label>
             Hoping to have it by <span className="hint">(optional)</span>
@@ -515,12 +602,24 @@ function HireForm({
               <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} required /> I'm 18 or older
             </label>
           )}
+          <label className="check">
+            <input type="checkbox" checked={exact} onChange={(e) => setExact(e.target.checked)} required /> I understand: {p.name} will
+            deliver exactly what the agreement says, nothing more or less, and changes later are new work with a new price.
+          </label>
           {error && (
             <p className="form-error" role="alert">
               {error}
             </p>
           )}
           <div className="row-actions">
+            <button
+              type="button"
+              className="btn"
+              disabled={busy || !chosenProject || !exact || !request.trim() || (!adultConfirmed && !adult)}
+              onClick={() => void send(true)}
+            >
+              Ask about it first
+            </button>
             <button className="btn slime" disabled={busy || !chosenProject}>
               Send request
             </button>
@@ -528,7 +627,10 @@ function HireForm({
               Cancel
             </button>
           </div>
-          <p className="muted small">Nothing is paid until you accept their offer.</p>
+          <p className="muted small">
+            Nothing is paid until you accept their offer. You can ask {p.name} for a conversation at any time; they decide when to open it, and
+            it's recorded so you both have proof of what was said.
+          </p>
         </>
       )}
     </form>

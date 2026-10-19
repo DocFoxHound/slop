@@ -251,6 +251,10 @@ export interface CreativeReview {
   vote: "not_slop" | "slop";
   body: string;
   reply: string | null;
+  /** A mediator's factual note after a review dispute. */
+  mediator_note: string | null;
+  /** The creative's dispute about it. */
+  dispute: "pending" | "removed" | "noted" | "kept" | null;
   created_at: string;
   replied_at: string | null;
 }
@@ -351,7 +355,8 @@ export interface Offer {
   currency: Currency;
   payment: "upfront" | "split" | "on_delivery";
   due_date: string;
-  revisions: number;
+  /** The client signs off on the direction before the rest is made. */
+  sign_off: boolean;
   rights: "transfer" | "licence";
   open_source: boolean;
   credit: boolean;
@@ -364,7 +369,9 @@ export type JobStatus =
   | "offered"
   | "awaiting_payment"
   | "in_progress"
+  | "awaiting_sign_off"
   | "delivered"
+  | "final_files"
   | "completed"
   | "declined"
   | "cancelled"
@@ -374,14 +381,60 @@ export type JobAction =
   | "offer"
   | "decline"
   | "accept"
-  | "ask_changes"
   | "pay"
   | "cancel"
+  | "send_for_sign_off"
+  | "sign_off"
   | "deliver"
-  | "revision"
-  | "complete"
+  | "accept_delivery"
+  | "final_files"
   | "review"
-  | "withdraw";
+  | "withdraw"
+  | "request_change"
+  | "propose_change"
+  | "offer_change"
+  | "decline_change"
+  | "withdraw_change"
+  | "accept_change"
+  | "request_conversation"
+  | "open_conversation"
+  | "close_conversation"
+  | "message"
+  | "open_problem";
+
+export interface JobChange {
+  id: string;
+  number: number;
+  status: "requested" | "offered" | "accepted" | "declined" | "withdrawn";
+  requested_note: string | null;
+  title: string | null;
+  scope_md: string | null;
+  extra_price_minor: number | null;
+  new_due_date: string | null;
+  decline_note: string | null;
+  text: string | null;
+  sha256: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export interface JobProblem {
+  id: string;
+  opened_by_me: boolean;
+  statement: string;
+  reply: string | null;
+  status: "open" | "resolved" | "unresolved" | "withdrawn";
+  mediator_suggestion: string | null;
+  closing_note: string | null;
+  created_at: string;
+  proposals: Array<{ id: string; mine: boolean; kind: "refund" | "cancel" | "redo" | "other"; amount_minor: number | null; note: string; status: string }>;
+}
+
+/** A side's own copy of a job conversation, as downloaded. */
+export interface ConversationCopy {
+  job_id: string;
+  messages: Array<{ id: string; author_id: string; author: string; created_at: string; body: string; sha256: string }>;
+}
 
 export interface Job {
   id: string;
@@ -395,12 +448,16 @@ export interface Job {
   request_md: string;
   wanted_by: string | null;
   client_is_business: boolean;
+  inquiry: boolean;
   offer: Offer | null;
   offer_count: number;
   summary: string[];
   agreement: { text: string; sha256: string | null; template: string; accepted_at: string | null } | null;
+  changes: JobChange[];
+  due_date: string | null;
   payments: Array<{
-    part: "full" | "deposit" | "final";
+    part: "full" | "deposit" | "final" | "change";
+    change_number: number | null;
     due_on: "accept" | "delivery";
     amount_minor: number;
     currency: Currency;
@@ -413,15 +470,37 @@ export interface Job {
   creative_receives_minor: number | null;
   withdrawal: { until: string; open: boolean; started_early: boolean } | null;
   withdrawal_days: number | null;
-  revisions_left: number;
+  signed_off_at: string | null;
+  final_files_at: string | null;
   auto_complete_at: string | null;
   completed_at: string | null;
   completed_automatically: boolean;
   credited: boolean;
+  conversation: {
+    open: boolean;
+    requested_at: string | null;
+    request_note: string | null;
+    text_deleted_after: string | null;
+    acknowledged: boolean;
+    notice: string;
+    messages: Array<{ id: string; author: string; mine: boolean; body: string | null; sha256: string; created_at: string }>;
+  };
+  problem: JobProblem | null;
+  /** For the creative: how this client has paid before. */
+  client_record: { completed_jobs: number; paid_in_full: number; owing: number } | null;
   events: Array<{ kind: string; actor: string | null; note: string | null; links: string[]; created_at: string }>;
   actions: JobAction[];
   payment_mode: "stripe" | "simulated" | "off";
-  review: { vote: "not_slop" | "slop"; body: string; reply: string | null } | null;
+  review: {
+    vote: "not_slop" | "slop";
+    body: string;
+    reply: string | null;
+    hidden: boolean;
+    mediator_note: string | null;
+    dispute: { reason: string; statement: string; client_statement: string | null; status: string; decision_reason: string | null } | null;
+  } | null;
+  /** What the client acknowledges before requesting and accepting. */
+  exact_wording: string;
   created_at: string;
 }
 
@@ -437,6 +516,8 @@ export interface JobCard {
   skill: Skill;
   title: string;
   price: string | null;
+  inquiry: boolean;
+  conversation_requested: boolean;
   updated_at: string;
 }
 
@@ -524,6 +605,34 @@ export interface AdminQueue {
   changes: Array<AppChange & { app: AdminAppRef; players_get: string | null; notes: ReviewNote[] }>;
   media: Array<MediaSet & { app: AdminAppRef; live: MediaSet | null; notes: ReviewNote[] }>;
   portfolios: Array<{ handle: string; name: string; ai_use: AiUse; set: PortfolioSet; live: PortfolioSet | null; notes: ReviewNote[] }>;
+  problems: Array<{
+    id: string;
+    job_id: string;
+    creative: string;
+    client: string;
+    title: string;
+    statement: string;
+    opened_by_creative: boolean;
+    reply: string | null;
+    mediator_suggestion: string | null;
+    proposals: Array<{ kind: string; amount_minor: number | null; note: string; status: string }>;
+    created_at: string;
+    notes: ReviewNote[];
+  }>;
+  review_disputes: Array<{
+    job_id: string;
+    creative: string;
+    creative_handle: string;
+    client: string;
+    vote: "not_slop" | "slop";
+    review: string;
+    reason: string;
+    reason_text: string;
+    statement: string;
+    client_statement: string | null;
+    created_at: string;
+    notes: ReviewNote[];
+  }>;
   ready_to_list: Array<AdminAppRef & { approved_releases: number; pictures_pending: boolean; notes: ReviewNote[] }>;
   checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
 }
@@ -744,6 +853,20 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   return data as T;
 }
 
+/** A text response (job records). The desktop app returns JSON bodies only, so it gets text back as a string too. */
+async function requestText(method: string, path: string): Promise<string> {
+  if (isDesktop) {
+    const res = await desktopRequest(method, path);
+    if (res.status >= 200 && res.status < 300) return typeof res.body === "string" ? res.body : JSON.stringify(res.body);
+    throw new ApiError(res.status, "http", `Request failed (${res.status})`);
+  }
+  const res = await fetch(API_BASE + path, { method, credentials: "same-origin" }).catch(() => {
+    throw new ApiError(0, "network", "Can't reach Slop. Check your connection and try again.");
+  });
+  if (!res.ok) throw new ApiError(res.status, "http", `Request failed (${res.status})`);
+  return res.text();
+}
+
 export const api = {
   categories: () => request<Category[]>("GET", "/v1/categories"),
   apps: (q: AppQuery = {}) => request<AppPage>("GET", `/v1/apps${query(q)}`),
@@ -810,6 +933,11 @@ export const api = {
     rejectMedia: (id: string, reason: string) => request<void>("POST", `/v1/admin/media/${id}/reject`, { reason }),
     approvePortfolio: (id: string) => request<void>("POST", `/v1/admin/portfolio/${id}/approve`),
     rejectPortfolio: (id: string, reason: string) => request<void>("POST", `/v1/admin/portfolio/${id}/reject`, { reason }),
+    jobRecord: (id: string) => requestText("GET", `/v1/admin/jobs/${id}/record`),
+    suggest: (problem: string, suggestion: string) => request<void>("POST", `/v1/admin/problems/${problem}/suggest`, { suggestion }),
+    closeProblem: (problem: string, note: string) => request<void>("POST", `/v1/admin/problems/${problem}/close`, { note }),
+    decideDispute: (job: string, body: { outcome: "remove" | "note" | "keep"; reason: string; note?: string }) =>
+      request<void>("POST", `/v1/admin/review-disputes/${job}/decide`, body),
     tokens: () => request<AdminToken[]>("GET", "/v1/admin/tokens"),
     createToken: (body: { name: string; scope: AdminToken["scope"]; days: number }) =>
       request<AdminToken & { token: string }>("POST", "/v1/admin/tokens", body),
@@ -863,13 +991,25 @@ export const api = {
         request_md: string;
         wanted_by?: string;
         client_is_business: boolean;
+        inquiry: boolean;
+        exact_wording_ack: boolean;
         confirm_adult: boolean;
       },
     ) => request<Job>("POST", `/v1/people/${encodeURIComponent(handle)}/hire`, body),
     jobs: () => request<{ as_client: JobCard[]; as_creative: JobCard[]; waiting_on_you: number }>("GET", "/v1/me/jobs"),
     job: (id: string) => request<Job>("GET", `/v1/jobs/${encodeURIComponent(id)}`),
     step: (id: string, step: string, body: unknown = {}) =>
-      request<Job>(step === "review" ? "PUT" : "POST", `/v1/jobs/${encodeURIComponent(id)}/${step}`, body),
+      request<Job>(
+        step === "review" || step === "review/dispute-answer" ? "PUT" : "POST",
+        `/v1/jobs/${encodeURIComponent(id)}/${step}`,
+        body,
+      ),
+    record: (id: string) => requestText("GET", `/v1/jobs/${encodeURIComponent(id)}/record`),
+    conversationCopy: (id: string) => request<ConversationCopy>("GET", `/v1/jobs/${encodeURIComponent(id)}/conversation`),
+    submitCopy: (id: string, copy: ConversationCopy) =>
+      request<{ verified_messages: number; unverified_messages: number }>("POST", `/v1/jobs/${encodeURIComponent(id)}/evidence`, { copy }),
+    disputeReview: (jobId: string, reason: string, statement: string) =>
+      request<void>("POST", `/v1/people/reviews/${encodeURIComponent(jobId)}/dispute`, { reason, statement }),
     pay: (id: string) => request<{ url: string | null; job: Job }>("POST", `/v1/jobs/${encodeURIComponent(id)}/pay`),
     checkPayment: (id: string) => request<Job>("POST", `/v1/jobs/${encodeURIComponent(id)}/payment/check`),
   },

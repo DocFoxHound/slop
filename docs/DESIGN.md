@@ -204,7 +204,7 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 A creative's page is built to sell a service, so it isn't an app page with a different header:
 - **Header:** name, "Individual" or "Studio · N people", headline, location, skills, "Taking work" or "Fully booked", typical turnaround, and the **AI-use disclosure** (required: No AI / AI-assisted / Mostly AI-generated, with an optional note). Whether they're a **business (trader)** is shown too (`LEGAL-GUIDANCE.md` HUM-1).
 - **Rating:** % Not Slop from **verified clients only** (a completed job through Slop), shown from 3 reviews, with the count.
-- **Portfolio:** pictures, videos (YouTube) and **audio tracks** for composers. Like app pictures, Slop doesn't host them: they live in a public GitHub repository, listed in `.slop/portfolio.json`, read at one commit, checked, and **reviewed before they show** (§15.6). A first profile goes live when its first portfolio is approved.
+- **Portfolio:** pictures, videos (YouTube) and **audio tracks** for composers. Like app pictures, Slop doesn't host them: they live in a public GitHub repository, listed in `.slop/portfolio.json`, read at one commit, checked, and **reviewed before they show** (§15.8). A first profile goes live when its first portfolio is approved.
 - **Services:** up to 8 packages (name, what's included, starting price, typical days, skill). "Hire" on a package starts a request with it filled in.
 - **Verified reviews:** each one says ✓ Verified client, the project and what was made, and the client's 👍/👎 with text. The creative can reply once, publicly.
 - **Worked on:** the apps that credit them (§15.4).
@@ -214,33 +214,38 @@ A creative's page is built to sell a service, so it isn't an app page with a dif
 ### 15.2 Hiring, start to finish
 Every job belongs to **one of the maker's projects**, at any stage (coming soon, beta or released; public or private). That's what lets the work be credited.
 
+**The rule both sides sign up to (decided 2026-10-19): the creative delivers exactly what the agreement says, nothing more and nothing less.** The maker is warned, in plain words, before sending a request and again before accepting, and ticks a box each time. Anything not written down isn't part of the work. Any change after acceptance is new work (§15.3).
+
 | Step | Who | What they see and do |
 |---|---|---|
 | 1. Get paid set-up | Creative, once | "Get paid": Stripe's own sign-up, a few minutes. Until it's done, the profile says "Not taking paid work yet". |
-| 2. Request | Maker | **Hire** (on a package or the profile) → pick the project → say what they need (and a hoped-for date). |
-| 3. Offer | Creative | The offer is pre-filled from the package: **what you'll get, price, payment (half now, half on delivery by default), due date, revisions, who owns it, open-source use, credit**. They adjust and send. Or decline. |
-| 4. Accept | Maker | A **one-screen summary in plain words**, with the full Service Agreement one tap away. **Accept & pay $X** (the first, largest number is what they pay). Or "Ask for changes" with a note, or decline. |
-| 5. Work | Creative | Starts once the first payment is in (or straight away for "all on delivery"). |
-| 6. Deliver | Creative | **Mark delivered** with a note and links to the files. |
-| 7. Finish | Maker | **Looks good** (paying the rest, if any), or **Ask for a revision** while revisions are left. After **7 days** with no answer, the job completes on its own. |
-| 8. After | Both | The maker can review the creative. The creative is credited on the app page, and the app appears on their profile. |
+| 2. Request or inquiry | Maker | **Hire** (on a package or the profile) → pick the project → write exactly what they need, under the warning. Two buttons: **Send request**, or **Ask about it first**: an *inquiry* asking the creative to review it, give their opinion and a timeframe, and talk it through before any offer. |
+| 3. Offer | Creative | Optionally open a conversation first (§15.5). The offer: **exactly what's included, price, payment (half now, half on accepting the delivery by default), due date, optional sign-off, who owns it, open-source use, credit**. Or decline. |
+| 4. Accept | Maker | A **one-screen summary in plain words** under a "read every word" warning, the full Service Agreement one tap away, and the exact-wording box again. **Accept & pay $X**, or decline (the creative can send a new offer). |
+| 5. Sign-off (optional) | Both | The creative sends the direction (a sketch, a sample). The maker **signs off**; from then on, changing the direction is a Change to Agreement. |
+| 6. Deliver | Creative | **Mark delivered** with links. While money is still owed, this is a **preview** (watermarked or reduced). |
+| 7. Accept the delivery | Maker | **Accept the delivery — pay the rest** (or just accept, if nothing's owed), or ask for a change, or open a problem. After **7 days** with no answer, the delivery counts as accepted and anything owed stays owed. |
+| 8. Final files | Creative | After the last payment, **send the final files**. The job completes. |
+| 9. After | Both | The maker can review the creative. The creative is credited on the app page, and the app appears on their profile. |
 
-- **Job records, not chat:** the request, offer, notes on changes, delivery and revision notes are short texts that are **part of the contract record** (kept for contract claims, `LEGAL-GUIDANCE.md` §15). Free conversation belongs in end-to-end encrypted chat (§19), which isn't built yet.
-- **Cancelling:** before acceptance, either side can decline. After it, the creative can cancel (and refunds from their Stripe dashboard). EU/UK consumers get the legal **withdrawal button** (HUM-3). Slop doesn't decide disputes.
+- **Cancelling:** before acceptance, either side can decline. After it, the creative can cancel (and refunds from their Stripe dashboard); the maker can back out only before paying anything. EU/UK consumers get the legal **withdrawal button** (HUM-3).
+- **If the maker doesn't pay the rest:** they never get the final files; until they've paid in full they have **no right to use the work** (copyright stays with the creative, so shipping it is infringement and the creative can have it taken down); the job shows as owed; **they can't hire anyone again until it's paid**; and creatives see a factual payment record on every job ("paid in full on 11 of 11 finished jobs"). Beyond that, the record is the creative's evidence for small claims.
+- **If the creative doesn't deliver what was agreed:** the maker doesn't accept the delivery, opens a problem (§15.6), and reviews the creative. Their review is the consequence on the creative's side.
 
 ### 15.3 The contract
-The **default Service Agreement** (`crates/slop-api/src/service_agreement.md`, versioned) is filled in from the offer. Both sides see the same plain summary:
-- **What:** title and scope.
-- **Price and payment:** up front, **half now and half on delivery (default)**, or all on delivery.
-- **Due date and revisions.**
-- **Who owns it:** **"You own it"** (copyright is transferred to the maker on full payment; the creative may show it in their portfolio) or **"Licence for this project"** (the maker may use, change and publish it in the named project, forever; the creative keeps the copyright).
+The **default Service Agreement** (`crates/slop-api/src/people/service_agreement.md`, versioned) is filled in from the offer. Both sides see the same plain summary:
+- **What, exactly:** title and an exact scope. "This agreement binds both of you to these words": the creative delivers what's written, nothing more or less; anything unwritten isn't part of it.
+- **Price and payment:** up front, **half now and half on accepting the delivery (default)**, or all on accepting the delivery. Delivery before the last payment is a preview; the final files follow it.
+- **Due date**, and an optional **sign-off** on the direction.
+- **Changes are new work.** There are no free "revisions": after acceptance, any change — added, removed, redone, a different style or direction, a new date — is a **Change to Agreement**: a separate document the creative writes, with its own scope, price (which may be zero) and due date. It applies only when the maker accepts it (ticking the exact-wording box again) and pays its price; until then the agreement stands as written. The creative may decline a requested change. Each accepted change is stored with its own SHA-256, referring to the agreement's.
+- **Who owns it:** **"You own it"** (copyright is transferred to the maker on full payment; the creative may show it in their portfolio) or **"Licence for this project"** (the maker may use, change and publish it in the named project, forever; the creative keeps the copyright). Nothing until paid in full.
 - **Open source:** whether the work may be published **under the project's open-source licence** (anyone can reuse it), or stays **all rights reserved** inside the repository. Asked plainly, because every public Slop app has public source.
 - **Credit:** shown on the project's page (on by default).
 - **AI use** for this job, and the creative's promise that it's true and that they have the rights to what they deliver.
-- **Refunds:** the creative's policy (default: full refund before work starts; after that, for undelivered parts).
-- **Law:** the creative's country, without removing the client's consumer rights where they live.
+- **Refunds:** the creative's policy (default: full refund before work starts; after that, for undelivered parts). Problems and mediation (§15.6).
+- **Records and conversations** (§15.5), and the **law**: the creative's country, without removing the maker's consumer rights where they live.
 
-"Accept" is the signature (US E-SIGN, EU eIDAS simple electronic signature). Slop stores the exact text both sides agreed to, its hash, the template version, and who accepted when.
+"Accept" is the signature (US E-SIGN, EU eIDAS simple electronic signature). Slop stores the exact text both sides agreed to, its hash, the template version, and who accepted when. **Both sides can download the full record** (agreement, changes, timeline, payments, problems) at any time.
 
 ### 15.4 What a project gets: credit, a badge, and "since the new work"
 Hiring people **never changes how votes count**. A rating is what players say (`LEGAL.md` §5.5). Instead:
@@ -249,10 +254,21 @@ Hiring people **never changes how votes count**. A rating is what players say (`
 - **"Since the new work" rating** on the app's ratings panel: % Not Slop from votes cast or changed **since the first release after the job completed**, beside the overall rating. Old 👎 votes about AI art no longer hide that the app improved, honestly, because only newer votes are in it.
 - These count only for jobs done through Slop, which is the reason to stay: creatives can always take work elsewhere.
 
-### 15.5 Money in one line
+### 15.5 Conversations: recorded, opened by the creative
+- **The creative starts conversations.** The maker can **ask for a conversation at any time** (with a short note), but only the creative opens it, and closes it. This keeps the maker from changing the requirements by message; changes go through §15.3.
+- **Recorded, and said so everywhere.** Above every conversation, and in a box each side ticks before their first message: *"This conversation is recorded, so you both have proof of what was said."*
+- **The two sides keep it, not Slop (decided 2026-10-19).** Slop holds the text while the conversation is open and for **30 days after it closes**, so both can **download their copy**; then it deletes the text and keeps only a **fingerprint** of each message (a SHA-256 chained to the one before). The fingerprints prove a copy is unchanged and complete, without Slop being able to read it.
+- **Slop staff see a conversation only if a side submits their copy** for a problem or a review dispute. Slop checks it against the fingerprints and tells the mediator how many messages match.
+- These job conversations are separate from personal chat (§19), which stays end-to-end encrypted.
+
+### 15.6 Problems, mediation and review disputes
+- **Problems.** Either side can open one on an accepted job: they state their case, the other answers, and either proposes outcomes (a refund, redoing a part at no charge, cancelling, something else). **Only what both accept happens**, and Slop carries it out where it can (cancelling; refunds are issued by the creative in Stripe). A **Slop mediator** (a person, or an AI reviewer with an admin token) can read the record — every look is logged — and **suggest** an outcome, which binds no one. If they can't agree, the mediator closes it unresolved and both keep the record for a card dispute or a court. **Slop never decides who's right about money** (LEGAL §4.1).
+- **Review disputes.** A creative can dispute a review that breaks the rules, isn't about the job, was used as a threat ("more for free or I'll leave a bad review"), or states something the record shows is false. The reviewer can answer. A mediator then **removes it**, **keeps it with a factual note** (shown under the review), or **keeps it**, always with a written reason shown to both. Reviews are **never removed for being negative**: an honest opinion stays, and the creative's public reply is their answer (HUM-12, HUM-18).
+
+### 15.7 Money in one line
 The maker pays the creative **directly** (Stripe, the creative's own account). Slop takes **5%** as its platform fee, out of what the creative receives, and never holds the money. Details: `PAYMENTS.md` §7.
 
-### 15.6 Review and safety
+### 15.8 Review and safety
 - New portfolios and portfolio changes wait for review in the admin panel, like app pictures, and AI reviewers can see and decide them (`review.rs`).
 - 18+ to sell or hire (confirmed on first use). Rules from `LEGAL-GUIDANCE.md` §4 (trader declaration, withdrawal, independence of creatives) apply.
 - **Slop doesn't settle disputes.** It acts on rule-breaking (scams, fraud, repeated non-delivery).
@@ -295,7 +311,7 @@ All data is invented. Sign-in, scans, installs, Pulse handshakes, donations, rep
 
 A Steam-style communication system. Not designed in detail yet.
 - **Friends and direct messages** between users, plus **group chats** for player teams.
-- **People conversations:** each quote or job gets its own thread between the creative and the client, with the Service Agreement and the delivery and completion steps shown in the thread. This is how creatives contact their clients.
+- **People job conversations** are different: recorded, opened by the creative, kept by the two sides with fingerprints at Slop (§15.5). They aren't part of this end-to-end encrypted chat.
 - **History backups are on by default** (opt-out). They're encrypted with a key only the user holds, so they stay end-to-end (`SECURITY.md` §8.5).
 - **Privacy (decided):** messages are between people and **end-to-end encrypted**, so Slop can't read them (`SECURITY.md` §8.5). Link warnings run in the recipient's app. Moderators only see messages that a participant reports. Chat is in the Slop app only, not the website.
 - **Safety:**

@@ -755,6 +755,13 @@ pub struct PeopleGenerated {
     pub reviews: usize,
     pub releases: usize,
     pub auto_completed: u64,
+    pub messages: usize,
+    pub sign_offs: usize,
+    pub changes: usize,
+    pub final_files: usize,
+    pub problems: usize,
+    pub review_disputes: usize,
+    pub conversation_texts_deleted: u64,
 }
 
 /// The truth a review follows: 👍 likelier the better and more reliable the creative.
@@ -984,9 +991,12 @@ pub async fn write(
             ((template.2 + rng.below((template.3 - template.2 + 1) as usize) as i64) / 500) * 500
         };
         let business = rng.chance(0.4);
+        let inquiry = rng.chance(0.2);
         sqlx::query(
-            "insert into jobs (id, creative_id, client_id, app_id, skill, status, request_md, client_is_business, created_at, updated_at)
-             values ($1, $2, $3, $4, $5, 'requested', $6, $7, $8, $8)",
+            "insert into jobs (id, creative_id, client_id, app_id, skill, status, request_md, client_is_business, created_at, updated_at,
+                               inquiry, request_ack_at, conversation_requested_at, conversation_request_note)
+             values ($1, $2, $3, $4, $5, 'requested', $6, $7, $8, $8, $9, $8, case when $9 then $8 end,
+                     case when $9 then 'Please review my request: your opinion, how long it would take, and anything unclear.' end)",
         )
         .bind(id)
         .bind(c.id)
@@ -1000,9 +1010,31 @@ pub async fn write(
         ))
         .bind(business)
         .bind(requested)
+        .bind(inquiry)
         .execute(db)
         .await?;
-        event(db, id, Some(*maker_id), "requested", None, requested).await?;
+        event(
+            db,
+            id,
+            Some(*maker_id),
+            if inquiry { "inquiry" } else { "requested" },
+            None,
+            requested,
+        )
+        .await?;
+        // Inquiries: the creative usually opens a conversation to talk it through first.
+        if inquiry && (job.end != End::Requested || rng.chance(0.5)) {
+            out.messages += converse(
+                db,
+                rng,
+                id,
+                *maker_id,
+                c.id,
+                requested + Duration::hours(3),
+                job.end == End::Requested,
+            )
+            .await?;
+        }
         if job.end == End::Requested {
             out.jobs += 1;
             continue;
@@ -1017,7 +1049,8 @@ pub async fn write(
             currency: "usd".into(),
             payment: payment.into(),
             due_date: (offered_at + Duration::days(i64::from(template.4) + 7)).date().to_string(),
-            revisions: if c.seed.5 == "heavy" { 0 } else { 1 + rng.below(2) as i16 },
+            sign_off: c.seed.5 != "heavy" && rng.chance(0.35),
+            revisions: 0,
             rights: if rng.chance(0.7) { "transfer".into() } else { "licence".into() },
             open_source: rng.chance(0.3),
             credit: rng.chance(0.92),
@@ -1083,7 +1116,8 @@ pub async fn write(
         let due_now = plan_pay.iter().any(|(_, on, _)| *on == "accept");
         sqlx::query(
             "update jobs set status = $2, agreement_text = $3, agreement_sha256 = $4, agreement_template = $5,
-                    accepted_at = $6, withdrawal_until = $7, start_now_ack_at = $8, started_at = $9, updated_at = $6
+                    accepted_at = $6, withdrawal_until = $7, start_now_ack_at = $8, started_at = $9, updated_at = $6,
+                    exact_terms_ack_at = $6, due_date = $10::date
              where id = $1",
         )
         .bind(id)
@@ -1095,6 +1129,7 @@ pub async fn write(
         .bind(withdrawal_days.map(|d| accepted + Duration::days(d.into())))
         .bind(withdrawal_days.map(|_| accepted))
         .bind((!due_now).then_some(accepted))
+        .bind(&offer.due_date)
         .execute(db)
         .await?;
         let mut payment_ids = Vec::new();
@@ -1140,6 +1175,136 @@ pub async fn write(
                 out.payments += 1;
             }
         }
+        // Sign-off on the direction, when the offer asks for one.
+        let mut work_day = first_paid + Duration::days(2);
+        if offer.sign_off && (job.end != End::InProgress || rng.chance(0.5)) {
+            event(
+                db,
+                id,
+                Some(c.id),
+                "sent_for_sign_off",
+                Some("Rough sketch attached."),
+                work_day,
+            )
+            .await?;
+            sqlx::query("update jobs set signed_off_at = $2 where id = $1")
+                .bind(id)
+                .bind(work_day + Duration::hours(8))
+                .execute(db)
+                .await?;
+            event(
+                db,
+                id,
+                Some(*maker_id),
+                "signed_off",
+                None,
+                work_day + Duration::hours(8),
+            )
+            .await?;
+            out.sign_offs += 1;
+            work_day += Duration::days(1);
+        }
+        // Changes to Agreement: new work with its own price and date.
+        let finishing = matches!(
+            job.end,
+            End::Completed | End::CompletedOwing | End::DeliveredRecently | End::DeliveredStale
+        );
+        if (finishing && rng.chance(0.2)) || (job.end == End::InProgress && rng.chance(0.3)) {
+            let accepted_change = finishing;
+            out.changes += 1;
+            let extra = if rng.chance(0.75) {
+                (price / 4 / 500).max(2) * 500
+            } else {
+                0
+            };
+            let terms = jobs::ChangeTerms {
+                number: 1,
+                title: "Add a second variant",
+                scope_md: "One more colour variant of everything delivered, same sizes.",
+                extra_price_minor: extra,
+                currency: "usd",
+                new_due_date: &(work_day + Duration::days(10)).date().to_string(),
+                requested_note: Some("Could we get a second colour variant?"),
+            };
+            let parties = Parties {
+                job_id: id,
+                creative_name: c.seed.0,
+                creative_handle: c.seed.1,
+                trader: c.trader,
+                client_name: maker_name,
+                project_title: &app_titles[job.app],
+                project_slug: &app_slugs[job.app],
+                skill: job.skill,
+                withdrawal_days,
+            };
+            let doc = jobs::change_document(&terms, &parties, &sha);
+            let change_id = Uuid::now_v7();
+            sqlx::query(
+                "insert into job_changes (id, job_id, number, requested_note, status, title, scope_md, extra_price_minor,
+                                          new_due_date, text, sha256, created_at, offered_at, decided_at)
+                 values ($1, $2, 1, $3, $4, $5, $6, $7, $8::date, $9, $10, $11, $12, $13)",
+            )
+            .bind(change_id)
+            .bind(id)
+            .bind(terms.requested_note)
+            .bind(if accepted_change { "accepted" } else if rng.chance(0.5) { "offered" } else { "requested" })
+            .bind(terms.title)
+            .bind(terms.scope_md)
+            .bind(extra as i32)
+            .bind(terms.new_due_date)
+            .bind(accepted_change.then_some(&doc))
+            .bind(accepted_change.then(|| hex::encode(<sha2::Sha256 as sha2::Digest>::digest(doc.as_bytes()))))
+            .bind(work_day)
+            .bind(work_day + Duration::hours(6))
+            .bind(accepted_change.then_some(work_day + Duration::hours(20)))
+            .execute(db)
+            .await?;
+            event(
+                db,
+                id,
+                Some(*maker_id),
+                "change_requested",
+                terms.requested_note,
+                work_day,
+            )
+            .await?;
+            if accepted_change {
+                event(
+                    db,
+                    id,
+                    Some(*maker_id),
+                    "change_accepted",
+                    Some("Change to Agreement 1"),
+                    work_day + Duration::hours(20),
+                )
+                .await?;
+                sqlx::query("update jobs set due_date = $2::date where id = $1")
+                    .bind(id)
+                    .bind(terms.new_due_date)
+                    .execute(db)
+                    .await?;
+                if extra > 0 {
+                    let pid = Uuid::now_v7();
+                    sqlx::query(
+                        "insert into job_payments (id, job_id, part, due_on, amount_minor, currency, status, change_id)
+                         values ($1, $2, 'change', 'accept', $3, 'usd', 'due', $4)",
+                    )
+                    .bind(pid)
+                    .bind(id)
+                    .bind(extra as i32)
+                    .bind(change_id)
+                    .execute(db)
+                    .await?;
+                    jobs::payment_succeeded_at(
+                        db,
+                        pay(pid, extra, 5),
+                        Some(work_day + Duration::hours(22)),
+                    )
+                    .await?;
+                    out.payments += 1;
+                }
+            }
+        }
         match job.end {
             End::InProgress => {
                 out.jobs += 1;
@@ -1180,16 +1345,26 @@ pub async fn write(
             .bind(delivered)
             .execute(db)
             .await?;
-        sqlx::query("update job_payments set status = 'due' where job_id = $1 and due_on = 'delivery' and status = 'waiting'")
+        let preview = sqlx::query("update job_payments set status = 'due' where job_id = $1 and due_on = 'delivery' and status = 'waiting'")
             .bind(id)
             .execute(db)
-            .await?;
+            .await?
+            .rows_affected()
+            > 0;
         event(
             db,
             id,
             Some(c.id),
-            "delivered",
-            Some("All files are in the shared folder."),
+            if preview {
+                "delivered_preview"
+            } else {
+                "delivered"
+            },
+            Some(if preview {
+                "Watermarked preview in the shared folder."
+            } else {
+                "All files are in the shared folder."
+            }),
             delivered,
         )
         .await?;
@@ -1237,6 +1412,36 @@ pub async fn write(
                 jobs::payment_succeeded_at(db, pay(*pid, *amount, 10 + n), Some(done)).await?;
                 out.payments += 1;
             }
+            // Paid for the preview: the creative sends the final files (most already have).
+            if rng.chance(0.93) {
+                let mut conn = db.acquire().await?;
+                jobs::send_final_files(
+                    &mut conn,
+                    id,
+                    c.id,
+                    "Final files, full resolution.",
+                    &[format!("https://files.example/{}/final.zip", c.seed.1)],
+                    done + Duration::hours(10),
+                )
+                .await
+                .map_err(|e| anyhow::anyhow!("{e}"))?;
+                out.final_files += 1;
+            }
+        }
+
+        // Some jobs hit a problem: both sides state their case and propose outcomes.
+        if rng.chance(0.08) {
+            out.problems += 1;
+            problem(
+                db,
+                rng,
+                id,
+                *maker_id,
+                c.id,
+                price,
+                done + Duration::days(1),
+            )
+            .await?;
         }
 
         // A review from the client, most of the time.
@@ -1258,13 +1463,222 @@ pub async fn write(
             .execute(db)
             .await?;
             out.reviews += 1;
+            // Creatives dispute some bad reviews; a mediator decides on the rules, never on the
+            // vote (HUM-18).
+            if !up && rng.chance(0.35) {
+                out.review_disputes += 1;
+                let (reason, statement) = *rng.pick(&[
+                    ("false_fact", "The review says the files were the wrong size; the agreement and delivery show the agreed sizes."),
+                    ("extortion", "They said they'd leave a bad review unless I added more work for free."),
+                    ("not_about_job", "This is about a different project than the one on this job."),
+                ]);
+                let r = rng.f();
+                let (status, hidden, mediator_note, why) = if r < 0.4 {
+                    ("pending", false, None, None)
+                } else if r < 0.75 {
+                    (
+                        "kept",
+                        false,
+                        None,
+                        Some("The review is the client's opinion of the work; it breaks no rule."),
+                    )
+                } else if r < 0.92 {
+                    (
+                        "noted",
+                        false,
+                        Some("The job record shows delivery at the sizes in the agreement."),
+                        Some(
+                            "A factual claim in the review differs from the job record; a note says so.",
+                        ),
+                    )
+                } else {
+                    (
+                        "removed",
+                        true,
+                        None,
+                        Some(
+                            "The recorded conversation shows the review was used as a threat to get free work.",
+                        ),
+                    )
+                };
+                sqlx::query(
+                    "insert into review_disputes (job_id, reason, statement, client_statement, status, decision_reason, decided_by, created_at, decided_at)
+                     values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
+                )
+                .bind(id)
+                .bind(reason)
+                .bind(statement)
+                .bind(rng.chance(0.6).then_some("I stand by my review."))
+                .bind(status)
+                .bind(why)
+                .bind((status != "pending").then_some("Sim mediator"))
+                .bind(done + Duration::days(3))
+                .bind((status != "pending").then_some(done + Duration::days(5)))
+                .execute(db)
+                .await?;
+                sqlx::query("update creative_reviews set hidden_at = case when $2 then $4::timestamptz end, hidden_reason = case when $2 then $5 end, mediator_note = $3 where job_id = $1")
+                    .bind(id)
+                    .bind(hidden)
+                    .bind(mediator_note)
+                    .bind(done + Duration::days(5))
+                    .bind(why)
+                    .execute(db)
+                    .await?;
+            }
         }
         out.jobs += 1;
     }
 
     // Jobs delivered over a week ago with no answer: the real hourly job completes them.
     out.auto_completed = jobs::auto_complete(db, now).await?;
+    // Conversations closed over 30 days ago: the real cleanup deletes the text, keeping fingerprints.
+    out.conversation_texts_deleted = jobs::forget_conversations(db, now).await?;
     Ok(out)
+}
+
+const LINES_CLIENT: &[&str] = &[
+    "Hi! Before we sign anything: is the brief clear enough?",
+    "We're thinking 32×32. Would that work for the style?",
+    "Roughly how long would this take you?",
+    "Great, that makes sense. Please send an offer with that wording.",
+];
+const LINES_CREATIVE: &[&str] = &[
+    "Thanks for asking first. Two questions: which engine, and do you need transparent backgrounds?",
+    "About two weeks. I'd suggest a sketch sign-off before the final pass.",
+    "I'll write the offer so the sizes and file formats are exact.",
+    "Sending the offer now. Please read the scope carefully: it's exactly what you'll get.",
+];
+
+/// A recorded conversation the creative opens, with fingerprints from the real code. Closed
+/// afterwards unless `keep_open`.
+async fn converse(
+    db: &PgPool,
+    rng: &mut Rng,
+    job: Uuid,
+    client: Uuid,
+    creative: Uuid,
+    from: OffsetDateTime,
+    keep_open: bool,
+) -> anyhow::Result<usize> {
+    sqlx::query(
+        "update jobs set conversation_open = true, conversation_requested_at = null, conversation_request_note = null,
+                client_recording_ack_at = $2, creative_recording_ack_at = $2 where id = $1",
+    )
+    .bind(job)
+    .bind(from)
+    .execute(db)
+    .await?;
+    event(db, job, Some(creative), "conversation_opened", None, from).await?;
+    let mut prev: Option<String> = None;
+    let n = 2 + rng.below(3);
+    for k in 0..n {
+        let (author, body) = if k % 2 == 0 {
+            (creative, LINES_CREATIVE[k / 2 % LINES_CREATIVE.len()])
+        } else {
+            (client, LINES_CLIENT[k / 2 % LINES_CLIENT.len()])
+        };
+        let id = Uuid::now_v7();
+        let sha = jobs::message_fingerprint(prev.as_deref(), id, author, body);
+        sqlx::query("insert into job_messages (id, job_id, author_id, body, sha256, created_at) values ($1, $2, $3, $4, $5, $6)")
+            .bind(id)
+            .bind(job)
+            .bind(author)
+            .bind(body)
+            .bind(&sha)
+            .bind(from + Duration::minutes(20 * k as i64 + 5))
+            .execute(db)
+            .await?;
+        prev = Some(sha);
+    }
+    if !keep_open {
+        let closed = from + Duration::hours(3);
+        sqlx::query(
+            "update jobs set conversation_open = false, conversation_closed_at = $2 where id = $1",
+        )
+        .bind(job)
+        .bind(closed)
+        .execute(db)
+        .await?;
+        event(db, job, Some(creative), "conversation_closed", None, closed).await?;
+    }
+    Ok(n)
+}
+
+/// A problem: a statement, an answer, proposals, and an outcome (agreed, a mediator's
+/// suggestion still open, or closed unresolved).
+async fn problem(
+    db: &PgPool,
+    rng: &mut Rng,
+    job: Uuid,
+    client: Uuid,
+    creative: Uuid,
+    price: i64,
+    at: OffsetDateTime,
+) -> anyhow::Result<()> {
+    let by_client = rng.chance(0.7);
+    let (opener, other) = if by_client {
+        (client, creative)
+    } else {
+        (creative, client)
+    };
+    let statement = if by_client {
+        "The delivery doesn't match the scope: the agreement says 4 directions and we got 3."
+    } else {
+        "The client has used the preview in their release but hasn't paid the second half."
+    };
+    let id = Uuid::now_v7();
+    let r = rng.f();
+    let status = if r < 0.55 {
+        "resolved"
+    } else if r < 0.8 {
+        "open"
+    } else {
+        "unresolved"
+    };
+    sqlx::query(
+        "insert into job_problems (id, job_id, opened_by, statement, reply, replied_at, status, mediator_suggestion, suggested_by,
+                                   suggested_at, closing_note, created_at, closed_at)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+    )
+    .bind(id)
+    .bind(job)
+    .bind(opener)
+    .bind(statement)
+    .bind("Fair point; let's sort it out here.")
+    .bind(at + Duration::hours(5))
+    .bind(status)
+    .bind((status != "resolved").then_some("From the agreement and the delivery, the fair outcome looks like a partial refund for the missing part."))
+    .bind((status != "resolved").then_some("Sim mediator"))
+    .bind((status != "resolved").then_some(at + Duration::days(1)))
+    .bind(match status {
+        "resolved" => Some("Both agreed: refund"),
+        "unresolved" => Some("Closed unresolved: both have the record for a card dispute or a court."),
+        _ => None,
+    })
+    .bind(at)
+    .bind((status != "open").then_some(at + Duration::days(2)))
+    .execute(db)
+    .await?;
+    event(db, job, Some(opener), "problem_opened", Some(statement), at).await?;
+    let refund = (price / 4 / 100).max(1) * 100;
+    sqlx::query(
+        "insert into job_problem_proposals (id, problem_id, proposed_by, kind, amount_minor, note, status, created_at, decided_at)
+         values ($1, $2, $3, 'refund', $4, 'A partial refund for the missing part.', $5, $6, $7)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(other)
+    .bind(refund as i32)
+    .bind(match status { "resolved" => "accepted", "unresolved" => "rejected", _ => "pending" })
+    .bind(at + Duration::hours(6))
+    .bind((status != "open").then_some(at + Duration::days(2)))
+    .execute(db)
+    .await?;
+    if status == "resolved" {
+        let mut conn = db.acquire().await?;
+        jobs::simulated_refund(&mut conn, job, refund).await?;
+    }
+    Ok(())
 }
 
 async fn event(
@@ -1359,6 +1773,25 @@ pub struct PeopleReport {
     pub change_when_work_was_generated: f64,
     /// The overall rating is untouched by hiring (HUM-13): apps where tally == recount.
     pub overall_rating_untouched: usize,
+    /// Conversations: messages, how many still have text, and copies that verify against the
+    /// fingerprints (every conversation must: `conversations_failing_verification` = 0).
+    pub messages: i64,
+    pub messages_with_text: i64,
+    pub conversations_verified: usize,
+    pub conversations_failing_verification: usize,
+    pub inquiries: i64,
+    /// Changes to Agreement by status, and the extra paid for accepted ones.
+    pub changes_by_status: BTreeMap<String, i64>,
+    pub changes_extra_paid_usd: f64,
+    pub signed_off: i64,
+    /// Must be 0: final files sent before the delivery payment was paid.
+    pub final_files_before_payment: i64,
+    pub waiting_for_final_files: i64,
+    pub problems_by_status: BTreeMap<String, i64>,
+    pub agreed_refunds_usd: f64,
+    pub review_disputes_by_status: BTreeMap<String, i64>,
+    /// Must be 0: hidden reviews counted in a creative's rating.
+    pub hidden_reviews_counted: i64,
 }
 
 pub async fn report(db: &PgPool) -> anyhow::Result<PeopleReport> {
@@ -1433,7 +1866,7 @@ pub async fn report(db: &PgPool) -> anyhow::Result<PeopleReport> {
         .fetch_one(db)
         .await?;
     r.reviews_not_completed = sqlx::query_scalar(
-        "select count(*) from creative_reviews r join jobs j on j.id = r.job_id where j.status <> 'completed'",
+        "select count(*) from creative_reviews r join jobs j on j.id = r.job_id where j.status not in ('completed', 'final_files')",
     )
     .fetch_one(db)
     .await?;
@@ -1521,6 +1954,110 @@ pub async fn report(db: &PgPool) -> anyhow::Result<PeopleReport> {
     }
     r.uplift_when_work_was_good = avg(&ups);
     r.change_when_work_was_generated = avg(&downs);
+
+    // Conversations: rebuild each side's copy and check it against the fingerprints.
+    r.messages = sqlx::query_scalar("select count(*) from job_messages")
+        .fetch_one(db)
+        .await?;
+    r.messages_with_text =
+        sqlx::query_scalar("select count(*) from job_messages where body is not null")
+            .fetch_one(db)
+            .await?;
+    r.inquiries = sqlx::query_scalar("select count(*) from jobs where inquiry")
+        .fetch_one(db)
+        .await?;
+    let talked: Vec<Uuid> = sqlx::query_scalar(
+        "select distinct job_id from job_messages m where not exists (select 1 from job_messages x where x.job_id = m.job_id and x.body is null)",
+    )
+    .fetch_all(db)
+    .await?;
+    for job in talked {
+        let rows: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
+            "select id, author_id, body, sha256 from job_messages where job_id = $1 order by created_at, id",
+        )
+        .bind(job)
+        .fetch_all(db)
+        .await?;
+        let copy = jobs::ConversationCopy {
+            job_id: job,
+            messages: rows
+                .into_iter()
+                .map(|(id, author_id, body, sha256)| jobs::CopiedMessage {
+                    id,
+                    author_id,
+                    author: String::new(),
+                    created_at: OffsetDateTime::UNIX_EPOCH,
+                    body,
+                    sha256,
+                })
+                .collect(),
+        };
+        let (_, bad) = jobs::verify_copy(db, job, &copy).await?;
+        if bad == 0 {
+            r.conversations_verified += 1
+        } else {
+            r.conversations_failing_verification += 1
+        }
+    }
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("select status, count(*) from job_changes group by status")
+            .fetch_all(db)
+            .await?;
+    r.changes_by_status = rows.into_iter().collect();
+    let extra: i64 = sqlx::query_scalar(
+        "select coalesce(sum(amount_minor), 0)::int8 from job_payments where part = 'change' and status = 'paid'",
+    )
+    .fetch_one(db)
+    .await?;
+    r.changes_extra_paid_usd = extra as f64 / 100.0;
+    r.signed_off = sqlx::query_scalar("select count(*) from jobs where signed_off_at is not null")
+        .fetch_one(db)
+        .await?;
+    r.final_files_before_payment = sqlx::query_scalar(
+        "select count(*) from jobs j where final_files_at is not null
+           and exists (select 1 from job_payments p where p.job_id = j.id and p.due_on = 'delivery' and (p.paid_at is null or p.paid_at > j.final_files_at))",
+    )
+    .fetch_one(db)
+    .await?;
+    r.waiting_for_final_files =
+        sqlx::query_scalar("select count(*) from jobs where status = 'final_files'")
+            .fetch_one(db)
+            .await?;
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("select status, count(*) from job_problems group by status")
+            .fetch_all(db)
+            .await?;
+    r.problems_by_status = rows.into_iter().collect();
+    let refunds: i64 = sqlx::query_scalar(
+        "select coalesce(-sum(amount_minor), 0)::int8 from payments where kind = 'refund'",
+    )
+    .fetch_one(db)
+    .await?;
+    r.agreed_refunds_usd = refunds as f64 / 100.0;
+    let rows: Vec<(String, i64)> =
+        sqlx::query_as("select status, count(*) from review_disputes group by status")
+            .fetch_all(db)
+            .await?;
+    r.review_disputes_by_status = rows.into_iter().collect();
+    // A hidden review must not count: compare each creative's real rating with a recount of
+    // the visible reviews only.
+    let creatives: Vec<Uuid> = sqlx::query_scalar("select user_id from creatives")
+        .fetch_all(db)
+        .await?;
+    for c in creatives {
+        let rating = people::rating_of(db, c).await?;
+        let (up, down): (i64, i64) = sqlx::query_as(
+            "select count(*) filter (where vote = 1), count(*) filter (where vote = -1) from (
+                 select distinct on (client_id) vote from creative_reviews where creative_id = $1 and hidden_at is null
+                 order by client_id, created_at desc) x",
+        )
+        .bind(c)
+        .fetch_one(db)
+        .await?;
+        if rating.not_slop != up || rating.slop != down {
+            r.hidden_reviews_counted += 1;
+        }
+    }
 
     // HUM-13: the overall tally is every current vote, nothing discounted.
     for app in &credited_apps {
