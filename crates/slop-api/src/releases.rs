@@ -569,12 +569,25 @@ fn github_release_file(url: &str) -> Option<(String, String, String)> {
 /// a short-lived signed link from GitHub's API, which also works for private repositories;
 /// otherwise the file's own URL. Slop never relays the file itself.
 pub async fn download_link(state: &AppState, url: &str) -> anyhow::Result<String> {
-    let (Some(_), Some((repo, tag, name))) = (
-        &state.config.releases.github_token,
+    let cfg = &state.config.releases;
+    let (true, Some((repo, tag, name))) = (
+        cfg.github_token.is_some() || cfg.github_app.is_some(),
         github_release_file(url),
     ) else {
         return Ok(url.to_string());
     };
+    // A public release's own link works for everyone and costs no API request; only a private
+    // repository's needs the API. (state.http doesn't follow the redirect to the file.)
+    if let Ok(res) = state
+        .http
+        .head(url)
+        .header("user-agent", "slop-api")
+        .send()
+        .await
+        && (res.status().is_success() || res.status().is_redirection())
+    {
+        return Ok(url.to_string());
+    }
     #[derive(Deserialize)]
     struct Asset {
         name: String,
@@ -590,6 +603,7 @@ pub async fn download_link(state: &AppState, url: &str) -> anyhow::Result<String
         state,
         api.join(&format!("repos/{repo}/releases/tags/{tag_path}"))?,
     )
+    .await
     .send()
     .await?
     .error_for_status()
@@ -609,6 +623,7 @@ pub async fn download_link(state: &AppState, url: &str) -> anyhow::Result<String
         Url::parse(&asset.url)?,
         "application/octet-stream",
     )
+    .await
     .send()
     .await?;
     if !res.status().is_redirection() {
@@ -855,23 +870,25 @@ async fn fetch_release(
     Ok(commit_verified)
 }
 
-pub(crate) fn github_get(state: &AppState, url: Url) -> reqwest::RequestBuilder {
-    github_request(state, &state.fetch_http, url, "application/vnd.github+json")
+pub(crate) async fn github_get(state: &AppState, url: Url) -> reqwest::RequestBuilder {
+    github_request(state, &state.fetch_http, url, "application/vnd.github+json").await
 }
 
-/// A GitHub API GET on a chosen client, with Slop's token if configured.
-fn github_request(
+/// A GitHub API GET on a chosen client, with the repository's GitHub App token or Slop's
+/// shared token (github_app::auth_for).
+async fn github_request(
     state: &AppState,
     client: &reqwest::Client,
     url: Url,
     accept: &str,
 ) -> reqwest::RequestBuilder {
+    let auth = crate::github_app::auth_for(state, &url).await;
     let req = client
         .get(url)
         .header("accept", accept)
         .header("user-agent", "slop-api");
-    match &state.config.releases.github_token {
-        Some(token) => req.bearer_auth(token),
+    match auth {
+        Some((token, _)) => req.bearer_auth(token),
         None => req,
     }
 }
@@ -896,6 +913,7 @@ pub async fn find_attestation(
         .join(&format!("repos/{repo_path}/attestations/sha256:{sha256}"))
         .map_err(|e| e.to_string())?;
     let res = github_get(state, url)
+        .await
         .send()
         .await
         .map_err(|e| format!("couldn't reach GitHub to find the attestation: {e}"))?;
@@ -962,6 +980,7 @@ async fn check_commit(state: &AppState, repo_url: &str, commit: &str) -> anyhow:
         .github_api_base
         .join(&format!("repos/{path}/commits/{commit}"))?;
     let res = github_get(state, url)
+        .await
         .send()
         .await
         .context("checking the commit on GitHub")?;

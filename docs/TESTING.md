@@ -14,8 +14,8 @@ Put its client ID and a client secret in `~/.config/slop/slop.env` on the server
 
 ## 2. The desktop app on Windows
 
-Open the site and click **Download Slop for Windows** (it appears once the first build has been
-published), or download the installer from the **Desktop app** run's artifacts on GitHub. Windows
+Open the site and click **Download** at the top left, then **Windows** (it appears once the first
+build has been published), or download the installer from the **Desktop app** run's artifacts on GitHub. Windows
 warns that the publisher is unknown, because the installer isn't code-signed: choose **More info →
 Run anyway**. From then on the app updates itself each time it starts.
 

@@ -25,6 +25,7 @@ use crate::{
     AppState, admin,
     auth::session::CurrentUser,
     error::{ApiError, ApiResult},
+    github_app,
     releases::{self, NewFile, ReleaseInfo},
     slop_build::path_segment,
 };
@@ -36,6 +37,8 @@ const WATCH_INTERVAL: StdDuration = StdDuration::from_secs(10 * 60);
 /// A new GitHub release whose files don't match yet is retried for this long, since files are
 /// often uploaded after the release is published.
 const WAIT_FOR_FILES: Duration = Duration::hours(2);
+/// Below this many requests left on Slop's shared GitHub token, the watcher stops for the hour.
+const LOW_BUDGET: i64 = 500;
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -237,7 +240,7 @@ async fn gh_json<T: serde::de::DeserializeOwned>(
     path: &str,
 ) -> anyhow::Result<Option<T>> {
     let url = state.config.releases.github_api_base.join(path)?;
-    let res = releases::github_get(state, url).send().await?;
+    let res = releases::github_get(state, url).await.send().await?;
     match res.status().as_u16() {
         200 => Ok(Some(res.json().await?)),
         404 => Ok(None),
@@ -404,6 +407,8 @@ async fn submit_from_github(
 
 #[derive(Serialize)]
 struct Settings {
+    /// Slop's GitHub App on this repository; absent when Slop has no App.
+    github_app: Option<GithubAppStatus>,
     watch_releases: bool,
     auto_update: bool,
     /// Whether the next release would be approved without a person, and if not, why.
@@ -415,6 +420,13 @@ struct Settings {
     #[serde(with = "time::serde::rfc3339::option")]
     watch_checked_at: Option<OffsetDateTime>,
     watch_problem: Option<String>,
+}
+
+/// Slop's GitHub App on the app's repository, when Slop has one.
+#[derive(Serialize)]
+struct GithubAppStatus {
+    installed: bool,
+    install_url: String,
 }
 
 async fn load_settings(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiResult<Settings> {
@@ -450,7 +462,18 @@ async fn load_settings(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiRes
             _ => None,
         }
     };
+    let github_app = match (
+        &state.config.releases.github_app,
+        slop_provenance::github_repo_path(repo_url),
+    ) {
+        (Some(app), Some(repo)) => Some(GithubAppStatus {
+            installed: github_app::installed(state, &repo).await?,
+            install_url: github_app::install_url(app),
+        }),
+        _ => None,
+    };
     Ok(Settings {
+        github_app,
         watch_releases,
         auto_update,
         auto_approval_ready: approval.is_ok(),
@@ -518,72 +541,145 @@ pub async fn run_watcher(state: AppState) {
 /// Checks every watched app once. Returns how many releases it submitted.
 pub async fn watch_once(state: &AppState) -> anyhow::Result<usize> {
     // Apps with a release to use as the pattern, whose newest release wasn't sent by Slop Build.
-    let apps: Vec<(Uuid, Uuid, String, Option<String>)> = sqlx::query_as(
-        "select a.id, a.maker_id, a.repo_url, a.watch_last_tag from apps a
+    // Each app is due by how active it is: apps with the GitHub App installed are woken by its
+    // webhook and only checked now and then as a safety net; recently updated apps often; quiet
+    // ones less. One still waiting for a release's files is checked every pass.
+    let apps: Vec<Watched> = sqlx::query_as(
+        "select a.id as app_id, a.maker_id, a.repo_url, a.watch_last_tag as last_tag,
+                a.watch_etag as etag
+         from apps a
+         left join lateral (select max(created_at) as at from releases r where r.app_id = a.id) newest on true
          where a.watch_releases and a.status <> 'delisted'
            and (select r.source from releases r where r.app_id = a.id order by r.created_at desc limit 1)
-               in ('maker', 'github_release')",
+               in ('maker', 'github_release')
+           and (a.watch_checked_at is null
+                or a.watch_problem like '%: waiting for its files%'
+                or a.watch_checked_at < now() - case
+                    when exists (select 1 from github_installations g
+                                 where 'https://github.com/' || g.repo_path
+                                       = lower(regexp_replace(a.repo_url, '(\\.git)?/*$', '')))
+                        then interval '6 hours'
+                    when newest.at > now() - interval '7 days' then interval '9 minutes'
+                    when newest.at > now() - interval '30 days' then interval '29 minutes'
+                    else interval '119 minutes'
+                end)
+         order by a.watch_checked_at nulls first",
     )
     .fetch_all(&state.db)
     .await?;
     let mut submitted = 0;
-    for (app_id, maker_id, repo_url, last_tag) in apps {
-        let Some(repo_path) = slop_provenance::github_repo_path(&repo_url) else {
+    let mut low_budget = false;
+    for app in apps {
+        let Some(repo_path) = slop_provenance::github_repo_path(&app.repo_url) else {
             continue;
         };
-        match watch_app(
-            state,
-            app_id,
-            maker_id,
-            &repo_url,
-            &repo_path,
-            last_tag.as_deref(),
-        )
-        .await
-        {
+        match watch_app(state, &app, &repo_path, &mut low_budget).await {
             Ok(did) => submitted += usize::from(did),
-            Err(err) => tracing::warn!(app = %app_id, error = %err, "watching releases"),
+            Err(err) => tracing::warn!(app = %app.app_id, error = %err, "watching releases"),
+        }
+        if low_budget {
+            // Leave the rest of the shared allowance for makers; the others are due next pass.
+            tracing::warn!("GitHub rate limit is low; the release watcher stops for now");
+            break;
         }
     }
     Ok(submitted)
 }
 
+/// Records a check. The answer's ETag is kept once the release is fully handled, so the next
+/// check is a free "nothing changed"; while still waiting for a release's files it isn't.
 async fn note(
     state: &AppState,
     app_id: Uuid,
     seen_tag: Option<&str>,
     problem: Option<&str>,
+    etag: Option<&str>,
 ) -> anyhow::Result<()> {
+    let still_waiting = seen_tag.is_none() && problem.is_some();
     sqlx::query(
         "update apps set watch_checked_at = now(), watch_problem = $3,
-                         watch_last_tag = coalesce($2, watch_last_tag)
+                         watch_last_tag = coalesce($2, watch_last_tag),
+                         watch_etag = case when $5 then watch_etag else $4 end
          where id = $1",
     )
     .bind(app_id)
     .bind(seen_tag)
     .bind(problem)
+    .bind(etag)
+    .bind(still_waiting)
     .execute(&state.db)
     .await?;
     Ok(())
 }
 
-async fn watch_app(
-    state: &AppState,
+/// One app the watcher looks at.
+#[derive(sqlx::FromRow)]
+struct Watched {
     app_id: Uuid,
     maker_id: Uuid,
-    repo_url: &str,
+    repo_url: String,
+    last_tag: Option<String>,
+    /// From the last fully handled answer: GitHub replies 304 if nothing changed, and a 304 to an
+    /// authenticated request doesn't count against the rate limit.
+    etag: Option<String>,
+}
+
+async fn watch_app(
+    state: &AppState,
+    app: &Watched,
     repo_path: &str,
-    last_tag: Option<&str>,
+    low_budget: &mut bool,
 ) -> anyhow::Result<bool> {
+    let (app_id, maker_id, repo_url) = (app.app_id, app.maker_id, app.repo_url.as_str());
+    let last_tag = app.last_tag.as_deref();
     // GitHub's "latest" skips drafts and pre-releases.
-    let Some(latest): Option<GhRelease> =
-        gh_json(state, &format!("repos/{repo_path}/releases/latest")).await?
-    else {
-        note(state, app_id, None, None).await?;
+    let url = state
+        .config
+        .releases
+        .github_api_base
+        .join(&format!("repos/{repo_path}/releases/latest"))?;
+    let auth = github_app::auth_for(state, &url).await;
+    let mut req = state
+        .fetch_http
+        .get(url)
+        .header("accept", "application/vnd.github+json")
+        .header("user-agent", "slop-api");
+    if let Some((token, _)) = &auth {
+        req = req.bearer_auth(token);
+    }
+    if let Some(etag) = &app.etag {
+        req = req.header("if-none-match", etag);
+    }
+    let res = req.send().await?;
+    // Only the shared token's allowance is the watcher's to protect; an installation has its own.
+    let shared = auth.as_ref().is_none_or(|(_, shared)| *shared);
+    let remaining = res
+        .headers()
+        .get("x-ratelimit-remaining")
+        .and_then(|v| v.to_str().ok()?.parse::<i64>().ok());
+    if shared && remaining.is_some_and(|r| r < LOW_BUDGET) {
+        *low_budget = true;
+    }
+    let etag = res
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_string);
+    let latest: Option<GhRelease> = match res.status().as_u16() {
+        304 => {
+            note(state, app_id, None, None, app.etag.as_deref()).await?;
+            return Ok(false);
+        }
+        200 => Some(res.json().await?),
+        404 => None,
+        code => anyhow::bail!("GitHub answered {code}"),
+    };
+    let Some(latest) = latest else {
+        note(state, app_id, None, None, etag.as_deref()).await?;
         return Ok(false);
     };
     if last_tag == Some(latest.tag_name.as_str()) {
-        note(state, app_id, None, None).await?;
+        note(state, app_id, None, None, etag.as_deref()).await?;
         return Ok(false);
     }
     let tag = latest.tag_name.clone();
@@ -596,7 +692,7 @@ async fn watch_app(
     .fetch_one(&state.db)
     .await?;
     if exists {
-        note(state, app_id, Some(&tag), None).await?;
+        note(state, app_id, Some(&tag), None, etag.as_deref()).await?;
         return Ok(false);
     }
 
@@ -641,6 +737,7 @@ async fn watch_app(
                 app_id,
                 (!young).then_some(tag.as_str()),
                 Some(&message),
+                etag.as_deref(),
             )
             .await?;
             return Ok(false);
@@ -660,13 +757,13 @@ async fn watch_app(
     .await
     {
         Ok(_) => {
-            note(state, app_id, Some(&tag), None).await?;
+            note(state, app_id, Some(&tag), None, etag.as_deref()).await?;
             tracing::info!(app = %app_id, %tag, "picked up a new GitHub release");
             Ok(true)
         }
         Err(err) => {
             let message = format!("{tag} couldn't be sent automatically: {err}");
-            note(state, app_id, Some(&tag), Some(&message)).await?;
+            note(state, app_id, Some(&tag), Some(&message), etag.as_deref()).await?;
             Ok(false)
         }
     }

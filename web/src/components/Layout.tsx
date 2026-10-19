@@ -42,6 +42,12 @@ export function Layout() {
             SL<b>O</b>P
           </span>
         </Link>
+        {/* The website offers the desktop app; the app itself doesn't need to. */}
+        {!isDesktop && (
+          <Link className="btn small download-btn" to="/download">
+            ⬇ Download
+          </Link>
+        )}
         <div className="tabs">
           {TABS.map((t) => (
             <NavLink key={t.to} to={t.to} end={t.end} className={() => (t.match(location.pathname) ? "on" : "")}>

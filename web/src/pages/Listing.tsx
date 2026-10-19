@@ -10,7 +10,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 
 const PAGE = 24;
 
-function AppGrid({ base, sorts = ["recent", "title"] }: { base: AppQuery; sorts?: Array<NonNullable<AppQuery["sort"]>> }) {
+function AppGrid({ base, sorts = ["recent", "trending", "title"] }: { base: AppQuery; sorts?: Array<NonNullable<AppQuery["sort"]>> }) {
   const [params, setParams] = useSearchParams();
   const stage = (params.get("stage") ?? "") as AppStage | "";
   const sort = (params.get("sort") ?? (base.q ? "relevance" : sorts[0])) as NonNullable<AppQuery["sort"]>;
@@ -35,7 +35,12 @@ function AppGrid({ base, sorts = ["recent", "title"] }: { base: AppQuery; sorts?
     setExtra({ key, apps: [...(pages?.apps ?? []), ...page.apps], next: page.next_offset });
   };
 
-  const sortLabels: Record<string, string> = { relevance: "Best match", recent: "Recently updated", title: "A–Z" };
+  const sortLabels: Record<string, string> = {
+    relevance: "Best match",
+    trending: "Most played this week",
+    recent: "Recently updated",
+    title: "A–Z",
+  };
   const sortOptions = base.q ? ["relevance", ...sorts] : sorts;
 
   return (

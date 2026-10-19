@@ -166,6 +166,8 @@ enum Sort {
     Recent,
     Title,
     Relevance,
+    /// Most players at once over the last 7 days (Slop Pulse), then recently updated.
+    Trending,
 }
 
 #[derive(Deserialize)]
@@ -246,6 +248,13 @@ async fn list_apps(
         }
         (Sort::Title, _) => {
             qb.push(" order by lower(a.title), a.slug");
+        }
+        (Sort::Trending, _) => {
+            qb.push(
+                " order by (select coalesce(max(p.players), 0) from pulse_counts p
+                            where p.app_id = a.id and p.bucket > now() - interval '7 days') desc,
+                           a.updated_at desc, a.slug",
+            );
         }
         _ => {
             qb.push(" order by a.updated_at desc, a.slug");
@@ -458,6 +467,7 @@ async fn detect_license(
         .join(&format!("repos/{repo}/license"))
         .map_err(|e| ApiError::Internal(e.into()))?;
     let res = crate::releases::github_get(&state, url)
+        .await
         .send()
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
