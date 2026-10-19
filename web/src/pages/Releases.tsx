@@ -663,7 +663,7 @@ function ReleasePicker({
 }
 
 /** Automatic pickup of new GitHub releases, and automatic approval of updates. */
-function UpdatesPanel({ slug }: { slug: string }) {
+export function UpdatesPanel({ slug }: { slug: string }) {
   const loaded = useLoad(() => api.updateSettings(slug), [slug]);
   const [settings, setSettings] = useState<UpdateSettings>();
   const [error, setError] = useState<string>();

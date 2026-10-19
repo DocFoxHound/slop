@@ -23,6 +23,7 @@ use crate::{
     auth::session::CurrentUser,
     catalog::{AppStage, AppStatus},
     error::{ApiError, ApiResult},
+    manage::{self, ChangeInfo},
     releases::{self, ReleaseInfo},
 };
 
@@ -37,6 +38,8 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/apps/{slug}/list", post(list_app))
         .route("/admin/apps/{slug}/delist", post(delist_app))
         .route("/admin/apps/{slug}/stage", post(set_stage))
+        .route("/admin/changes/{id}/approve", post(approve_change))
+        .route("/admin/changes/{id}/reject", post(reject_change))
 }
 
 /// A signed-in admin. Anyone else gets 404, so the admin API can't be discovered.
@@ -87,6 +90,15 @@ struct QueuedRelease {
     release: ReleaseInfo,
 }
 
+#[derive(Serialize)]
+struct QueuedChange {
+    app: AppRef,
+    #[serde(flatten)]
+    change: ChangeInfo,
+    /// The version players get now, for a change of release.
+    players_get: Option<String>,
+}
+
 #[derive(Serialize, sqlx::FromRow)]
 struct ReadyApp {
     #[sqlx(flatten)]
@@ -107,6 +119,8 @@ struct ServerChecks {
 struct Queue {
     /// Releases being checked, waiting for review, or whose checks failed; oldest first.
     releases: Vec<QueuedRelease>,
+    /// Makers' changes that would have players download something different; oldest first.
+    changes: Vec<QueuedChange>,
     /// Drafts that could go in the store: Coming soon pages, or apps with an approved release.
     ready_to_list: Vec<ReadyApp>,
     checks: ServerChecks,
@@ -145,9 +159,38 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
     )))
     .fetch_all(&state.db)
     .await?;
+    let mut conn = state.db.acquire().await?;
+    let pending: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "select id, app_id from app_changes where status = 'pending' order by created_at limit 100",
+    )
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut changes = Vec::with_capacity(pending.len());
+    for (id, app_id) in pending {
+        let app: AppRef = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select {APP_COLUMNS} from apps a join users u on u.id = a.maker_id where a.id = $1"
+        )))
+        .bind(app_id)
+        .fetch_one(&mut *conn)
+        .await?;
+        let change: ChangeInfo = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select {} where c.id = $1",
+            manage::change_columns()
+        )))
+        .bind(id)
+        .fetch_one(&mut *conn)
+        .await?;
+        let players_get = manage::serving(&mut conn, app_id).await?.map(|r| r.version);
+        changes.push(QueuedChange {
+            app,
+            change,
+            players_get,
+        });
+    }
     let cfg = &state.config.releases;
     Ok(Json(Queue {
         releases,
+        changes,
         ready_to_list,
         checks: ServerChecks {
             scanning: cfg.scanner.is_on(),
@@ -344,6 +387,30 @@ async fn set_stage(
     Json(body): Json<Stage>,
 ) -> ApiResult<StatusCode> {
     admin::set_stage(&state.db, &slug, body.stage, &admin.actor)
+        .await
+        .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn approve_change(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    manage::approve_change(&state.db, id, &admin.actor)
+        .await
+        .map_err(refused)?;
+    state.watch_wakeup.notify_one();
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reject_change(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<Reason>,
+) -> ApiResult<StatusCode> {
+    manage::reject_change(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
     Ok(StatusCode::NO_CONTENT)

@@ -516,6 +516,12 @@ async fn list_releases(
 }
 
 /// The newest approved release's signed manifest, for installing.
+/// The approved releases players can get, the one they do get first: the release the maker
+/// holds the app at, otherwise the newest approved. Bind the app's ID as $1.
+pub const SERVING: &str = "from releases r join apps a on a.id = r.app_id
+     where r.app_id = $1 and r.status = 'approved' and r.signed_manifest is not null
+     order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc";
+
 async fn latest_manifest(
     State(state): State<AppState>,
     MaybeUser(user): MaybeUser,
@@ -524,11 +530,9 @@ async fn latest_manifest(
 ) -> ApiResult<Json<Signed>> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
-    let manifest: Option<sqlx::types::Json<Signed>> = sqlx::query_scalar(
-        "select signed_manifest from releases
-         where app_id = $1 and status = 'approved' and signed_manifest is not null
-         order by reviewed_at desc limit 1",
-    )
+    let manifest: Option<sqlx::types::Json<Signed>> = sqlx::query_scalar(sqlx::AssertSqlSafe(
+        format!("select r.signed_manifest {SERVING} limit 1"),
+    ))
     .bind(app_id)
     .fetch_optional(&state.db)
     .await?;

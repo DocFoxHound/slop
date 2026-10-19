@@ -9,6 +9,7 @@ import { Guide } from "./pages/Guide";
 import { Account, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
 import { Library } from "./pages/Library";
 import { Releases } from "./pages/Releases";
+import { Manage } from "./pages/Manage";
 import { Browse, CategoryPage, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
 import { Store } from "./pages/Store";
@@ -31,6 +32,7 @@ const router = createBrowserRouter([
       { path: "/publish/new", element: <AppEditor /> },
       { path: "/publish/:slug", element: <AppEditor /> },
       { path: "/publish/:slug/releases", element: <Releases /> },
+      { path: "/publish/:slug/manage", element: <Manage /> },
       { path: "/library", element: <Library /> },
       { path: "/admin", element: <Admin /> },
       { path: "/desktop-signin/:id", element: <DesktopApprove /> },

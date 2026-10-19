@@ -15,7 +15,7 @@ use slop_api::{
     AppState, admin,
     auth::session,
     config::{CatalogRules, Config, GithubConfig, ReleaseConfig},
-    releases, router,
+    manage, releases, router,
     tokens::pkce_challenge,
 };
 use sqlx::PgPool;
@@ -3094,4 +3094,268 @@ async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) 
         .await
         .unwrap();
     assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+}
+
+/// The version in the manifest players are given.
+async fn served_version(app: &TestApp, cookie: &str) -> String {
+    let res = app
+        .send(req(Method::GET, "/v1/apps/game/manifest").cookie(cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let signed: slop_manifest::Signed = serde_json::from_value(body_json(res).await).unwrap();
+    let manifest: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    manifest.version
+}
+
+async fn request_change(app: &TestApp, cookie: &str, body: Value) -> Response {
+    app.send(
+        req(Method::POST, "/v1/apps/game/changes")
+            .cookie(cookie)
+            .json(body),
+    )
+    .await
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_choose_the_release_and_moves_are_reviewed(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    assert_eq!(release_status(&app, &second).await.0, "approved");
+    assert_eq!(served_version(&app, &maker).await, "1.1.0");
+
+    let manage = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(manage["serving"]["version"], "1.1.0");
+    assert_eq!(manage["held"], false);
+    assert_eq!(manage["approved"].as_array().unwrap().len(), 2);
+    assert_eq!(manage["repo_locked"], true);
+
+    // Rolling back to a release that already passed its checks goes through automatically.
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "release", "release_id": first, "note": "1.1 crashes" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let change = body_json(res).await;
+    assert_eq!(change["status"], "approved");
+    assert_eq!(change["automatic"], true);
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    // A new approved release doesn't go out while the app is held.
+    let third = submit_and_fetch(&app, &maker, "1.2.0").await;
+    assert_eq!(release_status(&app, &third).await.0, "approved");
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "release", "release_id": first }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "already held there");
+
+    // Without automatic approval, a person decides.
+    app.send(
+        req(Method::PUT, "/v1/apps/game/update-settings")
+            .cookie(&maker)
+            .json(json!({ "auto_update": false })),
+    )
+    .await;
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "release", "release_id": null }),
+    )
+    .await;
+    let change = body_json(res).await;
+    assert_eq!(change["status"], "pending");
+    assert!(change["status_reason"].as_str().unwrap().contains("person"));
+    assert_eq!(served_version(&app, &maker).await, "1.0.0");
+
+    let (admin_id, admin_cookie) = app.user("Ada Admin", "US").await;
+    admin::set_admin(&app.db, &admin_id.to_string(), true, "test")
+        .await
+        .unwrap();
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["changes"][0]["id"], change["id"]);
+    assert_eq!(queue["changes"][0]["players_get"], "1.0.0");
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!(
+                    "/v1/admin/changes/{}/approve",
+                    change["id"].as_str().unwrap()
+                ),
+            )
+            .cookie(&admin_cookie),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(served_version(&app, &maker).await, "1.2.0");
+
+    // Moving the repository: not from the store page editor, and always by a person.
+    sqlx::query("update apps set repo_url = 'https://github.com/octo/game' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let elsewhere = "https://github.com/octo/game-two".to_string();
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/game")
+                .cookie(&maker)
+                .json(json!({ "repo_url": elsewhere })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/game")
+                .cookie(&maker)
+                .json(json!({ "repo_url": "https://github.com/Octo/game.git", "title": "Game!" })),
+        )
+        .await;
+    let status = res.status();
+    assert_eq!(
+        status,
+        StatusCode::OK,
+        "the same repository is fine: {}",
+        body_json(res).await
+    );
+
+    app.send(
+        req(Method::PUT, "/v1/apps/game/update-settings")
+            .cookie(&maker)
+            .json(json!({ "auto_update": true })),
+    )
+    .await;
+    let change = body_json(
+        request_change(
+            &app,
+            &maker,
+            json!({ "kind": "repo", "repo_url": elsewhere }),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(change["status"], "pending");
+    let id: Uuid = change["id"].as_str().unwrap().parse().unwrap();
+    assert!(manage::reject_change(&app.db, id, "rev", "").await.is_err());
+    manage::reject_change(&app.db, id, "rev", "which repo is real?")
+        .await
+        .unwrap();
+    let change = body_json(
+        request_change(
+            &app,
+            &maker,
+            json!({ "kind": "repo", "repo_url": elsewhere }),
+        )
+        .await,
+    )
+    .await;
+    manage::approve_change(
+        &app.db,
+        change["id"].as_str().unwrap().parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let repo: String = sqlx::query_scalar("select repo_url from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(repo, elsewhere);
+    let settings = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/update-settings").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(settings["auto_approval_ready"], false);
+    assert!(
+        settings["auto_approval_note"]
+            .as_str()
+            .unwrap()
+            .contains("moved")
+    );
+
+    // The history shows each decision; a pending one can be cancelled.
+    let pending = body_json(
+        request_change(
+            &app,
+            &maker,
+            json!({ "kind": "repo", "repo_url": "https://github.com/octo/game-three" }),
+        )
+        .await,
+    )
+    .await;
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!(
+                    "/v1/apps/game/changes/{}/cancel",
+                    pending["id"].as_str().unwrap()
+                ),
+            )
+            .cookie(&maker),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let manage = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    let statuses: Vec<&str> = manage["changes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        statuses,
+        ["cancelled", "approved", "rejected", "approved", "approved"]
+    );
+
+    // Only the maker sees it.
+    let (_, stranger) = app.user("Stranger", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        request_change(
+            &app,
+            &stranger,
+            json!({ "kind": "release", "release_id": null })
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
 }

@@ -1,7 +1,7 @@
 // "How to publish": renders public/publishing.md, which is also served as-is for AI agents
 // (see public/llms.txt).
 
-import { useEffect, useRef, type MouseEvent } from "react";
+import { useEffect, useRef, useState, type MouseEvent } from "react";
 import { useLocation } from "react-router";
 
 import { Loading } from "../components/ui";
@@ -44,9 +44,7 @@ export function Guide() {
 
   return (
     <div className="page narrow guide">
-      <p className="muted small">
-        Also available as plain text for tools and AI agents: <a href="/publishing.md">/publishing.md</a>
-      </p>
+      <AiNotice />
       {doc.error && <p className="form-error">Couldn't load the guide.</p>}
       {!doc.data && !doc.error && <Loading />}
       {doc.data && (
@@ -59,5 +57,35 @@ export function Guide() {
         />
       )}
     </div>
+  );
+}
+
+/** Points makers at the easy route: hand this page to their AI assistant. */
+function AiNotice() {
+  const prompt = `Read ${window.location.origin}/publishing.md. Tell me what's required and what's optional for publishing on Slop, then set up my project so it's ready to deploy there.`;
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(prompt).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <aside className="panel panel-pad ai-notice">
+      <b>Using an AI coding assistant?</b>
+      <p className="small">
+        Tell it to read this page: it can work out what's required and what's optional, and set your project up for
+        publishing on Slop. Paste this in:
+      </p>
+      <div className="ai-prompt">
+        <code>{prompt}</code>
+        <button type="button" className="btn small" onClick={copy}>
+          {copied ? "Copied" : "Copy"}
+        </button>
+      </div>
+      <p className="muted small">
+        The same guide as plain text, for tools and AI agents: <a href="/publishing.md">/publishing.md</a>
+      </p>
+    </aside>
   );
 }

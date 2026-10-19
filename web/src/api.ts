@@ -68,8 +68,50 @@ export interface AdminAppRef {
   maker: string;
 }
 
+/** A maker's request to change what players download (crates/slop-api/src/manage.rs). */
+export interface AppChange {
+  id: string;
+  kind: "release" | "repo";
+  /** kind = release: the release to hold players at; null means "follow the newest". */
+  release_id: string | null;
+  release_version: string | null;
+  repo_url: string | null;
+  note: string | null;
+  status: "pending" | "approved" | "rejected" | "cancelled";
+  status_reason: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+  automatic: boolean;
+}
+
+export interface ApprovedRelease {
+  id: string;
+  version: string;
+  reviewed_at: string | null;
+  automatic: boolean;
+}
+
+export interface ManageOverview {
+  /** The release players get now. */
+  serving: ApprovedRelease | null;
+  /** Whether the app is held at `serving` instead of following the newest. */
+  held: boolean;
+  approved: ApprovedRelease[];
+  repo_url: string;
+  /** Players have the app, so moving it is reviewed by a person. */
+  repo_locked: boolean;
+  auto_approval_ready: boolean;
+  auto_approval_note: string | null;
+  changes: AppChange[];
+}
+
+export type ChangeRequest =
+  | { kind: "release"; release_id: string | null; note?: string }
+  | { kind: "repo"; repo_url: string; note?: string };
+
 export interface AdminQueue {
   releases: Array<Release & { app: AdminAppRef }>;
+  changes: Array<AppChange & { app: AdminAppRef; players_get: string | null }>;
   ready_to_list: Array<AdminAppRef & { approved_releases: number }>;
   checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
 }
@@ -329,6 +371,11 @@ export const api = {
       workflow: string;
       create_url: string | null;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
+  manage: (slug: string) => request<ManageOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/manage`),
+  requestChange: (slug: string, change: ChangeRequest) =>
+    request<AppChange>("POST", `/v1/apps/${encodeURIComponent(slug)}/changes`, change),
+  cancelChange: (slug: string, id: string) =>
+    request<AppChange>("POST", `/v1/apps/${encodeURIComponent(slug)}/changes/${encodeURIComponent(id)}/cancel`),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
   admin: {
     queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
@@ -336,6 +383,8 @@ export const api = {
     audit: () => request<AuditEntry[]>("GET", "/v1/admin/audit"),
     approve: (id: string) => request<void>("POST", `/v1/admin/releases/${id}/approve`),
     reject: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
+    approveChange: (id: string) => request<void>("POST", `/v1/admin/changes/${id}/approve`),
+    rejectChange: (id: string, reason: string) => request<void>("POST", `/v1/admin/changes/${id}/reject`, { reason }),
     revoke: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/revoke`, { reason }),
     list: (slug: string) => request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/list`),
     delist: (slug: string, reason: string) =>

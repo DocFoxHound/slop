@@ -14,7 +14,7 @@ use uuid::Uuid;
 
 use crate::catalog::AppStage;
 
-async fn audit(
+pub(crate) async fn audit(
     tx: &mut sqlx::PgConnection,
     actor: &str,
     action: &str,
@@ -276,6 +276,11 @@ pub async fn revoke(
     .await?
     .rows_affected();
     ensure!(updated == 1, "no approved release with that ID");
+    // An app held at this release goes back to its newest approved one.
+    sqlx::query("update apps set pinned_release_id = null where pinned_release_id = $1")
+        .bind(release_id)
+        .execute(&mut *tx)
+        .await?;
     audit(
         &mut tx,
         reviewer,
