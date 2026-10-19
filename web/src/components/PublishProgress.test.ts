@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AppDetail, Release } from "../api";
-import { progressSteps } from "./PublishProgress";
+import { currentStep, progressSteps } from "./PublishProgress";
 
 const app = (over: Partial<AppDetail> = {}) =>
   ({ slug: "game", stage: "beta", status: "draft", ...over }) as AppDetail;
@@ -90,5 +90,14 @@ describe("progressSteps", () => {
       Release: "skipped",
       "In the store": "active",
     });
+  });
+
+  it("points at the step an app is stuck on or waiting for", () => {
+    expect(currentStep(progressSteps(app(), [], testServer)).title).toBe("Release");
+    expect(currentStep(progressSteps(app(), [release()], testServer)).title).toBe("Review");
+    const failed = progressSteps(app(), [release({ status: "failed", status_reason: "HTTP 404" })], testServer);
+    expect(currentStep(failed)).toMatchObject({ title: "Files checked", state: "problem" });
+    const listed = progressSteps(app({ status: "listed" }), [release({ status: "approved" })], testServer);
+    expect(currentStep(listed)).toMatchObject({ title: "In the store", state: "done" });
   });
 });

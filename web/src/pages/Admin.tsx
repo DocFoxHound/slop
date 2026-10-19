@@ -127,7 +127,11 @@ function QueueTab() {
         </p>
       )}
 
-      <h2 className="section-title">Releases ({q.releases.length})</h2>
+      <h2 className="section-title">Releases to review ({q.releases.length})</h2>
+      <p className="muted small">
+        Approving a release signs it for players. A Beta or Released app needs one approved release before it can go in
+        the store.
+      </p>
       {q.releases.length === 0 && <div className="empty-state">Nothing waiting for review.</div>}
       <ul className="release-list">
         {q.releases.map((r) => (
@@ -327,6 +331,12 @@ function AppsTab() {
                   disabled={busy !== undefined}
                   onSubmit={(reason) => void run(a.slug, () => api.admin.delist(a.slug, reason))}
                 />
+              ) : a.stage !== "coming_soon" && a.releases.length === 0 ? (
+                <span className="muted small">
+                  {a.pending_releases > 0
+                    ? "Can't list yet: approve its release under Releases to review first."
+                    : "Can't list yet: the maker hasn't submitted a release. Set the stage to Coming soon to list the page without one."}
+                </span>
               ) : (
                 <button className="btn small" disabled={busy !== undefined} onClick={() => void run(a.slug, () => api.admin.list(a.slug))}>
                   Put in the store
