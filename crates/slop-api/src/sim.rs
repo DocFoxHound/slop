@@ -1584,7 +1584,17 @@ async fn sim_users(State(state): State<AppState>) -> ApiResult<Json<Vec<SimUserR
                         (select count(*) from votes v where v.user_id = u.id) as votes,
                         row_number() over (partition by s.personas order by u.country_code = 'GB', u.display_name) as n
                  from sim_users s join users u on u.id = s.user_id) x
-             where n <= 3 order by personas, display_name",
+             where n <= 3
+             union all
+             -- Makers and creatives, to try People jobs from either side.
+             select u.id, u.display_name || coalesce(' (' || c.name || ')', ''),
+                    case when c.user_id is not null then 'People: creative' else 'People: maker' end,
+                    u.country_code::text,
+                    (select count(*) from jobs j where j.creative_id = u.id or j.client_id = u.id),
+                    0
+             from users u left join creatives c on c.user_id = u.id
+             where u.display_name like 'Sim maker %' or (c.user_id is not null and u.display_name like 'Sim creative %')
+             order by personas, display_name",
         )
         .fetch_all(&state.db)
         .await?,
@@ -1601,7 +1611,10 @@ async fn sim_login(
         return Err(ApiError::NotFound);
     }
     let exists: bool =
-        sqlx::query_scalar("select exists (select 1 from sim_users where user_id = $1)")
+        sqlx::query_scalar(
+            "select exists (select 1 from sim_users where user_id = $1)
+                 or exists (select 1 from users where id = $1 and (display_name like 'Sim maker %' or display_name like 'Sim creative %'))",
+        )
             .bind(id)
             .fetch_one(&state.db)
             .await?;
