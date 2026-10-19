@@ -8,6 +8,7 @@ pub mod cleanup;
 pub mod config;
 pub mod desktop_updates;
 pub mod error;
+pub mod foryou;
 pub mod github_app;
 pub mod library;
 pub mod manage;
@@ -18,9 +19,11 @@ pub mod ratelimit;
 pub mod releases;
 pub mod review;
 pub mod scan;
+pub mod sim;
 pub mod slop_build;
 pub mod tokens;
 pub mod updates;
+pub mod votes;
 pub mod web;
 
 use std::{sync::Arc, time::Duration};
@@ -112,6 +115,9 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(admin_web::routes())
         .merge(review::routes())
         .merge(pulse::routes())
+        .merge(votes::routes())
+        .merge(foryou::routes())
+        .merge(sim::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(

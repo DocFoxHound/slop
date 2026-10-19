@@ -311,6 +311,20 @@ export function Account() {
             </span>
           </span>
         </label>
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={me.personalize}
+            onChange={(e) => void api.updateMe({ personalize: e.target.checked }).then(refresh)}
+          />{" "}
+          <span>
+            <b>Recommendations based on my activity</b>
+            <span className="muted small" style={{ display: "block" }}>
+              "For you" uses your library, what you've played and how you voted. Off: everyone sees the same popular,
+              well-rated and new apps.
+            </span>
+          </span>
+        </label>
       </div>
 
       <h2 className="section-title">Where you're signed in</h2>

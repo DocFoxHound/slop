@@ -22,6 +22,8 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Player counts per app per 5 minutes | `pulse_counts` | "Playing now" history and monthly peaks | Not personal data (counts only) | Kept |
 | Library | `library_entries` | The user's library; later, recommendations | Contract | Until removed or account deleted |
 | Release submitter | `releases.submitted_by` | Who submitted a build (accountability) | Legitimate interest | Life of app + 6 years (scan records, LEGAL-GUIDANCE §15) |
+| Votes and vote history (account, app, vote, playtime and launch days at the time, weight, time) | `vote_events`, `votes` | Ratings weighted by playtime, ratings over time, abuse checks, "For you" | Contract (ratings); legitimate interest (recommendations, abuse checks) | Life of the account; anonymised on deletion (METRICS §6) |
+| "Recommendations based on my activity" setting | `users.personalize` | Switching "For you" profiling off (LEGAL §7); off by default in the UK under-18 view (PRIV-6) | Legal obligation | Life of account |
 | Review decisions | `audit_log` | Record of review and moderation decisions | Legal obligation | 6 years (LEGAL-GUIDANCE §15) |
 | Review notes (author's name) | `review_notes` | Reviewers' findings on items waiting for a decision | Legitimate interest (moderation) | With the item they're about |
 | Admin API tokens (hashed token, name, last use) | `admin_tokens` | AI reviewers acting for an admin; showing which tokens are in use | Legitimate interest (moderation) | Until revoked or expired, then removable |

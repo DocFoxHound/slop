@@ -63,6 +63,7 @@ export function Layout() {
       </nav>
 
       <UpdateNotice />
+      <SimulationBanner />
       <main className="view" id="main" ref={view} tabIndex={-1}>
         <Outlet />
       </main>
@@ -172,5 +173,17 @@ export function Sidebar({ active }: { active?: string }) {
       <Link to="/publish">⬆️ Publish your app</Link>
       <Link to="/publish/guide">📖 How to publish</Link>
     </aside>
+  );
+}
+
+/** On the simulation sandbox, says so everywhere, with the way to view as a simulated user. */
+function SimulationBanner() {
+  const server = useLoad(() => api.server(), []);
+  if (!server.data?.simulation) return null;
+  return (
+    <div className="sim-banner" role="note">
+      <b>Simulation sandbox.</b> Every app, player and vote here is made up, to test recommendations and ratings.{" "}
+      <Link to="/sim">View as a simulated user</Link>
+    </div>
   );
 }

@@ -39,6 +39,11 @@ enum Command {
         #[command(subcommand)]
         command: AdminCommand,
     },
+    /// The simulation sandbox (only on a database whose name ends in _sim).
+    Simulate {
+        #[command(subcommand)]
+        command: SimulateCommand,
+    },
     /// Revoke an approved release: it stops launching on every client (SECURITY §5.5).
     Revoke {
         release_id: Uuid,
@@ -47,6 +52,31 @@ enum Command {
         #[arg(long)]
         reason: String,
     },
+}
+
+#[derive(Subcommand)]
+enum SimulateCommand {
+    /// Wipe the sandbox and make a new simulated store: apps, players, libraries, votes and
+    /// player counts over the past days.
+    Generate {
+        #[arg(long, default_value_t = 400)]
+        apps: usize,
+        #[arg(long, default_value_t = 1500)]
+        users: usize,
+        #[arg(long, default_value_t = 120)]
+        days: i64,
+        #[arg(long, default_value_t = 42)]
+        seed: u64,
+    },
+    /// Score recommendations, ratings and player counts against the simulated truth. Prints JSON.
+    Report {
+        #[arg(long, default_value_t = 400)]
+        sample: usize,
+        #[arg(long, default_value_t = 7)]
+        seed: u64,
+    },
+    /// Keep "playing now" alive: refresh the simulated live players every minute.
+    Pulse,
 }
 
 #[derive(Subcommand)]
@@ -180,6 +210,48 @@ async fn main() -> anyhow::Result<()> {
             eprintln!(
                 "Keep SLOP_SIGNING_KEY secret. Production keys belong in a KMS (docs/SECURITY.md §5.3)."
             );
+            Ok(())
+        }
+        Command::Simulate { command } => {
+            let (config, db) = connect().await?;
+            match command {
+                SimulateCommand::Generate {
+                    apps,
+                    users,
+                    days,
+                    seed,
+                } => {
+                    let made = slop_api::sim::generate(
+                        &db,
+                        slop_api::sim::Settings {
+                            apps,
+                            users,
+                            days,
+                            seed,
+                        },
+                    )
+                    .await?;
+                    println!("{}", serde_json::to_string_pretty(&made)?);
+                }
+                SimulateCommand::Report { sample, seed } => {
+                    let report = slop_api::sim::report(&db, &config, sample, seed).await?;
+                    println!("{}", serde_json::to_string_pretty(&report)?);
+                }
+                SimulateCommand::Pulse => {
+                    let mut rng = slop_api::sim::Rng::new(rand::random());
+                    loop {
+                        match slop_api::sim::pulse_tick(&db, &mut rng).await {
+                            Ok(live) => tracing::info!(
+                                players = live.values().sum::<i64>(),
+                                apps = live.len(),
+                                "simulated players"
+                            ),
+                            Err(err) => tracing::error!(error = ?err, "simulated players"),
+                        }
+                        tokio::time::sleep(Duration::from_secs(60)).await;
+                    }
+                }
+            }
             Ok(())
         }
         Command::Review { command } => {
@@ -331,6 +403,12 @@ async fn serve() -> anyhow::Result<()> {
         );
     }
 
+    if config.simulation {
+        let name = slop_api::sim::ensure_sandbox(&db)
+            .await
+            .context("SLOP_SIMULATION is only allowed on a sandbox database")?;
+        tracing::warn!(database = %name, "simulation sandbox: anyone can view as a simulated user");
+    }
     let bind = config.bind;
     let state = AppState::new(db, config)?;
     tokio::spawn(releases::run_fetcher(state.clone()));

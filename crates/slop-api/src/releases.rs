@@ -716,6 +716,8 @@ struct ServerInfo {
     /// Whether uploads are scanned. Off on test servers; the UI must not claim otherwise.
     scanning: bool,
     maker_signatures_required: bool,
+    /// The simulation sandbox: everything here is made up (sim.rs).
+    simulation: bool,
 }
 
 /// What this server checks, so the UI only claims what's true (LEGAL-GUIDANCE §5.5).
@@ -723,6 +725,7 @@ async fn server_info(State(state): State<AppState>) -> Json<ServerInfo> {
     Json(ServerInfo {
         scanning: state.config.releases.scanner.is_on(),
         maker_signatures_required: state.config.releases.require_maker_signature,
+        simulation: state.config.simulation,
     })
 }
 

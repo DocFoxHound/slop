@@ -28,6 +28,9 @@ pub struct Config {
     /// `fly-client-ip`). Unset: the connection's peer address. Only set it when every request
     /// passes through a proxy that overwrites the header, or clients can pick their own IP.
     pub client_ip_header: Option<String>,
+    /// The simulation sandbox (sim.rs): offers "view as a simulated user". `serve` refuses it
+    /// unless the database's name ends in `_sim`.
+    pub simulation: bool,
 }
 
 /// Updates for the Slop desktop app itself (desktop_updates.rs).
@@ -323,6 +326,7 @@ impl Config {
                 .ok()
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_ascii_lowercase()),
+            simulation: var_or("SLOP_SIMULATION", "false") == "true",
         })
     }
 

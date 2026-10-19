@@ -51,6 +51,8 @@ systemctl --user restart slop-api.service
 for _ in $(seq 30); do
   if [ "$(curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8090/healthz)" = 204 ]; then
     log "live: ${target:0:12}"
+    # The simulation sandbox runs the same build, when it's set up (docs/SIMULATION.md).
+    systemctl --user try-restart slop-sim.service slop-sim-pulse.service || log "couldn't restart the sandbox"
     # The deploy script updates itself from the deployed commit.
     install -m 755 "$build/update.sh" "$ROOT/bin/update.sh.new" && mv "$ROOT/bin/update.sh.new" "$ROOT/bin/update.sh"
     # Linux desktop packages: rebuild (in the background) when the app changed.

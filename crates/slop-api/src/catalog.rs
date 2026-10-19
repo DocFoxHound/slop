@@ -33,7 +33,7 @@ pub fn routes() -> Router<AppState> {
         .route("/repos/license", get(detect_license))
 }
 
-#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize, sqlx::Type)]
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Hash, Serialize, Deserialize, sqlx::Type)]
 #[serde(rename_all = "snake_case")]
 #[sqlx(type_name = "app_kind", rename_all = "snake_case")]
 pub enum AppKind {
@@ -94,7 +94,11 @@ async fn list_categories(State(state): State<AppState>) -> ApiResult<Json<Vec<Ca
 
 /// Appends the conditions that put an app in the store for this viewer: listed, allowed by the
 /// viewer's age policy, and not past its stage deadline (DESIGN §8: missed deadline = delisted).
-fn push_store_visible(qb: &mut QueryBuilder<Postgres>, rules: CatalogRules, policy: ViewerPolicy) {
+pub(crate) fn push_store_visible(
+    qb: &mut QueryBuilder<Postgres>,
+    rules: CatalogRules,
+    policy: ViewerPolicy,
+) {
     qb.push("a.status = 'listed' and a.min_age <= ")
         .push_bind(policy.max_min_age)
         .push(" and not ((a.stage = 'coming_soon' and a.stage_entered_at < now() - make_interval(days => ")
@@ -122,6 +126,10 @@ pub(crate) fn push_summary_columns_with(
                 coalesce(array(select t.slug from app_tags at join tags t on t.id = at.tag_id
                                where at.app_id = a.id order by t.slug), '{}') as tags,
                 (select ms.thumbnail->>'url' from media_sets ms where ms.id = a.media_set_id) as thumbnail_url,
+                (select count(*) from votes v where v.app_id = a.id) as vote_count,
+                (select case when count(*) >= 5 and sum(v.weight) > 0
+                             then round(100 * coalesce(sum(v.weight) filter (where v.vote = 1), 0) / sum(v.weight))::int4 end
+                 from votes v where v.app_id = a.id) as not_slop_percent,
                 (a.stage <> 'released' and a.last_commit_at is not null
                  and a.last_commit_at < now() - make_interval(days => ",
     )
@@ -139,21 +147,25 @@ pub(crate) fn push_summary_columns_with(
     .push(" from apps a");
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Clone, Serialize, sqlx::FromRow)]
 pub struct AppSummary {
-    slug: String,
-    title: String,
+    pub slug: String,
+    pub title: String,
     summary: String,
-    kind: AppKind,
-    stage: AppStage,
+    pub kind: AppKind,
+    pub stage: AppStage,
     #[serde(skip_serializing_if = "is_listed")]
     status: AppStatus,
-    min_age: i16,
-    tags: Vec<String>,
+    pub min_age: i16,
+    pub tags: Vec<String>,
     /// The maker's store tile, if they set one (media.rs).
     thumbnail_url: Option<String>,
+    /// Current 👍/👎 votes (votes.rs).
+    pub vote_count: i64,
+    /// Weighted % Not Slop; null below votes::MIN_VOTES.
+    pub not_slop_percent: Option<i32>,
     /// No commits for a while in Coming soon or Beta. Shown, but never recommended.
-    is_dead: bool,
+    pub is_dead: bool,
     /// When a Coming soon or Beta app must reach its next stage. `None` once released.
     #[serde(with = "time::serde::rfc3339::option")]
     stage_deadline: Option<OffsetDateTime>,
@@ -196,7 +208,7 @@ struct AppPage {
 const MAX_PAGE: i64 = 50;
 
 /// Most players at once over the last 7 days (Slop Pulse). `a` is `apps`.
-const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p
+pub(crate) const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p
      where p.app_id = a.id and p.bucket > now() - interval '7 days')";
 
 async fn list_apps(

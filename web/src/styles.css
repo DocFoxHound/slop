@@ -440,3 +440,36 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .media-review .ge-thumb { aspect-ratio: 16 / 9; }
 .review-notes { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 6px; }
 .review-notes li { padding: 8px 10px; border-left: 3px solid var(--line); background: var(--panel-2); border-radius: 0 6px 6px 0; font-size: 13px; }
+
+/* ---- ratings, charts, For you ---------------------------------------- */
+.tile .why { font-size: 11.5px; font-weight: 700; color: var(--slime); }
+.tile-rating { font-size: 12px; font-weight: 700; }
+.tile-rating.good, .rating-big.good { color: var(--good); }
+.tile-rating.mixed, .rating-big.mixed { color: var(--warn); }
+.tile-rating.bad, .rating-big.bad { color: var(--bad); }
+.rating-panel { margin-top: 20px; display: grid; gap: 12px; }
+.rating-panel h2 { font-size: 18px; }
+.rating-big { font-size: 24px; font-weight: 900; letter-spacing: -0.01em; }
+.vote-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
+.btn.vote.on.up { background: rgba(74, 222, 128, 0.16); border-color: var(--good); }
+.btn.vote.on.down { background: rgba(248, 113, 113, 0.16); border-color: var(--bad); }
+.chart { margin: 0; }
+.chart figcaption { display: flex; gap: 10px; flex-wrap: wrap; align-items: baseline; font-size: 13px; margin-bottom: 4px; }
+.chart svg { width: 100%; height: 180px; display: block; background: var(--panel-2); border-radius: 8px; }
+.chart .grid { stroke: var(--line); stroke-width: 1; }
+.chart .axis { fill: var(--muted); font-size: 11px; }
+.chart polyline { fill: none; stroke-width: 2.5; vector-effect: non-scaling-stroke; }
+.chart .line-main polyline { stroke: var(--slime); }
+.chart .line-main circle { fill: var(--slime); }
+.chart .line-players polyline { stroke: #60a5fa; }
+.chart .line-players circle { fill: #60a5fa; }
+.chart rect.up { fill: var(--good); }
+.chart rect.down { fill: var(--bad); }
+.chart-legend .key { font-size: 12px; color: var(--muted); margin-right: 10px; }
+.chart-legend .key::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--slime); }
+.chart-legend .key.up::before { background: var(--good); }
+.chart-legend .key.down::before { background: var(--bad); }
+.chart-legend .key.line-players::before { background: #60a5fa; }
+.chart-table { margin-top: 6px; font-size: 12px; }
+.link-btn { background: none; border: 0; padding: 2px 0; color: var(--slime); cursor: pointer; text-decoration: underline; }
+.sim-banner { padding: 8px 16px; background: rgba(96, 165, 250, 0.14); border-bottom: 1px solid rgba(96, 165, 250, 0.4); font-size: 13px; }

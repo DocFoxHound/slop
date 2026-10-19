@@ -13,6 +13,7 @@ import { Manage } from "./pages/Manage";
 import { Download } from "./pages/Download";
 import { Browse, CategoryPage, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
+import { Sim } from "./pages/Sim";
 import { Store } from "./pages/Store";
 import { SessionProvider } from "./session";
 import "./styles.css";
@@ -41,6 +42,7 @@ const router = createBrowserRouter([
       { path: "/signin", element: <SignIn /> },
       { path: "/signup", element: <SignUp /> },
       { path: "/account", element: <Account /> },
+      { path: "/sim", element: <Sim /> },
       { path: "*", element: <NotFound /> },
     ],
   },

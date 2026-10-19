@@ -8,3 +8,9 @@ slop.188-68-41-241.sslip.io {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8090
 }
+
+# The simulation sandbox (docs/SIMULATION.md): made-up apps, players and votes.
+sim.188-68-41-241.sslip.io {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8092
+}
