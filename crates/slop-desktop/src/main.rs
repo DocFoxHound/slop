@@ -307,6 +307,57 @@ fn open_login(app: &AppHandle) {
     }
 }
 
+/// On Windows, closing the store hides it to the notification area (the tray), like Steam:
+/// Slop keeps running so it can tell you about updates, and the tray icon brings it back.
+/// Minimizing still goes to the taskbar. Elsewhere, closing quits.
+const CLOSE_TO_TRAY: bool = cfg!(windows);
+
+fn make_tray(app: &tauri::App) -> tauri::Result<()> {
+    use tauri::{
+        menu::{Menu, MenuItem},
+        tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
+    };
+    let open = MenuItem::with_id(app, "open", "Open Slop", true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", "Quit Slop", true, None::<&str>)?;
+    let menu = Menu::with_items(app, &[&open, &quit])?;
+    let mut tray = TrayIconBuilder::with_id("slop")
+        .tooltip("Slop")
+        .menu(&menu)
+        .show_menu_on_left_click(false)
+        .on_menu_event(|app, event| match event.id.as_ref() {
+            "open" => bring_back(app),
+            "quit" => app.exit(0),
+            _ => {}
+        })
+        .on_tray_icon_event(|tray, event| {
+            if let TrayIconEvent::Click {
+                button: MouseButton::Left,
+                button_state: MouseButtonState::Up,
+                ..
+            } = event
+            {
+                bring_back(tray.app_handle());
+            }
+        });
+    if let Some(icon) = app.default_window_icon() {
+        tray = tray.icon(icon.clone());
+    }
+    tray.build(app)?;
+    Ok(())
+}
+
+/// Shows whichever window is in use: the sign-in window if it's open, otherwise the store.
+fn bring_back(app: &AppHandle) {
+    let window = app
+        .get_webview_window(LOGIN_WINDOW)
+        .or_else(|| app.get_webview_window("main"));
+    if let Some(w) = window {
+        let _ = w.show();
+        let _ = w.unminimize();
+        let _ = w.set_focus();
+    }
+}
+
 fn show_main(app: &AppHandle) {
     if let Some(main) = app.get_webview_window("main") {
         let _ = main.show();
@@ -498,6 +549,11 @@ fn main() {
         )
         .init();
     tauri::Builder::default()
+        // A second launch (e.g. from the Start menu while Slop is in the tray) brings back the
+        // running one instead of starting another. Registered first, as the plugin asks.
+        .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
+            bring_back(app)
+        }))
         .plugin(tauri_plugin_opener::init())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
@@ -518,10 +574,22 @@ fn main() {
                 pending_sign_in: tokio::sync::Mutex::new(None),
                 update: tokio::sync::Mutex::new(None),
             });
+            if CLOSE_TO_TRAY && let Err(e) = make_tray(app) {
+                tracing::error!(error = %e, "couldn't add the tray icon");
+            }
             tauri::async_runtime::spawn(startup(app.handle().clone()));
             Ok(())
         })
         .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { api, .. } = event
+                && CLOSE_TO_TRAY
+                && window.label() == "main"
+                && window.app_handle().tray_by_id("slop").is_some()
+            {
+                api.prevent_close();
+                let _ = window.hide();
+                return;
+            }
             // Closing the sign-in window while the store is still hidden (at launch) quits, so
             // the app never keeps running with no window.
             if window.label() == LOGIN_WINDOW && matches!(event, tauri::WindowEvent::Destroyed) {

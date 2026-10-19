@@ -196,11 +196,13 @@ pub async fn approve(
     };
     let signed = slop_manifest::sign(&manifest, Purpose::ReleaseManifest, key);
     sqlx::query(
-        "update releases set status = 'approved', reviewed_at = now(), signed_manifest = $2, status_reason = null
+        "update releases set status = 'approved', reviewed_at = now(), signed_manifest = $2, status_reason = null,
+                reviewed_by = $3
          where id = $1",
     )
     .bind(release_id)
     .bind(sqlx::types::Json(&signed))
+    .bind(reviewer)
     .execute(&mut *tx)
     .await?;
     audit(
@@ -229,11 +231,12 @@ pub async fn reject(
     );
     let mut tx = db.begin().await?;
     let updated = sqlx::query(
-        "update releases set status = 'rejected', status_reason = $2, reviewed_at = now()
+        "update releases set status = 'rejected', status_reason = $2, reviewed_at = now(), reviewed_by = $3
          where id = $1 and status in ('awaiting_review', 'fetching', 'failed')",
     )
     .bind(release_id)
     .bind(reason.trim())
+    .bind(reviewer)
     .execute(&mut *tx)
     .await?
     .rows_affected();

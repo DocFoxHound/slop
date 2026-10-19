@@ -7,8 +7,8 @@ publish: what Slop asks of your project, how to set it up, and what happens afte
 It's written so that a person or an AI agent can follow it from start to finish. Agents: the
 [checklist for agents](#checklist-for-agents) near the end lists every step in order.
 
-> **This is a test server.** Builds aren't automatically scanned yet, maker signatures aren't
-> required, and every release is reviewed by a person. Things marked *(coming)* below are planned
+> **This is a test server.** Builds aren't automatically scanned yet and maker signatures aren't
+> required. Each app's first release is reviewed by a person. Things marked *(coming)* below are planned
 > but not built yet.
 
 ## Why publish on Slop
@@ -104,10 +104,32 @@ It's saved as a draft that only you can see.
 
 ### 3. Submit a release
 
-Open your app's **Releases** page (from **Publish**, choose **Releases & progress**). Use one of
-the two options below.
+A release is one version of your app. On Slop it's a **GitHub release** on your repository with
+your builds attached. Open your app's **Releases** page (from **Publish**, choose **Releases &
+progress**) and use one of the options below.
 
-#### Option A: Slop Build (recommended)
+#### Option A: pick a GitHub release (simplest)
+
+1. On GitHub, open **Releases → Draft a new release**. Give it a tag such as `v1.0.0`, attach a
+   build for each platform (a `.zip` of the app's files, an installer, or an `.apk`), and publish
+   it. Don't mark it as a pre-release if you want Slop to pick up later ones by itself.
+2. On Slop's Releases page, under **Submit a release**, choose that release. Slop reads the
+   version from the tag (`v1.0.0` → `1.0.0`) and finds the commit the tag points at.
+3. Tick the files that are builds, one per platform. Slop guesses the platform and type from each
+   file's name (`.exe`/`.msi` → Windows installer, `.dmg` → macOS, `.apk` → Android, a `.zip`
+   with `windows`, `macos` or `linux` in its name → that platform); correct anything it got
+   wrong. For each zip, enter the program to start, as its path inside the zip.
+4. Choose **Send version …**.
+
+**Later versions arrive by themselves.** With **Pick up new GitHub releases** on (the default, in
+the **Updates** box), Slop checks your repository about every 10 minutes. When you publish a new
+release (not a draft or pre-release), Slop submits it using your previous release as the pattern:
+the same platforms and programs, with files whose names are the old ones with the new version in
+place of the old (`game-1.0.0-windows.zip` → `game-1.1.0-windows.zip`), or exactly the same
+names. If a file is missing, Slop waits up to two hours for it to be uploaded, then shows what it
+couldn't find so you can pick the release by hand.
+
+#### Option B: Slop Build
 
 Slop Build is a shared GitHub Actions workflow. Add one file to your repository and every push to
 your main branch (or every `v*` tag) builds your app for Windows, macOS and Linux, zips and signs
@@ -165,7 +187,7 @@ Godot, web/HTML5, Electron/Tauri and Python projects use `custom` for now, for e
 
 Builds made by Slop Build are labelled **Built by Slop Build from source**.
 
-#### Option B: build and submit yourself
+#### Option C: build and submit yourself
 
 1. Build each platform and zip it (or use an installer or `.apk`).
 2. Sign the files in GitHub Actions with
@@ -184,9 +206,10 @@ Builds made by Slop Build are labelled **Built by Slop Build from source**.
    ```
 
 3. Attach the files to a release on your repository.
-4. On Slop's Releases page, fill in **New release**: the version (e.g. `1.0.0`), the full commit
-   SHA, and for each platform the file's URL on your release page, its type, and for zips the
-   program to start (and optional arguments).
+4. On Slop's Releases page, pick the release (Option A), or open **Enter a release by hand** and
+   fill in the version (e.g. `1.0.0`), the full commit SHA, and for each platform the file's URL
+   on your release page, its type, and for zips the program to start (and optional arguments).
+   Repositories that aren't on GitHub always use the form.
 
 ### 4. What happens next
 
@@ -199,13 +222,20 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
 4. **Maker signature:** the attestation is checked: it must name the file's hash and come from
    your repository at the release's commit.
 5. **Scan:** *(coming: automatic malware and policy scans.)*
-6. **Review:** a person at Slop reviews the release. Approval signs it; a rejection comes with a
-   reason.
+6. **Review:** a person at Slop reviews your app's first release. Approval signs it; a rejection
+   comes with a reason.
 7. **In the store:** Slop staff put the app in the store.
 
-After that, publishing a new version is just another release (with Slop Build, a push). Players'
-apps update when it's approved. Slop can withdraw a release that turns out to be harmful; it then
-stops launching for everyone.
+**Updates.** With **Approve updates automatically** on (the default), every later release that
+passes every check is approved and signed by Slop straight away, with no wait for a person.
+Combined with **Pick up new GitHub releases** (or Slop Build), publishing an update is just
+publishing a release on GitHub. Players' apps show a notice and update when the player chooses.
+A person looks again if a release fails a check, or if one of your releases was withdrawn or
+rejected since the last one a person approved. Slop can withdraw a release that turns out to be
+harmful; it then stops launching for everyone.
+
+**Where things stand:** **Publish** lists each of your apps with the step it's waiting on or
+stuck at. **Releases & progress** has the full checklist and every release's history.
 
 ## Slop Pulse (player counts)
 
@@ -423,15 +453,20 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    checkout, with a single command. Note the program's path relative to the build folder.
 3. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
    language and call it once at startup. Send nothing but the token.
-4. On GitHub, add `.github/workflows/slop.yml` (Option A) with `app` set to the store address the
+4. Either publish a GitHub release with a build per platform attached (Option A; zips need the
+   program path, which the owner enters on Slop), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
    owner will use, `slop-url` set to the Slop site, and `project-type` set to `rust`, `go` or
    `custom` (with `build-command`, `output-dir` and `exec`). For private repositories without
-   GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option B.
+   GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option C. For
+   Option A, name files so the version is the only part that changes between releases
+   (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
 5. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
    same store address, the repository URL, licence, type, stage, age rating and tags.
-6. Push to the main branch (or a `v*` tag). Check the workflow run in the repository's Actions tab.
-7. **(person)** Watch **Publish → the app → Releases & progress** until the release is approved
-   and the app is in the store.
+6. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
+   Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
+7. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the
+   first release is approved and the app is in the store. Later releases are picked up and
+   approved automatically if they pass every check.
 
 Facts an agent may need:
 
@@ -441,6 +476,7 @@ Facts an agent may need:
 - Platforms: `windows`, `mac`, `linux`, `android`; one build each per release.
 - Build types: `archive` (zip; needs the program path), `installer`, `apk` (Android only).
 - A release can't reuse a version. Up to three releases can wait for review at once.
+- Tags become versions with a leading `v` removed when a digit follows (`v1.2.0` → `1.2.0`).
 - The program path inside a zip must be relative, use `/`, and not contain `..`.
 
 ## Questions

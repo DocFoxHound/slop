@@ -56,7 +56,7 @@ pub fn routes() -> Router<AppState> {
 // ---------------------------------------------------------------------------------------------
 // Submitting
 
-#[derive(Deserialize)]
+#[derive(Debug, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub(crate) struct NewFile {
     pub platform: String,
@@ -262,6 +262,10 @@ pub(crate) struct ReleaseInfo {
     commit_verified: bool,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
+    /// maker, slop_build or github_release.
+    source: String,
+    /// True when Slop approved it automatically as an update (updates.rs).
+    auto_approved: bool,
     files: Vec<ReleaseFileInfo>,
 }
 
@@ -292,13 +296,16 @@ async fn submit_release(
         &req.version,
         &req.commit_sha,
         req.files,
+        "maker",
     )
     .await?;
     Ok((StatusCode::CREATED, Json(release)))
 }
 
-/// Checks and records a new release for fetching and review. Shared by makers' own submissions
-/// and Slop Build's (slop_build.rs), so both go through the same checks.
+/// Checks and records a new release for fetching and review. Shared by makers' own submissions,
+/// Slop Build's (slop_build.rs) and the GitHub release watcher (updates.rs), so all go through
+/// the same checks. `source` is maker, slop_build or github_release.
+#[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_release(
     state: &AppState,
     app_id: Uuid,
@@ -307,6 +314,7 @@ pub(crate) async fn create_release(
     version: &str,
     commit_sha: &str,
     files: Vec<NewFile>,
+    source: &str,
 ) -> ApiResult<ReleaseInfo> {
     validate_version(version)?;
     validate_commit(commit_sha)?;
@@ -326,12 +334,13 @@ pub(crate) async fn create_release(
 
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
-    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by) values ($1, $2, $3, $4, $5)")
+    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by, source) values ($1, $2, $3, $4, $5, $6)")
         .bind(id)
         .bind(app_id)
         .bind(version)
         .bind(commit_sha)
         .bind(submitted_by)
+        .bind(source)
         .execute(&mut *tx)
         .await
         .map_err(|err| {
@@ -370,8 +379,11 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         Option<String>,
         bool,
         OffsetDateTime,
+        String,
+        bool,
     ) = sqlx::query_as(
-        "select id, version, commit_sha, status::text, status_reason, commit_verified, created_at
+        "select id, version, commit_sha, status::text, status_reason, commit_verified, created_at, source,
+                coalesce(reviewed_by = 'slop', false)
          from releases where id = $1",
     )
     .bind(id)
@@ -393,6 +405,8 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         status_reason: row.4,
         commit_verified: row.5,
         created_at: row.6,
+        source: row.7,
+        auto_approved: row.8,
         files,
     })
 }
@@ -681,6 +695,7 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
             .execute(&state.db)
             .await?;
             tracing::info!(release = %id, "release fetched; awaiting review");
+            crate::updates::try_auto_approve(state, id).await?;
         }
         Err(err) => {
             tracing::warn!(release = %id, error = %err, "release fetch failed");

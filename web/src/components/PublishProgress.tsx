@@ -87,9 +87,18 @@ export function progressSteps(
     }
 
     if (latest.status === "approved" || (approved && latest.status !== "awaiting_review")) {
-      steps.push({ title: "Review", state: "done", detail: `Version ${(approved ?? latest).version} approved and signed by Slop.` });
+      const r = latest.status === "approved" ? latest : (approved ?? latest);
+      steps.push({
+        title: "Review",
+        state: "done",
+        detail: `Version ${r.version} ${r.auto_approved ? "approved automatically as an update" : "approved"} and signed by Slop.`,
+      });
     } else if (latest.status === "awaiting_review") {
-      steps.push({ title: "Review", state: "active", detail: "Waiting for a Slop reviewer. This is done by a person, so it can take a while." });
+      steps.push({
+        title: "Review",
+        state: "active",
+        detail: `${latest.status_reason ?? "Waiting for a Slop reviewer."} This is done by a person, so it can take a while.`,
+      });
     } else if (latest.status === "rejected") {
       steps.push({ title: "Review", state: "problem", detail: `Not approved: ${latest.status_reason ?? "no reason given"}. Fix it and submit a new version.` });
     } else if (latest.status === "revoked") {
