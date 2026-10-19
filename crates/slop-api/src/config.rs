@@ -22,6 +22,7 @@ pub struct Config {
     pub rate_limits: crate::ratelimit::Limits,
     pub desktop: DesktopConfig,
     pub media: MediaConfig,
+    pub payments: PaymentsConfig,
     /// The built website (`web/dist`) to serve from the same origin. Unset: API only.
     pub web_dir: Option<std::path::PathBuf>,
     /// Header holding the client's IP, set by the load balancer (e.g. `x-forwarded-for`,
@@ -53,6 +54,36 @@ impl fmt::Debug for DesktopConfig {
                 &self.updater_key.as_ref().map(|_| "<redacted>"),
             )
             .field("repo", &self.repo)
+            .finish()
+    }
+}
+
+/// People payments (people/stripe.rs).
+#[derive(Clone, Debug, Default)]
+pub struct PaymentsConfig {
+    /// Stripe Connect. Unset: payments are simulated (sandbox, development) or off.
+    pub stripe: Option<StripeConfig>,
+    /// Without Stripe, record payments as simulated instead of refusing them. Only the simulation
+    /// sandbox and development servers turn this on; `serve` refuses it on other databases.
+    pub simulated: bool,
+}
+
+#[derive(Clone)]
+pub struct StripeConfig {
+    /// The platform's secret key (`sk_live_…` / `sk_test_…`).
+    pub secret_key: String,
+    /// Signs the Connect webhook endpoint's events (`whsec_…`).
+    pub webhook_secret: String,
+    /// Stripe's API. Changed only by tests.
+    pub api_base: Url,
+}
+
+impl fmt::Debug for StripeConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("StripeConfig")
+            .field("secret_key", &"<redacted>")
+            .field("webhook_secret", &"<redacted>")
+            .field("api_base", &self.api_base)
             .finish()
     }
 }
@@ -317,6 +348,27 @@ impl Config {
                 github_raw_base: var_or("GITHUB_RAW_BASE", "https://raw.githubusercontent.com/")
                     .parse()
                     .context("GITHUB_RAW_BASE")?,
+            },
+            payments: PaymentsConfig {
+                stripe: match (
+                    env::var("STRIPE_SECRET_KEY"),
+                    env::var("STRIPE_WEBHOOK_SECRET"),
+                ) {
+                    (Ok(secret_key), Ok(webhook_secret))
+                        if !secret_key.is_empty() && !webhook_secret.is_empty() =>
+                    {
+                        Some(StripeConfig {
+                            secret_key,
+                            webhook_secret,
+                            api_base: var_or("STRIPE_API_BASE", "https://api.stripe.com/")
+                                .parse()
+                                .context("STRIPE_API_BASE")?,
+                        })
+                    }
+                    _ => None,
+                },
+                simulated: var_or("SLOP_PAYMENTS", "off") == "simulated"
+                    || var_or("SLOP_SIMULATION", "false") == "true",
             },
             web_dir: env::var("SLOP_WEB_DIR")
                 .ok()

@@ -34,6 +34,8 @@ export interface AppSummary {
   vote_count: number;
   /** Weighted % Not Slop; null below the minimum number of votes. */
   not_slop_percent: number | null;
+  /** Credits a completed, fully paid People job: the "Made with people" badge. */
+  made_with_people: boolean;
   is_dead: boolean;
   stage_deadline: string | null;
   updated_at: string;
@@ -131,6 +133,8 @@ export interface AppDetail extends AppSummary {
   last_commit_at: string | null;
   tag_details: TagRef[];
   gallery: GalleryItem[];
+  /** Creatives credited through People jobs. */
+  credits: Credit[];
   is_mine: boolean;
 }
 
@@ -148,6 +152,8 @@ export interface Me {
   share_playtime: boolean;
   /** "Recommendations based on my activity". */
   personalize: boolean;
+  /** Confirmed 18+ for People. */
+  adult_confirmed: boolean;
 }
 
 /** % Not Slop at one point (crates/slop-api/src/votes.rs). */
@@ -167,6 +173,280 @@ export interface Ratings extends Tally {
   open: boolean;
   min_votes: number;
   mine?: { vote: "not_slop" | "slop" | null; can_vote: boolean; reason: string | null; weight: number };
+  /** Votes since the first release with work hired through People (null: none hired). */
+  since_new_work: (Partial<Tally> & { since: string | null; version: string | null; credits: string[] }) | null;
+}
+
+// ---- People (crates/slop-api/src/people) ------------------------------------------------------
+
+export interface Skill {
+  slug: string;
+  name: string;
+}
+
+export type AiUse = "none" | "assisted" | "heavy";
+export type Accent = "slime" | "ocean" | "grape" | "rose" | "ember" | "sun" | "forest" | "slate";
+export type Section = "portfolio" | "services" | "reviews" | "worked_on" | "about";
+export type Currency = "usd" | "eur" | "gbp";
+
+export interface Service {
+  id: string;
+  name: string;
+  description: string;
+  price_minor: number;
+  currency: Currency;
+  days: number;
+  skill: string;
+}
+
+export interface CreativeRating {
+  not_slop: number;
+  slop: number;
+  percent: number | null;
+  label: string | null;
+  min_reviews: number;
+}
+
+export interface CreativeCard {
+  handle: string;
+  name: string;
+  kind: "individual" | "studio";
+  team_size: number | null;
+  headline: string;
+  location: string;
+  skills: Skill[];
+  ai_use: AiUse;
+  taking_work: boolean;
+  /** Taking work and able to be paid. */
+  can_hire: boolean;
+  accent: Accent;
+  avatar_url: string | null;
+  preview: string[];
+  from_price: { minor: number; currency: Currency } | null;
+  rating: CreativeRating;
+  clients: number;
+}
+
+export interface Work {
+  key: string;
+  kind: "image" | "video" | "audio";
+  url: string | null;
+  width: number | null;
+  height: number | null;
+  youtube_id: string | null;
+  audio_url: string | null;
+  audio_format: string | null;
+  title: string | null;
+  caption: string | null;
+  skill: Skill | null;
+}
+
+export interface CreativeReview {
+  job_id: string;
+  client_name: string;
+  project: string | null;
+  project_slug: string | null;
+  work: string;
+  skill: Skill;
+  vote: "not_slop" | "slop";
+  body: string;
+  reply: string | null;
+  created_at: string;
+  replied_at: string | null;
+}
+
+export interface CreativePage extends CreativeCard {
+  about_md: string;
+  ai_note: string;
+  trader: boolean;
+  turnaround: string;
+  sections: Section[];
+  links: Array<{ label: string; url: string; domain: string }>;
+  banner_url: string | null;
+  works: Work[];
+  services: Array<Service & { skill_name: string }>;
+  reviews: CreativeReview[];
+  worked_on: Array<AppSummary & { role: string }>;
+  is_me: boolean;
+  status: "live" | "waiting" | "hidden";
+  hidden_reason: string | null;
+}
+
+export interface ProfileInput {
+  handle: string;
+  name: string;
+  kind: "individual" | "studio";
+  team_size: number | null;
+  headline: string;
+  about_md: string;
+  location: string;
+  skills: string[];
+  ai_use: AiUse;
+  ai_note: string;
+  trader: boolean;
+  taking_work: boolean;
+  turnaround: string;
+  services: Service[];
+  accent: Accent;
+  sections: Section[];
+  links: Array<{ label: string; url: string }>;
+  confirm_adult?: boolean;
+}
+
+export interface MyProfile extends Omit<ProfileInput, "confirm_adult"> {
+  portfolio_repo: string | null;
+  stripe_status: "none" | "pending" | "active" | "restricted";
+  live: boolean;
+  hidden_reason: string | null;
+  /** stripe, simulated (sandbox/development) or off. */
+  payments: "stripe" | "simulated" | "off";
+}
+
+export type PortfolioWork =
+  | { kind: "image"; path: string; url: string; width: number; height: number; title: string | null; caption: string | null }
+  | { kind: "video"; youtube_id: string; poster: RepoPicture | null; title: string | null; caption: string | null }
+  | { kind: "audio"; audio: { path: string; url: string; format: string }; poster: RepoPicture | null; title: string | null; caption: string | null };
+
+export function workKey(w: PortfolioWork): string {
+  return w.kind === "image" ? `image:${w.path}` : w.kind === "video" ? `video:${w.youtube_id}` : `audio:${w.audio.path}`;
+}
+
+export interface PortfolioSet {
+  id: string;
+  repo_url: string;
+  commit_sha: string;
+  avatar: RepoPicture | null;
+  banner: RepoPicture | null;
+  works: PortfolioWork[];
+  status: "pending" | "approved" | "rejected" | "superseded";
+  status_reason: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export interface PortfolioOverview {
+  repo_url: string | null;
+  live: PortfolioSet | null;
+  pending: PortfolioSet | null;
+  rejected: PortfolioSet | null;
+  checked_at: string | null;
+  problem: string | null;
+  order: string[];
+  manifest_path: string;
+  result?: "pending" | "unchanged" | "none" | "problem";
+}
+
+export interface Credit {
+  handle: string;
+  name: string;
+  role: string;
+  skill: Skill;
+  work: string;
+}
+
+export interface Offer {
+  title: string;
+  scope_md: string;
+  price_minor: number;
+  currency: Currency;
+  payment: "upfront" | "split" | "on_delivery";
+  due_date: string;
+  revisions: number;
+  rights: "transfer" | "licence";
+  open_source: boolean;
+  credit: boolean;
+  ai_use: AiUse;
+  refund_policy: string;
+}
+
+export type JobStatus =
+  | "requested"
+  | "offered"
+  | "awaiting_payment"
+  | "in_progress"
+  | "delivered"
+  | "completed"
+  | "declined"
+  | "cancelled"
+  | "withdrawn";
+
+export type JobAction =
+  | "offer"
+  | "decline"
+  | "accept"
+  | "ask_changes"
+  | "pay"
+  | "cancel"
+  | "deliver"
+  | "revision"
+  | "complete"
+  | "review"
+  | "withdraw";
+
+export interface Job {
+  id: string;
+  status: JobStatus;
+  status_text: string;
+  role: "client" | "creative";
+  creative: { name: string; handle: string; trader: boolean; ai_use: AiUse };
+  client_name: string;
+  project: { title: string; slug: string; stage: AppStage };
+  skill: Skill;
+  request_md: string;
+  wanted_by: string | null;
+  client_is_business: boolean;
+  offer: Offer | null;
+  offer_count: number;
+  summary: string[];
+  agreement: { text: string; sha256: string | null; template: string; accepted_at: string | null } | null;
+  payments: Array<{
+    part: "full" | "deposit" | "final";
+    due_on: "accept" | "delivery";
+    amount_minor: number;
+    currency: Currency;
+    status: "waiting" | "due" | "paid";
+    paid_at: string | null;
+    simulated: boolean;
+  }>;
+  paid_minor: number;
+  refunded_minor: number;
+  creative_receives_minor: number | null;
+  withdrawal: { until: string; open: boolean; started_early: boolean } | null;
+  withdrawal_days: number | null;
+  revisions_left: number;
+  auto_complete_at: string | null;
+  completed_at: string | null;
+  completed_automatically: boolean;
+  credited: boolean;
+  events: Array<{ kind: string; actor: string | null; note: string | null; links: string[]; created_at: string }>;
+  actions: JobAction[];
+  payment_mode: "stripe" | "simulated" | "off";
+  review: { vote: "not_slop" | "slop"; body: string; reply: string | null } | null;
+  created_at: string;
+}
+
+export interface JobCard {
+  id: string;
+  status: JobStatus;
+  status_text: string;
+  needs_you: boolean;
+  other_name: string;
+  creative_handle: string;
+  project_title: string;
+  project_slug: string;
+  skill: Skill;
+  title: string;
+  price: string | null;
+  updated_at: string;
+}
+
+export interface PeopleQuery {
+  skill?: string;
+  taking_work?: boolean;
+  ai?: "none" | "assisted";
+  studios?: boolean;
+  q?: string;
+  sort?: "shuffle" | "rating" | "clients";
 }
 
 export interface ForYouCard extends AppSummary {
@@ -243,6 +523,7 @@ export interface AdminQueue {
   releases: Array<Release & { app: AdminAppRef; notes: ReviewNote[] }>;
   changes: Array<AppChange & { app: AdminAppRef; players_get: string | null; notes: ReviewNote[] }>;
   media: Array<MediaSet & { app: AdminAppRef; live: MediaSet | null; notes: ReviewNote[] }>;
+  portfolios: Array<{ handle: string; name: string; ai_use: AiUse; set: PortfolioSet; live: PortfolioSet | null; notes: ReviewNote[] }>;
   ready_to_list: Array<AdminAppRef & { approved_releases: number; pictures_pending: boolean; notes: ReviewNote[] }>;
   checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
 }
@@ -388,6 +669,7 @@ export interface AppQuery {
   stage?: AppStage;
   kind?: AppKind;
   sort?: "recent" | "title" | "relevance" | "trending";
+  made_with_people?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -526,6 +808,8 @@ export const api = {
     rejectChange: (id: string, reason: string) => request<void>("POST", `/v1/admin/changes/${id}/reject`, { reason }),
     approveMedia: (id: string) => request<void>("POST", `/v1/admin/media/${id}/approve`),
     rejectMedia: (id: string, reason: string) => request<void>("POST", `/v1/admin/media/${id}/reject`, { reason }),
+    approvePortfolio: (id: string) => request<void>("POST", `/v1/admin/portfolio/${id}/approve`),
+    rejectPortfolio: (id: string, reason: string) => request<void>("POST", `/v1/admin/portfolio/${id}/reject`, { reason }),
     tokens: () => request<AdminToken[]>("GET", "/v1/admin/tokens"),
     createToken: (body: { name: string; scope: AdminToken["scope"]; days: number }) =>
       request<AdminToken & { token: string }>("POST", "/v1/admin/tokens", body),
@@ -555,6 +839,40 @@ export const api = {
   vote: (slug: string, vote: "not_slop" | "slop" | null) =>
     request<Ratings>("POST", `/v1/apps/${encodeURIComponent(slug)}/vote`, { vote }),
   forYou: () => request<ForYou>("GET", "/v1/me/for-you"),
+  people: {
+    list: (q: PeopleQuery = {}) =>
+      request<{ people: CreativeCard[]; skills: Array<Skill & { count: number }> }>("GET", `/v1/people${query(q)}`),
+    skills: () => request<Skill[]>("GET", "/v1/people/skills"),
+    page: (handle: string) => request<CreativePage>("GET", `/v1/people/${encodeURIComponent(handle)}`),
+    mine: () => request<MyProfile>("GET", "/v1/me/creative"),
+    save: (p: ProfileInput) => request<MyProfile>("PUT", "/v1/me/creative", p),
+    portfolio: () => request<PortfolioOverview>("GET", "/v1/me/creative/portfolio"),
+    checkPortfolio: (repo_url?: string) =>
+      request<PortfolioOverview>("POST", "/v1/me/creative/portfolio/check", repo_url ? { repo_url } : {}),
+    setPortfolioOrder: (keys: string[]) => request<PortfolioOverview>("PUT", "/v1/me/creative/portfolio/order", { keys }),
+    getPaid: () => request<{ url: string | null; status: string }>("POST", "/v1/me/creative/stripe"),
+    refreshPaid: () => request<{ url: string | null; status: string }>("POST", "/v1/me/creative/stripe/refresh"),
+    reply: (jobId: string, reply: string) =>
+      request<void>("PUT", `/v1/people/reviews/${encodeURIComponent(jobId)}/reply`, { reply }),
+    hire: (
+      handle: string,
+      body: {
+        app_slug: string;
+        skill: string;
+        service_id?: string;
+        request_md: string;
+        wanted_by?: string;
+        client_is_business: boolean;
+        confirm_adult: boolean;
+      },
+    ) => request<Job>("POST", `/v1/people/${encodeURIComponent(handle)}/hire`, body),
+    jobs: () => request<{ as_client: JobCard[]; as_creative: JobCard[]; waiting_on_you: number }>("GET", "/v1/me/jobs"),
+    job: (id: string) => request<Job>("GET", `/v1/jobs/${encodeURIComponent(id)}`),
+    step: (id: string, step: string, body: unknown = {}) =>
+      request<Job>(step === "review" ? "PUT" : "POST", `/v1/jobs/${encodeURIComponent(id)}/${step}`, body),
+    pay: (id: string) => request<{ url: string | null; job: Job }>("POST", `/v1/jobs/${encodeURIComponent(id)}/pay`),
+    checkPayment: (id: string) => request<Job>("POST", `/v1/jobs/${encodeURIComponent(id)}/payment/check`),
+  },
   simUsers: () => request<SimUser[]>("GET", "/v1/sim/users"),
   simLogin: (id: string) => request<void>("POST", `/v1/sim/login/${encodeURIComponent(id)}`),
   /** Full-page navigation target that starts GitHub sign-in. */

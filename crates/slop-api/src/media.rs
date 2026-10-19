@@ -251,6 +251,15 @@ macro_rules! problem {
 
 /// A picture path inside `.slop/`: plain letters, digits, `.`, `_`, `-` and `/`, no `..`.
 fn clean_path(path: &str) -> Result<String, Problem> {
+    clean_file_path(
+        path,
+        &[".png", ".jpg", ".jpeg", ".webp", ".gif"],
+        "a picture: use .png, .jpg, .webp or .gif",
+    )
+}
+
+/// A path inside `.slop/` with one of `exts`; `what` finishes "isn't …" when it has another.
+pub(crate) fn clean_file_path(path: &str, exts: &[&str], what: &str) -> Result<String, Problem> {
     let path = path.trim().trim_start_matches("./");
     let ok = !path.is_empty()
         && path.len() <= 200
@@ -267,16 +276,13 @@ fn clean_path(path: &str) -> Result<String, Problem> {
         );
     }
     let lower = path.to_ascii_lowercase();
-    if ![".png", ".jpg", ".jpeg", ".webp", ".gif"]
-        .iter()
-        .any(|ext| lower.ends_with(ext))
-    {
-        problem!("\"{path}\" isn't a picture: use .png, .jpg, .webp or .gif");
+    if !exts.iter().any(|ext| lower.ends_with(ext)) {
+        problem!("\"{path}\" isn't {what}");
     }
     Ok(path.to_string())
 }
 
-fn clean_caption(caption: Option<&str>) -> Result<Option<String>, Problem> {
+pub(crate) fn clean_caption(caption: Option<&str>) -> Result<Option<String>, Problem> {
     let Some(c) = caption.map(str::trim).filter(|c| !c.is_empty()) else {
         return Ok(None);
     };
@@ -317,7 +323,11 @@ pub fn youtube_id(link: &str) -> Option<String> {
 }
 
 /// Downloads a file, refusing anything over `max` bytes. None when it isn't there.
-async fn download(state: &AppState, url: Url, max: u64) -> anyhow::Result<Option<Vec<u8>>> {
+pub(crate) async fn download(
+    state: &AppState,
+    url: Url,
+    max: u64,
+) -> anyhow::Result<Option<Vec<u8>>> {
     let mut res = state
         .fetch_http
         .get(url)
@@ -369,15 +379,27 @@ fn inspect(path: &str, bytes: &[u8], min: (u32, u32)) -> Result<(String, u32, u3
     Ok((format.to_string(), w, h))
 }
 
-struct Reader<'a> {
+pub(crate) struct Reader<'a> {
     state: &'a AppState,
     /// `<raw base><owner>/<repo>/<commit>/.slop/`
     base: Url,
     seen: HashMap<String, Picture>,
 }
 
-impl Reader<'_> {
-    async fn picture(&mut self, path: &str, min: (u32, u32)) -> Result<Picture, Problem> {
+impl<'a> Reader<'a> {
+    pub(crate) fn new(state: &'a AppState, base: Url) -> Self {
+        Self {
+            state,
+            base,
+            seen: HashMap::new(),
+        }
+    }
+
+    pub(crate) async fn picture(
+        &mut self,
+        path: &str,
+        min: (u32, u32),
+    ) -> Result<Picture, Problem> {
         let path = clean_path(path)?;
         if let Some(p) = self.seen.get(&path) {
             inspect_dims(p, min)?;
@@ -432,7 +454,7 @@ pub enum Outcome {
 }
 
 /// The newest commit on the repository's default branch.
-async fn head_commit(state: &AppState, repo_path: &str) -> Result<String, Problem> {
+pub(crate) async fn head_commit(state: &AppState, repo_path: &str) -> Result<String, Problem> {
     #[derive(Deserialize)]
     struct Commit {
         sha: String,

@@ -13,6 +13,8 @@ import {
   type AppStage,
   type AppStatus,
   type MediaSet,
+  type PortfolioSet,
+  type RepoPicture,
   type ReviewNote,
 } from "../api";
 import { ItemThumb } from "../components/MediaEditor";
@@ -323,6 +325,54 @@ function QueueTab() {
         ))}
       </ul>
 
+      <h2 className="section-title">People portfolios to review ({q.portfolios.length})</h2>
+      <p className="muted small">
+        Creatives' portfolios from their GitHub repositories, fixed at a commit. A profile goes live with its first approved
+        portfolio. Look at every picture and listen to tracks: no sexually explicit content, and the work should match the
+        declared AI use.
+      </p>
+      {q.portfolios.length === 0 && <div className="empty-state">No portfolios waiting.</div>}
+      <ul className="release-list">
+        {q.portfolios.map((p) => (
+          <li key={p.set.id} className="panel panel-pad">
+            <div className="title-row spread">
+              <div className="title-row">
+                <Link to={`/people/${p.handle}`}>
+                  <b>{p.name}</b>
+                </Link>
+                <span className="muted">@{p.handle}</span>
+                <span className="badge neutral">AI: {p.ai_use.toUpperCase()}</span>
+                <span className="badge soon">{p.live ? "NEW PORTFOLIO" : "FIRST PORTFOLIO"}</span>
+              </div>
+              <span className="muted small">
+                <ExternalLink href={`${p.set.repo_url}/tree/${p.set.commit_sha}/.slop`}>
+                  <code>{p.set.commit_sha.slice(0, 7)}</code>
+                </ExternalLink>{" "}
+                · {formatDate(p.set.created_at)}
+              </span>
+            </div>
+            <PortfolioReview set={p.set} />
+            <Notes notes={p.notes} />
+            <div className="row-actions">
+              <button
+                className="btn slime small"
+                disabled={busy !== undefined}
+                onClick={() => void run(p.set.id, () => api.admin.approvePortfolio(p.set.id))}
+              >
+                {busy === p.set.id ? "Approving…" : "Approve portfolio"}
+              </button>
+              <ReasonButton
+                label="Turn down"
+                placeholder="What's wrong, shown to the creative"
+                danger
+                disabled={busy !== undefined}
+                onSubmit={(reason) => void run(p.set.id, () => api.admin.rejectPortfolio(p.set.id, reason))}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+
       <h2 className="section-title">Ready for the store ({q.ready_to_list.length})</h2>
       {q.ready_to_list.length === 0 && <div className="empty-state">No drafts are ready to list.</div>}
       <ul className="release-list">
@@ -535,6 +585,51 @@ function AuditTab() {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** Every work in a portfolio, large enough to judge; tracks play here, videos open on YouTube. */
+function PortfolioReview({ set }: { set: PortfolioSet }) {
+  return (
+    <div className="media-review">
+      {(
+        [
+          ["Avatar", set.avatar],
+          ["Banner", set.banner],
+        ] as Array<[string, RepoPicture | null]>
+      )
+        .flatMap(([label, pic]) => (pic ? [[label, pic] as const] : []))
+        .map(([label, pic]) => (
+          <figure key={label}>
+            <a href={pic.url} target="_blank" rel="noopener noreferrer">
+              <img src={pic.url} alt={label} />
+            </a>
+            <figcaption className="muted small">
+              {label} · {pic.width}×{pic.height}
+            </figcaption>
+          </figure>
+        ))}
+      {set.works.map((w, i) => (
+        <figure key={i}>
+          {w.kind === "image" ? (
+            <a href={w.url} target="_blank" rel="noopener noreferrer">
+              <img src={w.url} alt={w.title ?? `Work ${i + 1}`} />
+            </a>
+          ) : w.kind === "video" ? (
+            <ExternalLink href={`https://www.youtube.com/watch?v=${w.youtube_id}`}>{w.poster ? <img src={w.poster.url} alt="" /> : "▶ Watch on YouTube"}</ExternalLink>
+          ) : (
+            <>
+              {w.poster && <img src={w.poster.url} alt="" />}
+              <audio controls preload="none" src={w.audio.url} aria-label={w.title ?? `Track ${i + 1}`} />
+            </>
+          )}
+          <figcaption className="muted small">
+            {i + 1}. {w.title ?? w.kind} · {w.kind === "image" ? `${w.width}×${w.height}` : w.kind === "audio" ? w.audio.format : "YouTube"}
+            {w.caption && <div>“{w.caption}”</div>}
+          </figcaption>
+        </figure>
+      ))}
+    </div>
   );
 }
 

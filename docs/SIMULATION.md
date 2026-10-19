@@ -27,7 +27,22 @@ unweighted, over time) and **player counts** against a truth we know. The code i
 
   Player counts are recorded per 3 hours, busiest in the evening.
 
-The truth lives in `sim_users` and `sim_apps`. Only the report reads it; the real code never does.
+- **People** (`sim_people.rs`): 24 made-up creatives (artists, pixel artists, 3D modellers,
+  composers, sound designers, writers, voice actors, testers and studios, including two that
+  mostly generate their work with AI) plus 2 whose first portfolio waits for review. Each has a
+  hidden **quality** and **reliability**, a page with services, links and a portfolio (pictures
+  made on the spot; the sandbox has no audio files).
+  - About half the released apps' updates ship **hired work**: the update's true quality moves
+    with the creative's quality, and players vote on what they get.
+  - The makers hire for their apps in every state: requested, offered, waiting for payment, in
+    progress, delivered (some over 7 days ago, finished by the real auto-complete), completed
+    (some with the last half still owed), declined, cancelled and withdrawn.
+  - Payments go through the real `payment_succeeded_at`, marked **simulated**; credits come from
+    the real `maybe_credit`. Clients review most completed jobs, 👍 likelier the better the
+    creative.
+
+The truth lives in `sim_users`, `sim_apps` and `sim_creatives`. Only the report reads it; the real
+code never does.
 
 ## Running it
 
@@ -61,6 +76,12 @@ smaller simulation on every test run and checks the guarantees below.
 | `updates_moved_right_way` | After an update, the rating moved the way quality did | Most of `updates_checked` |
 | `rating_truth_correlation` | % Not Slop against true quality | Clearly positive |
 | `players_matching` | "Playing now" equals the live sessions made | All of `players_checked` |
+| `people.fees_not_5_percent` | Payments whose Slop fee isn't 5% | 0 |
+| `people.credit_rule_violations` | Jobs credited without being completed, fully paid and $10+, or the reverse | 0 |
+| `people.reviews_not_completed` / `reviews_not_by_client` | Reviews that shouldn't exist | 0 and 0 |
+| `people.overall_rating_untouched` | Badged apps whose rating is still every vote (HUM-13) | All of `badge_apps` |
+| `people.creative_rating_truth_correlation` | Creatives' % Not Slop against their true quality | Clearly positive; `no_ai_average_percent` above `heavy_ai_average_percent` |
+| `people.since_new_work_moved_right_way` | "Since the new work" moved the way the hired work moved quality, compared with the votes before | Most of `hired_updates_checked` |
 
 ## The sandbox site
 

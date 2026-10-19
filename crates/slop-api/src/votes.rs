@@ -151,6 +151,9 @@ pub struct Ratings {
     pub min_votes: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mine: Option<MyVote>,
+    /// For apps that hired creatives through People: the rating from votes since the first
+    /// release with their work (DESIGN §15.4). It never changes the rating above (HUM-13).
+    pub since_new_work: Option<crate::people::SinceNewWork>,
 }
 
 /// The current rating.
@@ -348,6 +351,7 @@ async fn load(state: &AppState, user: Option<&CurrentUser>, app_id: Uuid) -> Api
         open,
         min_votes: MIN_VOTES,
         mine,
+        since_new_work: crate::people::since_new_work(&state.db, app_id).await?,
     })
 }
 

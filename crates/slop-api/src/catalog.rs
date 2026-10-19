@@ -130,6 +130,7 @@ pub(crate) fn push_summary_columns_with(
                 (select case when count(*) >= 5 and sum(v.weight) > 0
                              then round(100 * coalesce(sum(v.weight) filter (where v.vote = 1), 0) / sum(v.weight))::int4 end
                  from votes v where v.app_id = a.id) as not_slop_percent,
+                exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null) as made_with_people,
                 (a.stage <> 'released' and a.last_commit_at is not null
                  and a.last_commit_at < now() - make_interval(days => ",
     )
@@ -164,6 +165,8 @@ pub struct AppSummary {
     pub vote_count: i64,
     /// Weighted % Not Slop; null below votes::MIN_VOTES.
     pub not_slop_percent: Option<i32>,
+    /// Has a completed, fully paid People job credited (DESIGN §15.4): the "Made with people" badge.
+    pub made_with_people: bool,
     /// No commits for a while in Coming soon or Beta. Shown, but never recommended.
     pub is_dead: bool,
     /// When a Coming soon or Beta app must reach its next stage. `None` once released.
@@ -194,6 +197,9 @@ struct ListQuery {
     category: Option<String>,
     stage: Option<AppStage>,
     kind: Option<AppKind>,
+    /// Only apps with the "Made with people" badge.
+    #[serde(default)]
+    made_with_people: bool,
     sort: Option<Sort>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -253,6 +259,9 @@ async fn list_apps(
     }
     if let Some(kind) = query.kind {
         qb.push(" and a.kind = ").push_bind(kind);
+    }
+    if query.made_with_people {
+        qb.push(" and exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null)");
     }
     match (
         query.sort.unwrap_or(if search.is_some() {
@@ -412,6 +421,8 @@ struct AppDetail {
     tag_details: Vec<TagRef>,
     /// Screenshots and videos, in the maker's order.
     gallery: Vec<crate::media::GalleryItem>,
+    /// Creatives credited through People jobs.
+    credits: Vec<crate::people::Credit>,
     is_mine: bool,
 }
 
@@ -500,6 +511,7 @@ async fn load_detail(
         last_commit_at: extra.last_commit_at,
         tag_details,
         gallery: crate::media::gallery(state, extra.id).await?,
+        credits: crate::people::credits(&state.db, extra.id).await?,
         is_mine,
     })
 }

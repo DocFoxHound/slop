@@ -10,7 +10,7 @@ Send your token with every request: `Authorization: Bearer slopadm_…`. Paths a
 {origin}. An unknown token, or a path you may not use, answers 404.
 
 - `GET /v1/admin/review`: everything waiting for a decision, oldest first.
-  - Add `?kind=release`, `change`, `media` or `listing` for one kind.
+  - Add `?kind=release`, `change`, `media`, `listing` or `portfolio` for one kind.
   - `can_decide` says whether your token may approve and reject. A `read` token may only leave
     notes.
   - Each item has:
@@ -109,6 +109,21 @@ can't change. It also has `width`, `height`, `format` and `sha256`.
 - Captions count as content too.
 - Pictures should show the app (screenshots, art, a logo or title), not unrelated material,
   advertising for something else, or text that breaks the rules above.
+
+### `portfolio`: a creative's People portfolio
+
+`detail.portfolio` is the new set and `detail.shown_now` what the profile shows today; `creative`
+says who it is and their declared AI use (`none`, `assisted`, `heavy`). A profile only goes live
+once its first portfolio is approved.
+
+- Open the `avatar`, the `banner` and **every** work: `image`s, the `poster` of each video and
+  track, and listen to `audio` files (`audio.url`) where you can. If you can't check one, leave an
+  `unsure` note naming it and don't approve.
+- The work should be the creative's own kind of work (art, music, writing samples, a showreel),
+  not unrelated material or advertising.
+- If the declared AI use is `none` but works look plainly machine-generated (for example
+  generator watermarks), leave a `concern` note rather than rejecting: a person decides.
+- Titles and captions count as content too.
 
 ### `listing`: putting an app in the store
 

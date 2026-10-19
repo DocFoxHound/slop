@@ -43,7 +43,7 @@
        ┌─────────────────────▼─────────────────────────────────┼──────────────────────┐
        │  Slop API: one modular application on the cloud container service, autoscaled  │
        │  Identity · Catalog · Publishing · Distribution · Library · Ratings · Pulse    │
-       │  Payment records · Humans · Teams · Chat (planned) · Moderation · Notify       │
+       │  Payment records · People · Teams · Chat (planned) · Moderation · Notify       │
        └──────┬───────────────────┬──────────────────────┬──────────────────┬──────────┘
               │                   │                      │                  │
        ┌──────▼──────┐    ┌───────▼───────┐       ┌──────▼──────┐    ┌──────▼──────┐
@@ -88,10 +88,10 @@
 | **Library** | Library, Interested, Private Slop sharing |
 | **Ratings** | Votes, weights, reviews, rollups (`METRICS.md`) |
 | **Pulse** | Launch tokens, heartbeats, live and peak counts (Postgres counters at first) |
-| **Payment records** | Mirror of Stripe charges, server donations, Humans payments (`PAYMENTS.md` §8) |
-| **Humans** | Profiles, quotes, Service Agreements, jobs, completion |
+| **Payment records** | Mirror of Stripe charges, server donations, People payments (`PAYMENTS.md` §8) |
+| **People** | Profiles, quotes, Service Agreements, jobs, completion |
 | **Teams** | Player teams, and official teams verified through GitHub organizations (`DESIGN.md` §14) |
-| **Chat** *(planned)* | Friends and direct messages, Humans conversations (`DESIGN.md` §19) |
+| **Chat** *(planned)* | Friends and direct messages, People conversations (`DESIGN.md` §19) |
 | **Moderation** | Reports, notice-and-action, statements of reasons, audit log (`LEGAL.md` §5) |
 | **Notify** | Email, push, in-app notifications |
 
@@ -196,7 +196,7 @@ yet (public repos only; detection uses the public API), and builds also run on `
 **Slop stores no builds and no source code** (decided 2026-10-17). Storing other people's software could be abused, and it costs money.
 - Builds live on the **maker's own release page**. GitHub Releases are free, with no limit on total size or bandwidth, but each file must be under 2 GiB.
 - **Files over 2 GiB** are split into parts by Slop Build. The client joins them back together and checks the hash of the whole.
-- **What Slop stores:** signed manifests, scan reports and hashes (a few KB per release), plus screenshots, store-page content and Humans portfolios.
+- **What Slop stores:** signed manifests, scan reports and hashes (a few KB per release), plus screenshots, store-page content and People portfolios.
 - **Integrity doesn't depend on where the file lives.** The client only installs a file whose hash matches the manifest Slop signed. If a release file is changed or replaced after scanning, installs **fail safely** and the app is flagged ("file changed after scan").
 - **Trade-offs:**
   - A maker can break their own app by deleting the release. The hash check keeps it safe, not available.
@@ -248,7 +248,7 @@ repository and commit, and checks the signed verdict.
 2. The automated scan pipeline and public reports. Ratings and Pulse.
 3. Donations and server donations (`PAYMENTS.md`).
 4. Branches and community builds. Teams. Private Slop with private repos.
-5. Humans and Humans payments. Chat.
+5. People and People payments. Chat.
 
 ## 9. Open questions
 1. **iOS:** whether to support it, and how (`DESIGN.md` §17).

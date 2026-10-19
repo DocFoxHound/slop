@@ -1,7 +1,7 @@
 import { describe, expect, it } from "vitest";
 
 import { query } from "./api";
-import { artFor, deadlineText } from "./format";
+import { artFor, deadlineText, money, toMinor } from "./format";
 
 const now = Date.parse("2026-10-18T12:00:00Z");
 
@@ -32,5 +32,20 @@ describe("query", () => {
   it("drops empty values and encodes the rest", () => {
     expect(query({ q: "a b&c", tag: undefined, stage: "", limit: 2 })).toBe("?q=a+b%26c&limit=2");
     expect(query({})).toBe("");
+  });
+});
+
+describe("money", () => {
+  it("formats like the server", () => {
+    expect(money(12001, "usd")).toBe("$120.01");
+    expect(money(12000, "usd")).toBe("$120");
+    expect(money(1234500, "gbp")).toBe("£12,345");
+    expect(money(950, "eur")).toBe("€9.50");
+  });
+  it("reads amounts people type", () => {
+    expect(toMinor("120")).toBe(12000);
+    expect(toMinor("$1,200.5")).toBe(120050);
+    expect(toMinor("12.345")).toBeNull();
+    expect(toMinor("ten")).toBeNull();
   });
 });

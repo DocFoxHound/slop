@@ -104,6 +104,28 @@ export function Search() {
   );
 }
 
+export function MadeWithPeople() {
+  useDocumentTitle("Made with people");
+  return (
+    <div className="page">
+      <div className="store">
+        <Sidebar />
+        <div>
+          <div className="crumbs">
+            <Link to="/">Store</Link> › Made with people
+          </div>
+          <h1 className="page-title">✋ Made with people</h1>
+          <p className="muted">
+            Apps whose makers hired artists, composers, writers and other creatives through <Link to="/people">People</Link>. Their pages
+            credit who made what.
+          </p>
+          <AppGrid base={{ made_with_people: true }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
 export function Upcoming() {
   useDocumentTitle("Coming soon & beta");
   const [params, setParams] = useSearchParams();

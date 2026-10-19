@@ -47,6 +47,8 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/changes/{id}/reject", post(reject_change))
         .route("/admin/media/{id}/approve", post(approve_media))
         .route("/admin/media/{id}/reject", post(reject_media))
+        .route("/admin/portfolio/{id}/approve", post(approve_portfolio))
+        .route("/admin/portfolio/{id}/reject", post(reject_portfolio))
 }
 
 /// A signed-in admin, or an admin's API token. Anyone else gets 404, so the admin API can't be
@@ -178,6 +180,8 @@ struct Queue {
     changes: Vec<QueuedChange>,
     /// New store-page pictures; oldest first.
     media: Vec<QueuedMedia>,
+    /// New People portfolios; oldest first. A profile goes live with its first approved one.
+    portfolios: Vec<crate::people::portfolio::QueuedPortfolio>,
     /// Drafts that could go in the store: Coming soon pages, or apps with an approved release.
     ready_to_list: Vec<ReadyApp>,
     checks: ServerChecks,
@@ -260,6 +264,7 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         releases,
         changes,
         media,
+        portfolios: crate::people::portfolio::queued(&state).await?,
         ready_to_list,
         checks: ServerChecks {
             scanning: cfg.scanner.is_on(),
@@ -550,6 +555,31 @@ async fn reject_media(
 ) -> ApiResult<StatusCode> {
     admin.may_decide()?;
     media::reject_set(&state.db, id, &admin.actor, &body.reason)
+        .await
+        .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn approve_portfolio(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
+    crate::people::portfolio::approve_set(&state.db, id, &admin.actor)
+        .await
+        .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn reject_portfolio(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(id): Path<Uuid>,
+    Json(body): Json<Reason>,
+) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
+    crate::people::portfolio::reject_set(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
     Ok(StatusCode::NO_CONTENT)

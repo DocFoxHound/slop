@@ -90,6 +90,25 @@ polls on the shared `GITHUB_TOKEN`, which runs out at around 800 watched apps.
 
 Makers see an **Install on GitHub** link in their app's **Updates** box once it's configured.
 
+## People payments (Stripe Connect)
+
+Until Stripe keys are set, People works (profiles, portfolios, requests and offers) but nobody can
+be paid, so nobody can be hired; pages say "Payments aren't switched on yet". The sandbox
+simulates payments instead.
+
+1. In Stripe: turn on **Connect** for the platform account (the creatives' accounts are their
+   own, with the full Stripe dashboard; Stripe carries losses).
+2. **Developers → Webhooks → Add endpoint** on **connected accounts**:
+   `https://<site>/v1/stripe/webhook`, events `checkout.session.completed`,
+   `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.created`,
+   `account.updated`.
+3. Add to `~/.config/slop/slop-api.env` and restart:
+   ```
+   STRIPE_SECRET_KEY=sk_test_…   # sk_live_… only after the lawyer's review (LEGAL §4)
+   STRIPE_WEBHOOK_SECRET=whsec_…
+   ```
+4. Before live keys: DAC7 and HMRC platform-reporting registration (LEGAL-GUIDANCE §16 checklist).
+
 ## Setting it up again
 
 ```sh

@@ -1,7 +1,7 @@
-# Slop — Money: Donations & Humans Payments
+# Slop — Money: Donations & People Payments
 
 **Status:** Draft · companion to [`DESIGN.md`](DESIGN.md) §12 and §15
-**Last updated:** 2026-10-17
+**Last updated:** 2026-10-19
 **Related:** [`LEGAL.md`](LEGAL.md) (legal positions behind every rule here) · [`SECURITY.md`](SECURITY.md) §9 · [`METRICS.md`](METRICS.md)
 
 > Wherever this document says "must" or "never", the reason is usually a legal position in `LEGAL.md`. Check there before changing it.
@@ -12,7 +12,7 @@
 
 1. **Slop never holds money.** Every payment goes straight into the **maker's or creative's own Stripe account**. Slop receives only its own 5% platform fee (`LEGAL.md` §3.1).
 2. **Donations aren't purchases.** Nothing is unlocked or given in return, and apps can't tell who donated (`LEGAL.md` §3.2).
-3. **Humans is the only sale.** It's a creative selling services to a client, and Slop isn't a party to it (`LEGAL.md` §4).
+3. **People is the only sale.** It's a creative selling services to a client, and Slop isn't a party to it (`LEGAL.md` §4).
 4. **Donors pay the card fees.** The total is shown before paying (`LEGAL.md` §3.4).
 5. **No card data at Slop.** Stripe Checkout/Elements only.
 
@@ -22,7 +22,7 @@
 |---|---|---|---|---|
 | **Donation** (one-off) | Donor | Maker's Stripe account | 5% of the donation (**VAT included** where due, paid out of Slop's 5%, never added to the donation; `LEGAL.md` §3.5) | Final. The maker may refund mistakes. |
 | **Server donation** (monthly) | Donor | Maker's Stripe account | 5% of each payment | Cancel any time. Past payments are final. |
-| **Humans job** | Client | Creative's Stripe account | 5% of the job price | Issued by the creative. Otherwise the client goes to their card issuer. |
+| **People job** (one or two payments) | Client (the maker) | Creative's Stripe account | 5% of each payment, from what the creative receives | Issued by the creative. Otherwise the client goes to their card issuer. |
 
 **Not offered:** wallets/top-ups, store credit, gift cards, escrow, payouts made by Slop, splitting a payment between accounts, or **in-app purchases** of any kind (decided 2026-10-17).
 
@@ -84,22 +84,37 @@ A community build has **its own** Donate button for the branch author's own Stri
 - **Servers are never tied to donating.** If the maker marks the servers as shut down, all server donations to that app are cancelled automatically and donors are emailed.
 - Receipts for every payment. An email reminder before the first renewal.
 
-## 7. Humans payments
+## 7. People payments
 
-- The creative sends a **quote**: scope, price, when payment is due (up front, on delivery, or per milestone), delivery date, and the default Service Agreement, which can be edited (`LEGAL.md` §4.1).
-- The client accepts and pays when payment is due: a **direct charge on the creative's Stripe account** with a 5% application fee. Fees and the total are shown before paying.
-- The payment page says: "Your contract is with @creative. Slop doesn't settle disputes."
-- **Completion:** after delivery the client has **7 days** to mark the job complete. Otherwise it's completed automatically, and the client can then vote 👍/👎.
-- **Refunds:** the creative issues them from their dashboard (full or partial). **Slop doesn't decide disputes.** If the creative refuses, the client's option is a chargeback through their card issuer. That goes against the creative's Stripe account.
+**Decided 2026-10-19.** Simple for both sides: the maker sees one price and pays it; the creative sees what they'll receive.
+
+- **One price.** The creative's quoted price is what the maker pays, in full, with nothing added at checkout (PAY-10). Prices are in USD, EUR or GBP, from **$10 to $10,000** per job (fraud limits, §9).
+- **Who pays what:**
+  ```
+  price P (what the maker pays) · Slop fee = 5% of P (VAT included, LEGAL.md §3.5)
+  creative receives P − 5% − Stripe's card fee (Stripe takes it from the creative's account)
+  ```
+  The offer form shows the creative "You'll receive about $X" before they send it. The maker never sees a fee added.
+- **When it's paid** (the creative picks; the default is the middle one):
+  - **All up front** — one payment when the maker accepts.
+  - **Half now, half on delivery** (default) — the first half (rounded up to the cent) on accepting, the rest when the maker says the work looks good.
+  - **All on delivery** — one payment at the end.
+- **Each payment is a direct charge** on the creative's Stripe account through Stripe Checkout, with `application_fee_amount` = 5% of that payment. **No escrow:** Slop can't hold the money until delivery (`LEGAL-GUIDANCE.md` §2), so the split is how the risk is shared. The payment page never promises protection Slop can't give.
+- **The payment page says:** "Your contract is with @creative, not Slop. Slop doesn't settle disputes. Your rights are against @creative." (HUM-5)
+- **Work starts** when the first payment succeeds (straight away for "all on delivery").
+- **Completion:** after delivery the maker has **7 days** to press "Looks good" or ask for a revision. Otherwise the job completes automatically. If a final payment is still unpaid then, it stays **owed** on the job page; the credit and badge (`DESIGN.md` §15.4) wait until it's paid.
+- **Refunds:** the creative issues them from their Stripe dashboard (full or partial). Slop records them from Stripe's webhooks. **Slop doesn't decide disputes.** If the creative refuses, the maker's option is a chargeback through their card issuer, which goes against the creative's Stripe account.
+- **Cancelling:** before acceptance either side can decline for free. After acceptance the creative can cancel (refunding what's fair from Stripe). EU/UK consumers hiring a trader can **withdraw** within 14 days (HUM-2, HUM-3).
 - **Slop acts only on rule-breaking** (scams, fraud, repeated non-delivery). Possible actions: warning, suspension, removal.
-- **Tax reporting:** creatives with EU links give DAC7 details during onboarding (`LEGAL.md` §4.3).
+- **Tax reporting:** creatives with EU links give DAC7 details during onboarding (`LEGAL.md` §4.3). Stripe's onboarding collects identity and bank details; Slop stores only the account ID and status.
+- **Without Stripe configured** (development, the simulation sandbox) the job flow works and payments are marked **simulated**. Production never offers simulated payments.
 
 ## 8. Records (no ledger of balances)
 
 Slop holds no balances, so it doesn't need a double-entry ledger. It keeps a **record of payments** that mirrors Stripe:
 
 ```
-payments(id, kind,                  -- donation | server_donation | humans_job | refund
+payments(id, kind,                  -- donation | server_donation | people_job | refund
          stripe_account_id,         -- recipient (maker/creative)
          stripe_charge_id UNIQUE, payer_account_id, app_id NULL, job_id NULL,
          amount_total_minor, donation_minor, slop_fee_minor, card_fee_minor, currency,
@@ -120,11 +135,13 @@ payments(id, kind,                  -- donation | server_donation | humans_job |
 | **Card testing** (stolen cards tried with small donations) | Stripe Radar, sign-in required to donate, a $1 minimum, rate limits per account/IP/card, CAPTCHA after failures |
 | **Cashing out stolen cards through your own app** | Stripe's KYC and risk checks on the maker's account, and payout timing set by Stripe. Slop flags donation spikes from new accounts or many countries and can disable donations on an app. |
 | **Hijacked maker account** | Bank details are managed in the maker's **Stripe** dashboard, not in Slop, so taking over a Slop account doesn't redirect money. Disconnecting or switching the Stripe account requires step-up auth and a 72-hour delay, and an email is sent (`SECURITY.md` §9). |
-| **Self-dealing Humans jobs** | Client and creative can't share payment methods, devices or Stripe accounts. Checks for money going round in loops. |
+| **Self-dealing People jobs** | Client and creative can't share payment methods, devices or Stripe accounts. Checks for money going round in loops. |
 
 ## 10. What the mockup simulates
 
-The mockup's Donate button (with the donor-pays-fees breakdown) and Humans quotes are pure UI. No Stripe, payments or records exist.
+The mockup's Donate button (with the donor-pays-fees breakdown) is pure UI.
+
+**Built (2026-10-19):** People payments (`crates/slop-api/src/people/`): Stripe Connect onboarding, Checkout for each job payment as a direct charge with the 5% application fee, signed webhooks, and the `payments` record (§8). Donations aren't built yet.
 
 ## 11. Open questions
 1. **iOS:** whether, and how, donations work in an iOS app (`DESIGN.md` §17).

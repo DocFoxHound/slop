@@ -27,6 +27,13 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Review decisions | `audit_log` | Record of review and moderation decisions | Legal obligation | 6 years (LEGAL-GUIDANCE §15) |
 | Review notes (author's name) | `review_notes` | Reviewers' findings on items waiting for a decision | Legitimate interest (moderation) | With the item they're about |
 | Admin API tokens (hashed token, name, last use) | `admin_tokens` | AI reviewers acting for an admin; showing which tokens are in use | Legitimate interest (moderation) | Until revoked or expired, then removable |
+| 18+ confirmation for People | `users.adult_confirmed_at` | Selling or hiring needs adults (LEGAL §6); no date of birth | Legal obligation / contract | Life of account |
+| Creative profile (name, headline, about, optional location, links, trader declaration, AI-use disclosure) | `creatives` | The public People page; trader status shown to clients (CRD Art. 6a, HUM-1) | Contract; legal obligation (trader declaration) | Life of the profile |
+| Stripe account ID and status | `creatives.stripe_account_id`, `stripe_status` | Paying the creative directly (PAYMENTS §3). Identity, tax and bank details stay at Stripe | Contract; legal obligation (DAC7 through Stripe) | Life of the profile + 6 years |
+| Portfolio links (files stay in the creative's repository) | `portfolio_sets` | Showing reviewed work on the People page | Contract | Life of the profile |
+| Jobs: request, offer, agreed Service Agreement, steps and their notes, delivery links | `jobs`, `job_events` | The contract record between creative and client (HUM-16, HUM-17) | Contract; legal obligation (records) | Life of the account + 6 years |
+| People payments and refunds (payer, amounts, fee, Stripe IDs) | `job_payments`, `payments`, `stripe_events` | Mirror of Stripe charges, reconciliation, fraud checks (PAYMENTS §8–9) | Contract; legal obligation (accounting) | 6 years (tax and accounting) |
+| Reviews of creatives and replies | `creative_reviews` | Verified-client ratings on People pages (LEGAL §4.5) | Legitimate interest (right to object, GDPR Art. 21) | Life of the profile; removed with the reviewer's account |
 
 **Not collected:** passwords, provider access tokens (used once at sign-in, never stored), date
 of birth, IP addresses in the database.
