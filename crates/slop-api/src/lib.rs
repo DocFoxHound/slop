@@ -139,6 +139,15 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
                 )),
         )
         .merge(
+            people::jobs::evidence_routes()
+                .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))
+                .layer(RequestBodyLimitLayer::new(2 * 1024 * 1024))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(20),
+                )),
+        )
+        .merge(
             desktop_updates::upload_routes()
                 .layer(axum::extract::DefaultBodyLimit::disable())
                 .layer(RequestBodyLimitLayer::new(desktop_updates::MAX_BUILD_BYTES))

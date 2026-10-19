@@ -264,16 +264,18 @@ async fn add_note(
     Path((kind, id)): Path<(String, Uuid)>,
     Json(body): Json<NewNote>,
 ) -> ApiResult<(StatusCode, Json<Note>)> {
-    let table = match kind.as_str() {
-        "release" => "releases",
-        "change" => "app_changes",
-        "media" => "media_sets",
-        "listing" => "apps",
-        "portfolio" => "portfolio_sets",
+    let (table, column) = match kind.as_str() {
+        "release" => ("releases", "id"),
+        "change" => ("app_changes", "id"),
+        "media" => ("media_sets", "id"),
+        "listing" => ("apps", "id"),
+        "portfolio" => ("portfolio_sets", "id"),
+        "problem" => ("job_problems", "id"),
+        "review_dispute" => ("review_disputes", "job_id"),
         _ => return Err(ApiError::NotFound),
     };
     let exists: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select exists (select 1 from {table} where id = $1)"
+        "select exists (select 1 from {table} where {column} = $1)"
     )))
     .bind(id)
     .fetch_one(&state.db)
@@ -411,7 +413,7 @@ struct Feed {
 
 #[derive(Deserialize)]
 struct FeedQuery {
-    /// Only this kind: release, change, media, listing or portfolio.
+    /// Only this kind: release, change, media, listing, portfolio, problem or review_dispute.
     kind: Option<String>,
 }
 
@@ -590,6 +592,64 @@ async fn feed(
                     "/v1/admin/portfolio/{id}/reject"
                 ))),
                 note: note_action("portfolio", id),
+            });
+        }
+    }
+
+    if want("problem") {
+        for p in crate::people::mediation::queued_problems(&state.db).await? {
+            let id = p.id;
+            let waiting_since = p.created_at;
+            items.push(Item {
+                kind: "problem",
+                id,
+                question: format!(
+                    "Suggest a fair outcome for the problem on \"{}\" ({} and {})? Suggestions don't bind anyone.",
+                    p.title, p.creative, p.client
+                ),
+                waiting_since,
+                app: None,
+                creative: Some(json!({ "name": p.creative, "record": format!("/v1/admin/jobs/{}/record", p.job_id) })),
+                detail: serde_json::to_value(&p).map_err(anyhow::Error::from)?,
+                notes: p.notes,
+                approve: Action {
+                    method: "POST",
+                    path: format!("/v1/admin/problems/{id}/suggest"),
+                    body: Some(json!({ "suggestion": "<a fair outcome, citing the agreement and record>" })),
+                },
+                reject: Some(Action {
+                    method: "POST",
+                    path: format!("/v1/admin/problems/{id}/close"),
+                    body: Some(json!({ "note": "<why it's closed unresolved>" })),
+                }),
+                note: note_action("problem", id),
+            });
+        }
+    }
+
+    if want("review_dispute") {
+        for d in crate::people::mediation::queued_disputes(&state.db).await? {
+            let id = d.job_id;
+            let waiting_since = d.created_at;
+            items.push(Item {
+                kind: "review_dispute",
+                id,
+                question: format!(
+                    "{} disputes a review by {}: \"{}\". Remove it, keep it with a factual note, or keep it?",
+                    d.creative, d.client, d.reason_text
+                ),
+                waiting_since,
+                app: None,
+                creative: Some(json!({ "handle": d.creative_handle, "record": format!("/v1/admin/jobs/{id}/record") })),
+                detail: serde_json::to_value(&d).map_err(anyhow::Error::from)?,
+                notes: d.notes,
+                approve: Action {
+                    method: "POST",
+                    path: format!("/v1/admin/review-disputes/{id}/decide"),
+                    body: Some(json!({ "outcome": "remove | note | keep", "reason": "<shown to both>", "note": "<for note: the facts from the record>" })),
+                },
+                reject: None,
+                note: note_action("review_dispute", id),
             });
         }
     }

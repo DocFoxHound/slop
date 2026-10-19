@@ -4519,6 +4519,12 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
     assert!(p.completed_automatically > 0, "{p:#?}");
     assert_eq!((p.reviews_not_completed, p.reviews_not_by_client), (0, 0));
     assert_eq!(p.overall_rating_untouched, p.badge_apps);
+    // Mediation and conversations, through the real code.
+    assert_eq!(p.conversations_failing_verification, 0, "{p:#?}");
+    assert!(p.conversations_verified > 0, "{p:#?}");
+    assert_eq!(p.final_files_before_payment, 0, "{p:#?}");
+    assert_eq!(p.hidden_reviews_counted, 0, "{p:#?}");
+    assert!(p.messages > 0 && p.inquiries > 0, "{p:#?}");
     // Too few reviews per creative at this size to score ratings; the sandbox report does.
     assert!(p.reviews > 30, "{p:#?}");
 }
@@ -4798,386 +4804,544 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
     // A consumer in Germany hiring a trader: the withdrawal right applies.
     let (client, client_cookie) = app.user("Tavern Dev", "DE").await;
     let (_, stranger) = app.user("Stranger", "US").await;
+    let (_, admin_cookie) = make_admin(&app, "Mediator").await;
     listed_with(&app, client, "tiny-tavern", "released", "").await;
     listed_with(&app, creative, "veras-own", "released", "").await;
+    let post =
+        |path: String, cookie: &str, body: Value| req(Method::POST, path).cookie(cookie).json(body);
 
-    // The project must be the client's own; adults only.
-    let hire = |slug: &str, adult: bool| json!({ "app_slug": slug, "skill": "pixel-art", "request_md": "A knight, please.", "confirm_adult": adult });
+    // The request: the client's own project, adults only, and the exact-wording warning.
+    let hire = |slug: &str, ack: bool, inquiry: bool| {
+        json!({ "app_slug": slug, "skill": "pixel-art", "request_md": "A knight, 4 directions, 32×32.",
+                "confirm_adult": true, "exact_wording_ack": ack, "inquiry": inquiry })
+    };
     let res = app
-        .send(
-            req(Method::POST, "/v1/people/vera/hire")
-                .cookie(&client_cookie)
-                .json(hire("tiny-tavern", false)),
-        )
+        .send(post(
+            "/v1/people/vera/hire".into(),
+            &client_cookie,
+            hire("tiny-tavern", false, true),
+        ))
         .await;
-    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "the exact-wording box is required"
+    );
     let res = app
-        .send(
-            req(Method::POST, "/v1/people/vera/hire")
-                .cookie(&client_cookie)
-                .json(hire("veras-own", true)),
-        )
+        .send(post(
+            "/v1/people/vera/hire".into(),
+            &client_cookie,
+            hire("veras-own", true, true),
+        ))
         .await;
-    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "not their project"
+    );
     let res = app
-        .send(
-            req(Method::POST, "/v1/people/vera/hire")
-                .cookie(&creative_cookie)
-                .json(hire("veras-own", true)),
-        )
+        .send(post(
+            "/v1/people/vera/hire".into(),
+            &creative_cookie,
+            hire("veras-own", true, true),
+        ))
         .await;
     assert_eq!(res.status(), StatusCode::CONFLICT, "can't hire yourself");
-    let res = app
-        .send(
-            req(Method::POST, "/v1/people/vera/hire")
-                .cookie(&client_cookie)
-                .json(hire("tiny-tavern", true)),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::OK);
-    let job = body_json(res).await;
+    let job = body_json(
+        app.send(post(
+            "/v1/people/vera/hire".into(),
+            &client_cookie,
+            hire("tiny-tavern", true, true),
+        ))
+        .await,
+    )
+    .await;
     let id = job["id"].as_str().unwrap().to_string();
-    assert_eq!(job["status"], "requested");
-    assert_eq!(job["actions"], json!(["decline"]));
     let url = |step: &str| format!("/v1/jobs/{id}/{step}");
-
-    // Only the two sides can see it.
+    assert_eq!(job["inquiry"], true);
+    assert!(
+        job["conversation"]["requested_at"].is_string(),
+        "an inquiry asks for a conversation"
+    );
+    assert!(
+        !job["actions"]
+            .as_array()
+            .unwrap()
+            .contains(&json!("message"))
+    );
     assert_eq!(
         app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&stranger))
             .await
             .status(),
         StatusCode::NOT_FOUND
     );
+
+    // Conversations: the creative opens them; both acknowledge they're recorded.
+    assert_eq!(
+        app.send(post(url("conversation/open"), &client_cookie, json!({})))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(post(
+            url("messages"),
+            &client_cookie,
+            json!({ "body": "hello?" })
+        ))
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
     let mine = body_json(
         app.send(req(Method::GET, "/v1/me/jobs").cookie(&creative_cookie))
             .await,
     )
     .await;
-    assert_eq!(mine["as_creative"][0]["needs_you"], true);
-    assert_eq!(mine["waiting_on_you"], 1);
-
-    // The creative offers; the client can't, and bad offers are refused.
-    assert_eq!(
-        app.send(
-            req(Method::POST, url("offer"))
-                .cookie(&client_cookie)
-                .json(sprite_offer("split"))
-        )
-        .await
-        .status(),
-        StatusCode::CONFLICT
-    );
-    let mut bad = sprite_offer("split");
-    bad["price_minor"] = json!(500);
-    assert_eq!(
-        app.send(
-            req(Method::POST, url("offer"))
-                .cookie(&creative_cookie)
-                .json(bad)
-        )
-        .await
-        .status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
+    assert_eq!(mine["as_creative"][0]["conversation_requested"], true);
     let job = body_json(
-        app.send(
-            req(Method::POST, url("offer"))
-                .cookie(&creative_cookie)
-                .json(sprite_offer("split")),
-        )
-        .await,
+        app.send(post(url("conversation/open"), &creative_cookie, json!({})))
+            .await,
     )
     .await;
-    assert_eq!(job["creative_receives_minor"], 12001 - 600);
-    // The client sees the plain summary and the agreement they'd accept.
+    assert_eq!(job["conversation"]["open"], true);
+    assert!(
+        job["conversation"]["notice"]
+            .as_str()
+            .unwrap()
+            .contains("recorded")
+    );
+    let res = app
+        .send(post(
+            url("messages"),
+            &creative_cookie,
+            json!({ "body": "Which engine?" }),
+        ))
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "must acknowledge the recording"
+    );
+    app.send(post(
+        url("messages"),
+        &creative_cookie,
+        json!({ "body": "Which engine?", "recording_ack": true }),
+    ))
+    .await;
+    app.send(post(
+        url("messages"),
+        &client_cookie,
+        json!({ "body": "Godot, transparent PNGs.", "recording_ack": true }),
+    ))
+    .await;
+    assert_eq!(
+        app.send(post(
+            url("messages"),
+            &stranger,
+            json!({ "body": "hi", "recording_ack": true })
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let job = body_json(
+        app.send(post(url("conversation/close"), &creative_cookie, json!({})))
+            .await,
+    )
+    .await;
+    assert_eq!(job["conversation"]["messages"].as_array().unwrap().len(), 2);
+    assert!(job["conversation"]["text_deleted_after"].is_string());
+    // Each side downloads its own copy; the fingerprints chain.
+    let res = app
+        .send(req(Method::GET, url("conversation")).cookie(&client_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let copy = body_json(res).await;
+    assert_eq!(copy["messages"][1]["body"], "Godot, transparent PNGs.");
+
+    // The offer, with a sign-off; accepting asks for the exact-wording box again.
+    let mut o = sprite_offer("split");
+    o["sign_off"] = json!(true);
+    app.send(post(url("offer"), &creative_cookie, o)).await;
     let job = body_json(
         app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&client_cookie))
             .await,
     )
     .await;
-    assert_eq!(job["status"], "offered");
     assert!(
         job["summary"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|l| l == "Payment: $60.01 when you accept, $60 when the work is delivered")
+            .any(|l| l.as_str().unwrap().contains("exactly as written"))
     );
     assert!(
         job["agreement"]["text"]
             .as_str()
             .unwrap()
-            .contains("within 14 days")
+            .contains("nothing more and nothing less")
     );
-    assert_eq!(job["agreement"]["sha256"], Value::Null);
-    assert_eq!(
-        job["creative_receives_minor"],
-        Value::Null,
-        "that's for the creative"
-    );
-
-    // Asking for changes sends it back; the new offer must be the one accepted.
+    assert_eq!(job["withdrawal_days"], 14);
     let res = app
-        .send(
-            req(Method::POST, url("changes"))
-                .cookie(&client_cookie)
-                .json(json!({ "note": "Could it be 2 revisions?" })),
-        )
+        .send(post(
+            url("accept"),
+            &client_cookie,
+            json!({ "offer_count": 1 }),
+        ))
         .await;
-    assert_eq!(body_json(res).await["status"], "requested");
-    let mut o = sprite_offer("split");
-    o["revisions"] = json!(2);
-    app.send(
-        req(Method::POST, url("offer"))
-            .cookie(&creative_cookie)
-            .json(o),
-    )
-    .await;
-    let res = app
-        .send(
-            req(Method::POST, url("accept"))
-                .cookie(&client_cookie)
-                .json(json!({ "offer_count": 1 })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     let job = body_json(
-        app.send(
-            req(Method::POST, url("accept"))
-                .cookie(&client_cookie)
-                .json(json!({ "offer_count": 2, "start_now": true })),
-        )
+        app.send(post(
+            url("accept"),
+            &client_cookie,
+            json!({ "offer_count": 1, "exact_terms_ack": true, "start_now": true }),
+        ))
         .await,
     )
     .await;
     assert_eq!(job["status"], "awaiting_payment");
-    assert_eq!(job["agreement"]["sha256"].as_str().unwrap().len(), 64);
-    assert_eq!(job["withdrawal"]["open"], true);
-    assert_eq!(job["withdrawal"]["started_early"], true);
-    assert!(
-        job["actions"]
-            .as_array()
-            .unwrap()
-            .contains(&json!("withdraw"))
-    );
-    assert_eq!(job["payments"][0]["status"], "due");
-    assert_eq!(job["payments"][1]["status"], "waiting");
-
-    // The first half (simulated here) starts the work. Slop's fee is 5% of it.
-    let paid = body_json(
-        app.send(req(Method::POST, url("pay")).cookie(&client_cookie))
-            .await,
-    )
-    .await;
-    assert_eq!(paid["url"], Value::Null);
+    let paid = body_json(app.send(post(url("pay"), &client_cookie, json!({}))).await).await;
     assert_eq!(paid["job"]["status"], "in_progress");
-    assert_eq!(paid["job"]["paid_minor"], 6001);
-    let fee: i32 =
-        sqlx::query_scalar("select slop_fee_minor from payments where kind = 'people_job'")
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert_eq!(fee, 300);
-    assert_eq!(
-        app.send(req(Method::POST, url("pay")).cookie(&client_cookie))
-            .await
-            .status(),
-        StatusCode::CONFLICT,
-        "nothing due"
-    );
 
-    // Delivered: the rest is due; "looks good" means paying it.
+    // Sign-off first; a change while waiting is new work with its own price and date.
     assert_eq!(
-        app.send(
-            req(Method::POST, url("deliver"))
-                .cookie(&client_cookie)
-                .json(json!({ "note": "x" }))
-        )
+        app.send(post(
+            url("deliver"),
+            &creative_cookie,
+            json!({ "note": "x" })
+        ))
         .await
         .status(),
         StatusCode::CONFLICT
     );
     let job = body_json(
-        app.send(
-            req(Method::POST, url("deliver"))
-                .cookie(&creative_cookie)
-                .json(json!({ "note": "Here!", "links": ["https://drive.example/knight.zip"] })),
-        )
+        app.send(post(
+            url("sign-off/send"),
+            &creative_cookie,
+            json!({ "links": ["https://drive.example/sketch.png"] }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(job["status"], "awaiting_sign_off");
+    let job = body_json(
+        app.send(post(
+            url("change/request"),
+            &client_cookie,
+            json!({ "note": "Could the knight also run?" }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(job["changes"][0]["status"], "requested");
+    assert_eq!(
+        app.send(post(
+            url("change/request"),
+            &client_cookie,
+            json!({ "note": "And jump?" })
+        ))
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    let due = (OffsetDateTime::now_utc().date() + time::Duration::days(30)).to_string();
+    let job = body_json(app.send(post(url("change/offer"), &creative_cookie, json!({
+        "title": "Add a running animation", "scope_md": "8 frames, 4 directions.", "extra_price_minor": 4000, "new_due_date": due
+    }))).await).await;
+    assert_eq!(job["changes"][0]["status"], "offered");
+    assert_eq!(
+        app.send(post(
+            url("change/accept"),
+            &client_cookie,
+            json!({ "number": 1 })
+        ))
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let job = body_json(
+        app.send(post(
+            url("change/accept"),
+            &client_cookie,
+            json!({ "number": 1, "exact_terms_ack": true }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(
+        job["status"], "awaiting_payment",
+        "the change's price is due now"
+    );
+    assert_eq!(job["due_date"], due);
+    assert!(
+        job["changes"][0]["text"]
+            .as_str()
+            .unwrap()
+            .starts_with("# Change to Agreement 1")
+    );
+    assert_eq!(job["changes"][0]["sha256"].as_str().unwrap().len(), 64);
+    let paid = body_json(app.send(post(url("pay"), &client_cookie, json!({}))).await).await;
+    assert_eq!(paid["job"]["status"], "in_progress");
+    app.send(post(
+        url("sign-off/send"),
+        &creative_cookie,
+        json!({ "links": ["https://drive.example/sketch2.png"] }),
+    ))
+    .await;
+    let job = body_json(
+        app.send(post(url("sign-off"), &client_cookie, json!({})))
+            .await,
+    )
+    .await;
+    assert!(job["signed_off_at"].is_string());
+
+    // The delivery is a preview while money is owed; paying it accepts, then the final files.
+    let job = body_json(
+        app.send(post(
+            url("deliver"),
+            &creative_cookie,
+            json!({ "links": ["https://drive.example/preview.zip"] }),
+        ))
         .await,
     )
     .await;
     assert_eq!(job["status"], "delivered");
-    let job = body_json(
-        app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&client_cookie))
-            .await,
-    )
-    .await;
-    assert_eq!(job["actions"], json!(["pay", "revision", "withdraw"]));
-    assert!(job["auto_complete_at"].is_string());
+    assert!(
+        job["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "delivered_preview")
+    );
     assert_eq!(
-        app.send(req(Method::POST, url("complete")).cookie(&client_cookie))
+        app.send(post(url("accept-delivery"), &client_cookie, json!({})))
             .await
             .status(),
         StatusCode::CONFLICT
     );
+    let paid = body_json(app.send(post(url("pay"), &client_cookie, json!({}))).await).await;
+    assert_eq!(paid["job"]["status"], "final_files");
+    assert_eq!(paid["job"]["credited"], false, "not until the final files");
     let job = body_json(
-        app.send(
-            req(Method::POST, url("revision"))
-                .cookie(&client_cookie)
-                .json(json!({ "note": "Bigger sword" })),
-        )
+        app.send(post(
+            url("final-files"),
+            &creative_cookie,
+            json!({ "links": ["https://drive.example/final.zip"] }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(job["status"], "completed");
+    assert_eq!(job["credited"], true);
+    assert_eq!(job["paid_minor"], 12001 + 4000);
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tiny-tavern")).await).await;
+    assert_eq!(page["made_with_people"], true);
+    assert_eq!(page["credits"][0]["handle"], "vera");
+
+    // The record has it all, for both sides.
+    let res = app
+        .send(req(Method::GET, url("record")).cookie(&creative_cookie))
+        .await;
+    let record =
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(record.contains("## Service Agreement"));
+    assert!(record.contains("# Change to Agreement 1"));
+    assert!(record.contains("Godot, transparent PNGs."));
+
+    // A problem: the copy of the conversation is checked against the fingerprints.
+    let job = body_json(
+        app.send(post(
+            url("problem"),
+            &client_cookie,
+            json!({ "statement": "One frame is missing from the run cycle." }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(job["problem"]["status"], "open");
+    let checked = body_json(
+        app.send(post(
+            url("evidence"),
+            &client_cookie,
+            json!({ "copy": copy.clone() }),
+        ))
         .await,
     )
     .await;
     assert_eq!(
-        (job["status"].as_str(), job["revisions_left"].as_i64()),
-        (Some("in_progress"), Some(1))
+        (
+            checked["verified_messages"].as_i64(),
+            checked["unverified_messages"].as_i64()
+        ),
+        (Some(2), Some(0))
     );
-    assert_eq!(job["payments"][1]["status"], "waiting");
-    app.send(
-        req(Method::POST, url("deliver"))
-            .cookie(&creative_cookie)
-            .json(json!({ "links": ["https://drive.example/knight2.zip"] })),
+    let mut forged = copy.clone();
+    forged["messages"][1]["body"] = json!("Unity, and also a free boss sprite.");
+    let checked = body_json(
+        app.send(post(
+            url("evidence"),
+            &creative_cookie,
+            json!({ "copy": forged }),
+        ))
+        .await,
     )
     .await;
-    let paid = body_json(
-        app.send(req(Method::POST, url("pay")).cookie(&client_cookie))
+    assert_eq!(checked["unverified_messages"], 1);
+    // Mediators read the record (audited) and suggest; only the two sides can agree.
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
             .await,
     )
     .await;
-    assert_eq!(paid["job"]["status"], "completed");
-    assert_eq!(paid["job"]["credited"], true);
-    assert_eq!(paid["job"]["paid_minor"], 12001);
-
-    // The project is credited and badged; the rating isn't touched (HUM-13).
-    let page = body_json(app.send(req(Method::GET, "/v1/apps/tiny-tavern")).await).await;
-    assert_eq!(page["made_with_people"], true);
-    assert_eq!(page["credits"][0]["role"], "Art");
-    assert_eq!(page["credits"][0]["handle"], "vera");
-    let only = list_slugs(&app, req(Method::GET, "/v1/apps?made_with_people=true")).await;
-    assert_eq!(only, ["tiny-tavern"]);
-    let ratings = body_json(
-        app.send(req(Method::GET, "/v1/apps/tiny-tavern/ratings"))
-            .await,
+    let problem = queue["problems"][0]["id"].as_str().unwrap().to_string();
+    let res = app
+        .send(req(Method::GET, format!("/v1/admin/jobs/{id}/record")).cookie(&admin_cookie))
+        .await;
+    let record =
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(record.contains("2 messages match Slop's fingerprints, 0 don't"));
+    let res = app
+        .send(post(
+            format!("/v1/admin/problems/{problem}/suggest"),
+            &admin_cookie,
+            json!({ "suggestion": "A $20 refund for the missing frame." }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let job = body_json(
+        app.send(post(
+            url("problem/propose"),
+            &creative_cookie,
+            json!({ "kind": "refund", "amount_minor": 2000, "note": "Sorry, $20 back." }),
+        ))
+        .await,
     )
     .await;
+    let proposal = job["problem"]["proposals"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
     assert_eq!(
-        ratings["since_new_work"]["since"],
-        Value::Null,
-        "no release with the work yet"
-    );
-    assert_eq!(ratings["since_new_work"]["credits"], json!(["Vera Okafor"]));
-
-    // After the next release, "since the new work" counts only newer votes.
-    let tavern: Uuid = sqlx::query_scalar("select id from apps where slug = 'tiny-tavern'")
-        .fetch_one(&app.db)
-        .await
-        .unwrap();
-    let old = OffsetDateTime::now_utc() - time::Duration::days(30);
-    let mut voters = Vec::new();
-    for i in 0..8 {
-        let (u, _) = app.user(&format!("Player {i}"), "US").await;
-        sqlx::query("insert into user_app_usage (user_id, app_id, days_launched, playtime_seconds) values ($1, $2, 3, 0)")
-            .bind(u).bind(tavern).execute(&app.db).await.unwrap();
-        voters.push(u);
-    }
-    for u in &voters[..5] {
-        slop_api::votes::cast(&app.db, *u, tavern, -1, Some(old))
-            .await
-            .unwrap();
-    }
-    sqlx::query(
-        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at)
-         values ($1, $2, '2.0.0', repeat('d', 40), 'approved', $3, now())",
-    )
-    .bind(Uuid::now_v7())
-    .bind(tavern)
-    .bind(client)
-    .execute(&app.db)
-    .await
-    .unwrap();
-    for u in &voters[3..8] {
-        slop_api::votes::cast(&app.db, *u, tavern, 1, None)
-            .await
-            .unwrap();
-    }
-    let ratings = body_json(
-        app.send(req(Method::GET, "/v1/apps/tiny-tavern/ratings"))
-            .await,
-    )
-    .await;
-    assert_eq!(
-        (ratings["not_slop"].as_i64(), ratings["slop"].as_i64()),
-        (Some(5), Some(3)),
-        "the overall rating is every vote"
-    );
-    assert_eq!(ratings["since_new_work"]["version"], "2.0.0");
-    assert_eq!(ratings["since_new_work"]["not_slop"], 5);
-    assert_eq!(ratings["since_new_work"]["slop"], 0);
-    assert_eq!(ratings["since_new_work"]["percent"], 100);
-
-    // Only the client reviews, once the job is complete; the creative replies.
-    assert_eq!(
-        app.send(
-            req(Method::PUT, url("review"))
-                .cookie(&creative_cookie)
-                .json(json!({ "vote": "slop" }))
-        )
+        app.send(post(
+            url(&format!("problem/proposals/{proposal}/accept")),
+            &creative_cookie,
+            json!({})
+        ))
         .await
         .status(),
         StatusCode::CONFLICT
     );
     let job = body_json(
+        app.send(post(
+            url(&format!("problem/proposals/{proposal}/accept")),
+            &client_cookie,
+            json!({}),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(job["problem"]["status"], "resolved");
+    assert_eq!(
+        job["refunded_minor"], 2000,
+        "simulated here; Stripe refunds come from the creative"
+    );
+
+    // A 👎 review, disputed: the mediator decides on the rules, with a reason.
+    app.send(
+        req(Method::PUT, url("review"))
+            .cookie(&client_cookie)
+            .json(json!({ "vote": "slop", "body": "Redo it free or this stays." })),
+    )
+    .await;
+    let res = app
+        .send(post(
+            format!("/v1/people/reviews/{id}/dispute"),
+            &stranger,
+            json!({ "reason": "extortion", "statement": "x" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let res = app
+        .send(post(
+            format!("/v1/people/reviews/{id}/dispute"),
+            &creative_cookie,
+            json!({ "reason": "extortion", "statement": "The review is a threat for free work." }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let job = body_json(
         app.send(
-            req(Method::PUT, url("review"))
+            req(Method::PUT, url("review/dispute-answer"))
                 .cookie(&client_cookie)
-                .json(json!({ "vote": "not_slop", "body": "Lovely knight." })),
+                .json(json!({ "statement": "It's my honest opinion." })),
         )
         .await,
     )
     .await;
-    assert_eq!(job["review"]["vote"], "not_slop");
-    let res = app
-        .send(
-            req(Method::PUT, format!("/v1/people/reviews/{id}/reply"))
-                .cookie(&creative_cookie)
-                .json(json!({ "reply": "Thank you!" })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(
-        app.send(
-            req(Method::PUT, format!("/v1/people/reviews/{id}/reply"))
-                .cookie(&stranger)
-                .json(json!({ "reply": "x" }))
-        )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND
-    );
-    let page = body_json(app.send(req(Method::GET, "/v1/people/vera")).await).await;
-    assert_eq!(page["reviews"][0]["work"], "Knight sprite sheet");
-    assert_eq!(page["reviews"][0]["reply"], "Thank you!");
-    assert_eq!(page["reviews"][0]["project"], "tiny-tavern");
-    assert_eq!(page["worked_on"][0]["slug"], "tiny-tavern");
-    assert_eq!(page["worked_on"][0]["role"], "Art");
-    assert_eq!(page["clients"], 1);
-
-    // A second job, delivered and left alone for 7 days, completes on its own.
-    let job2 = body_json(app.send(req(Method::POST, "/v1/people/vera/hire").cookie(&client_cookie).json(json!({ "app_slug": "tiny-tavern", "skill": "music", "request_md": "A tavern tune.", "client_is_business": true }))).await).await;
-    let id2 = job2["id"].as_str().unwrap().to_string();
-    app.send(
-        req(Method::POST, format!("/v1/jobs/{id2}/offer"))
-            .cookie(&creative_cookie)
-            .json(sprite_offer("upfront")),
+    assert_eq!(job["review"]["dispute"]["status"], "pending");
+    let feed = body_json(
+        app.send(req(Method::GET, "/v1/admin/review?kind=review_dispute").cookie(&admin_cookie))
+            .await,
     )
     .await;
+    assert_eq!(feed["items"][0]["id"], id.as_str());
+    let res = app
+        .send(post(
+            format!("/v1/admin/review-disputes/{id}/decide"),
+            &admin_cookie,
+            json!({ "outcome": "remove", "reason": "" }),
+        ))
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a reason is required"
+    );
+    let res = app.send(post(format!("/v1/admin/review-disputes/{id}/decide"), &admin_cookie, json!({ "outcome": "remove", "reason": "The review demands free work in exchange for removing it." }))).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let page = body_json(app.send(req(Method::GET, "/v1/people/vera")).await).await;
+    assert_eq!(page["reviews"], json!([]));
+    assert_eq!(page["rating"]["slop"], 0);
+
+    // Thirty days after the conversation closed, Slop forgets the text; copies still verify.
+    let n = slop_api::people::jobs::forget_conversations(
+        &app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(31),
+    )
+    .await
+    .unwrap();
+    assert_eq!(n, 2);
+    assert_eq!(
+        app.send(req(Method::GET, url("conversation")).cookie(&client_cookie))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let kept: slop_api::people::jobs::ConversationCopy = serde_json::from_value(copy).unwrap();
+    let job_id: Uuid = id.parse().unwrap();
+    assert_eq!(
+        slop_api::people::jobs::verify_copy(&app.db, job_id, &kept)
+            .await
+            .unwrap(),
+        (2, 0)
+    );
+
+    // Second job: nothing owed on delivery, left 7 days: completes on its own.
+    let job2 = body_json(app.send(post("/v1/people/vera/hire".into(), &client_cookie, json!({ "app_slug": "tiny-tavern", "skill": "music", "request_md": "A tavern tune.", "client_is_business": true, "exact_wording_ack": true }))).await).await;
+    let id2 = job2["id"].as_str().unwrap().to_string();
+    app.send(post(
+        format!("/v1/jobs/{id2}/offer"),
+        &creative_cookie,
+        sprite_offer("upfront"),
+    ))
+    .await;
     let job2 = body_json(
-        app.send(
-            req(Method::POST, format!("/v1/jobs/{id2}/accept"))
-                .cookie(&client_cookie)
-                .json(json!({ "offer_count": 1 })),
-        )
+        app.send(post(
+            format!("/v1/jobs/{id2}/accept"),
+            &client_cookie,
+            json!({ "offer_count": 1, "exact_terms_ack": true }),
+        ))
         .await,
     )
     .await;
@@ -5186,13 +5350,17 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
         Value::Null,
         "hiring as a business: no consumer withdrawal"
     );
-    app.send(req(Method::POST, format!("/v1/jobs/{id2}/pay")).cookie(&client_cookie))
-        .await;
-    app.send(
-        req(Method::POST, format!("/v1/jobs/{id2}/deliver"))
-            .cookie(&creative_cookie)
-            .json(json!({ "note": "Attached." })),
-    )
+    app.send(post(
+        format!("/v1/jobs/{id2}/pay"),
+        &client_cookie,
+        json!({}),
+    ))
+    .await;
+    app.send(post(
+        format!("/v1/jobs/{id2}/deliver"),
+        &creative_cookie,
+        json!({ "note": "Attached." }),
+    ))
     .await;
     let n = slop_api::people::jobs::auto_complete(
         &app.db,
@@ -5206,36 +5374,37 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
             .await,
     )
     .await;
-    assert_eq!(job2["status"], "completed");
-    assert_eq!(job2["completed_automatically"], true);
-    assert_eq!(job2["credited"], true);
-    let page = body_json(app.send(req(Method::GET, "/v1/apps/tiny-tavern")).await).await;
-    assert_eq!(page["credits"].as_array().unwrap().len(), 2);
-    assert_eq!(page["credits"][1]["role"], "Music");
+    assert_eq!(
+        (
+            job2["status"].as_str(),
+            job2["completed_automatically"].as_bool()
+        ),
+        (Some("completed"), Some(true))
+    );
 
-    // A third: withdrawn by the consumer within 14 days.
+    // Third: everything on delivery, never paid. Auto-completed, still owed: no new hires.
     let job3 = body_json(
-        app.send(
-            req(Method::POST, "/v1/people/vera/hire")
-                .cookie(&client_cookie)
-                .json(hire("tiny-tavern", true)),
-        )
+        app.send(post(
+            "/v1/people/vera/hire".into(),
+            &client_cookie,
+            hire("tiny-tavern", true, false),
+        ))
         .await,
     )
     .await;
     let id3 = job3["id"].as_str().unwrap().to_string();
-    app.send(
-        req(Method::POST, format!("/v1/jobs/{id3}/offer"))
-            .cookie(&creative_cookie)
-            .json(sprite_offer("on_delivery")),
-    )
+    app.send(post(
+        format!("/v1/jobs/{id3}/offer"),
+        &creative_cookie,
+        sprite_offer("on_delivery"),
+    ))
     .await;
     let job3 = body_json(
-        app.send(
-            req(Method::POST, format!("/v1/jobs/{id3}/accept"))
-                .cookie(&client_cookie)
-                .json(json!({ "offer_count": 1 })),
-        )
+        app.send(post(
+            format!("/v1/jobs/{id3}/accept"),
+            &client_cookie,
+            json!({ "offer_count": 1, "exact_terms_ack": true }),
+        ))
         .await,
     )
     .await;
@@ -5243,19 +5412,83 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
         job3["status"], "in_progress",
         "nothing to pay until delivery"
     );
+    app.send(post(
+        format!("/v1/jobs/{id3}/deliver"),
+        &creative_cookie,
+        json!({ "links": ["https://drive.example/p.png"] }),
+    ))
+    .await;
+    slop_api::people::jobs::auto_complete(
+        &app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(8),
+    )
+    .await
+    .unwrap();
+    let res = app
+        .send(post(
+            "/v1/people/vera/hire".into(),
+            &client_cookie,
+            hire("tiny-tavern", true, false),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("you still owe")
+    );
     let job3 = body_json(
-        app.send(req(Method::POST, format!("/v1/jobs/{id3}/withdraw")).cookie(&client_cookie))
+        app.send(req(Method::GET, format!("/v1/jobs/{id3}")).cookie(&creative_cookie))
             .await,
     )
     .await;
-    assert_eq!(job3["status"], "withdrawn");
-    assert_eq!(job3["actions"], json!([]));
-    let credited: i64 =
-        sqlx::query_scalar("select count(*) from jobs where credited_at is not null")
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert_eq!(credited, 2);
+    assert_eq!(job3["client_record"]["owing"], 1);
+    // Paying it unlocks the final files and hiring again.
+    let paid = body_json(
+        app.send(post(
+            format!("/v1/jobs/{id3}/pay"),
+            &client_cookie,
+            json!({}),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(paid["job"]["status"], "final_files");
+
+    // Fourth: withdrawn by the consumer within 14 days.
+    let job4 = body_json(
+        app.send(post(
+            "/v1/people/vera/hire".into(),
+            &client_cookie,
+            hire("tiny-tavern", true, false),
+        ))
+        .await,
+    )
+    .await;
+    let id4 = job4["id"].as_str().unwrap().to_string();
+    app.send(post(
+        format!("/v1/jobs/{id4}/offer"),
+        &creative_cookie,
+        sprite_offer("on_delivery"),
+    ))
+    .await;
+    app.send(post(
+        format!("/v1/jobs/{id4}/accept"),
+        &client_cookie,
+        json!({ "offer_count": 1, "exact_terms_ack": true }),
+    ))
+    .await;
+    let job4 = body_json(
+        app.send(post(
+            format!("/v1/jobs/{id4}/withdraw"),
+            &client_cookie,
+            json!({}),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(job4["status"], "withdrawn");
 }
 
 /// A fake Stripe: accounts, account links and Checkout sessions on connected accounts.
@@ -5397,7 +5630,7 @@ async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgP
 
     let (client, client_cookie) = app.user("Client", "US").await;
     listed_with(&app, client, "tavern", "beta", "").await;
-    let job = body_json(app.send(req(Method::POST, "/v1/people/vera/hire").cookie(&client_cookie).json(json!({ "app_slug": "tavern", "skill": "pixel-art", "request_md": "Knight", "confirm_adult": true }))).await).await;
+    let job = body_json(app.send(req(Method::POST, "/v1/people/vera/hire").cookie(&client_cookie).json(json!({ "app_slug": "tavern", "skill": "pixel-art", "request_md": "Knight", "confirm_adult": true, "exact_wording_ack": true }))).await).await;
     let id = job["id"].as_str().unwrap().to_string();
     app.send(
         req(Method::POST, format!("/v1/jobs/{id}/offer"))
@@ -5408,7 +5641,7 @@ async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgP
     app.send(
         req(Method::POST, format!("/v1/jobs/{id}/accept"))
             .cookie(&client_cookie)
-            .json(json!({ "offer_count": 1 })),
+            .json(json!({ "offer_count": 1, "exact_terms_ack": true })),
     )
     .await;
 

@@ -373,6 +373,118 @@ function QueueTab() {
         ))}
       </ul>
 
+      <h2 className="section-title">People problems ({q.problems.length})</h2>
+      <p className="muted small">
+        Problems the two sides haven't settled. Read the record (opening it is logged), then suggest a fair outcome. Suggestions bind no
+        one: only what both sides accept happens. Close it unresolved when they can't agree; both keep the record for a card dispute or a
+        court.
+      </p>
+      {q.problems.length === 0 && <div className="empty-state">No open problems.</div>}
+      <ul className="release-list">
+        {q.problems.map((p) => (
+          <li key={p.id} className="panel panel-pad">
+            <div className="title-row spread">
+              <b>{p.title}</b>
+              <span className="muted small">
+                {p.creative} and {p.client} · opened by the {p.opened_by_creative ? "creative" : "client"} · {formatDate(p.created_at)}
+              </span>
+            </div>
+            <p>
+              <b>Statement:</b> {p.statement}
+            </p>
+            {p.reply && (
+              <p>
+                <b>Answer:</b> {p.reply}
+              </p>
+            )}
+            {p.proposals.length > 0 && (
+              <ul className="small">
+                {p.proposals.map((x, i) => (
+                  <li key={i}>
+                    {x.kind}
+                    {x.amount_minor ? ` ${(x.amount_minor / 100).toFixed(2)}` : ""} — {x.note} ({x.status})
+                  </li>
+                ))}
+              </ul>
+            )}
+            {p.mediator_suggestion && <p className="muted">Suggested: {p.mediator_suggestion}</p>}
+            <JobRecord jobId={p.job_id} />
+            <Notes notes={p.notes} />
+            <div className="row-actions">
+              <ReasonButton
+                label="Suggest an outcome"
+                placeholder="A fair outcome, citing the agreement and the record"
+                disabled={busy !== undefined}
+                onSubmit={(text) => void run(p.id, () => api.admin.suggest(p.id, text))}
+              />
+              <ReasonButton
+                label="Close unresolved"
+                placeholder="Why it's closed, shown to both"
+                danger
+                disabled={busy !== undefined}
+                onSubmit={(text) => void run(p.id, () => api.admin.closeProblem(p.id, text))}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+
+      <h2 className="section-title">Review disputes ({q.review_disputes.length})</h2>
+      <p className="muted small">
+        Decide on the rules, never on whether the review is negative. Remove it only if it breaks the rules, isn't about the job, or was used
+        as a threat; add a factual note when it states something the record shows is false; otherwise keep it. The reason is shown to both.
+      </p>
+      {q.review_disputes.length === 0 && <div className="empty-state">No review disputes.</div>}
+      <ul className="release-list">
+        {q.review_disputes.map((d) => (
+          <li key={d.job_id} className="panel panel-pad">
+            <div className="title-row spread">
+              <span>
+                <b>{d.client}</b> on <Link to={`/people/${d.creative_handle}`}>{d.creative}</Link>:{" "}
+                {d.vote === "slop" ? "👎 Slop" : "👍 Not Slop"}
+              </span>
+              <span className="muted small">{formatDate(d.created_at)}</span>
+            </div>
+            <blockquote>{d.review || "(no text)"}</blockquote>
+            <p>
+              <b>Creative's dispute</b> ({d.reason_text}): {d.statement}
+            </p>
+            {d.client_statement && (
+              <p>
+                <b>Reviewer's answer:</b> {d.client_statement}
+              </p>
+            )}
+            <JobRecord jobId={d.job_id} />
+            <Notes notes={d.notes} />
+            <div className="row-actions">
+              <ReasonButton
+                label="Keep it"
+                placeholder="Why it stays, shown to both"
+                disabled={busy !== undefined}
+                onSubmit={(reason) => void run(d.job_id, () => api.admin.decideDispute(d.job_id, { outcome: "keep", reason }))}
+              />
+              <ReasonButton
+                label="Keep with a note"
+                placeholder="The facts from the record (shown under the review)"
+                disabled={busy !== undefined}
+                onSubmit={(note) =>
+                  void run(d.job_id, () =>
+                    api.admin.decideDispute(d.job_id, { outcome: "note", reason: "A factual claim differs from the job record.", note }),
+                  )
+                }
+              />
+              <ReasonButton
+                label="Remove it"
+                placeholder="Which rule it breaks, shown to both"
+                danger
+                disabled={busy !== undefined}
+                onSubmit={(reason) => void run(d.job_id, () => api.admin.decideDispute(d.job_id, { outcome: "remove", reason }))}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+
       <h2 className="section-title">Ready for the store ({q.ready_to_list.length})</h2>
       {q.ready_to_list.length === 0 && <div className="empty-state">No drafts are ready to list.</div>}
       <ul className="release-list">
@@ -585,6 +697,31 @@ function AuditTab() {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** A job's record, loaded on request: every look is written to the audit log. */
+function JobRecord({ jobId }: { jobId: string }) {
+  const [text, setText] = useState<string>();
+  const [error, setError] = useState<string>();
+  if (text)
+    return (
+      <details open className="agreement">
+        <summary>The job record</summary>
+        <pre className="code-block record">{text}</pre>
+      </details>
+    );
+  return (
+    <p className="small">
+      <button
+        type="button"
+        className="link-btn"
+        onClick={() => api.admin.jobRecord(jobId).then(setText, (e: unknown) => setError(String(e)))}
+      >
+        Read the job record (logged)
+      </button>
+      {error && <span className="bad"> {error}</span>}
+    </p>
   );
 }
 

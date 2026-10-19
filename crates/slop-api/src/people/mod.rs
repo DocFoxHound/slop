@@ -10,6 +10,7 @@
 //! HUM-10): the directory's default order is a daily shuffle.
 
 pub mod jobs;
+pub mod mediation;
 pub mod portfolio;
 pub mod stripe;
 
@@ -92,6 +93,7 @@ pub fn routes() -> Router<AppState> {
         .route("/me/creative/stripe/refresh", post(stripe::refresh_account))
         .route("/people/reviews/{job_id}/reply", put(reply))
         .merge(jobs::routes())
+        .merge(mediation::routes())
         .merge(stripe::webhook_routes())
 }
 
@@ -603,7 +605,7 @@ pub async fn rating_of(db: &sqlx::PgPool, creative_id: Uuid) -> sqlx::Result<Cre
     let (up, down): (i64, i64) = sqlx::query_as(
         "select count(*) filter (where vote = 1), count(*) filter (where vote = -1)
          from (select distinct on (client_id) vote from creative_reviews
-               where creative_id = $1 order by client_id, created_at desc) r",
+               where creative_id = $1 and hidden_at is null order by client_id, created_at desc) r",
     )
     .bind(creative_id)
     .fetch_one(db)
@@ -613,10 +615,10 @@ pub async fn rating_of(db: &sqlx::PgPool, creative_id: Uuid) -> sqlx::Result<Cre
 
 const RATING_SQL: &str = "(select coalesce(count(*) filter (where r.vote = 1), 0)
         from (select distinct on (client_id) vote from creative_reviews
-              where creative_id = c.user_id order by client_id, created_at desc) r) as not_slop,
+              where creative_id = c.user_id and hidden_at is null order by client_id, created_at desc) r) as not_slop,
      (select coalesce(count(*) filter (where r.vote = -1), 0)
         from (select distinct on (client_id) vote from creative_reviews
-              where creative_id = c.user_id order by client_id, created_at desc) r) as slop,
+              where creative_id = c.user_id and hidden_at is null order by client_id, created_at desc) r) as slop,
      (select count(distinct client_id) from jobs j
         where j.creative_id = c.user_id and j.status = 'completed') as clients";
 
@@ -833,6 +835,10 @@ pub struct ReviewView {
     pub vote: &'static str,
     pub body: String,
     pub reply: Option<String>,
+    /// A mediator's factual note, after a review dispute (mediation.rs).
+    pub mediator_note: Option<String>,
+    /// The creative's dispute about it: pending, removed, noted or kept.
+    pub dispute: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -980,63 +986,53 @@ async fn reviews_of(
     creative_id: Uuid,
     policy: ViewerPolicy,
 ) -> ApiResult<Vec<ReviewView>> {
-    let mut qb = QueryBuilder::new("select r.job_id, u.display_name, a.title, a.slug, (");
+    let mut qb =
+        QueryBuilder::new("select r.job_id, u.display_name as client_name, a.title, a.slug, (");
     catalog::push_store_visible(&mut qb, state.config.catalog, policy);
     qb.push(
-        ") as visible, j.offer->>'title', j.skill, r.vote, r.body, r.reply, r.created_at, r.replied_at
+        ") as visible, j.offer->>'title' as work, j.skill, r.vote, r.body, r.reply, r.mediator_note,
+           d.status as dispute, r.created_at, r.replied_at
          from creative_reviews r join jobs j on j.id = r.job_id join users u on u.id = r.client_id
-         join apps a on a.id = j.app_id
-         where r.creative_id = ",
+         join apps a on a.id = j.app_id left join review_disputes d on d.job_id = r.job_id
+         where r.hidden_at is null and r.creative_id = ",
     )
     .push_bind(creative_id)
     .push(" order by r.created_at desc limit 100");
-    type Row = (
-        Uuid,
-        String,
-        String,
-        String,
-        bool,
-        Option<String>,
-        String,
-        i16,
-        String,
-        Option<String>,
-        OffsetDateTime,
-        Option<OffsetDateTime>,
-    );
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        job_id: Uuid,
+        client_name: String,
+        title: String,
+        slug: String,
+        visible: bool,
+        work: Option<String>,
+        skill: String,
+        vote: i16,
+        body: String,
+        reply: Option<String>,
+        mediator_note: Option<String>,
+        dispute: Option<String>,
+        created_at: OffsetDateTime,
+        replied_at: Option<OffsetDateTime>,
+    }
     let rows: Vec<Row> = qb.build_query_as().fetch_all(&state.db).await?;
     Ok(rows
         .into_iter()
-        .map(
-            |(
-                job_id,
-                client_name,
-                title,
-                slug,
-                visible,
-                work,
-                s,
-                vote,
-                body,
-                reply,
-                created_at,
-                replied_at,
-            )| {
-                ReviewView {
-                    job_id,
-                    client_name,
-                    project: visible.then_some(title),
-                    project_slug: visible.then_some(slug),
-                    work: work.unwrap_or_else(|| "Commissioned work".into()),
-                    skill: skill(&s),
-                    vote: if vote > 0 { "not_slop" } else { "slop" },
-                    body,
-                    reply,
-                    created_at,
-                    replied_at,
-                }
-            },
-        )
+        .map(|r| ReviewView {
+            job_id: r.job_id,
+            client_name: r.client_name,
+            project: r.visible.then_some(r.title),
+            project_slug: r.visible.then_some(r.slug),
+            work: r.work.unwrap_or_else(|| "Commissioned work".into()),
+            skill: skill(&r.skill),
+            vote: if r.vote > 0 { "not_slop" } else { "slop" },
+            body: r.body,
+            reply: r.reply,
+            mediator_note: r.mediator_note,
+            dispute: r.dispute,
+            created_at: r.created_at,
+            replied_at: r.replied_at,
+        })
         .collect())
 }
 

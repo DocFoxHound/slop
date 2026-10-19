@@ -182,6 +182,10 @@ struct Queue {
     media: Vec<QueuedMedia>,
     /// New People portfolios; oldest first. A profile goes live with its first approved one.
     portfolios: Vec<crate::people::portfolio::QueuedPortfolio>,
+    /// Problems with People jobs that the two sides haven't settled; oldest first.
+    problems: Vec<crate::people::mediation::QueuedProblem>,
+    /// Creatives' disputes about reviews; oldest first.
+    review_disputes: Vec<crate::people::mediation::QueuedDispute>,
     /// Drafts that could go in the store: Coming soon pages, or apps with an approved release.
     ready_to_list: Vec<ReadyApp>,
     checks: ServerChecks,
@@ -265,6 +269,8 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         changes,
         media,
         portfolios: crate::people::portfolio::queued(&state).await?,
+        problems: crate::people::mediation::queued_problems(&state.db).await?,
+        review_disputes: crate::people::mediation::queued_disputes(&state.db).await?,
         ready_to_list,
         checks: ServerChecks {
             scanning: cfg.scanner.is_on(),
