@@ -658,6 +658,9 @@ function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () =>
                   </label>
                 </div>
               )}
+              {row.include && row.kind === "archive" && !row.name.toLowerCase().endsWith(".zip") && (
+                <p className="form-error">Slop can only unpack .zip files. Attach a .zip of this build to the release instead.</p>
+              )}
               {row.include && row.kind === "archive" && (
                 <label>
                   Program to start

@@ -2968,6 +2968,28 @@ async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) 
     assert_eq!(release["version"], "1.0.0");
     assert_eq!(release["commit_sha"], "1".repeat(40));
 
+    // Archives must be zips: the desktop app can't unpack anything else.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases/from-github")
+                .cookie(&maker)
+                .json(json!({
+                    "tag": "v1.1.0",
+                    "files": [{
+                        "platform": "linux", "kind": "archive", "exec": "game",
+                        "url": "https://github.com/octo/game/releases/download/v1.1.0/game-linux.tar.gz"
+                    }]
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains(".zip")
+    );
+
     // The watcher sees v1.1.0 is newer and submits it from the 1.0.0 pattern.
     assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 1);
     let mine = body_json(

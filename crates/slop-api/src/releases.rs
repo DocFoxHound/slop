@@ -219,6 +219,15 @@ fn validate_files(
             return Err(ApiError::invalid("files", "launch arguments are too long"));
         }
         let (url, file_name) = validate_file_url(repo_url, &f.url, allow_http)?;
+        // The desktop app unpacks zips only (slop-client library.rs).
+        if kind == FileKind::Archive && !file_name.to_ascii_lowercase().ends_with(".zip") {
+            return Err(ApiError::invalid(
+                "files",
+                format!(
+                    "{file_name}: archives must be .zip files; Slop can't unpack other kinds yet"
+                ),
+            ));
+        }
         checked.push(CheckedFile {
             platform,
             kind,
