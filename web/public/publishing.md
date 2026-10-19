@@ -474,7 +474,8 @@ Facts an agent may need:
 - Versions: up to 40 characters of letters, numbers, `.`, `_`, `+` and `-`, starting with a letter
   or number (e.g. `1.2.0`, `build.17`).
 - Platforms: `windows`, `mac`, `linux`, `android`; one build each per release.
-- Build types: `archive` (zip; needs the program path), `installer`, `apk` (Android only).
+- Build types: `archive` (a `.zip`, not `.tar.gz` or `.7z`; needs the program path), `installer`,
+  `apk` (Android only).
 - A release can't reuse a version. Up to three releases can wait for review at once.
 - Tags become versions with a leading `v` removed when a digit follows (`v1.2.0` → `1.2.0`).
 - The program path inside a zip must be relative, use `/`, and not contain `..`.
