@@ -16,6 +16,7 @@ pub mod releases;
 pub mod scan;
 pub mod slop_build;
 pub mod tokens;
+pub mod updates;
 pub mod web;
 
 use std::{sync::Arc, time::Duration};
@@ -47,6 +48,8 @@ pub struct AppState {
     pub fetch_http: reqwest::Client,
     /// Wakes the release fetcher when a release is submitted.
     pub fetch_wakeup: Arc<tokio::sync::Notify>,
+    /// Wakes the GitHub release watcher when a maker changes its settings.
+    pub watch_wakeup: Arc<tokio::sync::Notify>,
     /// Checks makers' GitHub artifact attestations.
     pub provenance: Arc<slop_provenance::ProvenanceVerifier>,
     pub rate_limiter: Arc<ratelimit::RateLimiter>,
@@ -73,6 +76,7 @@ impl AppState {
             http,
             fetch_http,
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
+            watch_wakeup: Arc::new(tokio::sync::Notify::new()),
             provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),
             rate_limiter,
             oidc_keys: Arc::default(),
@@ -94,6 +98,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(releases::routes())
         .merge(library::routes())
         .merge(slop_build::routes())
+        .merge(updates::routes())
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
         .merge(pulse::routes())

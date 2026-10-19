@@ -29,6 +29,8 @@ const release = (over: Partial<Release> = {}): Release => ({
   status: "awaiting_review",
   commit_verified: false,
   created_at: "2026-10-18T00:00:00Z",
+  source: "maker",
+  auto_approved: false,
   files: [file()],
   ...over,
 });
@@ -90,6 +92,13 @@ describe("progressSteps", () => {
       Release: "skipped",
       "In the store": "active",
     });
+  });
+
+  it("says why a release waits for a person, and when Slop approved it", () => {
+    const waiting = progressSteps(app(), [release({ status_reason: "Waiting for a person: an app's first release is always reviewed by a person" })], testServer);
+    expect(String(waiting.find((s) => s.title === "Review")?.detail)).toContain("first release");
+    const auto = progressSteps(app({ status: "listed" }), [release({ status: "approved", auto_approved: true })], testServer);
+    expect(String(auto.find((s) => s.title === "Review")?.detail)).toContain("automatically");
   });
 
   it("points at the step an app is stuck on or waiting for", () => {

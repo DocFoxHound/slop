@@ -146,7 +146,35 @@ export interface Release {
   status_reason?: string;
   commit_verified: boolean;
   created_at: string;
+  /** Who sent it: the maker, Slop Build, or Slop's GitHub release watcher. */
+  source: "maker" | "slop_build" | "github_release";
+  /** Approved by Slop as an update, without waiting for a person. */
+  auto_approved: boolean;
   files: ReleaseFile[];
+}
+
+/** One of the repository's GitHub releases, for "Pick a release". */
+export interface GithubRelease {
+  tag: string;
+  name: string | null;
+  version: string;
+  published_at: string | null;
+  prerelease: boolean;
+  html_url: string;
+  /** Already sent to Slop. */
+  submitted: boolean;
+  assets: Array<{ name: string; url: string; size: number; platform: Platform | null; kind: FileKind | null }>;
+}
+
+export interface UpdateSettings {
+  watch_releases: boolean;
+  auto_update: boolean;
+  auto_approval_ready: boolean;
+  auto_approval_note: string | null;
+  watch_note: string | null;
+  watch_last_tag: string | null;
+  watch_checked_at: string | null;
+  watch_problem: string | null;
 }
 
 export interface NewRelease {
@@ -270,6 +298,12 @@ export const api = {
       `/v1/repos/license${query({ url: repoUrl })}`,
     ),
   releases: (slug: string) => request<Release[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/releases`),
+  githubReleases: (slug: string) => request<GithubRelease[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/github-releases`),
+  submitGithubRelease: (slug: string, tag: string, files: NewRelease["files"]) =>
+    request<Release>("POST", `/v1/apps/${encodeURIComponent(slug)}/releases/from-github`, { tag, files }),
+  updateSettings: (slug: string) => request<UpdateSettings>("GET", `/v1/apps/${encodeURIComponent(slug)}/update-settings`),
+  changeUpdateSettings: (slug: string, change: Partial<Pick<UpdateSettings, "watch_releases" | "auto_update">>) =>
+    request<UpdateSettings>("PUT", `/v1/apps/${encodeURIComponent(slug)}/update-settings`, change),
   submitRelease: (slug: string, release: NewRelease) =>
     request<Release>("POST", `/v1/apps/${encodeURIComponent(slug)}/releases`, release),
   /** Whether an approved, signed build exists (the manifest itself is checked in Rust). */

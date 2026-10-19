@@ -112,6 +112,42 @@ async fn fake_github() -> String {
                 }
             }),
         )
+        // The repository's releases, for picking one and for the release watcher.
+        .route(
+            "/repos/octo/game/releases",
+            get(|| async {
+                axum::Json(json!([
+                    { "tag_name": "v1.1.0", "name": "Spring update", "draft": false, "prerelease": false,
+                      "published_at": "2026-10-01T00:00:00Z", "html_url": "https://github.com/octo/game/releases/tag/v1.1.0",
+                      "assets": [
+                          { "name": "game-1.1.0-windows.zip", "size": 10 },
+                          { "name": "Game-Setup.exe", "size": 12 },
+                          { "name": "checksums.txt", "size": 1 }
+                      ] },
+                    { "tag_name": "v1.0.0", "name": null, "draft": false, "prerelease": false,
+                      "published_at": "2026-09-01T00:00:00Z", "html_url": "https://github.com/octo/game/releases/tag/v1.0.0",
+                      "assets": [{ "name": "game-1.0.0-windows.zip", "size": 10 }] },
+                    { "tag_name": "v2.0.0", "draft": true, "html_url": "https://github.com/octo/game/releases/tag/v2.0.0" }
+                ]))
+            }),
+        )
+        .route(
+            "/repos/octo/game/releases/latest",
+            get(|| async {
+                axum::Json(json!({
+                    "tag_name": "v1.1.0", "draft": false, "prerelease": false,
+                    "published_at": "2026-10-01T00:00:00Z", "html_url": "https://github.com/octo/game/releases/tag/v1.1.0",
+                    "assets": [{ "name": "game-1.1.0-windows.zip", "size": 10 }]
+                }))
+            }),
+        )
+        .route(
+            "/repos/octo/game/commits/{reference}",
+            get(|axum::extract::Path(reference): axum::extract::Path<String>| async move {
+                let sha = if reference == "v1.0.0" { "1".repeat(40) } else { "b".repeat(40) };
+                axum::Json(json!({ "sha": sha }))
+            }),
+        )
         .route(
             "/repos/octo/game/contents/",
             get(|| async { axum::Json(json!([{ "name": "Cargo.toml" }, { "name": "src" }])) }),
@@ -2794,4 +2830,176 @@ async fn players_can_turn_off_playtime_sharing(db: PgPool) {
         .await
         .unwrap();
     assert_eq!(sessions, 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Picking GitHub releases, the release watcher and automatic approval
+
+async fn release_status(app: &TestApp, id: &str) -> (String, Option<String>, Option<String>) {
+    sqlx::query_as(
+        "select status::text, status_reason, reviewed_by from releases where id = $1::uuid",
+    )
+    .bind(id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn updates_are_approved_automatically_after_a_person_approves_one(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+
+    // The first release waits for a person, and says so.
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let (status, reason, _) = release_status(&app, &first).await;
+    assert_eq!(status, "awaiting_review");
+    assert!(reason.unwrap().contains("first release"));
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+
+    // The next one passes every check, so Slop approves and signs it.
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    assert_eq!(
+        release_status(&app, &second).await,
+        ("approved".into(), None, Some("slop".into()))
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["auto_approved"], true);
+    assert_eq!(mine[0]["source"], "maker");
+    assert_eq!(mine[1]["auto_approved"], false);
+
+    // After a withdrawal, a person looks again.
+    admin::revoke(&app.db, second.parse().unwrap(), "rev", "broken build")
+        .await
+        .unwrap();
+    let third = submit_and_fetch(&app, &maker, "1.2.0").await;
+    let (status, reason, _) = release_status(&app, &third).await;
+    assert_eq!(status, "awaiting_review");
+    assert!(reason.unwrap().contains("withdrawn"));
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        third.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+
+    // The maker can turn it off.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/game/update-settings")
+                .cookie(&maker)
+                .json(json!({ "auto_update": false })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let settings = body_json(res).await;
+    assert_eq!(settings["auto_update"], false);
+    assert_eq!(settings["auto_approval_ready"], false);
+    let fourth = submit_and_fetch(&app, &maker, "1.3.0").await;
+    assert_eq!(release_status(&app, &fourth).await.0, "awaiting_review");
+
+    // Settings are the maker's alone.
+    let (_, stranger) = app.user("Stranger", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/game/update-settings").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = github_app(&app).await;
+
+    // Pick: newest first, drafts left out, files guessed from their names.
+    let picks = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/github-releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    let picks = picks.as_array().unwrap();
+    assert_eq!(picks.len(), 2);
+    assert_eq!(picks[0]["tag"], "v1.1.0");
+    assert_eq!(picks[0]["version"], "1.1.0");
+    assert_eq!(picks[0]["submitted"], false);
+    let assets = picks[0]["assets"].as_array().unwrap();
+    assert_eq!(
+        assets[0]["url"],
+        "https://github.com/octo/game/releases/download/v1.1.0/game-1.1.0-windows.zip"
+    );
+    assert_eq!(assets[0]["platform"], "windows");
+    assert_eq!(assets[0]["kind"], "archive");
+    assert_eq!(assets[1]["kind"], "installer");
+    assert!(assets[2]["platform"].is_null());
+
+    // Submitting the older release: the version comes from the tag, the commit from GitHub.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases/from-github")
+                .cookie(&maker)
+                .json(json!({
+                    "tag": "v1.0.0",
+                    "files": [{
+                        "platform": "windows", "kind": "archive", "exec": "game.exe",
+                        "url": "https://github.com/octo/game/releases/download/v1.0.0/game-1.0.0-windows.zip"
+                    }]
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release = body_json(res).await;
+    assert_eq!(release["version"], "1.0.0");
+    assert_eq!(release["commit_sha"], "1".repeat(40));
+
+    // The watcher sees v1.1.0 is newer and submits it from the 1.0.0 pattern.
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 1);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["version"], "1.1.0");
+    assert_eq!(mine[0]["source"], "github_release");
+    assert_eq!(mine[0]["commit_sha"], "b".repeat(40));
+    assert_eq!(mine[0]["files"][0]["file_name"], "game-1.1.0-windows.zip");
+    assert_eq!(mine[0]["files"][0]["exec"], "game.exe");
+
+    // Each GitHub release is handled once.
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    let settings = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/update-settings").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(settings["watch_last_tag"], "v1.1.0");
+    assert!(settings["watch_problem"].is_null());
+    assert!(settings["watch_note"].is_null());
+
+    // Turning watching off stops it.
+    sqlx::query("delete from releases where version = '1.1.0'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update apps set watch_releases = false, watch_last_tag = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
 }

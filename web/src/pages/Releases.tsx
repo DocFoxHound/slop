@@ -4,7 +4,16 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 
-import { api, ApiError, type FileKind, type NewRelease, type Platform, type Release } from "../api";
+import {
+  api,
+  ApiError,
+  type FileKind,
+  type GithubRelease,
+  type NewRelease,
+  type Platform,
+  type Release,
+  type UpdateSettings,
+} from "../api";
 import { PublishProgress } from "../components/PublishProgress";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate } from "../format";
@@ -13,8 +22,8 @@ import { useSession } from "../session";
 
 const STATUS: Record<Release["status"], { label: string; badge: string; help: string }> = {
   fetching: { label: "CHECKING FILES", badge: "neutral", help: "Slop is downloading each file once to record its size and hash." },
-  awaiting_review: { label: "IN REVIEW", badge: "soon", help: "A person at Slop is reviewing this release." },
-  approved: { label: "APPROVED", badge: "official", help: "Signed by Slop. Players can install it." },
+  awaiting_review: { label: "IN REVIEW", badge: "soon", help: "Waiting for a person at Slop to review it." },
+  approved: { label: "APPROVED", badge: "official", help: "Signed by Slop. Players can install it, and get it as an update." },
   rejected: { label: "REJECTED", badge: "bad", help: "Not approved. See the reason below." },
   failed: { label: "FAILED", badge: "bad", help: "Slop couldn't check the files. See the reason below." },
   revoked: { label: "WITHDRAWN", badge: "bad", help: "Slop withdrew this release; it no longer launches." },
@@ -57,6 +66,7 @@ export function Releases() {
     return () => clearInterval(timer);
   }, [checking, releases.reload]);
   useDocumentTitle(app.data ? `${app.data.title} releases` : "Releases");
+  const [settingsNonce, setSettingsNonce] = useState(0);
 
   if (me === undefined || app.loading) return <Loading />;
   if (!me) {
@@ -77,6 +87,12 @@ export function Releases() {
   }
   if (!app.data) return <Loading />;
 
+  const isGithub = app.data.repo_url.startsWith("https://github.com/");
+  const onSubmitted = () => {
+    releases.reload();
+    setSettingsNonce((n) => n + 1);
+  };
+
   return (
     <div className="page narrow">
       <div className="crumbs">
@@ -84,19 +100,34 @@ export function Releases() {
       </div>
       <h1 className="page-title">Releases</h1>
       <p className="muted">
-        Builds stay on your own release page. Slop downloads each file once to record its size and SHA-256, a person reviews
-        the release, and Slop signs it. Players' apps then download from your release page and refuse any file that doesn't
-        match.
+        A release is one version of your app: a GitHub release with your builds attached. Slop downloads each file once to
+        record its size and SHA-256, checks it, and signs it. Players' apps then download from your release page and refuse any
+        file that doesn't match.
       </p>
 
       {releases.data && server.data && (
         <PublishProgress app={app.data} releases={releases.data} server={server.data} />
       )}
 
+      {isGithub ? (
+        <ReleasePicker slug={slug} onSubmitted={onSubmitted} />
+      ) : (
+        <ReleaseForm repoUrl={app.data.repo_url} slug={slug} onSubmitted={onSubmitted} />
+      )}
+
+      <UpdatesPanel key={settingsNonce} slug={slug} />
+
       <SlopBuildSetup slug={slug} />
       <SigningHelp />
 
-      <ReleaseForm repoUrl={app.data.repo_url} slug={slug} onSubmitted={releases.reload} />
+      {isGithub && (
+        <details className="panel panel-pad help">
+          <summary>
+            <b>Enter a release by hand</b> <span className="muted">— for files that aren't on a GitHub release</span>
+          </summary>
+          <ReleaseForm repoUrl={app.data.repo_url} slug={slug} onSubmitted={onSubmitted} />
+        </details>
+      )}
 
       <h2 className="section-title">History</h2>
       {releases.error && <ErrorState error={releases.error} onRetry={releases.reload} />}
@@ -107,7 +138,12 @@ export function Releases() {
             <div className="title-row spread">
               <div className="title-row">
                 <b>{r.version}</b>
-                <span className={`badge ${STATUS[r.status].badge}`}>{STATUS[r.status].label}</span>
+                <span className={`badge ${STATUS[r.status].badge}`}>
+                  {r.auto_approved && r.status === "approved" ? "APPROVED AUTOMATICALLY" : STATUS[r.status].label}
+                </span>
+                {r.source !== "maker" && (
+                  <span className="muted small">{r.source === "slop_build" ? "from Slop Build" : "picked up from GitHub"}</span>
+                )}
               </div>
               <span className="muted small">{formatDate(r.created_at)}</span>
             </div>
@@ -440,5 +476,271 @@ function ReleaseForm({ repoUrl, slug, onSubmitted }: { repoUrl: string; slug: st
         </button>
       </div>
     </form>
+  );
+}
+
+const PLATFORM_LABEL = Object.fromEntries(PLATFORMS.map((p) => [p.value, p.label])) as Record<Platform, string>;
+
+interface PickRow {
+  include: boolean;
+  name: string;
+  url: string;
+  platform: Platform;
+  kind: FileKind;
+  exec: string;
+}
+
+function pickRows(release: GithubRelease): PickRow[] {
+  const taken = new Set<Platform>();
+  return release.assets.map((a) => {
+    // One file per platform: the first guess for a platform is included, the rest start unticked.
+    const include = a.platform !== null && !taken.has(a.platform);
+    if (a.platform) taken.add(a.platform);
+    return {
+      include,
+      name: a.name,
+      url: a.url,
+      platform: a.platform ?? "windows",
+      kind: a.kind ?? "archive",
+      exec: "",
+    };
+  });
+}
+
+/** "Pick a release": the repository's GitHub releases, so makers don't type versions, commits or links. */
+function ReleasePicker({ slug, onSubmitted }: { slug: string; onSubmitted: () => void }) {
+  const list = useLoad(() => api.githubReleases(slug), [slug]);
+  const [tag, setTag] = useState("");
+  const [rows, setRows] = useState<PickRow[]>([]);
+  const [error, setError] = useState<ApiError>();
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string>();
+
+  const releases = list.data ?? [];
+  const chosen = releases.find((r) => r.tag === tag);
+  const choose = (t: string) => {
+    setTag(t);
+    setError(undefined);
+    setDone(undefined);
+    const r = releases.find((x) => x.tag === t);
+    setRows(r ? pickRows(r) : []);
+  };
+  // Start on the newest release that hasn't been sent yet.
+  useEffect(() => {
+    if (tag || !list.data) return;
+    const first = list.data.find((r) => !r.submitted && !r.prerelease) ?? list.data.find((r) => !r.submitted);
+    if (first) choose(first.tag);
+  }, [list.data]);
+
+  const update = (i: number, change: Partial<PickRow>) =>
+    setRows((rs) =>
+      rs.map((r, j) => {
+        if (j !== i) return r;
+        const next = { ...r, ...change };
+        if (change.platform === "android") next.kind = "apk";
+        else if (change.platform && next.kind === "apk") next.kind = "archive";
+        return next;
+      }),
+    );
+  const included = rows.filter((r) => r.include);
+  const platforms = included.map((r) => r.platform);
+  const duplicate = platforms.find((p, i) => platforms.indexOf(p) !== i);
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    if (!chosen) return;
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.submitGithubRelease(
+        slug,
+        chosen.tag,
+        included.map((r) => ({ platform: r.platform, kind: r.kind, url: r.url, ...(r.kind === "archive" ? { exec: r.exec.trim() } : {}) })),
+      );
+      setDone(chosen.version);
+      list.reload();
+      setTag("");
+      setRows([]);
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  return (
+    <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
+      <h2>Submit a release</h2>
+      <p className="muted small">
+        Make a release on GitHub with your builds attached (a zip per platform, or an installer), then pick it here. Slop
+        reads the version from its tag and the commit from GitHub.
+      </p>
+      {done && (
+        <p className="notice" role="status">
+          Version {done} sent. Slop is checking the files; follow it in the progress above.
+        </p>
+      )}
+      {list.loading && !list.data && <p className="muted">Reading your GitHub releases…</p>}
+      {list.error && (
+        <p className="form-error" role="alert">
+          {list.error.message}
+        </p>
+      )}
+      {list.data && releases.length === 0 && (
+        <p className="notice">
+          Your repository has no releases yet. On GitHub, open <b>Releases → Draft a new release</b>, give it a tag like{" "}
+          <code>v1.0.0</code>, attach your builds and publish it. Then come back and{" "}
+          <button type="button" className="link-button" onClick={list.reload}>
+            look again
+          </button>
+          .
+        </p>
+      )}
+      {releases.length > 0 && (
+        <label>
+          GitHub release
+          <select value={tag} onChange={(e) => choose(e.target.value)}>
+            <option value="">Choose a release…</option>
+            {releases.map((r) => (
+              <option key={r.tag} value={r.tag} disabled={r.submitted}>
+                {r.tag}
+                {r.name && r.name !== r.tag ? ` — ${r.name}` : ""}
+                {r.prerelease ? " (pre-release)" : ""}
+                {r.submitted ? " (already sent)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+      )}
+      {chosen && (
+        <>
+          <p className="muted small">
+            Version <b>{chosen.version}</b> ·{" "}
+            <ExternalLink href={chosen.html_url}>see it on GitHub</ExternalLink>
+          </p>
+          {rows.length === 0 && <p className="notice">This release has no files attached. Add your builds to it on GitHub.</p>}
+          {rows.length > 0 && <p className="small"><b>Which files are builds?</b> Tick one per platform.</p>}
+          {rows.map((row, i) => (
+            <fieldset key={row.name} className={`file-row pick-row ${row.include ? "" : "off"}`}>
+              <label className="check">
+                <input type="checkbox" checked={row.include} onChange={(e) => update(i, { include: e.target.checked })} />
+                <code>{row.name}</code>
+              </label>
+              {row.include && (
+                <div className="row-2">
+                  <label>
+                    Platform
+                    <select value={row.platform} onChange={(e) => update(i, { platform: e.target.value as Platform })}>
+                      {PLATFORMS.map((p) => (
+                        <option key={p.value} value={p.value}>
+                          {p.label}
+                        </option>
+                      ))}
+                    </select>
+                  </label>
+                  <label>
+                    Type
+                    <select
+                      value={row.kind}
+                      disabled={row.platform === "android"}
+                      onChange={(e) => update(i, { kind: e.target.value as FileKind })}
+                    >
+                      {row.platform === "android" ? (
+                        <option value="apk">APK</option>
+                      ) : (
+                        <>
+                          <option value="archive">Zip of the app's files</option>
+                          <option value="installer">Installer</option>
+                        </>
+                      )}
+                    </select>
+                  </label>
+                </div>
+              )}
+              {row.include && row.kind === "archive" && (
+                <label>
+                  Program to start
+                  <input value={row.exec} required placeholder="my-game.exe or bin/my-game" onChange={(e) => update(i, { exec: e.target.value })} />
+                  <span className="hint">Its path inside the zip. Slop remembers it for your next releases.</span>
+                </label>
+              )}
+            </fieldset>
+          ))}
+          {duplicate && <p className="form-error">Pick one file for {PLATFORM_LABEL[duplicate]}.</p>}
+          {error && (
+            <p className="form-error" role="alert">
+              {error.message}
+            </p>
+          )}
+          <div className="actions">
+            <button className="btn slime" disabled={busy || included.length === 0 || Boolean(duplicate)}>
+              {busy ? "Sending…" : `Send version ${chosen.version}`}
+            </button>
+          </div>
+        </>
+      )}
+    </form>
+  );
+}
+
+/** Automatic pickup of new GitHub releases, and automatic approval of updates. */
+function UpdatesPanel({ slug }: { slug: string }) {
+  const loaded = useLoad(() => api.updateSettings(slug), [slug]);
+  const [settings, setSettings] = useState<UpdateSettings>();
+  const [error, setError] = useState<string>();
+  const s = settings ?? loaded.data;
+  if (!s) return null;
+
+  const change = async (c: Partial<Pick<UpdateSettings, "watch_releases" | "auto_update">>) => {
+    setError(undefined);
+    try {
+      setSettings(await api.changeUpdateSettings(slug, c));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
+  };
+
+  return (
+    <section className="panel panel-pad form updates-panel">
+      <h2>Updates</h2>
+      <label className="check">
+        <input type="checkbox" checked={s.watch_releases} onChange={(e) => void change({ watch_releases: e.target.checked })} />
+        <span>
+          <b>Pick up new GitHub releases</b>
+          <span className="muted small" style={{ display: "block" }}>
+            When you publish a new release on GitHub (not a draft or pre-release), Slop sends it for you within about 10
+            minutes. It expects the same files as last time, with the new version in their names.
+          </span>
+        </span>
+      </label>
+      {s.watch_releases && (
+        <p className="muted small updates-status">
+          {s.watch_note ??
+            (s.watch_checked_at
+              ? `Last checked ${formatDate(s.watch_checked_at)}${s.watch_last_tag ? ` · newest seen: ${s.watch_last_tag}` : ""}.`
+              : "Not checked yet.")}
+        </p>
+      )}
+      {s.watch_problem && <p className="notice">{s.watch_problem}</p>}
+      <label className="check">
+        <input type="checkbox" checked={s.auto_update} onChange={(e) => void change({ auto_update: e.target.checked })} />
+        <span>
+          <b>Approve updates automatically</b>
+          <span className="muted small" style={{ display: "block" }}>
+            After a person at Slop approves your first release, new versions that pass every check go out to players
+            straight away. Players get a notice and update when they want.
+          </span>
+        </span>
+      </label>
+      {s.auto_update && (
+        <p className="muted small updates-status">
+          {s.auto_approval_ready
+            ? "Your next release will be approved automatically if it passes every check."
+            : `Your next release waits for a person: ${s.auto_approval_note}.`}
+        </p>
+      )}
+      {error && <p className="form-error">{error}</p>}
+    </section>
   );
 }

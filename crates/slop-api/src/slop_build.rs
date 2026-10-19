@@ -151,7 +151,7 @@ const SEGMENT: &AsciiSet = &NON_ALPHANUMERIC
     .remove(b'_')
     .remove(b'~');
 
-fn path_segment(s: &str) -> String {
+pub(crate) fn path_segment(s: &str) -> String {
     utf8_percent_encode(s, SEGMENT).to_string()
 }
 
@@ -225,6 +225,7 @@ async fn submit_from_ci(
         &req.version,
         &req.commit.to_ascii_lowercase(),
         files,
+        "slop_build",
     )
     .await?;
     tracing::info!(app = %req.app, version = %req.version, run_repo = %claims.repository, "Slop Build submitted a release");

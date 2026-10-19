@@ -363,3 +363,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .status-row { display: flex; justify-content: space-between; align-items: center; gap: 14px; flex-wrap: wrap; }
 .status-row .step { flex: 1 1 320px; min-width: 0; }
 .status-row .step-state { margin-left: 4px; }
+.pick-row.off { opacity: 0.6; }
+.pick-row label.check code { word-break: break-all; }
+.updates-panel { gap: 10px; }
+.updates-status { margin: -4px 0 4px 28px; }
+.link-button { background: none; border: 0; padding: 0; color: var(--slime); cursor: pointer; font: inherit; text-decoration: underline; }
