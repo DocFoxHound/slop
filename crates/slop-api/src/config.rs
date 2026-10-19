@@ -57,14 +57,17 @@ impl fmt::Debug for DesktopConfig {
 /// Store-page pictures and videos (media.rs).
 #[derive(Clone, Debug)]
 pub struct MediaConfig {
-    /// Where YouTube keeps video posters (`vi/<id>/hqdefault.jpg`). Changed only by tests.
-    pub youtube_image_base: Url,
+    /// Where GitHub serves repository files: `<base><owner>/<repo>/<commit>/<path>`. Not the
+    /// API, so it doesn't use Slop's request allowance. Changed only by tests.
+    pub github_raw_base: Url,
 }
 
 impl Default for MediaConfig {
     fn default() -> Self {
         Self {
-            youtube_image_base: "https://i.ytimg.com/".parse().expect("valid URL"),
+            github_raw_base: "https://raw.githubusercontent.com/"
+                .parse()
+                .expect("valid URL"),
         }
     }
 }
@@ -308,9 +311,9 @@ impl Config {
                 repo: env::var("SLOP_DESKTOP_REPO").ok().filter(|s| !s.is_empty()),
             },
             media: MediaConfig {
-                youtube_image_base: var_or("SLOP_YOUTUBE_IMAGE_BASE", "https://i.ytimg.com/")
+                github_raw_base: var_or("GITHUB_RAW_BASE", "https://raw.githubusercontent.com/")
                     .parse()
-                    .context("SLOP_YOUTUBE_IMAGE_BASE")?,
+                    .context("GITHUB_RAW_BASE")?,
             },
             web_dir: env::var("SLOP_WEB_DIR")
                 .ok()
@@ -326,12 +329,6 @@ impl Config {
     /// Cookies are `Secure` (and use the `__Host-` prefix) whenever the site is served over HTTPS.
     pub fn secure_cookies(&self) -> bool {
         self.public_url.scheme() == "https"
-    }
-
-    /// Where uploaded pictures are served: `<base><id>`. Absolute, because the desktop app's
-    /// pages aren't on Slop's origin.
-    pub fn media_base(&self) -> String {
-        format!("{}v1/media/", self.public_url)
     }
 }
 

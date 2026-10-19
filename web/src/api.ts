@@ -39,12 +39,75 @@ export interface AppSummary {
 export interface GalleryItem {
   id: string;
   kind: "image" | "video";
-  /** The picture, or the video's poster. */
-  url: string;
+  /** The picture, or the video's poster; null for a video without one. */
+  url: string | null;
   youtube_id: string | null;
   caption: string | null;
+  width: number | null;
+  height: number | null;
+}
+
+/** A picture from the maker's repository, pinned to a commit. */
+export interface RepoPicture {
+  path: string;
+  url: string;
+  sha256: string;
   width: number;
   height: number;
+  format: string;
+}
+
+export type MediaItem =
+  | ({ kind: "image"; caption: string | null } & RepoPicture)
+  | { kind: "video"; youtube_id: string; poster: RepoPicture | null; caption: string | null };
+
+/** The order key the server uses for a gallery item. */
+export function mediaKey(item: MediaItem): string {
+  return item.kind === "image" ? `image:${item.path}` : `video:${item.youtube_id}`;
+}
+
+export interface MediaSet {
+  id: string;
+  commit_sha: string;
+  thumbnail: RepoPicture | null;
+  gallery: MediaItem[];
+  status: "pending" | "approved" | "rejected" | "superseded";
+  status_reason: string | null;
+  source: "maker" | "release";
+  created_at: string;
+  reviewed_at: string | null;
+}
+
+export interface MediaOverview {
+  live: MediaSet | null;
+  pending: MediaSet | null;
+  rejected: MediaSet | null;
+  checked_at: string | null;
+  problem: string | null;
+  supported: boolean;
+  manifest_path: string;
+  order: string[];
+  result?: "pending" | "unchanged" | "none" | "problem";
+}
+
+/** A reviewer's note on something waiting for a decision (crates/slop-api/src/review.rs). */
+export interface ReviewNote {
+  id: string;
+  author: string;
+  verdict: "pass" | "concern" | "unsure" | null;
+  note: string;
+  created_at: string;
+}
+
+export interface AdminToken {
+  id: string;
+  name: string;
+  scope: "read" | "review";
+  admin: string;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string | null;
+  revoked_at: string | null;
 }
 
 /** Shelves for an app's page. */
@@ -132,9 +195,10 @@ export type ChangeRequest =
   | { kind: "repo"; repo_url: string; note?: string };
 
 export interface AdminQueue {
-  releases: Array<Release & { app: AdminAppRef }>;
-  changes: Array<AppChange & { app: AdminAppRef; players_get: string | null }>;
-  ready_to_list: Array<AdminAppRef & { approved_releases: number }>;
+  releases: Array<Release & { app: AdminAppRef; notes: ReviewNote[] }>;
+  changes: Array<AppChange & { app: AdminAppRef; players_get: string | null; notes: ReviewNote[] }>;
+  media: Array<MediaSet & { app: AdminAppRef; live: MediaSet | null; notes: ReviewNote[] }>;
+  ready_to_list: Array<AdminAppRef & { approved_releases: number; pictures_pending: boolean; notes: ReviewNote[] }>;
   checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
 }
 
@@ -362,20 +426,11 @@ export const api = {
     request<AppDetail>("PATCH", `/v1/apps/${encodeURIComponent(slug)}`, changes),
   myApps: () => request<AppSummary[]>("GET", "/v1/me/apps"),
   similar: (slug: string) => request<SimilarApps>("GET", `/v1/apps/${encodeURIComponent(slug)}/similar`),
-  /** Pictures go up as data: URLs; the server re-encodes them. */
-  setThumbnail: (slug: string, image: string) =>
-    request<{ thumbnail_url: string }>("PUT", `/v1/apps/${encodeURIComponent(slug)}/thumbnail`, { image }),
-  removeThumbnail: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/thumbnail`),
-  addToGallery: (
-    slug: string,
-    item: { kind: "image"; image: string; caption?: string } | { kind: "video"; url: string; caption?: string },
-  ) => request<GalleryItem[]>("POST", `/v1/apps/${encodeURIComponent(slug)}/gallery`, item),
-  captionGalleryItem: (slug: string, id: string, caption: string) =>
-    request<GalleryItem[]>("PATCH", `/v1/apps/${encodeURIComponent(slug)}/gallery/${encodeURIComponent(id)}`, { caption }),
-  removeFromGallery: (slug: string, id: string) =>
-    request<GalleryItem[]>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/gallery/${encodeURIComponent(id)}`),
-  reorderGallery: (slug: string, ids: string[]) =>
-    request<GalleryItem[]>("PUT", `/v1/apps/${encodeURIComponent(slug)}/gallery/order`, { ids }),
+  /** Pictures from the repository's .slop/media.json (crates/slop-api/src/media.rs). */
+  media: (slug: string) => request<MediaOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/media`),
+  checkMedia: (slug: string) => request<MediaOverview>("POST", `/v1/apps/${encodeURIComponent(slug)}/media/check`),
+  setMediaOrder: (slug: string, keys: string[]) =>
+    request<MediaOverview>("PUT", `/v1/apps/${encodeURIComponent(slug)}/media/order`, { keys }),
   /** The licence GitHub finds in a repository, for the Publish form. */
   detectLicense: (repoUrl: string) =>
     request<{ spdx: string | null; name: string | null; note: string | null }>(
@@ -424,6 +479,12 @@ export const api = {
     reject: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
     approveChange: (id: string) => request<void>("POST", `/v1/admin/changes/${id}/approve`),
     rejectChange: (id: string, reason: string) => request<void>("POST", `/v1/admin/changes/${id}/reject`, { reason }),
+    approveMedia: (id: string) => request<void>("POST", `/v1/admin/media/${id}/approve`),
+    rejectMedia: (id: string, reason: string) => request<void>("POST", `/v1/admin/media/${id}/reject`, { reason }),
+    tokens: () => request<AdminToken[]>("GET", "/v1/admin/tokens"),
+    createToken: (body: { name: string; scope: AdminToken["scope"]; days: number }) =>
+      request<AdminToken & { token: string }>("POST", "/v1/admin/tokens", body),
+    revokeToken: (id: string) => request<void>("POST", `/v1/admin/tokens/${id}/revoke`),
     revoke: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/revoke`, { reason }),
     list: (slug: string) => request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/list`),
     delist: (slug: string, reason: string) =>

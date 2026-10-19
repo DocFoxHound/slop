@@ -121,11 +121,7 @@ pub(crate) fn push_summary_columns_with(
         "select a.slug, a.title, a.summary, a.kind, a.stage, a.status, a.min_age, a.updated_at,
                 coalesce(array(select t.slug from app_tags at join tags t on t.id = at.tag_id
                                where at.app_id = a.id order by t.slug), '{}') as tags,
-                (select ",
-    )
-    .push_bind(config.media_base())
-    .push(
-        " || m.id::text from app_media m where m.app_id = a.id and m.role = 'thumbnail') as thumbnail_url,
+                (select ms.thumbnail->>'url' from media_sets ms where ms.id = a.media_set_id) as thumbnail_url,
                 (a.stage <> 'released' and a.last_commit_at is not null
                  and a.last_commit_at < now() - make_interval(days => ",
     )

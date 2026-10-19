@@ -1,7 +1,8 @@
 // The screenshots-and-videos carousel on an app's page: one big view and a strip of thumbnails,
-// like Steam's. Videos stay on YouTube: the page shows Slop's copy of the poster, and only loads
-// YouTube's player (from youtube-nocookie.com) once someone presses play. The desktop app opens
-// the video in the browser instead.
+// like Steam's. Pictures come from the maker's repository (crates/slop-api/src/media.rs). Videos
+// stay on YouTube: the page shows the maker's poster (or a plain card), and only loads YouTube's
+// player (from youtube-nocookie.com) once someone presses play. The desktop app opens the video
+// in the browser instead.
 
 import { useState, type KeyboardEvent } from "react";
 
@@ -44,14 +45,14 @@ export function Gallery({ items, title }: { items: GalleryItem[]; title: string 
           />
         ) : current.kind === "video" ? (
           <button type="button" className="gallery-play" onClick={() => play(current)} aria-label={`Play video: ${label(current, index)}`}>
-            <img src={current.url} alt="" />
+            {current.url ? <img src={current.url} alt="" /> : <span className="play-card">{current.caption ?? title}</span>}
             <span className="play-mark" aria-hidden="true">
               ▶
             </span>
             <span className="play-note">{isDesktop ? "Opens on YouTube" : "Plays from YouTube"}</span>
           </button>
         ) : (
-          <img src={current.url} alt={label(current, index)} />
+          <img src={current.url ?? ""} alt={label(current, index)} />
         )}
         {items.length > 1 && (
           <>
@@ -77,7 +78,7 @@ export function Gallery({ items, title }: { items: GalleryItem[]; title: string 
               className={i === index ? "on" : ""}
               onClick={() => go(i)}
             >
-              <img src={item.url} alt="" loading="lazy" />
+              {item.url ? <img src={item.url} alt="" loading="lazy" /> : <span className="play-card" />}
               {item.kind === "video" && (
                 <span className="play-mark small" aria-hidden="true">
                   ▶

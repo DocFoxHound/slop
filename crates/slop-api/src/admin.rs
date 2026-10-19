@@ -322,6 +322,10 @@ pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result
              review. A Coming soon page can be listed without one."
         );
     }
+    ensure!(
+        !crate::media::has_pending(&mut tx, id).await?,
+        "review the app's pictures first: a new set is waiting under Pictures to review"
+    );
     sqlx::query("update apps set status = 'listed', updated_at = now() where id = $1")
         .bind(id)
         .execute(&mut *tx)

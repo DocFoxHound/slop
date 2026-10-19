@@ -417,24 +417,26 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 
 .media-editor { margin-top: 18px; }
 .media-editor h2 { font-size: 18px; }
-.thumb-row { display: flex; gap: 16px; align-items: center; flex-wrap: wrap; }
 .thumb-preview { width: 280px; max-width: 100%; }
-.thumb-preview .art { aspect-ratio: 460 / 215; }
-.thumb-preview .art .initial { font-size: 46px; }
-.file-btn { position: relative; overflow: hidden; }
-.file-btn input[type="file"] { position: absolute; inset: 0; opacity: 0; cursor: pointer; }
-.file-btn:focus-within { outline: 2px solid var(--slime); outline-offset: 2px; }
 .gallery-edit { list-style: none; margin: 0; padding: 0; display: grid; gap: 10px; }
 .gallery-edit li { display: grid; grid-template-columns: 128px minmax(0, 1fr) auto; gap: 12px; align-items: center; padding: 8px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
 .ge-thumb { position: relative; aspect-ratio: 16 / 9; background: #000; border-radius: 5px; overflow: hidden; }
 .ge-thumb img { width: 100%; height: 100%; object-fit: cover; display: block; }
-.ge-caption { display: flex; gap: 8px; align-items: flex-end; }
-.ge-caption label { flex: 1; }
-.video-add { display: flex; gap: 10px; align-items: flex-end; }
-.video-add label { flex: 1; }
 @media (max-width: 600px) {
   .gallery-edit li { grid-template-columns: 96px minmax(0, 1fr); }
   .gallery-edit li .row-actions { grid-column: 1 / -1; }
-  .video-add { flex-direction: column; align-items: stretch; }
   .gallery-strip button { width: 88px; }
 }
+
+/* ---- repository pictures and review ---------------------------------- */
+.code-block { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 10px 12px; font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; white-space: pre-wrap; overflow-wrap: anywhere; margin: 8px 0; }
+.media-set { display: grid; gap: 10px; margin-top: 16px; padding-top: 14px; border-top: 1px solid var(--line); }
+.thumb-img { width: 100%; aspect-ratio: 460 / 215; object-fit: cover; border-radius: 6px; display: block; }
+.play-card { position: absolute; inset: 0; display: grid; place-items: center; padding: 12px; background: linear-gradient(135deg, #1b2330, #0b0f15); color: var(--text-2); font-weight: 700; text-align: center; }
+.gallery-strip .play-card, .ge-thumb .play-card { font-size: 0; }
+.media-review { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 12px; margin: 10px 0; }
+.media-review figure { margin: 0; }
+.media-review img { width: 100%; aspect-ratio: 16 / 9; object-fit: contain; background: #000; border-radius: 6px; display: block; }
+.media-review .ge-thumb { aspect-ratio: 16 / 9; }
+.review-notes { list-style: none; margin: 10px 0; padding: 0; display: grid; gap: 6px; }
+.review-notes li { padding: 8px 10px; border-left: 3px solid var(--line); background: var(--panel-2); border-radius: 0 6px 6px 0; font-size: 13px; }

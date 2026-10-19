@@ -23,6 +23,8 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Library | `library_entries` | The user's library; later, recommendations | Contract | Until removed or account deleted |
 | Release submitter | `releases.submitted_by` | Who submitted a build (accountability) | Legitimate interest | Life of app + 6 years (scan records, LEGAL-GUIDANCE §15) |
 | Review decisions | `audit_log` | Record of review and moderation decisions | Legal obligation | 6 years (LEGAL-GUIDANCE §15) |
+| Review notes (author's name) | `review_notes` | Reviewers' findings on items waiting for a decision | Legitimate interest (moderation) | With the item they're about |
+| Admin API tokens (hashed token, name, last use) | `admin_tokens` | AI reviewers acting for an admin; showing which tokens are in use | Legitimate interest (moderation) | Until revoked or expired, then removable |
 
 **Not collected:** passwords, provider access tokens (used once at sign-in, never stored), date
 of birth, IP addresses in the database.

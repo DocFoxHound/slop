@@ -768,19 +768,19 @@ pub async fn run_fetcher(state: AppState) {
 
 /// Fetches one release, if one is waiting. Returns whether it did any work.
 pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
-    let claimed: Option<(Uuid, String, String)> = sqlx::query_as(
+    let claimed: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
         "update releases r set fetch_started_at = now()
          from apps a
          where a.id = r.app_id and r.id = (
              select id from releases
              where status = 'fetching' and (fetch_started_at is null or fetch_started_at < now() - $1)
              order by created_at limit 1 for update skip locked)
-         returning r.id, r.commit_sha, a.repo_url",
+         returning r.id, r.app_id, r.commit_sha, a.repo_url",
     )
     .bind(FETCH_LEASE)
     .fetch_optional(&state.db)
     .await?;
-    let Some((id, commit, repo_url)) = claimed else {
+    let Some((id, app_id, commit, repo_url)) = claimed else {
         return Ok(false);
     };
 
@@ -795,6 +795,8 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
             .execute(&state.db)
             .await?;
             tracing::info!(release = %id, "release fetched; awaiting review");
+            // Pictures that changed with this release wait for their own review.
+            crate::media::refresh_for_release(state, app_id, &repo_url, &commit).await;
             crate::updates::try_auto_approve(state, id).await?;
         }
         Err(err) => {

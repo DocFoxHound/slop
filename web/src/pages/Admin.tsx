@@ -4,14 +4,25 @@
 import { useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
-import { api, ApiError, type AdminApp, type AdminQueue, type AppStage, type AppStatus } from "../api";
+import {
+  api,
+  ApiError,
+  type AdminApp,
+  type AdminQueue,
+  type AdminToken,
+  type AppStage,
+  type AppStatus,
+  type MediaSet,
+  type ReviewNote,
+} from "../api";
+import { ItemThumb } from "../components/MediaEditor";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { NotFound } from "./Listing";
 
-type Tab = "queue" | "apps" | "audit";
+type Tab = "queue" | "apps" | "audit" | "ai";
 
 export function Admin() {
   useDocumentTitle("Admin");
@@ -31,6 +42,7 @@ export function Admin() {
             ["queue", "Review queue"],
             ["apps", "Apps"],
             ["audit", "Audit log"],
+            ["ai", "AI reviewers"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -47,6 +59,7 @@ export function Admin() {
       {tab === "queue" && <QueueTab />}
       {tab === "apps" && <AppsTab />}
       {tab === "audit" && <AuditTab />}
+      {tab === "ai" && <TokensTab />}
     </div>
   );
 }
@@ -167,6 +180,7 @@ function QueueTab() {
                 <FileRow key={f.platform} file={f} />
               ))}
             </dl>
+            <Notes notes={r.notes} />
             <div className="row-actions">
               <button
                 className="btn slime small"
@@ -233,6 +247,7 @@ function QueueTab() {
                 </>
               )}
             </dl>
+            <Notes notes={c.notes} />
             {c.kind === "repo" && (
               <p className="muted small">
                 Check the new repository belongs to the same maker and project. Its first release will come back here for
@@ -259,27 +274,83 @@ function QueueTab() {
         ))}
       </ul>
 
+      <h2 className="section-title">Pictures to review ({q.media.length})</h2>
+      <p className="muted small">
+        Store-page pictures and videos from makers' repositories, fixed at a commit. Look at every one: no sexually explicit
+        content, nothing that doesn't fit the age rating. Approving shows them in the store; an app can't be put in the
+        store while its pictures wait here.
+      </p>
+      {q.media.length === 0 && <div className="empty-state">No pictures waiting.</div>}
+      <ul className="release-list">
+        {q.media.map((m) => (
+          <li key={m.id} className="panel panel-pad">
+            <div className="title-row spread">
+              <div className="title-row">
+                <Link to={`/app/${m.app.slug}`}>
+                  <b>{m.app.title}</b>
+                </Link>
+                <span className="muted">by {m.app.maker}</span>
+                <span className="badge soon">{m.live ? "NEW PICTURES" : "FIRST PICTURES"}</span>
+              </div>
+              <span className="muted small">
+                <ExternalLink href={`${m.app.repo_url}/tree/${m.commit_sha}/.slop`}>
+                  <code>{m.commit_sha.slice(0, 7)}</code>
+                </ExternalLink>{" "}
+                · {formatDate(m.created_at)}
+              </span>
+            </div>
+            <MediaReview set={m} />
+            {m.live && (
+              <details>
+                <summary className="muted small">What the store shows now</summary>
+                <MediaReview set={m.live} />
+              </details>
+            )}
+            <Notes notes={m.notes} />
+            <div className="row-actions">
+              <button className="btn slime small" disabled={busy !== undefined} onClick={() => void run(m.id, () => api.admin.approveMedia(m.id))}>
+                {busy === m.id ? "Approving…" : "Approve pictures"}
+              </button>
+              <ReasonButton
+                label="Turn down"
+                placeholder="What's wrong, shown to the maker"
+                danger
+                disabled={busy !== undefined}
+                onSubmit={(reason) => void run(m.id, () => api.admin.rejectMedia(m.id, reason))}
+              />
+            </div>
+          </li>
+        ))}
+      </ul>
+
       <h2 className="section-title">Ready for the store ({q.ready_to_list.length})</h2>
       {q.ready_to_list.length === 0 && <div className="empty-state">No drafts are ready to list.</div>}
       <ul className="release-list">
         {q.ready_to_list.map((a) => (
-          <li key={a.slug} className="panel panel-pad title-row spread">
-            <div className="title-row">
-              <Link to={`/app/${a.slug}`}>
-                <b>{a.title}</b>
-              </Link>
-              <span className="muted">
-                {STAGE_LABEL[a.stage]} · by {a.maker} · {a.approved_releases} approved release
-                {a.approved_releases === 1 ? "" : "s"}
-              </span>
+          <li key={a.slug} className="panel panel-pad">
+            <div className="title-row spread">
+              <div className="title-row">
+                <Link to={`/app/${a.slug}`}>
+                  <b>{a.title}</b>
+                </Link>
+                <span className="muted">
+                  {STAGE_LABEL[a.stage]} · by {a.maker} · {a.approved_releases} approved release
+                  {a.approved_releases === 1 ? "" : "s"}
+                </span>
+              </div>
+              {a.pictures_pending ? (
+                <span className="muted small">Review its pictures first</span>
+              ) : (
+                <button
+                  className="btn slime small"
+                  disabled={busy !== undefined}
+                  onClick={() => void run(a.slug, () => api.admin.list(a.slug))}
+                >
+                  {busy === a.slug ? "Listing…" : "Put in the store"}
+                </button>
+              )}
             </div>
-            <button
-              className="btn slime small"
-              disabled={busy !== undefined}
-              onClick={() => void run(a.slug, () => api.admin.list(a.slug))}
-            >
-              {busy === a.slug ? "Listing…" : "Put in the store"}
-            </button>
+            <Notes notes={a.notes} />
           </li>
         ))}
       </ul>
@@ -464,5 +535,181 @@ function AuditTab() {
         ))}
       </tbody>
     </table>
+  );
+}
+
+/** Every picture in a set, large enough to judge, with each video linked. */
+function MediaReview({ set }: { set: MediaSet }) {
+  return (
+    <div className="media-review">
+      {set.thumbnail && (
+        <figure>
+          <a href={set.thumbnail.url} target="_blank" rel="noopener noreferrer">
+            <img src={set.thumbnail.url} alt="Thumbnail" />
+          </a>
+          <figcaption className="muted small">
+            Thumbnail · {set.thumbnail.width}×{set.thumbnail.height}
+          </figcaption>
+        </figure>
+      )}
+      {set.gallery.map((item, i) => (
+        <figure key={i}>
+          {item.kind === "image" ? (
+            <a href={item.url} target="_blank" rel="noopener noreferrer">
+              <img src={item.url} alt={`Screenshot ${i + 1}`} />
+            </a>
+          ) : (
+            <ExternalLink href={`https://www.youtube.com/watch?v=${item.youtube_id}`}>
+              <ItemThumb item={item} />
+            </ExternalLink>
+          )}
+          <figcaption className="muted small">
+            {i + 1}. {item.kind === "image" ? `${item.path} · ${item.width}×${item.height}` : "YouTube video: watch it"}
+            {item.caption && <div>“{item.caption}”</div>}
+          </figcaption>
+        </figure>
+      ))}
+      {!set.thumbnail && set.gallery.length === 0 && <p className="muted small">No pictures: this set removes them all.</p>}
+    </div>
+  );
+}
+
+const VERDICT: Record<NonNullable<ReviewNote["verdict"]>, { label: string; badge: string }> = {
+  pass: { label: "PASS", badge: "official" },
+  concern: { label: "CONCERN", badge: "bad" },
+  unsure: { label: "UNSURE", badge: "warn" },
+};
+
+/** Notes reviewers (often AI reviewers) left on an item. */
+function Notes({ notes }: { notes: ReviewNote[] }) {
+  if (notes.length === 0) return null;
+  return (
+    <ul className="review-notes">
+      {notes.map((n) => (
+        <li key={n.id}>
+          {n.verdict && <span className={`badge ${VERDICT[n.verdict].badge}`}>{VERDICT[n.verdict].label}</span>} {n.note}
+          <div className="faint small">
+            {n.author} · {formatDate(n.created_at)}
+          </div>
+        </li>
+      ))}
+    </ul>
+  );
+}
+
+function TokensTab() {
+  const tokens = useLoad(() => api.admin.tokens(), []);
+  const { busy, error, run } = useAction(tokens.reload);
+  const [name, setName] = useState("");
+  const [scope, setScope] = useState<AdminToken["scope"]>("read");
+  const [days, setDays] = useState(90);
+  const [created, setCreated] = useState<string>();
+  const origin = window.location.origin;
+  const prompt = created
+    ? `You are a reviewer for the Slop store. Read ${origin}/v1/admin/review/guide and follow it. ` +
+      `Send this header with every request: "Authorization: Bearer ${created}". ` +
+      `Then go through GET ${origin}/v1/admin/review and handle each item.`
+    : "";
+
+  return (
+    <>
+      <p className="muted">
+        An AI reviewer gets an API token that acts for you on the admin API. It reads everything waiting (releases, change
+        requests, pictures, apps ready for the store) at <code>/v1/admin/review</code>, follows the guide at{" "}
+        <code>/v1/admin/review/guide</code>, and leaves notes you see in the review queue. A <b>read</b> token can only look
+        and leave notes; a <b>review</b> token can also approve and reject. Everything it does is in the audit log under the
+        token's name.
+      </p>
+      <form
+        className="panel panel-pad form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void run("create", async () => {
+            const t = await api.admin.createToken({ name, scope, days });
+            setCreated(t.token);
+            setName("");
+          });
+        }}
+      >
+        <h2>New token</h2>
+        <div className="row-2">
+          <label>
+            Name
+            <input value={name} maxLength={60} required placeholder="e.g. Claude, picture checks" onChange={(e) => setName(e.target.value)} />
+          </label>
+          <label>
+            Can
+            <select value={scope} onChange={(e) => setScope(e.target.value as AdminToken["scope"])}>
+              <option value="read">Look and leave notes (read)</option>
+              <option value="review">Also approve and reject (review)</option>
+            </select>
+          </label>
+        </div>
+        <label>
+          Expires after
+          <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
+            {[7, 30, 90, 365].map((d) => (
+              <option key={d} value={d}>
+                {d} days
+              </option>
+            ))}
+          </select>
+        </label>
+        <div className="row-actions">
+          <button className="btn slime" disabled={busy !== undefined || !name.trim()}>
+            Make token
+          </button>
+        </div>
+      </form>
+      {created && (
+        <div className="panel panel-pad ai-notice">
+          <b>Copy it now: Slop won't show this token again.</b>
+          <pre className="code-block">{created}</pre>
+          <p className="small">Give your AI this prompt:</p>
+          <pre className="code-block ai-prompt">{prompt}</pre>
+          <div className="row-actions">
+            <button className="btn small" onClick={() => void navigator.clipboard.writeText(prompt)}>
+              Copy prompt
+            </button>
+            <button className="btn small ghost" onClick={() => setCreated(undefined)}>
+              Done
+            </button>
+          </div>
+        </div>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <h2 className="section-title">Tokens</h2>
+      {tokens.error && <ErrorState error={tokens.error} onRetry={tokens.reload} />}
+      {tokens.data?.length === 0 && <div className="empty-state">No tokens yet.</div>}
+      <ul className="release-list">
+        {tokens.data?.map((t) => {
+          const expired = new Date(t.expires_at) < new Date();
+          return (
+            <li key={t.id} className="panel panel-pad title-row spread">
+              <div>
+                <div className="title-row">
+                  <b>{t.name}</b>
+                  <span className={`badge ${t.scope === "review" ? "soon" : "neutral"}`}>{t.scope.toUpperCase()}</span>
+                  {t.revoked_at ? <span className="badge bad">REVOKED</span> : expired && <span className="badge bad">EXPIRED</span>}
+                </div>
+                <div className="muted small">
+                  for {t.admin} · made {formatDate(t.created_at)} · expires {formatDate(t.expires_at)} ·{" "}
+                  {t.last_used_at ? `last used ${formatDate(t.last_used_at)}` : "never used"}
+                </div>
+              </div>
+              {!t.revoked_at && !expired && (
+                <button className="btn small ghost danger" disabled={busy !== undefined} onClick={() => void run(t.id, () => api.admin.revokeToken(t.id))}>
+                  Revoke
+                </button>
+              )}
+            </li>
+          );
+        })}
+      </ul>
+    </>
   );
 }
