@@ -2103,6 +2103,12 @@ async fn the_api_can_serve_the_website(db: PgPool) {
     )
     .unwrap();
     std::fs::write(dir.join("assets/app-1234.js"), "console.log(1)").unwrap();
+    std::fs::write(
+        dir.join("guide.html"),
+        "<!doctype html><title>How to publish</title>",
+    )
+    .unwrap();
+    std::fs::write(dir.join("publishing.md"), "# Publishing → Slop").unwrap();
 
     let base = test_app(db).await;
     let mut config = base.config.clone();
@@ -2136,6 +2142,16 @@ async fn the_api_can_serve_the_website(db: PgPool) {
             .await
             .contains("Sign in")
     );
+    // The guide comes with its text already in the page, and as UTF-8 Markdown, for tools that
+    // don't run JavaScript.
+    assert!(
+        text(app.send(req(Method::GET, "/publish/guide")).await)
+            .await
+            .contains("How to publish")
+    );
+    let md = app.send(req(Method::GET, "/publishing.md")).await;
+    assert_eq!(md.headers()["content-type"], "text/markdown; charset=utf-8");
+    assert!(text(md).await.contains("Publishing → Slop"));
     let asset = app.send(req(Method::GET, "/assets/app-1234.js")).await;
     assert_eq!(
         asset.headers()["cache-control"],
