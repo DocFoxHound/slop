@@ -5,6 +5,7 @@
 //! it to the UI as a small set of commands.
 
 pub mod api;
+pub mod chat;
 pub mod library;
 pub mod signin;
 

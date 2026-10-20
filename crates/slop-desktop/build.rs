@@ -18,6 +18,7 @@ fn main() {
             "uninstall_app",
             "launch_app",
             "run_installer",
+            "chat",
         ]),
     ))
     .expect("failed to run tauri-build");

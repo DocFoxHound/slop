@@ -7,12 +7,14 @@ pub mod auth;
 pub mod branches;
 pub mod catalog;
 pub mod challenge;
+pub mod chat;
 pub mod cleanup;
 pub mod config;
 pub mod desktop_updates;
 pub mod donations;
 pub mod error;
 pub mod foryou;
+pub mod friends;
 pub mod frozen;
 pub mod github_app;
 pub mod interested;
@@ -80,6 +82,8 @@ pub struct AppState {
     pub oidc_keys: Arc<tokio::sync::RwLock<slop_build::OidcKeys>>,
     /// Slop's GitHub App installation tokens.
     pub github_app_tokens: Arc<github_app::TokenCache>,
+    /// Wakes chat long-polls (chat.rs).
+    pub chat_hub: chat::Hub,
 }
 
 impl AppState {
@@ -106,6 +110,7 @@ impl AppState {
             rate_limiter,
             oidc_keys: Arc::default(),
             github_app_tokens: Arc::default(),
+            chat_hub: chat::Hub::default(),
         })
     }
 }
@@ -145,6 +150,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(private::routes())
         .merge(teams::routes())
         .merge(frozen::routes())
+        .merge(friends::routes())
+        .merge(chat::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
@@ -163,6 +170,32 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
                     Duration::from_secs(20),
                 )),
         )
+        .merge(
+            chat::message_routes()
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    chat::MAX_COMMIT_BODY * 2,
+                ))
+                .layer(RequestBodyLimitLayer::new(chat::MAX_COMMIT_BODY * 2))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(20),
+                )),
+        )
+        .merge(
+            chat::upload_routes()
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    chat::MAX_ATTACHMENT_BYTES,
+                ))
+                .layer(RequestBodyLimitLayer::new(chat::MAX_ATTACHMENT_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(120),
+                )),
+        )
+        .merge(chat::sync_routes().layer(TimeoutLayer::with_status_code(
+            StatusCode::SERVICE_UNAVAILABLE,
+            Duration::from_secs(40),
+        )))
         .merge(
             people::jobs::evidence_routes()
                 .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))

@@ -8,6 +8,7 @@ import { api } from "../api";
 import { AppTile, ErrorState, Loading, Shelf } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { ConnectionButtons } from "./Friends";
 
 export function Profile() {
   const { id = "" } = useParams();
@@ -34,6 +35,7 @@ export function Profile() {
               </>
             )}
           </p>
+          <ConnectionButtons userId={id} name={p.name} />
         </div>
       </div>
       {p.is_me && (

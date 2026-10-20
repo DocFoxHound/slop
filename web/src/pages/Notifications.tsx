@@ -18,6 +18,7 @@ const ICON: Record<Notification["category"], string> = {
   teams: "👥",
   apps: "📦",
   chat: "💬",
+  friends: "🤝",
 };
 
 export function Notifications() {

@@ -30,6 +30,7 @@
     "allow-install-app",
     "allow-uninstall-app",
     "allow-launch-app",
-    "allow-run-installer"
+    "allow-run-installer",
+    "allow-chat"
   ]
 }

@@ -71,6 +71,16 @@ pub async fn run(state: crate::AppState) {
         if let Err(err) = crate::notify::cleanup(&state.db).await {
             tracing::error!(error = ?err, "notification cleanup failed");
         }
+        // Chat: encrypted messages, Welcomes and attachments after 30 days; unapproved devices
+        // after a day.
+        match crate::chat::cleanup(&state.db).await {
+            Ok(n) if n > 0 => tracing::info!(deleted = n, "old chat deliveries"),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "chat cleanup failed"),
+        }
+        if let Err(err) = crate::chat::expire_pending(&state.db).await {
+            tracing::error!(error = ?err, "chat device expiry failed");
+        }
         match crate::people::jobs::auto_complete(&state.db, time::OffsetDateTime::now_utc()).await {
             Ok(n) if n > 0 => tracing::info!(completed = n, "people jobs completed after 7 days"),
             Ok(_) => {}

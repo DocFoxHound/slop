@@ -144,6 +144,35 @@ const EXPORT: &[(&str, &str)] = &[
         "select to_jsonb(d) - 'user_id' from donation_accounts d where d.user_id = $1",
     ),
     (
+        "friends",
+        "select coalesce(jsonb_agg(jsonb_build_object('user', case when f.user_a = $1 then f.user_b else f.user_a end,
+                'since', f.since)), '[]')
+         from friends f where $1 in (f.user_a, f.user_b)",
+    ),
+    (
+        "friend_requests",
+        "select coalesce(jsonb_agg(to_jsonb(r)), '[]') from friend_requests r where $1 in (r.from_id, r.to_id)",
+    ),
+    (
+        "blocked",
+        "select coalesce(jsonb_agg(jsonb_build_object('user', blocked_id, 'since', created_at)), '[]')
+         from user_blocks where user_id = $1",
+    ),
+    (
+        "chat_devices",
+        "select coalesce(jsonb_agg(jsonb_build_object('id', id, 'name', name, 'status', status, 'created_at', created_at,
+                'last_seen_at', last_seen_at, 'revoked_at', revoked_at) order by created_at), '[]')
+         from chat_devices where user_id = $1",
+    ),
+    (
+        "chats",
+        // Messages are end-to-end encrypted: Slop has only who is in each chat. Your app has the
+        // messages themselves.
+        "select coalesce(jsonb_agg(jsonb_build_object('chat', c.id, 'kind', c.kind, 'created_at', c.created_at,
+                'members', (select jsonb_agg(m2.user_id) from chat_members m2 where m2.conversation_id = c.id))), '[]')
+         from chat_conversations c join chat_members m on m.conversation_id = c.id where m.user_id = $1",
+    ),
+    (
         "donation_account_changes",
         "select coalesce(jsonb_agg(to_jsonb(c) - 'user_id' order by c.requested_at), '[]')
          from stripe_account_changes c where c.user_id = $1",
@@ -363,6 +392,8 @@ pub async fn close_account(
         "user_app_usage",
         "pulse_sessions",
         "notifications",
+        "chat_backups",
+        "chat_member_state",
     ] {
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "delete from {table} where user_id = $1"
@@ -378,6 +409,19 @@ pub async fn close_account(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    // Chat: friends and requests go, their devices are revoked (so the people they chatted with
+    // remove them from every chat), and they leave their group chats.
+    for sql in [
+        "delete from friends where $1 in (user_a, user_b)",
+        "delete from friend_requests where $1 in (from_id, to_id)",
+        "delete from user_blocks where user_id = $1",
+        "update chat_devices set status = 'revoked', revoked_at = now() where user_id = $1 and status <> 'revoked'",
+        "delete from chat_key_packages k using chat_devices d where d.id = k.device_id and d.user_id = $1",
+        "delete from chat_welcomes w using chat_devices d where d.id = w.device_id and d.user_id = $1",
+        "delete from chat_members m using chat_conversations c where c.id = m.conversation_id and c.kind in ('group', 'self') and m.user_id = $1",
+    ] {
+        sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
+    }
     // Teams: they leave; a team they owned passes to its longest-standing member, or ends.
     sqlx::query(
         "update team_members m set role = 'owner'

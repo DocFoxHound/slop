@@ -14,6 +14,7 @@ use serde_json::Value;
 use slop_client::{
     Error,
     api::{ApiClient, ApiResponse, KeyringTokenStore},
+    chat::{Chat, KeyringSecrets, OutgoingFile},
     library::{InstalledApp, Library},
     signin,
     slop_manifest::{self, Platform, Signed},
@@ -50,6 +51,9 @@ struct Desktop {
     pending_sign_in: tokio::sync::Mutex<Option<signin::PendingSignIn>>,
     /// A newer version, once one has been found.
     update: tokio::sync::Mutex<Option<UpdateInfo>>,
+    /// Chat for the signed-in user, opened on first use (DESIGN §19).
+    chat: tokio::sync::Mutex<Option<Arc<Chat>>>,
+    chat_dir: std::path::PathBuf,
 }
 
 /// Errors as the UI sees them: a short code and a sentence to show.
@@ -179,6 +183,8 @@ async fn sign_in_finish(app: AppHandle, desktop: State<'_, Desktop>) -> CommandR
 /// Signs out, then closes the store and shows the sign-in window, like Steam.
 #[tauri::command]
 async fn sign_out(app: AppHandle, desktop: State<'_, Desktop>) -> CommandResult<()> {
+    // Chat stops syncing; its encrypted state stays for the next sign-in.
+    *desktop.chat.lock().await = None;
     desktop.api.sign_out().await?;
     let _ = app.emit("session-changed", ());
     open_login(&app);
@@ -525,6 +531,318 @@ async fn run_installer(desktop: State<'_, Desktop>, slug: String) -> CommandResu
     })
 }
 
+// ---------------------------------------------------------------------------------------------
+// Chat: end-to-end encrypted in slop-client; the page only sees what it shows (SECURITY §8.5).
+
+/// What the chat page can ask for. One command, so the page's reach stays one entry point.
+#[derive(serde::Deserialize)]
+#[serde(tag = "action", rename_all = "snake_case")]
+enum ChatAction {
+    Status,
+    Setup {
+        name: String,
+    },
+    Approve {
+        device: uuid::Uuid,
+        code: String,
+    },
+    StartOver,
+    RemoveDevice {
+        device: uuid::Uuid,
+    },
+    Conversations,
+    Messages {
+        conversation: uuid::Uuid,
+        before: Option<i64>,
+    },
+    Send {
+        conversation: uuid::Uuid,
+        text: String,
+        reply_to: Option<uuid::Uuid>,
+        #[serde(default)]
+        files: Vec<FileIn>,
+        link_preview: bool,
+    },
+    React {
+        conversation: uuid::Uuid,
+        message: uuid::Uuid,
+        emoji: String,
+        on: bool,
+    },
+    Edit {
+        conversation: uuid::Uuid,
+        message: uuid::Uuid,
+        text: String,
+    },
+    Delete {
+        conversation: uuid::Uuid,
+        message: uuid::Uuid,
+    },
+    Rename {
+        conversation: uuid::Uuid,
+        name: String,
+    },
+    StartDirect {
+        user: String,
+    },
+    StartGroup {
+        users: Vec<String>,
+        name: Option<String>,
+    },
+    StartTeam {
+        team: String,
+    },
+    AddPeople {
+        conversation: uuid::Uuid,
+        users: Vec<String>,
+    },
+    Leave {
+        conversation: uuid::Uuid,
+    },
+    RemovePerson {
+        conversation: uuid::Uuid,
+        user: uuid::Uuid,
+    },
+    Hide {
+        conversation: uuid::Uuid,
+    },
+    Mute {
+        conversation: uuid::Uuid,
+        muted: bool,
+    },
+    MarkRead {
+        conversation: uuid::Uuid,
+    },
+    Attachment {
+        conversation: uuid::Uuid,
+        message: uuid::Uuid,
+        attachment: uuid::Uuid,
+    },
+    SecurityCodes {
+        conversation: uuid::Uuid,
+    },
+    Report {
+        conversation: uuid::Uuid,
+        message: uuid::Uuid,
+        reason: String,
+        details: String,
+    },
+    SetBackups {
+        on: bool,
+    },
+    Restore {
+        code: String,
+    },
+}
+
+#[derive(serde::Deserialize)]
+struct FileIn {
+    name: String,
+    mime: String,
+    /// Base64.
+    data: String,
+}
+
+/// The signed-in user's chat, opened (and its sync loop started) on first use.
+async fn chat_for(app: &AppHandle, desktop: &Desktop) -> CommandResult<Arc<Chat>> {
+    let mut slot = desktop.chat.lock().await;
+    if let Some(chat) = slot.as_ref() {
+        return Ok(chat.clone());
+    }
+    let me: Value = desktop.api.get_json("/v1/me").await?;
+    let user: uuid::Uuid = me["id"]
+        .as_str()
+        .and_then(|s| s.parse().ok())
+        .ok_or(CommandError {
+            code: "signed_out",
+            message: "Sign in to chat.".into(),
+        })?;
+    let chat = Arc::new(Chat::open(
+        desktop.api.clone(),
+        desktop.chat_dir.clone(),
+        &KeyringSecrets::new(APP_ID),
+        user,
+    )?);
+    *slot = Some(chat.clone());
+    tauri::async_runtime::spawn(chat_loop(app.clone(), Arc::downgrade(&chat)));
+    Ok(chat)
+}
+
+/// Long-polls for new messages while chat is open, and tells the page what changed. Stops when
+/// the user signs out (the chat is dropped).
+async fn chat_loop(app: AppHandle, chat: std::sync::Weak<Chat>) {
+    let mut backoff = 2;
+    loop {
+        let Some(c) = chat.upgrade() else {
+            return;
+        };
+        match c.sync(25).await {
+            Ok(changes) => {
+                backoff = 2;
+                if changes.list || changes.devices || !changes.conversations.is_empty() {
+                    let _ = app.emit("chat-changed", changes);
+                }
+                drop(c);
+                // Not set up or approved yet: look again now and then.
+                tokio::time::sleep(Duration::from_millis(300)).await;
+            }
+            Err(e) => {
+                drop(c);
+                tracing::warn!(error = %e, "chat sync");
+                tokio::time::sleep(Duration::from_secs(backoff)).await;
+                backoff = (backoff * 2).min(60);
+            }
+        }
+    }
+}
+
+fn to_value<T: Serialize>(v: T) -> CommandResult<Value> {
+    serde_json::to_value(v).map_err(|e| CommandError {
+        code: "invalid",
+        message: e.to_string(),
+    })
+}
+
+#[tauri::command]
+async fn chat(
+    app: AppHandle,
+    desktop: State<'_, Desktop>,
+    action: ChatAction,
+) -> CommandResult<Value> {
+    use base64::Engine;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let chat = chat_for(&app, &desktop).await?;
+    let ok = || Ok(Value::Null);
+    match action {
+        ChatAction::Status => to_value(chat.status().await?),
+        ChatAction::Setup { name } => to_value(chat.setup(&name).await?),
+        ChatAction::Approve { device, code } => {
+            chat.approve(device, &code).await?;
+            ok()
+        }
+        ChatAction::StartOver => {
+            chat.start_over().await?;
+            ok()
+        }
+        ChatAction::RemoveDevice { device } => {
+            chat.remove_device(device).await?;
+            ok()
+        }
+        ChatAction::Conversations => to_value(chat.conversations().await?),
+        ChatAction::Messages {
+            conversation,
+            before,
+        } => to_value(chat.messages(conversation, before, 200).await?),
+        ChatAction::Send {
+            conversation,
+            text,
+            reply_to,
+            files,
+            link_preview,
+        } => {
+            let mut out = Vec::new();
+            for f in files {
+                out.push(OutgoingFile {
+                    name: f.name,
+                    mime: f.mime,
+                    bytes: b64.decode(f.data).map_err(|_| CommandError {
+                        code: "invalid",
+                        message: "a file couldn't be read".into(),
+                    })?,
+                });
+            }
+            to_value(
+                chat.send(conversation, &text, reply_to, out, link_preview)
+                    .await?,
+            )
+        }
+        ChatAction::React {
+            conversation,
+            message,
+            emoji,
+            on,
+        } => {
+            chat.react(conversation, message, &emoji, on).await?;
+            ok()
+        }
+        ChatAction::Edit {
+            conversation,
+            message,
+            text,
+        } => {
+            chat.edit(conversation, message, &text).await?;
+            ok()
+        }
+        ChatAction::Delete {
+            conversation,
+            message,
+        } => {
+            chat.delete(conversation, message).await?;
+            ok()
+        }
+        ChatAction::Rename { conversation, name } => {
+            chat.rename(conversation, &name).await?;
+            ok()
+        }
+        ChatAction::StartDirect { user } => to_value(chat.start_direct(&user).await?),
+        ChatAction::StartGroup { users, name } => {
+            to_value(chat.start_group(&users, name.as_deref()).await?)
+        }
+        ChatAction::StartTeam { team } => to_value(chat.start_team(&team).await?),
+        ChatAction::AddPeople {
+            conversation,
+            users,
+        } => {
+            chat.add_people(conversation, &users).await?;
+            ok()
+        }
+        ChatAction::Leave { conversation } => {
+            chat.leave(conversation).await?;
+            ok()
+        }
+        ChatAction::RemovePerson { conversation, user } => {
+            chat.remove_person(conversation, user).await?;
+            ok()
+        }
+        ChatAction::Hide { conversation } => {
+            chat.hide(conversation).await?;
+            ok()
+        }
+        ChatAction::Mute {
+            conversation,
+            muted,
+        } => {
+            chat.set_muted(conversation, muted).await?;
+            ok()
+        }
+        ChatAction::MarkRead { conversation } => {
+            chat.mark_read(conversation).await?;
+            ok()
+        }
+        ChatAction::Attachment {
+            conversation,
+            message,
+            attachment,
+        } => {
+            let (mime, bytes) = chat.attachment(conversation, message, attachment).await?;
+            Ok(serde_json::json!({ "mime": mime, "data": b64.encode(bytes) }))
+        }
+        ChatAction::SecurityCodes { conversation } => {
+            to_value(chat.security_codes(conversation).await?)
+        }
+        ChatAction::Report {
+            conversation,
+            message,
+            reason,
+            details,
+        } => Ok(chat
+            .report(conversation, message, &reason, &details)
+            .await?),
+        ChatAction::SetBackups { on } => to_value(chat.set_backups(on).await?),
+        ChatAction::Restore { code } => to_value(chat.restore_backup(&code).await?),
+    }
+}
+
 fn urlencode(s: &str) -> String {
     url::form_urlencoded::byte_serialize(s.as_bytes()).collect()
 }
@@ -560,6 +878,7 @@ fn main() {
             let base = API_URL.parse().expect("SLOP_API_URL is a valid URL");
             let api = ApiClient::new(base, Arc::new(KeyringTokenStore::new(APP_ID)))?;
             let root = app.path().app_data_dir()?.join("library");
+            let chat_dir = app.path().app_data_dir()?.join("chat");
             // Plain-http downloads only in debug builds pointed at a local API.
             let allow_http = cfg!(debug_assertions) && API_URL.starts_with("http://localhost");
             // Unsigned builds too, for the same local-development case, or when this build was
@@ -573,6 +892,8 @@ fn main() {
                 platform: Platform::current(),
                 pending_sign_in: tokio::sync::Mutex::new(None),
                 update: tokio::sync::Mutex::new(None),
+                chat: tokio::sync::Mutex::new(None),
+                chat_dir,
             });
             #[cfg(windows)]
             if let Err(e) = make_tray(app) {
@@ -620,6 +941,7 @@ fn main() {
             uninstall_app,
             launch_app,
             run_installer,
+            chat,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Slop desktop app");

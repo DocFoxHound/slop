@@ -57,6 +57,7 @@ pub const CATEGORIES: &[(&str, &str)] = &[
         "Your apps: going public, and when Slop can't read a repository",
     ),
     ("chat", "New chat messages while you're away"),
+    ("friends", "Friend requests, and when someone accepts yours"),
 ];
 
 /// Pending notifications older than this aren't emailed (e.g. when email is switched on later).

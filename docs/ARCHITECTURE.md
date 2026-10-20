@@ -91,7 +91,7 @@
 | **Payment records** | Mirror of Stripe charges, server donations, People payments (`PAYMENTS.md` §8) |
 | **People** | Profiles, quotes, Service Agreements, jobs, completion |
 | **Teams** | Player teams, and official teams verified through GitHub organizations (`DESIGN.md` §14) |
-| **Chat** *(planned)* | Friends and direct messages, People conversations (`DESIGN.md` §19) |
+| **Chat** | Friends and blocks, and the delivery service for end-to-end encrypted chats: devices and key packages, ordering, long-polled sync, encrypted attachments and backups (`DESIGN.md` §19, `SECURITY.md` §8.5). The encryption runs in `slop-client`. People job conversations stay in People |
 | **Moderation** | Reports, notice-and-action, statements of reasons, audit log (`LEGAL.md` §5) |
 | **Notify** | Email, push, in-app notifications |
 

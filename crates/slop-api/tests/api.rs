@@ -8479,3 +8479,625 @@ async fn fee_statements_show_the_vat_inside_slops_fee(db: PgPool) {
     assert_eq!(s["statements"][0]["vat_minor"], 0);
     assert_eq!(slop_api::donations::vat_included(100, 2000), 17);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Chat (DESIGN §19, SECURITY §8.5): end to end with the real client core and real encryption
+
+use slop_client::chat::{Chat, MemorySecrets, OutgoingFile};
+
+/// Serves the API on a local port, for clients that make real HTTP requests.
+async fn serve(app: &TestApp) -> String {
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    let router = app.router.clone();
+    tokio::spawn(async move { axum::serve(listener, router).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+/// A user's Slop app with chat: signed in through the desktop flow, its own secure store and
+/// data folder.
+async fn chat_app(app: &TestApp, base: &str, user: Uuid, cookie: &str) -> Chat {
+    let tokens = desktop_sign_in(app, cookie).await;
+    let store = slop_client::api::MemoryTokenStore::default();
+    use slop_client::api::TokenStore;
+    store.save(tokens["refresh_token"].as_str().unwrap());
+    let api = slop_client::api::ApiClient::new(base.parse().unwrap(), std::sync::Arc::new(store))
+        .unwrap();
+    let dir = std::env::temp_dir().join(format!("slop-chat-test-{}", Uuid::now_v7()));
+    Chat::open(api, dir, &MemorySecrets::default(), user).unwrap()
+}
+
+async fn befriend(app: &TestApp, a: Uuid, b: Uuid) {
+    sqlx::query("insert into friends (user_a, user_b) values (least($1, $2), greatest($1, $2))")
+        .bind(a)
+        .bind(b)
+        .execute(&app.db)
+        .await
+        .unwrap();
+}
+
+fn chat_limits(c: &mut Config) {
+    c.rate_limits.write_per_minute = 10_000;
+    c.rate_limits.read_per_minute = 10_000;
+    c.rate_limits.auth_per_minute = 1_000;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn chat_is_end_to_end_encrypted_and_slop_only_relays_it(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let base = serve(&app).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (_, cara_web) = app.user("Cara", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+
+    // Chat is in the app only: the website can't register a device.
+    let res = app
+        .send(req(Method::POST, "/v1/chat/devices").cookie(&ann_web).json(json!({
+            "id": Uuid::now_v7(), "name": "Browser", "signature_key": "AAAA", "key_packages": [], "last_resort": "AAAA"
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    let ann = chat_app(&app, &base, ann_id, &ann_web).await;
+    let bob = chat_app(&app, &base, bob_id, &bob_web).await;
+    assert_eq!(
+        ann.setup("Ann's PC").await.unwrap().state,
+        "active",
+        "a first device needs no approval"
+    );
+    assert_eq!(bob.setup("Bob's PC").await.unwrap().state, "active");
+
+    // A direct chat: Ann's app sets up the encryption with Bob's device; Bob's joins from the Welcome.
+    let conv = ann.start_direct(&bob_id.to_string()).await.unwrap();
+    bob.sync(0).await.unwrap();
+    let list = bob.conversations().await.unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].title, "Ann");
+    assert!(list[0].ready);
+
+    // Messages: Slop stores only ciphertext.
+    ann.send(
+        conv,
+        "hello bob, pay me on paypal for the sprites",
+        None,
+        vec![],
+        false,
+    )
+    .await
+    .unwrap();
+    let changes = bob.sync(0).await.unwrap();
+    assert_eq!(changes.conversations, [conv]);
+    let messages = bob.messages(conv, None, 50).await.unwrap();
+    let hello = messages.iter().find(|m| !m.notice).unwrap();
+    assert_eq!(hello.text, "hello bob, pay me on paypal for the sprites");
+    assert_eq!(hello.sender.name, "Ann");
+    assert!(!hello.warnings.is_empty(), "off-platform payment warning");
+    assert!(hello.reportable);
+    let stored: Vec<Vec<u8>> = sqlx::query_scalar("select body from chat_messages")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert!(!stored.is_empty());
+    for body in &stored {
+        assert!(
+            !body.windows(5).any(|w| w == b"hello" || w == b"paypa"),
+            "Slop can't read messages"
+        );
+    }
+    let unread = &bob.conversations().await.unwrap()[0];
+    assert_eq!(unread.unread, 1);
+    bob.mark_read(conv).await.unwrap();
+    assert_eq!(bob.conversations().await.unwrap()[0].unread, 0);
+
+    // Reactions, a meme attachment, replies, edits and deletes.
+    bob.react(conv, hello.id, "😂", true).await.unwrap();
+    let gif = b"GIF89a pretend this is a meme".to_vec();
+    ann.send(
+        conv,
+        "",
+        Some(hello.id),
+        vec![OutgoingFile {
+            name: "meme.gif".into(),
+            mime: "image/gif".into(),
+            bytes: gif.clone(),
+        }],
+        false,
+    )
+    .await
+    .unwrap();
+    ann.sync(0).await.unwrap();
+    let mine = ann.messages(conv, None, 50).await.unwrap();
+    assert_eq!(mine[0].reactions[0].emoji, "😂");
+    assert_eq!(mine[0].reactions[0].names, ["Bob"]);
+    bob.sync(0).await.unwrap();
+    let messages = bob.messages(conv, None, 50).await.unwrap();
+    let meme = messages.last().unwrap();
+    assert_eq!(meme.reply_to.as_ref().unwrap().id, hello.id);
+    assert_eq!(meme.attachments[0].mime, "image/gif");
+    let (mime, bytes) = bob
+        .attachment(conv, meme.id, meme.attachments[0].id)
+        .await
+        .unwrap();
+    assert_eq!((mime.as_str(), bytes), ("image/gif", gif.clone()));
+    let at_slop: Vec<u8> = sqlx::query_scalar("select body from chat_attachments")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(
+        !at_slop.windows(6).any(|w| w == b"GIF89a"),
+        "attachments are encrypted too"
+    );
+    assert!(bob.edit(conv, hello.id, "not mine").await.is_err());
+    ann.edit(conv, hello.id, "hello bob!").await.unwrap();
+    ann.delete(conv, meme.id).await.unwrap();
+    bob.sync(0).await.unwrap();
+    let messages = bob.messages(conv, None, 50).await.unwrap();
+    let hello2 = messages.iter().find(|m| m.id == hello.id).unwrap();
+    assert_eq!((hello2.text.as_str(), hello2.edited), ("hello bob!", true));
+    assert!(messages.iter().find(|m| m.id == meme.id).unwrap().deleted);
+
+    // A second device for Bob: approved on the first after comparing codes, then it gets the
+    // chats and their history.
+    let bob2 = chat_app(&app, &base, bob_id, &bob_web).await;
+    let status = bob2.setup("Bob's laptop").await.unwrap();
+    assert_eq!(status.state, "pending");
+    let code = status.code.unwrap();
+    let pending = bob.status().await.unwrap().pending;
+    assert_eq!(pending.len(), 1);
+    assert_eq!(pending[0].code, code);
+    assert!(
+        bob.approve(pending[0].id, "AAA-AAA-AAA").await.is_err(),
+        "codes must match"
+    );
+    bob.approve(pending[0].id, &code).await.unwrap();
+    assert_eq!(bob2.status().await.unwrap().state, "active");
+    for _ in 0..3 {
+        bob.sync(0).await.unwrap();
+        ann.sync(0).await.unwrap();
+        bob2.sync(0).await.unwrap();
+    }
+    let on_laptop = bob2.messages(conv, None, 50).await.unwrap();
+    assert!(
+        on_laptop.iter().any(|m| m.text == "hello bob!"),
+        "history from the approving device: {on_laptop:?}"
+    );
+    ann.send(conv, "hi both of you", None, vec![], false)
+        .await
+        .unwrap();
+    bob2.sync(0).await.unwrap();
+    bob.sync(0).await.unwrap();
+    assert!(
+        bob2.messages(conv, None, 50)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "hi both of you")
+    );
+    assert!(
+        bob.messages(conv, None, 50)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "hi both of you")
+    );
+    let codes = ann.security_codes(conv).await.unwrap();
+    assert_eq!(codes.len(), 2);
+    let bob_codes = bob2.security_codes(conv).await.unwrap();
+    assert_eq!(
+        codes.iter().find(|c| c.user == bob_id).unwrap().code,
+        bob_codes.iter().find(|c| c.user == bob_id).unwrap().code,
+        "everyone sees the same security code"
+    );
+
+    // Reporting: Bob's app sends the decrypted message; Slop checks it against the franking tag.
+    let hello_id = hello.id;
+    let ack = bob
+        .report(
+            conv,
+            hello_id,
+            "harassment",
+            "Asked me to pay outside Slop.",
+        )
+        .await
+        .unwrap();
+    assert!(ack["reference"].is_string());
+    let (kind, quoted, about): (String, String, Uuid) =
+        sqlx::query_as("select subject_kind, quoted, subject_user_id from reports")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((kind.as_str(), about), ("chat_message", ann_id));
+    assert!(
+        quoted.contains("paypal"),
+        "the original text, as sent: {quoted}"
+    );
+    let seq: i64 = sqlx::query_scalar(
+        "select min(seq) from chat_messages where kind = 'application' and sender_user_id = $1",
+    )
+    .bind(ann_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/reports").cookie(&bob_web).json(json!({
+            "kind": "chat_message", "subject": conv.to_string(), "reason": "spam", "details": "x", "good_faith": true,
+            "chat": { "conversation_id": conv, "seq": seq, "plaintext": "{\"text\":\"made up\"}", "franking_key": "AAAA" },
+        })))
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a made-up message fails the check"
+    );
+
+    // Strangers can't start a chat; blocking stops one.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/chat/conversations")
+                .cookie(&cara_web)
+                .json(json!({ "kind": "direct", "user": ann_id })),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::CONFLICT,
+        "website sessions can't chat at all"
+    );
+    let cara_id: Uuid = sqlx::query_scalar("select id from users where display_name = 'Cara'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let cara = chat_app(&app, &base, cara_id, &cara_web).await;
+    cara.setup("Cara's PC").await.unwrap();
+    assert!(
+        cara.start_direct(&ann_id.to_string()).await.is_err(),
+        "not connected"
+    );
+    assert_eq!(
+        app.send(req(Method::PUT, format!("/v1/me/blocks/{ann_id}")).cookie(&bob_web))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        ann.send(conv, "still there?", None, vec![], false)
+            .await
+            .is_err()
+    );
+    assert!(
+        bob.conversations().await.unwrap().is_empty(),
+        "the blocked person's chat leaves the list"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn group_chats_add_and_remove_people_and_their_devices(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let base = serve(&app).await;
+    let mut people = Vec::new();
+    for name in ["Ann", "Bob", "Cara"] {
+        let (id, web) = app.user(name, "US").await;
+        people.push((id, web));
+    }
+    befriend(&app, people[0].0, people[1].0).await;
+    befriend(&app, people[0].0, people[2].0).await;
+    let mut apps = Vec::new();
+    for (id, web) in &people {
+        let chat = chat_app(&app, &base, *id, web).await;
+        chat.setup("PC").await.unwrap();
+        apps.push(chat);
+    }
+    let (ann, bob, cara) = (&apps[0], &apps[1], &apps[2]);
+    let users: Vec<String> = people[1..].iter().map(|(id, _)| id.to_string()).collect();
+    let conv = ann
+        .start_group(&users, Some("Roguelike nights"))
+        .await
+        .unwrap();
+    let sync_all = || async {
+        for _ in 0..2 {
+            for a in &apps {
+                a.sync(0).await.unwrap();
+            }
+        }
+    };
+    sync_all().await;
+    for a in [bob, cara] {
+        let list = a.conversations().await.unwrap();
+        assert_eq!(
+            list[0].title, "Roguelike nights",
+            "the name travels inside the encryption"
+        );
+    }
+    cara.send(conv, "gg everyone", None, vec![], false)
+        .await
+        .unwrap();
+    sync_all().await;
+    assert!(
+        ann.messages(conv, None, 10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "gg everyone")
+    );
+    assert!(
+        bob.messages(conv, None, 10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "gg everyone")
+    );
+
+    // Only the person who started it removes people; their devices leave the encryption.
+    let res = app
+        .send(
+            req(
+                Method::DELETE,
+                format!("/v1/chat/conversations/{conv}/members/{}", people[2].0),
+            )
+            .cookie(&people[1].1),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    ann.remove_person(conv, people[2].0).await.unwrap();
+    sync_all().await;
+    let epoch_before: i64 =
+        sqlx::query_scalar("select epoch from chat_conversations where id = $1")
+            .bind(conv)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(epoch_before >= 2);
+    ann.send(conv, "cara can't read this", None, vec![], false)
+        .await
+        .unwrap();
+    sync_all().await;
+    assert!(
+        bob.messages(conv, None, 10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "cara can't read this")
+    );
+    assert!(
+        !cara
+            .messages(conv, None, 10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "cara can't read this")
+    );
+    assert!(
+        cara.conversations()
+            .await
+            .unwrap()
+            .iter()
+            .all(|c| c.id != conv)
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn friends_and_who_may_message(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (teen_id, teen) = app.user("Tia", "GB").await;
+
+    // A request, then accepting it.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/friends")
+                .cookie(&ann)
+                .json(json!({ "user": format!("http://localhost:8080/u/{bob_id}") })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["status"], "requested");
+    let conn = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{ann_id}/connection")).cookie(&bob))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (conn["friend"].as_str(), conn["can_message"].as_bool()),
+        (Some("incoming"), Some(false))
+    );
+    let notified: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and category = 'friends'",
+    )
+    .bind(bob_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notified, 1);
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/me/friends/{ann_id}/accept")).cookie(&bob))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let friends = body_json(
+        app.send(req(Method::GET, "/v1/me/friends").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(friends["friends"][0]["name"], "Bob");
+    let conn = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{bob_id}/connection")).cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (conn["friend"].as_str(), conn["can_message"].as_bool()),
+        (Some("friends"), Some(true))
+    );
+
+    // "Messages from anyone": strangers may message an adult who allows it, never a UK teen.
+    let conn = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{ann_id}/connection")).cookie(&teen))
+            .await,
+    )
+    .await;
+    assert_eq!(conn["can_message"], false);
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/chat-settings")
+                .cookie(&ann)
+                .json(json!({ "from_anyone": true })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["from_anyone"], true);
+    let conn = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{ann_id}/connection")).cookie(&teen))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        conn["can_message"], false,
+        "an under-18 view never messages strangers"
+    );
+    let settings = body_json(
+        app.send(req(Method::GET, "/v1/me/chat-settings").cookie(&teen))
+            .await,
+    )
+    .await;
+    assert_eq!(settings["locked"], true);
+    assert_eq!(
+        app.send(
+            req(Method::PUT, "/v1/me/chat-settings")
+                .cookie(&teen)
+                .json(json!({ "from_anyone": true }))
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    let conn = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{teen_id}/connection")).cookie(&bob))
+            .await,
+    )
+    .await;
+    assert_eq!(conn["can_message"], false);
+
+    // Blocking ends the friendship and hides requests; blocked looks like nobody.
+    assert_eq!(
+        app.send(req(Method::PUT, format!("/v1/me/blocks/{bob_id}")).cookie(&ann))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let friends = body_json(
+        app.send(req(Method::GET, "/v1/me/friends").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert!(friends["friends"].as_array().unwrap().is_empty());
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/friends")
+                .cookie(&bob)
+                .json(json!({ "user": ann_id.to_string() })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let blocks = body_json(
+        app.send(req(Method::GET, "/v1/me/blocks").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(blocks[0]["name"], "Bob");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn chat_commits_must_build_on_the_current_epoch(db: PgPool) {
+    use base64::Engine;
+    let b64 = |b: &[u8]| base64::engine::general_purpose::STANDARD.encode(b);
+    let app = test_app_with(db, chat_limits).await;
+    let (_, web) = app.user("Ann", "US").await;
+    let (_, other_web) = app.user("Bob", "US").await;
+    let tokens = desktop_sign_in(&app, &web).await;
+    let bearer = format!("Bearer {}", tokens["access_token"].as_str().unwrap());
+    let device = Uuid::now_v7();
+    let res = app
+        .send(req(Method::POST, "/v1/chat/devices").header("authorization", bearer.clone()).json(json!({
+            "id": device, "name": "PC", "signature_key": b64(&[1; 32]), "key_packages": [b64(b"kp")], "last_resort": b64(b"lr")
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let created = body_json(res).await;
+    assert_eq!(created["status"], "active");
+    assert_eq!(created["code"].as_str().unwrap().len(), 11);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/chat/conversations")
+                .header("authorization", bearer.clone())
+                .json(json!({ "kind": "self" })),
+        )
+        .await;
+    let conv = body_json(res).await["id"].as_str().unwrap().to_string();
+    let call = |path: String, body: Value| {
+        req(Method::POST, path)
+            .header("authorization", bearer.clone())
+            .header("x-slop-chat-device", device.to_string())
+            .json(body)
+    };
+    let commit = |epoch: i64| {
+        call(
+            format!("/v1/chat/conversations/{conv}/commit"),
+            json!({ "epoch": epoch, "commit": b64(b"commit") }),
+        )
+    };
+    let message = |epoch: i64| {
+        call(
+            format!("/v1/chat/conversations/{conv}/messages"),
+            json!({ "epoch": epoch, "body": b64(b"ciphertext"), "franking_tag": b64(&[0; 32]) }),
+        )
+    };
+    assert_eq!(app.send(commit(0)).await.status(), StatusCode::OK);
+    let res = app.send(commit(0)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let err = body_json(res).await;
+    assert_eq!(
+        (
+            err["error"]["code"].as_str(),
+            err["error"]["epoch"].as_i64()
+        ),
+        (Some("stale_epoch"), Some(1))
+    );
+    assert_eq!(app.send(message(0)).await.status(), StatusCode::CONFLICT);
+    assert_eq!(app.send(message(1)).await.status(), StatusCode::OK);
+    let synced = body_json(
+        app.send(
+            req(Method::GET, "/v1/chat/sync?after=0")
+                .header("authorization", bearer.clone())
+                .header("x-slop-chat-device", device.to_string()),
+        )
+        .await,
+    )
+    .await;
+    let kinds: Vec<&str> = synced["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["commit", "application"]);
+    assert_eq!(synced["key_packages"], 1);
+
+    // Someone else's session can't use this device, or see the chat.
+    let other = desktop_sign_in(&app, &other_web).await;
+    let res = app
+        .send(
+            req(Method::GET, "/v1/chat/sync?after=0")
+                .header(
+                    "authorization",
+                    format!("Bearer {}", other["access_token"].as_str().unwrap()),
+                )
+                .header("x-slop-chat-device", device.to_string()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let res = app
+        .send(req(Method::GET, format!("/v1/chat/conversations/{conv}")).cookie(&other_web))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
