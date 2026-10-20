@@ -353,6 +353,13 @@ pub async fn close_account(
         .execute(&mut *tx)
         .await?;
     }
+    // Private Slop: nothing is shared with them any more, and their own stops being shared.
+    sqlx::query(
+        "delete from app_shares where user_id = $1 or app_id in (select id from apps where maker_id = $1)",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("update creatives set taking_work = false, updated_at = now() where user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)

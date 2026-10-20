@@ -320,6 +320,28 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
         )}
 
         {!existing && (
+          <fieldset className="visibility-choice">
+            <legend>Who can see it?</legend>
+            <label className="check">
+              <input type="radio" name="visibility" checked={form.visibility !== "private"} onChange={() => set("visibility", "public")} />
+              <span>
+                <b>Everyone</b> <span className="muted small">— in the store, from a public open-source repository</span>
+              </span>
+            </label>
+            <label className="check">
+              <input type="radio" name="visibility" checked={form.visibility === "private"} onChange={() => set("visibility", "private")} />
+              <span>
+                <b>Private Slop</b>{" "}
+                <span className="muted small">
+                  — only you and people you share it with. Never in the store; no donations or voting. The repository can be
+                  private if Slop's GitHub App can read it.
+                </span>
+              </span>
+            </label>
+          </fieldset>
+        )}
+
+        {!existing && (
           <div className="row-2">
             {field(
               "kind",

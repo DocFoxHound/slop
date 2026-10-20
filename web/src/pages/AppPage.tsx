@@ -1,4 +1,4 @@
-import { useState, type MouseEvent, type ReactNode } from "react";
+import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 
 import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
@@ -73,6 +73,16 @@ function AppView({ app }: { app: AppDetail }) {
           <Link to={`/publish/${app.slug}`}>Edit draft</Link>
         </div>
       )}
+
+      {app.private && (
+        <div className="notice">
+          <span className="badge neutral">PRIVATE SLOP</span>{" "}
+          {app.is_mine
+            ? "Only you and the people you share it with can see this. It's never in the store."
+            : `${app.maker.display_name} shared this with you. Only the people it's shared with can see it.`}
+        </div>
+      )}
+      {app.private && app.is_mine && <SharePanel slug={app.slug} />}
 
       {app.branch && (
         <div className="notice community-notice">
@@ -200,8 +210,8 @@ function AppView({ app }: { app: AppDetail }) {
           ) : (
             <p className="muted">The maker hasn't written a description yet.</p>
           )}
-          <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />
-          <Reviews slug={app.slug} />
+          {!app.private && <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />}
+          {!app.private && <Reviews slug={app.slug} />}
         </div>
         <aside className="side-col">
           <div className="panel panel-pad install-box">
@@ -215,7 +225,7 @@ function AppView({ app }: { app: AppDetail }) {
             ) : (
               <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
             )}
-            <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />
+            {!app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />}
             {packages.length > 0 && (
               <p className="muted small packages">
                 Linux packages:{" "}
@@ -257,8 +267,8 @@ function AppView({ app }: { app: AppDetail }) {
               </span>
             </div>
           </div>
-          {!app.branch && <CommunityBuilds app={app} />}
-          {app.stage !== "coming_soon" && <DonateBox slug={app.slug} title={app.title} />}
+          {!app.branch && !app.private && <CommunityBuilds app={app} />}
+          {app.stage !== "coming_soon" && !app.private && <DonateBox slug={app.slug} title={app.title} />}
           {!app.is_mine && (
             <p className="report-row">
               <ReportButton kind="app" subject={app.slug} label="this app" />
@@ -370,6 +380,62 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
         <Link className="small" to={`/app/${app.slug}/branch`}>
           Register a branch from your fork →
         </Link>
+      )}
+    </div>
+  );
+}
+
+/** Who a Private Slop app is shared with (the owner's view). */
+function SharePanel({ slug }: { slug: string }) {
+  const shares = useLoad(() => api.private.shares(slug), [slug]);
+  const [who, setWho] = useState("");
+  const [error, setError] = useState<string>();
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(undefined);
+    try {
+      await api.private.share(slug, who);
+      setWho("");
+      shares.reload();
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
+  };
+  return (
+    <div className="panel panel-pad share-panel">
+      <h3>Shared with</h3>
+      {shares.data?.length ? (
+        <ul className="plain">
+          {shares.data.map((s) => (
+            <li key={s.user_id}>
+              <Link to={`/u/${s.user_id}`}>{s.name}</Link>{" "}
+              <button type="button" className="link-btn small muted" onClick={() => void api.private.unshare(slug, s.user_id).then(shares.reload)}>
+                Stop sharing
+              </button>
+            </li>
+          ))}
+        </ul>
+      ) : (
+        <p className="muted small">Nobody yet.</p>
+      )}
+      <form className="row-actions" onSubmit={(e) => void add(e)}>
+        <input
+          aria-label="Their profile link"
+          placeholder="Paste their profile link"
+          value={who}
+          onChange={(e) => setWho(e.target.value)}
+        />
+        <button className="btn small" disabled={!who.trim()}>
+          Share
+        </button>
+      </form>
+      <p className="faint small">
+        They see it once a release is approved, and download it straight from your release page through short-lived links.
+      </p>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
       )}
     </div>
   );

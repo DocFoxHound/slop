@@ -226,7 +226,7 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
                 (select count(*) from releases r where r.app_id = a.id and r.status = 'approved') as approved_releases,
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending
          from apps a join users u on u.id = a.maker_id
-         where a.status = 'draft'
+         where a.status = 'draft' and a.visibility = 'public'
            and (a.stage = 'coming_soon' or exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved'))
          order by a.updated_at"
     )))

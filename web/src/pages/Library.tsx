@@ -23,6 +23,7 @@ export function Library() {
   const library = useLoad(() => (me ? api.library() : Promise.resolve([])), [me?.id]);
   const installed = useLoad(() => (isDesktop ? desktop.installed() : Promise.resolve([])), []);
   const interested = useLoad(() => (me ? api.interested.mine() : Promise.resolve([])), [me?.id]);
+  const privateSlop = useLoad(() => (me ? api.private.mine() : Promise.resolve({ mine: [], shared: [] })), [me?.id]);
 
   if (me === undefined || library.loading || installed.loading) return <Loading />;
 
@@ -75,6 +76,34 @@ export function Library() {
             </li>
           ))}
         </ul>
+      )}
+
+      {((privateSlop.data?.mine.length ?? 0) > 0 || (privateSlop.data?.shared.length ?? 0) > 0) && (
+        <>
+          <h2 className="section-title">Private Slop</h2>
+          <p className="muted small">Yours, and what friends shared with you. Only the people it's shared with can see these.</p>
+          <ul className="library-list">
+            {[...(privateSlop.data?.mine ?? []).map((a) => ({ ...a, owner: "you" })), ...(privateSlop.data?.shared ?? [])].map((a) => (
+              <li key={a.slug} className="panel library-row">
+                <Link to={`/app/${a.slug}`} className="library-art" aria-label={a.title}>
+                  <Art app={a} withName={false} />
+                </Link>
+                <div className="library-info">
+                  <div className="title-row">
+                    <Link to={`/app/${a.slug}`} className="text">
+                      <b>{a.title}</b>
+                    </Link>
+                    <span className="badge neutral">PRIVATE</span>
+                  </div>
+                  <div className="muted small">by {a.owner}</div>
+                </div>
+                <div className="library-actions">
+                  <InstallControls slug={a.slug} title={a.title} inLibrary={Boolean(library.data?.some((e) => e.slug === a.slug))} />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
 
       {(interested.data?.length ?? 0) > 0 && (

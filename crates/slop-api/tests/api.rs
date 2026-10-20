@@ -7295,3 +7295,147 @@ async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
     assert_eq!(own["branch_of"], "castle");
     assert_eq!(own["maker"]["display_name"], "Bo Brancher");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Private Slop (DESIGN §13)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn private_slop_is_seen_only_by_who_it_is_shared_with(db: PgPool) {
+    let app = test_app(db).await;
+    let (owner_id, owner) = app.user("Olive Owner", "US").await;
+    let (friend_id, friend) = app.user("Finn Friend", "US").await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    let mut body = new_app("secret-tool");
+    body["visibility"] = json!("private");
+    body["repo_url"] = json!("https://github.com/octo/private-tool");
+    let res = app
+        .send(req(Method::POST, "/v1/apps").cookie(&owner).json(body))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let detail = body_json(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(detail["private"], true);
+
+    // Sharing: by profile link; not visible until it has an approved release.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/secret-tool/shares")
+                .cookie(&owner)
+                .json(json!({ "user": format!("http://localhost:8080/u/{friend_id}") })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(body_json(res).await[0]["name"], "Finn Friend");
+    assert_eq!(
+        app.send(
+            req(Method::POST, "/v1/apps/secret-tool/shares")
+                .cookie(&friend)
+                .json(json!({ "user": owner_id.to_string() }))
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
+        "only the owner shares"
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&friend))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let id: Uuid = sqlx::query_scalar("select id from apps where slug = 'secret-tool'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         values ($1, $2, '1.0.0', repeat('c', 40), 'approved', $3, now(), true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(owner_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&friend))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/private").cookie(&friend))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["shared"][0]["slug"], "secret-tool");
+    assert_eq!(mine["shared"][0]["owner"], "Olive Owner");
+    let inbox = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications").cookie(&friend))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        inbox["items"][0]["title"],
+        "Olive Owner shared Pixel Dungeon Delver with you"
+    );
+
+    // Never in the store; no listing, donations or voting.
+    assert!(
+        list_slugs(&app, req(Method::GET, "/v1/apps").cookie(&friend))
+            .await
+            .is_empty()
+    );
+    assert!(
+        admin::list_app(&app.db, "secret-tool", "test")
+            .await
+            .is_err()
+    );
+    let res = app
+        .send(req(Method::GET, "/v1/apps/secret-tool/donate").cookie(&friend))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND, "no donations");
+    app.send(req(Method::POST, "/v1/apps/secret-tool/launch").cookie(&friend))
+        .await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/secret-tool/vote")
+                .cookie(&friend)
+                .json(json!({ "vote": "not_slop" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Unsharing takes it away.
+    let res = app
+        .send(
+            req(
+                Method::DELETE,
+                format!("/v1/apps/secret-tool/shares/{friend_id}"),
+            )
+            .cookie(&owner),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&friend))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}

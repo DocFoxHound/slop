@@ -276,6 +276,8 @@ export interface AppDetail extends AppSummary {
   credits: Credit[];
   is_mine: boolean;
   /** The viewer marked it Interested. */
+  /** Private Slop: only its owner and the people it's shared with see it. */
+  private: boolean;
   is_interested: boolean;
   /** For a community branch: what it branches from. */
   branch: {
@@ -1098,9 +1100,11 @@ export interface NewApp {
   min_age: number;
   tags: string[];
   platforms: AppPlatform[];
+  /** "private": Private Slop, only for you and the people you share it with. */
+  visibility?: "public" | "private";
 }
 
-export type AppChanges = Partial<Omit<NewApp, "slug" | "kind" | "stage">>;
+export type AppChanges = Partial<Omit<NewApp, "slug" | "kind" | "stage" | "visibility">>;
 
 export interface AppQuery {
   q?: string;
@@ -1377,6 +1381,15 @@ export const api = {
       ),
     write: (slug: string, body: string) => request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/review`, { body }),
     remove: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/review`),
+  },
+  private: {
+    mine: () => request<{ mine: AppSummary[]; shared: Array<AppSummary & { owner: string }> }>("GET", "/v1/me/private"),
+    shares: (slug: string) =>
+      request<Array<{ user_id: string; name: string; shared_at: string }>>("GET", `/v1/apps/${encodeURIComponent(slug)}/shares`),
+    share: (slug: string, user: string) =>
+      request<Array<{ user_id: string; name: string; shared_at: string }>>("POST", `/v1/apps/${encodeURIComponent(slug)}/shares`, { user }),
+    unshare: (slug: string, userId: string) =>
+      request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/shares/${encodeURIComponent(userId)}`),
   },
   registerBranch: (
     parent: string,
