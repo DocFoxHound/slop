@@ -652,6 +652,10 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
 
     // Write it all.
     let mut tx = db.begin().await?;
+    // Payments and vote history are append-only; only a *_sim database may wipe them.
+    sqlx::query("select set_config('slop.purge', 'on', true)")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("update creatives set portfolio_set_id = null")
         .execute(&mut *tx)
         .await?;

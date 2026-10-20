@@ -46,6 +46,9 @@ pub struct Config {
     pub simulation: bool,
     /// What the admins' alerts watch (ops.rs).
     pub ops: OpsConfig,
+    /// Encrypts personal fields at rest (fields.rs): base64 of 32 random bytes in
+    /// `SLOP_FIELD_KEY`. Unset: stored as they are.
+    pub field_key: Option<[u8; 32]>,
     /// How many different staff must approve a sensitive action (staff.rs), counting the one
     /// who asks: 1 while Slop has one person, 2 once there's a second.
     pub approvals_required: u8,
@@ -590,6 +593,19 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_ascii_lowercase()),
             simulation: var_or("SLOP_SIMULATION", "false") == "true",
+            field_key: match env::var("SLOP_FIELD_KEY") {
+                Ok(v) if !v.is_empty() => {
+                    use base64::Engine;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(v.trim())
+                        .context("SLOP_FIELD_KEY must be base64")?;
+                    Some(
+                        <[u8; 32]>::try_from(bytes.as_slice())
+                            .map_err(|_| anyhow::anyhow!("SLOP_FIELD_KEY must be 32 bytes"))?,
+                    )
+                }
+                _ => None,
+            },
             approvals_required: var_or("SLOP_APPROVALS_REQUIRED", "1")
                 .parse()
                 .context("SLOP_APPROVALS_REQUIRED")?,

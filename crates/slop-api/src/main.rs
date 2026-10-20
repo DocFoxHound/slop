@@ -451,6 +451,11 @@ async fn serve() -> anyhow::Result<()> {
     tokio::spawn(slop_api::pulse::run_sampler(state.clone()));
     tokio::spawn(slop_api::notify::run_email(state.clone()));
     tokio::spawn(slop_api::ops::run(state.clone()));
+    match slop_api::fields::seal_existing(&state).await {
+        Ok(0) => {}
+        Ok(n) => tracing::info!(n, "encrypted stored VAT numbers"),
+        Err(err) => tracing::error!(error = %err, "encrypting stored fields"),
+    }
     tokio::spawn(slop_api::rescan::run(state.clone()));
     tokio::spawn(slop_api::abuse::run(state.clone()));
     tokio::spawn(slop_api::push::run(state.clone()));
