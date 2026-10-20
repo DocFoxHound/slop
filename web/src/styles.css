@@ -697,3 +697,20 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
 .table th, .table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
 .table th { color: var(--muted); font-weight: 600; }
+
+/* ---- Reviews and profiles -------------------------------------------------- */
+.my-review { margin-top: 10px; display: flex; flex-direction: column; gap: 4px; }
+.my-review p { margin: 0; }
+.app-reviews { margin-top: 14px; }
+.app-reviews h2 { margin: 0; }
+.review-list { list-style: none; margin: 10px 0; padding: 0; }
+.review-list li { padding: 10px 0; border-bottom: 1px solid var(--line); }
+.review-list li:last-child { border-bottom: 0; }
+.review-list p { margin: 6px 0; }
+.review-who { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.profile-head { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
+.profile-head .avatar { width: 64px; height: 64px; border-radius: 14px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; font-size: 28px; flex: none; }
+.profile-votes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
+.profile-votes li { display: grid; grid-template-columns: 260px 1fr; gap: 16px; padding: 12px; }
+.profile-vote-text p { margin: 8px 0 0; }
+@media (max-width: 600px) { .profile-votes li { grid-template-columns: 1fr; } }

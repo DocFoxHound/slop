@@ -307,6 +307,8 @@ pub(crate) struct Settings {
     share_playtime: Option<bool>,
     /// "Recommendations based on my activity" (foryou.rs).
     personalize: Option<bool>,
+    /// "Show my votes and reviews on my profile" (reviews.rs).
+    profile_public: Option<bool>,
 }
 
 /// `PATCH /v1/me`: the user's own settings.
@@ -324,6 +326,13 @@ pub(crate) async fn update_settings(
     }
     if let Some(on) = body.personalize {
         sqlx::query("update users set personalize = $2 where id = $1")
+            .bind(user.id)
+            .bind(on)
+            .execute(&state.db)
+            .await?;
+    }
+    if let Some(on) = body.profile_public {
+        sqlx::query("update users set profile_public = $2 where id = $1")
             .bind(user.id)
             .bind(on)
             .execute(&state.db)

@@ -7032,3 +7032,181 @@ async fn stripe_donations_are_direct_charges_named_as_donations(db: PgPool) {
         ("paid", format!("ch_{session}").as_str())
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Written reviews and profiles (DESIGN §7)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviews_go_with_votes_and_profiles_follow_the_privacy_choice(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker, "tower", "released", "").await;
+    let (us_id, us) = app.user("Uma US", "US").await;
+    let (uk_id, uk) = app.user("Kit UK", "GB").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    let (_, reporter) = app.user("Rita Reporter", "US").await;
+    for cookie in [&us, &uk] {
+        app.send(req(Method::POST, "/v1/apps/tower/launch").cookie(cookie))
+            .await;
+    }
+    let review = |cookie: &str, body: &str| {
+        req(Method::PUT, "/v1/apps/tower/review")
+            .cookie(cookie)
+            .json(json!({ "body": body }))
+    };
+    // A review goes with a vote.
+    assert_eq!(
+        app.send(review(&us, "Great tower defence.")).await.status(),
+        StatusCode::CONFLICT
+    );
+    for (cookie, v) in [(&us, "not_slop"), (&uk, "slop")] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/tower/vote")
+                    .cookie(cookie)
+                    .json(json!({ "vote": v })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+    assert_eq!(
+        app.send(review(&us, "Great tower defence.")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(review(&uk, "Too grindy after level 5."))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(review(&us, "  ")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // On the app page: public profiles by name; the UK under-18 default is private (PRIV-6).
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(
+        (page["not_slop"].as_i64(), page["slop"].as_i64()),
+        (Some(1), Some(1)),
+        "{page}"
+    );
+    let by = |name: &str| {
+        page["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["body"].as_str().unwrap().contains(name))
+            .unwrap()
+            .clone()
+    };
+    let uma = by("Great");
+    assert_eq!(uma["author"], "Uma US");
+    assert_eq!(uma["author_id"], us_id.to_string());
+    let kit = by("grindy");
+    assert_eq!(kit["author"], "A player");
+    assert!(kit["author_id"].is_null());
+    let only_slop = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/reviews?vote=slop"))
+            .await,
+    )
+    .await;
+    assert_eq!(only_slop["reviews"].as_array().unwrap().len(), 1);
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/ratings").cookie(&us))
+            .await,
+    )
+    .await;
+    assert_eq!(ratings["mine"]["review"]["body"], "Great tower defence.");
+
+    // Profiles: votes and reviews when public.
+    let p = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{us_id}")))
+            .await,
+    )
+    .await;
+    assert_eq!(p["public"], true);
+    assert_eq!(p["votes"][0]["slug"], "tower");
+    assert_eq!(p["votes"][0]["my_vote"], "not_slop");
+    assert_eq!(p["votes"][0]["review"], "Great tower defence.");
+    let p = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{uk_id}")))
+            .await,
+    )
+    .await;
+    assert_eq!(p["public"], false);
+    assert_eq!(p["votes"].as_array().unwrap().len(), 0);
+    let own = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{uk_id}")).cookie(&uk))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        own["votes"].as_array().unwrap().len(),
+        1,
+        "you always see your own"
+    );
+    app.send(
+        req(Method::PATCH, "/v1/me")
+            .cookie(&uk)
+            .json(json!({ "profile_public": true })),
+    )
+    .await;
+    let p = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{uk_id}")))
+            .await,
+    )
+    .await;
+    assert_eq!(p["public"], true);
+
+    // Withdrawing the vote takes the review off the page.
+    app.send(
+        req(Method::POST, "/v1/apps/tower/vote")
+            .cookie(&uk)
+            .json(json!({ "vote": null })),
+    )
+    .await;
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(page["reviews"].as_array().unwrap().len(), 1);
+
+    // Reported and hidden by a decision, never for being negative (REV-2).
+    let id = uma["id"].as_str().unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&reporter)
+                .json(json!({
+                    "kind": "app_review", "subject": id, "reason": "private_info",
+                    "details": "Contains someone's phone number.", "good_faith": true
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        queue["reports"][0]["link"],
+        format!("/app/tower#review-{id}")
+    );
+    let report_id = queue["reports"][0]["id"].as_str().unwrap();
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/reports/{report_id}/act")).cookie(&admin).json(json!({
+                "action": "hide_review", "rule": "private_info", "facts": "The review includes a phone number.",
+                "outcome": "Hidden."
+            })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(page["reviews"].as_array().unwrap().len(), 0);
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/ratings").cookie(&us))
+            .await,
+    )
+    .await;
+    assert_eq!(ratings["mine"]["review"]["hidden"], true);
+}

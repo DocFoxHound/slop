@@ -430,6 +430,7 @@ async fn signup(
         suspended: false,
         new_decisions: 0,
         unread_notifications: 0,
+        profile_public: under18 == Some(false),
     };
     Ok((
         StatusCode::CREATED,
@@ -479,6 +480,9 @@ struct Me {
     /// Unread notifications (notify.rs), for the bell.
     #[sqlx(skip)]
     unread_notifications: i64,
+    /// Votes and reviews on the public profile (reviews.rs), with its default applied.
+    #[sqlx(skip)]
+    profile_public: bool,
 }
 
 async fn me(
@@ -500,6 +504,7 @@ async fn me(
     me.personalize = crate::foryou::personalized(&state.db, user.id, policy).await?;
     me.new_decisions = crate::moderation::unseen(&state.db, user.id).await?;
     me.unread_notifications = crate::notify::unread(&state.db, user.id).await?;
+    me.profile_public = crate::reviews::is_public(&state.db, user.id).await?;
     Ok(Json(me))
 }
 

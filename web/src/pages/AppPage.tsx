@@ -5,6 +5,7 @@ import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
 import { Gallery } from "../components/Gallery";
 import { RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
+import { Reviews } from "../components/Reviews";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -191,6 +192,7 @@ function AppView({ app }: { app: AppDetail }) {
             <p className="muted">The maker hasn't written a description yet.</p>
           )}
           <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />
+          <Reviews slug={app.slug} />
         </div>
         <aside className="side-col">
           <div className="panel panel-pad install-box">

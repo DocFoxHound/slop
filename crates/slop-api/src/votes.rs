@@ -136,6 +136,9 @@ pub struct MyVote {
     pub reason: Option<&'static str>,
     /// How much their vote counts now.
     pub weight: f32,
+    /// Their written review, if any (reviews.rs).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub review: Option<crate::reviews::MyReview>,
 }
 
 #[derive(Serialize)]
@@ -332,6 +335,7 @@ async fn my_vote(
         can_vote: reason.is_none(),
         reason,
         weight: usage.map_or(0.1, |(p, d)| vote_weight(p, d)),
+        review: crate::reviews::mine(&state.db, user.id, app_id).await?,
     })
 }
 

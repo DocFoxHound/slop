@@ -326,8 +326,22 @@ export function Account() {
         </dl>
       </div>
 
-      <h2 className="section-title">Privacy</h2>
+      <h2 className="section-title" id="privacy">Privacy</h2>
       <div className="panel panel-pad">
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={me.profile_public}
+            onChange={(e) => void api.updateMe({ profile_public: e.target.checked }).then(refresh)}
+          />{" "}
+          <span>
+            <b>Show my votes and reviews on my profile</b>
+            <span className="muted small" style={{ display: "block" }}>
+              Off: your profile shows only your name and apps, and your reviews show as "A player".{" "}
+              <Link to={`/u/${me.id}`}>See your profile</Link>
+            </span>
+          </span>
+        </label>
         <label className="check">
           <input
             type="checkbox"
