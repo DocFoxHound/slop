@@ -145,11 +145,15 @@ enum ReviewCommand {
         #[arg(long)]
         reviewer: String,
     },
-    /// Take an app out of the store.
+    /// Take an app out of the store. The maker gets a statement of reasons and can appeal.
     Delist {
         slug: String,
         #[arg(long)]
         reviewer: String,
+        /// The Content Policy rule it breaks (moderation.rs RULES), e.g. malware.
+        #[arg(long)]
+        rule: String,
+        /// The facts, as the maker will read them.
         #[arg(long)]
         reason: String,
     },
@@ -310,9 +314,10 @@ async fn main() -> anyhow::Result<()> {
                 ReviewCommand::Delist {
                     slug,
                     reviewer,
+                    rule,
                     reason,
                 } => {
-                    admin::delist_app(&db, &slug, &reviewer, &reason).await?;
+                    admin::delist_app(&db, &slug, &reviewer, &rule, &reason).await?;
                     println!("{slug} is out of the store.");
                 }
                 ReviewCommand::Stage {
@@ -389,6 +394,9 @@ async fn connect() -> anyhow::Result<(Config, PgPool)> {
         .await
         .context("connecting to Postgres")?;
     MIGRATOR.run(&db).await.context("running migrations")?;
+    slop_api::legal::sync(&db)
+        .await
+        .context("publishing legal documents")?;
     Ok((config, db))
 }
 

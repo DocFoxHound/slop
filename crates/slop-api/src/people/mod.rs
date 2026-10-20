@@ -135,6 +135,16 @@ pub async fn require_adult(state: &AppState, user: &CurrentUser, confirm: bool) 
     Ok(())
 }
 
+/// SQL for a creative `c` whose page others can see: its first portfolio approved, not hidden,
+/// and the account not suspended. A closed account's page stays visible, frozen (account.rs).
+pub(crate) const VISIBLE_SQL: &str = "c.portfolio_set_id is not null and c.hidden_reason is null
+     and not exists (select 1 from users su where su.id = c.user_id and su.suspended_at is not null)";
+
+/// SQL for a creative `c` in the directory and open to hiring: visible, and the account open.
+pub(crate) const OPEN_SQL: &str = "c.portfolio_set_id is not null and c.hidden_reason is null
+     and not exists (select 1 from users su where su.id = c.user_id
+                     and (su.suspended_at is not null or su.closed_at is not null))";
+
 async fn skills() -> Json<Vec<Skill>> {
     Json(SKILLS.iter().map(|(s, _)| skill(s)).collect())
 }
@@ -377,6 +387,7 @@ async fn save_profile(
     Json(p): Json<ProfileInput>,
 ) -> ApiResult<Json<MyProfile>> {
     require_adult(&state, &user, p.confirm_adult).await?;
+    crate::legal::require(&state.db, user.id, "people").await?;
     let handle = p.handle.trim().to_ascii_lowercase();
     let handle_ok = (3..=40).contains(&handle.len())
         && handle.split('-').all(|part| {
@@ -758,7 +769,7 @@ async fn directory(
 ) -> ApiResult<Json<Directory>> {
     let mut qb = QueryBuilder::new("select * from (");
     push_card_select(&mut qb, "");
-    qb.push(" where c.portfolio_set_id is not null and c.hidden_reason is null");
+    qb.push(" where ").push(OPEN_SQL);
     if let Some(s) = q.skill.as_deref().filter(|s| !s.is_empty()) {
         qb.push(" and ")
             .push_bind(s.to_string())
@@ -803,10 +814,9 @@ async fn directory(
     };
     qb.push(" limit 200");
     let rows: Vec<CardRow> = qb.build_query_as().fetch_all(&state.db).await?;
-    let counts: Vec<(String, i64)> = sqlx::query_as(
-        "select s, count(*) from creatives c, unnest(c.skills) s
-         where c.portfolio_set_id is not null and c.hidden_reason is null group by s",
-    )
+    let counts: Vec<(String, i64)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select s, count(*) from creatives c, unnest(c.skills) s where {OPEN_SQL} group by s"
+    )))
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Directory {
@@ -871,6 +881,8 @@ struct Page {
     /// For the creative's own view: live, waiting (for the first portfolio review) or hidden.
     status: &'static str,
     hidden_reason: Option<String>,
+    /// The account was closed: the page is kept, frozen, and takes no new work.
+    closed: bool,
 }
 
 #[derive(Serialize)]
@@ -909,23 +921,27 @@ async fn page(
         banner: Option<media::Picture>,
         portfolio_set_id: Option<Uuid>,
         hidden_reason: Option<String>,
+        suspended: bool,
+        closed: bool,
     }
     let mut qb = QueryBuilder::new("");
     push_card_select(
         &mut qb,
         ", c.user_id, c.about_md, c.ai_note, c.trader, c.turnaround, c.sections, c.links,
-           ps.banner, c.portfolio_set_id, c.hidden_reason",
+           ps.banner, c.portfolio_set_id, c.hidden_reason,
+           (select su.suspended_at is not null from users su where su.id = c.user_id) as suspended,
+           (select su.closed_at is not null from users su where su.id = c.user_id) as closed",
     );
     qb.push(" where c.handle = ")
         .push_bind(handle.to_ascii_lowercase());
     let row: Option<Row> = qb.build_query_as().fetch_optional(&state.db).await?;
     let row = row.ok_or(ApiError::NotFound)?;
     let is_me = user.as_ref().is_some_and(|u| u.id == row.user_id);
-    let live = row.portfolio_set_id.is_some() && row.hidden_reason.is_none();
+    let live = row.portfolio_set_id.is_some() && row.hidden_reason.is_none() && !row.suspended;
     if !live && !is_me {
         return Err(ApiError::NotFound);
     }
-    let status = if row.hidden_reason.is_some() {
+    let status = if row.hidden_reason.is_some() || row.suspended {
         "hidden"
     } else if live {
         "live"
@@ -977,6 +993,7 @@ async fn page(
         is_me,
         status,
         hidden_reason: if is_me { row.hidden_reason } else { None },
+        closed: row.closed,
         card: row.card.into_card(),
     }))
 }
@@ -1120,17 +1137,18 @@ pub struct Credit {
 /// The creatives an app credits (completed, fully paid jobs with credit on). Hidden profiles
 /// aren't linked.
 pub async fn credits(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<Credit>> {
-    let rows: Vec<(String, String, String, Option<String>)> = sqlx::query_as(
-        "select c.handle, c.name, j.skill, j.offer->>'title'
+    let rows: Vec<(String, String, String, Option<String>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select c.handle, c.name, j.skill, j.offer->>'title'
          from jobs j join creatives c on c.user_id = j.creative_id
          where j.app_id = $1 and j.credited_at is not null
            and coalesce((j.offer->>'credit')::boolean, true)
-           and c.hidden_reason is null and c.portfolio_set_id is not null
-         order by j.credited_at",
-    )
-    .bind(app_id)
-    .fetch_all(db)
-    .await?;
+           and {VISIBLE_SQL}
+         order by j.credited_at"
+        )))
+        .bind(app_id)
+        .fetch_all(db)
+        .await?;
     Ok(rows
         .into_iter()
         .map(|(handle, name, s, work)| Credit {

@@ -628,3 +628,35 @@ img.pixelated { image-rendering: pixelated; object-fit: contain !important; }
 .proposals { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; font-size: 13px; }
 .dispute-form { margin-top: 8px; border-top: 1px solid var(--line); padding-top: 8px; }
 pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size: 12px; }
+
+/* ---- Reports, moderation decisions, terms ------------------------------- */
+.dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.dialog.wide { width: min(760px, calc(100vw - 32px)); }
+.dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
+.dialog h2 { margin: 0 0 6px; font-size: 19px; }
+.report-form fieldset, .appeal-form fieldset, .report-copyright { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 8px; }
+.report-form legend, .appeal-form legend { font-weight: 600; padding: 0 4px; }
+.report-reasons { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 4px 12px; }
+.legal-scroll { max-height: 320px; overflow: auto; border: 1px solid var(--line); border-radius: 8px; padding: 8px 14px; background: var(--panel-2); font-size: 13px; }
+.legal-scroll h2 { font-size: 16px; margin: 16px 0 6px; padding-top: 0; border-top: 0; }
+.legal-index, .report-list, .legal-notices, .legal-versions { list-style: none; margin: 0 0 16px; padding: 0; }
+.legal-index li, .report-list li { display: flex; justify-content: space-between; gap: 12px; padding: 12px 16px; border-bottom: 1px solid var(--line); }
+.legal-index li { flex-direction: column; gap: 2px; }
+.legal-index li:last-child, .report-list li:last-child { border-bottom: 0; }
+.legal-notices li, .legal-versions li { padding: 4px 0; }
+.legal-versions [aria-current="page"] { font-weight: 700; text-decoration: none; }
+.legal-page .doc { padding: 8px 24px 20px; }
+.account-notices { flex: none; display: flex; flex-direction: column; }
+.account-notice { padding: 7px 20px; background: rgba(251, 191, 36, 0.08); border-bottom: 1px solid rgba(251, 191, 36, 0.3); font-size: 13px; display: flex; gap: 6px 10px; flex-wrap: wrap; align-items: baseline; }
+.account-notice.bad-notice { background: rgba(248, 113, 113, 0.1); border-bottom-color: rgba(248, 113, 113, 0.4); }
+.decision { margin-bottom: 12px; }
+.decision.is-new { border-color: var(--warn); }
+.decision-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
+.decision-head h3 { margin: 0; font-size: 16px; }
+.report-row { margin: 10px 0 0; text-align: right; }
+.review-report { text-align: right; }
+.decide-form { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
+.report-card.overdue { border-color: var(--bad); }
+.report-card blockquote { margin: 0; padding: 6px 10px; border-left: 3px solid var(--line); background: var(--panel-2); border-radius: 0 6px 6px 0; }
+.close-account ul { margin: 0 0 8px; padding-left: 20px; color: var(--text-2); font-size: 13px; }
+.mono { font-family: ui-monospace, "Cascadia Code", Menlo, monospace; }

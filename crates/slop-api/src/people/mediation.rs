@@ -896,6 +896,40 @@ async fn decide(
     if done.rows_affected() == 0 {
         return Err(ApiError::Conflict("that dispute isn't pending".into()));
     }
+    if hidden {
+        // A removed review is a moderation decision: the reviewer gets the statement of reasons
+        // and can appeal (CON-9).
+        let (client, dispute_reason, label): (Uuid, String, String) = sqlx::query_as(
+            "select r.client_id, d.reason, 'Review of ' || c.name || ' by ' || u.display_name
+             from creative_reviews r join review_disputes d on d.job_id = r.job_id
+             join creatives c on c.user_id = r.creative_id join users u on u.id = r.client_id
+             where r.job_id = $1",
+        )
+        .bind(job_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        let rule = match dispute_reason.as_str() {
+            "not_about_job" => "fake_review",
+            "extortion" => "extortion",
+            "false_fact" => "false_fact",
+            _ => "harassment",
+        };
+        crate::moderation::record(
+            &mut tx,
+            &crate::moderation::NewDecision {
+                user_id: client,
+                subject_kind: "review",
+                subject_id: job_id,
+                subject_label: &label,
+                action: "hide_review",
+                rule,
+                law: None,
+                facts: &reason,
+                decided_by: &admin.actor,
+            },
+        )
+        .await?;
+    }
     sqlx::query(
         "update creative_reviews set hidden_at = case when $2 then now() end, hidden_reason = case when $2 then $3 end,
                 mediator_note = $4 where job_id = $1",

@@ -203,6 +203,15 @@ async fn github_callback(
     .await?;
 
     if let Some(user_id) = existing {
+        // A closed account's sign-in stays refused (DESIGN §4).
+        let closed: bool =
+            sqlx::query_scalar("select closed_at is not null from users where id = $1")
+                .bind(user_id)
+                .fetch_one(&state.db)
+                .await?;
+        if closed {
+            return Ok((jar, Redirect::to("/signin?error=closed")).into_response());
+        }
         let user_agent = headers.get(USER_AGENT).and_then(|v| v.to_str().ok());
         let cookie = session::create(&state.db, &state.config, user_id, user_agent).await?;
         return Ok((jar.add(cookie), Redirect::to(&return_to)).into_response());
@@ -293,6 +302,9 @@ struct SignupRequest {
     country_code: String,
     /// The user confirms they are at least their country's minimum age (16 everywhere today).
     age_confirmed: bool,
+    /// The user accepts the Terms of Service in effect (legal.rs).
+    #[serde(default)]
+    accept_terms: bool,
 }
 
 #[derive(Serialize)]
@@ -348,6 +360,13 @@ async fn signup(
         ));
     }
 
+    if !req.accept_terms {
+        return Err(ApiError::invalid(
+            "accept_terms",
+            "accept the Terms of Service to create an account",
+        ));
+    }
+
     let mut tx = state.db.begin().await?;
     let pending: Option<(String, String, Option<String>, String)> = sqlx::query_as(
         "delete from pending_signups where token_hash = $1 and expires_at > now()
@@ -382,6 +401,9 @@ async fn signup(
                 err.into()
             }
         })?;
+    if let Some(version) = crate::legal::current_version(&mut tx, "terms").await? {
+        crate::legal::record_acceptance(&mut tx, user_id, "terms", &version).await?;
+    }
     tx.commit().await?;
 
     let user_agent = headers.get(USER_AGENT).and_then(|v| v.to_str().ok());
@@ -405,6 +427,8 @@ async fn signup(
         share_playtime: true,
         personalize: under18 == Some(false),
         adult_confirmed: false,
+        suspended: false,
+        new_decisions: 0,
     };
     Ok((
         StatusCode::CREATED,
@@ -446,6 +470,11 @@ struct Me {
     personalize: bool,
     /// Confirmed 18+ for People (LEGAL §6), so the UI only asks once.
     adult_confirmed: bool,
+    /// Suspended by a moderation decision (moderation.rs).
+    suspended: bool,
+    /// Moderation decisions about the user they haven't opened yet.
+    #[sqlx(skip)]
+    new_decisions: i64,
 }
 
 async fn me(
@@ -455,7 +484,7 @@ async fn me(
 ) -> ApiResult<Json<Me>> {
     let mut me: Me = sqlx::query_as(
         "select id, display_name, email, country_code, is_admin, share_playtime,
-                adult_confirmed_at is not null as adult_confirmed
+                adult_confirmed_at is not null as adult_confirmed, suspended_at is not null as suspended
          from users where id = $1",
     )
     .bind(user.id)
@@ -465,6 +494,7 @@ async fn me(
         crate::policy::ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers)
             .await?;
     me.personalize = crate::foryou::personalized(&state.db, user.id, policy).await?;
+    me.new_decisions = crate::moderation::unseen(&state.db, user.id).await?;
     Ok(Json(me))
 }
 

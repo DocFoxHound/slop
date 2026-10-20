@@ -829,6 +829,7 @@ async fn create_app(
     let min_age = validate_min_age(req.min_age)?;
     let platforms = validate_platforms(&req.platforms)?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
+    crate::legal::require(&state.db, user.id, "publisher").await?;
 
     let app_id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;

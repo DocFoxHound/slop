@@ -4,6 +4,7 @@ import { Link, useParams } from "react-router";
 import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
 import { Gallery } from "../components/Gallery";
 import { RatingPanel } from "../components/RatingPanel";
+import { ReportButton } from "../components/Report";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -238,6 +239,11 @@ function AppView({ app }: { app: AppDetail }) {
               </span>
             </div>
           </div>
+          {!app.is_mine && (
+            <p className="report-row">
+              <ReportButton kind="app" subject={app.slug} label="this app" />
+            </p>
+          )}
         </aside>
       </div>
 

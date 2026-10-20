@@ -261,6 +261,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
     };
     let mut config = config;
     adjust(&mut config);
+    slop_api::legal::sync(&db).await.unwrap();
     let state = AppState::new(db.clone(), config.clone()).unwrap();
     TestApp {
         router: router(state.clone()).unwrap(),
@@ -340,6 +341,15 @@ impl TestApp {
         .bind(id)
         .bind(name)
         .bind(country)
+        .execute(&self.db)
+        .await
+        .unwrap();
+        // Test users have accepted every agreement in effect, unless a test takes it back.
+        sqlx::query(
+            "insert into legal_acceptances (user_id, kind, version)
+             select $1, kind, version from legal_documents where kind in ('terms', 'publisher', 'people')",
+        )
+        .bind(id)
         .execute(&self.db)
         .await
         .unwrap();
@@ -513,6 +523,18 @@ async fn github_signup_then_signin(db: PgPool) {
                 })),
         )
         .await;
+    // The Terms of Service are accepted at sign-up.
+    assert_eq!(body_json(res).await["error"]["field"], "accept_terms");
+    let res = app
+        .send(
+            req(Method::POST, "/v1/auth/signup")
+                .cookie(&signup_cookie)
+                .json(json!({
+                    "display_name": "  Octo  ", "country_code": "us", "age_confirmed": true,
+                    "accept_terms": true
+                })),
+        )
+        .await;
     assert_eq!(res.status(), StatusCode::CREATED);
     let session_cookie = set_cookie(&res, "slop_session").unwrap();
     let body = body_json(res).await;
@@ -526,6 +548,12 @@ async fn github_signup_then_signin(db: PgPool) {
     )
     .await;
     assert_eq!(me["email"], "octo@example.com");
+    let accepted: Vec<String> =
+        sqlx::query_scalar("select kind from legal_acceptances order by kind")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(accepted, ["terms"]);
 
     // Signing in again with the same GitHub account goes straight to a session.
     let res = app.send(req(Method::GET, "/v1/auth/github/start")).await;
@@ -2607,7 +2635,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
         .send(
             req(Method::POST, "/v1/admin/apps/game/delist")
                 .cookie(&admin)
-                .json(json!({ "reason": "Test delisting" })),
+                .json(json!({ "rule": "misleading", "reason": "Test delisting" })),
         )
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
@@ -2628,6 +2656,7 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
         actions,
         [
             "app.delist",
+            "moderation.delist_app",
             "release.revoke",
             "app.stage",
             "app.list",
@@ -4496,8 +4525,14 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
     // People: creatives, jobs in every state, payments through the real code.
     let p = &r.people;
     assert!(made.people.jobs > 40, "{made:?}");
+    // Profiles moderation hid (sim_moderation.rs) aren't live.
+    let hidden: i64 =
+        sqlx::query_scalar("select count(*) from creatives where hidden_reason is not null")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
     assert_eq!(
-        p.live_profiles as usize,
+        (p.live_profiles + hidden) as usize,
         slop_api::sim_people::CREATIVES.len()
     );
     assert_eq!(
@@ -4527,6 +4562,18 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
     assert!(p.messages > 0 && p.inquiries > 0, "{p:#?}");
     // Too few reviews per creative at this size to score ratings; the sandbox report does.
     assert!(p.reviews > 30, "{p:#?}");
+    // Reports, decisions and appeals, through the real code.
+    let m = &r.moderation;
+    assert_eq!(m.actioned_without_decision, 0, "{m:#?}");
+    for status in ["open", "actioned", "dismissed"] {
+        assert!(
+            m.reports_by_status
+                .iter()
+                .any(|(s, n)| s == status && *n > 0),
+            "{m:#?}"
+        );
+    }
+    assert!(!m.decisions_by_action.is_empty(), "{m:#?}");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4799,7 +4846,12 @@ async fn creatives_go_live_with_a_reviewed_portfolio(db: PgPool) {
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn hiring_runs_from_request_to_credit(db: PgPool) {
-    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    // A long walk-through: more writes than one client may make in a minute.
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 1000;
+    })
+    .await;
     let (creative, creative_cookie) = live_creative(&app, "vera", "US", true).await;
     // A consumer in Germany hiring a trader: the withdrawal right applies.
     let (client, client_cookie) = app.user("Tavern Dev", "DE").await;
@@ -4944,6 +4996,41 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
         .await
         .status(),
         StatusCode::NOT_FOUND
+    );
+    // Either side can report the other's message; a stranger can't see it to report it.
+    let job = body_json(
+        app.send(req(Method::GET, format!("/v1/jobs/{id}")).cookie(&client_cookie))
+            .await,
+    )
+    .await;
+    let first = job["conversation"]["messages"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let report = |cookie: &str| {
+        req(Method::POST, "/v1/reports").cookie(cookie).json(json!({
+            "kind": "message", "subject": first, "reason": "harassment",
+            "details": "Rude.", "good_faith": true
+        }))
+    };
+    assert_eq!(
+        app.send(report(&stranger)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(report(&creative_cookie)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app.send(report(&client_cookie)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let quoted: String =
+        sqlx::query_scalar("select quoted from reports where subject_kind = 'message'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        quoted, "Which engine?",
+        "the report keeps the text as it was"
     );
     let job = body_json(
         app.send(post(url("conversation/close"), &creative_cookie, json!({})))
@@ -5466,7 +5553,10 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
         .await,
     )
     .await;
-    let id4 = job4["id"].as_str().unwrap().to_string();
+    let id4 = job4["id"]
+        .as_str()
+        .unwrap_or_else(|| panic!("{job4}"))
+        .to_string();
     app.send(post(
         format!("/v1/jobs/{id4}/offer"),
         &creative_cookie,
@@ -5488,7 +5578,7 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
         .await,
     )
     .await;
-    assert_eq!(job4["status"], "withdrawn");
+    assert_eq!(job4["status"], "withdrawn", "{job4}");
 }
 
 /// A fake Stripe: accounts, account links and Checkout sessions on connected accounts.
@@ -5731,5 +5821,592 @@ async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgP
             .unwrap()
             .iter()
             .any(|e| e["kind"] == "refunded")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reports, moderation decisions, appeals, closing accounts and terms (DESIGN §4, §16)
+
+fn report_app(slug: &str, reason: &str) -> Value {
+    json!({ "kind": "app", "subject": slug, "reason": reason, "details": "It mines crypto.", "good_faith": true })
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reports_lead_to_decisions_with_reasons_and_appeals(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, reporter) = app.user("Rita Reporter", "US").await;
+    let (_, other) = app.user("Otto Other", "US").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    listed_with(&app, maker_id, "miner", "released", "").await;
+
+    // Reasons depend on what's reported.
+    let reasons = body_json(
+        app.send(req(Method::GET, "/v1/reports/reasons?kind=review"))
+            .await,
+    )
+    .await;
+    let codes: Vec<&str> = reasons
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["code"].as_str().unwrap())
+        .collect();
+    assert!(codes.contains(&"fake_review") && !codes.contains(&"malware"));
+
+    // A report is acknowledged with a reference and a deadline: serious ones within a day.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&reporter)
+                .json(report_app("miner", "malware")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let ack = body_json(res).await;
+    let reference = ack["reference"].as_str().unwrap().to_string();
+    assert!(reference.starts_with("R-"));
+    let due = OffsetDateTime::parse(ack["due_at"].as_str().unwrap(), &Rfc3339).unwrap();
+    assert!(due - OffsetDateTime::now_utc() <= time::Duration::hours(24));
+    // Once per reporter while it's open; never about your own; a good-faith statement each time.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&reporter)
+                .json(report_app("miner", "scam")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&maker)
+                .json(report_app("miner", "malware")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let mut no_statement = report_app("miner", "malware");
+    no_statement["good_faith"] = json!(false);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&other)
+                .json(no_statement),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "good_faith");
+    // Signed out: a name and email, except for child abuse reports.
+    let res = app
+        .send(req(Method::POST, "/v1/reports").json(report_app("miner", "broken")))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "name");
+    let mut signed_out = report_app("miner", "broken");
+    signed_out["name"] = json!("Sam");
+    signed_out["email"] = json!("sam@example.com");
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/reports").json(signed_out))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/reports").json(report_app("miner", "child_abuse")))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let preserved: i64 = sqlx::query_scalar(
+        "select count(*) from reports where preserve_until > now() + interval '360 days'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(preserved, 1, "child abuse reports are preserved for a year");
+    // A copyright report needs what a DMCA notice needs.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&other)
+                .json(report_app("miner", "copyright")),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "copyright");
+
+    // The queue: urgent first, with who it's about.
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    let reports = queue["reports"].as_array().unwrap();
+    assert_eq!(reports.len(), 3);
+    assert_eq!(reports[0]["reason"], "child_abuse");
+    assert_eq!(reports[0]["priority"], 0);
+    assert_eq!(reports[0]["reporter"], "No name <no email>, signed out");
+    assert_eq!(reports[1]["reason"], "malware");
+    assert_eq!(reports[1]["account"]["name"], "Mia Maker");
+    assert_eq!(reports[1]["same_subject"], 2);
+    let report_id = reports[1]["id"].as_str().unwrap().to_string();
+    // Only admins can act.
+    let act = |cookie: &str, body: Value| {
+        req(Method::POST, format!("/v1/admin/reports/{report_id}/act"))
+            .cookie(cookie)
+            .json(body)
+    };
+    let decision = json!({
+        "action": "delist_app", "rule": "malware",
+        "facts": "Version 1.2 starts a crypto miner in the background.",
+        "outcome": "We took the app out of the store."
+    });
+    assert_eq!(
+        app.send(act(&reporter, decision.clone())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut bad = decision.clone();
+    bad["action"] = json!("hide_review");
+    assert_eq!(
+        app.send(act(&admin, bad)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app.send(act(&admin, decision.clone())).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    // Every open report about the app closes with it; the app leaves the store.
+    let open: i64 = sqlx::query_scalar("select count(*) from reports where status = 'open'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(open, 0);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/miner").cookie(&other))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // The reporter sees the outcome.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/reports").cookie(&reporter))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["reference"], reference.as_str());
+    assert_eq!(mine[0]["status"], "actioned");
+    assert_eq!(mine[0]["outcome"], "We took the app out of the store.");
+
+    // The maker is told, with a statement of reasons.
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&maker)).await).await;
+    assert_eq!(me["new_decisions"], 1);
+    let decisions = body_json(
+        app.send(req(Method::GET, "/v1/me/decisions").cookie(&maker))
+            .await,
+    )
+    .await;
+    let d = &decisions[0];
+    assert_eq!(d["action_label"], "Taken out of the store");
+    assert_eq!(d["rule_title"], "Malware and data theft");
+    assert_eq!(d["automated"], false);
+    assert_eq!(d["can_appeal"], true);
+    assert_eq!(d["new"], true);
+    assert!(
+        d.get("decided_by").is_none(),
+        "the moderator isn't named to the user"
+    );
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&maker)).await).await;
+    assert_eq!(me["new_decisions"], 0);
+    // Others can't see or appeal it.
+    let id = d["id"].as_str().unwrap().to_string();
+    let appeal = |cookie: &str| {
+        req(Method::POST, format!("/v1/me/decisions/{id}/appeal"))
+            .cookie(cookie)
+            .json(json!({ "appeal": "That's a pathfinding worker thread, not a miner." }))
+    };
+    assert_eq!(
+        app.send(appeal(&reporter)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app.send(appeal(&maker)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["appeal_status"], "pending");
+    assert_eq!(
+        app.send(appeal(&maker)).await.status(),
+        StatusCode::CONFLICT,
+        "once"
+    );
+
+    // A person reverses it, and the app is back.
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        queue["appeals"][0]["appeal"],
+        "That's a pathfinding worker thread, not a miner."
+    );
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/decisions/{id}/appeal"))
+                .cookie(&admin)
+                .json(json!({ "reverse": true, "reason": "Checked the source: it's a worker thread." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/miner").cookie(&other))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let decisions = body_json(
+        app.send(req(Method::GET, "/v1/me/decisions").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(decisions[0]["appeal_status"], "reversed");
+    assert!(decisions[0]["reversed_at"].is_string());
+    assert_eq!(decisions[0]["new"], true, "the answer is news too");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn suspended_accounts_can_read_and_appeal_but_nothing_else(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, reporter) = app.user("Rita Reporter", "US").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    listed_with(&app, maker_id, "scammy", "released", "").await;
+    app.send(
+        req(Method::POST, "/v1/reports")
+            .cookie(&reporter)
+            .json(report_app("scammy", "scam")),
+    )
+    .await;
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    let report_id = queue["reports"][0]["id"].as_str().unwrap();
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/reports/{report_id}/act"))
+                .cookie(&admin)
+                .json(json!({
+                    "action": "suspend_account", "rule": "scam", "law": "FTC Act §5",
+                    "facts": "Asked players for card details.", "outcome": "We suspended the maker."
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&maker)).await).await;
+    assert_eq!(me["suspended"], true);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("another")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"]["code"], "suspended");
+    let res = app
+        .send(req(Method::GET, "/v1/me/export").cookie(&maker))
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "a suspended account can still download its data"
+    );
+    let decisions = body_json(
+        app.send(req(Method::GET, "/v1/me/decisions").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(decisions[0]["subject_kind"], "account");
+    assert_eq!(decisions[0]["law"], "FTC Act §5");
+    let id = decisions[0]["id"].as_str().unwrap();
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/me/decisions/{id}/appeal"))
+                .cookie(&maker)
+                .json(json!({ "appeal": "Someone else had my password." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    app.send(
+        req(Method::POST, format!("/v1/admin/decisions/{id}/appeal"))
+            .cookie(&admin)
+            .json(json!({ "reverse": true, "reason": "Account was taken over; restored." })),
+    )
+    .await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("another")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn closing_an_account_bans_the_sign_in_and_keeps_ratings_honest(db: PgPool) {
+    let app = test_app(db).await;
+    // Sign up through GitHub, so the sign-in can be tried again afterwards.
+    let res = app.send(req(Method::GET, "/v1/auth/github/start")).await;
+    let state = query_param(&location(&res), "state");
+    let state_cookie = set_cookie(&res, "slop_oauth_state").unwrap();
+    let res = app
+        .send(
+            req(
+                Method::GET,
+                format!("/v1/auth/github/callback?code=ok&state={state}"),
+            )
+            .cookie(&state_cookie),
+        )
+        .await;
+    let signup_cookie = set_cookie(&res, "slop_signup").unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/auth/signup").cookie(&signup_cookie).json(json!({
+                "display_name": "Octo", "country_code": "US", "age_confirmed": true, "accept_terms": true
+            })),
+        )
+        .await;
+    let cookie = set_cookie(&res, "slop_session").unwrap();
+    let user_id: Uuid = sqlx::query_scalar("select id from users")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "liked", "released", "").await;
+    listed_with(&app, user_id, "octos-game", "released", "").await;
+    let liked: Uuid = sqlx::query_scalar("select id from apps where slug = 'liked'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("insert into votes (user_id, app_id, vote, weight) values ($1, $2, 1, 2)")
+        .bind(user_id)
+        .bind(liked)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // The data export has everything linked to the account.
+    let res = app
+        .send(req(Method::GET, "/v1/me/export").cookie(&cookie))
+        .await;
+    assert!(
+        res.headers()[header::CONTENT_DISPOSITION]
+            .to_str()
+            .unwrap()
+            .contains("attachment")
+    );
+    let export = body_json(res).await;
+    assert_eq!(export["account"]["email"], "octo@example.com");
+    assert_eq!(export["sign_ins"][0]["provider"], "github");
+    assert_eq!(export["votes"][0]["app"], "liked");
+    assert_eq!(export["apps"][0]["slug"], "octos-game");
+    assert_eq!(export["agreements_accepted"][0]["document"], "terms");
+    assert!(export["sessions"][0].get("token_hash").is_none());
+
+    // Typing the confirmation is required; an open People job would block it.
+    let close = |confirm: &str| {
+        req(Method::POST, "/v1/me/close")
+            .cookie(&cookie)
+            .json(json!({ "confirm": confirm }))
+    };
+    assert_eq!(
+        app.send(close("yes")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app.send(close("Close my account")).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Signed out everywhere, and the sign-in is refused from now on.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me").cookie(&cookie))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let res = app.send(req(Method::GET, "/v1/auth/github/start")).await;
+    let state = query_param(&location(&res), "state");
+    let state_cookie = set_cookie(&res, "slop_oauth_state").unwrap();
+    let res = app
+        .send(
+            req(
+                Method::GET,
+                format!("/v1/auth/github/callback?code=ok&state={state}"),
+            )
+            .cookie(&state_cookie),
+        )
+        .await;
+    assert_eq!(location(&res), "/signin?error=closed");
+    assert!(set_cookie(&res, "slop_session").is_none());
+
+    // Personal data gone; the vote still counts, linked to nobody; the app out of the store.
+    let (email, closed): (Option<String>, bool) =
+        sqlx::query_as("select email, closed_at is not null from users where id = $1")
+            .bind(user_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((email, closed), (None, true));
+    let votes: Vec<(Uuid, f32)> =
+        sqlx::query_as("select user_id, weight from votes where app_id = $1")
+            .bind(liked)
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(votes.len(), 1);
+    assert_ne!(votes[0].0, user_id);
+    let status: String =
+        sqlx::query_scalar("select status::text from apps where slug = 'octos-game'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "delisted");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agreements_wait_for_the_version_in_effect(db: PgPool) {
+    let app = test_app(db).await;
+    let (id, maker) = app.user("Mia Maker", "US").await;
+    sqlx::query("delete from legal_acceptances where user_id = $1 and kind = 'publisher'")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // A first app needs the Publisher Agreement.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("first")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let err = body_json(res).await;
+    assert_eq!(err["error"]["code"], "terms_required");
+    assert_eq!(err["error"]["field"], "publisher");
+    let doc = body_json(app.send(req(Method::GET, "/v1/legal/publisher")).await).await;
+    assert_eq!(doc["title"], "Publisher Agreement");
+    assert!(
+        doc["body_md"]
+            .as_str()
+            .unwrap()
+            .contains("Draft for legal review")
+    );
+    let version = doc["version"].as_str().unwrap().to_string();
+    let accept = |kind: &str, version: &str| {
+        req(Method::POST, "/v1/me/legal/accept")
+            .cookie(&maker)
+            .json(json!({ "kind": kind, "version": version }))
+    };
+    assert_eq!(
+        app.send(accept("privacy", &version)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "policies are read, not accepted"
+    );
+    assert_eq!(
+        app.send(accept("publisher", "1999-01-01")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.send(accept("publisher", &version)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("first")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // A change is announced 15 days ahead: nothing waits for it until then, but it's shown.
+    sqlx::query(
+        "insert into legal_documents (kind, version, title, summary, body_md, sha256, effective_at)
+         values ('publisher', '2099-01-01', 'Publisher Agreement', 'Clearer AI rules.', 'New words.', 'x', now() + interval '15 days')",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let notices = body_json(
+        app.send(req(Method::GET, "/v1/me/legal").cookie(&maker))
+            .await,
+    )
+    .await;
+    let n = notices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["kind"] == "publisher")
+        .unwrap();
+    assert_eq!(n["version"], "2099-01-01");
+    assert_eq!(n["in_effect"], false);
+    assert_eq!(n["action"], "accept");
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("second")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    // Once it's in effect, publishing waits for it.
+    sqlx::query("update legal_documents set effective_at = now() where version = '2099-01-01'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("third")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        app.send(accept("publisher", "2099-01-01")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("third")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // A new version of a file takes effect 15 days after it's published; the first at once.
+    sqlx::query("update legal_documents set version = '2000-01-01' where kind = 'privacy'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::legal::sync(&app.db).await.unwrap();
+    let wait: f64 = sqlx::query_scalar(
+        "select extract(epoch from effective_at - published_at)::float8 from legal_documents
+         where kind = 'privacy' and version <> '2000-01-01'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(wait, 15.0 * 86400.0);
+    let notices = body_json(
+        app.send(req(Method::GET, "/v1/me/legal").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(
+        notices
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|n| n["kind"] == "privacy" && n["action"] == "read")
     );
 }

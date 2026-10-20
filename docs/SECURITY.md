@@ -173,7 +173,8 @@ The client installs software, so it's a prime target:
 ### 8.1 Web and API
 - Follow the **OWASP ASVS** (level 2 overall, level 3 for payments and publishing).
 - **Authorization on every request, on the server.** This is the biggest web risk for Private Slop, chat and People messages, and payment records: every object read checks the caller's rights. Use non-guessable IDs (UUIDv7/ULID) as well, but never *instead of* checks. Postgres row-level security acts as a backstop.
-- Rate limits per account, IP and endpoint. Stricter for sign-in, voting, donations, reports and messages.
+- Rate limits per account, IP and endpoint. Stricter for sign-in, voting, donations, reports and messages. *Built: per IP for every request (`ratelimit.rs`), and 20 reports per account per day (`moderation.rs`).*
+- Suspended accounts (`users.suspended_at`) can only read, appeal, accept terms, download their data, sign out or close the account: every other write is refused in the session extractor (`auth/session.rs`). Closed accounts can't sign in at all, and their sessions are revoked.
   - **Built (2026-10-18):** per-IP token buckets for sign-in (20/min), writes (60/min) and reads (600/min), in memory per API instance (`crates/slop-api/src/ratelimit.rs`). Still to do: per-account limits for voting, donations, reports and messages as those features land, and a shared limiter once Slop runs several instances.
 - Input validation and output encoding. Store pages and reviews are **Markdown rendered with a strict allowlist** (no raw HTML).
 - **Security headers:** a CSP with nonces, HSTS (preload), `frame-ancestors 'none'`, Referrer-Policy, Permissions-Policy.

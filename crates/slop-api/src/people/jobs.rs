@@ -1158,6 +1158,7 @@ async fn hire(
     Json(body): Json<HireBody>,
 ) -> ApiResult<Json<JobView>> {
     require_adult(&state, &user, body.confirm_adult).await?;
+    crate::legal::require(&state.db, user.id, "people").await?;
     if !body.exact_wording_ack {
         return Err(ApiError::invalid(
             "exact_wording_ack",
@@ -1172,11 +1173,12 @@ async fn hire(
         bool,
         sqlx::types::Json<Vec<Service>>,
     );
-    let row: Option<Hireable> = sqlx::query_as(
-        "select user_id, skills, (portfolio_set_id is not null and hidden_reason is null),
+    let row: Option<Hireable> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select user_id, skills, ({}),
                 (taking_work and stripe_status = 'active'), services
-         from creatives where handle = $1",
-    )
+         from creatives c where handle = $1",
+        super::OPEN_SQL
+    )))
     .bind(handle.to_ascii_lowercase())
     .fetch_optional(&state.db)
     .await?;

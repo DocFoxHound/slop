@@ -154,7 +154,165 @@ export interface Me {
   personalize: boolean;
   /** Confirmed 18+ for People. */
   adult_confirmed: boolean;
+  /** Suspended by a moderation decision: can read, appeal, download data, sign out or close the account. */
+  suspended: boolean;
+  /** Moderation decisions about the user they haven't opened yet. */
+  new_decisions: number;
 }
+
+/** Slop's legal documents (crates/slop-api/src/legal.rs). */
+export type LegalKind = "terms" | "privacy" | "content" | "publisher" | "people";
+
+export interface LegalVersion {
+  version: string;
+  summary: string;
+  published_at: string;
+  effective_at: string;
+}
+
+export interface LegalDocument extends LegalVersion {
+  kind: LegalKind;
+  title: string;
+  body_md: string;
+  sha256: string;
+  in_effect: boolean;
+  versions: LegalVersion[];
+}
+
+export interface LegalIndexEntry {
+  kind: LegalKind;
+  title: string;
+  /** Accepted (an agreement) rather than only read (a policy). */
+  accepted: boolean;
+  current: LegalVersion | null;
+  upcoming: LegalVersion | null;
+}
+
+/** A document the signed-in user should hear about. */
+export interface LegalNotice {
+  kind: LegalKind;
+  title: string;
+  version: string;
+  summary: string;
+  effective_at: string;
+  in_effect: boolean;
+  action: "accept" | "read";
+}
+
+/** Reports and moderation (crates/slop-api/src/moderation.rs). */
+export type ReportKind = "app" | "review" | "profile" | "message";
+
+export interface ReportReason {
+  code: string;
+  label: string;
+  /** Reviewed within 24 hours. */
+  urgent: boolean;
+}
+
+export interface CopyrightNotice {
+  work: string;
+  owner: string;
+  address: string;
+  phone: string;
+  good_faith: boolean;
+  accurate_under_penalty: boolean;
+  signature: string;
+}
+
+export interface ReportBody {
+  kind: ReportKind;
+  subject: string;
+  reason: string;
+  details: string;
+  good_faith: boolean;
+  name?: string;
+  email?: string;
+  copyright?: CopyrightNotice;
+}
+
+export interface MyReport {
+  reference: string;
+  subject_kind: ReportKind;
+  subject_label: string;
+  reason: string;
+  reason_label: string;
+  status: "open" | "actioned" | "dismissed";
+  outcome: string | null;
+  created_at: string;
+  decided_at: string | null;
+}
+
+export interface ModerationDecision {
+  id: string;
+  reference: string;
+  subject_kind: ReportKind | "account";
+  subject_label: string;
+  action: "delist_app" | "hide_review" | "hide_profile" | "suspend_account" | "warn";
+  action_label: string;
+  rule: string;
+  rule_title: string;
+  law: string | null;
+  facts: string;
+  automated: boolean;
+  created_at: string;
+  appeal: string | null;
+  appealed_at: string | null;
+  appeal_status: "pending" | "upheld" | "reversed" | null;
+  appeal_reason: string | null;
+  appeal_decided_at: string | null;
+  reversed_at: string | null;
+  can_appeal: boolean;
+  appeal_until: string;
+  new?: boolean;
+}
+
+export interface CounterNotice {
+  name: string;
+  address: string;
+  phone: string;
+  mistake_under_penalty: boolean;
+  consent_to_jurisdiction: boolean;
+  signature: string;
+}
+
+export interface ModeratedAccount {
+  id: string;
+  name: string;
+  closed: boolean;
+  suspended: boolean;
+  decisions: number;
+  copyright_strikes: number;
+}
+
+export interface QueuedReport {
+  id: string;
+  reference: string;
+  subject_kind: ReportKind;
+  subject_label: string;
+  link: string | null;
+  quoted: string | null;
+  account: ModeratedAccount | null;
+  reason: string;
+  reason_label: string;
+  details: string;
+  reporter: string;
+  copyright: CopyrightNotice | null;
+  priority: 0 | 1 | 2;
+  due_at: string;
+  overdue: boolean;
+  created_at: string;
+  same_subject: number;
+  actions: ModerationDecision["action"][];
+  suggested_rule: string | null;
+  preserve: boolean;
+}
+
+export type QueuedAppeal = ModerationDecision & {
+  decided_by: string;
+  counter_notice: CounterNotice | null;
+  account: ModeratedAccount;
+  link: string | null;
+};
 
 /** % Not Slop at one point (crates/slop-api/src/votes.rs). */
 export interface Tally {
@@ -274,6 +432,8 @@ export interface CreativePage extends CreativeCard {
   is_me: boolean;
   status: "live" | "waiting" | "hidden";
   hidden_reason: string | null;
+  /** The account was closed: the page is kept, frozen, and takes no new work. */
+  closed: boolean;
 }
 
 export interface ProfileInput {
@@ -633,6 +793,12 @@ export interface AdminQueue {
     created_at: string;
     notes: ReviewNote[];
   }>;
+  /** Open reports: urgent first, then by when they're due. */
+  reports: QueuedReport[];
+  /** Appeals against moderation decisions. */
+  appeals: QueuedAppeal[];
+  /** Content Policy rules a decision can cite: [code, title]. */
+  rules: Array<[string, string]>;
   ready_to_list: Array<AdminAppRef & { approved_releases: number; pictures_pending: boolean; notes: ReviewNote[] }>;
   checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
 }
@@ -944,8 +1110,16 @@ export const api = {
     revokeToken: (id: string) => request<void>("POST", `/v1/admin/tokens/${id}/revoke`),
     revoke: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/revoke`, { reason }),
     list: (slug: string) => request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/list`),
-    delist: (slug: string, reason: string) =>
-      request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/delist`, { reason }),
+    delist: (slug: string, rule: string, reason: string) =>
+      request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/delist`, { rule, reason }),
+    act: (
+      id: string,
+      body: { action: string; rule: string; law?: string; facts: string; outcome: string; external_reference?: string },
+    ) => request<{ decision: string }>("POST", `/v1/admin/reports/${id}/act`, body),
+    dismiss: (id: string, outcome: string, external_reference?: string) =>
+      request<void>("POST", `/v1/admin/reports/${id}/dismiss`, { outcome, external_reference }),
+    decideAppeal: (id: string, reverse: boolean, reason: string) =>
+      request<void>("POST", `/v1/admin/decisions/${id}/appeal`, { reverse, reason }),
     stage: (slug: string, stage: AppStage) =>
       request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/stage`, { stage }),
   },
@@ -1018,7 +1192,7 @@ export const api = {
   /** Full-page navigation target that starts GitHub sign-in. */
   githubSignInUrl: (returnTo: string) => `${API_BASE}/v1/auth/github/start${query({ return_to: returnTo })}`,
   signupInfo: () => request<SignupInfo>("GET", "/v1/auth/signup"),
-  signup: (body: { display_name: string; country_code: string; age_confirmed: boolean }) =>
+  signup: (body: { display_name: string; country_code: string; age_confirmed: boolean; accept_terms: boolean }) =>
     request<{ user: Me; return_to: string }>("POST", "/v1/auth/signup", body),
   signout: () => request<void>("POST", "/v1/auth/signout"),
   me: () => request<Me>("GET", "/v1/me"),
@@ -1028,6 +1202,26 @@ export const api = {
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/players`,
     ),
+  legal: {
+    index: () => request<LegalIndexEntry[]>("GET", "/v1/legal"),
+    document: (kind: string, version?: string) =>
+      request<LegalDocument>("GET", `/v1/legal/${encodeURIComponent(kind)}${query({ version })}`),
+    notices: () => request<LegalNotice[]>("GET", "/v1/me/legal"),
+    accept: (kind: LegalKind, version: string) => request<void>("POST", "/v1/me/legal/accept", { kind, version }),
+  },
+  reports: {
+    reasons: (kind: ReportKind) => request<ReportReason[]>("GET", `/v1/reports/reasons${query({ kind })}`),
+    send: (body: ReportBody) => request<{ reference: string; due_at: string }>("POST", "/v1/reports", body),
+    mine: () => request<MyReport[]>("GET", "/v1/me/reports"),
+  },
+  decisions: {
+    mine: () => request<ModerationDecision[]>("GET", "/v1/me/decisions"),
+    appeal: (id: string, appeal: string, counter_notice?: CounterNotice) =>
+      request<ModerationDecision>("POST", `/v1/me/decisions/${encodeURIComponent(id)}/appeal`, { appeal, counter_notice }),
+  },
+  /** Everything linked to the account, as JSON text to save. */
+  exportData: () => requestText("GET", "/v1/me/export"),
+  closeAccount: (confirm: string) => request<void>("POST", "/v1/me/close", { confirm }),
   sessions: () => request<SessionInfo[]>("GET", "/v1/me/sessions"),
   revokeSession: (id: string) => request<void>("DELETE", `/v1/me/sessions/${encodeURIComponent(id)}`),
 };

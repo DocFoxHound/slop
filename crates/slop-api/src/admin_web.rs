@@ -186,6 +186,12 @@ struct Queue {
     problems: Vec<crate::people::mediation::QueuedProblem>,
     /// Creatives' disputes about reviews; oldest first.
     review_disputes: Vec<crate::people::mediation::QueuedDispute>,
+    /// Open reports: urgent first, then by when they're due (moderation.rs).
+    reports: Vec<crate::moderation::QueuedReport>,
+    /// Appeals against moderation decisions; oldest first.
+    appeals: Vec<crate::moderation::QueuedAppeal>,
+    /// The Content Policy rules a decision can cite: (code, title).
+    rules: &'static [(&'static str, &'static str)],
     /// Drafts that could go in the store: Coming soon pages, or apps with an approved release.
     ready_to_list: Vec<ReadyApp>,
     checks: ServerChecks,
@@ -271,6 +277,9 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         portfolios: crate::people::portfolio::queued(&state).await?,
         problems: crate::people::mediation::queued_problems(&state.db).await?,
         review_disputes: crate::people::mediation::queued_disputes(&state.db).await?,
+        reports: crate::moderation::queued(&state.db).await?,
+        appeals: crate::moderation::queued_appeals(&state.db).await?,
+        rules: crate::moderation::RULES,
         ready_to_list,
         checks: ServerChecks {
             scanning: cfg.scanner.is_on(),
@@ -452,14 +461,23 @@ async fn list_app(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Delist {
+    /// The Content Policy rule (moderation.rs RULES).
+    rule: String,
+    /// The facts, for the maker's statement of reasons.
+    reason: String,
+}
+
 async fn delist_app(
     State(state): State<AppState>,
     admin: AdminUser,
     Path(slug): Path<String>,
-    Json(body): Json<Reason>,
+    Json(body): Json<Delist>,
 ) -> ApiResult<StatusCode> {
     admin.may_decide()?;
-    admin::delist_app(&state.db, &slug, &admin.actor, &body.reason)
+    admin::delist_app(&state.db, &slug, &admin.actor, &body.rule, &body.reason)
         .await
         .map_err(refused)?;
     Ok(StatusCode::NO_CONTENT)

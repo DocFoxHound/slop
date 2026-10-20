@@ -3,6 +3,7 @@ import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
 import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
+import { formatDate } from "../format";
 import { desktop, isDesktop } from "../platform";
 import { UpdateNotice } from "./UpdateNotice";
 import { WindowControls } from "./WindowControls";
@@ -35,6 +36,20 @@ export function Layout() {
   useEffect(() => {
     view.current?.scrollTo({ top: 0 });
   }, [location.pathname]);
+  // Links to a part of a page (/account#decisions): wait for it to load, then go there.
+  useEffect(() => {
+    const id = decodeURIComponent(location.hash.slice(1));
+    if (!id) return;
+    let tries = 0;
+    const timer = window.setInterval(() => {
+      const el = document.getElementById(id);
+      if (el || ++tries > 30) {
+        window.clearInterval(timer);
+        el?.scrollIntoView({ block: "start" });
+      }
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [location.pathname, location.hash]);
 
   return (
     <div className="window">
@@ -71,6 +86,7 @@ export function Layout() {
 
       <UpdateNotice />
       <SimulationBanner />
+      <AccountNotices />
       <main className="view" id="main" ref={view} tabIndex={-1}>
         <Outlet />
       </main>
@@ -181,7 +197,70 @@ export function Sidebar({ active }: { active?: string }) {
       <Link to="/publish">⬆️ Publish your app</Link>
       <Link to="/publish/guide">📖 How to publish</Link>
       <Link to="/people">🎨 Hire artists &amp; composers</Link>
+      <h4>Slop</h4>
+      <Link to="/legal">📜 Terms &amp; policies</Link>
+      <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>
     </aside>
+  );
+}
+
+/**
+ * Things the signed-in user should know, on every page but never in the way: a suspension, new
+ * moderation decisions, and agreements or policies that changed (crates/slop-api/src/legal.rs).
+ * Announcements of later changes can be dismissed; ones in effect stay until accepted.
+ */
+function AccountNotices() {
+  const { me } = useSession();
+  const location = useLocation();
+  const notices = useLoad(() => (me ? api.legal.notices() : Promise.resolve([])), [me?.id, location.pathname === "/account"]);
+  const [dismissed, setDismissed] = useState<string[]>(() => {
+    try {
+      return JSON.parse(localStorage.getItem("slop.dismissed-notices") ?? "[]") as string[];
+    } catch {
+      return [];
+    }
+  });
+  if (!me) return null;
+  const dismiss = (key: string) => {
+    const next = [...dismissed, key];
+    setDismissed(next);
+    try {
+      localStorage.setItem("slop.dismissed-notices", JSON.stringify(next));
+    } catch {
+      // Private windows: dismissed for this page view only.
+    }
+  };
+  const legal = (notices.data ?? []).filter((n) => !dismissed.includes(`${n.kind}:${n.version}`) || (n.in_effect && n.action === "accept"));
+  if (!me.suspended && me.new_decisions === 0 && legal.length === 0) return null;
+  return (
+    <div className="account-notices" role="status">
+      {me.suspended && (
+        <div className="account-notice bad-notice">
+          <b>Your account is suspended.</b> You can read Slop, download your data and appeal.{" "}
+          <Link to="/account#decisions">See why, and appeal</Link>
+        </div>
+      )}
+      {!me.suspended && me.new_decisions > 0 && (
+        <div className="account-notice">
+          Slop made {me.new_decisions === 1 ? "a decision" : `${me.new_decisions} decisions`} about your content.{" "}
+          <Link to="/account#decisions">See what, why, and how to appeal</Link>
+        </div>
+      )}
+      {legal.map((n) => (
+        <div className="account-notice" key={`${n.kind}:${n.version}`}>
+          {n.in_effect ? `The ${n.title} changed on ${formatDate(n.effective_at)}.` : `The ${n.title} changes on ${formatDate(n.effective_at)}.`}{" "}
+          <span className="muted">{n.summary}</span>{" "}
+          <Link to={`/legal/${n.kind}${n.in_effect ? "" : `?version=${n.version}`}`}>
+            {n.action === "accept" ? "Review and accept" : "Read it"}
+          </Link>
+          {!(n.in_effect && n.action === "accept") && (
+            <button type="button" className="link-btn small muted" onClick={() => dismiss(`${n.kind}:${n.version}`)}>
+              Dismiss
+            </button>
+          )}
+        </div>
+      ))}
+    </div>
   );
 }
 
