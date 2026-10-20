@@ -693,6 +693,10 @@ async fn report(
             err.into()
         }
     })?;
+    // A report that the app is malicious, or isn't its source, re-scans its live release now.
+    if body.kind == "app" && matches!(reason.code, "malware" | "source_mismatch") {
+        crate::rescan::request(&state.db, subject.id, reason.code).await?;
+    }
     Ok(Json(Acknowledgement { reference, due_at }))
 }
 

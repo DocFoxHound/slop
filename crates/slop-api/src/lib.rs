@@ -35,6 +35,7 @@ pub mod ratelimit;
 pub mod releases;
 pub mod repo_owner;
 pub mod repo_tokens;
+pub mod rescan;
 pub mod review;
 pub mod reviews;
 pub mod scan;

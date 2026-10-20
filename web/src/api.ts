@@ -1092,6 +1092,18 @@ export interface AdminFeatured {
 }
 
 export interface AdminQueue {
+  /** Live releases a re-scan flagged (rescan.rs): withdraw them or keep them. */
+  rescans: Array<{
+    release_id: string;
+    version: string;
+    platform: string;
+    file_name: string;
+    rescan_result: string | null;
+    rescan_report: (Partial<ScanReport> & { detail?: string }) | null;
+    rescan_flagged_at: string;
+    slug: string;
+    title: string;
+  }>;
   releases: Array<Release & { app: AdminAppRef; notes: ReviewNote[] }>;
   changes: Array<AppChange & { app: AdminAppRef; players_get: string | null; notes: ReviewNote[] }>;
   media: Array<MediaSet & { app: AdminAppRef; live: MediaSet | null; notes: ReviewNote[] }>;
@@ -1133,7 +1145,7 @@ export interface AdminQueue {
   ready_to_list: Array<
     AdminAppRef & { approved_releases: number; pictures_pending: boolean; going_public: boolean; notes: ReviewNote[] }
   >;
-  checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
+  checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean; github_app: boolean; github_token: boolean };
 }
 
 export interface AdminApp extends AdminAppRef {
@@ -1513,6 +1525,9 @@ export const api = {
     approve: (id: string) => request<void>("POST", `/v1/admin/releases/${id}/approve`),
     reject: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
     /** Clears a scan finding or Defender result judged a false positive (logged). */
+    /** Keeps a live release a re-scan flagged, as a false positive (logged). */
+    clearRescan: (id: string, platform: string, reason: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/rescan-clear`, { reason }),
     clearScan: (id: string, platform: string, reason: string) =>
       request<void>("POST", `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/clear`, { reason }),
     approveChange: (id: string) => request<void>("POST", `/v1/admin/changes/${id}/approve`),

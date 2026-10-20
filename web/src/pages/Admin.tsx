@@ -20,8 +20,9 @@ import {
   type PortfolioSet,
   type RepoPicture,
   type ReviewNote,
+  type ScanReport,
 } from "../api";
-import { FileChecks, SourceCheckList } from "../components/Checks";
+import { FileChecks, ScanFindings, SourceCheckList } from "../components/Checks";
 import { ItemThumb } from "../components/MediaEditor";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, STAGE_LABEL } from "../format";
@@ -150,6 +151,51 @@ function QueueTab() {
 
       <ReportsSection q={q} onDone={queue.reload} />
       <AppealsSection q={q} onDone={queue.reload} />
+
+      {q.rescans.length > 0 && (
+        <>
+          <h2 className="section-title">Live releases flagged by a re-scan ({q.rescans.length})</h2>
+          <p className="muted small">
+            Players still have these. Withdraw the release if it's harmful (it stops launching for everyone), or keep it if
+            the finding is a false positive; the same finding isn't raised again.
+          </p>
+          <ul className="release-list">
+            {q.rescans.map((f) => (
+              <li key={`${f.release_id}/${f.platform}`} className="panel panel-pad">
+                <div className="title-row spread">
+                  <div className="title-row">
+                    <Link to={`/app/${f.slug}`}>
+                      <b>{f.title}</b>
+                    </Link>
+                    <span className="muted">
+                      {f.version} · {f.platform} · {f.file_name}
+                    </span>
+                    <span className="badge bad">{f.rescan_result === "changed" ? "FILE CHANGED" : "FOUND SOMETHING"}</span>
+                  </div>
+                  <span className="muted small">{formatDate(f.rescan_flagged_at)}</span>
+                </div>
+                {f.rescan_report?.detail && <p className="small">{f.rescan_report.detail}</p>}
+                {f.rescan_report?.findings && <ScanFindings report={{ engines: {}, capabilities: [], ...f.rescan_report } as ScanReport} />}
+                <div className="row-actions">
+                  <ReasonButton
+                    label="Withdraw release"
+                    placeholder="Why, shown to the maker and players"
+                    danger
+                    disabled={busy !== undefined}
+                    onSubmit={(reason) => void run(f.release_id, () => api.admin.revoke(f.release_id, reason))}
+                  />
+                  <ReasonButton
+                    label="Keep it: false positive"
+                    placeholder="Why it's a false positive (logged, at least 10 characters)"
+                    disabled={busy !== undefined}
+                    onSubmit={(reason) => void run(f.release_id, () => api.admin.clearRescan(f.release_id, f.platform, reason))}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       <h2 className="section-title">Releases to review ({q.releases.length})</h2>
       <p className="muted small">
@@ -618,6 +664,9 @@ function ServerChecks({ checks }: { checks: AdminQueue["checks"] }) {
     !checks.signing_key && "No signing key is set (SLOP_SIGNING_KEY), so nothing can be approved.",
     !checks.scanning && "Scanning is off: files are not scanned.",
     !checks.maker_signatures_required && "Maker signatures aren't required on this server.",
+    !checks.github_app &&
+      "Slop's GitHub App isn't set up: private GitHub repositories can't be published or shared, and releases are picked up by polling.",
+    !checks.github_app && !checks.github_token && "No GITHUB_TOKEN either: every GitHub request uses the anonymous 60-an-hour allowance.",
   ].filter(Boolean);
   if (notes.length === 0) return null;
   return (

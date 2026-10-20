@@ -41,6 +41,10 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/releases/{id}/reject", post(reject))
         .route("/admin/releases/{id}/revoke", post(revoke))
         .route(
+            "/admin/releases/{id}/files/{platform}/rescan-clear",
+            post(clear_rescan),
+        )
+        .route(
             "/admin/releases/{id}/files/{platform}/clear",
             post(clear_scan),
         )
@@ -177,6 +181,11 @@ struct ServerChecks {
     maker_signatures_required: bool,
     /// Whether releases can be signed at all (SLOP_SIGNING_KEY).
     signing_key: bool,
+    /// Slop's GitHub App: without it, private GitHub repositories can't be published or shared,
+    /// and every GitHub request shares one small allowance.
+    github_app: bool,
+    /// The server has a GitHub token (a higher allowance than none at all).
+    github_token: bool,
 }
 
 #[derive(Serialize)]
@@ -201,6 +210,8 @@ struct Queue {
     rules: &'static [(&'static str, &'static str)],
     /// Drafts that could go in the store: Coming soon pages, or apps with an approved release.
     ready_to_list: Vec<ReadyApp>,
+    /// Live releases a re-scan flagged (rescan.rs): withdraw them or keep them.
+    rescans: Vec<FlaggedFile>,
     checks: ServerChecks,
 }
 
@@ -289,10 +300,21 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         appeals: crate::moderation::queued_appeals(&state.db).await?,
         rules: crate::moderation::RULES,
         ready_to_list,
+        rescans: sqlx::query_as(
+            "select r.id as release_id, r.version, f.platform, f.file_name, f.rescan_result, f.rescan_report,
+                    f.rescan_flagged_at, a.slug, a.title
+             from release_files f join releases r on r.id = f.release_id join apps a on a.id = r.app_id
+             where f.rescan_flagged_at is not null and r.status = 'approved'
+             order by f.rescan_flagged_at",
+        )
+        .fetch_all(&state.db)
+        .await?,
         checks: ServerChecks {
             scanning: cfg.scanner.is_on(),
             maker_signatures_required: cfg.require_maker_signature,
             signing_key: cfg.signing_key.is_some(),
+            github_app: cfg.github_app.is_some(),
+            github_token: cfg.github_token.as_deref().is_some_and(|t| !t.is_empty()),
         },
     }))
 }
@@ -454,6 +476,62 @@ async fn clear_scan(
     admin::clear_scan(&state.db, id, &platform, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct FlaggedFile {
+    release_id: Uuid,
+    version: String,
+    platform: String,
+    file_name: String,
+    rescan_result: Option<String>,
+    rescan_report: Option<serde_json::Value>,
+    #[serde(with = "time::serde::rfc3339")]
+    rescan_flagged_at: time::OffsetDateTime,
+    slug: String,
+    title: String,
+}
+
+/// Keeps a live release a re-scan flagged: the reviewer judged it a false positive (logged).
+async fn clear_rescan(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path((id, platform)): Path<(Uuid, String)>,
+    Json(body): Json<Reason>,
+) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
+    let reason = body.reason.trim();
+    if !(10..=1000).contains(&reason.chars().count()) {
+        return Err(ApiError::invalid(
+            "reason",
+            "say why in 10 to 1000 characters",
+        ));
+    }
+    let mut tx = state.db.begin().await?;
+    let cleared = sqlx::query(
+        "update release_files set rescan_flagged_at = null, rescan_cleared_reason = $3
+         where release_id = $1 and platform = $2 and rescan_flagged_at is not null",
+    )
+    .bind(id)
+    .bind(&platform)
+    .bind(reason)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if cleared == 0 {
+        return Err(ApiError::NotFound);
+    }
+    admin::audit(
+        &mut tx,
+        &admin.actor,
+        "release.rescan_cleared",
+        &format!("{id} {platform}"),
+        serde_json::json!({ "reason": reason }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

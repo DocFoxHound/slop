@@ -10693,3 +10693,144 @@ async fn admins_are_alerted_once_and_alerts_clear(db: PgPool) {
     assert_eq!(player_ops, 0, "only admins get alerts");
     std::fs::remove_dir_all(&backups).unwrap();
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn live_releases_are_rescanned_and_new_findings_go_to_review(db: PgPool) {
+    // A stand-in scanner that finds something once `mode` says so.
+    let dir = std::env::temp_dir().join(format!("slop-rescan-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let mode = dir.join("mode");
+    std::fs::write(&mode, "clean").unwrap();
+    let script = dir.join("slop-scan");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nif grep -q held {mode}; then echo '{{\"result\":\"on_hold\",\"detail\":\"Flagged by YARA: Trojan.Test in game.exe\",\"findings\":[{{\"engine\":\"YARA\",\"file\":\"game.exe\",\"name\":\"Trojan.Test\"}}],\"capabilities\":[],\"engines\":{{}}}}'; else echo '{{\"result\":\"passed\",\"detail\":\"nothing found\",\"findings\":[],\"capabilities\":[],\"engines\":{{}}}}'; fi\n",
+            mode = mode.display()
+        ),
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let command = script.to_str().unwrap().to_string();
+    let app = test_app_with(db, move |c| {
+        c.releases.scanner = slop_api::scan::Scanner::from_setting("local", &command).unwrap();
+    })
+    .await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    sqlx::query("update apps set status = 'listed'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let id: Uuid = submit_and_fetch(&app, &maker, "1.0.0")
+        .await
+        .parse()
+        .unwrap();
+    admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
+        .await
+        .unwrap();
+
+    // Just approved: not due for a week.
+    assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 0);
+
+    // A malware report re-scans it now; still clean.
+    let (_, reporter) = app.user("Reporter", "US").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&reporter)
+                .json(json!({
+                    "kind": "app", "subject": "game", "reason": "malware",
+                    "details": "It asked for my password.", "good_faith": true
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 1);
+    let (result, flagged): (String, Option<time::OffsetDateTime>) = sqlx::query_as(
+        "select rescan_result, rescan_flagged_at from release_files where release_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(result, "passed");
+    assert!(flagged.is_none());
+    assert_eq!(
+        slop_api::rescan::run_once(&app.state).await.unwrap(),
+        0,
+        "the request is done"
+    );
+
+    // New signatures find something: the release goes to review, players keep it meanwhile.
+    std::fs::write(&mode, "held").unwrap();
+    slop_api::rescan::request(&app.db, app_id(&app, "game").await, "test")
+        .await
+        .unwrap();
+    assert_eq!(slop_api::rescan::run_once(&app.state).await.unwrap(), 1);
+    let (_, admin_cookie) = make_admin(&app, "Admin").await;
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["rescans"][0]["slug"], "game");
+    assert_eq!(
+        queue["rescans"][0]["rescan_report"]["findings"][0]["name"],
+        "Trojan.Test"
+    );
+    let status: String = sqlx::query_scalar("select status::text from releases where id = $1")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "approved");
+
+    // The reviewer keeps it (a false positive): it isn't raised again for the same finding.
+    let clear = |reason: &str| {
+        req(
+            Method::POST,
+            format!("/v1/admin/releases/{id}/files/windows/rescan-clear"),
+        )
+        .cookie(&admin_cookie)
+        .json(json!({ "reason": reason }))
+    };
+    assert_eq!(
+        app.send(clear("ok")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.send(clear("Test signature, matches a known false positive"))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    slop_api::rescan::request(&app.db, app_id(&app, "game").await, "test")
+        .await
+        .unwrap();
+    slop_api::rescan::run_once(&app.state).await.unwrap();
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["rescans"], json!([]));
+    let logged: i64 = sqlx::query_scalar(
+        "select count(*) from audit_log where action in ('release.rescan_flagged', 'release.rescan_cleared')",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(logged, 2);
+    std::fs::remove_dir_all(&dir).unwrap();
+}
+
+async fn app_id(app: &TestApp, slug: &str) -> Uuid {
+    sqlx::query_scalar("select id from apps where slug = $1")
+        .bind(slug)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
