@@ -54,7 +54,7 @@ pub struct Reason {
     pub rule: Option<&'static str>,
 }
 
-const ALL: &[&str] = &["app", "review", "profile", "message"];
+const ALL: &[&str] = &["app", "review", "profile", "message", "app_review"];
 
 pub const REASONS: &[Reason] = &[
     Reason {
@@ -67,7 +67,7 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "threat",
         label: "A threat to someone's life or safety",
-        kinds: &["review", "profile", "message"],
+        kinds: &["review", "app_review", "profile", "message"],
         priority: 0,
         rule: Some("threat"),
     },
@@ -116,21 +116,21 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "copyright",
         label: "Copyright or trademark infringement",
-        kinds: &["app", "review", "profile"],
+        kinds: &["app", "review", "app_review", "profile"],
         priority: 1,
         rule: Some("copyright"),
     },
     Reason {
         code: "harassment",
         label: "Harassment, hate or bullying",
-        kinds: &["review", "profile", "message"],
+        kinds: &["review", "app_review", "profile", "message"],
         priority: 2,
         rule: Some("harassment"),
     },
     Reason {
         code: "private_info",
         label: "Someone's private information",
-        kinds: &["review", "profile", "message"],
+        kinds: &["review", "app_review", "profile", "message"],
         priority: 2,
         rule: Some("private_info"),
     },
@@ -158,14 +158,14 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "fake_review",
         label: "A fake, paid or off-topic review",
-        kinds: &["review"],
+        kinds: &["review", "app_review"],
         priority: 2,
         rule: Some("fake_review"),
     },
     Reason {
         code: "spam",
         label: "Spam",
-        kinds: &["review", "profile", "message"],
+        kinds: &["review", "app_review", "profile", "message"],
         priority: 2,
         rule: Some("spam"),
     },
@@ -237,7 +237,7 @@ pub fn action_label(action: &str) -> &'static str {
 fn actions_for(kind: &str) -> &'static [&'static str] {
     match kind {
         "app" => &["delist_app", "warn", "suspend_account"],
-        "review" => &["hide_review", "warn", "suspend_account"],
+        "review" | "app_review" => &["hide_review", "warn", "suspend_account"],
         "profile" => &["hide_profile", "warn", "suspend_account"],
         _ => &["warn", "suspend_account"],
     }
@@ -416,6 +416,23 @@ async fn find_subject(
                 quoted: None,
             })
         }
+        "app_review" => {
+            let id: Uuid = subject.parse().map_err(|_| ApiError::NotFound)?;
+            let row: Option<(Uuid, String, String)> = sqlx::query_as(
+                "select r.user_id, u.display_name, a.title from app_reviews r join users u on u.id = r.user_id
+                 join apps a on a.id = r.app_id where r.id = $1 and r.hidden_at is null",
+            )
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+            let (author, name, title) = row.ok_or(ApiError::NotFound)?;
+            Ok(Subject {
+                id,
+                user_id: Some(author),
+                label: format!("Review of {title} by {name}"),
+                quoted: None,
+            })
+        }
         "message" => {
             // Only the two sides of a job see its messages, so only they can report one.
             let user = user.ok_or(ApiError::Unauthorized)?;
@@ -446,7 +463,10 @@ async fn find_subject(
                 quoted: Some(body),
             })
         }
-        _ => Err(ApiError::invalid("kind", "app, review, profile or message")),
+        _ => Err(ApiError::invalid(
+            "kind",
+            "app, review, app_review, profile or message",
+        )),
     }
 }
 
@@ -751,6 +771,18 @@ async fn apply(
                 .await?;
             }
         }
+        ("hide_review", "app_review") => {
+            sqlx::query(
+                "update app_reviews set hidden_at = case when $2 then null else now() end,
+                        hidden_reason = case when $2 then null else $3 end
+                 where id = $1",
+            )
+            .bind(subject_id)
+            .bind(undo)
+            .bind(why)
+            .execute(&mut *tx)
+            .await?;
+        }
         ("hide_profile", "profile") => {
             sqlx::query(
                 "update creatives set hidden_reason = case when $2 then null else $3 end, updated_at = now()
@@ -1052,6 +1084,13 @@ async fn link(db: &sqlx::PgPool, kind: &str, id: Uuid) -> sqlx::Result<Option<St
                 .await?
                 .map(|h| format!("/people/{h}"))
         }
+        "app_review" => sqlx::query_scalar::<_, String>(
+            "select a.slug from app_reviews r join apps a on a.id = r.app_id where r.id = $1",
+        )
+        .bind(id)
+        .fetch_optional(db)
+        .await?
+        .map(|s| format!("/app/{s}#review-{id}")),
         "review" => sqlx::query_scalar::<_, String>(
             "select c.handle from creative_reviews r join creatives c on c.user_id = r.creative_id
              where r.job_id = $1",

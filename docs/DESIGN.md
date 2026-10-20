@@ -90,6 +90,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 - **Only users who have launched the app through Slop** can vote. That's the same launch that counts them in Slop Pulse. One vote per account, changeable at any time.
 - **Weighted by playtime** (decided): votes from people who played longer count for more. Store pages show **both** the weighted and unweighted % (`METRICS.md` §2).
 - Votes and reviews are **public on profiles by default**. Users can make them private.
+- **Built 2026-10-20** (`crates/slop-api/src/reviews.rs`): an optional written review under your vote (shown only while you have a vote; edit or delete any time), a Reviews list on app pages with 👍/👎 filters and a Report button on each, and profiles at `/u/{id}` with your apps, People page, and votes and reviews when public. In the UK under-18 view they're private by default (PRIV-6); a private profile's reviews show as "A player". Closing an account deletes its written reviews (its votes stay, anonymised).
 - Displayed as **% Not Slop**, with a label so the direction is always clear:
 
 | % Not Slop | Label |

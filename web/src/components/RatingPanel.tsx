@@ -2,7 +2,8 @@
 // one beside it), the vote buttons, and the rating, votes and players over time
 // (crates/slop-api/src/votes.rs, pulse.rs; DESIGN §7, METRICS §2).
 
-import { useState } from "react";
+import { useState, type FormEvent } from "react";
+import { Link } from "react-router";
 
 import { api, ApiError, type Ratings } from "../api";
 import { formatDate } from "../format";
@@ -143,6 +144,9 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
       ) : (
         <p className="muted small">{mine?.reason}</p>
       )}
+      {r.open && signedIn && !isMine && mine?.vote && (
+        <MyReview slug={slug} review={mine.review} onSaved={async () => setRatings(await api.ratings(slug))} />
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -196,5 +200,88 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
         />
       )}
     </section>
+  );
+}
+
+/** The voter's own written review, under their vote (crates/slop-api/src/reviews.rs). */
+function MyReview({
+  slug,
+  review,
+  onSaved,
+}: {
+  slug: string;
+  review?: { body: string; hidden: boolean };
+  onSaved: () => Promise<void>;
+}) {
+  const [editing, setEditing] = useState(false);
+  const [text, setText] = useState(review?.body ?? "");
+  const [error, setError] = useState<string>();
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(undefined);
+    try {
+      await api.reviews.write(slug, text);
+      setEditing(false);
+      await onSaved();
+      window.dispatchEvent(new Event("slop:reviews-changed"));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
+  };
+  const remove = async () => {
+    await api.reviews.remove(slug);
+    setText("");
+    await onSaved();
+    window.dispatchEvent(new Event("slop:reviews-changed"));
+  };
+  if (review && !editing) {
+    return (
+      <div className="my-review">
+        <b className="small">Your review</b>
+        {review.hidden && (
+          <p className="small warn">
+            Hidden by a moderation decision: see why on your <Link to="/account#decisions">account page</Link>.
+          </p>
+        )}
+        <p className="pre">{review.body}</p>
+        <span className="row-actions">
+          <button type="button" className="link-btn small" onClick={() => setEditing(true)}>
+            Edit
+          </button>
+          <button type="button" className="link-btn small" onClick={() => void remove()}>
+            Delete
+          </button>
+        </span>
+      </div>
+    );
+  }
+  if (!editing) {
+    return (
+      <button type="button" className="link-btn small" onClick={() => setEditing(true)}>
+        Add a written review
+      </button>
+    );
+  }
+  return (
+    <form className="form my-review" onSubmit={(e) => void save(e)}>
+      <label>
+        Your review
+        <textarea value={text} rows={4} maxLength={4000} onChange={(e) => setText(e.target.value)} />
+        <span className="hint">Shown with your vote. Honest and about the app; nobody may offer you anything for it.</span>
+      </label>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <div className="row-actions">
+        <button className="btn small slime" disabled={!text.trim()}>
+          Save review
+        </button>
+        <button type="button" className="btn small ghost" onClick={() => setEditing(false)}>
+          Cancel
+        </button>
+      </div>
+    </form>
   );
 }

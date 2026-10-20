@@ -350,6 +350,8 @@ pub struct Generated {
     /// Interested marks on upcoming apps.
     pub interests: u64,
     pub donations: crate::sim_donations::DonationsGenerated,
+    /// Written reviews with votes.
+    pub reviews: u64,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -656,6 +658,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     for table in [
         "notifications",
         "interests",
+        "app_reviews",
         "reports",
         "moderation_decisions",
         "creative_reviews",
@@ -989,6 +992,30 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .execute(db)
     .await?
     .rows_affected();
+    // Written reviews: about one vote in seven, in a few voices for each side.
+    let reviews = sqlx::query(
+        "insert into app_reviews (id, user_id, app_id, body, created_at, updated_at)
+         select gen_random_uuid(), v.user_id, v.app_id,
+                case when v.vote = 1 then (array[
+                    'Exactly what I wanted. Runs well and I keep coming back to it.',
+                    'Small, but every part of it feels made with care.',
+                    'Surprised how polished this is. The last update fixed my one complaint.',
+                    'Great for short sessions. Wish there was more of it!'
+                  ])[1 + abs(hashtext(v.user_id::text)) % 4]
+                else (array[
+                    'Feels unfinished: menus are confusing and it crashed twice.',
+                    'Looks nice in the screenshots, but there is not much to do.',
+                    'Same three ideas over and over. Not for me.',
+                    'Performance is rough on my laptop, and the controls fight you.'
+                  ])[1 + abs(hashtext(v.user_id::text)) % 4] end,
+                v.updated_at, v.updated_at
+         from votes v join sim_users s on s.user_id = v.user_id
+         where abs(hashtext(v.user_id::text || v.app_id::text)) % 7 = 0
+         on conflict do nothing",
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
     let donations = crate::sim_donations::write(db, &mut rng, now).await?;
 
@@ -1005,6 +1032,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         moderation,
         interests,
         donations,
+        reviews,
     })
 }
 

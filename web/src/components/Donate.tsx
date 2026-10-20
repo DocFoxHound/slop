@@ -132,18 +132,18 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
             }}
           >
             <b>{amount(p.total, d.currency)}</b>
-            <span className="small muted">{d.maker.split(" ")[0]} gets {amount(p.maker_receives, d.currency)}</span>
+            <span className="small muted">{d.maker} gets {amount(p.maker_receives, d.currency)}</span>
           </button>
         ))}
       </div>
       <label>
-        Or your own amount for {d.maker.split(" ")[0]} ({amount(d.min_minor, d.currency)} to {amount(d.max_minor, d.currency)})
+        Or your own amount for {d.maker} ({amount(d.min_minor, d.currency)} to {amount(d.max_minor, d.currency)})
         <input inputMode="decimal" value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="e.g. 7.50" />
       </label>
       {q && (
         <p className="donate-total" aria-live="polite">
           You pay <b>{amount(q.total, d.currency)}</b>
-          {monthly && " every month"} · {d.maker.split(" ")[0]} receives {amount(q.maker_receives, d.currency)} ·{" "}
+          {monthly && " every month"} · {d.maker} receives {amount(q.maker_receives, d.currency)} ·{" "}
           {amount(q.slop_fee, d.currency)} Slop fee ·{" "}
           {q.donor_covers_fees
             ? `${amount(q.processing, d.currency)} card processing`
@@ -154,7 +154,7 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
         <>
           <label className="check">
             <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} />
-            <span>Tell {d.maker.split(" ")[0]} my name (only them; donors are never shown publicly)</span>
+            <span>Tell {d.maker} my name (only them; donors are never shown publicly)</span>
           </label>
           {share && (
             <label>

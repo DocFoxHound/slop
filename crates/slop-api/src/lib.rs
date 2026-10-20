@@ -25,6 +25,7 @@ pub mod pulse;
 pub mod ratelimit;
 pub mod releases;
 pub mod review;
+pub mod reviews;
 pub mod scan;
 pub mod sim;
 pub mod sim_donations;
@@ -134,6 +135,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(account::routes())
         .merge(notify::routes())
         .merge(donations::routes())
+        .merge(reviews::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

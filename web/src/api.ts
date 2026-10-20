@@ -132,6 +132,32 @@ export interface FeeStatement {
   simulated: boolean;
 }
 
+/** A written review on an app (crates/slop-api/src/reviews.rs). */
+export interface AppReview {
+  id: string;
+  /** Set when the author's profile is public. */
+  author_id: string | null;
+  /** Their name, or "A player" when their profile is private. */
+  author: string;
+  vote: "not_slop" | "slop";
+  body: string;
+  created_at: string;
+  updated_at: string;
+  edited: boolean;
+  mine: boolean;
+}
+
+export interface UserProfile {
+  id: string;
+  name: string;
+  joined: string;
+  public: boolean;
+  is_me: boolean;
+  creative_handle: string | null;
+  apps: AppSummary[];
+  votes: Array<AppSummary & { my_vote: "not_slop" | "slop"; review: string | null; voted_at: string }>;
+}
+
 /** A notification in the bell (crates/slop-api/src/notify.rs). */
 export interface Notification {
   id: string;
@@ -273,6 +299,8 @@ export interface Me {
   new_decisions: number;
   /** Unread notifications, for the bell. */
   unread_notifications: number;
+  /** Votes and reviews shown on the public profile (default on; off in the UK under-18 view). */
+  profile_public: boolean;
 }
 
 /** Slop's legal documents (crates/slop-api/src/legal.rs). */
@@ -317,7 +345,7 @@ export interface LegalNotice {
 }
 
 /** Reports and moderation (crates/slop-api/src/moderation.rs). */
-export type ReportKind = "app" | "review" | "profile" | "message";
+export type ReportKind = "app" | "review" | "profile" | "message" | "app_review";
 
 export interface ReportReason {
   code: string;
@@ -447,7 +475,14 @@ export interface Ratings extends Tally {
   daily: Array<{ day: string; not_slop: number; slop: number; changed: number; withdrawn: number }>;
   open: boolean;
   min_votes: number;
-  mine?: { vote: "not_slop" | "slop" | null; can_vote: boolean; reason: string | null; weight: number };
+  mine?: {
+    vote: "not_slop" | "slop" | null;
+    can_vote: boolean;
+    reason: string | null;
+    weight: number;
+    /** Their written review; hidden when a moderation decision hid it. */
+    review?: { body: string; hidden: boolean };
+  };
   /** Votes since the first release with work hired through People (null: none hired). */
   since_new_work: (Partial<Tally> & { since: string | null; version: string | null; credits: string[] }) | null;
 }
@@ -1313,12 +1348,22 @@ export const api = {
     request<{ user: Me; return_to: string }>("POST", "/v1/auth/signup", body),
   signout: () => request<void>("POST", "/v1/auth/signout"),
   me: () => request<Me>("GET", "/v1/me"),
-  updateMe: (changes: { share_playtime?: boolean; personalize?: boolean }) => request<void>("PATCH", "/v1/me", changes),
+  updateMe: (changes: { share_playtime?: boolean; personalize?: boolean; profile_public?: boolean }) => request<void>("PATCH", "/v1/me", changes),
   players: (slug: string) =>
     request<{ playing_now: number; peak_this_month: number; daily_peaks: Array<{ day: string; peak: number }> }>(
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/players`,
     ),
+  reviews: {
+    list: (slug: string, vote?: "not_slop" | "slop", offset?: number) =>
+      request<{ reviews: AppReview[]; not_slop: number; slop: number; next_offset: number | null }>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/reviews${query({ vote, offset })}`,
+      ),
+    write: (slug: string, body: string) => request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/review`, { body }),
+    remove: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/review`),
+  },
+  profile: (id: string) => request<UserProfile>("GET", `/v1/users/${encodeURIComponent(id)}`),
   donations: {
     info: (slug: string) => request<DonateInfo>("GET", `/v1/apps/${encodeURIComponent(slug)}/donate`),
     quote: (slug: string, amount_minor: number) =>

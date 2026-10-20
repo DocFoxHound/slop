@@ -43,6 +43,8 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Maker's Stripe account for donations, and the tax-notice confirmation | `donation_accounts` | Paying donations straight to the maker (PAYMENTS §3); PAY-9 | Contract; legal obligation | Life of the account + 6 years |
 | Donations (donor, app, amounts, fee, status, Stripe charge or invoice; a message and the choice to share the donor's name) | `donations` | Receipts and history for the donor, totals for the maker, Slop's fee records | Contract; legal obligation (accounting, 10 years) | 10 years (LEGAL-GUIDANCE §15) |
 | Server donations (donor, app, amounts, the terms they confirmed, status, reminder times) | `server_donations` | Monthly donations, proof of consent (PAY-14), reminders (PAY-16) | Contract; legal obligation | 10 years |
+| Written reviews of apps | `app_reviews` | Shown with the vote on the app page, and on the profile when it's public | Contract (it's the feature) / legitimate interest | Until deleted, or the account closes |
+| Profile privacy choice | `users.profile_public` | Whether votes and reviews show on the public profile (PRIV-6 default) | Contract | Life of account |
 | Interested list | `interests` | The user's Interested apps: library, stage notifications, "For you"; only counts are public | Contract; legitimate interest (recommendations) | Until removed or the account closes |
 | Notifications (title, link, read time) | `notifications` | Telling the user about their jobs, Interested apps and moderation decisions | Contract | 180 days after being read, a year at most |
 | Email choices | `users.email_prefs` | Which notification emails the user wants | Contract | Life of account |

@@ -144,6 +144,12 @@ const EXPORT: &[(&str, &str)] = &[
         "select to_jsonb(d) - 'user_id' from donation_accounts d where d.user_id = $1",
     ),
     (
+        "app_reviews",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug) || (to_jsonb(r) - 'user_id' - 'app_id')
+                order by r.created_at), '[]')
+         from app_reviews r join apps a on a.id = r.app_id where r.user_id = $1",
+    ),
+    (
         "reviews_written",
         "select coalesce(jsonb_agg(to_jsonb(r) - 'client_id'), '[]') from creative_reviews r where r.client_id = $1",
     ),
@@ -335,6 +341,7 @@ pub async fn close_account(
     for table in [
         "library_entries",
         "interests",
+        "app_reviews",
         "user_app_usage",
         "pulse_sessions",
         "notifications",
