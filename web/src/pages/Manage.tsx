@@ -5,7 +5,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 
-import { api, ApiError, type AppChange, type ManageOverview } from "../api";
+import { api, ApiError, type AppChange, type ManageOverview, type RatingGroup } from "../api";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -81,6 +81,7 @@ export function Manage() {
       {m.pulse_required !== null && <PulseNeeded received={m.pulse_required} />}
       <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
       <UpdatesPanel key={settingsNonce} slug={slug} />
+      {!app.data.private && app.data.stage === "released" && <RatingBreakdown slug={slug} />}
       {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
       <RepoMove slug={slug} overview={m} onChanged={changed} />
       <Requests slug={slug} changes={m.changes} onChanged={changed} />
@@ -144,6 +145,73 @@ function Frozen({
         <p className="form-error" role="alert">
           {error}
         </p>
+      )}
+    </section>
+  );
+}
+
+const PLATFORM_NAME: Record<string, string> = { windows: "Windows", linux: "Linux" };
+
+function GroupTable({ caption, groups, name }: { caption: string; groups: RatingGroup[]; name: (key: string | null) => string }) {
+  return (
+    <table className="kv-table">
+      <caption className="sr-only">{caption}</caption>
+      <thead>
+        <tr>
+          <th scope="col">{caption}</th>
+          <th scope="col">Weighted</th>
+          <th scope="col">Unweighted</th>
+          <th scope="col">👍 / 👎</th>
+        </tr>
+      </thead>
+      <tbody>
+        {groups.map((g) => (
+          <tr key={g.key ?? "none"}>
+            <td>{name(g.key)}</td>
+            <td>{g.percent_weighted !== null ? `${g.percent_weighted}%` : "—"}</td>
+            <td>{g.percent !== null ? `${g.percent}%` : "—"}</td>
+            <td>
+              {g.not_slop.toLocaleString()} / {g.slop.toLocaleString()}
+            </td>
+          </tr>
+        ))}
+      </tbody>
+    </table>
+  );
+}
+
+/** The maker's ratings by version and platform, and what each version did to votes (METRICS §3, §5). */
+function RatingBreakdown({ slug }: { slug: string }) {
+  const b = useLoad(() => api.ratingsBreakdown(slug), [slug]);
+  return (
+    <section className="panel panel-pad">
+      <h2>Ratings</h2>
+      <p className="muted small">
+        Each player's current vote, grouped by the version and platform they voted on. Percentages show from 5 votes.{" "}
+        <Link to="/ratings">How ratings work</Link>.
+      </p>
+      {b.error && <ErrorState error={b.error} onRetry={b.reload} />}
+      {b.data && b.data.by_version.length === 0 && <p className="muted">No votes yet.</p>}
+      {b.data && b.data.by_version.length > 0 && (
+        <>
+          <GroupTable caption="Version" groups={b.data.by_version} name={(k) => (k ? `v${k}` : "Before versions were recorded")} />
+          <GroupTable caption="Platform" groups={b.data.by_platform} name={(k) => (k ? (PLATFORM_NAME[k] ?? k) : "Not recorded")} />
+          {b.data.impact.some((i) => i.to_not_slop + i.to_slop > 0) && (
+            <>
+              <h3>Update impact</h3>
+              <ul>
+                {b.data.impact
+                  .filter((i) => i.to_not_slop + i.to_slop + i.new_votes > 0)
+                  .map((i) => (
+                    <li key={i.version}>
+                      On v{i.version}: {i.to_not_slop.toLocaleString()} changed 👎 → 👍, {i.to_slop.toLocaleString()} changed 👍 → 👎,{" "}
+                      {i.new_votes.toLocaleString()} new votes.
+                    </li>
+                  ))}
+              </ul>
+            </>
+          )}
+        </>
       )}
     </section>
   );

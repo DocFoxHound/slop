@@ -65,7 +65,9 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 7. New & updated
 8. "Fresh slop": the most 👎 Slop-voted apps, for fun
 
-**Sexually explicit content is banned** (decided, `LEGAL.md` §5.11). Non-explicit romance and suggestive themes are allowed, with a content label.
+**Built 2026-10-20:** the front page in this order (For you sits under the carousel for signed-in players). Featured is picked by staff in the admin Apps tab (`featured.rs`, up to 8, audit-logged) and never moves by itself. Popular this month = most library adds since the 1st, then most players. Most Not Slop right now = weighted rating from votes cast or changed in the last 30 days (5+ votes). Fresh slop = most weighted 👎 in the last 30 days. Game tiles show players now from Slop Pulse.
+
+**Sexually explicit content is banned** (decided, `LEGAL.md` §5.11). Non-explicit romance and suggestive themes are allowed, with a content label. **Built 2026-10-20:** makers tick labels on the store-page form (romance, suggestive themes, violence, horror, strong language, gambling themes); they show on the app page.
 
 **Categories and tags** have two levels:
 - **Broad categories:** Games, Tools, Creative, Utilities, Learning, Play style, Vibe.

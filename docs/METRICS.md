@@ -51,6 +51,8 @@ Library adds, installs and Interested. These feed "Popular this month", "For you
 - Store pages show **both**: "**84% Not Slop** (weighted by playtime) · 79% unweighted", with a toggle on the rating-over-time chart.
 - Apps that aren't games (tools with no Pulse playtime) use launches instead: the number of separate days the user launched the app, with 10 days or more counting fully.
 
+**Built 2026-10-20:** the "How ratings work" page (`/ratings`) publishes the formula and the tables of weights.
+
 ## 3. Who sees what
 
 | Viewer | Payments | Votes |
@@ -60,6 +62,8 @@ Library adds, installs and Interested. These feed "Popular this month", "For you
 | **The maker** | Totals per day, version and country. Names and messages only from donors who chose to share them. Minimum group of 10 people before a breakdown is shown. | Weighted and unweighted totals over time, per version/branch/platform. Public reviews. |
 | **Slop staff** | Full detail by role, with access logged | Full detail for abuse checks, with access logged |
 | **Public** | Nothing | Rating-over-time charts |
+
+**Built 2026-10-20 (votes):** the maker's Manage page shows each player's current vote grouped by the version and platform it was cast on (the desktop app reports the platform at launch), and "update impact" per version (👎 → 👍 and 👍 → 👎 changes, new votes). Branches are separate apps with their own ratings.
 
 ## 4. Architecture
 

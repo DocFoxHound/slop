@@ -19,6 +19,7 @@ import { ChatPage } from "./pages/Chat";
 import { FriendsPage } from "./pages/Friends";
 import { Browse, CategoryPage, Community, MadeWithPeople, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
+import { HowRatings } from "./pages/HowRatings";
 import { JobPage, MyJobs } from "./pages/Jobs";
 import { People, PersonPage } from "./pages/People";
 import { PeopleEdit } from "./pages/PeopleEdit";
@@ -34,6 +35,7 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <Store /> },
       { path: "/search", element: <Search /> },
+      { path: "/ratings", element: <HowRatings /> },
       { path: "/upcoming", element: <Upcoming /> },
       { path: "/community", element: <Community /> },
       { path: "/browse", element: <Browse /> },

@@ -18,6 +18,21 @@ export interface Category {
   tags: TagRef[];
 }
 
+export type ContentLabel = "romance" | "suggestive" | "violence" | "horror" | "strong_language" | "gambling_themes";
+
+/** A slide in the front page's Featured carousel. */
+export type FeaturedApp = AppSummary & { blurb: string };
+
+/** The maker's rating breakdown (crates/slop-api/src/votes.rs, METRICS §3, §5). */
+export interface RatingGroup extends Tally {
+  key: string | null;
+}
+export interface RatingBreakdown {
+  by_version: RatingGroup[];
+  by_platform: RatingGroup[];
+  impact: Array<{ version: string; to_not_slop: number; to_slop: number; new_votes: number }>;
+}
+
 export interface AppSummary {
   slug: string;
   title: string;
@@ -27,6 +42,10 @@ export interface AppSummary {
   /** Only present when not listed (the maker's own drafts). */
   status?: AppStatus;
   min_age: number;
+  /** Themes some players want to know about (DESIGN §5). */
+  content_labels: ContentLabel[];
+  /** Games: players in Slop Pulse's latest count, if it's recent. */
+  players_now: number | null;
   tags: string[];
   /** The maker's store tile (920×430), if they set one. */
   thumbnail_url: string | null;
@@ -1052,6 +1071,14 @@ export type ChangeRequest =
   | { kind: "release"; release_id: string | null; note?: string }
   | { kind: "repo"; repo_url: string; note?: string };
 
+export interface AdminFeatured {
+  slug: string;
+  title: string;
+  blurb: string;
+  /** In the store for everyone; a slide that isn't simply doesn't show. */
+  listed: boolean;
+}
+
 export interface AdminQueue {
   releases: Array<Release & { app: AdminAppRef; notes: ReviewNote[] }>;
   changes: Array<AppChange & { app: AdminAppRef; players_get: string | null; notes: ReviewNote[] }>;
@@ -1257,6 +1284,7 @@ export interface NewApp {
   repo_url: string;
   license_spdx: string;
   min_age: number;
+  content_labels?: ContentLabel[];
   tags: string[];
   platforms: AppPlatform[];
   /** "private": Private Slop, only for you and the people you share it with. */
@@ -1271,7 +1299,17 @@ export interface AppQuery {
   category?: string;
   stage?: AppStage;
   kind?: AppKind;
-  sort?: "recent" | "title" | "relevance" | "trending" | "anticipated" | "rating" | "popular" | "reviewed";
+  sort?:
+    | "recent"
+    | "title"
+    | "relevance"
+    | "trending"
+    | "anticipated"
+    | "rating"
+    | "popular"
+    | "reviewed"
+    | "not_slop_now"
+    | "fresh_slop";
   made_with_people?: boolean;
   /** Runs on this platform, directly or through a community build. */
   platform?: "windows" | "linux";
@@ -1433,6 +1471,9 @@ export const api = {
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
   admin: {
     queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
+    featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
+    setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
+      request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),
     apps: (status?: AppStatus) => request<AdminApp[]>("GET", `/v1/admin/apps${query({ status })}`),
     audit: () => request<AuditEntry[]>("GET", "/v1/admin/audit"),
     approve: (id: string) => request<void>("POST", `/v1/admin/releases/${id}/approve`),
@@ -1498,6 +1539,10 @@ export const api = {
   server: () =>
     request<{ scanning: boolean; maker_signatures_required: boolean; simulation: boolean }>("GET", "/v1/server"),
   ratings: (slug: string) => request<Ratings>("GET", `/v1/apps/${encodeURIComponent(slug)}/ratings`),
+  /** The maker's own breakdown by version and platform. */
+  ratingsBreakdown: (slug: string) =>
+    request<RatingBreakdown>("GET", `/v1/apps/${encodeURIComponent(slug)}/ratings/breakdown`),
+  featured: () => request<FeaturedApp[]>("GET", "/v1/featured"),
   vote: (slug: string, vote: "not_slop" | "slop" | null) =>
     request<Ratings>("POST", `/v1/apps/${encodeURIComponent(slug)}/vote`, { vote }),
   forYou: () => request<ForYou>("GET", "/v1/me/for-you"),

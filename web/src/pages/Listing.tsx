@@ -11,7 +11,16 @@ import { useDocumentTitle, useLoad } from "../hooks";
 
 const PAGE = 24;
 
-const DEFAULT_SORTS: Array<NonNullable<AppQuery["sort"]>> = ["recent", "trending", "popular", "rating", "reviewed", "title"];
+const DEFAULT_SORTS: Array<NonNullable<AppQuery["sort"]>> = [
+  "recent",
+  "trending",
+  "popular",
+  "rating",
+  "not_slop_now",
+  "reviewed",
+  "fresh_slop",
+  "title",
+];
 
 /** The platform filter's "my platform", where Slop has builds for it. */
 function myPlatform(): "windows" | "linux" | undefined {
@@ -58,6 +67,8 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
     popular: "Popular this month",
     anticipated: "Most anticipated",
     rating: "Most Not Slop",
+    not_slop_now: "Most Not Slop right now",
+    fresh_slop: "Fresh slop (most 👎 this month)",
     reviewed: "Most reviewed",
     recent: "Recently updated",
     title: "A–Z",

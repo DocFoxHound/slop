@@ -1,0 +1,159 @@
+// "How ratings work" (METRICS §2): the weighting formula is published, so players and makers
+// can check what a rating means. The numbers here match crates/slop-api/src/votes.rs.
+
+import { Link } from "react-router";
+
+import { useDocumentTitle } from "../hooks";
+
+const PLAYTIME: Array<[string, string]> = [
+  ["Under 2 minutes", "0.1"],
+  ["5 minutes", "0.28"],
+  ["30 minutes", "0.54"],
+  ["1 hour", "0.64"],
+  ["3 hours", "0.81"],
+  ["10 hours or more", "1"],
+];
+
+const DAYS: Array<[string, string]> = [
+  ["1 day", "0.29"],
+  ["3 days", "0.58"],
+  ["5 days", "0.75"],
+  ["10 days or more", "1"],
+];
+
+const LABELS: Array<[string, string]> = [
+  ["95–100%", "Overwhelmingly Not Slop"],
+  ["80–94%", "Very Not Slop"],
+  ["70–79%", "Mostly Not Slop"],
+  ["40–69%", "Mixed"],
+  ["20–39%", "Mostly Slop"],
+  ["0–19%", "Overwhelmingly Slop"],
+];
+
+export function HowRatings() {
+  useDocumentTitle("How ratings work");
+  return (
+    <div className="page narrow prose">
+      <h1>How ratings work</h1>
+      <p className="lead">
+        Every app on Slop is rated 👍 <b>Not Slop</b> or 👎 <b>Slop</b> by the people who play it. A vote from someone who played
+        for hours counts for more than one from someone who tried it for a minute.
+      </p>
+
+      <h2>Who can vote</h2>
+      <ul>
+        <li>Anyone signed in who has launched the app through Slop. You can't rate what you haven't tried.</li>
+        <li>Only released apps: Coming soon and Beta apps collect Interested marks instead.</li>
+        <li>One vote per account. You can change or withdraw it whenever you like.</li>
+      </ul>
+
+      <h2>Weighting by playtime</h2>
+      <p>Each vote's weight comes from how much you'd played when you voted:</p>
+      <pre>
+        <code>weight = min(1, log10(1 + minutes) / log10(601))</code>
+      </pre>
+      <p>So ten hours or more counts fully, and less than two minutes counts 0.1.</p>
+      <table className="kv-table">
+        <caption className="sr-only">Vote weight by playtime</caption>
+        <thead>
+          <tr>
+            <th scope="col">Played</th>
+            <th scope="col">Vote counts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {PLAYTIME.map(([p, w]) => (
+            <tr key={p}>
+              <td>{p}</td>
+              <td>{w}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      <p>
+        Tools and games that don't report playtime use the number of separate days you launched them instead, with ten days or
+        more counting fully: <code>min(1, log10(1 + days) / log10(11))</code>.
+      </p>
+      <table className="kv-table">
+        <caption className="sr-only">Vote weight by days launched</caption>
+        <thead>
+          <tr>
+            <th scope="col">Launched on</th>
+            <th scope="col">Vote counts</th>
+          </tr>
+        </thead>
+        <tbody>
+          {DAYS.map(([d, w]) => (
+            <tr key={d}>
+              <td>{d}</td>
+              <td>{w}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h2>What you see</h2>
+      <ul>
+        <li>
+          <b>% Not Slop, weighted:</b> the weighted share of 👍 votes. It's the number shown first.
+        </li>
+        <li>
+          <b>Unweighted:</b> one account, one vote. It's shown beside the weighted one, so you can see if they disagree.
+        </li>
+        <li>
+          <b>No rating below 5 votes.</b> A handful of votes says too little.
+        </li>
+        <li>
+          <b>Over time:</b> each app page charts its rating month by month, weighted or unweighted.
+        </li>
+      </ul>
+      <table className="kv-table">
+        <caption className="sr-only">Rating labels</caption>
+        <thead>
+          <tr>
+            <th scope="col">Weighted % Not Slop</th>
+            <th scope="col">Label</th>
+          </tr>
+        </thead>
+        <tbody>
+          {LABELS.map(([range, label]) => (
+            <tr key={range}>
+              <td>{range}</td>
+              <td>{label}</td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+
+      <h2>The store's lists</h2>
+      <ul>
+        <li>
+          <b>Most Not Slop:</b> the best weighted rating overall, among apps with at least 5 votes.
+        </li>
+        <li>
+          <b>Most Not Slop right now:</b> the same, counting only votes cast or changed in the last 30 days.
+        </li>
+        <li>
+          <b>Fresh slop:</b> the most weighted 👎 votes in the last 30 days. It's for fun, so please be kind in reviews.
+        </li>
+      </ul>
+
+      <h2>Apps that hired creatives</h2>
+      <p>
+        When an app credits work from someone hired through People, its page also shows the rating from votes since the first
+        release with that work. That never changes the app's main rating.
+      </p>
+
+      <h2>Your votes and privacy</h2>
+      <ul>
+        <li>Your current votes and reviews show on your profile, unless you make it private on your account page.</li>
+        <li>The history of your changes is never shown to anyone else.</li>
+        <li>Makers see totals, for example by version and platform, never who voted.</li>
+        <li>No one can buy votes or ratings: Slop sells nothing, and donations never affect them.</li>
+      </ul>
+      <p>
+        <Link to="/">Back to the store</Link>
+      </p>
+    </div>
+  );
+}

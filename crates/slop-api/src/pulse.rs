@@ -9,7 +9,7 @@ use std::time::Duration as StdDuration;
 
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::{get, post},
 };
@@ -62,12 +62,20 @@ struct Launched {
 
 /// Called by the desktop app when a signed-in player launches an app: records the launch day
 /// and issues a one-time Pulse token.
+#[derive(Deserialize)]
+struct LaunchQuery {
+    /// windows or linux: the maker's rating breakdown per platform (METRICS §3).
+    platform: Option<String>,
+}
+
 async fn launch(
     State(state): State<AppState>,
     user: CurrentUser,
     headers: HeaderMap,
     Path(slug): Path<String>,
+    Query(query): Query<LaunchQuery>,
 ) -> ApiResult<Json<Launched>> {
+    let platform = query.platform.filter(|p| p == "windows" || p == "linux");
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     let pulse_url = format!(
@@ -100,15 +108,17 @@ async fn launch(
     .await?;
     // Apps without Pulse are weighted by the days they were launched (METRICS §2).
     sqlx::query(
-        "insert into user_app_usage (user_id, app_id, days_launched, last_launch_day)
-         values ($1, $2, 1, current_date)
+        "insert into user_app_usage (user_id, app_id, days_launched, last_launch_day, last_platform)
+         values ($1, $2, 1, current_date, $3)
          on conflict (user_id, app_id) do update set
            days_launched = user_app_usage.days_launched
              + case when user_app_usage.last_launch_day = current_date then 0 else 1 end,
-           last_launch_day = current_date",
+           last_launch_day = current_date,
+           last_platform = coalesce($3, user_app_usage.last_platform)",
     )
     .bind(user.id)
     .bind(app_id)
+    .bind(&platform)
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
