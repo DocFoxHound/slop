@@ -270,6 +270,14 @@ pub(crate) async fn sync_account(
         .execute(&state.db)
         .await?;
     }
+    // A donations account waiting to be switched to (donations.rs).
+    sqlx::query(
+        "update stripe_account_changes set new_account_status = $2 where new_account_id = $1",
+    )
+    .bind(acct)
+    .bind(status)
+    .execute(&state.db)
+    .await?;
     Ok(status.to_string())
 }
 

@@ -4,20 +4,37 @@ import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import { api, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
+import { detectOs, OS_LABEL } from "../platform";
 import { Sidebar } from "../components/Layout";
 import { ErrorState, Loading, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 
 const PAGE = 24;
 
-function AppGrid({ base, sorts = ["recent", "trending", "title"] }: { base: AppQuery; sorts?: Array<NonNullable<AppQuery["sort"]>> }) {
+const DEFAULT_SORTS: Array<NonNullable<AppQuery["sort"]>> = ["recent", "trending", "popular", "rating", "reviewed", "title"];
+
+/** The platform filter's "my platform", where Slop has builds for it. */
+function myPlatform(): "windows" | "linux" | undefined {
+  const os = detectOs();
+  return os === "windows" || os === "linux" ? os : undefined;
+}
+
+function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Array<NonNullable<AppQuery["sort"]>> }) {
   const [params, setParams] = useSearchParams();
-  const stage = (params.get("stage") ?? "") as AppStage | "";
+  const show = params.get("stage") ?? "";
+  const stage = (["released", "beta", "coming_soon"].includes(show) ? show : "") as AppStage | "";
+  const upcoming = show === "upcoming" ? true : undefined;
   const sort = (params.get("sort") ?? (base.q ? "relevance" : sorts[0])) as NonNullable<AppQuery["sort"]>;
+  const platformParam = params.get("runs_on");
+  const platform = platformParam === "windows" || platformParam === "linux" ? platformParam : undefined;
+  const minParam = Number(params.get("not_slop"));
+  const min_not_slop = minParam > 0 && minParam <= 100 ? minParam : undefined;
+  const mine = myPlatform();
   const [extra, setExtra] = useState<{ key: string; apps: AppSummary[]; next: number | null }>();
 
-  const key = JSON.stringify({ base, stage, sort });
-  const first = useLoad(() => api.apps({ ...base, stage: stage || base.stage, sort, limit: PAGE }), [key]);
+  const filters: AppQuery = { ...base, stage: stage || base.stage, upcoming, platform, min_not_slop, sort };
+  const key = JSON.stringify(filters);
+  const first = useLoad(() => api.apps({ ...filters, limit: PAGE }), [key]);
   const pages = extra?.key === key ? extra : undefined;
   const apps = first.data ? [...first.data.apps, ...(pages?.apps ?? [])] : undefined;
   const next = pages ? pages.next : first.data?.next_offset;
@@ -31,15 +48,17 @@ function AppGrid({ base, sorts = ["recent", "trending", "title"] }: { base: AppQ
 
   const more = async () => {
     if (next == null) return;
-    const page = await api.apps({ ...base, stage: stage || base.stage, sort, limit: PAGE, offset: next });
+    const page = await api.apps({ ...filters, limit: PAGE, offset: next });
     setExtra({ key, apps: [...(pages?.apps ?? []), ...page.apps], next: page.next_offset });
   };
 
   const sortLabels: Record<string, string> = {
     relevance: "Best match",
     trending: "Most played this week",
+    popular: "Popular this month",
     anticipated: "Most anticipated",
-    rating: "Best rated",
+    rating: "Most Not Slop",
+    reviewed: "Most reviewed",
     recent: "Recently updated",
     title: "A–Z",
   };
@@ -61,15 +80,38 @@ function AppGrid({ base, sorts = ["recent", "trending", "title"] }: { base: AppQ
         {!base.stage && (
           <label>
             Show{" "}
-            <select value={stage} onChange={(e) => set("stage", e.target.value)}>
+            <select value={show} onChange={(e) => set("stage", e.target.value)}>
               <option value="">Everything</option>
               <option value="released">Released</option>
+              <option value="upcoming">Upcoming (coming soon and beta)</option>
               <option value="beta">Beta</option>
               <option value="coming_soon">Coming soon</option>
             </select>
           </label>
         )}
+        <label>
+          Runs on{" "}
+          <select value={platform ?? ""} onChange={(e) => set("runs_on", e.target.value)}>
+            <option value="">Any platform</option>
+            {(["windows", "linux"] as const).map((p) => (
+              <option key={p} value={p}>
+                {OS_LABEL[p]}
+                {p === mine ? " (this computer)" : ""}
+              </option>
+            ))}
+          </select>
+        </label>
+        <label>
+          Not Slop{" "}
+          <select value={min_not_slop ?? ""} onChange={(e) => set("not_slop", e.target.value)}>
+            <option value="">Any rating</option>
+            <option value="70">70% or more</option>
+            <option value="80">80% or more</option>
+            <option value="95">95% or more</option>
+          </select>
+        </label>
       </div>
+      {platform && <p className="muted small">Includes apps that run on {OS_LABEL[platform]} through a community build.</p>}
       {first.error ? (
         <ErrorState error={first.error} onRetry={first.reload} />
       ) : (

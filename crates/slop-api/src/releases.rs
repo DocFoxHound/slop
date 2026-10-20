@@ -390,6 +390,12 @@ pub(crate) async fn create_release(
 ) -> ApiResult<ReleaseInfo> {
     validate_version(version)?;
     validate_commit(commit_sha)?;
+    if let Some(reason) = crate::frozen::frozen_reason(&state.db, app_id).await? {
+        return Err(ApiError::Conflict(format!(
+            "this app is frozen, so it can't take new releases: {reason}. Restore Slop's access \
+             to the repository, then press Check now on the app's Manage page"
+        )));
+    }
     let required: Vec<String> = sqlx::query_scalar("select platforms from apps where id = $1")
         .bind(app_id)
         .fetch_one(&state.db)

@@ -9,6 +9,7 @@ import { api, ApiError, type DonationQuote } from "../api";
 import { toMinor } from "../format";
 import { useLoad } from "../hooks";
 import { openExternal } from "../platform";
+import { solve } from "../pow";
 import { useSession } from "../session";
 
 /** Always with cents: "$3.40". */
@@ -31,6 +32,7 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
   const [adult, setAdult] = useState(false);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [thanks, setThanks] = useState(false);
 
   // Back from Stripe: read the payment now rather than wait for the webhook.
@@ -79,15 +81,28 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
     if (!q) return;
     setBusy(true);
     setError(undefined);
+    const body = {
+      amount_minor: q.donation,
+      monthly,
+      share_name: share,
+      message: share && message.trim() ? message.trim() : undefined,
+      consent,
+      confirm_adult: adult,
+    };
     try {
-      const res = await api.donations.start(slug, {
-        amount_minor: q.donation,
-        monthly,
-        share_name: share,
-        message: share && message.trim() ? message.trim() : undefined,
-        consent,
-        confirm_adult: adult,
-      });
+      let res;
+      try {
+        res = await api.donations.start(slug, body);
+      } catch (err) {
+        // After a few unfinished checkouts Slop asks the browser for a quick proof of work
+        // (card testing, PAYMENTS §9). It takes a second or two.
+        if (!(err instanceof ApiError) || err.code !== "challenge_required") throw err;
+        setChecking(true);
+        const c = await api.donations.challenge();
+        const nonce = await solve(c.prefix, c.difficulty);
+        setChecking(false);
+        res = await api.donations.start(slug, { ...body, challenge: { id: c.id, nonce } });
+      }
       if (res.url) {
         await openExternal(res.url);
       } else {
@@ -98,6 +113,7 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy(false);
+      setChecking(false);
     }
   };
 
@@ -190,7 +206,7 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
           className="btn slime"
           disabled={busy || !q || (monthly && !consent) || (Boolean(me) && !me!.adult_confirmed && !adult)}
         >
-          {busy ? "Opening…" : q ? `Donate ${amount(q.total, d.currency)}${monthly ? " a month" : ""}` : "Choose an amount"}
+          {checking ? "Checking your browser…" : busy ? "Opening…" : q ? `Donate ${amount(q.total, d.currency)}${monthly ? " a month" : ""}` : "Choose an amount"}
         </button>
       )}
       <p className="faint small">

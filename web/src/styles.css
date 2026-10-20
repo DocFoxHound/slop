@@ -741,3 +741,5 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .verification h2 { margin: 0 0 6px; }
 .checks li { padding: 3px 0; }
 .official-team { color: inherit; }
+.notice-panel { border-color: rgba(250, 204, 21, 0.45); background: rgba(250, 204, 21, 0.06); }
+.inline-form { margin-top: 14px; max-width: 420px; }

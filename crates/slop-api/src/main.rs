@@ -439,6 +439,10 @@ async fn serve() -> anyhow::Result<()> {
     tokio::spawn(slop_api::notify::run_email(state.clone()));
     tokio::spawn(slop_api::donations::run(state.clone()));
     tokio::spawn(slop_api::teams::run(state.clone()));
+    // The sandbox's repositories are invented, so checking them would freeze every app.
+    if !state.config.simulation {
+        tokio::spawn(slop_api::frozen::run(state.clone()));
+    }
     let app = router(state)?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await

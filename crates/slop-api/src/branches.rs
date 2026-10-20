@@ -15,7 +15,7 @@ use axum::{
     routing::post,
 };
 use serde::{Deserialize, Serialize};
-use sqlx::{PgPool, QueryBuilder};
+use sqlx::{PgConnection, PgPool, QueryBuilder};
 use uuid::Uuid;
 
 use crate::{
@@ -36,6 +36,30 @@ pub const KINDS: &[(&str, &str)] = &[
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/apps/{slug}/branches", post(register))
+}
+
+/// Whether this is a community build of a game whose original counts players with Slop Pulse.
+/// Such builds must include Pulse too (DESIGN §9), so player counts and playtime-weighted votes
+/// mean the same on both; a reviewer can't list one before its first Pulse handshake.
+pub async fn needs_pulse(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "select exists (select 1 from apps b join apps p on p.id = b.parent_app_id
+                        where b.id = $1 and p.kind = 'game'
+                          and exists (select 1 from pulse_sessions s where s.app_id = p.id and s.started_at is not null))",
+    )
+    .bind(app_id)
+    .fetch_one(conn)
+    .await
+}
+
+/// Whether the app has ever sent a Pulse handshake (a launch through Slop that called `start`).
+pub async fn has_pulse(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "select exists (select 1 from pulse_sessions where app_id = $1 and started_at is not null)",
+    )
+    .bind(app_id)
+    .fetch_one(conn)
+    .await
 }
 
 #[derive(Serialize)]

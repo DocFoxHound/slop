@@ -6,12 +6,14 @@ pub mod admin_web;
 pub mod auth;
 pub mod branches;
 pub mod catalog;
+pub mod challenge;
 pub mod cleanup;
 pub mod config;
 pub mod desktop_updates;
 pub mod donations;
 pub mod error;
 pub mod foryou;
+pub mod frozen;
 pub mod github_app;
 pub mod interested;
 pub mod legal;
@@ -142,6 +144,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(branches::routes())
         .merge(private::routes())
         .merge(teams::routes())
+        .merge(frozen::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

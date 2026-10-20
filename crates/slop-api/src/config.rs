@@ -87,6 +87,10 @@ pub struct PaymentsConfig {
     /// Without Stripe, record payments as simulated instead of refusing them. Only the simulation
     /// sandbox and development servers turn this on; `serve` refuses it on other databases.
     pub simulated: bool,
+    /// Slop's VAT registration numbers, shown on fee statements (`SLOP_VAT_ID`).
+    pub vat_id: Option<String>,
+    /// The EU's VIES service for checking VAT numbers (`SLOP_VIES_URL`; "off" to skip).
+    pub vies_url: Option<Url>,
 }
 
 #[derive(Clone)]
@@ -390,6 +394,18 @@ impl Config {
                 },
                 simulated: var_or("SLOP_PAYMENTS", "off") == "simulated"
                     || var_or("SLOP_SIMULATION", "false") == "true",
+                vat_id: env::var("SLOP_VAT_ID")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty()),
+                vies_url: match var_or(
+                    "SLOP_VIES_URL",
+                    "https://ec.europa.eu/taxation_customs/vies/rest-api/check-vat-number",
+                )
+                .as_str()
+                {
+                    "off" | "" => None,
+                    url => Some(url.parse().context("SLOP_VIES_URL")?),
+                },
             },
             doh_url: var_or("SLOP_DOH_URL", "https://cloudflare-dns.com/dns-query")
                 .parse()

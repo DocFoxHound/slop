@@ -110,6 +110,8 @@ simulates payments instead.
    STRIPE_WEBHOOK_SECRET=whsec_…
    ```
 4. Before live keys: DAC7 and HMRC platform-reporting registration (LEGAL-GUIDANCE §16 checklist).
+5. Once Slop has its EU OSS / UK VAT registrations, put the numbers in `SLOP_VAT_ID` so fee
+   statements show them (e.g. `SLOP_VAT_ID=EU372000000 · GB000000000`).
 
 ## Email (notifications)
 

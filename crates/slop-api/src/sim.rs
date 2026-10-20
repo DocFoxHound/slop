@@ -1049,6 +1049,24 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .execute(db)
         .await?;
     }
+    // Frozen: one app whose repository Slop can't read any more, 4 days into its 14 (frozen.rs);
+    // and one Private Slop app waiting for a reviewer to make it public.
+    sqlx::query(
+        "update apps set frozen_at = $1 - interval '4 days',
+                frozen_reason = 'Slop can''t read the repository: it was deleted, renamed, or Slop''s access was removed'
+         where id = (select id from apps where status = 'listed' and visibility = 'public' and parent_app_id is null
+                     order by md5(id::text) limit 1)",
+    )
+    .bind(now)
+    .execute(db)
+    .await?;
+    if let Some(app) = private_apps.first() {
+        sqlx::query("update apps set public_requested_at = $2 - interval '1 day' where id = $1")
+            .bind(app)
+            .bind(now)
+            .execute(db)
+            .await?;
+    }
     let teams = sim_teams(db, now).await?;
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
     let donations = crate::sim_donations::write(db, &mut rng, now).await?;

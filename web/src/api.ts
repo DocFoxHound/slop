@@ -132,6 +132,32 @@ export interface FeeStatement {
   received_minor: number;
   slop_fee_minor: number;
   simulated: boolean;
+  /** The VAT included in Slop's fee; zero under the reverse charge. */
+  vat_minor: number;
+}
+
+/** How VAT applies to Slop's fee for this user (LEGAL §3.5): the 5% always includes it. */
+export interface VatTreatment {
+  kind: "none" | "included" | "reverse_charge";
+  rate_bp: number | null;
+  country: string;
+  vat_number: string | null;
+  vat_number_checked: boolean;
+  slop_vat_id: string | null;
+}
+
+export interface DonationAccount {
+  status: string;
+  payments: string;
+  /** A switch or disconnection waiting out its 72 hours (SECURITY §9). */
+  change: { kind: "switch" | "disconnect"; requested_at: string; effective_at: string; new_account_ready: boolean | null } | null;
+}
+
+/** A proof-of-work check after repeated unfinished checkouts (crates/slop-api/src/challenge.rs). */
+export interface PowChallenge {
+  id: string;
+  prefix: string;
+  difficulty: number;
 }
 
 /** A written review on an app (crates/slop-api/src/reviews.rs). */
@@ -196,7 +222,7 @@ export interface TeamPage {
 /** A notification in the bell (crates/slop-api/src/notify.rs). */
 export interface Notification {
   id: string;
-  category: "jobs" | "interested" | "moderation";
+  category: "jobs" | "interested" | "moderation" | "donations" | "shared" | "teams" | "apps" | "chat";
   title: string;
   body: string;
   link: string;
@@ -956,6 +982,12 @@ export interface ManageOverview {
   auto_approval_ready: boolean;
   auto_approval_note: string | null;
   changes: AppChange[];
+  /** Slop can't read the repository: no new releases until it can (SECURITY §12.2). */
+  frozen: { reason: string; since: string; until: string } | null;
+  /** Private Slop waiting for a reviewer to make it public. */
+  public_requested: boolean;
+  /** Community builds of Pulse games: null if not needed, else whether the handshake arrived. */
+  pulse_required: boolean | null;
 }
 
 export type ChangeRequest =
@@ -1001,7 +1033,9 @@ export interface AdminQueue {
   appeals: QueuedAppeal[];
   /** Content Policy rules a decision can cite: [code, title]. */
   rules: Array<[string, string]>;
-  ready_to_list: Array<AdminAppRef & { approved_releases: number; pictures_pending: boolean; notes: ReviewNote[] }>;
+  ready_to_list: Array<
+    AdminAppRef & { approved_releases: number; pictures_pending: boolean; going_public: boolean; notes: ReviewNote[] }
+  >;
   checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean };
 }
 
@@ -1147,8 +1181,14 @@ export interface AppQuery {
   category?: string;
   stage?: AppStage;
   kind?: AppKind;
-  sort?: "recent" | "title" | "relevance" | "trending" | "anticipated" | "rating";
+  sort?: "recent" | "title" | "relevance" | "trending" | "anticipated" | "rating" | "popular" | "reviewed";
   made_with_people?: boolean;
+  /** Runs on this platform, directly or through a community build. */
+  platform?: "windows" | "linux";
+  /** Only upcoming (Coming soon and Beta) or only released. */
+  upcoming?: boolean;
+  /** At least this weighted % Not Slop. */
+  min_not_slop?: number;
   /** Community branches instead of apps. */
   community?: boolean;
   limit?: number;
@@ -1288,6 +1328,11 @@ export const api = {
       create_url: string | null;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
   manage: (slug: string) => request<ManageOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/manage`),
+  /** "Check now" for a frozen app's repository; the freeze if it's still frozen. */
+  repoCheck: (slug: string) =>
+    request<ManageOverview["frozen"]>("POST", `/v1/apps/${encodeURIComponent(slug)}/repo-check`),
+  makePublic: (slug: string) => request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
+  cancelMakePublic: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
   requestChange: (slug: string, change: ChangeRequest) =>
     request<AppChange>("POST", `/v1/apps/${encodeURIComponent(slug)}/changes`, change),
   cancelChange: (slug: string, id: string) =>
@@ -1476,7 +1521,15 @@ export const api = {
       ),
     start: (
       slug: string,
-      body: { amount_minor: number; monthly: boolean; share_name: boolean; message?: string; consent: boolean; confirm_adult: boolean },
+      body: {
+        amount_minor: number;
+        monthly: boolean;
+        share_name: boolean;
+        message?: string;
+        consent: boolean;
+        confirm_adult: boolean;
+        challenge?: { id: string; nonce: string };
+      },
     ) => request<{ url: string | null; id: string; done: boolean }>("POST", `/v1/apps/${encodeURIComponent(slug)}/donate`, body),
     check: (id: string) => request<void>("POST", `/v1/me/donations/${encodeURIComponent(id)}/check`),
     mine: () => request<{ donations: MyDonation[]; server_donations: MyServerDonation[] }>("GET", "/v1/me/donations"),
@@ -1489,11 +1542,18 @@ export const api = {
     serversShutDown: (slug: string) => request<{ cancelled: number }>("POST", `/v1/apps/${encodeURIComponent(slug)}/servers/shut-down`),
     summary: (slug: string) => request<DonationSummary>("GET", `/v1/apps/${encodeURIComponent(slug)}/donations`),
     refund: (id: string) => request<void>("POST", `/v1/donations/${encodeURIComponent(id)}/refund`),
-    account: () => request<{ status: string; payments: string }>("GET", "/v1/me/donation-account"),
+    account: () => request<DonationAccount>("GET", "/v1/me/donation-account"),
+    /** Needs a sign-in from the last few minutes; takes effect after 72 hours. */
+    changeAccount: (kind: "switch" | "disconnect", return_to?: string) =>
+      request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account/change", { kind, return_to }),
+    cancelAccountChange: () => request<void>("POST", "/v1/me/donation-account/change/cancel"),
+    challenge: () => request<PowChallenge>("POST", "/v1/donations/challenge"),
+    setVat: (vat_number: string | null) =>
+      request<{ vat_number: string | null; checked: boolean; note: string | null }>("PUT", "/v1/me/vat", { vat_number }),
     onboard: (body: { tax_notice_ack: boolean; confirm_adult: boolean; return_to?: string }) =>
       request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account", body),
     refreshAccount: () => request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account/refresh"),
-    feeStatements: () => request<FeeStatement[]>("GET", "/v1/me/fee-statements"),
+    feeStatements: () => request<{ statements: FeeStatement[]; vat: VatTreatment }>("GET", "/v1/me/fee-statements"),
   },
   interested: {
     mine: () => request<Array<AppSummary & { interested_at: string }>>("GET", "/v1/me/interested"),

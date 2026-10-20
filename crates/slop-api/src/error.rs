@@ -29,6 +29,12 @@ pub enum ApiError {
     TermsRequired(&'static str),
     #[error("your account is suspended: see the decision on your account page")]
     Suspended,
+    /// A sensitive action (SECURITY §4.3) needs a sign-in from the last few minutes.
+    #[error("sign in again to confirm it's you: this protects where your money goes")]
+    StepUpRequired,
+    /// Too many unfinished checkouts: solve a proof-of-work challenge first (challenge.rs).
+    #[error("one more step before trying again: your browser needs to do a quick check")]
+    ChallengeRequired,
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -61,6 +67,8 @@ impl IntoResponse for ApiError {
             Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
             Self::TermsRequired(_) => (StatusCode::CONFLICT, "terms_required"),
             Self::Suspended => (StatusCode::FORBIDDEN, "suspended"),
+            Self::StepUpRequired => (StatusCode::FORBIDDEN, "step_up_required"),
+            Self::ChallengeRequired => (StatusCode::CONFLICT, "challenge_required"),
             Self::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
