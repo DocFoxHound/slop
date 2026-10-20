@@ -4288,7 +4288,7 @@ async fn ai_reviewers_use_admin_tokens(db: PgPool) {
     )
     .await;
     let note = &queue["media"][0]["notes"][0];
-    assert_eq!(note["verdict"], "unsure");
+    assert_eq!(note["verdict"], "unsure", "{queue}");
     assert!(
         note["author"]
             .as_str()
@@ -10833,4 +10833,178 @@ async fn app_id(app: &TestApp, slug: &str) -> Uuid {
         .fetch_one(&app.db)
         .await
         .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_watch_and_moderate_through_the_api_and_mcp(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, admin) = make_admin(&app, "Admin").await;
+    let (troll_id, troll) = app.user("Troll Account", "US").await;
+    let mut tokens = std::collections::HashMap::new();
+    for scope in ["review", "moderate"] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/admin/tokens")
+                    .cookie(&admin)
+                    .json(json!({ "name": format!("Claude {scope}"), "scope": scope, "days": 7 })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        tokens.insert(
+            scope,
+            format!("Bearer {}", body_json(res).await["token"].as_str().unwrap()),
+        );
+    }
+    let as_token = |scope: &str, r: Req| r.header("authorization", tokens[scope].clone());
+
+    // Watching: the status overview, and finding an account.
+    let status = body_json(
+        app.send(as_token("review", req(Method::GET, "/v1/admin/status")))
+            .await,
+    )
+    .await;
+    assert!(status["waiting"]["reports_urgent"].is_number(), "{status}");
+    assert!(status["alerts"].is_array());
+    let found = body_json(
+        app.send(as_token(
+            "review",
+            req(Method::GET, "/v1/admin/users?q=troll"),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(found[0]["id"], troll_id.to_string());
+    let res = app
+        .send(req(Method::GET, format!("/v1/admin/users/{troll_id}")).cookie(&troll))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND, "admins only");
+
+    // A review token can warn, not suspend.
+    let decide = |scope: &str, action: &str| {
+        as_token(
+            scope,
+            req(Method::POST, format!("/v1/admin/users/{troll_id}/decide")).json(json!({
+                "action": action, "rule": "harassment",
+                "facts": "Sent the same insult to twelve people in a day."
+            })),
+        )
+    };
+    assert_eq!(
+        app.send(decide("review", "warn")).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(decide("review", "suspend_account")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // Over MCP, with the moderate token: the tools, then a suspension.
+    let rpc =
+        |scope: &str, body: Value| as_token(scope, req(Method::POST, "/v1/admin/mcp").json(body));
+    let init = body_json(
+        app.send(rpc(
+            "moderate",
+            json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize", "params": {} }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(init["result"]["serverInfo"]["name"], "slop-admin");
+    let res = app
+        .send(rpc(
+            "moderate",
+            json!({ "jsonrpc": "2.0", "method": "notifications/initialized" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let tools = body_json(
+        app.send(rpc(
+            "moderate",
+            json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+        ))
+        .await,
+    )
+    .await;
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    assert!(
+        names.contains(&"slop_status") && names.contains(&"moderate_user"),
+        "{names:?}"
+    );
+    let call = |scope: &str, name: &str, args: Value| {
+        rpc(
+            scope,
+            json!({ "jsonrpc": "2.0", "id": 3, "method": "tools/call", "params": { "name": name, "arguments": args } }),
+        )
+    };
+    let suspend = json!({
+        "id": troll_id.to_string(), "action": "suspend_account", "rule": "harassment",
+        "facts": "Kept messaging people after a warning."
+    });
+    let refused = body_json(
+        app.send(call("review", "moderate_user", suspend.clone()))
+            .await,
+    )
+    .await;
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    let done = body_json(app.send(call("moderate", "moderate_user", suspend)).await).await;
+    assert_eq!(done["result"]["isError"], false, "{done}");
+    let suspended: bool =
+        sqlx::query_scalar("select suspended_at is not null from users where id = $1")
+            .bind(troll_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(suspended);
+    let details = body_json(
+        app.send(call(
+            "moderate",
+            "user_details",
+            json!({ "id": troll_id.to_string() }),
+        ))
+        .await,
+    )
+    .await;
+    let text = details["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("suspend_account") && text.contains("warn"),
+        "{text}"
+    );
+
+    // Lifting it, with a reason; the person is told, and every step is in the audit log.
+    let lifted = body_json(
+        app.send(call(
+            "moderate",
+            "lift_suspension",
+            json!({ "id": troll_id.to_string(), "reason": "Apologised and the reports were a misunderstanding." }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(lifted["result"]["isError"], false, "{lifted}");
+    let notices: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and category = 'moderation'",
+    )
+    .bind(troll_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notices, 3, "warning, suspension, lifted");
+    let actors: Vec<String> = sqlx::query_scalar(
+        "select actor from audit_log where action in ('moderation.suspend_account', 'moderation.lift_suspension', 'user.view')",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(actors.len(), 3);
+    assert!(
+        actors.iter().all(|a| a.contains("Claude moderate")),
+        "{actors:?}"
+    );
+    let unknown = body_json(app.send(call("moderate", "drop_database", json!({}))).await).await;
+    assert!(unknown["error"].is_object());
 }

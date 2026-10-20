@@ -64,7 +64,7 @@ fn alert(
 }
 
 /// A file's timestamp (written by the backup scripts), as a time.
-fn stamp_in(path: &Path) -> Option<OffsetDateTime> {
+pub fn stamp_in(path: &Path) -> Option<OffsetDateTime> {
     let text = std::fs::read_to_string(path).ok()?;
     OffsetDateTime::parse(text.trim(), &time::format_description::well_known::Rfc3339).ok()
 }

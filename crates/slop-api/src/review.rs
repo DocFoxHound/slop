@@ -6,7 +6,9 @@
 //! `GET /v1/admin/review/guide`, and then approves, rejects, or leaves a **note** for a person.
 //!
 //! Tokens act for the admin who made them, only on the admin API, and are named in the audit
-//! log. `read` tokens can look and leave notes; `review` tokens can also approve and reject.
+//! log. `read` tokens can look and leave notes; `review` tokens can also approve and reject;
+//! `moderate` tokens can also suspend and reinstate accounts, withdraw releases and take apps
+//! out of the store (agent.rs).
 //! They expire, can be revoked, and stop working if their admin loses admin rights. Only an
 //! admin signed in themselves can make or revoke them (a token can't make tokens).
 
@@ -51,6 +53,8 @@ pub fn routes() -> Router<AppState> {
 pub struct TokenUse {
     pub id: Uuid,
     pub can_decide: bool,
+    /// "moderate" tokens: also suspend and reinstate accounts, withdraw releases, delist apps.
+    pub can_moderate: bool,
 }
 
 /// The admin behind an `Authorization: Bearer slopadm_…` header. None when the request has no
@@ -88,7 +92,8 @@ pub async fn admin_from_token(
         user_id,
         token: Some(TokenUse {
             id,
-            can_decide: scope == "review",
+            can_decide: scope == "review" || scope == "moderate",
+            can_moderate: scope == "moderate",
         }),
     }))
 }
@@ -158,8 +163,8 @@ async fn create_token(
             "give it a name of up to 60 characters",
         ));
     }
-    if !matches!(body.scope.as_str(), "read" | "review") {
-        return Err(ApiError::invalid("scope", "read or review"));
+    if !matches!(body.scope.as_str(), "read" | "review" | "moderate") {
+        return Err(ApiError::invalid("scope", "read, review or moderate"));
     }
     let days = body.days.unwrap_or(90);
     if !(1..=365).contains(&days) {

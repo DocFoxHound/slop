@@ -78,6 +78,14 @@ impl AdminUser {
         }
     }
 
+    /// Suspensions, withdrawn releases, apps out of the store: not for `read` or `review` tokens.
+    pub fn may_moderate(&self) -> ApiResult<()> {
+        match &self.token {
+            Some(t) if !t.can_moderate => Err(ApiError::Forbidden),
+            _ => Ok(()),
+        }
+    }
+
     /// Managing tokens: only an admin signed in themselves.
     pub fn signed_in(&self) -> ApiResult<()> {
         match self.token {
@@ -541,7 +549,7 @@ async fn revoke(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.may_moderate()?;
     admin::revoke(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -602,7 +610,7 @@ async fn delist_app(
     Path(slug): Path<String>,
     Json(body): Json<Delist>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.may_moderate()?;
     admin::delist_app(&state.db, &slug, &admin.actor, &body.rule, &body.reason)
         .await
         .map_err(refused)?;

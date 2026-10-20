@@ -1037,9 +1037,14 @@ function TokensTab() {
   const [created, setCreated] = useState<string>();
   const origin = window.location.origin;
   const prompt = created
-    ? `You are a reviewer for the Slop store. Read ${origin}/v1/admin/review/guide and follow it. ` +
+    ? `You help run the Slop store for me. Read ${origin}/v1/admin/review/guide and follow it. ` +
       `Send this header with every request: "Authorization: Bearer ${created}". ` +
-      `Then go through GET ${origin}/v1/admin/review and handle each item.`
+      `Start with GET ${origin}/v1/admin/status, then go through GET ${origin}/v1/admin/review. ` +
+      `Only suspend accounts, withdraw releases or take apps out of the store when I ask you to.`
+    : "";
+  // Claude Code (or any MCP client) gets the same API as tools.
+  const mcp = created
+    ? `claude mcp add --transport http slop-admin ${origin}/v1/admin/mcp --header "Authorization: Bearer ${created}"`
     : "";
 
   return (
@@ -1047,9 +1052,12 @@ function TokensTab() {
       <p className="muted">
         An AI reviewer gets an API token that acts for you on the admin API. It reads everything waiting (releases, change
         requests, pictures, apps ready for the store) at <code>/v1/admin/review</code>, follows the guide at{" "}
-        <code>/v1/admin/review/guide</code>, and leaves notes you see in the review queue. A <b>read</b> token can only look
-        and leave notes; a <b>review</b> token can also approve and reject. Everything it does is in the audit log under the
-        token's name.
+        <code>/v1/admin/review/guide</code>, and leaves notes you see in the review queue. It can watch the server at{" "}
+        <code>/v1/admin/status</code> (alerts, queues, backups) and, at your request, act on reports and accounts. A{" "}
+        <b>read</b> token can only look and leave notes; a <b>review</b> token can also approve and reject; a{" "}
+        <b>moderate</b> token can also suspend and reinstate accounts, withdraw releases and take apps out of the store.
+        Everything it does is in the audit log under the token's name. Agents that speak MCP (such as Claude) can connect to{" "}
+        <code>/v1/admin/mcp</code> and get all of this as tools.
       </p>
       <form
         className="panel panel-pad form"
@@ -1073,6 +1081,7 @@ function TokensTab() {
             <select value={scope} onChange={(e) => setScope(e.target.value as AdminToken["scope"])}>
               <option value="read">Look and leave notes (read)</option>
               <option value="review">Also approve and reject (review)</option>
+              <option value="moderate">Also suspend accounts and withdraw releases (moderate)</option>
             </select>
           </label>
         </div>
@@ -1098,9 +1107,14 @@ function TokensTab() {
           <pre className="code-block">{created}</pre>
           <p className="small">Give your AI this prompt:</p>
           <pre className="code-block ai-prompt">{prompt}</pre>
+          <p className="small">Or connect Claude Code to Slop's admin tools (MCP):</p>
+          <pre className="code-block ai-prompt">{mcp}</pre>
           <div className="row-actions">
             <button className="btn small" onClick={() => void navigator.clipboard.writeText(prompt)}>
               Copy prompt
+            </button>
+            <button className="btn small" onClick={() => void navigator.clipboard.writeText(mcp)}>
+              Copy MCP command
             </button>
             <button className="btn small ghost" onClick={() => setCreated(undefined)}>
               Done
@@ -1124,7 +1138,7 @@ function TokensTab() {
               <div>
                 <div className="title-row">
                   <b>{t.name}</b>
-                  <span className={`badge ${t.scope === "review" ? "soon" : "neutral"}`}>{t.scope.toUpperCase()}</span>
+                  <span className={`badge ${t.scope === "moderate" ? "bad" : t.scope === "review" ? "soon" : "neutral"}`}>{t.scope.toUpperCase()}</span>
                   {t.revoked_at ? <span className="badge bad">REVOKED</span> : expired && <span className="badge bad">EXPIRED</span>}
                 </div>
                 <div className="muted small">

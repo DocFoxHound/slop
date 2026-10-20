@@ -204,6 +204,7 @@ The client installs software, so it's a prime target:
 - SSO with **hardware security keys** for all staff, and short-lived just-in-time production access.
 - Admin tools have **roles** (moderator, support, finance, security). Sensitive actions need two people: revocations, transferring a disputed app to another account, disabling donations on an app, and account removals.
 - Every admin action is written to an **append-only audit log**, visible to the security team.
+- **Agents (built 2026-10-20, `agent.rs`, `review.rs`):** an admin signed in themselves makes an expiring, revocable API token for an AI agent, at one of three levels: `read` (look, leave notes), `review` (also approve, reject, decide reports and appeals) and `moderate` (also suspend and reinstate accounts, withdraw releases, take apps out of the store). The token acts only on the admin API, stops working if its admin loses admin rights, and every action is audit-logged under its name; reading an account's details is logged too. The same API is offered as MCP tools at `/v1/admin/mcp`, which call the REST endpoints through the router, so no check is skipped. Until roles and two-person approval exist, a `moderate` token is as powerful as its admin for those actions: give one only to an agent you direct, for a short time.
 
 ### 8.5 Chat: end-to-end encryption (decided)
 Slop **can't** read chat messages (`LEGAL.md` §4.6).
