@@ -11,6 +11,7 @@ import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { DonationsPanel } from "../components/DonationsManage";
+import { RepoAccessPanel } from "../components/RepoToken";
 import { UpdatesPanel } from "./Releases";
 
 /** The value of the "follow the newest" choice in the release list. */
@@ -84,6 +85,7 @@ export function Manage() {
       {!app.data.private && app.data.stage === "released" && <RatingBreakdown slug={slug} />}
       {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
       <RepoMove slug={slug} overview={m} onChanged={changed} />
+      {app.data.private && <RepoAccessPanel slug={slug} repoUrl={app.data.repo_url} />}
       <Requests slug={slug} changes={m.changes} onChanged={changed} />
     </div>
   );

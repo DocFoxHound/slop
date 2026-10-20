@@ -847,6 +847,9 @@ struct NewApp {
     /// "public" (the default) or "private" (Private Slop, DESIGN §13).
     #[serde(default)]
     visibility: Option<String>,
+    /// A private repository outside GitHub: a read-only token for it (repo_tokens.rs).
+    #[serde(default)]
+    repo_token: Option<crate::repo_tokens::Given>,
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -1068,7 +1071,11 @@ async fn create_app(
     let platforms = validate_platforms(&req.platforms)?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
-    crate::repo_owner::check(&state, user.id, &repo_url, None).await?;
+    if let Some(t) = &req.repo_token {
+        crate::repo_tokens::verify_given(&state, &repo_url, t).await?;
+    }
+    crate::repo_owner::check_with(&state, user.id, &repo_url, None, req.repo_token.as_ref())
+        .await?;
 
     let visibility = match req.visibility.as_deref() {
         None | Some("public") => "public",
@@ -1107,6 +1114,9 @@ async fn create_app(
         }
     })?;
     set_tags(&mut tx, app_id, &tag_ids).await?;
+    if let (Some(t), Some(key)) = (&req.repo_token, state.config.releases.repo_token_key) {
+        crate::repo_tokens::store(&mut tx, &key, app_id, &repo_url, t, user.id).await?;
+    }
     tx.commit().await?;
 
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;

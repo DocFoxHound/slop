@@ -33,6 +33,7 @@ pub mod push;
 pub mod ratelimit;
 pub mod releases;
 pub mod repo_owner;
+pub mod repo_tokens;
 pub mod review;
 pub mod reviews;
 pub mod scan;
@@ -157,6 +158,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(friends::routes())
         .merge(push::routes())
         .merge(repo_owner::routes())
+        .merge(repo_tokens::routes())
         .merge(chat::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.

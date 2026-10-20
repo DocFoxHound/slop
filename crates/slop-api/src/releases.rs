@@ -697,6 +697,17 @@ async fn file_download_link(
     .fetch_optional(&state.db)
     .await?;
     let url = url.ok_or(ApiError::NotFound)?;
+    // A private repository outside GitHub: the host's short-lived link, asked for with the
+    // maker's token (repo_tokens.rs).
+    if let Some(auth) = crate::repo_tokens::auth_for(&state, app_id, &url)
+        .await
+        .map_err(ApiError::Internal)?
+    {
+        let url = crate::repo_tokens::short_lived_link(&state, &url, &auth)
+            .await
+            .map_err(|e| ApiError::Conflict(format!("{e:#}")))?;
+        return Ok(Json(DownloadLink { url }));
+    }
     let url = download_link(&state, &url)
         .await
         .map_err(ApiError::Internal)?;
@@ -853,6 +864,10 @@ async fn fetch_release(
     repo_url: &str,
 ) -> anyhow::Result<bool> {
     let commit_verified = check_commit(state, repo_url, commit).await?;
+    let app_id: Uuid = sqlx::query_scalar("select app_id from releases where id = $1")
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
     let files: Vec<(String, String, String)> = sqlx::query_as(
         "select platform, url, file_name from release_files where release_id = $1 order by platform",
     )
@@ -861,16 +876,23 @@ async fn fetch_release(
     .await?;
     let scanner = state.config.releases.scanner;
     for (platform, url, file_name) in files {
-        let source = download_link(state, &url)
-            .await
-            .with_context(|| format!("{platform} build"))?;
+        // A private repository outside GitHub: read with the maker's token (repo_tokens.rs).
+        let auth = crate::repo_tokens::auth_for(state, app_id, &url).await?;
+        let source = if auth.is_some() {
+            url.clone()
+        } else {
+            download_link(state, &url)
+                .await
+                .with_context(|| format!("{platform} build"))?
+        };
         // With a scanner, the file is kept on disk until it's scanned, then deleted.
         let local = scanner
             .is_on()
             .then(|| std::env::temp_dir().join(format!("slop-release-{}", Uuid::now_v7())));
-        let downloaded = download(
+        let downloaded = download_with(
             &state.fetch_http,
             &source,
+            auth.as_deref(),
             state.config.releases.max_file_bytes,
             local.as_deref(),
         )
@@ -1082,12 +1104,28 @@ pub async fn download(
     max: u64,
     keep: Option<&std::path::Path>,
 ) -> anyhow::Result<(u64, String)> {
+    download_with(http, url, None, max, keep).await
+}
+
+/// `download`, with an `Authorization` header for a private repository. The HTTP client drops
+/// it if a redirect leaves the host, so it never reaches file storage elsewhere.
+pub async fn download_with(
+    http: &reqwest::Client,
+    url: &str,
+    auth: Option<&str>,
+    max: u64,
+    keep: Option<&std::path::Path>,
+) -> anyhow::Result<(u64, String)> {
     use tokio::io::AsyncWriteExt;
     let mut out = match keep {
         Some(p) => Some(tokio::fs::File::create(p).await.context("temporary file")?),
         None => None,
     };
-    let res = http.get(url).send().await.context("download failed")?;
+    let mut request = http.get(url);
+    if let Some(auth) = auth {
+        request = request.header(reqwest::header::AUTHORIZATION, auth);
+    }
+    let res = request.send().await.context("download failed")?;
     if !res.status().is_success() {
         bail!("download failed: HTTP {}", res.status().as_u16());
     }

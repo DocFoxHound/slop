@@ -1301,9 +1301,26 @@ export interface NewApp {
   platforms: AppPlatform[];
   /** "private": Private Slop, only for you and the people you share it with. */
   visibility?: "public" | "private";
+  /** A private repository outside GitHub: a read-only token for it. */
+  repo_token?: RepoTokenInput;
 }
 
-export type AppChanges = Partial<Omit<NewApp, "slug" | "kind" | "stage" | "visibility">>;
+export type RepoTokenKind = "gitlab" | "bitbucket" | "gitea";
+export interface RepoTokenInput {
+  kind: RepoTokenKind;
+  token: string;
+}
+export interface RepoTokenStatus {
+  saved: boolean;
+  kind: RepoTokenKind | null;
+  saved_at: string | null;
+  last_used_at: string | null;
+  /** The server can keep tokens (SLOP_REPO_TOKEN_KEY is set). */
+  available: boolean;
+  github: boolean;
+}
+
+export type AppChanges = Partial<Omit<NewApp, "slug" | "kind" | "stage" | "visibility" | "repo_token">>;
 
 export interface AppQuery {
   q?: string;
@@ -1545,8 +1562,17 @@ export const api = {
     cancel: () => request<void>("DELETE", "/v1/auth/combine"),
   },
   /** How to prove you own a repository, and whether you have (repo_owner.rs). */
-  repoOwnership: (repo_url: string) => request<RepoOwnership>("POST", "/v1/repos/ownership", { repo_url }),
-  checkRepoCode: (repo_url: string) => request<RepoOwnership>("POST", "/v1/repos/ownership/check", { repo_url }),
+  repoOwnership: (repo_url: string, repo_token?: RepoTokenInput) =>
+    request<RepoOwnership>("POST", "/v1/repos/ownership", { repo_url, repo_token }),
+  checkRepoCode: (repo_url: string, repo_token?: RepoTokenInput) =>
+    request<RepoOwnership>("POST", "/v1/repos/ownership/check", { repo_url, repo_token }),
+  /** A private repository outside GitHub: its read-only token (never shown again once saved). */
+  repoToken: {
+    status: (slug: string) => request<RepoTokenStatus>("GET", `/v1/apps/${encodeURIComponent(slug)}/repo-token`),
+    save: (slug: string, t: RepoTokenInput) =>
+      request<RepoTokenStatus>("PUT", `/v1/apps/${encodeURIComponent(slug)}/repo-token`, t),
+    forget: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/repo-token`),
+  },
   /** The newest desktop app build for a platform (for the download button). */
   desktopLatest: (platform: "windows" | "mac" | "linux-deb" | "linux-rpm") =>
     request<{ version: string; url: string }>("GET", `/v1/desktop/latest/${platform}`),

@@ -57,6 +57,25 @@ pub enum Access {
 }
 
 /// Checks one repository. `public` says whether its source has to be public (public apps).
+/// `check`, using the maker's read-only token for a private repository outside GitHub
+/// (repo_tokens.rs) when there is one.
+pub async fn check_app(state: &AppState, app_id: Uuid, repo_url: &str, public: bool) -> Access {
+    if !public && slop_provenance::github_repo_path(repo_url).is_none() {
+        match crate::repo_tokens::still_works(state, app_id).await {
+            Some(true) => return Access::Readable,
+            Some(false) => {
+                return Access::Lost(
+                    "Slop's token can't read the repository any more: it was revoked or expired, \
+                     or the repository moved. Save a new one on the Manage page"
+                        .into(),
+                );
+            }
+            None => {}
+        }
+    }
+    check(state, repo_url, public).await
+}
+
 pub async fn check(state: &AppState, repo_url: &str, public: bool) -> Access {
     if let Some(repo) = slop_provenance::github_repo_path(repo_url) {
         let Ok(url) = state
@@ -99,7 +118,7 @@ pub async fn check(state: &AppState, repo_url: &str, public: bool) -> Access {
         };
     }
     // Other hosts: a public repository answers Git's own discovery request without signing in.
-    // Private repositories on other hosts need deploy tokens, which Slop doesn't take yet.
+    // Private repositories on other hosts are checked with the maker's token (check_app).
     if !public {
         return Access::Unknown;
     }
@@ -252,7 +271,7 @@ async fn due(state: &AppState) -> sqlx::Result<Vec<(Uuid, String, bool)>> {
 pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
     let apps = due(state).await?;
     for (id, repo, public) in &apps {
-        let access = check(state, repo, *public).await;
+        let access = check_app(state, *id, repo, *public).await;
         apply(state, *id, access).await?;
     }
     end_grace(state).await?;
@@ -337,7 +356,7 @@ pub async fn check_now(
     slug: &str,
 ) -> ApiResult<Option<Frozen>> {
     let (id, repo, visibility, _) = owned(state, user, slug).await?;
-    let access = check(state, &repo, visibility == "public").await;
+    let access = check_app(state, id, &repo, visibility == "public").await;
     apply(state, id, access).await?;
     Ok(status(&state.db, id).await?)
 }

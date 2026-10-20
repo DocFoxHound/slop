@@ -197,6 +197,7 @@ The client installs software, so it's a prime target:
 - No secrets in code or images. Use a secrets manager/KMS with automatic rotation.
 - Signing keys are in an HSM/KMS (§5.3), and their use is logged and alerted on.
 - Separate keys per environment. Staging can never sign production releases.
+- **Makers' repository tokens** (built 2026-10-20, `repo_tokens.rs`): read-only tokens for private repositories outside GitHub, checked before they're saved, encrypted with ChaCha20-Poly1305 under `SLOP_REPO_TOKEN_KEY` with the app's ID as associated data, never returned by the API, and only sent to the repository's own host (checked against private networks) in the `Authorization` header, which the HTTP client drops on a redirect to another host. Saving one is audit-logged. Today the key sits in the same env file as the others; it moves to the KMS with them.
 
 ### 8.4 Staff and admin access
 - SSO with **hardware security keys** for all staff, and short-lived just-in-time production access.
