@@ -144,6 +144,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
   - May lag behind official updates.
   - Links to the branch's README, and requires an "I understand" checkbox before installing.
 - Community builds of games must include Slop Pulse too.
+- **Built 2026-10-20** (`crates/slop-api/src/branches.rs`): a branch is an app of its own (the author's fork, releases reviewed and signed like any app, its own votes, reviews and Donate button) linked to the original. "Register a branch" on an app's page (mod, fix, translation, port or other; your own fork, not the original repository). It isn't listed in the store on its own: the original's page lists its Community builds, ones that add a platform first ("adds Linux"), and there's a Community builds shelf and page. A branch's page says whose it is, and installing needs the caveats ticked. Not yet: requiring Pulse in community builds of games, and "runs on my platform (including community builds)" in search.
 
 ## 10. Security & compliance pipeline
 

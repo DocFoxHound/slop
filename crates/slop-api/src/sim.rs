@@ -352,6 +352,8 @@ pub struct Generated {
     pub donations: crate::sim_donations::DonationsGenerated,
     /// Written reviews with votes.
     pub reviews: u64,
+    /// Community branches (DESIGN §9).
+    pub branches: usize,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -1016,6 +1018,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .execute(db)
     .await?
     .rows_affected();
+    let branches = sim_branches(db, now).await?;
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
     let donations = crate::sim_donations::write(db, &mut rng, now).await?;
 
@@ -1033,7 +1036,106 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         interests,
         donations,
         reviews,
+        branches,
     })
+}
+
+/// Community branches: ports of Windows-only games to Linux, and a few mods and translations,
+/// each by another simulated maker, with an approved release and some votes.
+async fn sim_branches(db: &PgPool, now: OffsetDateTime) -> anyhow::Result<usize> {
+    let parents: Vec<(Uuid, String, String, Uuid)> = sqlx::query_as(
+        "select a.id, a.slug, a.title, a.maker_id from apps a
+         where a.status = 'listed' and a.stage = 'released' and a.parent_app_id is null
+         order by md5(a.id::text) limit 14",
+    )
+    .fetch_all(db)
+    .await?;
+    let makers: Vec<Uuid> = sqlx::query_scalar(
+        "select id from users where display_name like 'Sim maker %' order by id",
+    )
+    .fetch_all(db)
+    .await?;
+    let mut made = 0;
+    for (i, (parent, slug, title, owner)) in parents.iter().enumerate() {
+        let author = makers[(i * 5 + 3) % makers.len().max(1)];
+        if author == *owner {
+            continue;
+        }
+        let (kind, suffix, name, platforms, note): (&str, &str, String, Vec<&str>, &str) =
+            match i % 4 {
+                0 | 1 => (
+                    "port",
+                    "linux",
+                    format!("{title} (Linux port)"),
+                    vec!["linux", "linux-deb"],
+                    "A native Linux build with a .deb package.",
+                ),
+                2 => (
+                    "mod",
+                    "plus",
+                    format!("{title}+"),
+                    vec!["windows"],
+                    "Adds a hard mode and a level editor.",
+                ),
+                _ => (
+                    "translation",
+                    "de",
+                    format!("{title} (Deutsch)"),
+                    vec!["windows"],
+                    "German text and menus.",
+                ),
+            };
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "insert into apps (id, slug, title, summary, description_md, kind, stage, status, maker_id, repo_url, license_spdx,
+                               min_age, platforms, parent_app_id, branch_kind, branch_note, created_at, updated_at, last_commit_at)
+             select $1, $2 || '-' || $3, $4, $5, $5, p.kind, 'released', 'listed', $6, 'https://github.com/sim-fork/' || $2,
+                    p.license_spdx, p.min_age, $7, p.id, $8, $5, $9, $9, $9
+             from apps p where p.id = $10",
+        )
+        .bind(id)
+        .bind(slug)
+        .bind(suffix)
+        .bind(&name)
+        .bind(note)
+        .bind(author)
+        .bind(&platforms)
+        .bind(kind)
+        .bind(now - time::Duration::days(20 + i as i64))
+        .bind(parent)
+        .execute(db)
+        .await?;
+        sqlx::query("insert into app_tags (app_id, tag_id) select $1, tag_id from app_tags where app_id = $2")
+            .bind(id)
+            .bind(parent)
+            .execute(db)
+            .await?;
+        sqlx::query(
+            "insert into releases (id, app_id, version, commit_sha, status, submitted_by, created_at, reviewed_at, commit_verified)
+             values ($1, $2, '1.0.0', repeat('f', 40), 'approved', $3, $4, $4, true)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(id)
+        .bind(author)
+        .bind(now - time::Duration::days(15 + i as i64))
+        .execute(db)
+        .await?;
+        // Some of the original's players try it and vote.
+        sqlx::query(
+            "insert into votes (user_id, app_id, vote, weight, updated_at)
+             select v.user_id, $1, case when abs(hashtext(v.user_id::text || $3)) % 5 = 0 then -1 else 1 end, 0.6, $2
+             from votes v where v.app_id = $4 and abs(hashtext(v.user_id::text)) % 3 = 0
+             on conflict do nothing",
+        )
+        .bind(id)
+        .bind(now - time::Duration::days(3))
+        .bind(suffix)
+        .bind(parent)
+        .execute(db)
+        .await?;
+        made += 1;
+    }
+    Ok(made)
 }
 
 fn capitalize(s: &str) -> String {

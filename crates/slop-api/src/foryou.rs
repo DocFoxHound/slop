@@ -424,7 +424,7 @@ pub async fn candidates(
     qb.push(catalog::PLAYERS_THIS_WEEK.replace("a.id", "s.id"))
         .push(" as players_week from (");
     catalog::push_summary_columns_with(&mut qb, config, ", a.id, a.maker_id, a.created_at");
-    qb.push(" where ");
+    qb.push(" where a.parent_app_id is null and ");
     catalog::push_store_visible(&mut qb, config.catalog, policy);
     qb.push(") s order by s.slug");
     qb.build_query_as().fetch_all(db).await

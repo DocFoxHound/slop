@@ -1,0 +1,228 @@
+//! Branches and community builds (DESIGN §9).
+//!
+//! Anyone can fork an app and register a branch: a mod, a fix, a translation or a port. A branch
+//! is an app of its own (its author, its fork, its releases, which are reviewed and signed like
+//! any other, its votes and its own donate button), linked to the app it branches from. It isn't
+//! listed in the store on its own: it shows on the original's page as a **Community** build,
+//! with what platforms it adds, and in the "Community branches" shelf. Installing one needs an
+//! "I understand" first: made by its author, not the publisher; checked the same way; may lag
+//! behind official updates.
+
+use axum::{
+    Json, Router,
+    extract::{Path, State},
+    http::{HeaderMap, StatusCode},
+    routing::post,
+};
+use serde::{Deserialize, Serialize};
+use sqlx::{PgPool, QueryBuilder};
+use uuid::Uuid;
+
+use crate::{
+    AppState,
+    auth::session::CurrentUser,
+    catalog::{self, AppSummary},
+    error::{ApiError, ApiResult, is_unique_violation},
+    policy::ViewerPolicy,
+};
+
+pub const KINDS: &[(&str, &str)] = &[
+    ("mod", "Mod"),
+    ("fix", "Fix"),
+    ("translation", "Translation"),
+    ("port", "Port"),
+    ("other", "Other"),
+];
+
+pub fn routes() -> Router<AppState> {
+    Router::new().route("/apps/{slug}/branches", post(register))
+}
+
+#[derive(Serialize)]
+pub struct BranchInfo {
+    /// The app it branches from.
+    parent_slug: String,
+    parent_title: String,
+    parent_maker: String,
+    kind: String,
+    kind_label: &'static str,
+    note: Option<String>,
+}
+
+/// For a branch's own page: what it branches from.
+pub async fn info(db: &PgPool, app_id: Uuid) -> sqlx::Result<Option<BranchInfo>> {
+    let row: Option<(String, String, String, String, Option<String>)> = sqlx::query_as(
+        "select p.slug, p.title, u.display_name, a.branch_kind, a.branch_note
+         from apps a join apps p on p.id = a.parent_app_id join users u on u.id = p.maker_id where a.id = $1",
+    )
+    .bind(app_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(
+        |(parent_slug, parent_title, parent_maker, kind, note)| BranchInfo {
+            kind_label: KINDS
+                .iter()
+                .find(|(k, _)| *k == kind)
+                .map_or("Other", |(_, l)| l),
+            parent_slug,
+            parent_title,
+            parent_maker,
+            kind,
+            note,
+        },
+    ))
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub struct CommunityBuild {
+    #[sqlx(flatten)]
+    #[serde(flatten)]
+    app: AppSummary,
+    author: String,
+    branch_kind: String,
+    branch_note: Option<String>,
+    platforms: Vec<String>,
+    /// Platforms it has that the original doesn't: the gaps it fills.
+    #[sqlx(skip)]
+    adds: Vec<String>,
+}
+
+/// For an app's page: its branches in the store, the ones filling platform gaps first.
+pub async fn community(
+    state: &AppState,
+    app_id: Uuid,
+    parent_platforms: &[String],
+    policy: ViewerPolicy,
+) -> sqlx::Result<Vec<CommunityBuild>> {
+    let mut qb = QueryBuilder::new("");
+    catalog::push_summary_columns_with(
+        &mut qb,
+        &state.config,
+        ", (select u.display_name from users u where u.id = a.maker_id) as author, a.branch_kind, a.branch_note, a.platforms",
+    );
+    qb.push(" where a.parent_app_id = ")
+        .push_bind(app_id)
+        .push(" and ");
+    catalog::push_store_visible(&mut qb, state.config.catalog, policy);
+    qb.push(" order by a.title limit 50");
+    let mut builds: Vec<CommunityBuild> = qb.build_query_as().fetch_all(&state.db).await?;
+    for b in &mut builds {
+        b.adds = b
+            .platforms
+            .iter()
+            .filter(|p| !parent_platforms.contains(p))
+            .cloned()
+            .collect();
+    }
+    builds.sort_by(|a, b| {
+        a.adds
+            .is_empty()
+            .cmp(&b.adds.is_empty())
+            .then(b.app.vote_count.cmp(&a.app.vote_count))
+    });
+    Ok(builds)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct Register {
+    slug: String,
+    title: String,
+    summary: String,
+    repo_url: String,
+    license_spdx: String,
+    kind: String,
+    note: String,
+    platforms: Vec<String>,
+}
+
+/// Registers a branch of an app the author can see. It starts as a draft: the author submits a
+/// release, which is checked and reviewed like any other, and Slop lists it.
+async fn register(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    headers: HeaderMap,
+    Path(parent_slug): Path<String>,
+    Json(b): Json<Register>,
+) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
+    let (parent, _) = catalog::visible_app(&state, &parent_slug, Some(&user), policy).await?;
+    let is_branch: bool =
+        sqlx::query_scalar("select parent_app_id is not null from apps where id = $1")
+            .bind(parent)
+            .fetch_one(&state.db)
+            .await?;
+    if is_branch {
+        return Err(ApiError::Conflict(
+            "branch the original app, not a branch of it".into(),
+        ));
+    }
+    crate::legal::require(&state.db, user.id, "publisher").await?;
+    catalog::validate_slug(&b.slug)?;
+    let title = catalog::validate_text("title", &b.title, 80, false)?;
+    let summary = catalog::validate_text("summary", &b.summary, 200, false)?;
+    let note = catalog::validate_text("note", &b.note, 500, false)?;
+    let repo_url = catalog::validate_repo_url(&b.repo_url)?;
+    let license = catalog::validate_license(&b.license_spdx)?;
+    let platforms = catalog::validate_platforms(&b.platforms)?;
+    if !KINDS.iter().any(|(k, _)| *k == b.kind) {
+        return Err(ApiError::invalid(
+            "kind",
+            "mod, fix, translation, port or other",
+        ));
+    }
+    let same_repo: bool =
+        sqlx::query_scalar("select lower(repo_url) = lower($2) from apps where id = $1")
+            .bind(parent)
+            .bind(&repo_url)
+            .fetch_one(&state.db)
+            .await?;
+    if same_repo {
+        return Err(ApiError::invalid(
+            "repo_url",
+            "a branch builds from your own fork, not the original repository",
+        ));
+    }
+    let id = Uuid::now_v7();
+    let mut tx = state.db.begin().await?;
+    // The branch takes the original's kind, age rating and tags; it's Released from the start,
+    // and can be listed once it has an approved release.
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx,
+                           min_age, platforms, parent_app_id, branch_kind, branch_note)
+         select $1, $2, $3, $4, $5, p.kind, 'released', $6, $7, $8, p.min_age, $9, p.id, $10, nullif($5, '')
+         from apps p where p.id = $11",
+    )
+    .bind(id)
+    .bind(&b.slug)
+    .bind(&title)
+    .bind(&summary)
+    .bind(&note)
+    .bind(user.id)
+    .bind(&repo_url)
+    .bind(&license)
+    .bind(&platforms)
+    .bind(&b.kind)
+    .bind(parent)
+    .execute(&mut *tx)
+    .await
+    .map_err(|err| {
+        if is_unique_violation(&err) {
+            ApiError::invalid("slug", "that address is taken")
+        } else {
+            err.into()
+        }
+    })?;
+    sqlx::query(
+        "insert into app_tags (app_id, tag_id) select $1, tag_id from app_tags where app_id = $2",
+    )
+    .bind(id)
+    .bind(parent)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok((
+        StatusCode::CREATED,
+        Json(serde_json::json!({ "slug": b.slug })),
+    ))
+}

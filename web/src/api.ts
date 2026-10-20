@@ -38,6 +38,8 @@ export interface AppSummary {
   made_with_people: boolean;
   /** People who marked it Interested: the demand signal for upcoming apps. */
   interested: number;
+  /** A community branch of this app (DESIGN §9). */
+  branch_of: string | null;
   is_dead: boolean;
   stage_deadline: string | null;
   updated_at: string;
@@ -275,6 +277,17 @@ export interface AppDetail extends AppSummary {
   is_mine: boolean;
   /** The viewer marked it Interested. */
   is_interested: boolean;
+  /** For a community branch: what it branches from. */
+  branch: {
+    parent_slug: string;
+    parent_title: string;
+    parent_maker: string;
+    kind: string;
+    kind_label: string;
+    note: string | null;
+  } | null;
+  /** For an app: its community builds, ones filling platform gaps first. */
+  community: Array<AppSummary & { author: string; branch_kind: string; branch_note: string | null; platforms: string[]; adds: string[] }>;
 }
 
 export interface AppPage {
@@ -1095,8 +1108,10 @@ export interface AppQuery {
   category?: string;
   stage?: AppStage;
   kind?: AppKind;
-  sort?: "recent" | "title" | "relevance" | "trending" | "anticipated";
+  sort?: "recent" | "title" | "relevance" | "trending" | "anticipated" | "rating";
   made_with_people?: boolean;
+  /** Community branches instead of apps. */
+  community?: boolean;
   limit?: number;
   offset?: number;
 }
@@ -1363,6 +1378,10 @@ export const api = {
     write: (slug: string, body: string) => request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/review`, { body }),
     remove: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/review`),
   },
+  registerBranch: (
+    parent: string,
+    body: { slug: string; title: string; summary: string; repo_url: string; license_spdx: string; kind: string; note: string; platforms: string[] },
+  ) => request<{ slug: string }>("POST", `/v1/apps/${encodeURIComponent(parent)}/branches`, body),
   profile: (id: string) => request<UserProfile>("GET", `/v1/users/${encodeURIComponent(id)}`),
   donations: {
     info: (slug: string) => request<DonateInfo>("GET", `/v1/apps/${encodeURIComponent(slug)}/donate`),
