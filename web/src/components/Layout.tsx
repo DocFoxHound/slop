@@ -36,9 +36,34 @@ const TABS = [
   { to: "/publish", label: "Publish", icon: "⬆️", end: false, match: (p: string) => p.startsWith("/publish") },
 ];
 
+/** Unread chat messages, in the desktop app once chat is running (pages/Chat.tsx). */
+function useChatUnread(): number {
+  const [unread, setUnread] = useState(0);
+  useEffect(() => {
+    if (!isDesktop) return;
+    let unlisten: (() => void) | undefined;
+    const count = () => {
+      void desktop
+        .chat<Array<{ unread: number; muted: boolean }>>({ action: "conversations" })
+        .then((list) => setUnread(list.filter((c) => !c.muted).reduce((n, c) => n + c.unread, 0)))
+        .catch(() => undefined);
+    };
+    // Only after chat reports something (or a chat was read): asking earlier would set chat up
+    // on devices that never use it.
+    void desktop.onChatChanged(count).then((u) => (unlisten = u));
+    window.addEventListener("slop-chat-read", count);
+    return () => {
+      unlisten?.();
+      window.removeEventListener("slop-chat-read", count);
+    };
+  }, []);
+  return unread;
+}
+
 export function Layout() {
   const location = useLocation();
   const view = useRef<HTMLElement>(null);
+  const chatUnread = useChatUnread();
 
   // New page, back to the top. The page scrolls inside <main>, not the window.
   useEffect(() => {
@@ -82,6 +107,11 @@ export function Layout() {
           {TABS.map((t) => (
             <NavLink key={t.to} to={t.to} end={t.end} className={() => (t.match(location.pathname) ? "on" : "")}>
               {t.label.toUpperCase()}
+              {t.to === "/chat" && chatUnread > 0 && (
+                <span className="unread-badge tab-badge" aria-label={`${chatUnread} unread`}>
+                  {chatUnread > 99 ? "99+" : chatUnread}
+                </span>
+              )}
             </NavLink>
           ))}
           <AdminTab />
