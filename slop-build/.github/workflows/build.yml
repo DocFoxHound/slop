@@ -35,7 +35,7 @@ on:
         required: true
         type: string
       project-type:
-        description: rust, go, godot, web, electron, tauri, python or custom.
+        description: rust, go, dotnet, godot, unity, web, electron, tauri, python or custom.
         required: true
         type: string
       platforms:
@@ -85,6 +85,23 @@ on:
         required: false
         type: string
         default: "4.3"
+      godot-dotnet:
+        description: "godot only: the project uses C# (Godot's .NET build)."
+        required: false
+        type: boolean
+        default: false
+      dotnet-version:
+        description: "dotnet, and godot with godot-dotnet: the .NET SDK version."
+        required: false
+        type: string
+        default: "8.0.x"
+      dotnet-project:
+        description: >-
+          dotnet only: the project to publish (a .csproj), relative to project-path. Found
+          automatically when there's one program project.
+        required: false
+        type: string
+        default: ""
       godot-preset-windows:
         description: "godot only: the export preset for Windows (export_presets.cfg)."
         required: false
@@ -144,6 +161,18 @@ on:
       SIGNPATH_API_TOKEN:
         description: Your SignPath CI user's API token (only with signpath-organization-id).
         required: false
+      UNITY_LICENSE:
+        description: "unity: the contents of your Unity licence file (.ulf). Unity's licence, kept in your repository's secrets."
+        required: false
+      UNITY_EMAIL:
+        description: "unity: your Unity account's email."
+        required: false
+      UNITY_PASSWORD:
+        description: "unity: your Unity account's password."
+        required: false
+      UNITY_SERIAL:
+        description: "unity: a Plus or Pro serial, instead of UNITY_LICENSE."
+        required: false
 
 permissions: {}
 
@@ -170,7 +199,7 @@ jobs:
           SLOP_URL: ${{ inputs.slop-url }}
         run: |
           [[ "$APP" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "::error::app must be your app's Slop address, e.g. my-game"; exit 1; }
-          [[ "$TYPE" =~ ^(rust|go|godot|web|electron|tauri|python|custom)$ ]] || { echo "::error::project-type must be rust, go, godot, web, electron, tauri, python or custom"; exit 1; }
+          [[ "$TYPE" =~ ^(rust|go|dotnet|godot|unity|web|electron|tauri|python|custom)$ ]] || { echo "::error::project-type must be rust, go, dotnet, godot, unity, web, electron, tauri, python or custom"; exit 1; }
           [[ "$SLOP_URL" =~ ^https?://[^/]+/?$ ]] || { echo "::error::slop-url must be a site address like https://slop.example"; exit 1; }
 
       - name: Choose version and release
@@ -212,9 +241,77 @@ jobs:
           print("matrix=" + json.dumps({"include": [{"platform": p, "runner": runners[p]} for p in wanted]}))
           PY
 
+  # Unity, through GameCI's builder (Docker, on Linux), for every requested platform. The
+  # licence is the maker's, from their own repository's secrets; Slop never sees it.
+  unity:
+    name: Build with Unity (${{ matrix.platform }})
+    needs: prepare
+    if: inputs.project-type == 'unity'
+    runs-on: ubuntu-latest
+    strategy:
+      fail-fast: true
+      matrix: ${{ fromJSON(needs.prepare.outputs.matrix) }}
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          lfs: true
+
+      - name: Check the Unity licence
+        env:
+          HAS_LICENSE: ${{ secrets.UNITY_LICENSE != '' }}
+          HAS_SERIAL: ${{ secrets.UNITY_SERIAL != '' }}
+          HAS_LOGIN: ${{ secrets.UNITY_EMAIL != '' && secrets.UNITY_PASSWORD != '' }}
+        run: |
+          if [ "$HAS_LICENSE" != "true" ] && [ "$HAS_SERIAL" != "true" ]; then
+            echo "::error::Unity needs a licence to build: add UNITY_LICENSE (Personal) or UNITY_SERIAL (Plus/Pro) to your repository's secrets. See the Unity section of the publishing guide."
+            exit 1
+          fi
+          if [ "$HAS_LOGIN" != "true" ]; then
+            echo "::error::Unity also needs UNITY_EMAIL and UNITY_PASSWORD in your repository's secrets."
+            exit 1
+          fi
+
+      # Unity's editor image is large: make room on the runner.
+      - name: Free disk space
+        run: |
+          sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /opt/hostedtoolcache/CodeQL
+          docker system prune -af >/dev/null || true
+          df -h /
+
+      - uses: actions/cache@v4
+        with:
+          path: ${{ inputs.project-path }}/Library
+          key: slop-unity-${{ matrix.platform }}-${{ hashFiles(format('{0}/Assets/**', inputs.project-path), format('{0}/Packages/**', inputs.project-path), format('{0}/ProjectSettings/**', inputs.project-path)) }}
+          restore-keys: slop-unity-${{ matrix.platform }}-
+
+      - name: Build
+        uses: game-ci/unity-builder@v4
+        env:
+          UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}
+          UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}
+          UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}
+          UNITY_SERIAL: ${{ secrets.UNITY_SERIAL }}
+        with:
+          projectPath: ${{ inputs.project-path }}
+          targetPlatform: ${{ matrix.platform == 'windows' && 'StandaloneWindows64' || 'StandaloneLinux64' }}
+          buildName: ${{ inputs.app }}
+          buildsPath: slop-unity
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slop-unity-${{ matrix.platform }}
+          path: slop-unity/${{ matrix.platform == 'windows' && 'StandaloneWindows64' || 'StandaloneLinux64' }}
+          retention-days: 1
+
   build:
     name: Build (${{ matrix.platform }})
-    needs: prepare
+    needs: [prepare, unity]
+    # Unity's job is skipped for every other type.
+    if: ${{ !cancelled() && needs.prepare.result == 'success' && (needs.unity.result == 'success' || needs.unity.result == 'skipped') }}
     runs-on: ${{ matrix.runner }}
     strategy:
       fail-fast: true
@@ -237,6 +334,19 @@ jobs:
         uses: actions/setup-go@v5
         with:
           go-version-file: go.mod
+
+      - name: Get the Unity build
+        if: inputs.project-type == 'unity'
+        uses: actions/download-artifact@v4
+        with:
+          name: slop-unity-${{ matrix.platform }}
+          path: slop-dist/unity
+
+      - name: Set up .NET
+        if: inputs.project-type == 'dotnet' || (inputs.project-type == 'godot' && inputs.godot-dotnet)
+        uses: actions/setup-dotnet@v4
+        with:
+          dotnet-version: ${{ inputs.dotnet-version }}
 
       - name: Set up Python
         if: inputs.project-type == 'python'
@@ -278,25 +388,31 @@ jobs:
         env:
           GODOT: ${{ inputs.godot-version }}
           PLATFORM: ${{ matrix.platform }}
+          DOTNET: ${{ inputs.godot-dotnet }}
         run: |
           ver="${GODOT%-stable}"
           [[ "$ver" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::godot-version must look like 4.3 or 4.4.1"; exit 1; }
           base="https://github.com/godotengine/godot/releases/download/${ver}-stable"
           tools="$RUNNER_TEMP/godot"; mkdir -p "$tools"
+          # C# projects need Godot's .NET build ("mono"), with its own templates.
+          mono=""; tpl="${ver}.stable"
+          if [ "$DOTNET" = "true" ]; then mono="_mono"; tpl="${ver}.stable.mono"; fi
           if [ "$PLATFORM" = "windows" ]; then
-            curl -sSfL -o "$tools/godot.zip" "$base/Godot_v${ver}-stable_win64.exe.zip"
-            templates="$APPDATA/Godot/export_templates/${ver}.stable"
+            if [ -n "$mono" ]; then file="Godot_v${ver}-stable_mono_win64.zip"; else file="Godot_v${ver}-stable_win64.exe.zip"; fi
+            templates="$APPDATA/Godot/export_templates/$tpl"
           else
-            curl -sSfL -o "$tools/godot.zip" "$base/Godot_v${ver}-stable_linux.x86_64.zip"
-            templates="$HOME/.local/share/godot/export_templates/${ver}.stable"
+            if [ -n "$mono" ]; then file="Godot_v${ver}-stable_mono_linux_x86_64.zip"; else file="Godot_v${ver}-stable_linux.x86_64.zip"; fi
+            templates="$HOME/.local/share/godot/export_templates/$tpl"
           fi
+          curl -sSfL -o "$tools/godot.zip" "$base/$file"
           (cd "$tools" && unzip -q godot.zip && rm godot.zip)
           if [ "$PLATFORM" = "windows" ]; then
-            bin=$(ls "$tools"/*_console.exe | head -n 1)
+            bin=$(find "$tools" -name '*_console.exe' | head -n 1)
           else
-            bin=$(ls "$tools"/Godot_v*_linux.x86_64 | head -n 1); chmod +x "$bin"
+            bin=$(find "$tools" -type f -name 'Godot_v*_linux*.x86_64' | head -n 1); chmod +x "$bin"
           fi
-          curl -sSfL -o "$tools/templates.tpz" "$base/Godot_v${ver}-stable_export_templates.tpz"
+          [ -n "$bin" ] || { echo "::error::couldn't find Godot in $file"; exit 1; }
+          curl -sSfL -o "$tools/templates.tpz" "$base/Godot_v${ver}-stable${mono}_export_templates.tpz"
           mkdir -p "$templates"
           (cd "$tools" && unzip -q templates.tpz && cp -R templates/. "$templates/")
           echo "SLOP_GODOT=$bin" >> "$GITHUB_ENV"
@@ -314,6 +430,8 @@ jobs:
           PRESET_WINDOWS: ${{ inputs.godot-preset-windows }}
           PRESET_LINUX: ${{ inputs.godot-preset-linux }}
           PY_ENTRY: ${{ inputs.python-entry }}
+          DOTNET_PROJECT: ${{ inputs.dotnet-project }}
+          GODOT_DOTNET: ${{ inputs.godot-dotnet }}
           PY_WINDOWED: ${{ inputs.python-windowed }}
         run: |
           ext=""; [ "$PLATFORM" = "windows" ] && ext=".exe"
@@ -356,12 +474,54 @@ jobs:
               go build -trimpath -o "$out/$REPO_NAME$ext" .
               exec="$REPO_NAME$ext"
               ;;
+            dotnet)
+              cd "$PROJECT"
+              # The program project: the one given, or the only one whose OutputType is Exe or WinExe.
+              proj="$DOTNET_PROJECT"
+              if [ -z "$proj" ]; then
+                proj=$(python3 - <<'PY'
+          import pathlib, re, sys
+          found = [p for p in pathlib.Path(".").rglob("*.csproj")
+                   if "/bin/" not in str(p) and "/obj/" not in str(p)
+                   and re.search(r"<OutputType>\s*(Exe|WinExe)\s*</OutputType>", p.read_text(errors="ignore"), re.I)]
+          if len(found) != 1:
+              raise SystemExit(f"::error::found {len(found)} program projects ({', '.join(map(str, found)) or 'none'}): set dotnet-project")
+          print(found[0])
+          PY
+                )
+              fi
+              [ -f "$proj" ] || { echo "::error::no $proj in $PROJECT"; exit 1; }
+              # Tools a project declares (e.g. MonoGame's content builder).
+              [ -f .config/dotnet-tools.json ] && dotnet tool restore
+              rid=linux-x64; [ "$PLATFORM" = "windows" ] && rid=win-x64
+              # Self-contained: players don't need .NET installed.
+              dotnet publish "$proj" -c Release -r "$rid" --self-contained true -p:PublishSingleFile=false -o "$out"
+              name=$(python3 - "$proj" <<'PY'
+          import pathlib, re, sys
+          p = pathlib.Path(sys.argv[1])
+          m = re.search(r"<AssemblyName>\s*([^<]+?)\s*</AssemblyName>", p.read_text(errors="ignore"))
+          print(m.group(1) if m else p.stem)
+          PY
+              )
+              exec="$name$ext"
+              ;;
+            unity)
+              cp -R slop-dist/unity/. "$out/"
+              # Unity names the player after buildName (the app's address).
+              if [ -f "$out/$APP$ext" ]; then exec="$APP$ext"; else exec=$(find_program "$out"); fi
+              ;;
             godot)
               cd "$PROJECT"
               [ -f project.godot ] || { echo "::error::no project.godot in $PROJECT (set project-path)"; exit 1; }
               preset="$PRESET_LINUX"; [ "$PLATFORM" = "windows" ] && preset="$PRESET_WINDOWS"
               grep -q "^name=\"$preset\"" export_presets.cfg 2>/dev/null || {
                 echo "::error::export_presets.cfg has no preset named \"$preset\": in Godot, open Project → Export, add it, and commit export_presets.cfg"; exit 1; }
+              # C#: build the scripts first, as the editor does before exporting.
+              if [ "$GODOT_DOTNET" = "true" ]; then
+                csproj=$(ls *.csproj 2>/dev/null | head -n 1)
+                [ -n "$csproj" ] || { echo "::error::godot-dotnet is on but there's no .csproj next to project.godot"; exit 1; }
+                dotnet build "$csproj" -c ExportRelease >/dev/null || dotnet build "$csproj" -c Release
+              fi
               # Import once, so a clean checkout exports like the editor does.
               "$SLOP_GODOT" --headless --import >/dev/null 2>&1 || true
               "$SLOP_GODOT" --headless --export-release "$preset" "$out/$REPO_NAME$ext"
@@ -702,6 +862,46 @@ jobs:
             jq --arg n "$name" '. + [{"platform": "linux-rpm", "file_name": $n}]' slop-dist/files.json > f && mv f slop-dist/files.json
           fi
           ls -l slop-dist/out
+
+      # GitHub release files are limited to 2 GiB: a bigger archive goes up in numbered parts
+      # (name.001, name.002, …), each signed and checked on its own; the desktop app downloads
+      # them in order, checks each, and joins them back into the archive Slop checked.
+      - name: Split files over 2 GiB
+        run: |
+          python3 - <<'PY'
+          import json, os
+          LIMIT = 2_000_000_000
+          out = os.path.join("slop-dist", "out")
+          path = os.path.join("slop-dist", "files.json")
+          files = json.load(open(path))
+          for f in files:
+              src = os.path.join(out, f["file_name"])
+              size = os.path.getsize(src)
+              if size <= LIMIT:
+                  continue
+              if f["platform"] in ("linux-deb", "linux-rpm"):
+                  raise SystemExit(f"::error::{f['file_name']} is over 2 GiB, which GitHub releases can't hold. Turn off linux-packages for this app; the .tar.gz is split into parts instead.")
+              count = -(-size // LIMIT)
+              if count > 64:
+                  raise SystemExit(f"::error::{f['file_name']} is over 128 GB, more than Slop takes.")
+              parts = []
+              with open(src, "rb") as fh:
+                  for n in range(1, count + 1):
+                      name = f"{f['file_name']}.{n:03}"
+                      with open(os.path.join(out, name), "wb") as part:
+                          left = LIMIT
+                          while left:
+                              chunk = fh.read(min(left, 1 << 24))
+                              if not chunk:
+                                  break
+                              part.write(chunk)
+                              left -= len(chunk)
+                      parts.append(name)
+              os.remove(src)
+              f["parts"] = parts
+              print(f"{f['file_name']}: {size} bytes in {count} parts")
+          json.dump(files, open(path, "w"))
+          PY
 
       - name: Sign (maker's attestation)
         if: inputs.sign && inputs.publish

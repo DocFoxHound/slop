@@ -241,6 +241,8 @@ jobs:
 | `output-dir` | `custom`: the folder the build produces; it's packed as-is. `web`: the folder with your built `index.html` |
 | `exec` | The program to start, relative to the build; `{ext}` becomes `.exe` on Windows. Needed for `custom`, worked out for every other type |
 | `godot-version` | `godot`: your Godot version, e.g. `4.3` (default) or `4.4.1`. The standard build, not .NET |
+| `godot-dotnet` | `godot`: `true` for C# projects |
+| `dotnet-version`, `dotnet-project` | `dotnet` (and C# Godot): the .NET SDK (default `8.0.x`) and, if there's more than one, the program project to ship |
 | `godot-preset-windows`, `godot-preset-linux` | `godot`: the export presets to use (default `Windows Desktop` and `Linux`) |
 | `python-version`, `python-entry`, `python-windowed` | `python`: Python version (default 3.12), the script that starts the app (default `main.py`), and `true` for apps with their own window, such as pygame games |
 | `node-version` | `electron`, `tauri`, `web`: Node.js version (default 22) |
@@ -262,7 +264,9 @@ reviewers see the source checks; they never stop a release.
 |---|---|
 | `rust` | `cargo build --release --locked`; ships the first binary |
 | `go` | `go build`; the program is named after the repository |
-| `godot` | Installs Godot (`godot-version`) and its export templates, imports the project, and exports your presets named `Windows Desktop` and `Linux`. Commit `export_presets.cfg`. GDScript projects; .NET isn't supported yet |
+| `godot` | Installs Godot (`godot-version`) and its export templates, imports the project, and exports your presets named `Windows Desktop` and `Linux`. Commit `export_presets.cfg`. For C# projects add `godot-dotnet: true` (Godot's .NET build) |
+| `unity` | Unity through [GameCI](https://game.ci): the editor version from `ProjectSettings/ProjectVersion.txt`, Windows and Linux players. Needs your Unity licence in your repository's secrets: see [Unity](#unity) |
+| `dotnet` | `dotnet publish`, self-contained (players don't need .NET), for console, MonoGame, Avalonia and similar apps. Finds the program project, or set `dotnet-project` |
 | `python` | PyInstaller, as a folder: installs `requirements.txt`, then builds `python-entry` |
 | `electron` | `npm ci`, then electron-builder as an unpacked folder (no installer: Slop installs and updates it) |
 | `tauri` | `npm ci` if there's a `package.json`, then `tauri build --no-bundle`; ships the program |
@@ -282,6 +286,29 @@ For example, a Godot game:
 A Python game: PyInstaller programs are often flagged by antivirus heuristics, so signing them
 ([Signing](#signing)) helps most there. Electron on Linux needs unprivileged user namespaces for
 its sandbox; most distributions have them on.
+
+### Unity
+
+Slop Build builds Unity projects with [GameCI](https://game.ci) on your repository's own GitHub
+Actions, so your Unity licence stays in your repository: Slop never sees it.
+
+1. Get a licence file: follow [GameCI's activation guide](https://game.ci/docs/github/activation)
+   (for Unity Personal, it gives you a `.ulf` file).
+2. In your repository: Settings → Secrets and variables → Actions → New repository secret. Add
+   `UNITY_LICENSE` (the `.ulf` file's contents), `UNITY_EMAIL` and `UNITY_PASSWORD`. Plus or Pro
+   licences use `UNITY_SERIAL` instead of `UNITY_LICENSE`.
+3. Add Slop Build from your Releases page; the file it fills in passes those secrets on.
+
+Builds use the Mono scripting backend on Linux runners. Large projects take a while the first
+time; the `Library` folder is cached after that. Commit with Git LFS if your assets need it.
+
+### Games over 2 GiB
+
+GitHub release files are limited to 2 GiB. Slop Build splits a bigger `.zip` or `.tar.gz` into
+numbered parts (`game.zip.001`, `game.zip.002`…, up to 64) and signs each one; players' desktop
+apps download them in order, check every part, and join them back into the file Slop checked.
+`.deb` and `.rpm` packages can't be split, so turn `linux-packages` off for a game that big.
+Releases picked from GitHub (Option A) or entered by hand don't take parts yet: use Slop Build.
 
 **Launch settings (`slop.toml`).** Optional, at the top of your repository (or the project's
 folder). It says which program to start and with what arguments, for every platform or per

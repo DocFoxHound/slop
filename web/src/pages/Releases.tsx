@@ -264,6 +264,9 @@ const PROJECT_LABEL: Record<string, string> = {
   rust: "Rust",
   go: "Go",
   godot: "Godot",
+  "godot-dotnet": "Godot (C#)",
+  dotnet: ".NET",
+  unity: "Unity",
   web: "web (HTML5)",
   electron: "Electron",
   tauri: "Tauri",
@@ -280,7 +283,7 @@ function SlopBuildSetup({ slug }: { slug: string }) {
       <h2>Let Slop Build do it</h2>
       <p>
         Add one file to your repository and every push to your main branch, or every <code>v*</code> tag, builds your app
-        (Rust, Go, Godot, Python, Electron, Tauri, a website, or your own build command) for Windows and Linux on GitHub
+        (Rust, Go, .NET, Godot, Unity, Python, Electron, Tauri, a website, or your own build command) for Windows and Linux on GitHub
         Actions (a .zip, a .tar.gz and .deb/.rpm packages), signs it, attaches it to a
         release, and sends it here. No
         keys or secrets to set up.

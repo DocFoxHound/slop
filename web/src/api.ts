@@ -1527,7 +1527,7 @@ export const api = {
   slopBuildSetup: (slug: string) =>
     request<{
       supported: boolean;
-      project_type: "rust" | "go" | "godot" | "web" | "electron" | "tauri" | "python" | "custom";
+      project_type: "rust" | "go" | "dotnet" | "godot" | "godot-dotnet" | "unity" | "web" | "electron" | "tauri" | "python" | "custom";
       detected: string | null;
       note: string | null;
       file_path: string;

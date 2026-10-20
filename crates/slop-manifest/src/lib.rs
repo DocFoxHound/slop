@@ -143,6 +143,24 @@ pub struct ManifestFile {
     /// key that made it (sshsig.rs). Present only when there's no attestation.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub maker_signature: Option<MakerSignature>,
+    /// Files over GitHub's 2 GiB limit are released in parts, joined in order. Then `url` names
+    /// the joined file (not uploaded itself), `size` and `sha256` are the joined file's, and each
+    /// part has its own hash and attestation. Empty for a file in one piece.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub parts: Vec<FilePart>,
+}
+
+/// One part of a file released in parts.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FilePart {
+    pub url: String,
+    pub size: u64,
+    /// Lowercase hex SHA-256 of this part.
+    pub sha256: String,
+    /// The maker's attestation naming this part's hash, like a whole file's.
+    #[serde(default)]
+    pub attestation: Option<String>,
 }
 
 /// A maker's own signature on a file (SECURITY §5.3, files attached by hand).
@@ -357,6 +375,7 @@ mod tests {
                 }),
                 attestation: None,
                 maker_signature: None,
+                parts: vec![],
             }],
             approved_at: "2026-10-18T00:00:00Z".into(),
         }

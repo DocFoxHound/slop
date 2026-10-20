@@ -341,6 +341,7 @@ fn manifest_for(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signe
             }),
             attestation: None,
             maker_signature: None,
+            parts: vec![],
         }],
         approved_at: "2026-10-18T00:00:00Z".into(),
     };
@@ -749,6 +750,102 @@ async fn hand_built_files_need_the_makers_signature() {
     assert!(
         matches!(&err, Error::Verify(m) if m.contains("maker signature")),
         "{err:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A file released in parts (over GitHub's 2 GiB limit, here just split in two).
+fn parts_manifest(base: &str, whole: &[u8], parts: &[(&str, &[u8])]) -> Signed {
+    let manifest = ReleaseManifest {
+        schema: MANIFEST_SCHEMA,
+        app_id: "id".into(),
+        app_slug: "game".into(),
+        app_title: "Game".into(),
+        maker: "Octo".into(),
+        repo_url: "https://github.com/octo/game".into(),
+        release_id: "r1".into(),
+        version: "1.0.0".into(),
+        commit: "a".repeat(40),
+        files: vec![ManifestFile {
+            platform: Platform::Linux,
+            kind: FileKind::Archive,
+            url: format!("{base}files/game.zip"),
+            file_name: "game.zip".into(),
+            size: whole.len() as u64,
+            sha256: hex::encode(Sha256::digest(whole)),
+            launch: Some(Launch {
+                exec: "bin/game".into(),
+                args: vec!["hello".into()],
+            }),
+            attestation: None,
+            maker_signature: None,
+            parts: parts
+                .iter()
+                .map(|(name, bytes)| slop_manifest::FilePart {
+                    url: format!("{base}files/{name}"),
+                    size: bytes.len() as u64,
+                    sha256: hex::encode(Sha256::digest(bytes)),
+                    attestation: None,
+                })
+                .collect(),
+        }],
+        approved_at: "2026-10-18T00:00:00Z".into(),
+    };
+    slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
+}
+
+#[tokio::test]
+async fn files_in_parts_are_checked_and_joined() {
+    let (base, fake) = fake_api().await;
+    let zip = zip_of(&[("bin/game", GAME, 0o755), ("data/readme.txt", b"hi", 0o644)]);
+    let (one, two) = zip.split_at(zip.len() / 2);
+    let signed = parts_manifest(&base, &zip, &[("game.zip.001", one), ("game.zip.002", two)]);
+    fake.files.lock().unwrap().extend([
+        ("game.zip.001".to_string(), one.to_vec()),
+        ("game.zip.002".to_string(), two.to_vec()),
+    ]);
+    let dir = tempdir();
+    let lib = library(&dir);
+    let seen = Mutex::new(0u64);
+    lib.install(&signed, Platform::Linux, None, |got, total| {
+        assert_eq!(total, zip.len() as u64);
+        *seen.lock().unwrap() = got
+    })
+    .await
+    .unwrap();
+    assert_eq!(*seen.lock().unwrap(), zip.len() as u64);
+    assert_eq!(
+        std::fs::read(dir.join("apps/game/files/bin/game")).unwrap(),
+        GAME
+    );
+
+    // A part swapped after Slop checked it: nothing is installed.
+    lib.uninstall("game").unwrap();
+    let mut swapped = two.to_vec();
+    swapped[0] ^= 0xff;
+    fake.files.lock().unwrap()[1].1 = swapped;
+    let err = lib
+        .install(&signed, Platform::Linux, None, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Verify(m) if m.contains("part 2")),
+        "{err}"
+    );
+    assert!(lib.installed().is_empty());
+
+    // Parts without the maker's signature aren't installed where signatures are required.
+    fake.files.lock().unwrap()[1].1 = two.to_vec();
+    let strict = Library::new(&dir, vec![key().verifying_key()])
+        .unwrap()
+        .allow_http_downloads(true);
+    let err = strict
+        .install(&signed, Platform::Linux, None, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Verify(m) if m.contains("part 1")),
+        "{err}"
     );
     std::fs::remove_dir_all(dir).unwrap();
 }
