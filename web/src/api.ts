@@ -1610,6 +1610,23 @@ export const api = {
     request<{ redirect_url: string }>("POST", `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`),
 
   providers: () => request<Record<SignInProvider, boolean>>("GET", "/v1/auth/providers"),
+  passkeys: {
+    list: () =>
+      request<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>("GET", "/v1/me/passkeys"),
+    remove: (id: string) => request<void>("DELETE", `/v1/me/passkeys/${encodeURIComponent(id)}`),
+    registerStart: () =>
+      request<{ challenge_id: string; options: { publicKey: Record<string, unknown> } }>("POST", "/v1/me/passkeys/register/start"),
+    registerFinish: (challenge_id: string, name: string, credential: unknown) =>
+      request<unknown>("POST", "/v1/me/passkeys/register/finish", { challenge_id, name, credential }),
+    signInStart: () =>
+      request<{ challenge_id: string; options: { publicKey: Record<string, unknown> } }>("POST", "/v1/auth/passkey/start"),
+    signInFinish: (challenge_id: string, credential: unknown) =>
+      request<unknown>("POST", "/v1/auth/passkey/finish", { challenge_id, credential }),
+    stepUpStart: () =>
+      request<{ challenge_id: string; options: { publicKey: Record<string, unknown> } }>("POST", "/v1/me/step-up/start"),
+    stepUpFinish: (challenge_id: string, credential: unknown) =>
+      request<void>("POST", "/v1/me/step-up/finish", { challenge_id, credential }),
+  },
   /** The sign-ins linked to the account (crates/slop-api/src/auth/mod.rs). */
   identities: () => request<LinkedIdentity[]>("GET", "/v1/me/identities"),
   unlink: (provider: string, subject: string) =>

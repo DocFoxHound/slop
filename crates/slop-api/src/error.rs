@@ -30,7 +30,7 @@ pub enum ApiError {
     #[error("your account is suspended: see the decision on your account page")]
     Suspended,
     /// A sensitive action (SECURITY §4.3) needs a sign-in from the last few minutes.
-    #[error("sign in again to confirm it's you: this protects where your money goes")]
+    #[error("confirm it's you first: sign in again, or use a passkey")]
     StepUpRequired,
     /// Too many unfinished checkouts: solve a proof-of-work challenge first (challenge.rs).
     #[error("one more step before trying again: your browser needs to do a quick check")]

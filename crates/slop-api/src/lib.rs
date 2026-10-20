@@ -30,6 +30,7 @@ pub mod media;
 pub mod moderation;
 pub mod notify;
 pub mod ops;
+pub mod passkeys;
 pub mod people;
 pub mod policy;
 pub mod private;
@@ -162,6 +163,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(moderation::routes())
         .merge(account::routes())
         .merge(notify::routes())
+        .merge(passkeys::routes())
         .merge(ops::routes())
         .merge(donations::routes())
         .merge(reviews::routes())

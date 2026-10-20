@@ -70,6 +70,8 @@ pub struct AdminUser {
     pub token: Option<crate::review::TokenUse>,
     /// Their staff roles (staff.rs).
     pub roles: Vec<crate::staff::Role>,
+    /// The website session, when signed in themselves (not a token).
+    pub session_id: Option<Uuid>,
 }
 
 impl AdminUser {
@@ -92,6 +94,26 @@ impl AdminUser {
             }
         }
         Ok(())
+    }
+
+    /// The most sensitive steps need a sign-in, or a passkey confirmation, from the last few
+    /// minutes (SECURITY §4.3), and a person rather than a token.
+    pub async fn confirm_recent(&self, db: &sqlx::PgPool) -> ApiResult<()> {
+        let Some(session) = self.session_id else {
+            return Err(ApiError::Forbidden);
+        };
+        let fresh: bool = sqlx::query_scalar(
+            "select created_at > now() - $2 or coalesce(stepped_up_at > now() - $2, false) from sessions where id = $1",
+        )
+        .bind(session)
+        .bind(crate::auth::session::STEP_UP_WINDOW)
+        .fetch_one(db)
+        .await?;
+        if fresh {
+            Ok(())
+        } else {
+            Err(ApiError::StepUpRequired)
+        }
     }
 
     /// Managing tokens: only an admin signed in themselves.
@@ -125,6 +147,7 @@ impl FromRequestParts<AppState> for AdminUser {
             user_id: user.id,
             token: None,
             roles: crate::staff::roles_of(&state.db, user.id).await?,
+            session_id: Some(user.session_id),
         })
     }
 }
