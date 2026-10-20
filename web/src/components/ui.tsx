@@ -62,6 +62,7 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
       </div>
       <div className="tile-body">
         {reason && <span className="why">{reason}</span>}
+        {app.branch_of && <span className="badge neutral community-badge">COMMUNITY</span>}
         {app.made_with_people && (
           <span className="made-with-people" title="Made with creatives hired through People">
             ✋ Made with people

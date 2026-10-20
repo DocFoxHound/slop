@@ -472,6 +472,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .chart-legend .key.line-players::before { background: #60a5fa; }
 .chart-table { margin-top: 6px; font-size: 12px; }
 .link-btn { background: none; border: 0; padding: 2px 0; color: var(--slime); cursor: pointer; text-decoration: underline; }
+.link-btn.muted { color: var(--muted); }
 .sim-banner { padding: 8px 16px; background: rgba(96, 165, 250, 0.14); border-bottom: 1px solid rgba(96, 165, 250, 0.4); font-size: 13px; }
 
 /* ---- People (DESIGN §15) --------------------------------------------- */
@@ -714,3 +715,11 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .profile-votes li { display: grid; grid-template-columns: 260px 1fr; gap: 16px; padding: 12px; }
 .profile-vote-text p { margin: 8px 0 0; }
 @media (max-width: 600px) { .profile-votes li { grid-template-columns: 1fr; } }
+
+/* ---- Community builds ------------------------------------------------------ */
+.community-notice .badge { margin-right: 6px; }
+.community-gate ul { margin: 0 0 8px; padding-left: 18px; color: var(--text-2); }
+.community-builds { margin-top: 14px; }
+.community-builds h3 { margin: 0 0 8px; }
+.community-builds li { margin-bottom: 8px; }
+.community-badge { align-self: flex-start; }

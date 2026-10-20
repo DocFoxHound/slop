@@ -4,6 +4,7 @@ pub mod account;
 pub mod admin;
 pub mod admin_web;
 pub mod auth;
+pub mod branches;
 pub mod catalog;
 pub mod cleanup;
 pub mod config;
@@ -136,6 +137,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(notify::routes())
         .merge(donations::routes())
         .merge(reviews::routes())
+        .merge(branches::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

@@ -438,7 +438,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
 }
 
 /** Windows and/or Linux. Linux builds come as a .tar.gz plus a .deb and/or .rpm package. */
-function PlatformPicker({
+export function PlatformPicker({
   value,
   onChange,
   error,

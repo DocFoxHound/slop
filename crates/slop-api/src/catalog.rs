@@ -132,6 +132,7 @@ pub(crate) fn push_summary_columns_with(
                  from votes v where v.app_id = a.id) as not_slop_percent,
                 exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null) as made_with_people,
                 (select count(*) from interests i where i.app_id = a.id) as interested,
+                (select p.slug from apps p where p.id = a.parent_app_id) as branch_of,
                 (a.stage <> 'released' and a.last_commit_at is not null
                  and a.last_commit_at < now() - make_interval(days => ",
     )
@@ -170,6 +171,8 @@ pub struct AppSummary {
     pub made_with_people: bool,
     /// People who marked it Interested (DESIGN §5): the demand signal for upcoming apps.
     pub interested: i64,
+    /// A community branch of this app (DESIGN §9).
+    pub branch_of: Option<String>,
     /// No commits for a while in Coming soon or Beta. Shown, but never recommended.
     pub is_dead: bool,
     /// When a Coming soon or Beta app must reach its next stage. `None` once released.
@@ -193,6 +196,8 @@ enum Sort {
     Trending,
     /// Most people Interested ("Most anticipated", DESIGN §5).
     Anticipated,
+    /// Best rated (weighted % Not Slop, with enough votes), then most votes.
+    Rating,
 }
 
 #[derive(Deserialize)]
@@ -205,6 +210,9 @@ struct ListQuery {
     /// Only apps with the "Made with people" badge.
     #[serde(default)]
     made_with_people: bool,
+    /// Community branches instead of apps (DESIGN §9): the store lists branches only here.
+    #[serde(default)]
+    community: bool,
     sort: Option<Sort>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -241,6 +249,11 @@ async fn list_apps(
     push_summary_columns(&mut qb, &state.config);
     qb.push(" where ");
     push_store_visible(&mut qb, rules, policy);
+    qb.push(if query.community {
+        " and a.parent_app_id is not null"
+    } else {
+        " and a.parent_app_id is null"
+    });
     if let Some(q) = search {
         qb.push(" and a.search @@ websearch_to_tsquery('english', ")
             .push_bind(q)
@@ -283,6 +296,13 @@ async fn list_apps(
         }
         (Sort::Title, _) => {
             qb.push(" order by lower(a.title), a.slug");
+        }
+        (Sort::Rating, _) => {
+            qb.push(
+                " order by (select case when count(*) >= 5 then sum(v.weight) filter (where v.vote = 1) / nullif(sum(v.weight), 0) end
+                            from votes v where v.app_id = a.id) desc nulls last,
+                           (select count(*) from votes v where v.app_id = a.id) desc, a.slug",
+            );
         }
         (Sort::Anticipated, _) => {
             qb.push(
@@ -345,7 +365,7 @@ async fn similar_apps(
     let mut seen: Vec<String> = vec![slug.clone()];
     let base = |qb: &mut QueryBuilder<Postgres>, seen: &[String]| {
         push_summary_columns(qb, &state.config);
-        qb.push(" where ");
+        qb.push(" where a.parent_app_id is null and ");
         push_store_visible(qb, rules, policy);
         qb.push(" and not (a.stage <> 'released' and a.last_commit_at is not null and a.last_commit_at < now() - make_interval(days => ")
             .push_bind(rules.dead_after_days)
@@ -436,6 +456,10 @@ struct AppDetail {
     is_mine: bool,
     /// The viewer marked it Interested.
     is_interested: bool,
+    /// For a community branch: the app it branches from, and what it changes (DESIGN §9).
+    branch: Option<crate::branches::BranchInfo>,
+    /// For an app: its community builds in the store.
+    community: Vec<crate::branches::CommunityBuild>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -510,6 +534,7 @@ async fn load_detail(
     .fetch_all(&state.db)
     .await?;
 
+    let community = crate::branches::community(state, extra.id, &extra.platforms, policy).await?;
     Ok(AppDetail {
         summary,
         description_md: extra.description_md,
@@ -525,6 +550,8 @@ async fn load_detail(
         gallery: crate::media::gallery(state, extra.id).await?,
         credits: crate::people::credits(&state.db, extra.id).await?,
         is_mine,
+        branch: crate::branches::info(&state.db, extra.id).await?,
+        community,
         is_interested: match user {
             Some(u) => {
                 sqlx::query_scalar(
@@ -690,7 +717,7 @@ struct AppChanges {
 
 const MAX_TAGS: usize = 10;
 
-fn validate_slug(slug: &str) -> ApiResult<()> {
+pub(crate) fn validate_slug(slug: &str) -> ApiResult<()> {
     let ok = (3..=60).contains(&slug.len())
         && slug.split('-').all(|part| {
             !part.is_empty()
@@ -707,7 +734,7 @@ fn validate_slug(slug: &str) -> ApiResult<()> {
     Ok(())
 }
 
-fn validate_text(
+pub(crate) fn validate_text(
     field: &'static str,
     value: &str,
     max: usize,
@@ -754,7 +781,7 @@ pub(crate) fn validate_repo_url(value: &str) -> ApiResult<String> {
 
 /// An SPDX licence expression's characters. Whether the licence is OSI-approved is checked by the
 /// licence scan (LEGAL-GUIDANCE IP-2), which runs against the repo itself.
-fn validate_license(value: &str) -> ApiResult<String> {
+pub(crate) fn validate_license(value: &str) -> ApiResult<String> {
     let value = value.trim();
     let ok = (1..=64).contains(&value.len())
         && value

@@ -39,6 +39,7 @@ function AppGrid({ base, sorts = ["recent", "trending", "title"] }: { base: AppQ
     relevance: "Best match",
     trending: "Most played this week",
     anticipated: "Most anticipated",
+    rating: "Best rated",
     recent: "Recently updated",
     title: "A–Z",
   };
@@ -121,6 +122,28 @@ export function MadeWithPeople() {
             credit who made what.
           </p>
           <AppGrid base={{ made_with_people: true }} />
+        </div>
+      </div>
+    </div>
+  );
+}
+
+export function Community() {
+  useDocumentTitle("Community builds");
+  return (
+    <div className="page">
+      <div className="store">
+        <Sidebar />
+        <div>
+          <div className="crumbs">
+            <Link to="/">Store</Link> › Community builds
+          </div>
+          <h1 className="page-title">Community builds</h1>
+          <p className="muted">
+            Branches of apps, built from forks: mods, fixes, translations and ports. Each is made by its author, not the
+            original publisher, and checked the same way as every app on Slop.
+          </p>
+          <AppGrid base={{ community: true }} sorts={["rating", "recent", "title"]} />
         </div>
       </div>
     </div>

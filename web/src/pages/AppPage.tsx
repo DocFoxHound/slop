@@ -1,4 +1,4 @@
-import type { MouseEvent } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 
 import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
@@ -71,6 +71,15 @@ function AppView({ app }: { app: AppDetail }) {
           <StatusBadge app={app} /> Only you can see this page.{" "}
           {app.status === "draft" && "It goes in the store once it's published and passes every scan."}{" "}
           <Link to={`/publish/${app.slug}`}>Edit draft</Link>
+        </div>
+      )}
+
+      {app.branch && (
+        <div className="notice community-notice">
+          <span className="badge neutral">COMMUNITY</span> A {app.branch.kind_label.toLowerCase()} of{" "}
+          <Link to={`/app/${app.branch.parent_slug}`}>{app.branch.parent_title}</Link>, made by{" "}
+          <b>{app.maker.display_name}</b>, not {app.branch.parent_maker}.
+          {app.branch.note && <> {app.branch.note}</>}
         </div>
       )}
 
@@ -199,6 +208,10 @@ function AppView({ app }: { app: AppDetail }) {
             <h3>{app.stage === "coming_soon" ? "Coming soon" : "Get it"}</h3>
             {app.stage === "coming_soon" ? (
               <p className="muted">No builds yet. This is a Coming soon page.</p>
+            ) : app.branch && !app.is_mine ? (
+              <CommunityGate app={app}>
+                <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
+              </CommunityGate>
             ) : (
               <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
             )}
@@ -244,6 +257,7 @@ function AppView({ app }: { app: AppDetail }) {
               </span>
             </div>
           </div>
+          {!app.branch && <CommunityBuilds app={app} />}
           {app.stage !== "coming_soon" && <DonateBox slug={app.slug} title={app.title} />}
           {!app.is_mine && (
             <p className="report-row">
@@ -299,4 +313,64 @@ function runsOn(platforms: AppPlatform[]): string {
     parts.push(pkgs.length ? `Linux (also as ${pkgs.join(" and ")})` : "Linux");
   }
   return parts.join(" · ");
+}
+
+const PLATFORM_NAME: Record<string, string> = { windows: "Windows", linux: "Linux", "linux-deb": ".deb", "linux-rpm": ".rpm" };
+
+/** A community build's caveats (DESIGN §9), ticked before it can be installed. */
+function CommunityGate({ app, children }: { app: AppDetail; children: ReactNode }) {
+  const [ok, setOk] = useState(false);
+  if (!app.branch) return <>{children}</>;
+  if (ok) return <>{children}</>;
+  return (
+    <div className="community-gate">
+      <ul className="small">
+        <li>
+          Made by {app.maker.display_name}, not {app.branch.parent_maker}.
+        </li>
+        <li>Checked the same way as every app on Slop.</li>
+        <li>May lag behind {app.branch.parent_title}'s official updates.</li>
+        <li>
+          Read <ExternalLink href={app.repo_url}>its README</ExternalLink> first.
+        </li>
+      </ul>
+      <label className="check">
+        <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} />
+        <span>I understand this is a community build.</span>
+      </label>
+    </div>
+  );
+}
+
+/** Community builds of this app: ones that fill a platform gap first. */
+function CommunityBuilds({ app }: { app: AppDetail }) {
+  return (
+    <div className="panel panel-pad community-builds">
+      <h3>Community builds</h3>
+      {app.community.length === 0 ? (
+        <p className="muted small">None yet. Mods, fixes, translations and ports from forks show here.</p>
+      ) : (
+        <ul className="plain">
+          {app.community.map((b) => (
+            <li key={b.slug}>
+              <Link to={`/app/${b.slug}`}>
+                <b>{b.title}</b>
+              </Link>{" "}
+              <span className="badge neutral">COMMUNITY</span>
+              <div className="muted small">
+                {b.branch_kind} by {b.author}
+                {b.adds.length > 0 && <> · adds {b.adds.map((p) => PLATFORM_NAME[p] ?? p).join(", ")}</>}
+                {b.not_slop_percent !== null && <> · {b.not_slop_percent}% Not Slop</>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!app.is_mine && (
+        <Link className="small" to={`/app/${app.slug}/branch`}>
+          Register a branch from your fork →
+        </Link>
+      )}
+    </div>
+  );
 }

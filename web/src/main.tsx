@@ -5,6 +5,7 @@ import { createBrowserRouter, RouterProvider } from "react-router";
 import { Layout } from "./components/Layout";
 import { Admin } from "./pages/Admin";
 import { AppPage } from "./pages/AppPage";
+import { RegisterBranch } from "./pages/Branch";
 import { Guide } from "./pages/Guide";
 import { Account, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
 import { LegalIndex, LegalPage } from "./pages/Legal";
@@ -14,7 +15,7 @@ import { Profile } from "./pages/Profile";
 import { Releases } from "./pages/Releases";
 import { Manage } from "./pages/Manage";
 import { Download } from "./pages/Download";
-import { Browse, CategoryPage, MadeWithPeople, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
+import { Browse, CategoryPage, Community, MadeWithPeople, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
 import { JobPage, MyJobs } from "./pages/Jobs";
 import { People, PersonPage } from "./pages/People";
@@ -31,10 +32,12 @@ const router = createBrowserRouter([
       { path: "/", element: <Store /> },
       { path: "/search", element: <Search /> },
       { path: "/upcoming", element: <Upcoming /> },
+      { path: "/community", element: <Community /> },
       { path: "/browse", element: <Browse /> },
       { path: "/browse/:slug", element: <CategoryPage /> },
       { path: "/tag/:slug", element: <TagPage /> },
       { path: "/app/:slug", element: <AppPage /> },
+      { path: "/app/:slug/branch", element: <RegisterBranch /> },
       { path: "/publish", element: <Publish /> },
       { path: "/publish/guide", element: <Guide /> },
       { path: "/publish/new", element: <AppEditor /> },

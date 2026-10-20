@@ -7210,3 +7210,88 @@ async fn reviews_go_with_votes_and_profiles_follow_the_privacy_choice(db: PgPool
     .await;
     assert_eq!(ratings["mine"]["review"]["hidden"], true);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Branches and community builds (DESIGN §9)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (author_id, author) = app.user("Bo Brancher", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "castle",
+        "released",
+        "platforms = '{windows}', repo_url = 'https://github.com/mia/castle'",
+    )
+    .await;
+    let branch =
+        |slug: &str, repo: &str| {
+            req(Method::POST, "/v1/apps/castle/branches").cookie(&author).json(json!({
+            "slug": slug, "title": "Castle (Linux port)", "summary": "Runs natively on Linux.",
+            "repo_url": repo, "license_spdx": "MIT", "kind": "port",
+            "note": "Adds a Linux build and fixes paths.", "platforms": ["linux", "linux-deb"]
+        }))
+        };
+    let res = app
+        .send(branch("castle-linux", "https://github.com/mia/castle"))
+        .await;
+    assert_eq!(
+        body_json(res).await["error"]["field"],
+        "repo_url",
+        "a fork, not the original"
+    );
+    let res = app
+        .send(branch("castle-linux", "https://github.com/bo/castle"))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(
+        app.send(branch("castle-linux", "https://github.com/bo/castle2"))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app
+        .send(req(Method::POST, "/v1/apps/castle-linux/branches").cookie(&author).json(json!({
+            "slug": "x", "title": "x", "summary": "x", "repo_url": "https://github.com/z/z", "license_spdx": "MIT",
+            "kind": "fix", "note": "", "platforms": ["windows"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "branch the original");
+
+    // A draft until a release is approved and it's listed, like any app.
+    let id: Uuid = sqlx::query_scalar("select id from apps where slug = 'castle-linux'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         values ($1, $2, '1.0.0', repeat('b', 40), 'approved', $3, now(), true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(author_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    admin::list_app(&app.db, "castle-linux", "test")
+        .await
+        .unwrap();
+
+    // Not in the store on its own; in the Community list; on the original's page, filling the gap.
+    let store = list_slugs(&app, req(Method::GET, "/v1/apps")).await;
+    assert_eq!(store, ["castle"]);
+    let community = list_slugs(&app, req(Method::GET, "/v1/apps?community=true")).await;
+    assert_eq!(community, ["castle-linux"]);
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/castle")).await).await;
+    assert_eq!(page["community"][0]["slug"], "castle-linux");
+    assert_eq!(page["community"][0]["author"], "Bo Brancher");
+    assert_eq!(page["community"][0]["adds"], json!(["linux", "linux-deb"]));
+    let own = body_json(app.send(req(Method::GET, "/v1/apps/castle-linux")).await).await;
+    assert_eq!(own["branch"]["parent_slug"], "castle");
+    assert_eq!(own["branch"]["kind_label"], "Port");
+    assert_eq!(own["branch_of"], "castle");
+    assert_eq!(own["maker"]["display_name"], "Bo Brancher");
+}

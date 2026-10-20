@@ -54,6 +54,7 @@ export function Store() {
   const { me } = useSession();
   const fresh = useLoad(() => api.apps({ stage: "released", sort: "recent", limit: 8 }), []);
   const categories = useLoad(() => api.categories(), []);
+  const community = useLoad(() => api.apps({ community: true, sort: "rating", limit: 4 }).then((p) => p.apps), []);
   const server = useLoad(() => api.server(), []);
   const trending = useLoad(
     () =>
@@ -117,6 +118,17 @@ export function Store() {
             </Link>
           </SectionHeader>
           <UpcomingShelf />
+
+          <SectionHeader title="Community branches worth installing" sub="Mods, fixes, translations and ports from forks">
+            <Link to="/community" className="sub">
+              See all →
+            </Link>
+          </SectionHeader>
+          {community.error ? (
+            <ErrorState error={community.error} onRetry={community.reload} />
+          ) : (
+            <Shelf apps={community.data} empty="No community builds yet." />
+          )}
 
           <SectionHeader title="Browse by category">
             <Link to="/browse" className="sub">
