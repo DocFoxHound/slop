@@ -971,7 +971,11 @@ pub struct Check {
     pub detail: String,
 }
 
-async fn github_get(state: &AppState, token: &str, path: &str) -> anyhow::Result<Option<Value>> {
+pub(crate) async fn github_get(
+    state: &AppState,
+    token: &str,
+    path: &str,
+) -> anyhow::Result<Option<Value>> {
     let url = state.config.releases.github_api_base.join(path)?;
     let res = state
         .http

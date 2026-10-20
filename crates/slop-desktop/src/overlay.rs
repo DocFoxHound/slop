@@ -599,12 +599,36 @@ mod x11_tests {
         let s = &conn.setup().roots[screen];
         let (root, w, h) = (s.root, s.width_in_pixels, s.height_in_pixels);
         let win = conn.generate_id().unwrap();
-        conn.create_window(0, win, root, 0, 0, w, h, 0, WindowClass::INPUT_OUTPUT, 0, &CreateWindowAux::new())
-            .unwrap();
+        conn.create_window(
+            0,
+            win,
+            root,
+            0,
+            0,
+            w,
+            h,
+            0,
+            WindowClass::INPUT_OUTPUT,
+            0,
+            &CreateWindowAux::new(),
+        )
+        .unwrap();
         conn.map_window(win).unwrap();
-        let atom = |n: &str| conn.intern_atom(false, n.as_bytes()).unwrap().reply().unwrap().atom;
-        conn.change_property32(PropMode::REPLACE, win, atom("_NET_WM_PID"), AtomEnum::CARDINAL, &[std::process::id()])
-            .unwrap();
+        let atom = |n: &str| {
+            conn.intern_atom(false, n.as_bytes())
+                .unwrap()
+                .reply()
+                .unwrap()
+                .atom
+        };
+        conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            atom("_NET_WM_PID"),
+            AtomEnum::CARDINAL,
+            &[std::process::id()],
+        )
+        .unwrap();
         conn.change_property32(
             PropMode::REPLACE,
             win,
@@ -613,8 +637,14 @@ mod x11_tests {
             &[atom("_NET_WM_STATE_FULLSCREEN")],
         )
         .unwrap();
-        conn.change_property32(PropMode::REPLACE, root, atom("_NET_ACTIVE_WINDOW"), AtomEnum::WINDOW, &[win])
-            .unwrap();
+        conn.change_property32(
+            PropMode::REPLACE,
+            root,
+            atom("_NET_ACTIVE_WINDOW"),
+            AtomEnum::WINDOW,
+            &[win],
+        )
+        .unwrap();
         conn.sync().unwrap();
         let f = super::platform::foreground().expect("the window in front");
         assert_eq!(f.pid, std::process::id());
@@ -623,15 +653,33 @@ mod x11_tests {
         assert!(super::fills_screen(&f));
         // Started by this process's parent: a game launched from Slop, or a child of one.
         let parent = super::platform::parent_of(std::process::id()).unwrap();
-        assert!(super::belongs_to(f.pid, &[parent], &super::platform::parent_of));
-        assert!(!super::belongs_to(f.pid, &[999_999], &super::platform::parent_of));
+        assert!(super::belongs_to(
+            f.pid,
+            &[parent],
+            &super::platform::parent_of
+        ));
+        assert!(!super::belongs_to(
+            f.pid,
+            &[999_999],
+            &super::platform::parent_of
+        ));
 
         // A small window in front instead: not full screen, so Shift+Tab is left alone.
-        conn.change_property32(PropMode::REPLACE, win, atom("_NET_WM_STATE"), AtomEnum::ATOM, &[])
-            .unwrap();
+        conn.change_property32(
+            PropMode::REPLACE,
+            win,
+            atom("_NET_WM_STATE"),
+            AtomEnum::ATOM,
+            &[],
+        )
+        .unwrap();
         conn.configure_window(
             win,
-            &x11rb::protocol::xproto::ConfigureWindowAux::new().width(640).height(480).x(100).y(100),
+            &x11rb::protocol::xproto::ConfigureWindowAux::new()
+                .width(640)
+                .height(480)
+                .x(100)
+                .y(100),
         )
         .unwrap();
         conn.sync().unwrap();

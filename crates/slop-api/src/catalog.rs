@@ -998,6 +998,7 @@ async fn create_app(
     let platforms = validate_platforms(&req.platforms)?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
+    crate::repo_owner::check(&state, user.id, &repo_url, None).await?;
 
     let visibility = match req.visibility.as_deref() {
         None | Some("public") => "public",
@@ -1080,6 +1081,9 @@ async fn update_app(
     }
     if let Some(repo_url) = &changes.repo_url {
         let repo_url = validate_repo_url(repo_url)?;
+        if !crate::manage::same_repo(&repo_url, &current_repo) {
+            crate::repo_owner::check(&state, user.id, &repo_url, Some(app_id)).await?;
+        }
         // Once players have the app, moving it is checked first (manage.rs).
         if crate::manage::repo_locked(&mut tx, app_id).await?
             && !crate::manage::same_repo(&repo_url, &current_repo)

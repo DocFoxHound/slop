@@ -215,7 +215,31 @@ async fn fake_github() -> String {
                 }
             }),
         )
-        .route("/user/{id}", get(|| async { axum::Json(json!({ "id": 42, "login": "octo" })) }))
+        .route(
+            "/user/{id}",
+            get(|axum::extract::Path(id): axum::extract::Path<i64>| async move {
+                let login = match id { 42 => "octo", 43 => "bob", _ => "someone" };
+                axum::Json(json!({ "id": id, "login": login }))
+            }),
+        )
+        // Who owns a repository (repo_owner.rs): octo is account 42, bob 43; acme and globex are
+        // organizations (only acme has Slop's App). Deleted repositories aren't there.
+        .route(
+            "/repos/{owner}/{repo}",
+            get(|axum::extract::Path((owner, repo)): axum::extract::Path<(String, String)>| async move {
+                if repo.contains("deleted") || repo.contains("gone") {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                let (id, kind) = match owner.as_str() {
+                    "octo" => (42, "User"),
+                    "bob" => (43, "User"),
+                    "acme" => (900, "Organization"),
+                    "globex" => (901, "Organization"),
+                    _ => (7, "User"),
+                };
+                axum::Json(json!({ "private": false, "owner": { "login": owner, "id": id, "type": kind } })).into_response()
+            }),
+        )
         .route(
             "/orgs/{org}/memberships/{login}",
             get(|axum::extract::Path((org, login)): axum::extract::Path<(String, String)>| async move {
@@ -304,6 +328,8 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             github_oidc_issuer: github_base.trim_end_matches('/').to_string(),
             github_token: None,
             github_app: None,
+            // Tests users have no GitHub accounts; repo_owner tests switch it on.
+            require_repo_owner: false,
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
@@ -462,7 +488,7 @@ fn new_app(slug: &str) -> Value {
         "description_md": "Explore **procedural** dungeons.",
         "kind": "game",
         "stage": "released",
-        "repo_url": "https://github.com/octo/pixel-dungeon",
+        "repo_url": format!("https://github.com/octo/{slug}"),
         "license_spdx": "MIT",
         "min_age": 12,
         "tags": ["roguelike", "retro"],
@@ -797,11 +823,11 @@ async fn drafts_are_private_until_listed(db: PgPool) {
     assert_eq!(created["maker"]["display_name"], "Maker");
 
     let res = app
-        .send(
-            req(Method::POST, "/v1/apps")
-                .cookie(&maker)
-                .json(new_app("pixel-dungeon")),
-        )
+        .send(req(Method::POST, "/v1/apps").cookie(&maker).json({
+            let mut again = new_app("pixel-dungeon");
+            again["repo_url"] = json!("https://github.com/octo/another-repo");
+            again
+        }))
         .await;
     assert_eq!(body_json(res).await["error"]["field"], "slug");
 
@@ -9201,4 +9227,179 @@ async fn phones_get_content_free_pushes(db: PgPool) {
         .unwrap();
     assert_eq!(left.len(), 1, "the gone subscription is dropped: {left:?}");
     assert!(left[0].ends_with("push/ok"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
+    let app = test_app_with(db, |config| {
+        config.releases.require_repo_owner = true;
+        config.releases.github_app = Some(slop_api::config::GithubAppConfig {
+            app_id: "123".into(),
+            slug: "slop-test".into(),
+            private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
+                "fixtures/github-app-test-key.pem"
+            ))
+            .unwrap(),
+            webhook_secret: "hook-secret".into(),
+        });
+    })
+    .await;
+    let github = |user: Uuid, id: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query("insert into identities (provider, provider_subject, user_id) values ('github', $1, $2)")
+                .bind(id)
+                .bind(user)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+    };
+    let (octo_id, octo) = app.user("Octo", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (_, nobody) = app.user("No GitHub", "US").await;
+    github(octo_id, "42").await;
+    github(bob_id, "43").await;
+    let publish = |cookie: &str, slug: &str, repo: &str| {
+        let mut body = new_app(slug);
+        body["repo_url"] = json!(repo);
+        req(Method::POST, "/v1/apps").cookie(cookie).json(body)
+    };
+    let refused = |res: Response| async move {
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // A collaborator (or anyone else) can't link octo's repository; octo can.
+    let why = refused(
+        app.send(publish(
+            &bob,
+            "pixel",
+            "https://github.com/octo/pixel-dungeon",
+        ))
+        .await,
+    )
+    .await;
+    assert!(why.contains("octo owns this one"), "{why}");
+    let why = refused(
+        app.send(publish(
+            &nobody,
+            "pixel",
+            "https://github.com/octo/pixel-dungeon",
+        ))
+        .await,
+    )
+    .await;
+    assert!(why.contains("sign in with GitHub"), "{why}");
+    let res = app
+        .send(publish(
+            &octo,
+            "pixel",
+            "https://github.com/octo/pixel-dungeon",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // One app per repository, however the address is written.
+    let res = app
+        .send(publish(
+            &octo,
+            "pixel-2",
+            "https://github.com/Octo/Pixel-Dungeon.git",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already on Slop")
+    );
+
+    // Organizations: only their owners, through Slop's App on the organization.
+    let res = app
+        .send(publish(
+            &octo,
+            "acme-game",
+            "https://github.com/acme/studio-game",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED, "octo owns acme");
+    let why = refused(
+        app.send(publish(
+            &bob,
+            "acme-2",
+            "https://github.com/acme/other-game",
+        ))
+        .await,
+    )
+    .await;
+    assert!(
+        why.contains("only owners of the acme organization"),
+        "{why}"
+    );
+    let why = refused(
+        app.send(publish(&octo, "globex", "https://github.com/globex/game"))
+            .await,
+    )
+    .await;
+    assert!(why.contains("install Slop's GitHub App"), "{why}");
+
+    // Other hosts can't be checked yet; a repository Slop can't see isn't accepted either.
+    let why = refused(
+        app.send(publish(&octo, "lab", "https://gitlab.com/octo/game"))
+            .await,
+    )
+    .await;
+    assert!(
+        why.contains("only check who owns GitHub repositories"),
+        "{why}"
+    );
+    let why = refused(
+        app.send(publish(
+            &octo,
+            "gone",
+            "https://github.com/octo/deleted-game",
+        ))
+        .await,
+    )
+    .await;
+    assert!(why.contains("can't see that repository"), "{why}");
+
+    // Moving an app is checked the same way.
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/pixel")
+                .cookie(&octo)
+                .json(json!({ "repo_url": "https://github.com/bob/pixel-dungeon" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Branches come from the author's own fork.
+    sqlx::query("update apps set status = 'listed' where slug = 'pixel'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let branch = |cookie: &str, repo: &str| {
+        req(Method::POST, "/v1/apps/pixel/branches").cookie(cookie).json(json!({
+            "slug": "pixel-linux", "title": "Pixel (Linux port)", "summary": "Native Linux.",
+            "repo_url": repo, "license_spdx": "MIT", "kind": "port", "note": "Adds Linux.", "platforms": ["linux", "linux-deb"]
+        }))
+    };
+    let why = refused(
+        app.send(branch(&octo, "https://github.com/bob/pixel-dungeon"))
+            .await,
+    )
+    .await;
+    assert!(why.contains("bob owns"), "{why}");
+    assert_eq!(
+        app.send(branch(&bob, "https://github.com/bob/pixel-dungeon"))
+            .await
+            .status(),
+        StatusCode::CREATED
+    );
 }

@@ -332,6 +332,7 @@ async fn request_change(
                     "that's already the app's repository".into(),
                 ));
             }
+            crate::repo_owner::check(&state, user.id, &repo_url, Some(app_id)).await?;
             let decision = if repo_locked(&mut tx, app_id).await? {
                 Decision::Wait(
                     "Waiting for a person: moving an app players already have is always checked."

@@ -31,6 +31,7 @@ pub mod pulse;
 pub mod push;
 pub mod ratelimit;
 pub mod releases;
+pub mod repo_owner;
 pub mod review;
 pub mod reviews;
 pub mod scan;
