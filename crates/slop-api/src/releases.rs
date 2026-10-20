@@ -461,9 +461,84 @@ pub(crate) async fn create_release(
         .execute(&mut *tx)
         .await?;
     }
+    tell_maker(&mut tx, id, ReleaseEvent::Received { source }).await?;
     tx.commit().await?;
     state.fetch_wakeup.notify_one();
     load_release(state, id).await
+}
+
+/// What happened to a release, for its maker.
+pub enum ReleaseEvent<'a> {
+    Received { source: &'a str },
+    Approved { automatically: bool },
+    Rejected { reason: &'a str },
+    Failed { reason: &'a str },
+    Withdrawn { reason: &'a str },
+}
+
+/// Tells the app's maker about every release (SECURITY §5.3, §5.4): if someone else publishes in
+/// their name (a stolen account, a compromised repository), they hear about it straight away,
+/// under the 🔔 and by email.
+pub async fn tell_maker(
+    conn: &mut sqlx::PgConnection,
+    release_id: Uuid,
+    event: ReleaseEvent<'_>,
+) -> sqlx::Result<()> {
+    let row: Option<(Uuid, String, String, String)> = sqlx::query_as(
+        "select a.maker_id, a.slug, a.title, r.version from releases r join apps a on a.id = r.app_id where r.id = $1",
+    )
+    .bind(release_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((maker, slug, title, version)) = row else {
+        return Ok(());
+    };
+    let (headline, body) = match event {
+        ReleaseEvent::Received { source } => (
+            format!("{title} {version} was submitted"),
+            format!(
+                "{}. Slop is checking it now. If you didn't publish this, withdraw it from Manage and secure your accounts and repository.",
+                match source {
+                    "slop_build" => "Slop Build sent it from your repository",
+                    "github_release" => "Slop picked it up from a GitHub release",
+                    _ => "It was submitted from your account",
+                }
+            ),
+        ),
+        ReleaseEvent::Approved { automatically } => (
+            format!("{title} {version} is approved"),
+            if automatically {
+                "It passed every check and was approved automatically. Players get it as an update."
+                    .into()
+            } else {
+                "A reviewer approved it. Players get it as an update.".into()
+            },
+        ),
+        ReleaseEvent::Rejected { reason } => (
+            format!("{title} {version} wasn't approved"),
+            reason.to_string(),
+        ),
+        ReleaseEvent::Failed { reason } => (
+            format!("{title} {version} couldn't be checked"),
+            reason.to_string(),
+        ),
+        ReleaseEvent::Withdrawn { reason } => (
+            format!("{title} {version} was withdrawn"),
+            format!("It no longer launches for anyone. Why: {reason}"),
+        ),
+    };
+    crate::notify::send(
+        conn,
+        crate::notify::Notice {
+            user_id: maker,
+            category: "apps",
+            title: headline,
+            body,
+            link: format!("/publish/{slug}/releases"),
+            collapse_key: None,
+        },
+    )
+    .await
 }
 
 pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
@@ -848,11 +923,15 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
         }
         Err(err) => {
             tracing::warn!(release = %id, error = %err, "release fetch failed");
+            let reason = format!("{err:#}");
+            let mut tx = state.db.begin().await?;
             sqlx::query("update releases set status = 'failed', status_reason = $2 where id = $1 and status = 'fetching'")
                 .bind(id)
-                .bind(format!("{err:#}"))
-                .execute(&state.db)
+                .bind(&reason)
+                .execute(&mut *tx)
                 .await?;
+            tell_maker(&mut tx, id, ReleaseEvent::Failed { reason: &reason }).await?;
+            tx.commit().await?;
         }
     }
     Ok(true)

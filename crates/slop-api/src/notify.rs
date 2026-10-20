@@ -54,7 +54,7 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ),
     (
         "apps",
-        "Your apps: going public, and when Slop can't read a repository",
+        "Your apps: every release (received, approved, rejected, withdrawn), going public, and when Slop can't read a repository",
     ),
     ("chat", "New chat messages while you're away"),
     ("friends", "Friend requests, and when someone accepts yours"),

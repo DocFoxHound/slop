@@ -46,6 +46,9 @@ pub struct Config {
     pub simulation: bool,
     /// What the admins' alerts watch (ops.rs).
     pub ops: OpsConfig,
+    /// Where to report security problems (`mailto:` or https), published in
+    /// /.well-known/security.txt. Unset: no security.txt.
+    pub security_contact: Option<String>,
     /// Encrypts personal fields at rest (fields.rs): base64 of 32 random bytes in
     /// `SLOP_FIELD_KEY`. Unset: stored as they are.
     pub field_key: Option<[u8; 32]>,
@@ -593,6 +596,10 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_ascii_lowercase()),
             simulation: var_or("SLOP_SIMULATION", "false") == "true",
+            security_contact: env::var("SLOP_SECURITY_CONTACT")
+                .ok()
+                .map(|v| v.trim().to_string())
+                .filter(|v| v.starts_with("mailto:") || v.starts_with("https://")),
             field_key: match env::var("SLOP_FIELD_KEY") {
                 Ok(v) if !v.is_empty() => {
                     use base64::Engine;

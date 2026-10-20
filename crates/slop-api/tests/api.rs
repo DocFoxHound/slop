@@ -462,6 +462,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         ops: Default::default(),
         approvals_required: 1,
         field_key: Some([11; 32]),
+        security_contact: Some("mailto:security@slop.example".into()),
     };
     let mut config = config;
     adjust(&mut config);
@@ -11351,4 +11352,48 @@ async fn payments_and_vote_history_are_append_only_and_vat_numbers_sealed(db: Pg
     )
     .await;
     assert_eq!(export["account"]["vat_number"], "GB123456789");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_hear_about_every_release_and_security_txt_is_served(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let titles: Vec<String> = sqlx::query_scalar(
+        "select title from notifications where user_id = $1 and category = 'apps' order by created_at",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        titles,
+        ["Game 1.0.0 was submitted", "Game 1.0.0 is approved"]
+    );
+
+    let res = app
+        .send(req(Method::GET, "/.well-known/security.txt"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        res.headers()["permissions-policy"]
+            .to_str()
+            .unwrap()
+            .contains("camera=()")
+    );
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    let text = String::from_utf8(bytes.to_vec()).unwrap();
+    assert!(
+        text.starts_with("Contact: mailto:security@slop.example\nExpires: "),
+        "{text}"
+    );
 }
