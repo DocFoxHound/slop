@@ -141,6 +141,14 @@ function ReasonButton({
   );
 }
 
+const ABUSE_LABEL: Record<string, string> = {
+  vote_burst: "VOTES FROM NEW ACCOUNTS",
+  review_bomb: "REVIEW BOMB",
+  vote_swing: "VOTE SWING",
+  lookalike_name: "LOOKALIKE NAME",
+  rate_limited: "HITTING RATE LIMITS",
+};
+
 function QueueTab() {
   const queue = useLoad(() => api.admin.queue(), []);
   const { busy, error, notice, run } = useAction(queue.reload);
@@ -166,6 +174,56 @@ function QueueTab() {
 
       <ReportsSection q={q} onDone={queue.reload} />
       <AppealsSection q={q} onDone={queue.reload} />
+
+      {q.abuse.length > 0 && (
+        <>
+          <h2 className="section-title">Possible abuse ({q.abuse.length})</h2>
+          <p className="muted small">
+            Patterns from the hourly checks. Nothing has changed: look, act through the usual tools if it's real, then close
+            it with what you found.
+          </p>
+          <ul className="release-list">
+            {q.abuse.map((a) => (
+              <li key={a.id} className="panel panel-pad">
+                <div className="title-row spread">
+                  <div className="title-row">
+                    <span className="badge warn">{ABUSE_LABEL[a.kind] ?? a.kind}</span>
+                    {a.subject_kind === "app" && a.slug ? (
+                      <Link to={`/app/${a.slug}`}>
+                        <b>{a.subject_label}</b>
+                      </Link>
+                    ) : (
+                      <Link to={`/u/${a.subject_id}`}>
+                        <b>{a.subject_label}</b>
+                      </Link>
+                    )}
+                  </div>
+                  <span className="muted small">{formatDate(a.detected_at)}</span>
+                </div>
+                <p className="small muted">
+                  {Object.entries(a.detail)
+                    .map(([k, v]) => `${k.replace(/_/g, " ")}: ${String(v)}`)
+                    .join(" · ")}
+                </p>
+                <div className="row-actions">
+                  <ReasonButton
+                    label="Dealt with"
+                    placeholder="What you did"
+                    disabled={busy !== undefined}
+                    onSubmit={(note) => void run(a.id, () => api.admin.closeAbuse(a.id, note, true))}
+                  />
+                  <ReasonButton
+                    label="Nothing wrong"
+                    placeholder="Why it's fine"
+                    disabled={busy !== undefined}
+                    onSubmit={(note) => void run(a.id, () => api.admin.closeAbuse(a.id, note, false))}
+                  />
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
 
       {q.rescans.length > 0 && (
         <>

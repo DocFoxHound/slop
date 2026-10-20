@@ -229,6 +229,8 @@ struct Queue {
     ready_to_list: Vec<ReadyApp>,
     /// Live releases a re-scan flagged (rescan.rs): withdraw them or keep them.
     rescans: Vec<FlaggedFile>,
+    /// Patterns the abuse checks found (abuse.rs), for a person to look at.
+    abuse: Vec<crate::abuse::Signal>,
     checks: ServerChecks,
 }
 
@@ -317,6 +319,7 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         appeals: crate::moderation::queued_appeals(&state.db).await?,
         rules: crate::moderation::RULES,
         ready_to_list,
+        abuse: crate::abuse::open(&state.db).await?,
         rescans: sqlx::query_as(
             "select r.id as release_id, r.version, f.platform, f.file_name, f.rescan_result, f.rescan_report,
                     f.rescan_flagged_at, a.slug, a.title

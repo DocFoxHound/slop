@@ -63,6 +63,7 @@ struct Waiting {
     reports_overdue: i64,
     appeals: i64,
     live_releases_flagged_by_rescan: i64,
+    abuse_signals: i64,
     apps_ready_to_list: i64,
 }
 
@@ -118,6 +119,7 @@ async fn status(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<J
             reports_overdue: count(db, "select count(*) from reports where status = 'open' and due_at < now()").await?,
             appeals: count(db, "select count(*) from moderation_decisions where appeal_status = 'pending'").await.unwrap_or(0),
             live_releases_flagged_by_rescan: count(db, "select count(*) from release_files f join releases r on r.id = f.release_id where f.rescan_flagged_at is not null and r.status = 'approved'").await?,
+            abuse_signals: count(db, "select count(*) from abuse_signals where status = 'open'").await?,
             apps_ready_to_list: count(db, "select count(*) from apps a where a.status = 'draft' and a.visibility = 'public' and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')").await?,
         },
         last_backup: ops.backup_dir.as_ref().and_then(|d| crate::ops::stamp_in(&d.join("last-success"))),
@@ -699,6 +701,14 @@ const TOOLS: &[Tool] = &[
         path: "/v1/admin/decisions/{id}/appeal",
         properties: || json!({ "id": s("The decision ID"), "reverse": { "type": "boolean", "description": "true reverses it" }, "reason": s("Shown to the person") }),
         required: &["id", "reverse", "reason"],
+    },
+    Tool {
+        name: "close_abuse_signal",
+        description: "Close a pattern the abuse checks found (admin_queue lists them under `abuse`): acted=true when you dealt with it through the moderation tools, false when it's nothing. The note is kept.",
+        method: Method::POST,
+        path: "/v1/admin/abuse/{id}/dismiss",
+        properties: || json!({ "id": s("The signal ID"), "note": s("What you found"), "acted": { "type": "boolean", "description": "true if it was acted on" } }),
+        required: &["id", "note"],
     },
     Tool {
         name: "find_users",

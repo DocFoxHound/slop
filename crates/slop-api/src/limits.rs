@@ -137,7 +137,7 @@ impl AccountLimiter {
             })
             .map(|(u, (n, _))| (*u, *n))
             .collect();
-        out.sort_by(|a, b| b.1.cmp(&a.1));
+        out.sort_by_key(|e| std::cmp::Reverse(e.1));
         out
     }
 }

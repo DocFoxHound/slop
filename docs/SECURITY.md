@@ -269,6 +269,8 @@ More detail in `PAYMENTS.md`.
 
 ## 11. Trust & safety (abuse of the platform)
 
+**Built 2026-10-20 (`abuse.rs`, `limits.rs`):** hourly checks for vote bursts from accounts made in the last week, review bombs (a day's 👎 at least 5 times the usual), coordinated vote swings, app names that look like another maker's listed app (case, spacing, punctuation and look-alike characters folded), and accounts repeatedly hitting the per-account rate limits. Each is raised once in the admin queue and as an alert; nothing changes automatically, and a reviewer closes it with a note. Still to do: icon similarity, known-bad link lists, and marking review-bomb periods on the rating chart.
+
 | Threat | Mitigations |
 |---|---|
 | **Fake votes / bots** | Voting only after a recorded launch (DESIGN §7). One account = one vote. Votes from new accounts weighted less or delayed. Checks for clusters (same devices/IPs/payment methods). |
