@@ -15,7 +15,9 @@ tauri-plugin-global-shortcut = "2"
 tauri-plugin-notification = "2"
 tauri-plugin-opener = "2"
 tauri-plugin-single-instance = "2"
-tauri-plugin-updater = "2"
+# No "zip": Windows updates are a signed installer and Linux updates are packages, so the
+# updater never unpacks archives (it would for macOS bundles; macOS is not built yet).
+tauri-plugin-updater = { version = "2", default-features = false, features = ["rustls-tls", "system-proxy"] }
 tokio = { version = "1.53.3", features = ["rt", "sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }

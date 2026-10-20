@@ -36,8 +36,13 @@ fail() { log "FAILED at $1; staying on ${current:0:12}"; touch "$ROOT/builds/fai
 audit_dependencies() {
   podman run --rm --network=host -v "$REPO:/src:ro,z" ghcr.io/google/osv-scanner:v2.7.0 \
     scan source --lockfile /src/Cargo.lock --lockfile /src/web/package-lock.json --format json >"$ROOT/osv.json" 2>/dev/null || true
-  python3 - "$ROOT/osv.json" "$target" "$REPO/deploy/audit-accepted.json" >"$ROOT/audit.json.new" <<'PY' && mv "$ROOT/audit.json.new" "$ROOT/audit.json"
+  python3 - "$ROOT/osv.json" "$target" "$REPO/deploy/audit-accepted.json" "$REPO" >"$ROOT/audit.json.new" <<'PY' && mv "$ROOT/audit.json.new" "$ROOT/audit.json"
 import json, sys, datetime
+sys.path.insert(0, sys.argv[4] + "/deploy")
+from sbom import built_crates, web_packages
+# Only what's really shipped: Cargo.lock also lists optional dependencies nobody enables, and
+# package-lock.json development tools.
+shipped = built_crates(sys.argv[4]) | web_packages(sys.argv[4])
 try:
     data = json.load(open(sys.argv[1]))
 except Exception:
@@ -50,6 +55,8 @@ found = []
 for r in data.get("results", []):
     for p in r.get("packages", []):
         pkg = p.get("package", {})
+        if (pkg.get("name"), pkg.get("version")) not in shipped:
+            continue
         for v in p.get("vulnerabilities", []):
             if v.get("id") in accepted or any(a in accepted for a in v.get("aliases", [])):
                 continue
@@ -61,9 +68,18 @@ PY
 }
 
 # The full output is kept in test.log; the journal gets which tests failed and why.
-if ! DATABASE_URL="$TEST_DATABASE_URL" cargo test -q >"$ROOT/test.log" 2>&1; then
-  grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$ROOT/test.log" | tail -n 30
-  fail "tests"
+run_tests() { DATABASE_URL="$TEST_DATABASE_URL" cargo test -q >"$ROOT/test.log" 2>&1; }
+if ! run_tests; then
+  # The database being busy (someone else's test run) isn't the commit's fault: wait, try again
+  # once. Real failures fail twice.
+  if grep -qE "PoolTimedOut|too many clients|connection refused" "$ROOT/test.log"; then
+    log "tests hit a busy database; trying again in a minute"
+    sleep 60
+    run_tests || { grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$ROOT/test.log" | tail -n 30; fail "tests"; }
+  else
+    grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$ROOT/test.log" | tail -n 30
+    fail "tests"
+  fi
 fi
 # Lints block a deploy too (warnings are errors), as CI would.
 if ! cargo clippy --all-targets -q -- -D warnings >"$ROOT/lint.log" 2>&1; then
