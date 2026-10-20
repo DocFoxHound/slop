@@ -1,6 +1,7 @@
 // Makers' releases: submit builds from your own release page, and follow them through review
 // (docs/ARCHITECTURE.md §6.3-6.4). Slop never stores builds; it hashes them and signs a manifest.
 
+import { FileChecks, SourceCheckList } from "../components/Checks";
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 
@@ -174,6 +175,7 @@ export function Releases() {
                 <FileDetail key={f.platform} file={f} />
               ))}
             </dl>
+            <SourceCheckList checks={r.source_checks} audience="maker" />
           </li>
         ))}
       </ul>
@@ -219,6 +221,7 @@ function FileDetail({ file }: { file: Release["files"][number] }) {
             {file.scan_detail && <span className="muted">{file.scan_detail}</span>}
           </div>
         )}
+        <FileChecks file={file} audience="maker" />
         {file.provenance ? (
           <div className="small">
             <span className="badge official">{file.provenance.built_by_slop_build ? "BUILT BY SLOP BUILD" : "SIGNED BY YOUR CI"}</span>{" "}
@@ -292,6 +295,28 @@ function SlopBuildSetup({ slug }: { slug: string }) {
               <span className="muted small">Opens GitHub with the file filled in; you just commit it.</span>
             </p>
           )}
+          <details>
+            <summary>
+              <b>Building somewhere else?</b> <span className="muted">Add Slop Check so Windows builds get Microsoft Defender's check</span>
+            </summary>
+            <p className="muted small">
+              Windows builds need a clean Microsoft Defender check before they're published (Slop Build does it for you). Slop Check runs it
+              on GitHub's Windows runner whenever you publish a release. <Link to="/publish/guide#slop-check">More about it</Link>.
+            </p>
+            <p className="muted small">
+              <code>{setup.data.check_file_path}</code>
+            </p>
+            <pre>
+              <code>{setup.data.check_workflow}</code>
+            </pre>
+            {setup.data.check_create_url && (
+              <p>
+                <ExternalLink href={setup.data.check_create_url}>
+                  <span className="btn">Add Slop Check to my repository</span>
+                </ExternalLink>
+              </p>
+            )}
+          </details>
         </>
       )}
     </section>

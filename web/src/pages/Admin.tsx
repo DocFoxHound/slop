@@ -20,6 +20,7 @@ import {
   type RepoPicture,
   type ReviewNote,
 } from "../api";
+import { FileChecks, SourceCheckList } from "../components/Checks";
 import { ItemThumb } from "../components/MediaEditor";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, STAGE_LABEL } from "../format";
@@ -185,9 +186,15 @@ function QueueTab() {
                 {r.commit_verified ? <span className="badge official">FOUND IN REPO</span> : <span className="badge warn">NOT CHECKED</span>}
               </dd>
               {r.files.map((f) => (
-                <FileRow key={f.platform} file={f} />
+                <FileRow
+                  key={f.platform}
+                  file={f}
+                  canClear={r.status === "awaiting_review" && busy === undefined}
+                  onClear={(reason) => void run(`${r.id}/${f.platform}`, () => api.admin.clearScan(r.id, f.platform, reason))}
+                />
               ))}
             </dl>
+            <SourceCheckList checks={r.source_checks} audience="reviewer" />
             <Notes notes={r.notes} />
             <div className="row-actions">
               <button
@@ -527,7 +534,18 @@ function QueueTab() {
   );
 }
 
-function FileRow({ file }: { file: AdminQueue["releases"][number]["files"][number] }) {
+function FileRow({
+  file,
+  canClear,
+  onClear,
+}: {
+  file: AdminQueue["releases"][number]["files"][number];
+  canClear: boolean;
+  onClear: (reason: string) => void;
+}) {
+  const scanHeld = file.scan_result !== null && !["passed", "note", "skipped"].includes(file.scan_result);
+  const defenderMissing = file.platform === "windows" && (!file.defender || file.defender.detections.length > 0);
+  const clearable = !file.cleared_reason && (scanHeld || defenderMissing);
   return (
     <>
       <dt>{file.platform}</dt>
@@ -555,9 +573,21 @@ function FileRow({ file }: { file: AdminQueue["releases"][number]["files"][numbe
             </span>
           )}{" "}
           <span className={`badge ${file.scan_result === "passed" ? "official" : file.scan_result === "skipped" ? "neutral" : "bad"}`}>
-            {file.scan_result === "skipped" ? "NOT SCANNED" : `SCAN: ${(file.scan_result ?? "pending").toUpperCase()}`}
-          </span>
+            {file.scan_result === "skipped" ? "NOT SCANNED" : `SCAN: ${(file.scan_result ?? "pending").replace("_", " ").toUpperCase()}`}
+          </span>{" "}
+          {file.scan_detail && <span className="muted">{file.scan_detail}</span>}
         </div>
+        <FileChecks file={file} audience="reviewer" />
+        {clearable && (
+          <div className="row-actions">
+            <ReasonButton
+              label="Clear as a false positive"
+              placeholder="Why it's a false positive (logged, at least 10 characters)"
+              disabled={!canClear}
+              onSubmit={onClear}
+            />
+          </div>
+        )}
       </dd>
     </>
   );

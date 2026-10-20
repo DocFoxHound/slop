@@ -1,0 +1,21 @@
+# .github/workflows/slop-check.yml — for apps built with your own CI instead of Slop Build.
+# When you publish a release, this checks its Windows files with Microsoft Defender and tells
+# Slop. Builds from Slop Build are checked already and don't need it.
+name: Slop Check
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to check
+jobs:
+  check:
+    uses: DocFoxHound/slop-build/.github/workflows/check.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      tag: ${{ inputs.tag }}
+      app: your-app
+      slop-url: https://slop.188-68-41-241.sslip.io

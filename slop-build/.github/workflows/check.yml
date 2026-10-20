@@ -1,0 +1,109 @@
+# Slop Check: Microsoft Defender's check of Windows builds made outside Slop Build
+# (docs/DESIGN.md §10, crates/slop-api/src/slop_build.rs).
+#
+# Slop runs ClamAV, YARA and capa on every build itself, but Defender only runs on Windows. Makers
+# who build with their own CI call this from a small workflow in their repository (Slop's
+# publishing guide has it), usually when a release is published. It runs on the maker's own
+# GitHub Actions minutes: downloads the release's Windows files, scans them with today's
+# definitions, and tells Slop with the run's GitHub OIDC token (no secret is shared). Slop attaches
+# the result to the release files with the same SHA-256.
+
+name: Slop Check
+
+on:
+  workflow_call:
+    inputs:
+      app:
+        description: The app's address on Slop (its slug).
+        required: true
+        type: string
+      slop-url:
+        description: The Slop site, e.g. https://slop.example
+        required: true
+        type: string
+      tag:
+        description: The release to check (defaults to the release that triggered the run).
+        required: false
+        type: string
+        default: ""
+
+permissions: {}
+
+jobs:
+  defender:
+    name: Check with Microsoft Defender
+    runs-on: windows-latest
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - name: Download the Windows files
+        shell: bash
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ inputs.tag != '' && inputs.tag || github.event.release.tag_name }}
+        run: |
+          [ -n "$TAG" ] || { echo "::error::no release tag: pass tag, or run this when a release is published"; exit 1; }
+          mkdir -p slop-check
+          gh release download "$TAG" --repo "$GITHUB_REPOSITORY" --dir slop-check \
+            --pattern '*.zip' --pattern '*.exe' --pattern '*.msi' --pattern '*.msix'
+          ls -l slop-check
+
+      - name: Scan
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Update-MpSignature
+          Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent NeverSend
+          $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          $status = Get-MpComputerStatus
+          $reports = @()
+          foreach ($f in Get-ChildItem slop-check -File) {
+            $target = $f.FullName
+            if ($f.Extension -eq '.zip') {
+              $target = Join-Path $env:RUNNER_TEMP ("unpacked-" + $f.BaseName)
+              Expand-Archive $f.FullName -DestinationPath $target -Force
+            }
+            $out = & $mp -Scan -ScanType 3 -File $target -DisableRemediation 2>&1 | Out-String
+            $code = $LASTEXITCODE
+            if ($code -ne 0 -and $code -ne 2) { throw "Defender couldn't scan $($f.Name) (exit $code): $out" }
+            $detections = @(); $threat = $null
+            foreach ($line in $out -split "`r?`n") {
+              if ($line -match '^\s*Threat\s*:\s*(.+)$') { $threat = $Matches[1].Trim() }
+              elseif ($line -match '^\s*file\s*:\s*(.+)$' -and $threat) {
+                $detections += @{ file = (Split-Path $Matches[1].Trim() -Leaf); threat = $threat }
+              }
+            }
+            # The main program's signer, if the build has exactly one top-level .exe.
+            $exe = Get-ChildItem $target -Filter *.exe -File -ErrorAction SilentlyContinue | Select-Object -First 1
+            $signer = $null
+            if ($exe) {
+              $sig = Get-AuthenticodeSignature $exe.FullName
+              if ($sig.Status -eq 'Valid') { $signer = ($sig.SignerCertificate.Subject -split ',')[0] -replace '^CN=', '' }
+            }
+            $reports += [ordered]@{
+              sha256 = (Get-FileHash $f.FullName -Algorithm SHA256).Hash.ToLower()
+              engine = $status.AMEngineVersion
+              signatures = $status.AntivirusSignatureVersion
+              signatures_updated = $status.AntivirusSignatureLastUpdated.ToString('o')
+              detections = @($detections)
+              signed_by = $signer
+            }
+            foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($f.Name)::$($d.threat) in $($d.file). Slop holds the release for a person to look at. If it's a false positive, submit it at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer)." }
+          }
+          if ($reports.Count -eq 0) { throw "the release has no Windows files (.zip, .exe, .msi)" }
+          @{ app = '${{ inputs.app }}'; files = @($reports) } | ConvertTo-Json -Depth 5 | Set-Content body.json
+
+      - name: Tell Slop
+        shell: bash
+        env:
+          SLOP_URL: ${{ inputs.slop-url }}
+        run: |
+          base="${SLOP_URL%/}"
+          token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$base" | python -c 'import json,sys; print(json.load(sys.stdin)["value"])')
+          echo "::add-mask::$token"
+          status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$base/v1/slop-build/checks" \
+            -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)
+          cat response.json; echo
+          if [ "$status" -ge 300 ]; then echo "::error::Slop refused the check (HTTP $status)"; exit 1; fi

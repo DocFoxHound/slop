@@ -40,6 +40,10 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/releases/{id}/approve", post(approve))
         .route("/admin/releases/{id}/reject", post(reject))
         .route("/admin/releases/{id}/revoke", post(revoke))
+        .route(
+            "/admin/releases/{id}/files/{platform}/clear",
+            post(clear_scan),
+        )
         .route("/admin/apps/{slug}/list", post(list_app))
         .route("/admin/apps/{slug}/delist", post(delist_app))
         .route("/admin/apps/{slug}/stage", post(set_stage))
@@ -435,6 +439,19 @@ async fn reject(
 ) -> ApiResult<StatusCode> {
     admin.may_decide()?;
     admin::reject(&state.db, id, &admin.actor, &body.reason)
+        .await
+        .map_err(refused)?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn clear_scan(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path((id, platform)): Path<(Uuid, String)>,
+    Json(body): Json<Reason>,
+) -> ApiResult<StatusCode> {
+    admin.may_decide()?;
+    admin::clear_scan(&state.db, id, &platform, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
     Ok(StatusCode::NO_CONTENT)

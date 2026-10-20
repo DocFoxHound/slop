@@ -9918,3 +9918,195 @@ async fn other_hosts_prove_ownership_by_account_or_readme_code(db: PgPool) {
     assert!(a["message"].as_str().unwrap().contains("already on Slop"));
     let _ = std::fs::remove_dir_all(&root);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The scan pipeline (DESIGN §10): Slop's scanner, Microsoft Defender from Slop Check, and reviewers
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn scans_and_defender_checks_gate_approval(db: PgPool) {
+    // A stand-in for deploy/scanner/slop-scan: holds files named "*held*", passes the rest.
+    let dir = std::env::temp_dir().join(format!("slop-scan-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let script = dir.join("slop-scan");
+    std::fs::write(
+        &script,
+        "#!/bin/sh\ncase \"$2\" in *held*) echo '{\"result\":\"on_hold\",\"detail\":\"Flagged by ClamAV: Win.Test in game.exe\"}';;\n *) echo '{\"result\":\"passed\",\"detail\":\"Scanned with ClamAV, YARA and capa: nothing found.\",\"engines\":{\"clamav\":\"test\"}}';; esac\n",
+    )
+    .unwrap();
+    {
+        use std::os::unix::fs::PermissionsExt;
+        std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    let command = script.to_str().unwrap().to_string();
+    let app = test_app_with(db, move |c| {
+        c.releases.scanner = slop_api::scan::Scanner::from_setting("local", &command).unwrap();
+    })
+    .await;
+    let rules = admin::ReviewRules::from_config(&app.config);
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let id: Uuid = submit_and_fetch(&app, &maker, "1.0.0")
+        .await
+        .parse()
+        .unwrap();
+    let (result, report, sha): (String, Value, String) = sqlx::query_as(
+        "select scan_result, scan_report, sha256 from release_files where release_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(result, "passed");
+    assert_eq!(report["engines"]["clamav"], "test");
+
+    // Scanned clean, but a Windows build also needs Microsoft Defender's check.
+    let err = admin::approve(&app.db, Some(&app.signing_key), rules, id, "rev")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Microsoft Defender"), "{err}");
+
+    // Slop Check, from the app's own repository, reports Defender flagging it.
+    sqlx::query("update apps set repo_url = 'https://github.com/octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let check_ref = RECIPE_REF.replace("build.yml", "check.yml");
+    let check = |detections: Value| {
+        json!({ "app": "game", "files": [{
+            "sha256": sha, "engine": "1.1.25090.3001", "signatures": "1.461.119.0",
+            "detections": detections, "signed_by": null
+        }] })
+    };
+    let send = |token: String, body: Value| {
+        app.send(
+            req(Method::POST, "/v1/slop-build/checks")
+                .header("authorization", format!("Bearer {token}"))
+                .json(body),
+        )
+    };
+    let res = send(
+        github_token(
+            &app,
+            json!({ "job_workflow_ref": "evil/workflow/.github/workflows/x.yml@main" }),
+        ),
+        check(json!([])),
+    )
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "only Slop's own check workflow"
+    );
+    let res = send(
+        github_token(
+            &app,
+            json!({ "job_workflow_ref": check_ref, "repository": "someone/else" }),
+        ),
+        check(json!([])),
+    )
+    .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "only from the app's repository"
+    );
+    let res = send(
+        github_token(&app, json!({ "job_workflow_ref": check_ref })),
+        check(json!([{ "file": "game.exe", "threat": "Trojan:Win32/Wacatac.B!ml" }])),
+    )
+    .await;
+    assert_eq!(body_json(res).await["matched"], 1);
+    let err = admin::approve(&app.db, Some(&app.signing_key), rules, id, "rev")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Wacatac"), "{err}");
+
+    // A reviewer who judges it a false positive clears it, with a reason; then it can go out.
+    assert!(
+        admin::clear_scan(&app.db, id, "windows", "rev", "short")
+            .await
+            .is_err()
+    );
+    admin::clear_scan(
+        &app.db,
+        id,
+        "windows",
+        "rev",
+        "Heuristic detection of an unsigned Godot export; submitted to Microsoft as a false positive.",
+    )
+    .await
+    .unwrap();
+    admin::approve(&app.db, Some(&app.signing_key), rules, id, "rev")
+        .await
+        .unwrap();
+    let logged: i64 =
+        sqlx::query_scalar("select count(*) from audit_log where action = 'release.clear_scan'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(logged, 1);
+
+    // A clean check (arriving before Slop fetched the file) lets the next release through.
+    let next: Uuid = {
+        sqlx::query("update apps set repo_url = $1")
+            .bind(format!("{}octo/game", app.fake_base))
+            .execute(&app.db)
+            .await
+            .unwrap();
+        submit_and_fetch(&app, &maker, "1.0.1")
+            .await
+            .parse()
+            .unwrap()
+    };
+    let clean = json!({ "app": "game", "files": [{
+        "sha256": sha, "engine": "1.1.25090.3001", "signatures": "1.461.119.0", "detections": [], "signed_by": "SignPath Foundation"
+    }] });
+    sqlx::query("update apps set repo_url = 'https://github.com/octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = send(
+        github_token(&app, json!({ "job_workflow_ref": check_ref })),
+        clean,
+    )
+    .await;
+    assert_eq!(
+        body_json(res).await["matched"],
+        2,
+        "the same file is in both releases"
+    );
+    admin::approve(&app.db, Some(&app.signing_key), rules, next, "rev")
+        .await
+        .unwrap();
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        mine[0]["files"][0]["defender"]["signed_by"],
+        "SignPath Foundation"
+    );
+
+    // Players see the engines and Defender's result, not the findings or the reviewer's reasons.
+    sqlx::query("update apps set status = 'listed'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let public = body_json(app.send(req(Method::GET, "/v1/apps/game/releases")).await).await;
+    let cleared = public
+        .as_array()
+        .unwrap()
+        .iter()
+        .flat_map(|r| r["files"].as_array().unwrap().iter())
+        .collect::<Vec<_>>();
+    assert!(!cleared.is_empty());
+    for f in cleared {
+        assert!(f["cleared_reason"].is_null());
+        if let Some(report) = f["scan_report"].as_object() {
+            assert!(report.keys().all(|k| k == "engines"), "{report:?}");
+        }
+    }
+    let _ = std::fs::remove_dir_all(&dir);
+}

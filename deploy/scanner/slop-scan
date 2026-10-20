@@ -1,0 +1,13 @@
+#!/bin/sh
+# Scans one file with Slop's scanner container and prints the verdict as JSON (scan.rs runs this).
+# Usage: slop-scan <path> [file name]. No network, read-only root, no capabilities, limited
+# memory, processes and scratch space: the file is only read, never run. (Root inside the
+# container is this unprivileged user outside it, so it can read the file it was handed.)
+set -eu
+path=$1
+name=${2:-$(basename "$path")}
+case "$name" in */*|..*|"") name=file ;; esac
+exec podman run --rm --user 0 --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+  --pids-limit=256 --memory=4g --tmpfs /tmp:rw,size=6g \
+  -v slop-scan-db:/db:ro -v "$path":"/scan/$name":ro,z \
+  localhost/slop-scanner "/scan/$name"

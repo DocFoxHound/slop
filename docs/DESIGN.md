@@ -169,6 +169,17 @@ Runs on every upload (official, community, private and upcoming), on every updat
 | Monetization rules | Loot boxes, pay-to-win, fake currencies, scam patterns |
 | Slop Pulse *(public games)* | SDK present; heartbeat carries nothing but app id + token |
 
+**Built so far (2026-10-20):**
+
+- **Malware scan:** every release file, unpacked, with ClamAV, YARA (YARA-Forge core rules) and capa (what each program can do), in a locked-down container with no network (`deploy/scanner`). A ClamAV or YARA finding puts the file **on hold**; notable capa capabilities (keylogging, injection, persistence…) are a **note** for the reviewer. The scanner never decides "blocked": that's a person's call.
+- **Microsoft Defender:** Windows builds are checked with Defender and the day's definitions on GitHub's Windows runner, in the maker's own repository: Slop Build does it on every build, and **Slop Check** (`slop-build/.github/workflows/check.yml`) does it for makers who build elsewhere. The result reaches Slop with the run's GitHub OIDC token, which proves which repository and workflow sent it. With scanning on, a Windows file needs a clean Defender check before approval.
+- **Signing:** Slop Build signs the Windows program with the maker's free SignPath Foundation certificate when they have one, and every check records who signed it.
+- **Dependency audit and secrets:** Slop Build runs OSV-Scanner and gitleaks on the source. Only the maker and reviewers see the results, and they never stop a release.
+- **False positives:** a reviewer can clear a scan finding or a Defender detection with a reason (10+ characters, audit-logged, shown to the maker).
+- **Public report:** the app page says what the newest approved release was scanned with, Defender's result and who signed it. Never "safe".
+
+Why not upload to Microsoft, VirusTotal and the like for makers: Microsoft has no submission API (false positives are submitted by the developer, by hand), and the free tiers of VirusTotal, MetaDefender and Hybrid Analysis don't allow commercial use. Players aren't shown SmartScreen's "unrecognized app" prompt in the first place, because the Slop app adds no Mark-of-the-Web to what it downloads.
+
 Results are **passed**, **note**, **on hold** (fixable, e.g. a license mismatch or a leaked key), **rejected** (a policy violation, e.g. a loot box) or **blocked** (malicious; the account is flagged for human review). Every app has a public security report.
 
 ## 11. Slop Pulse (player count)

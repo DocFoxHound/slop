@@ -87,6 +87,8 @@ struct FileRow {
     provenance_problem: Option<String>,
     scan_result: Option<String>,
     scan_detail: Option<String>,
+    defender: Option<sqlx::types::Json<crate::scan::DefenderCheck>>,
+    cleared_reason: Option<String>,
 }
 
 /// What approval requires, from the server's configuration.
@@ -138,7 +140,7 @@ pub async fn approve(
 
     let rows: Vec<FileRow> = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem,
-                scan_result, scan_detail
+                scan_result, scan_detail, defender, cleared_reason
          from release_files where release_id = $1 order by platform",
     )
     .bind(release_id)
@@ -153,15 +155,37 @@ pub async fn approve(
             .scan_result
             .as_deref()
             .and_then(crate::scan::ScanResult::parse);
+        let cleared = f.cleared_reason.is_some();
         match scan {
+            Some(_) if cleared => {}
             Some(result) if rules.scanner.approvable(result) => {}
             Some(result) => bail!(
-                "the {} build's scan result is {}: {}",
+                "the {} build's scan result is {}: {}. If it's a false positive, clear it with a reason",
                 f.platform,
                 result.as_str(),
                 f.scan_detail.as_deref().unwrap_or("no details")
             ),
             None => bail!("the {} build hasn't been through the scan step", f.platform),
+        }
+        // Windows builds need Microsoft Defender's all-clear, so players' Windows runs them.
+        if rules.scanner.is_on() && f.platform == "windows" && !cleared {
+            match &f.defender {
+                Some(d) if !d.sha256.eq_ignore_ascii_case(&sha256) => bail!(
+                    "the Windows build's Defender check was for a different file; run Slop Check again"
+                ),
+                Some(d) if !d.detections.is_empty() => bail!(
+                    "Microsoft Defender flags the Windows build ({}). If it's a false positive, the maker submits it to Microsoft, or a reviewer clears it with a reason",
+                    d.detections
+                        .iter()
+                        .map(|x| x.threat.as_str())
+                        .collect::<Vec<_>>()
+                        .join(", ")
+                ),
+                Some(_) => {}
+                None => bail!(
+                    "the Windows build hasn't been checked with Microsoft Defender: Slop Build does it, and builds made elsewhere run Slop Check"
+                ),
+            }
         }
         if rules.require_maker_signature && f.attestation.is_none() {
             bail!(
@@ -221,6 +245,47 @@ pub async fn approve(
 }
 
 /// Rejects a release. The reason is shown to the maker.
+/// Clears a scan finding (or a missing or flagging Defender check) a reviewer judged a false
+/// positive, with the reason, so the release can be approved. Audit-logged.
+pub async fn clear_scan(
+    db: &PgPool,
+    release_id: Uuid,
+    platform: &str,
+    reviewer: &str,
+    reason: &str,
+) -> anyhow::Result<()> {
+    check_reviewer(reviewer)?;
+    let reason = reason.trim();
+    ensure!(
+        (10..=1000).contains(&reason.chars().count()),
+        "say why it's a false positive (10 to 1,000 characters)"
+    );
+    let mut tx = db.begin().await?;
+    let slug: Option<String> = sqlx::query_scalar(
+        "update release_files f set cleared_by = $3, cleared_reason = $4, cleared_at = now()
+         from releases r join apps a on a.id = r.app_id
+         where f.release_id = $1 and f.platform = $2 and r.id = f.release_id and r.status = 'awaiting_review'
+         returning a.slug",
+    )
+    .bind(release_id)
+    .bind(platform)
+    .bind(reviewer)
+    .bind(reason)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let slug = slug.context("no such file waiting for review")?;
+    audit(
+        &mut tx,
+        reviewer,
+        "release.clear_scan",
+        &slug,
+        json!({ "release": release_id, "platform": platform, "reason": reason }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
 pub async fn reject(
     db: &PgPool,
     release_id: Uuid,
