@@ -1114,6 +1114,17 @@ export interface AdminFeatured {
 }
 
 export interface AdminQueue {
+  /** Patterns the abuse checks found (abuse.rs). */
+  abuse: Array<{
+    id: string;
+    kind: "vote_burst" | "review_bomb" | "vote_swing" | "lookalike_name" | "rate_limited";
+    subject_kind: "app" | "account";
+    subject_id: string;
+    subject_label: string;
+    slug: string | null;
+    detail: Record<string, unknown>;
+    detected_at: string;
+  }>;
   /** Live releases a re-scan flagged (rescan.rs): withdraw them or keep them. */
   rescans: Array<{
     release_id: string;
@@ -1554,6 +1565,8 @@ export const api = {
     approve: (id: string) => request<void>("POST", `/v1/admin/releases/${id}/approve`),
     reject: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
     /** Clears a scan finding or Defender result judged a false positive (logged). */
+    closeAbuse: (id: string, note: string, acted: boolean) =>
+      request<void>("POST", `/v1/admin/abuse/${id}/dismiss`, { note, acted }),
     /** Keeps a live release a re-scan flagged, as a false positive (logged). */
     clearRescan: (id: string, platform: string, reason: string) =>
       request<void>("POST", `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/rescan-clear`, { reason }),

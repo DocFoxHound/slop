@@ -1,5 +1,6 @@
 //! The Slop API: one modular application (docs/ARCHITECTURE.md §4).
 
+pub mod abuse;
 pub mod account;
 pub mod admin;
 pub mod admin_web;
@@ -136,6 +137,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     }
 
     let v1 = Router::new()
+        .merge(abuse::routes())
         .merge(auth::routes())
         .merge(catalog::routes())
         .merge(releases::routes())

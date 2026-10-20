@@ -284,6 +284,20 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
         ));
     }
 
+    let signals: i64 =
+        sqlx::query_scalar("select count(*) from abuse_signals where status = 'open'")
+            .fetch_one(db)
+            .await?;
+    if signals > 0 {
+        out.push(alert(
+            "abuse-open",
+            format!("{signals} possible abuse pattern{} to look at", if signals == 1 { "" } else { "s" }),
+            "Vote bursts, review bombs, lookalike app names or accounts hitting rate limits. See the admin queue.",
+            "/admin",
+            false,
+        ));
+    }
+
     let waiting: i64 = sqlx::query_scalar(
         "select count(*) from releases where status = 'awaiting_review' and created_at < $1",
     )

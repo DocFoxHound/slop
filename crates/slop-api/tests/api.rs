@@ -11190,3 +11190,88 @@ async fn accounts_are_rate_limited_per_action(db: PgPool) {
         "others aren't affected"
     );
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn abuse_checks_raise_vote_bursts_and_lookalike_names_once(db: PgPool) {
+    let app = test_app_with(db, |c| c.rate_limits.write_per_minute = 10_000).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    let (other_id, _) = app.user("Copycat", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "stardew",
+        "released",
+        "title = 'Stardew Valley'",
+    )
+    .await;
+    // Twelve brand-new accounts vote on it within the hour.
+    for i in 0..12 {
+        let (_, voter) = app.user(&format!("New {i}"), "US").await;
+        app.send(req(Method::POST, "/v1/apps/stardew/launch?platform=windows").cookie(&voter))
+            .await;
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/stardew/vote")
+                    .cookie(&voter)
+                    .json(json!({ "vote": "slop" })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+    // Another maker names theirs almost the same.
+    listed_with(
+        &app,
+        other_id,
+        "stardew-2",
+        "released",
+        "title = 'Stardew Va1ley', status = 'draft'",
+    )
+    .await;
+
+    let raised = slop_api::abuse::run_once(&app.state).await.unwrap();
+    assert!(raised >= 2, "{raised}");
+    assert_eq!(
+        slop_api::abuse::run_once(&app.state).await.unwrap(),
+        0,
+        "raised once"
+    );
+    let (_, admin) = make_admin(&app, "Admin").await;
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    let kinds: Vec<&str> = queue["abuse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["kind"].as_str().unwrap())
+        .collect();
+    assert!(
+        kinds.contains(&"vote_burst") && kinds.contains(&"lookalike_name"),
+        "{kinds:?}"
+    );
+    let look = queue["abuse"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|s| s["kind"] == "lookalike_name")
+        .unwrap();
+    assert_eq!(look["slug"], "stardew-2");
+    assert_eq!(look["detail"]["looks_like"], "Stardew Valley");
+    let id = look["id"].as_str().unwrap();
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/abuse/{id}/dismiss"))
+                .cookie(&admin)
+                .json(json!({ "note": "Same maker's sequel? No: asked them to rename.", "acted": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["abuse"].as_array().unwrap().len(), kinds.len() - 1);
+}
