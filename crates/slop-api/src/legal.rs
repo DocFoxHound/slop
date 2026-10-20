@@ -350,6 +350,8 @@ struct Notice {
     #[serde(with = "time::serde::rfc3339")]
     effective_at: OffsetDateTime,
     in_effect: bool,
+    /// The document's first version: it's new, not changed.
+    first: bool,
     /// "accept" for agreements the user is party to, "read" for policies.
     action: &'static str,
 }
@@ -379,8 +381,11 @@ async fn my_notices(
         if !party {
             continue;
         }
-        let (current, upcoming) = split(versions(&state.db, kind).await?);
+        let all = versions(&state.db, kind).await?;
+        let oldest = all.last().map(|v| v.version.clone());
+        let (current, upcoming) = split(all);
         for v in [current, upcoming].into_iter().flatten() {
+            let first = oldest.as_deref() == Some(v.version.as_str());
             let in_effect = v.effective_at <= now;
             if *accepted {
                 let done: bool = sqlx::query_scalar(
@@ -408,6 +413,7 @@ async fn my_notices(
                 summary: v.summary,
                 effective_at: v.effective_at,
                 in_effect,
+                first,
                 action: if *accepted { "accept" } else { "read" },
             });
         }
