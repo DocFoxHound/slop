@@ -305,7 +305,10 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
    archives first. Nothing is ever run. Windows builds also need a clean check from
    **Microsoft Defender** (Slop Build or [Slop Check](#slop-check)). If something is found, the
    release waits for a person: scanners make mistakes, and a reviewer can clear a false positive
-   (the reason is shown to you). A scan says what was found, not that a program is safe.
+   (the reason is shown to you). A scan says what was found, not that a program is safe. Each file
+   also has a **Look up on VirusTotal** link for its hash, an optional second opinion: it's not
+   required, and uploading a file there shares it with VirusTotal's subscribers, so don't for a
+   private app.
 6. **Review:** a person at Slop reviews your app's first release. Approval signs it; a rejection
    comes with a reason.
 7. **In the store:** Slop staff put the app in the store.

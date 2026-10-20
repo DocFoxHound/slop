@@ -176,6 +176,7 @@ Runs on every upload (official, community, private and upcoming), on every updat
 - **Signing:** Slop Build signs the Windows program with the maker's free SignPath Foundation certificate when they have one, and every check records who signed it.
 - **Dependency audit and secrets:** Slop Build runs OSV-Scanner and gitleaks on the source. Only the maker and reviewers see the results, and they never stop a release.
 - **False positives:** a reviewer can clear a scan finding or a Defender detection with a reason (10+ characters, audit-logged, shown to the maker).
+- **VirusTotal (optional):** makers and reviewers get a "Look up on VirusTotal" link for each file's hash, a second opinion only. Slop sends nothing there and never requires it (privacy for private apps; the free tier bars commercial use).
 - **Public report:** the app page says what the newest approved release was scanned with, Defender's result and who signed it. Never "safe".
 
 Why not upload to Microsoft, VirusTotal and the like for makers: Microsoft has no submission API (false positives are submitted by the developer, by hand), and the free tiers of VirusTotal, MetaDefender and Hybrid Analysis don't allow commercial use. Players aren't shown SmartScreen's "unrecognized app" prompt in the first place, because the Slop app adds no Mark-of-the-Web to what it downloads.

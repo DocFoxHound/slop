@@ -160,6 +160,23 @@ export function SourceCheckList({ checks, audience }: { checks: SourceChecks | n
   );
 }
 
+/**
+ * A lookup of the file's hash on VirusTotal, as an optional second opinion. It's only a link: Slop
+ * sends nothing to VirusTotal, and it shows a report only if someone has already uploaded the file.
+ */
+export function VirusTotalLink({ sha256, audience }: { sha256: string; audience: "maker" | "reviewer" }) {
+  return (
+    <div className="small muted">
+      <ExternalLink href={`https://www.virustotal.com/gui/file/${encodeURIComponent(sha256)}`}>Look up on VirusTotal</ExternalLink>{" "}
+      (optional second opinion; finds a report only if the file was uploaded there before.
+      {audience === "maker"
+        ? " Uploading it yourself shares the file with VirusTotal's subscribers, so don't for a private app."
+        : " A few detections from little-known engines are common for new, unsigned programs."}
+      )
+    </div>
+  );
+}
+
 /** All of a file's checks, for the maker or a reviewer. */
 export function FileChecks({ file, audience }: { file: ReleaseFile; audience: "maker" | "reviewer" }) {
   const windows = file.platform === "windows";
@@ -168,6 +185,7 @@ export function FileChecks({ file, audience }: { file: ReleaseFile; audience: "m
       {windows && file.sha256 && <DefenderLine defender={file.defender} audience={audience} />}
       {windows && <SignedLine defender={file.defender} audience={audience} />}
       {audience === "reviewer" && <ScanFindings report={file.scan_report} />}
+      {file.sha256 && <VirusTotalLink sha256={file.sha256} audience={audience} />}
       {file.cleared_reason && (
         <div className="small">
           <span className="badge neutral">CLEARED BY A REVIEWER</span> <span className="muted">{file.cleared_reason}</span>
