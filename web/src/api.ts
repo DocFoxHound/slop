@@ -395,7 +395,7 @@ export interface ReviewNote {
 export interface AdminToken {
   id: string;
   name: string;
-  scope: "read" | "review";
+  scope: "read" | "review" | "moderate";
   admin: string;
   created_at: string;
   expires_at: string;

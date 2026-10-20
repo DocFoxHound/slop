@@ -3,6 +3,7 @@
 pub mod account;
 pub mod admin;
 pub mod admin_web;
+pub mod agent;
 pub mod auth;
 pub mod branches;
 pub mod catalog;
@@ -140,6 +141,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(media::routes())
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
+        .merge(agent::routes())
         .merge(review::routes())
         .merge(pulse::routes())
         .merge(votes::routes())

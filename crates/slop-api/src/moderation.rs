@@ -1341,6 +1341,9 @@ async fn act(
     Json(b): Json<ActBody>,
 ) -> ApiResult<Json<serde_json::Value>> {
     admin.may_decide()?;
+    if b.action == "suspend_account" {
+        admin.may_moderate()?;
+    }
     let facts = text("facts", &b.facts, 4000, true)?;
     let outcome = text("outcome", &b.outcome, 2000, true)?;
     let law = text("law", b.law.as_deref().unwrap_or(""), 300, false)?;
