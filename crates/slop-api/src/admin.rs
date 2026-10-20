@@ -314,6 +314,10 @@ pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result
             .await?;
     let (id, stage, status) = row.context("no such app")?;
     ensure!(status != "listed", "already listed");
+    ensure!(
+        !crate::catalog::is_private(&mut *tx, id).await?,
+        "it's Private Slop: private apps are never listed in the store"
+    );
     if stage != AppStage::ComingSoon {
         ensure!(
             has_approved_release(&mut tx, id).await?,

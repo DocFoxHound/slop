@@ -22,6 +22,7 @@ pub mod moderation;
 pub mod notify;
 pub mod people;
 pub mod policy;
+pub mod private;
 pub mod pulse;
 pub mod ratelimit;
 pub mod releases;
@@ -138,6 +139,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(donations::routes())
         .merge(reviews::routes())
         .merge(branches::routes())
+        .merge(private::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

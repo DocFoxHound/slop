@@ -198,6 +198,7 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 - Publish something **only you can see**. It never appears in the store, search, recommendations or official team pages.
 - **Same requirements** as public apps (at least one build, every scan) **except Slop Pulse**, and the source can be in a **private repo** that Slop is allowed to read (`SECURITY.md` §12). Builds stay on the owner's private release page. People it's shared with download through short-lived links, and Slop never stores the software. No store page, no donations, no voting.
 - **Sharing:** with specific friends and/or **player teams** you belong to. **Never with or to official teams.**
+- **Built 2026-10-20** (`crates/slop-api/src/private.rs`): "Who can see it?" when publishing; the owner shares by pasting someone's profile link (there are no friends lists yet) and can stop sharing; people see it once it has an approved release, in a Private Slop section of their library, and are notified. Every request checks access on the server (`catalog::push_shared_with`); private apps can't be listed, and have no voting, reviews, donations, Interested or branches. Sharing with player teams comes with teams (§14). Not yet: making a private app public (SECURITY §12.3), and the 14-day freeze when Slop loses access to the repository (§12.2).
 
 ## 14. Teams
 

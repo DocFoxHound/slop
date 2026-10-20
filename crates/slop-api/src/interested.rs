@@ -69,6 +69,9 @@ async fn add(
         .bind(app_id)
         .fetch_one(&state.db)
         .await?;
+    if catalog::is_private(&state.db, app_id).await? {
+        return Err(ApiError::NotFound);
+    }
     if stage == AppStage::Released {
         return Err(ApiError::Conflict(
             "it's released: add it to your library instead".into(),

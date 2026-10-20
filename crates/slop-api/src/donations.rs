@@ -215,11 +215,12 @@ async fn target(
                     a.donation_currency, a.runs_servers, a.servers_statement, a.servers_shut_down_at is not null,
                     d.stripe_account_id, d.stripe_status
              from apps a join users u on u.id = a.maker_id left join donation_accounts d on d.user_id = a.maker_id
-             where a.id = $1",
+             where a.id = $1 and a.visibility = 'public'",
         )
         .bind(app_id)
-        .fetch_one(&state.db)
-        .await?;
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
     Ok(Target {
         app_id,
         slug: row.0,

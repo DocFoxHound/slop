@@ -354,6 +354,8 @@ pub struct Generated {
     pub reviews: u64,
     /// Community branches (DESIGN §9).
     pub branches: usize,
+    /// Private Slop apps, each shared with a few players.
+    pub private_apps: usize,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -659,6 +661,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .await?;
     for table in [
         "notifications",
+        "app_shares",
         "interests",
         "app_reviews",
         "reports",
@@ -1019,6 +1022,25 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .await?
     .rows_affected();
     let branches = sim_branches(db, now).await?;
+    // Private Slop: a few makers keep a tool to themselves and share it with a handful of players.
+    let private_apps: Vec<Uuid> = sqlx::query_scalar(
+        "update apps set visibility = 'private', status = 'draft'
+         where id in (select id from apps where status = 'listed' and stage = 'released' and parent_app_id is null
+                      and kind = 'app' order by md5(id::text) desc limit 6)
+         returning id",
+    )
+    .fetch_all(db)
+    .await?;
+    for app in &private_apps {
+        sqlx::query(
+            "insert into app_shares (app_id, user_id)
+             select $1, user_id from sim_users order by md5(user_id::text || $1::text) limit 4
+             on conflict do nothing",
+        )
+        .bind(app)
+        .execute(db)
+        .await?;
+    }
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
     let donations = crate::sim_donations::write(db, &mut rng, now).await?;
 
@@ -1037,6 +1059,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         donations,
         reviews,
         branches,
+        private_apps: private_apps.len(),
     })
 }
 

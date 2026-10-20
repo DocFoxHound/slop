@@ -99,7 +99,7 @@ pub(crate) fn push_store_visible(
     rules: CatalogRules,
     policy: ViewerPolicy,
 ) {
-    qb.push("a.status = 'listed' and a.min_age <= ")
+    qb.push("a.status = 'listed' and a.visibility = 'public' and a.min_age <= ")
         .push_bind(policy.max_min_age)
         .push(" and not ((a.stage = 'coming_soon' and a.stage_entered_at < now() - make_interval(days => ")
         .push_bind(rules.coming_soon_days)
@@ -460,6 +460,8 @@ struct AppDetail {
     branch: Option<crate::branches::BranchInfo>,
     /// For an app: its community builds in the store.
     community: Vec<crate::branches::CommunityBuild>,
+    /// Private Slop (DESIGN §13): only its owner and the people it's shared with see it.
+    private: bool,
 }
 
 #[derive(sqlx::FromRow)]
@@ -474,6 +476,7 @@ struct AppExtra {
     stage_entered_at: OffsetDateTime,
     last_commit_at: Option<OffsetDateTime>,
     store_visible: bool,
+    private: bool,
 }
 
 /// Finds an app the viewer may see: one in the store for them, or their own. Returns its ID and
@@ -486,7 +489,9 @@ pub async fn visible_app(
 ) -> ApiResult<(Uuid, bool)> {
     let mut qb = QueryBuilder::new("select a.id, a.maker_id, (");
     push_store_visible(&mut qb, state.config.catalog, policy);
-    qb.push(") from apps a where a.slug = ").push_bind(slug);
+    qb.push(") or ");
+    push_shared_with(&mut qb, user.map(|u| u.id));
+    qb.push(" from apps a where a.slug = ").push_bind(slug);
     let row: Option<(Uuid, Uuid, bool)> = qb.build_query_as().fetch_optional(&state.db).await?;
     let (id, maker_id, store_visible) = row.ok_or(ApiError::NotFound)?;
     let is_mine = user.is_some_and(|u| u.id == maker_id);
@@ -494,6 +499,26 @@ pub async fn visible_app(
         return Err(ApiError::NotFound);
     }
     Ok((id, is_mine))
+}
+
+/// SQL condition: app `a` is Private Slop shared with the viewer, and has an approved release
+/// (DESIGN §13: same requirements as public apps). Checked on every request (SECURITY §12).
+pub(crate) fn push_shared_with(qb: &mut QueryBuilder<Postgres>, viewer: Option<Uuid>) {
+    qb.push(
+        "(a.visibility = 'private'
+          and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')
+          and exists (select 1 from app_shares s where s.app_id = a.id and s.user_id = ",
+    )
+    .push_bind(viewer)
+    .push("))");
+}
+
+/// Private Slop has no store page features: no voting, reviews, donations, Interested or branches.
+pub async fn is_private<'c>(db: impl sqlx::PgExecutor<'c>, app_id: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar("select visibility = 'private' from apps where id = $1")
+        .bind(app_id)
+        .fetch_one(db)
+        .await
 }
 
 /// Loads an app's store page. Makers always see their own apps; everyone else only sees apps
@@ -510,7 +535,9 @@ async fn load_detail(
                 a.stage_entered_at, a.last_commit_at, (",
     );
     push_store_visible(&mut qb, rules, policy);
-    qb.push(") as store_visible from apps a join users u on u.id = a.maker_id where a.slug = ")
+    qb.push(") or ");
+    push_shared_with(&mut qb, user.map(|u| u.id));
+    qb.push(" as store_visible, a.visibility = 'private' as private from apps a join users u on u.id = a.maker_id where a.slug = ")
         .push_bind(slug);
     let extra: AppExtra = qb
         .build_query_as()
@@ -550,6 +577,7 @@ async fn load_detail(
         gallery: crate::media::gallery(state, extra.id).await?,
         credits: crate::people::credits(&state.db, extra.id).await?,
         is_mine,
+        private: extra.private,
         branch: crate::branches::info(&state.db, extra.id).await?,
         community,
         is_interested: match user {
@@ -698,6 +726,9 @@ struct NewApp {
     #[serde(default)]
     tags: Vec<String>,
     platforms: Vec<String>,
+    /// "public" (the default) or "private" (Private Slop, DESIGN §13).
+    #[serde(default)]
+    visibility: Option<String>,
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -882,12 +913,18 @@ async fn create_app(
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
 
+    let visibility = match req.visibility.as_deref() {
+        None | Some("public") => "public",
+        Some("private") => "private",
+        Some(_) => return Err(ApiError::invalid("visibility", "public or private")),
+    };
+
     let app_id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
-                           platforms)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12)",
+                           platforms, visibility)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -901,6 +938,7 @@ async fn create_app(
     .bind(&license)
     .bind(min_age)
     .bind(&platforms)
+    .bind(visibility)
     .execute(&mut *tx)
     .await
     .map_err(|err| {

@@ -157,6 +157,9 @@ async fn register(
             "branch the original app, not a branch of it".into(),
         ));
     }
+    if catalog::is_private(&state.db, parent).await? {
+        return Err(ApiError::NotFound);
+    }
     crate::legal::require(&state.db, user.id, "publisher").await?;
     catalog::validate_slug(&b.slug)?;
     let title = catalog::validate_text("title", &b.title, 80, false)?;

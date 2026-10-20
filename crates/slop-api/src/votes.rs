@@ -397,6 +397,9 @@ async fn vote(
             "makers can't vote on their own apps".into(),
         ));
     }
+    if catalog::is_private(&state.db, app_id).await? {
+        return Err(ApiError::Conflict("Private Slop has no voting".into()));
+    }
     let mine = my_vote(&state, &user, app_id, true).await?;
     let open: bool = sqlx::query_scalar("select stage = 'released' from apps where id = $1")
         .bind(app_id)
