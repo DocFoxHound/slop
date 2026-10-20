@@ -17,6 +17,8 @@ pub struct Config {
     pub google: Option<OAuthConfig>,
     pub gitlab: Option<OAuthConfig>,
     pub bitbucket: Option<OAuthConfig>,
+    pub microsoft: Option<OAuthConfig>,
+    pub discord: Option<OAuthConfig>,
     /// Extra origins allowed to make state-changing requests (e.g. a dev server on another port).
     pub trusted_origins: Vec<String>,
     /// Header set by the CDN or load balancer with the viewer's ISO country code.
@@ -394,6 +396,18 @@ impl Config {
             "https://bitbucket.org/site/oauth2/access_token",
             "https://api.bitbucket.org/2.0/",
         )?;
+        let microsoft = OAuthConfig::from_env(
+            "MICROSOFT",
+            "https://login.microsoftonline.com/common/oauth2/v2.0/authorize",
+            "https://login.microsoftonline.com/common/oauth2/v2.0/token",
+            "https://graph.microsoft.com/",
+        )?;
+        let discord = OAuthConfig::from_env(
+            "DISCORD",
+            "https://discord.com/oauth2/authorize",
+            "https://discord.com/api/oauth2/token",
+            "https://discord.com/api/",
+        )?;
 
         let trusted_origins = list_var("SLOP_TRUSTED_ORIGINS");
 
@@ -456,6 +470,8 @@ impl Config {
             google,
             gitlab,
             bitbucket,
+            microsoft,
+            discord,
             trusted_origins,
             country_header,
             catalog,

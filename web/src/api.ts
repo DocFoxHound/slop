@@ -182,13 +182,15 @@ export interface DonationAccount {
   change: { kind: "switch" | "disconnect"; requested_at: string; effective_at: string; new_account_ready: boolean | null } | null;
 }
 
-export type SignInProvider = "github" | "google" | "gitlab" | "bitbucket";
+export type SignInProvider = "github" | "google" | "gitlab" | "bitbucket" | "microsoft" | "discord";
 
 export const PROVIDER_LABEL: Record<SignInProvider, string> = {
   github: "GitHub",
   google: "Google",
   gitlab: "GitLab",
   bitbucket: "Bitbucket",
+  microsoft: "Microsoft",
+  discord: "Discord",
 };
 
 export interface LinkedIdentity {

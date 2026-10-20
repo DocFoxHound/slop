@@ -40,7 +40,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 - Browsing works signed out. Anything personal requires an account: library, Interested, votes, donations, reports, publishing, teams.
 - **One account = one vote per app = one Slop Pulse count per game.** This is the main defence against botting.
 - Users can link devices (computer and phones) to their account.
-- **Linked sign-ins** (built 2026-10-20): GitHub, Google, GitLab and Bitbucket (each on once the server has its app keys; Apple, Microsoft and Discord later). Account → Sign-ins links more from a signed-in session after a recent sign-in, and only by signing in to the account being linked, so nobody can link someone else's; never because emails match. Any linked sign-in opens the account; the last one can't be unlinked. Linked Git accounts are also how Slop knows which repositories are yours (§8).
+- **Linked sign-ins** (built 2026-10-20): GitHub, Google, GitLab, Bitbucket, Microsoft and Discord (each on once the server has its app keys; Microsoft's email is never used, since Microsoft doesn't verify it). Apple later: Sign in with Apple needs a paid Apple Developer membership. Account → Sign-ins links more from a signed-in session after a recent sign-in, and only by signing in to the account being linked, so nobody can link someone else's; never because emails match. Any linked sign-in opens the account; the last one can't be unlinked. Linked Git accounts are also how Slop knows which repositories are yours (§8).
 - **Combining accounts:** if a sign-in being linked already has its own Slop account, signing in to it proves it's yours, and after a confirmation page everything moves into the signed-in account (apps, library, playtime, votes and reviews, friends, chats, teams, People jobs and page, donations, notifications, reports and decisions). Where both have the same thing, the signed-in account's stays; the other is closed and points at it. Not combined: two People pages or two donation Stripe accounts (one goes first), and suspended or closed accounts. Chat history stays on the other account's devices, which are removed; its chats continue on this account's devices.
 - **Your data and closing your account** (built 2026-10-20). The account page downloads everything linked to the account as one file. **Closing** an account bans that sign-in and freezes what others rely on, instead of erasing it:
   - the sign-in can never be used on Slop again; the email, settings, library and playtime are removed;
@@ -383,5 +383,5 @@ The first draft, for reference:
   - Only users who are friends or share a job or team can message each other, unless a user allows messages from anyone.
 - **Open:**
   - How long encrypted attachments are kept.
-  - Real-time delivery (WebSockets) and notifications.
+  - Real-time delivery: settled 2026-10-20. Sync is a long poll that the server wakes the moment a message for the device arrives (an in-process broadcast), so delivery is immediate without WebSockets. With several API instances the wake-up will need Postgres LISTEN/NOTIFY (or similar) across them.
   - Voice chat: probably not.
