@@ -1,18 +1,12 @@
 {
-  "about": "Advisories reviewed and accepted, with why. The deploy audit (update.sh) leaves these out of the admins' alert. Review them when the dependency that pulls them in releases a fix.",
+  "about": "Advisories reviewed and accepted, with why. The deploy audit (update.sh) only reports crates actually built and packages actually shipped, and leaves these out of the admins' alert. All that's left is Tauri's Linux desktop stack (GTK3 and D-Bus); review when Tauri moves to GTK4 / zbus 6. Fixed 2026-10-20 instead of accepted: rsa (jsonwebtoken now uses aws-lc-rs), zip 4 (the updater no longer unpacks archives), libcrux-kem (never built).",
   "accepted": {
-    "RUSTSEC-2026-0330": "libcrux-kem 0.0.9 (through openmls_rust_crypto 0.6): hybrid KEM seeds. Slop's chat uses only MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519, never the hybrid KEM. Pinned until openmls_rust_crypto updates. Reviewed 2026-10-20.",
-    "RUSTSEC-2026-0331": "libcrux-kem 0.0.9: decoding short hybrid keys. As RUSTSEC-2026-0330. Reviewed 2026-10-20.",
-    "RUSTSEC-2026-0367": "zip 4.6.1, only through tauri-plugin-updater 2, which unpacks an update only after verifying its signature. Slop's own installs use zip 9 with their own path checks. Reviewed 2026-10-20.",
-    "RUSTSEC-2026-0368": "zip 4.6.1: as RUSTSEC-2026-0367. Reviewed 2026-10-20.",
-    "RUSTSEC-2026-0369": "zip 4.6.1: as RUSTSEC-2026-0367. Reviewed 2026-10-20.",
-    "RUSTSEC-2023-0071": "rsa 0.9 (through jsonwebtoken): the Marvin attack needs private-key operations; Slop only verifies RS256 signatures with public keys (GitHub's OIDC tokens). No fixed release exists. Reviewed 2026-10-20.",
     "RUSTSEC-2024-0429": "glib 0.18 (Tauri's GTK stack on Linux): unsound VariantStrIter, which Slop never uses. Reviewed 2026-10-20.",
     "GHSA-wrw7-89jp-8q8g": "glib 0.18: as RUSTSEC-2024-0429. Reviewed 2026-10-20.",
     "RUSTSEC-2024-0370": "proc-macro-error 1 is unmaintained: a build-time macro in Tauri's GTK stack. Reviewed 2026-10-20.",
     "RUSTSEC-2026-0173": "proc-macro-error2 is unmaintained: build-time only. Reviewed 2026-10-20.",
-    "RUSTSEC-2026-0370": "zvariant is unmaintained (Tauri's D-Bus stack on Linux). Reviewed 2026-10-20.",
-    "RUSTSEC-2026-0371": "zbus_names is unmaintained (Tauri's D-Bus stack on Linux). Reviewed 2026-10-20.",
-    "RUSTSEC-2026-0372": "zvariant_derive is unmaintained (Tauri's D-Bus stack on Linux). Reviewed 2026-10-20."
+    "RUSTSEC-2026-0370": "zvariant is unmaintained: merged into zbus 6, which Tauri's notification, opener, single-instance and keyring plugins haven't moved to yet (Tauri's D-Bus stack on Linux). Reviewed 2026-10-20.",
+    "RUSTSEC-2026-0371": "zbus_names is unmaintained: merged into zbus 6, which Tauri's notification, opener, single-instance and keyring plugins haven't moved to yet (Tauri's D-Bus stack on Linux). Reviewed 2026-10-20.",
+    "RUSTSEC-2026-0372": "zvariant_derive is unmaintained: merged into zbus 6, which Tauri's notification, opener, single-instance and keyring plugins haven't moved to yet (Tauri's D-Bus stack on Linux). Reviewed 2026-10-20."
   }
 }
