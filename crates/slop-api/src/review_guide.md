@@ -170,6 +170,11 @@ let your admin decide, unless they told you to handle a kind of case yourself.
   (it stops launching for everyone); `POST /v1/admin/releases/{id}/files/{platform}/rescan-clear`
   with `{"reason"}` keeps one a re-scan flagged.
 
+Sensitive actions (suspending or reinstating an account, withdrawing a release, delisting an
+app) may need a second person: then they answer `202` with `pending_action`, and happen only once
+another staff member approves them on the website. You can't approve them, and shouldn't ask to:
+tell your admin it's waiting (`GET /v1/admin/actions`).
+
 Token levels: `read` looks and leaves notes; `review` also approves, rejects and decides reports
 and appeals; `moderate` is needed to suspend or reinstate accounts, withdraw releases and take
 apps out of the store. A request your token can't make answers 403.

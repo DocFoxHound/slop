@@ -605,6 +605,22 @@ pub async fn set_admin(db: &PgPool, who: &str, admin: bool, actor: &str) -> anyh
         .bind(admin)
         .execute(&mut *tx)
         .await?;
+    // From the command line, staff start as owners (the server's operator is trusted); on the
+    // website, roles are given one at a time (staff.rs). Losing staff rights ends every role.
+    if admin {
+        sqlx::query(
+            "insert into staff_roles (user_id, role, granted_by) values ($1, 'owner', $2) on conflict do nothing",
+        )
+        .bind(id)
+        .bind(actor)
+        .execute(&mut *tx)
+        .await?;
+    } else {
+        sqlx::query("delete from staff_roles where user_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     audit(
         &mut tx,
         actor,

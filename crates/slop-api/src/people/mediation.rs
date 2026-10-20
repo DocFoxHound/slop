@@ -772,7 +772,7 @@ async fn suggest(
     Path(id): Path<Uuid>,
     Json(body): Json<Suggestion>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Moderate)?;
     let text = note("suggestion", &body.suggestion, 4000, true)?;
     let mut tx = state.db.begin().await?;
     let job: Option<Uuid> = sqlx::query_scalar(
@@ -820,7 +820,7 @@ async fn close(
     Path(id): Path<Uuid>,
     Json(body): Json<CloseBody>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Moderate)?;
     let text = note("note", &body.note, 2000, true)?;
     let mut tx = state.db.begin().await?;
     let job: Option<Uuid> = sqlx::query_scalar(
@@ -871,7 +871,7 @@ async fn decide(
     Path(job_id): Path<Uuid>,
     Json(d): Json<Decision>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Moderate)?;
     let reason = note("reason", &d.reason, 1000, true)?;
     let (status, hidden, mediator_note) = match d.outcome.as_str() {
         "remove" => ("removed", true, None),

@@ -34,6 +34,7 @@ use crate::{
     AppState, admin,
     admin_web::AdminUser,
     error::{ApiError, ApiResult},
+    staff::Perm,
 };
 
 pub fn routes() -> Router<AppState> {
@@ -232,6 +233,7 @@ async fn user_details(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<UserDetails>> {
+    admin.need(Perm::Moderate)?;
     let db = &state.db;
     let row: Option<AccountRow> =
         sqlx::query_as(
@@ -321,16 +323,16 @@ struct DecideUser {
 }
 
 /// A warning or suspension without a report: recorded, explained to the person and appealable
-/// like any moderation decision.
+/// like any moderation decision. A suspension is sensitive: it waits for enough staff (staff.rs).
 async fn decide_user(
     State(state): State<AppState>,
     admin: AdminUser,
     Path(id): Path<Uuid>,
     Json(b): Json<DecideUser>,
-) -> ApiResult<Json<Value>> {
+) -> ApiResult<Response> {
     match b.action.as_str() {
-        "warn" => admin.may_decide()?,
-        "suspend_account" => admin.may_moderate()?,
+        "warn" => admin.need(Perm::Moderate)?,
+        "suspend_account" => admin.need(Perm::Sensitive)?,
         _ => return Err(ApiError::invalid("action", "warn or suspend_account")),
     }
     if !crate::moderation::RULES
@@ -352,6 +354,46 @@ async fn decide_user(
     if id == admin.user_id {
         return Err(ApiError::invalid("action", "not on your own account"));
     }
+    let name: String =
+        sqlx::query_scalar("select display_name from users where id = $1 and closed_at is null")
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or(ApiError::NotFound)?;
+    if b.action == "suspend_account" {
+        return Ok(crate::staff::request(
+            &state,
+            &admin,
+            "account.suspend",
+            &format!("Suspend {name} ({})", b.rule),
+            json!({ "user_id": id, "rule": b.rule, "facts": facts, "law": b.law }),
+        )
+        .await?
+        .into_response());
+    }
+    let d = decide_account(
+        &state,
+        id,
+        "warn",
+        &b.rule,
+        facts,
+        b.law.as_deref(),
+        &admin.actor,
+    )
+    .await?;
+    Ok(Json(d).into_response())
+}
+
+/// Records and carries out a decision about an account.
+async fn decide_account(
+    state: &AppState,
+    id: Uuid,
+    action: &str,
+    rule: &str,
+    facts: &str,
+    law: Option<&str>,
+    actor: &str,
+) -> ApiResult<Value> {
     let mut tx = state.db.begin().await?;
     let row: Option<(String, Option<OffsetDateTime>, Option<OffsetDateTime>)> = sqlx::query_as(
         "select display_name, suspended_at, closed_at from users where id = $1 for update",
@@ -363,7 +405,7 @@ async fn decide_user(
     if closed.is_some() {
         return Err(ApiError::Conflict("that account is closed".into()));
     }
-    if b.action == "suspend_account" && suspended.is_some() {
+    if action == "suspend_account" && suspended.is_some() {
         return Err(ApiError::Conflict(
             "that account is already suspended".into(),
         ));
@@ -375,17 +417,33 @@ async fn decide_user(
             subject_kind: "account",
             subject_id: id,
             subject_label: &name,
-            action: &b.action,
-            rule: &b.rule,
-            law: b.law.as_deref().filter(|l| !l.trim().is_empty()),
+            action,
+            rule,
+            law: law.filter(|l| !l.trim().is_empty()),
             facts,
-            decided_by: &admin.actor,
+            decided_by: actor,
         },
     )
     .await
     .map_err(|e| ApiError::Conflict(format!("{e:#}")))?;
     tx.commit().await?;
-    Ok(Json(json!({ "decision": decision })))
+    Ok(json!({ "decision": decision }))
+}
+
+/// A suspension, once approved (staff.rs).
+pub(crate) async fn suspend_stored(state: &AppState, p: &Value, actor: &str) -> ApiResult<Value> {
+    let id: Uuid =
+        serde_json::from_value(p["user_id"].clone()).map_err(|e| ApiError::Internal(e.into()))?;
+    decide_account(
+        state,
+        id,
+        "suspend_account",
+        p["rule"].as_str().unwrap_or_default(),
+        p["facts"].as_str().unwrap_or_default(),
+        p["law"].as_str(),
+        actor,
+    )
+    .await
 }
 
 #[derive(Deserialize)]
@@ -395,14 +453,15 @@ struct Lift {
     reason: String,
 }
 
-/// Ends a suspension early (not an appeal: that's /admin/decisions/{id}/appeal).
+/// Ends a suspension early (not an appeal: that's /admin/decisions/{id}/appeal). Sensitive: it
+/// waits for enough staff (staff.rs).
 async fn lift_suspension(
     State(state): State<AppState>,
     admin: AdminUser,
     Path(id): Path<Uuid>,
     Json(b): Json<Lift>,
-) -> ApiResult<StatusCode> {
-    admin.may_moderate()?;
+) -> ApiResult<crate::staff::Outcome> {
+    admin.need(Perm::Sensitive)?;
     let reason = b.reason.trim();
     if !(10..=1000).contains(&reason.chars().count()) {
         return Err(ApiError::invalid(
@@ -410,6 +469,28 @@ async fn lift_suspension(
             "say why in 10 to 1000 characters",
         ));
     }
+    let name: Option<String> = sqlx::query_scalar(
+        "select display_name from users where id = $1 and suspended_at is not null",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let name = name.ok_or_else(|| ApiError::Conflict("that account isn't suspended".into()))?;
+    crate::staff::request(
+        &state,
+        &admin,
+        "account.lift",
+        &format!("Lift {name}'s suspension: {reason}"),
+        json!({ "user_id": id, "reason": reason }),
+    )
+    .await
+}
+
+/// Lifting a suspension, once approved (staff.rs).
+pub(crate) async fn lift_stored(state: &AppState, p: &Value, actor: &str) -> ApiResult<Value> {
+    let id: Uuid =
+        serde_json::from_value(p["user_id"].clone()).map_err(|e| ApiError::Internal(e.into()))?;
+    let reason = p["reason"].as_str().unwrap_or_default();
     let mut tx = state.db.begin().await?;
     let lifted = sqlx::query(
         "update users set suspended_at = null where id = $1 and suspended_at is not null",
@@ -442,7 +523,7 @@ async fn lift_suspension(
     .await?;
     admin::audit(
         &mut tx,
-        &admin.actor,
+        actor,
         "moderation.lift_suspension",
         &id.to_string(),
         json!({ "reason": reason }),
@@ -450,7 +531,7 @@ async fn lift_suspension(
     .await
     .map_err(ApiError::Internal)?;
     tx.commit().await?;
-    Ok(StatusCode::NO_CONTENT)
+    Ok(Value::Null)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -650,6 +731,14 @@ const TOOLS: &[Tool] = &[
         path: "/v1/admin/users/{id}/lift-suspension",
         properties: || json!({ "id": s("The account ID"), "reason": s("Why") }),
         required: &["id", "reason"],
+    },
+    Tool {
+        name: "pending_actions",
+        description: "Sensitive actions (withdrawals, delistings, suspensions, role changes) waiting for more staff approvals. Only people approve them, signed in on the website; tell your admin what's waiting.",
+        method: Method::GET,
+        path: "/v1/admin/actions",
+        properties: || json!({ "status": s("pending (the default) or all") }),
+        required: &[],
     },
     Tool {
         name: "audit_log",

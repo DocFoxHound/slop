@@ -89,6 +89,7 @@ pub async fn admin_from_token(
     }
     Ok(Some(AdminUser {
         actor: format!("AI reviewer \"{name}\" for {display_name} ({user_id}, token {id})"),
+        roles: crate::staff::roles_of(&state.db, user_id).await?,
         user_id,
         token: Some(TokenUse {
             id,
@@ -122,6 +123,7 @@ async fn list_tokens(
     admin: AdminUser,
 ) -> ApiResult<Json<Vec<TokenInfo>>> {
     admin.signed_in()?;
+    admin.need(crate::staff::Perm::Security)?;
     Ok(Json(
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select {TOKEN_COLUMNS} from admin_tokens t join users u on u.id = t.user_id
@@ -156,6 +158,7 @@ async fn create_token(
     Json(body): Json<NewToken>,
 ) -> ApiResult<(StatusCode, Json<CreatedToken>)> {
     admin.signed_in()?;
+    admin.need(crate::staff::Perm::Security)?;
     let name = body.name.trim();
     if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
         return Err(ApiError::invalid(
@@ -210,6 +213,7 @@ async fn revoke_token(
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     admin.signed_in()?;
+    admin.need(crate::staff::Perm::Security)?;
     let mut tx = state.db.begin().await?;
     let name: Option<String> = sqlx::query_scalar(
         "update admin_tokens set revoked_at = now() where id = $1 and revoked_at is null returning name",

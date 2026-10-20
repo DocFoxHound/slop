@@ -20,6 +20,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::HeaderMap,
+    response::IntoResponse,
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
@@ -1318,7 +1319,7 @@ fn refused(err: anyhow::Error) -> ApiError {
     ApiError::Conflict(format!("{err:#}"))
 }
 
-#[derive(Deserialize)]
+#[derive(Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 struct ActBody {
     action: String,
@@ -1339,11 +1340,69 @@ async fn act(
     admin: AdminUser,
     Path(id): Path<Uuid>,
     Json(b): Json<ActBody>,
-) -> ApiResult<Json<serde_json::Value>> {
-    admin.may_decide()?;
+) -> ApiResult<axum::response::Response> {
+    admin.need(crate::staff::Perm::Moderate)?;
     if b.action == "suspend_account" {
-        admin.may_moderate()?;
+        // Suspending someone is sensitive: it waits for enough staff (staff.rs).
+        admin.need(crate::staff::Perm::Sensitive)?;
+        validate_act(&b)?;
+        let label: Option<String> = sqlx::query_scalar(
+            "select subject_label from reports where id = $1 and status = 'open'",
+        )
+        .bind(id)
+        .fetch_optional(&state.db)
+        .await?;
+        let label = label.ok_or_else(|| ApiError::Conflict("that report isn't open".into()))?;
+        return Ok(crate::staff::request(
+            &state,
+            &admin,
+            "report.act",
+            &format!(
+                "Suspend the account behind report about {label} ({})",
+                b.rule
+            ),
+            json!({ "report_id": id, "body": b }),
+        )
+        .await?
+        .into_response());
     }
+    Ok(Json(act_on_report(&state, id, &b, &admin.actor).await?).into_response())
+}
+
+fn validate_act(b: &ActBody) -> ApiResult<()> {
+    text("facts", &b.facts, 4000, true)?;
+    text("outcome", &b.outcome, 2000, true)?;
+    text("law", b.law.as_deref().unwrap_or(""), 300, false)?;
+    text(
+        "external_reference",
+        b.external_reference.as_deref().unwrap_or(""),
+        200,
+        false,
+    )?;
+    Ok(())
+}
+
+/// A suspension through a report, once approved (staff.rs).
+pub(crate) async fn act_on_report_stored(
+    state: &AppState,
+    payload: &serde_json::Value,
+    actor: &str,
+) -> ApiResult<serde_json::Value> {
+    let id: Uuid = serde_json::from_value(payload["report_id"].clone())
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    let b: ActBody = serde_json::from_value(payload["body"].clone())
+        .map_err(|e| ApiError::Internal(e.into()))?;
+    act_on_report(state, id, &b, actor).await
+}
+
+/// Decides an open report: the decision, closing the reports about the same thing, and telling
+/// the reporters.
+async fn act_on_report(
+    state: &AppState,
+    id: Uuid,
+    b: &ActBody,
+    actor: &str,
+) -> ApiResult<serde_json::Value> {
     let facts = text("facts", &b.facts, 4000, true)?;
     let outcome = text("outcome", &b.outcome, 2000, true)?;
     let law = text("law", b.law.as_deref().unwrap_or(""), 300, false)?;
@@ -1391,7 +1450,7 @@ async fn act(
             rule: &b.rule,
             law: Some(&law),
             facts: &facts,
-            decided_by: &admin.actor,
+            decided_by: actor,
         },
     )
     .await
@@ -1405,7 +1464,7 @@ async fn act(
     .bind(id)
     .bind(subject_id)
     .bind(&outcome)
-    .bind(&admin.actor)
+    .bind(actor)
     .bind(decision)
     .bind(&external)
     .bind(&kind)
@@ -1413,7 +1472,7 @@ async fn act(
     .await?;
     tell_reporters(&mut tx, &state.config, &closed, &outcome).await?;
     tx.commit().await?;
-    Ok(Json(json!({ "decision": decision })))
+    Ok(json!({ "decision": decision }))
 }
 
 /// A report that was just answered.
@@ -1479,7 +1538,7 @@ async fn dismiss(
     Path(id): Path<Uuid>,
     Json(b): Json<DismissBody>,
 ) -> ApiResult<axum::http::StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Moderate)?;
     let outcome = text("outcome", &b.outcome, 2000, true)?;
     let external = text(
         "external_reference",
@@ -1530,7 +1589,7 @@ async fn decide_appeal(
     Path(id): Path<Uuid>,
     Json(b): Json<AppealDecision>,
 ) -> ApiResult<axum::http::StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Moderate)?;
     let reason = text("reason", &b.reason, 2000, true)?;
     let mut tx = state.db.begin().await?;
     let row: Option<(String, String, Uuid, Uuid, String, String)> = sqlx::query_as(

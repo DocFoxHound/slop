@@ -46,6 +46,9 @@ pub struct Config {
     pub simulation: bool,
     /// What the admins' alerts watch (ops.rs).
     pub ops: OpsConfig,
+    /// How many different staff must approve a sensitive action (staff.rs), counting the one
+    /// who asks: 1 while Slop has one person, 2 once there's a second.
+    pub approvals_required: u8,
 }
 
 /// Folders the admins' alerts read (ops.rs). Unset: those checks are off.
@@ -587,6 +590,9 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_ascii_lowercase()),
             simulation: var_or("SLOP_SIMULATION", "false") == "true",
+            approvals_required: var_or("SLOP_APPROVALS_REQUIRED", "1")
+                .parse()
+                .context("SLOP_APPROVALS_REQUIRED")?,
             ops: OpsConfig {
                 backup_dir: env::var("SLOP_OPS_BACKUP_DIR")
                     .ok()
