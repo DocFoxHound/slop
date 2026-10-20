@@ -210,6 +210,8 @@ async fn register(
             "a branch builds from your own fork, not the original repository",
         ));
     }
+    // The fork must be the author's own.
+    crate::repo_owner::check(&state, user.id, &repo_url, None).await?;
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
     // The branch takes the original's kind, age rating and tags; it's Released from the start,

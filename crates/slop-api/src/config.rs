@@ -182,6 +182,9 @@ pub struct ReleaseConfig {
     pub github_token: Option<String>,
     /// Slop's GitHub App, when configured (github_app.rs).
     pub github_app: Option<GithubAppConfig>,
+    /// Only a repository's GitHub owner may link it (repo_owner.rs). Off only in tests and the
+    /// simulation sandbox, whose players have no GitHub accounts (`SLOP_REQUIRE_REPO_OWNER`).
+    pub require_repo_owner: bool,
 }
 
 /// Slop's GitHub App: makers install it on a repository so GitHub sends release webhooks and
@@ -363,6 +366,7 @@ impl Config {
             ),
             github_token: env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
             github_app: GithubAppConfig::from_env()?,
+            require_repo_owner: var_or("SLOP_REQUIRE_REPO_OWNER", "true") != "false",
         };
 
         Ok(Self {

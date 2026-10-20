@@ -110,6 +110,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 
 **Requirements for every listing:**
 1. **Open source**, in a public repo (GitHub, GitLab, Bitbucket or self-hosted) under an OSI-approved license. Private Slop may use a private repo (§13).
+   - **Only the repository's owner can put it on Slop** (built 2026-10-20, `repo_owner.rs`): for a personal repository the publisher's GitHub account must own it; for an organization's, they must be one of its owners (checked through Slop's GitHub App on the organization). Collaborators can't, even with admin rights. One app per repository; anyone else builds on it as a branch from their own fork, which must be theirs too. Checked whenever a repository is linked or changed. Only GitHub can be checked so far, so other hosts wait. Apps linked before this weren't re-checked.
 2. **At least one build** for at least one platform, on the **maker's own release page**. Normally it's made by **Slop Build**: the maker just verifies their account, links the repo, and accepts one ready-made pipeline file (`ARCHITECTURE.md` §6.2). The build is signed in the pipeline. App files are preferred, but an installer or APK is allowed. Coming soon pages are the only exception.
 3. **Passes every scan** (§10).
 4. **Games:** **Slop Pulse** (§11) is recommended, not required (decided 2026-10-18).

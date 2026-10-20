@@ -380,7 +380,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
               <Link to={`/publish/${existing.slug}/manage`}>Request a move from Manage</Link>.
             </>
           ) : (
-            "Public, on GitHub, GitLab, Bitbucket or your own server."
+            "On GitHub, and yours: your own account's, or an organization you're an owner of (with Slop's GitHub App installed on it). Collaborators can't publish someone else's repository."
           ),
         )}
         <div className="row-2">

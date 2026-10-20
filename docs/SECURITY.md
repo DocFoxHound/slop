@@ -79,6 +79,7 @@ How builds get from source to the player's computer is described in `ARCHITECTUR
 - Slop gets **read-only** access to the repo, so it can check the commit and run source scans:
   - **GitHub:** a GitHub App limited to the selected repos.
   - **GitLab / Bitbucket / self-hosted:** read-only deploy tokens.
+- **Only the repository's owner can link it** (`crates/slop-api/src/repo_owner.rs`): the publisher's GitHub account ID must be the repository owner's, or they must be an owner of the organization that owns it. Collaborators can't, and a repository can back one app only, so nobody can list (and take donations for) someone else's work.
 - Every upload names a **commit SHA**. Slop checks that the commit exists in the linked repo. Tags and branch names aren't trusted, because they can be moved.
 - **Build attestations** (a signed CI record of "built from this commit by this workflow"):
   - Built by Slop Build's recipe: **"Built by Slop Build from source"**.
