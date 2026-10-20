@@ -24,6 +24,7 @@ import {
   type ScanReport,
 } from "../api";
 import { FileChecks, ScanFindings, SourceCheckList } from "../components/Checks";
+import { StepUpPrompt } from "../components/PasskeyStepUp";
 import { ItemThumb } from "../components/MediaEditor";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, STAGE_LABEL } from "../format";
@@ -80,10 +81,12 @@ function useAction(onDone: () => void) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
+  const [stepUp, setStepUp] = useState(false);
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key);
     setError(undefined);
     setNotice(undefined);
+    setStepUp(false);
     try {
       const result = await action();
       // Sensitive actions may wait for another staff member (staff.rs).
@@ -93,11 +96,12 @@ function useAction(onDone: () => void) {
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
+      setStepUp(err instanceof ApiError && err.code === "step_up_required");
     } finally {
       setBusy(undefined);
     }
   };
-  return { busy, error, notice, run };
+  return { busy, error, notice, stepUp, run };
 }
 
 function ReasonButton({
@@ -717,7 +721,7 @@ function FileRow({
 /** Sensitive actions waiting for another staff member's approval (staff.rs). */
 function PendingActions() {
   const actions = useLoad(() => api.admin.actions(), []);
-  const { busy, error, run } = useAction(actions.reload);
+  const { busy, error, stepUp, run } = useAction(actions.reload);
   const list = actions.data?.actions ?? [];
   if (!list.length) return null;
   return (
@@ -747,7 +751,7 @@ function PendingActions() {
       </ul>
       {error && (
         <p className="form-error" role="alert">
-          {error}
+          {stepUp ? <StepUpPrompt signInAgain="/signin?return_to=%2Fadmin" /> : error}
         </p>
       )}
     </section>
@@ -758,7 +762,7 @@ function PendingActions() {
 function StaffTab() {
   const staff = useLoad(() => api.admin.staff(), []);
   const history = useLoad(() => api.admin.actions(true), []);
-  const { busy, error, notice, run } = useAction(() => {
+  const { busy, error, notice, stepUp, run } = useAction(() => {
     staff.reload();
     history.reload();
   });
@@ -799,7 +803,7 @@ function StaffTab() {
       )}
       {error && (
         <p className="form-error" role="alert">
-          {error}
+          {stepUp ? <StepUpPrompt signInAgain="/signin?return_to=%2Fadmin%3Ftab%3Dstaff" /> : error}
         </p>
       )}
       <table className="kv-table">

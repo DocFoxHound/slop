@@ -4,6 +4,8 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
+import { StepUpPrompt } from "../components/PasskeyStepUp";
+import { createPasskey, passkeysSupported, signWithPasskey } from "../passkeys";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -67,12 +69,126 @@ function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null
               Continue with {PROVIDER_LABEL[p]}
             </a>
           ))}
+          {passkeysSupported() && <PasskeySignIn returnTo={returnTo} />}
         </div>
         <p className="faint small">
           Already have an account with another sign-in? Sign in with that one, then link this one under Account → Sign-ins.
           Slop never joins accounts just because their emails match.
         </p>
       </div>
+    </div>
+  );
+}
+
+/** Signing in with a passkey added under Account → Sign-ins. */
+function PasskeySignIn({ returnTo }: { returnTo: string }) {
+  const { refresh } = useSession();
+  const navigate = useNavigate();
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const go = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const started = await api.passkeys.signInStart();
+      const credential = await signWithPasskey(started.options);
+      await api.passkeys.signInFinish(started.challenge_id, credential);
+      await refresh();
+      navigate(returnTo);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : "The passkey wasn't used. Try again, or use another sign-in.");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <>
+      <button type="button" className="btn big provider" disabled={busy} onClick={() => void go()}>
+        {busy ? "Waiting for your passkey…" : "Sign in with a passkey"}
+      </button>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Account → Sign-ins: passkeys on this account. Adding or removing one needs a recent sign-in. */
+function Passkeys() {
+  const keys = useLoad(() => api.passkeys.list(), []);
+  const [name, setName] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<ApiError | string>();
+  const run = async (action: () => Promise<unknown>) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await action();
+      keys.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err : err instanceof Error ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const add = () =>
+    run(async () => {
+      const started = await api.passkeys.registerStart();
+      const credential = await createPasskey(started.options);
+      await api.passkeys.registerFinish(started.challenge_id, name.trim() || "Passkey", credential);
+      setName("");
+    });
+  if (!passkeysSupported()) return null;
+  return (
+    <div className="passkeys">
+      <h3>Passkeys</h3>
+      <p className="muted small">
+        Sign in with Face ID, Touch ID, Windows Hello or a security key instead of a provider, and confirm sensitive changes
+        without signing in again. Slop keeps only the public half.
+      </p>
+      {keys.data && keys.data.length > 0 && (
+        <ul className="report-list">
+          {keys.data.map((k) => (
+            <li key={k.id}>
+              <span>
+                <b>{k.name}</b>{" "}
+                <span className="muted small">
+                  added {formatDate(k.created_at)}
+                  {k.last_used_at && ` · last used ${formatDate(k.last_used_at)}`}
+                </span>
+              </span>
+              <button className="btn small ghost" disabled={busy} onClick={() => void run(() => api.passkeys.remove(k.id))}>
+                Remove
+              </button>
+            </li>
+          ))}
+        </ul>
+      )}
+      <form
+        className="reason-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          void add();
+        }}
+      >
+        <input aria-label="Name for the passkey" placeholder="e.g. MacBook, YubiKey" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+        <button className="btn small" disabled={busy}>
+          {busy ? "Waiting for your device…" : "Add a passkey"}
+        </button>
+      </form>
+      {error && (
+        <p className="form-error" role="alert">
+          {typeof error === "string" ? (
+            error
+          ) : error.code === "step_up_required" ? (
+            <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent("/account#sign-ins")}`} onDone={() => setError(undefined)} />
+          ) : (
+            error.message
+          )}
+        </p>
+      )}
     </div>
   );
 }
@@ -559,6 +675,7 @@ export function SignIns() {
             {error}
           </p>
         )}
+        <Passkeys />
       </div>
     </section>
   );

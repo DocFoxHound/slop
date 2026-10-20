@@ -11088,6 +11088,17 @@ async fn sensitive_actions_need_two_people_and_roles_limit_staff(db: PgPool) {
     .await;
     assert_eq!(listed["approvals_required"], 2);
     assert_eq!(listed["actions"][0]["kind"], "release.revoke");
+    // An old session must confirm first (sign in again, or a passkey).
+    sqlx::query("update sessions set created_at = now() - interval '1 hour'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(approve(&b)).await;
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    sqlx::query("update sessions set stepped_up_at = now()")
+        .execute(&app.db)
+        .await
+        .unwrap();
     // Ben approves: now it happens, in both names.
     assert_eq!(app.send(approve(&b)).await.status(), StatusCode::NO_CONTENT);
     assert_eq!(release_status().await, "revoked");
@@ -11395,5 +11406,116 @@ async fn makers_hear_about_every_release_and_security_txt_is_served(db: PgPool) 
     assert!(
         text.starts_with("Contact: mailto:security@slop.example\nExpires: "),
         "{text}"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn passkeys_are_added_after_a_recent_sign_in_and_confirm_sensitive_actions(db: PgPool) {
+    use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
+    let app = test_app(db).await;
+    let (user_id, cookie) = app.user("Pia", "US").await;
+    let origin = url::Url::parse("http://localhost:8080").unwrap();
+    let mut authenticator = WebauthnAuthenticator::new(SoftPasskey::new(true));
+
+    // Add one.
+    let started = body_json(
+        app.send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
+            .await,
+    )
+    .await;
+    let options = serde_json::from_value(started["options"].clone()).unwrap();
+    let credential = authenticator
+        .do_registration(origin.clone(), options)
+        .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/passkeys/register/finish")
+                .cookie(&cookie)
+                .json(json!({ "challenge_id": started["challenge_id"], "name": "Laptop", "credential": credential })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    // A challenge works once.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/passkeys/register/finish")
+                .cookie(&cookie)
+                .json(json!({ "challenge_id": started["challenge_id"], "name": "Again", "credential": credential })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/me/passkeys").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(listed[0]["name"], "Laptop");
+
+    // An old session can't do sensitive things until it confirms with the passkey.
+    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
+        .bind(user_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    let started = body_json(
+        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
+            .await,
+    )
+    .await;
+    let options = serde_json::from_value(started["options"].clone()).unwrap();
+    let assertion = authenticator
+        .do_authentication(origin.clone(), options)
+        .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/step-up/finish")
+                .cookie(&cookie)
+                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::OK,
+        "confirmed in the last ten minutes"
+    );
+    let used: bool =
+        sqlx::query_scalar("select last_used_at is not null from passkeys where user_id = $1")
+            .bind(user_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(used);
+
+    // Someone else's session can't use Pia's challenge.
+    let (_, other) = app.user("Other", "US").await;
+    let started = body_json(
+        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
+            .await,
+    )
+    .await;
+    let options = serde_json::from_value(started["options"].clone()).unwrap();
+    let assertion = authenticator.do_authentication(origin, options).unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/step-up/finish")
+                .cookie(&other)
+                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // Signing in starts a usernameless ceremony.
+    let started = body_json(app.send(req(Method::POST, "/v1/auth/passkey/start")).await).await;
+    assert!(
+        started["options"]["publicKey"]["challenge"].is_string(),
+        "{started}"
     );
 }

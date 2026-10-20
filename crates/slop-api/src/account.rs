@@ -384,6 +384,10 @@ pub async fn close_account(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    sqlx::query("delete from passkeys where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("delete from admin_tokens where user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)

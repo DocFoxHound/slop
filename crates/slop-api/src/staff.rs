@@ -463,10 +463,12 @@ async fn approve(
     .await?;
     let (kind, payload, status, needed) = row.ok_or(ApiError::NotFound)?;
     admin.need(perm_for(&kind))?;
-    // A person approves, signed in themselves: never an agent's token.
+    // A person approves, signed in themselves (recently, or confirmed with a passkey): never an
+    // agent's token.
     if admin.token.is_some() {
         return Err(ApiError::Forbidden);
     }
+    admin.confirm_recent(&state.db).await?;
     if status != "pending" {
         return Err(ApiError::Conflict(format!("that request is {status}")));
     }
@@ -587,6 +589,7 @@ async fn change_role(
 ) -> ApiResult<Outcome> {
     admin.need(Perm::Security)?;
     admin.signed_in()?;
+    admin.confirm_recent(&state.db).await?;
     // Only an owner gives or takes the owner role.
     if b.role == Role::Owner && !admin.roles.contains(&Role::Owner) {
         return Err(ApiError::Forbidden);

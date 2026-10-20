@@ -58,6 +58,8 @@ Slop's whole promise is "AI-made software you can trust." That makes it a **soft
 
 ### 4.3 Step-up authentication (for sensitive actions)
 Since there are no passwords, high-risk actions require a **passkey (WebAuthn)** registered with Slop, or a fresh provider re-login if no passkey is set up:
+
+**Built 2026-10-20 (`passkeys.rs`, webauthn-rs):** passkeys are added under Account → Sign-ins after a recent sign-in, sign in without a username (closed accounts refused), and satisfy step-up: a sensitive action accepts a sign-in or a passkey confirmation from the last ten minutes. Staff approving another person's sensitive action or changing roles must have one too. Slop stores public keys and counters only; ceremonies last five minutes and work once. Passkeys work on the website (the desktop app's origin differs). Requiring them for publishers is still to do.
 - Required for **anyone who publishes or receives money:** a passkey for publishers, branch authors with builds, creatives and team admins. Their provider account must also have 2FA (checked where the provider reports it, otherwise required by policy).
 - Step-up is needed for:
   - Changing the tracked branch.

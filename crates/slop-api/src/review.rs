@@ -90,6 +90,7 @@ pub async fn admin_from_token(
     Ok(Some(AdminUser {
         actor: format!("AI reviewer \"{name}\" for {display_name} ({user_id}, token {id})"),
         roles: crate::staff::roles_of(&state.db, user_id).await?,
+        session_id: None,
         user_id,
         token: Some(TokenUse {
             id,

@@ -13,6 +13,7 @@ import { disablePush, enablePush, pushState, type PushState } from "../push";
 import { useSession } from "../session";
 import { AcceptDocument } from "./Terms";
 import { ErrorState } from "./ui";
+import { StepUpPrompt } from "./PasskeyStepUp";
 
 /** The Content Policy section a rule title points to (headings get ids from their text). */
 function ruleLink(title: string): string {
@@ -524,12 +525,7 @@ export function AccountDonations() {
 function StepUp({ error }: { error: ApiError }) {
   if (error.code !== "step_up_required") return <>{error.message}</>;
   const back = window.location.pathname + "#receiving";
-  return (
-    <>
-      For your safety, this needs a sign-in from the last few minutes.{" "}
-      <a href={api.githubSignInUrl(back)}>Sign in again</a>, then try once more.
-    </>
-  );
+  return <StepUpPrompt signInAgain={api.githubSignInUrl(back)} />;
 }
 
 /** Where donations are paid, and switching or disconnecting it: 72 hours' wait (SECURITY §9). */

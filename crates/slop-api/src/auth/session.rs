@@ -182,10 +182,11 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
 pub const STEP_UP_WINDOW: Duration = Duration::minutes(10);
 
 /// Step-up authentication (SECURITY §4.3): the session must come from a sign-in in the last few
-/// minutes. Until Slop has passkeys, signing in again through the provider is the step up.
+/// minutes, or have confirmed with a passkey in them (passkeys.rs).
 pub async fn require_recent_sign_in(db: &PgPool, user: &CurrentUser) -> ApiResult<()> {
-    let fresh: bool =
-        sqlx::query_scalar("select created_at > now() - $2 from sessions where id = $1")
+    let fresh: bool = sqlx::query_scalar(
+        "select created_at > now() - $2 or coalesce(stepped_up_at > now() - $2, false) from sessions where id = $1",
+    )
             .bind(user.session_id)
             .bind(STEP_UP_WINDOW)
             .fetch_one(db)
