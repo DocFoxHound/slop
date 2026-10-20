@@ -18,7 +18,13 @@ export interface Category {
   tags: TagRef[];
 }
 
-export type ContentLabel = "romance" | "suggestive" | "violence" | "horror" | "strong_language" | "gambling_themes";
+export type ContentLabel =
+  | "romance"
+  | "suggestive"
+  | "violence"
+  | "horror"
+  | "strong_language"
+  | "gambling_themes";
 
 /** A slide in the front page's Featured carousel. */
 export type FeaturedApp = AppSummary & { blurb: string };
@@ -30,7 +36,12 @@ export interface RatingGroup extends Tally {
 export interface RatingBreakdown {
   by_version: RatingGroup[];
   by_platform: RatingGroup[];
-  impact: Array<{ version: string; to_not_slop: number; to_slop: number; new_votes: number }>;
+  impact: Array<{
+    version: string;
+    to_not_slop: number;
+    to_slop: number;
+    new_votes: number;
+  }>;
 }
 
 /** Updates for an installed app (crates/slop-api/src/library.rs). */
@@ -40,7 +51,12 @@ export interface AppUpdate {
   /** A newer release still being checked: "fetching" (downloading and scanning) or "awaiting_review". */
   pending: { version: string; status: "fetching" | "awaiting_review" } | null;
   /** The official app and its community builds, when there's more than one. */
-  builds: Array<{ slug: string; title: string; official: boolean; platforms: string[] }>;
+  builds: Array<{
+    slug: string;
+    title: string;
+    official: boolean;
+    platforms: string[];
+  }>;
 }
 
 export interface AppSummary {
@@ -146,11 +162,36 @@ export interface DonationSettings {
 }
 
 export interface DonationSummary {
-  currency_totals: Array<{ currency: string; donations: number; donated_minor: number; slop_fee_minor: number; refunded_minor: number }>;
-  months: Array<{ month: string; currency: string; donations: number; donated_minor: number }>;
+  currency_totals: Array<{
+    currency: string;
+    donations: number;
+    donated_minor: number;
+    slop_fee_minor: number;
+    refunded_minor: number;
+  }>;
+  months: Array<{
+    month: string;
+    currency: string;
+    donations: number;
+    donated_minor: number;
+  }>;
   active_server_donations: number | null;
-  shared: Array<{ name: string; message: string | null; currency: string; donation_minor: number; paid_at: string }>;
-  recent: Array<{ id: string; kind: string; currency: string; total_minor: number; status: string; refundable: boolean; paid_at: string }>;
+  shared: Array<{
+    name: string;
+    message: string | null;
+    currency: string;
+    donation_minor: number;
+    paid_at: string;
+  }>;
+  recent: Array<{
+    id: string;
+    kind: string;
+    currency: string;
+    total_minor: number;
+    status: string;
+    refundable: boolean;
+    paid_at: string;
+  }>;
 }
 
 export interface FeeStatement {
@@ -179,10 +220,16 @@ export interface DonationAccount {
   status: string;
   payments: string;
   /** A switch or disconnection waiting out its 72 hours (SECURITY §9). */
-  change: { kind: "switch" | "disconnect"; requested_at: string; effective_at: string; new_account_ready: boolean | null } | null;
+  change: {
+    kind: "switch" | "disconnect";
+    requested_at: string;
+    effective_at: string;
+    new_account_ready: boolean | null;
+  } | null;
 }
 
-export type SignInProvider = "github" | "google" | "gitlab" | "bitbucket" | "microsoft" | "discord";
+export type SignInProvider =
+  "github" | "google" | "gitlab" | "bitbucket" | "microsoft" | "discord";
 
 export const PROVIDER_LABEL: Record<SignInProvider, string> = {
   github: "GitHub",
@@ -272,7 +319,13 @@ export interface UserProfile {
   is_me: boolean;
   creative_handle: string | null;
   apps: AppSummary[];
-  votes: Array<AppSummary & { my_vote: "not_slop" | "slop"; review: string | null; voted_at: string }>;
+  votes: Array<
+    AppSummary & {
+      my_vote: "not_slop" | "slop";
+      review: string | null;
+      voted_at: string;
+    }
+  >;
 }
 
 /** Teams (crates/slop-api/src/teams.rs). */
@@ -299,11 +352,24 @@ export interface TeamPage {
   dns: { domain: string | null; record: string; value: string } | null;
   role: "owner" | "admin" | "member" | null;
   invited: boolean;
-  members: Array<{ user_id: string; name: string; role: "owner" | "admin" | "member"; joined_at: string }>;
+  members: Array<{
+    user_id: string;
+    name: string;
+    role: "owner" | "admin" | "member";
+    joined_at: string;
+  }>;
   member_count: number;
   apps: AppSummary[];
   picks: Array<AppSummary & { id: string; note: string; by: string }>;
-  events: Array<{ id: string; title: string; starts_at: string; app_slug: string | null; app_title: string | null; by: string; mine: boolean }>;
+  events: Array<{
+    id: string;
+    title: string;
+    starts_at: string;
+    app_slug: string | null;
+    app_title: string | null;
+    by: string;
+    mine: boolean;
+  }>;
   shared: AppSummary[];
   hidden: boolean;
 }
@@ -311,7 +377,16 @@ export interface TeamPage {
 /** A notification in the bell (crates/slop-api/src/notify.rs). */
 export interface Notification {
   id: string;
-  category: "jobs" | "interested" | "moderation" | "donations" | "shared" | "teams" | "apps" | "chat" | "friends";
+  category:
+    | "jobs"
+    | "interested"
+    | "moderation"
+    | "donations"
+    | "shared"
+    | "teams"
+    | "apps"
+    | "chat"
+    | "friends";
   title: string;
   body: string;
   link: string;
@@ -325,7 +400,11 @@ export interface EmailPrefs {
   /** Whether this server sends email at all. */
   email_on: boolean;
   has_email: boolean;
-  categories: Array<{ category: Notification["category"]; label: string; email: boolean }>;
+  categories: Array<{
+    category: Notification["category"];
+    label: string;
+    email: boolean;
+  }>;
 }
 
 /** A screenshot or video on an app's page (crates/slop-api/src/media.rs). */
@@ -352,11 +431,18 @@ export interface RepoPicture {
 
 export type MediaItem =
   | ({ kind: "image"; caption: string | null } & RepoPicture)
-  | { kind: "video"; youtube_id: string; poster: RepoPicture | null; caption: string | null };
+  | {
+      kind: "video";
+      youtube_id: string;
+      poster: RepoPicture | null;
+      caption: string | null;
+    };
 
 /** The order key the server uses for a gallery item. */
 export function mediaKey(item: MediaItem): string {
-  return item.kind === "image" ? `image:${item.path}` : `video:${item.youtube_id}`;
+  return item.kind === "image"
+    ? `image:${item.path}`
+    : `video:${item.youtube_id}`;
 }
 
 export interface MediaSet {
@@ -439,7 +525,15 @@ export interface AppDetail extends AppSummary {
     note: string | null;
   } | null;
   /** For an app: its community builds, ones filling platform gaps first. */
-  community: Array<AppSummary & { author: string; branch_kind: string; branch_note: string | null; platforms: string[]; adds: string[] }>;
+  community: Array<
+    AppSummary & {
+      author: string;
+      branch_kind: string;
+      branch_note: string | null;
+      platforms: string[];
+      adds: string[];
+    }
+  >;
 }
 
 export interface AppPage {
@@ -469,7 +563,8 @@ export interface Me {
 }
 
 /** Slop's legal documents (crates/slop-api/src/legal.rs). */
-export type LegalKind = "terms" | "privacy" | "content" | "publisher" | "people";
+export type LegalKind =
+  "terms" | "privacy" | "content" | "publisher" | "people";
 
 export interface LegalVersion {
   version: string;
@@ -510,7 +605,14 @@ export interface LegalNotice {
 }
 
 /** Reports and moderation (crates/slop-api/src/moderation.rs). */
-export type ReportKind = "app" | "review" | "profile" | "message" | "app_review" | "team" | "chat_message";
+export type ReportKind =
+  | "app"
+  | "review"
+  | "profile"
+  | "message"
+  | "app_review"
+  | "team"
+  | "chat_message";
 
 export interface ReportReason {
   code: string;
@@ -557,7 +659,8 @@ export interface ModerationDecision {
   reference: string;
   subject_kind: ReportKind | "account";
   subject_label: string;
-  action: "delist_app" | "hide_review" | "hide_profile" | "suspend_account" | "warn";
+  action:
+    "delist_app" | "hide_review" | "hide_profile" | "suspend_account" | "warn";
   action_label: string;
   rule: string;
   rule_title: string;
@@ -637,7 +740,13 @@ export interface Tally {
 
 export interface Ratings extends Tally {
   monthly: Array<Tally & { month: string }>;
-  daily: Array<{ day: string; not_slop: number; slop: number; changed: number; withdrawn: number }>;
+  daily: Array<{
+    day: string;
+    not_slop: number;
+    slop: number;
+    changed: number;
+    withdrawn: number;
+  }>;
   open: boolean;
   min_votes: number;
   mine?: {
@@ -649,7 +758,13 @@ export interface Ratings extends Tally {
     review?: { body: string; hidden: boolean };
   };
   /** Votes since the first release with work hired through People (null: none hired). */
-  since_new_work: (Partial<Tally> & { since: string | null; version: string | null; credits: string[] }) | null;
+  since_new_work:
+    | (Partial<Tally> & {
+        since: string | null;
+        version: string | null;
+        credits: string[];
+      })
+    | null;
 }
 
 // ---- People (crates/slop-api/src/people) ------------------------------------------------------
@@ -660,8 +775,10 @@ export interface Skill {
 }
 
 export type AiUse = "none" | "assisted" | "heavy";
-export type Accent = "slime" | "ocean" | "grape" | "rose" | "ember" | "sun" | "forest" | "slate";
-export type Section = "portfolio" | "services" | "reviews" | "worked_on" | "about";
+export type Accent =
+  "slime" | "ocean" | "grape" | "rose" | "ember" | "sun" | "forest" | "slate";
+export type Section =
+  "portfolio" | "services" | "reviews" | "worked_on" | "about";
 export type Currency = "usd" | "eur" | "gbp";
 
 export interface Service {
@@ -784,12 +901,36 @@ export interface MyProfile extends Omit<ProfileInput, "confirm_adult"> {
 }
 
 export type PortfolioWork =
-  | { kind: "image"; path: string; url: string; width: number; height: number; title: string | null; caption: string | null }
-  | { kind: "video"; youtube_id: string; poster: RepoPicture | null; title: string | null; caption: string | null }
-  | { kind: "audio"; audio: { path: string; url: string; format: string }; poster: RepoPicture | null; title: string | null; caption: string | null };
+  | {
+      kind: "image";
+      path: string;
+      url: string;
+      width: number;
+      height: number;
+      title: string | null;
+      caption: string | null;
+    }
+  | {
+      kind: "video";
+      youtube_id: string;
+      poster: RepoPicture | null;
+      title: string | null;
+      caption: string | null;
+    }
+  | {
+      kind: "audio";
+      audio: { path: string; url: string; format: string };
+      poster: RepoPicture | null;
+      title: string | null;
+      caption: string | null;
+    };
 
 export function workKey(w: PortfolioWork): string {
-  return w.kind === "image" ? `image:${w.path}` : w.kind === "video" ? `video:${w.youtube_id}` : `audio:${w.audio.path}`;
+  return w.kind === "image"
+    ? `image:${w.path}`
+    : w.kind === "video"
+      ? `video:${w.youtube_id}`
+      : `audio:${w.audio.path}`;
 }
 
 export interface PortfolioSet {
@@ -904,13 +1045,27 @@ export interface JobProblem {
   mediator_suggestion: string | null;
   closing_note: string | null;
   created_at: string;
-  proposals: Array<{ id: string; mine: boolean; kind: "refund" | "cancel" | "redo" | "other"; amount_minor: number | null; note: string; status: string }>;
+  proposals: Array<{
+    id: string;
+    mine: boolean;
+    kind: "refund" | "cancel" | "redo" | "other";
+    amount_minor: number | null;
+    note: string;
+    status: string;
+  }>;
 }
 
 /** A side's own copy of a job conversation, as downloaded. */
 export interface ConversationCopy {
   job_id: string;
-  messages: Array<{ id: string; author_id: string; author: string; created_at: string; body: string; sha256: string }>;
+  messages: Array<{
+    id: string;
+    author_id: string;
+    author: string;
+    created_at: string;
+    body: string;
+    sha256: string;
+  }>;
 }
 
 export interface Job {
@@ -929,7 +1084,12 @@ export interface Job {
   offer: Offer | null;
   offer_count: number;
   summary: string[];
-  agreement: { text: string; sha256: string | null; template: string; accepted_at: string | null } | null;
+  agreement: {
+    text: string;
+    sha256: string | null;
+    template: string;
+    accepted_at: string | null;
+  } | null;
   changes: JobChange[];
   due_date: string | null;
   payments: Array<{
@@ -960,12 +1120,29 @@ export interface Job {
     text_deleted_after: string | null;
     acknowledged: boolean;
     notice: string;
-    messages: Array<{ id: string; author: string; mine: boolean; body: string | null; sha256: string; created_at: string }>;
+    messages: Array<{
+      id: string;
+      author: string;
+      mine: boolean;
+      body: string | null;
+      sha256: string;
+      created_at: string;
+    }>;
   };
   problem: JobProblem | null;
   /** For the creative: how this client has paid before. */
-  client_record: { completed_jobs: number; paid_in_full: number; owing: number } | null;
-  events: Array<{ kind: string; actor: string | null; note: string | null; links: string[]; created_at: string }>;
+  client_record: {
+    completed_jobs: number;
+    paid_in_full: number;
+    owing: number;
+  } | null;
+  events: Array<{
+    kind: string;
+    actor: string | null;
+    note: string | null;
+    links: string[];
+    created_at: string;
+  }>;
   actions: JobAction[];
   payment_mode: "stripe" | "simulated" | "off";
   review: {
@@ -974,7 +1151,13 @@ export interface Job {
     reply: string | null;
     hidden: boolean;
     mediator_note: string | null;
-    dispute: { reason: string; statement: string; client_statement: string | null; status: string; decision_reason: string | null } | null;
+    dispute: {
+      reason: string;
+      statement: string;
+      client_statement: string | null;
+      status: string;
+      decision_reason: string | null;
+    } | null;
   } | null;
   /** What the client acknowledges before requesting and accepting. */
   exact_wording: string;
@@ -1083,7 +1266,8 @@ export type ChangeRequest =
   | { kind: "release"; release_id: string | null; note?: string }
   | { kind: "repo"; repo_url: string; note?: string };
 
-export type StaffRole = "owner" | "moderator" | "reviewer" | "support" | "finance" | "security";
+export type StaffRole =
+  "owner" | "moderator" | "reviewer" | "support" | "finance" | "security";
 export interface StaffActions {
   approvals_required: number;
   actions: Array<{
@@ -1099,7 +1283,12 @@ export interface StaffActions {
   }>;
 }
 export interface StaffList {
-  staff: Array<{ id: string; display_name: string; roles: StaffRole[]; suspended: boolean }>;
+  staff: Array<{
+    id: string;
+    display_name: string;
+    roles: StaffRole[];
+    suspended: boolean;
+  }>;
   roles: StaffRole[];
   my_roles: StaffRole[];
   approvals_required: number;
@@ -1117,7 +1306,13 @@ export interface AdminQueue {
   /** Patterns the abuse checks found (abuse.rs). */
   abuse: Array<{
     id: string;
-    kind: "vote_burst" | "review_bomb" | "vote_swing" | "lookalike_name" | "rate_limited";
+    kind:
+      | "vote_burst"
+      | "review_bomb"
+      | "vote_swing"
+      | "lookalike_name"
+      | "rate_limited"
+      | "malicious_dependency";
     subject_kind: "app" | "account";
     subject_id: string;
     subject_label: string;
@@ -1138,9 +1333,24 @@ export interface AdminQueue {
     title: string;
   }>;
   releases: Array<Release & { app: AdminAppRef; notes: ReviewNote[] }>;
-  changes: Array<AppChange & { app: AdminAppRef; players_get: string | null; notes: ReviewNote[] }>;
-  media: Array<MediaSet & { app: AdminAppRef; live: MediaSet | null; notes: ReviewNote[] }>;
-  portfolios: Array<{ handle: string; name: string; ai_use: AiUse; set: PortfolioSet; live: PortfolioSet | null; notes: ReviewNote[] }>;
+  changes: Array<
+    AppChange & {
+      app: AdminAppRef;
+      players_get: string | null;
+      notes: ReviewNote[];
+    }
+  >;
+  media: Array<
+    MediaSet & { app: AdminAppRef; live: MediaSet | null; notes: ReviewNote[] }
+  >;
+  portfolios: Array<{
+    handle: string;
+    name: string;
+    ai_use: AiUse;
+    set: PortfolioSet;
+    live: PortfolioSet | null;
+    notes: ReviewNote[];
+  }>;
   problems: Array<{
     id: string;
     job_id: string;
@@ -1151,7 +1361,12 @@ export interface AdminQueue {
     opened_by_creative: boolean;
     reply: string | null;
     mediator_suggestion: string | null;
-    proposals: Array<{ kind: string; amount_minor: number | null; note: string; status: string }>;
+    proposals: Array<{
+      kind: string;
+      amount_minor: number | null;
+      note: string;
+      status: string;
+    }>;
     created_at: string;
     notes: ReviewNote[];
   }>;
@@ -1176,9 +1391,20 @@ export interface AdminQueue {
   /** Content Policy rules a decision can cite: [code, title]. */
   rules: Array<[string, string]>;
   ready_to_list: Array<
-    AdminAppRef & { approved_releases: number; pictures_pending: boolean; going_public: boolean; notes: ReviewNote[] }
+    AdminAppRef & {
+      approved_releases: number;
+      pictures_pending: boolean;
+      going_public: boolean;
+      notes: ReviewNote[];
+    }
   >;
-  checks: { scanning: boolean; maker_signatures_required: boolean; signing_key: boolean; github_app: boolean; github_token: boolean };
+  checks: {
+    scanning: boolean;
+    maker_signatures_required: boolean;
+    signing_key: boolean;
+    github_app: boolean;
+    github_token: boolean;
+  };
 }
 
 export interface AdminApp extends AdminAppRef {
@@ -1217,11 +1443,18 @@ export interface SessionInfo {
   current: boolean;
 }
 
-export type Platform = "windows" | "mac" | "linux" | "android" | "linux-deb" | "linux-rpm";
+export type Platform =
+  "windows" | "mac" | "linux" | "android" | "linux-deb" | "linux-rpm";
 /** What an app's store page says it runs on: the builds every release must include. */
 export type AppPlatform = "windows" | "linux" | "linux-deb" | "linux-rpm";
 export type FileKind = "archive" | "installer" | "apk";
-export type ReleaseStatus = "fetching" | "awaiting_review" | "approved" | "rejected" | "failed" | "revoked";
+export type ReleaseStatus =
+  | "fetching"
+  | "awaiting_review"
+  | "approved"
+  | "rejected"
+  | "failed"
+  | "revoked";
 
 /** Who built a file, proven by the maker's GitHub artifact attestation. */
 export interface Provenance {
@@ -1246,7 +1479,8 @@ export interface ReleaseFile {
   provenance_problem: string | null;
   /** Signed by hand with the maker's registered SSH key. */
   maker_key: { fingerprint: string; key_name: string } | null;
-  scan_result: "passed" | "note" | "on_hold" | "rejected" | "blocked" | "skipped" | null;
+  scan_result:
+    "passed" | "note" | "on_hold" | "rejected" | "blocked" | "skipped" | null;
   scan_detail: string | null;
   /** Slop's scanner's report: engines, findings, notable capabilities. */
   scan_report: ScanReport | null;
@@ -1275,9 +1509,52 @@ export interface DefenderCheck {
 
 export interface SourceChecks {
   secrets: Array<{ file: string; line: number | null; rule: string }>;
-  vulnerabilities: Array<{ package: string; version: string; ecosystem: string; id: string; summary: string }>;
+  vulnerabilities: Array<{
+    package: string;
+    version: string;
+    ecosystem: string;
+    id: string;
+    summary: string;
+  }>;
   tools: Record<string, string>;
   checked: boolean;
+}
+
+/** A pattern Slop's source check found: what, how often, and where (`path:line`). */
+export interface SourceHit {
+  rule: string;
+  label: string;
+  count: number;
+  examples: string[];
+}
+
+/** Slop's own look at the source at the release commit (crates/slop-api/src/source_scan.rs). */
+export interface RepoScan {
+  status: "checked" | "not_checked" | "failed";
+  detail?: string;
+  truncated?: boolean;
+  licence?: {
+    declared: string;
+    files: Array<{ path: string; spdx: string | null }>;
+    headers: SourceHit[];
+    problems: string[];
+  };
+  lockfiles?: string[];
+  packages?: number;
+  monetization?: SourceHit[];
+}
+
+/** An advisory OSV lists for one of the release's packages (crates/slop-api/src/dep_watch.rs). */
+export interface Advisory {
+  vuln_id: string;
+  ecosystem: string;
+  package: string;
+  version: string;
+  summary: string;
+  fixed: string | null;
+  malicious: boolean;
+  known_at_build: boolean;
+  found_at: string;
 }
 
 export interface Release {
@@ -1295,6 +1572,10 @@ export interface Release {
   files: ReleaseFile[];
   /** Slop Build's source checks. */
   source_checks: SourceChecks | null;
+  /** Slop's own source check: licence, monetization notes, packages (makers and reviewers). */
+  repo_scan: RepoScan | null;
+  /** Advisories for its packages, from the daily watch (makers and reviewers). */
+  advisories: Advisory[];
 }
 
 /** One of the repository's GitHub releases, for "Pick a release". */
@@ -1307,7 +1588,13 @@ export interface GithubRelease {
   html_url: string;
   /** Already sent to Slop. */
   submitted: boolean;
-  assets: Array<{ name: string; url: string; size: number; platform: Platform | null; kind: FileKind | null }>;
+  assets: Array<{
+    name: string;
+    url: string;
+    size: number;
+    platform: Platform | null;
+    kind: FileKind | null;
+  }>;
 }
 
 export interface UpdateSettings {
@@ -1326,7 +1613,13 @@ export interface UpdateSettings {
 export interface NewRelease {
   version: string;
   commit_sha: string;
-  files: Array<{ platform: Platform; kind: FileKind; url: string; exec?: string; args?: string[] }>;
+  files: Array<{
+    platform: Platform;
+    kind: FileKind;
+    url: string;
+    exec?: string;
+    args?: string[];
+  }>;
 }
 
 export interface LibraryEntry extends AppSummary {
@@ -1367,7 +1660,9 @@ export interface RepoTokenStatus {
   github: boolean;
 }
 
-export type AppChanges = Partial<Omit<NewApp, "slug" | "kind" | "stage" | "visibility" | "repo_token">>;
+export type AppChanges = Partial<
+  Omit<NewApp, "slug" | "kind" | "stage" | "visibility" | "repo_token">
+>;
 
 export interface AppQuery {
   q?: string;
@@ -1417,29 +1712,55 @@ export const API_BASE = "";
 export function query(params: object): string {
   const search = new URLSearchParams();
   for (const [key, value] of Object.entries(params)) {
-    if (value !== undefined && value !== null && value !== "") search.set(key, String(value));
+    if (value !== undefined && value !== null && value !== "")
+      search.set(key, String(value));
   }
   const s = search.toString();
   return s ? `?${s}` : "";
 }
 
 /** In the desktop app, requests go through Rust, which holds the user's tokens. */
-async function desktopRequest(method: string, path: string, body?: unknown): Promise<{ status: number; body: unknown }> {
+async function desktopRequest(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<{ status: number; body: unknown }> {
   const { invoke } = await import("@tauri-apps/api/core");
   try {
-    return await invoke<{ status: number; body: unknown }>("api_request", { methodName: method, path, body: body ?? null });
+    return await invoke<{ status: number; body: unknown }>("api_request", {
+      methodName: method,
+      path,
+      body: body ?? null,
+    });
   } catch (err) {
     const e = err as { code?: string; message?: string };
-    throw new ApiError(0, e.code ?? "network", e.message ?? "Can't reach Slop. Check your connection and try again.");
+    throw new ApiError(
+      0,
+      e.code ?? "network",
+      e.message ?? "Can't reach Slop. Check your connection and try again.",
+    );
   }
 }
 
-async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
+async function request<T>(
+  method: string,
+  path: string,
+  body?: unknown,
+): Promise<T> {
   if (isDesktop) {
     const res = await desktopRequest(method, path, body);
     if (res.status >= 200 && res.status < 300) return res.body as T;
-    const err = (res.body as { error?: { code?: string; message?: string; field?: string } } | null)?.error;
-    throw new ApiError(res.status, err?.code ?? "http", err?.message ?? `Request failed (${res.status})`, err?.field);
+    const err = (
+      res.body as {
+        error?: { code?: string; message?: string; field?: string };
+      } | null
+    )?.error;
+    throw new ApiError(
+      res.status,
+      err?.code ?? "http",
+      err?.message ?? `Request failed (${res.status})`,
+      err?.field,
+    );
   }
 
   const init: RequestInit = {
@@ -1457,14 +1778,27 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
   try {
     res = await fetch(API_BASE + path, init);
   } catch {
-    throw new ApiError(0, "network", "Can't reach Slop. Check your connection and try again.");
+    throw new ApiError(
+      0,
+      "network",
+      "Can't reach Slop. Check your connection and try again.",
+    );
   }
   if (res.status === 204) return undefined as T;
 
   const data: unknown = await res.json().catch(() => null);
   if (!res.ok) {
-    const err = (data as { error?: { code?: string; message?: string; field?: string } } | null)?.error;
-    throw new ApiError(res.status, err?.code ?? "http", err?.message ?? `Request failed (${res.status})`, err?.field);
+    const err = (
+      data as {
+        error?: { code?: string; message?: string; field?: string };
+      } | null
+    )?.error;
+    throw new ApiError(
+      res.status,
+      err?.code ?? "http",
+      err?.message ?? `Request failed (${res.status})`,
+      err?.field,
+    );
   }
   return data as T;
 }
@@ -1473,51 +1807,109 @@ async function request<T>(method: string, path: string, body?: unknown): Promise
 async function requestText(method: string, path: string): Promise<string> {
   if (isDesktop) {
     const res = await desktopRequest(method, path);
-    if (res.status >= 200 && res.status < 300) return typeof res.body === "string" ? res.body : JSON.stringify(res.body);
+    if (res.status >= 200 && res.status < 300)
+      return typeof res.body === "string" ? res.body : JSON.stringify(res.body);
     throw new ApiError(res.status, "http", `Request failed (${res.status})`);
   }
-  const res = await fetch(API_BASE + path, { method, credentials: "same-origin" }).catch(() => {
-    throw new ApiError(0, "network", "Can't reach Slop. Check your connection and try again.");
+  const res = await fetch(API_BASE + path, {
+    method,
+    credentials: "same-origin",
+  }).catch(() => {
+    throw new ApiError(
+      0,
+      "network",
+      "Can't reach Slop. Check your connection and try again.",
+    );
   });
-  if (!res.ok) throw new ApiError(res.status, "http", `Request failed (${res.status})`);
+  if (!res.ok)
+    throw new ApiError(res.status, "http", `Request failed (${res.status})`);
   return res.text();
 }
 
 export const api = {
   categories: () => request<Category[]>("GET", "/v1/categories"),
   apps: (q: AppQuery = {}) => request<AppPage>("GET", `/v1/apps${query(q)}`),
-  app: (slug: string) => request<AppDetail>("GET", `/v1/apps/${encodeURIComponent(slug)}`),
+  app: (slug: string) =>
+    request<AppDetail>("GET", `/v1/apps/${encodeURIComponent(slug)}`),
   createApp: (app: NewApp) => request<AppDetail>("POST", "/v1/apps", app),
   updateApp: (slug: string, changes: AppChanges) =>
-    request<AppDetail>("PATCH", `/v1/apps/${encodeURIComponent(slug)}`, changes),
+    request<AppDetail>(
+      "PATCH",
+      `/v1/apps/${encodeURIComponent(slug)}`,
+      changes,
+    ),
   myApps: () => request<AppSummary[]>("GET", "/v1/me/apps"),
-  similar: (slug: string) => request<SimilarApps>("GET", `/v1/apps/${encodeURIComponent(slug)}/similar`),
+  similar: (slug: string) =>
+    request<SimilarApps>("GET", `/v1/apps/${encodeURIComponent(slug)}/similar`),
   /** Pictures from the repository's .slop/media.json (crates/slop-api/src/media.rs). */
-  media: (slug: string) => request<MediaOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/media`),
-  checkMedia: (slug: string) => request<MediaOverview>("POST", `/v1/apps/${encodeURIComponent(slug)}/media/check`),
+  media: (slug: string) =>
+    request<MediaOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/media`),
+  checkMedia: (slug: string) =>
+    request<MediaOverview>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/media/check`,
+    ),
   setMediaOrder: (slug: string, keys: string[]) =>
-    request<MediaOverview>("PUT", `/v1/apps/${encodeURIComponent(slug)}/media/order`, { keys }),
+    request<MediaOverview>(
+      "PUT",
+      `/v1/apps/${encodeURIComponent(slug)}/media/order`,
+      { keys },
+    ),
   /** The licence GitHub finds in a repository, for the Publish form. */
   detectLicense: (repoUrl: string) =>
     request<{ spdx: string | null; name: string | null; note: string | null }>(
       "GET",
       `/v1/repos/license${query({ url: repoUrl })}`,
     ),
-  releases: (slug: string) => request<Release[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/releases`),
-  githubReleases: (slug: string) => request<GithubRelease[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/github-releases`),
-  submitGithubRelease: (slug: string, tag: string, files: NewRelease["files"]) =>
-    request<Release>("POST", `/v1/apps/${encodeURIComponent(slug)}/releases/from-github`, { tag, files }),
-  updateSettings: (slug: string) => request<UpdateSettings>("GET", `/v1/apps/${encodeURIComponent(slug)}/update-settings`),
-  changeUpdateSettings: (slug: string, change: Partial<Pick<UpdateSettings, "watch_releases" | "auto_update">>) =>
-    request<UpdateSettings>("PUT", `/v1/apps/${encodeURIComponent(slug)}/update-settings`, change),
+  releases: (slug: string) =>
+    request<Release[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/releases`),
+  githubReleases: (slug: string) =>
+    request<GithubRelease[]>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/github-releases`,
+    ),
+  submitGithubRelease: (
+    slug: string,
+    tag: string,
+    files: NewRelease["files"],
+  ) =>
+    request<Release>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/releases/from-github`,
+      { tag, files },
+    ),
+  updateSettings: (slug: string) =>
+    request<UpdateSettings>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/update-settings`,
+    ),
+  changeUpdateSettings: (
+    slug: string,
+    change: Partial<Pick<UpdateSettings, "watch_releases" | "auto_update">>,
+  ) =>
+    request<UpdateSettings>(
+      "PUT",
+      `/v1/apps/${encodeURIComponent(slug)}/update-settings`,
+      change,
+    ),
   submitRelease: (slug: string, release: NewRelease) =>
-    request<Release>("POST", `/v1/apps/${encodeURIComponent(slug)}/releases`, release),
+    request<Release>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/releases`,
+      release,
+    ),
   /** Whether an approved, signed build exists (the manifest itself is checked in Rust). */
   /** For installed apps: the release players get, a newer one being checked, and other builds. */
   libraryUpdates: (slugs: string[]) =>
-    request<AppUpdate[]>("GET", `/v1/library/updates?apps=${encodeURIComponent(slugs.join(","))}`),
+    request<AppUpdate[]>(
+      "GET",
+      `/v1/library/updates?apps=${encodeURIComponent(slugs.join(","))}`,
+    ),
   hasBuild: (slug: string) =>
-    request<unknown>("GET", `/v1/apps/${encodeURIComponent(slug)}/manifest`).then(
+    request<unknown>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/manifest`,
+    ).then(
       () => true,
       (err: unknown) => {
         if (err instanceof ApiError && err.status === 404) return false;
@@ -1527,7 +1919,18 @@ export const api = {
   slopBuildSetup: (slug: string) =>
     request<{
       supported: boolean;
-      project_type: "rust" | "go" | "dotnet" | "godot" | "godot-dotnet" | "unity" | "web" | "electron" | "tauri" | "python" | "custom";
+      project_type:
+        | "rust"
+        | "go"
+        | "dotnet"
+        | "godot"
+        | "godot-dotnet"
+        | "unity"
+        | "web"
+        | "electron"
+        | "tauri"
+        | "python"
+        | "custom";
       detected: string | null;
       note: string | null;
       file_path: string;
@@ -1538,111 +1941,254 @@ export const api = {
       check_create_url: string | null;
       build_now_url: string | null;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
-  manage: (slug: string) => request<ManageOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/manage`),
+  manage: (slug: string) =>
+    request<ManageOverview>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/manage`,
+    ),
   /** "Check now" for a frozen app's repository; the freeze if it's still frozen. */
   repoCheck: (slug: string) =>
-    request<ManageOverview["frozen"]>("POST", `/v1/apps/${encodeURIComponent(slug)}/repo-check`),
-  makePublic: (slug: string) => request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
-  cancelMakePublic: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
+    request<ManageOverview["frozen"]>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/repo-check`,
+    ),
+  makePublic: (slug: string) =>
+    request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
+  cancelMakePublic: (slug: string) =>
+    request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
   requestChange: (slug: string, change: ChangeRequest) =>
-    request<AppChange>("POST", `/v1/apps/${encodeURIComponent(slug)}/changes`, change),
+    request<AppChange>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/changes`,
+      change,
+    ),
   cancelChange: (slug: string, id: string) =>
-    request<AppChange>("POST", `/v1/apps/${encodeURIComponent(slug)}/changes/${encodeURIComponent(id)}/cancel`),
+    request<AppChange>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/changes/${encodeURIComponent(id)}/cancel`,
+    ),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
   admin: {
     queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
     /** What needs an admin right now (ops.rs): stale backups, failed deploys, overdue reports… */
-    ops: () => request<Array<{ key: string; title: string; detail: string; link: string; first_seen: string }>>("GET", "/v1/admin/ops"),
+    ops: () =>
+      request<
+        Array<{
+          key: string;
+          title: string;
+          detail: string;
+          link: string;
+          first_seen: string;
+        }>
+      >("GET", "/v1/admin/ops"),
     /** Sensitive actions waiting for (or done after) enough staff approvals (staff.rs). */
-    actions: (all = false) => request<StaffActions>("GET", `/v1/admin/actions${all ? "?status=all" : ""}`),
-    approveAction: (id: string) => request<unknown>("POST", `/v1/admin/actions/${id}/approve`),
-    cancelAction: (id: string) => request<void>("POST", `/v1/admin/actions/${id}/cancel`),
+    actions: (all = false) =>
+      request<StaffActions>(
+        "GET",
+        `/v1/admin/actions${all ? "?status=all" : ""}`,
+      ),
+    approveAction: (id: string) =>
+      request<unknown>("POST", `/v1/admin/actions/${id}/approve`),
+    cancelAction: (id: string) =>
+      request<void>("POST", `/v1/admin/actions/${id}/cancel`),
     staff: () => request<StaffList>("GET", "/v1/admin/staff"),
     changeRole: (userId: string, role: StaffRole, grant: boolean) =>
-      request<unknown>("POST", `/v1/admin/staff/${encodeURIComponent(userId)}/roles`, { role, grant }),
+      request<unknown>(
+        "POST",
+        `/v1/admin/staff/${encodeURIComponent(userId)}/roles`,
+        { role, grant },
+      ),
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
       request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),
-    apps: (status?: AppStatus) => request<AdminApp[]>("GET", `/v1/admin/apps${query({ status })}`),
+    apps: (status?: AppStatus) =>
+      request<AdminApp[]>("GET", `/v1/admin/apps${query({ status })}`),
     audit: () => request<AuditEntry[]>("GET", "/v1/admin/audit"),
-    approve: (id: string) => request<void>("POST", `/v1/admin/releases/${id}/approve`),
-    reject: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
+    approve: (id: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/approve`),
+    reject: (id: string, reason: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
     /** Clears a scan finding or Defender result judged a false positive (logged). */
     closeAbuse: (id: string, note: string, acted: boolean) =>
       request<void>("POST", `/v1/admin/abuse/${id}/dismiss`, { note, acted }),
     /** Keeps a live release a re-scan flagged, as a false positive (logged). */
     clearRescan: (id: string, platform: string, reason: string) =>
-      request<void>("POST", `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/rescan-clear`, { reason }),
+      request<void>(
+        "POST",
+        `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/rescan-clear`,
+        { reason },
+      ),
     clearScan: (id: string, platform: string, reason: string) =>
-      request<void>("POST", `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/clear`, { reason }),
-    approveChange: (id: string) => request<void>("POST", `/v1/admin/changes/${id}/approve`),
-    rejectChange: (id: string, reason: string) => request<void>("POST", `/v1/admin/changes/${id}/reject`, { reason }),
-    approveMedia: (id: string) => request<void>("POST", `/v1/admin/media/${id}/approve`),
-    rejectMedia: (id: string, reason: string) => request<void>("POST", `/v1/admin/media/${id}/reject`, { reason }),
-    approvePortfolio: (id: string) => request<void>("POST", `/v1/admin/portfolio/${id}/approve`),
-    rejectPortfolio: (id: string, reason: string) => request<void>("POST", `/v1/admin/portfolio/${id}/reject`, { reason }),
-    jobRecord: (id: string) => requestText("GET", `/v1/admin/jobs/${id}/record`),
-    suggest: (problem: string, suggestion: string) => request<void>("POST", `/v1/admin/problems/${problem}/suggest`, { suggestion }),
-    closeProblem: (problem: string, note: string) => request<void>("POST", `/v1/admin/problems/${problem}/close`, { note }),
-    decideDispute: (job: string, body: { outcome: "remove" | "note" | "keep"; reason: string; note?: string }) =>
-      request<void>("POST", `/v1/admin/review-disputes/${job}/decide`, body),
+      request<void>(
+        "POST",
+        `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/clear`,
+        { reason },
+      ),
+    approveChange: (id: string) =>
+      request<void>("POST", `/v1/admin/changes/${id}/approve`),
+    rejectChange: (id: string, reason: string) =>
+      request<void>("POST", `/v1/admin/changes/${id}/reject`, { reason }),
+    approveMedia: (id: string) =>
+      request<void>("POST", `/v1/admin/media/${id}/approve`),
+    rejectMedia: (id: string, reason: string) =>
+      request<void>("POST", `/v1/admin/media/${id}/reject`, { reason }),
+    approvePortfolio: (id: string) =>
+      request<void>("POST", `/v1/admin/portfolio/${id}/approve`),
+    rejectPortfolio: (id: string, reason: string) =>
+      request<void>("POST", `/v1/admin/portfolio/${id}/reject`, { reason }),
+    jobRecord: (id: string) =>
+      requestText("GET", `/v1/admin/jobs/${id}/record`),
+    suggest: (problem: string, suggestion: string) =>
+      request<void>("POST", `/v1/admin/problems/${problem}/suggest`, {
+        suggestion,
+      }),
+    closeProblem: (problem: string, note: string) =>
+      request<void>("POST", `/v1/admin/problems/${problem}/close`, { note }),
+    decideDispute: (
+      job: string,
+      body: {
+        outcome: "remove" | "note" | "keep";
+        reason: string;
+        note?: string;
+      },
+    ) => request<void>("POST", `/v1/admin/review-disputes/${job}/decide`, body),
     tokens: () => request<AdminToken[]>("GET", "/v1/admin/tokens"),
-    createToken: (body: { name: string; scope: AdminToken["scope"]; days: number }) =>
+    createToken: (body: {
+      name: string;
+      scope: AdminToken["scope"];
+      days: number;
+    }) =>
       request<AdminToken & { token: string }>("POST", "/v1/admin/tokens", body),
-    revokeToken: (id: string) => request<void>("POST", `/v1/admin/tokens/${id}/revoke`),
-    revoke: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/revoke`, { reason }),
-    list: (slug: string) => request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/list`),
+    revokeToken: (id: string) =>
+      request<void>("POST", `/v1/admin/tokens/${id}/revoke`),
+    revoke: (id: string, reason: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/revoke`, { reason }),
+    list: (slug: string) =>
+      request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/list`),
     delist: (slug: string, rule: string, reason: string) =>
-      request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/delist`, { rule, reason }),
+      request<void>(
+        "POST",
+        `/v1/admin/apps/${encodeURIComponent(slug)}/delist`,
+        { rule, reason },
+      ),
     act: (
       id: string,
-      body: { action: string; rule: string; law?: string; facts: string; outcome: string; external_reference?: string },
-    ) => request<{ decision: string }>("POST", `/v1/admin/reports/${id}/act`, body),
+      body: {
+        action: string;
+        rule: string;
+        law?: string;
+        facts: string;
+        outcome: string;
+        external_reference?: string;
+      },
+    ) =>
+      request<{ decision: string }>(
+        "POST",
+        `/v1/admin/reports/${id}/act`,
+        body,
+      ),
     dismiss: (id: string, outcome: string, external_reference?: string) =>
-      request<void>("POST", `/v1/admin/reports/${id}/dismiss`, { outcome, external_reference }),
+      request<void>("POST", `/v1/admin/reports/${id}/dismiss`, {
+        outcome,
+        external_reference,
+      }),
     decideAppeal: (id: string, reverse: boolean, reason: string) =>
-      request<void>("POST", `/v1/admin/decisions/${id}/appeal`, { reverse, reason }),
+      request<void>("POST", `/v1/admin/decisions/${id}/appeal`, {
+        reverse,
+        reason,
+      }),
     stage: (slug: string, stage: AppStage) =>
-      request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/stage`, { stage }),
+      request<void>(
+        "POST",
+        `/v1/admin/apps/${encodeURIComponent(slug)}/stage`,
+        { stage },
+      ),
   },
-  addToLibrary: (slug: string) => request<void>("PUT", `/v1/me/library/${encodeURIComponent(slug)}`),
-  removeFromLibrary: (slug: string) => request<void>("DELETE", `/v1/me/library/${encodeURIComponent(slug)}`),
+  addToLibrary: (slug: string) =>
+    request<void>("PUT", `/v1/me/library/${encodeURIComponent(slug)}`),
+  removeFromLibrary: (slug: string) =>
+    request<void>("DELETE", `/v1/me/library/${encodeURIComponent(slug)}`),
   desktopRequest: (id: string) =>
-    request<{ device_name: string; expires_at: string }>("GET", `/v1/auth/desktop/requests/${encodeURIComponent(id)}`),
+    request<{ device_name: string; expires_at: string }>(
+      "GET",
+      `/v1/auth/desktop/requests/${encodeURIComponent(id)}`,
+    ),
   approveDesktop: (id: string) =>
-    request<{ redirect_url: string }>("POST", `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`),
+    request<{ redirect_url: string }>(
+      "POST",
+      `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`,
+    ),
 
-  providers: () => request<Record<SignInProvider, boolean>>("GET", "/v1/auth/providers"),
+  providers: () =>
+    request<Record<SignInProvider, boolean>>("GET", "/v1/auth/providers"),
   signingKeys: {
     list: () =>
-      request<Array<{ id: string; name: string; fingerprint: string; created_at: string; active_from: string; active: boolean }>>(
-        "GET",
-        "/v1/me/signing-keys",
-      ),
-    add: (name: string, public_key: string) => request<unknown>("POST", "/v1/me/signing-keys", { name, public_key }),
-    remove: (id: string) => request<void>("DELETE", `/v1/me/signing-keys/${encodeURIComponent(id)}`),
+      request<
+        Array<{
+          id: string;
+          name: string;
+          fingerprint: string;
+          created_at: string;
+          active_from: string;
+          active: boolean;
+        }>
+      >("GET", "/v1/me/signing-keys"),
+    add: (name: string, public_key: string) =>
+      request<unknown>("POST", "/v1/me/signing-keys", { name, public_key }),
+    remove: (id: string) =>
+      request<void>("DELETE", `/v1/me/signing-keys/${encodeURIComponent(id)}`),
   },
   passkeys: {
     list: () =>
-      request<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>("GET", "/v1/me/passkeys"),
-    remove: (id: string) => request<void>("DELETE", `/v1/me/passkeys/${encodeURIComponent(id)}`),
+      request<
+        Array<{
+          id: string;
+          name: string;
+          created_at: string;
+          last_used_at: string | null;
+        }>
+      >("GET", "/v1/me/passkeys"),
+    remove: (id: string) =>
+      request<void>("DELETE", `/v1/me/passkeys/${encodeURIComponent(id)}`),
     registerStart: () =>
-      request<{ challenge_id: string; options: { publicKey: Record<string, unknown> } }>("POST", "/v1/me/passkeys/register/start"),
+      request<{
+        challenge_id: string;
+        options: { publicKey: Record<string, unknown> };
+      }>("POST", "/v1/me/passkeys/register/start"),
     registerFinish: (challenge_id: string, name: string, credential: unknown) =>
-      request<unknown>("POST", "/v1/me/passkeys/register/finish", { challenge_id, name, credential }),
+      request<unknown>("POST", "/v1/me/passkeys/register/finish", {
+        challenge_id,
+        name,
+        credential,
+      }),
     signInStart: () =>
-      request<{ challenge_id: string; options: { publicKey: Record<string, unknown> } }>("POST", "/v1/auth/passkey/start"),
+      request<{
+        challenge_id: string;
+        options: { publicKey: Record<string, unknown> };
+      }>("POST", "/v1/auth/passkey/start"),
     signInFinish: (challenge_id: string, credential: unknown) =>
-      request<unknown>("POST", "/v1/auth/passkey/finish", { challenge_id, credential }),
+      request<unknown>("POST", "/v1/auth/passkey/finish", {
+        challenge_id,
+        credential,
+      }),
     stepUpStart: () =>
-      request<{ challenge_id: string; options: { publicKey: Record<string, unknown> } }>("POST", "/v1/me/step-up/start"),
+      request<{
+        challenge_id: string;
+        options: { publicKey: Record<string, unknown> };
+      }>("POST", "/v1/me/step-up/start"),
     stepUpFinish: (challenge_id: string, credential: unknown) =>
-      request<void>("POST", "/v1/me/step-up/finish", { challenge_id, credential }),
+      request<void>("POST", "/v1/me/step-up/finish", {
+        challenge_id,
+        credential,
+      }),
   },
   /** The sign-ins linked to the account (crates/slop-api/src/auth/mod.rs). */
   identities: () => request<LinkedIdentity[]>("GET", "/v1/me/identities"),
   unlink: (provider: string, subject: string) =>
-    request<void>("DELETE", `/v1/me/identities/${encodeURIComponent(provider)}/${encodeURIComponent(subject)}`),
+    request<void>(
+      "DELETE",
+      `/v1/me/identities/${encodeURIComponent(provider)}/${encodeURIComponent(subject)}`,
+    ),
   /** Combining with the account of a sign-in being linked (auth/merge.rs). */
   combine: {
     preview: () => request<CombinePreview>("GET", "/v1/auth/combine"),
@@ -1651,45 +2197,100 @@ export const api = {
   },
   /** How to prove you own a repository, and whether you have (repo_owner.rs). */
   repoOwnership: (repo_url: string, repo_token?: RepoTokenInput) =>
-    request<RepoOwnership>("POST", "/v1/repos/ownership", { repo_url, repo_token }),
+    request<RepoOwnership>("POST", "/v1/repos/ownership", {
+      repo_url,
+      repo_token,
+    }),
   checkRepoCode: (repo_url: string, repo_token?: RepoTokenInput) =>
-    request<RepoOwnership>("POST", "/v1/repos/ownership/check", { repo_url, repo_token }),
+    request<RepoOwnership>("POST", "/v1/repos/ownership/check", {
+      repo_url,
+      repo_token,
+    }),
   /** A private repository outside GitHub: its read-only token (never shown again once saved). */
   repoToken: {
-    status: (slug: string) => request<RepoTokenStatus>("GET", `/v1/apps/${encodeURIComponent(slug)}/repo-token`),
+    status: (slug: string) =>
+      request<RepoTokenStatus>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/repo-token`,
+      ),
     save: (slug: string, t: RepoTokenInput) =>
-      request<RepoTokenStatus>("PUT", `/v1/apps/${encodeURIComponent(slug)}/repo-token`, t),
-    forget: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/repo-token`),
+      request<RepoTokenStatus>(
+        "PUT",
+        `/v1/apps/${encodeURIComponent(slug)}/repo-token`,
+        t,
+      ),
+    forget: (slug: string) =>
+      request<void>(
+        "DELETE",
+        `/v1/apps/${encodeURIComponent(slug)}/repo-token`,
+      ),
   },
   /** The newest desktop app build for a platform (for the download button). */
   desktopLatest: (platform: "windows" | "mac" | "linux-deb" | "linux-rpm") =>
-    request<{ version: string; url: string }>("GET", `/v1/desktop/latest/${platform}`),
+    request<{ version: string; url: string }>(
+      "GET",
+      `/v1/desktop/latest/${platform}`,
+    ),
   /** What this server checks, so pages only claim what's true. */
   server: () =>
-    request<{ scanning: boolean; maker_signatures_required: boolean; simulation: boolean }>("GET", "/v1/server"),
-  ratings: (slug: string) => request<Ratings>("GET", `/v1/apps/${encodeURIComponent(slug)}/ratings`),
+    request<{
+      scanning: boolean;
+      maker_signatures_required: boolean;
+      simulation: boolean;
+    }>("GET", "/v1/server"),
+  ratings: (slug: string) =>
+    request<Ratings>("GET", `/v1/apps/${encodeURIComponent(slug)}/ratings`),
   /** The maker's own breakdown by version and platform. */
   ratingsBreakdown: (slug: string) =>
-    request<RatingBreakdown>("GET", `/v1/apps/${encodeURIComponent(slug)}/ratings/breakdown`),
+    request<RatingBreakdown>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/ratings/breakdown`,
+    ),
   featured: () => request<FeaturedApp[]>("GET", "/v1/featured"),
   vote: (slug: string, vote: "not_slop" | "slop" | null) =>
-    request<Ratings>("POST", `/v1/apps/${encodeURIComponent(slug)}/vote`, { vote }),
+    request<Ratings>("POST", `/v1/apps/${encodeURIComponent(slug)}/vote`, {
+      vote,
+    }),
   forYou: () => request<ForYou>("GET", "/v1/me/for-you"),
   people: {
     list: (q: PeopleQuery = {}) =>
-      request<{ people: CreativeCard[]; skills: Array<Skill & { count: number }> }>("GET", `/v1/people${query(q)}`),
+      request<{
+        people: CreativeCard[];
+        skills: Array<Skill & { count: number }>;
+      }>("GET", `/v1/people${query(q)}`),
     skills: () => request<Skill[]>("GET", "/v1/people/skills"),
-    page: (handle: string) => request<CreativePage>("GET", `/v1/people/${encodeURIComponent(handle)}`),
+    page: (handle: string) =>
+      request<CreativePage>("GET", `/v1/people/${encodeURIComponent(handle)}`),
     mine: () => request<MyProfile>("GET", "/v1/me/creative"),
     save: (p: ProfileInput) => request<MyProfile>("PUT", "/v1/me/creative", p),
-    portfolio: () => request<PortfolioOverview>("GET", "/v1/me/creative/portfolio"),
+    portfolio: () =>
+      request<PortfolioOverview>("GET", "/v1/me/creative/portfolio"),
     checkPortfolio: (repo_url?: string) =>
-      request<PortfolioOverview>("POST", "/v1/me/creative/portfolio/check", repo_url ? { repo_url } : {}),
-    setPortfolioOrder: (keys: string[]) => request<PortfolioOverview>("PUT", "/v1/me/creative/portfolio/order", { keys }),
-    getPaid: () => request<{ url: string | null; status: string }>("POST", "/v1/me/creative/stripe"),
-    refreshPaid: () => request<{ url: string | null; status: string }>("POST", "/v1/me/creative/stripe/refresh"),
+      request<PortfolioOverview>(
+        "POST",
+        "/v1/me/creative/portfolio/check",
+        repo_url ? { repo_url } : {},
+      ),
+    setPortfolioOrder: (keys: string[]) =>
+      request<PortfolioOverview>("PUT", "/v1/me/creative/portfolio/order", {
+        keys,
+      }),
+    getPaid: () =>
+      request<{ url: string | null; status: string }>(
+        "POST",
+        "/v1/me/creative/stripe",
+      ),
+    refreshPaid: () =>
+      request<{ url: string | null; status: string }>(
+        "POST",
+        "/v1/me/creative/stripe/refresh",
+      ),
     reply: (jobId: string, reply: string) =>
-      request<void>("PUT", `/v1/people/reviews/${encodeURIComponent(jobId)}/reply`, { reply }),
+      request<void>(
+        "PUT",
+        `/v1/people/reviews/${encodeURIComponent(jobId)}/reply`,
+        { reply },
+      ),
     hire: (
       handle: string,
       body: {
@@ -1703,125 +2304,287 @@ export const api = {
         exact_wording_ack: boolean;
         confirm_adult: boolean;
       },
-    ) => request<Job>("POST", `/v1/people/${encodeURIComponent(handle)}/hire`, body),
-    jobs: () => request<{ as_client: JobCard[]; as_creative: JobCard[]; waiting_on_you: number }>("GET", "/v1/me/jobs"),
-    job: (id: string) => request<Job>("GET", `/v1/jobs/${encodeURIComponent(id)}`),
+    ) =>
+      request<Job>(
+        "POST",
+        `/v1/people/${encodeURIComponent(handle)}/hire`,
+        body,
+      ),
+    jobs: () =>
+      request<{
+        as_client: JobCard[];
+        as_creative: JobCard[];
+        waiting_on_you: number;
+      }>("GET", "/v1/me/jobs"),
+    job: (id: string) =>
+      request<Job>("GET", `/v1/jobs/${encodeURIComponent(id)}`),
     step: (id: string, step: string, body: unknown = {}) =>
       request<Job>(
         step === "review" || step === "review/dispute-answer" ? "PUT" : "POST",
         `/v1/jobs/${encodeURIComponent(id)}/${step}`,
         body,
       ),
-    record: (id: string) => requestText("GET", `/v1/jobs/${encodeURIComponent(id)}/record`),
-    conversationCopy: (id: string) => request<ConversationCopy>("GET", `/v1/jobs/${encodeURIComponent(id)}/conversation`),
+    record: (id: string) =>
+      requestText("GET", `/v1/jobs/${encodeURIComponent(id)}/record`),
+    conversationCopy: (id: string) =>
+      request<ConversationCopy>(
+        "GET",
+        `/v1/jobs/${encodeURIComponent(id)}/conversation`,
+      ),
     submitCopy: (id: string, copy: ConversationCopy) =>
-      request<{ verified_messages: number; unverified_messages: number }>("POST", `/v1/jobs/${encodeURIComponent(id)}/evidence`, { copy }),
+      request<{ verified_messages: number; unverified_messages: number }>(
+        "POST",
+        `/v1/jobs/${encodeURIComponent(id)}/evidence`,
+        { copy },
+      ),
     disputeReview: (jobId: string, reason: string, statement: string) =>
-      request<void>("POST", `/v1/people/reviews/${encodeURIComponent(jobId)}/dispute`, { reason, statement }),
-    pay: (id: string) => request<{ url: string | null; job: Job }>("POST", `/v1/jobs/${encodeURIComponent(id)}/pay`),
-    checkPayment: (id: string) => request<Job>("POST", `/v1/jobs/${encodeURIComponent(id)}/payment/check`),
+      request<void>(
+        "POST",
+        `/v1/people/reviews/${encodeURIComponent(jobId)}/dispute`,
+        { reason, statement },
+      ),
+    pay: (id: string) =>
+      request<{ url: string | null; job: Job }>(
+        "POST",
+        `/v1/jobs/${encodeURIComponent(id)}/pay`,
+      ),
+    checkPayment: (id: string) =>
+      request<Job>("POST", `/v1/jobs/${encodeURIComponent(id)}/payment/check`),
   },
   simUsers: () => request<SimUser[]>("GET", "/v1/sim/users"),
-  simLogin: (id: string) => request<void>("POST", `/v1/sim/login/${encodeURIComponent(id)}`),
+  simLogin: (id: string) =>
+    request<void>("POST", `/v1/sim/login/${encodeURIComponent(id)}`),
   /** Full-page navigation target that starts GitHub sign-in. */
-  githubSignInUrl: (returnTo: string) => `${API_BASE}/v1/auth/github/start${query({ return_to: returnTo })}`,
+  githubSignInUrl: (returnTo: string) =>
+    `${API_BASE}/v1/auth/github/start${query({ return_to: returnTo })}`,
   signInUrl: (provider: SignInProvider, returnTo: string) =>
     `${API_BASE}/v1/auth/${provider}/start${query({ return_to: returnTo })}`,
   /** Linking another sign-in: signs in again first if needed, then to the provider. */
   linkUrl: (provider: SignInProvider, returnTo = "/account#sign-ins") =>
     `${API_BASE}/v1/auth/${provider}/link${query({ return_to: returnTo })}`,
   signupInfo: () => request<SignupInfo>("GET", "/v1/auth/signup"),
-  signup: (body: { display_name: string; country_code: string; age_confirmed: boolean; accept_terms: boolean }) =>
+  signup: (body: {
+    display_name: string;
+    country_code: string;
+    age_confirmed: boolean;
+    accept_terms: boolean;
+  }) =>
     request<{ user: Me; return_to: string }>("POST", "/v1/auth/signup", body),
   signout: () => request<void>("POST", "/v1/auth/signout"),
   me: () => request<Me>("GET", "/v1/me"),
-  updateMe: (changes: { share_playtime?: boolean; personalize?: boolean; profile_public?: boolean }) => request<void>("PATCH", "/v1/me", changes),
+  updateMe: (changes: {
+    share_playtime?: boolean;
+    personalize?: boolean;
+    profile_public?: boolean;
+  }) => request<void>("PATCH", "/v1/me", changes),
   players: (slug: string) =>
-    request<{ playing_now: number; peak_this_month: number; daily_peaks: Array<{ day: string; peak: number }> }>(
-      "GET",
-      `/v1/apps/${encodeURIComponent(slug)}/players`,
-    ),
+    request<{
+      playing_now: number;
+      peak_this_month: number;
+      daily_peaks: Array<{ day: string; peak: number }>;
+    }>("GET", `/v1/apps/${encodeURIComponent(slug)}/players`),
   reviews: {
     list: (slug: string, vote?: "not_slop" | "slop", offset?: number) =>
-      request<{ reviews: AppReview[]; not_slop: number; slop: number; next_offset: number | null }>(
+      request<{
+        reviews: AppReview[];
+        not_slop: number;
+        slop: number;
+        next_offset: number | null;
+      }>(
         "GET",
         `/v1/apps/${encodeURIComponent(slug)}/reviews${query({ vote, offset })}`,
       ),
-    write: (slug: string, body: string) => request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/review`, { body }),
-    remove: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/review`),
+    write: (slug: string, body: string) =>
+      request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/review`, {
+        body,
+      }),
+    remove: (slug: string) =>
+      request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/review`),
   },
   private: {
-    mine: () => request<{ mine: AppSummary[]; shared: Array<AppSummary & { owner: string }> }>("GET", "/v1/me/private"),
+    mine: () =>
+      request<{
+        mine: AppSummary[];
+        shared: Array<AppSummary & { owner: string }>;
+      }>("GET", "/v1/me/private"),
     shares: (slug: string) =>
-      request<Array<{ user_id: string | null; team: string | null; name: string; shared_at: string }>>(
-        "GET",
-        `/v1/apps/${encodeURIComponent(slug)}/shares`,
-      ),
+      request<
+        Array<{
+          user_id: string | null;
+          team: string | null;
+          name: string;
+          shared_at: string;
+        }>
+      >("GET", `/v1/apps/${encodeURIComponent(slug)}/shares`),
     share: (slug: string, to: { user?: string; team?: string }) =>
-      request<Array<{ user_id: string | null; team: string | null; name: string; shared_at: string }>>(
-        "POST",
-        `/v1/apps/${encodeURIComponent(slug)}/shares`,
-        to,
-      ),
+      request<
+        Array<{
+          user_id: string | null;
+          team: string | null;
+          name: string;
+          shared_at: string;
+        }>
+      >("POST", `/v1/apps/${encodeURIComponent(slug)}/shares`, to),
     unshareTeam: (slug: string, team: string) =>
-      request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/team-shares/${encodeURIComponent(team)}`),
+      request<void>(
+        "DELETE",
+        `/v1/apps/${encodeURIComponent(slug)}/team-shares/${encodeURIComponent(team)}`,
+      ),
     unshare: (slug: string, userId: string) =>
-      request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/shares/${encodeURIComponent(userId)}`),
+      request<void>(
+        "DELETE",
+        `/v1/apps/${encodeURIComponent(slug)}/shares/${encodeURIComponent(userId)}`,
+      ),
   },
   push: {
     key: () => request<{ public_key: string }>("GET", "/v1/push/key"),
-    subscribe: (subscription: PushSubscriptionJSON) => request<void>("POST", "/v1/me/push", subscription),
-    unsubscribe: (endpoint: string) => request<void>("DELETE", "/v1/me/push", { endpoint }),
+    subscribe: (subscription: PushSubscriptionJSON) =>
+      request<void>("POST", "/v1/me/push", subscription),
+    unsubscribe: (endpoint: string) =>
+      request<void>("DELETE", "/v1/me/push", { endpoint }),
   },
   friends: {
     list: () => request<Friends>("GET", "/v1/me/friends"),
     /** A profile link or user ID; "friends" when they had already asked you. */
-    request: (user: string) => request<{ status: "requested" | "friends" }>("POST", "/v1/me/friends", { user }),
-    accept: (id: string) => request<void>("POST", `/v1/me/friends/${encodeURIComponent(id)}/accept`),
+    request: (user: string) =>
+      request<{ status: "requested" | "friends" }>("POST", "/v1/me/friends", {
+        user,
+      }),
+    accept: (id: string) =>
+      request<void>("POST", `/v1/me/friends/${encodeURIComponent(id)}/accept`),
     /** Removes a friend, declines their request or cancels yours. */
-    remove: (id: string) => request<void>("DELETE", `/v1/me/friends/${encodeURIComponent(id)}`),
+    remove: (id: string) =>
+      request<void>("DELETE", `/v1/me/friends/${encodeURIComponent(id)}`),
     blocks: () => request<FriendPerson[]>("GET", "/v1/me/blocks"),
-    block: (id: string) => request<void>("PUT", `/v1/me/blocks/${encodeURIComponent(id)}`),
-    unblock: (id: string) => request<void>("DELETE", `/v1/me/blocks/${encodeURIComponent(id)}`),
-    connection: (id: string) => request<Connection>("GET", `/v1/users/${encodeURIComponent(id)}/connection`),
-    chatSettings: () => request<{ from_anyone: boolean; locked: boolean }>("GET", "/v1/me/chat-settings"),
+    block: (id: string) =>
+      request<void>("PUT", `/v1/me/blocks/${encodeURIComponent(id)}`),
+    unblock: (id: string) =>
+      request<void>("DELETE", `/v1/me/blocks/${encodeURIComponent(id)}`),
+    connection: (id: string) =>
+      request<Connection>(
+        "GET",
+        `/v1/users/${encodeURIComponent(id)}/connection`,
+      ),
+    chatSettings: () =>
+      request<{ from_anyone: boolean; locked: boolean }>(
+        "GET",
+        "/v1/me/chat-settings",
+      ),
     setChatSettings: (from_anyone: boolean) =>
-      request<{ from_anyone: boolean; locked: boolean }>("PUT", "/v1/me/chat-settings", { from_anyone }),
+      request<{ from_anyone: boolean; locked: boolean }>(
+        "PUT",
+        "/v1/me/chat-settings",
+        { from_anyone },
+      ),
   },
   teams: {
     list: () => request<TeamCard[]>("GET", "/v1/teams"),
-    mine: () => request<{ teams: TeamCard[]; invites: TeamCard[] }>("GET", "/v1/me/teams"),
-    create: (body: { slug: string; name: string; kind: "player" | "official"; about: string; join_policy?: string; github_org?: string }) =>
-      request<{ slug: string }>("POST", "/v1/teams", body),
-    page: (slug: string) => request<TeamPage>("GET", `/v1/teams/${encodeURIComponent(slug)}`),
-    update: (slug: string, body: { name?: string; about?: string; join_policy?: string; dns_domain?: string }) =>
-      request<void>("PATCH", `/v1/teams/${encodeURIComponent(slug)}`, body),
-    join: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/join`),
-    leave: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/leave`),
-    invite: (slug: string, user: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/invites`, { user }),
-    accept: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/invites/accept`),
-    decline: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/invites/decline`),
+    mine: () =>
+      request<{ teams: TeamCard[]; invites: TeamCard[] }>(
+        "GET",
+        "/v1/me/teams",
+      ),
+    create: (body: {
+      slug: string;
+      name: string;
+      kind: "player" | "official";
+      about: string;
+      join_policy?: string;
+      github_org?: string;
+    }) => request<{ slug: string }>("POST", "/v1/teams", body),
+    page: (slug: string) =>
+      request<TeamPage>("GET", `/v1/teams/${encodeURIComponent(slug)}`),
+    update: (
+      slug: string,
+      body: {
+        name?: string;
+        about?: string;
+        join_policy?: string;
+        dns_domain?: string;
+      },
+    ) => request<void>("PATCH", `/v1/teams/${encodeURIComponent(slug)}`, body),
+    join: (slug: string) =>
+      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/join`),
+    leave: (slug: string) =>
+      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/leave`),
+    invite: (slug: string, user: string) =>
+      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/invites`, {
+        user,
+      }),
+    accept: (slug: string) =>
+      request<void>(
+        "POST",
+        `/v1/teams/${encodeURIComponent(slug)}/invites/accept`,
+      ),
+    decline: (slug: string) =>
+      request<void>(
+        "POST",
+        `/v1/teams/${encodeURIComponent(slug)}/invites/decline`,
+      ),
     removeMember: (slug: string, userId: string) =>
-      request<void>("DELETE", `/v1/teams/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`),
+      request<void>(
+        "DELETE",
+        `/v1/teams/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`,
+      ),
     setRole: (slug: string, userId: string, role: string) =>
-      request<void>("PUT", `/v1/teams/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`, { role }),
+      request<void>(
+        "PUT",
+        `/v1/teams/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`,
+        { role },
+      ),
     pick: (slug: string, app_slug: string, note: string) =>
-      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/picks`, { app_slug, note }),
-    unpick: (slug: string, id: string) => request<void>("DELETE", `/v1/teams/${encodeURIComponent(slug)}/picks/${encodeURIComponent(id)}`),
-    addEvent: (slug: string, body: { title: string; starts_at: string; app_slug?: string }) =>
-      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/events`, body),
+      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/picks`, {
+        app_slug,
+        note,
+      }),
+    unpick: (slug: string, id: string) =>
+      request<void>(
+        "DELETE",
+        `/v1/teams/${encodeURIComponent(slug)}/picks/${encodeURIComponent(id)}`,
+      ),
+    addEvent: (
+      slug: string,
+      body: { title: string; starts_at: string; app_slug?: string },
+    ) =>
+      request<void>(
+        "POST",
+        `/v1/teams/${encodeURIComponent(slug)}/events`,
+        body,
+      ),
     removeEvent: (slug: string, id: string) =>
-      request<void>("DELETE", `/v1/teams/${encodeURIComponent(slug)}/events/${encodeURIComponent(id)}`),
+      request<void>(
+        "DELETE",
+        `/v1/teams/${encodeURIComponent(slug)}/events/${encodeURIComponent(id)}`,
+      ),
     verify: (slug: string) =>
-      request<{ verified: boolean; checks: TeamPage["checks"] }>("POST", `/v1/teams/${encodeURIComponent(slug)}/verify`),
+      request<{ verified: boolean; checks: TeamPage["checks"] }>(
+        "POST",
+        `/v1/teams/${encodeURIComponent(slug)}/verify`,
+      ),
   },
   registerBranch: (
     parent: string,
-    body: { slug: string; title: string; summary: string; repo_url: string; license_spdx: string; kind: string; note: string; platforms: string[] },
-  ) => request<{ slug: string }>("POST", `/v1/apps/${encodeURIComponent(parent)}/branches`, body),
-  profile: (id: string) => request<UserProfile>("GET", `/v1/users/${encodeURIComponent(id)}`),
+    body: {
+      slug: string;
+      title: string;
+      summary: string;
+      repo_url: string;
+      license_spdx: string;
+      kind: string;
+      note: string;
+      platforms: string[];
+    },
+  ) =>
+    request<{ slug: string }>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(parent)}/branches`,
+      body,
+    ),
+  profile: (id: string) =>
+    request<UserProfile>("GET", `/v1/users/${encodeURIComponent(id)}`),
   donations: {
-    info: (slug: string) => request<DonateInfo>("GET", `/v1/apps/${encodeURIComponent(slug)}/donate`),
+    info: (slug: string) =>
+      request<DonateInfo>("GET", `/v1/apps/${encodeURIComponent(slug)}/donate`),
     quote: (slug: string, amount_minor: number) =>
       request<DonationQuote & { currency: string; consent: string | null }>(
         "GET",
@@ -1838,41 +2601,119 @@ export const api = {
         confirm_adult: boolean;
         challenge?: { id: string; nonce: string };
       },
-    ) => request<{ url: string | null; id: string; done: boolean }>("POST", `/v1/apps/${encodeURIComponent(slug)}/donate`, body),
-    check: (id: string) => request<void>("POST", `/v1/me/donations/${encodeURIComponent(id)}/check`),
-    mine: () => request<{ donations: MyDonation[]; server_donations: MyServerDonation[] }>("GET", "/v1/me/donations"),
-    cancel: (id: string) => request<void>("POST", `/v1/me/server-donations/${encodeURIComponent(id)}/cancel`),
-    settings: (slug: string) => request<DonationSettings>("GET", `/v1/apps/${encodeURIComponent(slug)}/donations/settings`),
+    ) =>
+      request<{ url: string | null; id: string; done: boolean }>(
+        "POST",
+        `/v1/apps/${encodeURIComponent(slug)}/donate`,
+        body,
+      ),
+    check: (id: string) =>
+      request<void>("POST", `/v1/me/donations/${encodeURIComponent(id)}/check`),
+    mine: () =>
+      request<{
+        donations: MyDonation[];
+        server_donations: MyServerDonation[];
+      }>("GET", "/v1/me/donations"),
+    cancel: (id: string) =>
+      request<void>(
+        "POST",
+        `/v1/me/server-donations/${encodeURIComponent(id)}/cancel`,
+      ),
+    settings: (slug: string) =>
+      request<DonationSettings>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/donations/settings`,
+      ),
     saveSettings: (
       slug: string,
-      body: { donations_on: boolean; donation_suggested_minor: number; donation_currency: string; runs_servers: boolean; servers_statement: string | null },
-    ) => request<DonationSettings>("PUT", `/v1/apps/${encodeURIComponent(slug)}/donations/settings`, body),
-    serversShutDown: (slug: string) => request<{ cancelled: number }>("POST", `/v1/apps/${encodeURIComponent(slug)}/servers/shut-down`),
-    summary: (slug: string) => request<DonationSummary>("GET", `/v1/apps/${encodeURIComponent(slug)}/donations`),
-    refund: (id: string) => request<void>("POST", `/v1/donations/${encodeURIComponent(id)}/refund`),
+      body: {
+        donations_on: boolean;
+        donation_suggested_minor: number;
+        donation_currency: string;
+        runs_servers: boolean;
+        servers_statement: string | null;
+      },
+    ) =>
+      request<DonationSettings>(
+        "PUT",
+        `/v1/apps/${encodeURIComponent(slug)}/donations/settings`,
+        body,
+      ),
+    serversShutDown: (slug: string) =>
+      request<{ cancelled: number }>(
+        "POST",
+        `/v1/apps/${encodeURIComponent(slug)}/servers/shut-down`,
+      ),
+    summary: (slug: string) =>
+      request<DonationSummary>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/donations`,
+      ),
+    refund: (id: string) =>
+      request<void>("POST", `/v1/donations/${encodeURIComponent(id)}/refund`),
     account: () => request<DonationAccount>("GET", "/v1/me/donation-account"),
     /** Needs a sign-in from the last few minutes; takes effect after 72 hours. */
     changeAccount: (kind: "switch" | "disconnect", return_to?: string) =>
-      request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account/change", { kind, return_to }),
-    cancelAccountChange: () => request<void>("POST", "/v1/me/donation-account/change/cancel"),
+      request<{ url: string | null; status: string }>(
+        "POST",
+        "/v1/me/donation-account/change",
+        { kind, return_to },
+      ),
+    cancelAccountChange: () =>
+      request<void>("POST", "/v1/me/donation-account/change/cancel"),
     challenge: () => request<PowChallenge>("POST", "/v1/donations/challenge"),
     setVat: (vat_number: string | null) =>
-      request<{ vat_number: string | null; checked: boolean; note: string | null }>("PUT", "/v1/me/vat", { vat_number }),
-    onboard: (body: { tax_notice_ack: boolean; confirm_adult: boolean; return_to?: string }) =>
-      request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account", body),
-    refreshAccount: () => request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account/refresh"),
-    feeStatements: () => request<{ statements: FeeStatement[]; vat: VatTreatment }>("GET", "/v1/me/fee-statements"),
+      request<{
+        vat_number: string | null;
+        checked: boolean;
+        note: string | null;
+      }>("PUT", "/v1/me/vat", { vat_number }),
+    onboard: (body: {
+      tax_notice_ack: boolean;
+      confirm_adult: boolean;
+      return_to?: string;
+    }) =>
+      request<{ url: string | null; status: string }>(
+        "POST",
+        "/v1/me/donation-account",
+        body,
+      ),
+    refreshAccount: () =>
+      request<{ url: string | null; status: string }>(
+        "POST",
+        "/v1/me/donation-account/refresh",
+      ),
+    feeStatements: () =>
+      request<{ statements: FeeStatement[]; vat: VatTreatment }>(
+        "GET",
+        "/v1/me/fee-statements",
+      ),
   },
   interested: {
-    mine: () => request<Array<AppSummary & { interested_at: string }>>("GET", "/v1/me/interested"),
-    add: (slug: string) => request<void>("PUT", `/v1/me/interested/${encodeURIComponent(slug)}`),
-    remove: (slug: string) => request<void>("DELETE", `/v1/me/interested/${encodeURIComponent(slug)}`),
+    mine: () =>
+      request<Array<AppSummary & { interested_at: string }>>(
+        "GET",
+        "/v1/me/interested",
+      ),
+    add: (slug: string) =>
+      request<void>("PUT", `/v1/me/interested/${encodeURIComponent(slug)}`),
+    remove: (slug: string) =>
+      request<void>("DELETE", `/v1/me/interested/${encodeURIComponent(slug)}`),
     /** Upcoming apps for this viewer, each with why; the most anticipated when not personal. */
-    forYou: () => request<Array<AppSummary & { reason: string }>>("GET", "/v1/upcoming/for-you"),
+    forYou: () =>
+      request<Array<AppSummary & { reason: string }>>(
+        "GET",
+        "/v1/upcoming/for-you",
+      ),
   },
   notifications: {
-    list: () => request<{ unread: number; items: Notification[] }>("GET", "/v1/me/notifications"),
-    read: (ids: string[] = []) => request<void>("POST", "/v1/me/notifications/read", { ids }),
+    list: () =>
+      request<{ unread: number; items: Notification[] }>(
+        "GET",
+        "/v1/me/notifications",
+      ),
+    read: (ids: string[] = []) =>
+      request<void>("POST", "/v1/me/notifications/read", { ids }),
     prefs: () => request<EmailPrefs>("GET", "/v1/me/email-prefs"),
     setPrefs: (changes: Partial<Record<Notification["category"], boolean>>) =>
       request<EmailPrefs>("PUT", "/v1/me/email-prefs", changes),
@@ -1880,23 +2721,39 @@ export const api = {
   legal: {
     index: () => request<LegalIndexEntry[]>("GET", "/v1/legal"),
     document: (kind: string, version?: string) =>
-      request<LegalDocument>("GET", `/v1/legal/${encodeURIComponent(kind)}${query({ version })}`),
+      request<LegalDocument>(
+        "GET",
+        `/v1/legal/${encodeURIComponent(kind)}${query({ version })}`,
+      ),
     notices: () => request<LegalNotice[]>("GET", "/v1/me/legal"),
-    accept: (kind: LegalKind, version: string) => request<void>("POST", "/v1/me/legal/accept", { kind, version }),
+    accept: (kind: LegalKind, version: string) =>
+      request<void>("POST", "/v1/me/legal/accept", { kind, version }),
   },
   reports: {
-    reasons: (kind: ReportKind) => request<ReportReason[]>("GET", `/v1/reports/reasons${query({ kind })}`),
-    send: (body: ReportBody) => request<{ reference: string; due_at: string }>("POST", "/v1/reports", body),
+    reasons: (kind: ReportKind) =>
+      request<ReportReason[]>("GET", `/v1/reports/reasons${query({ kind })}`),
+    send: (body: ReportBody) =>
+      request<{ reference: string; due_at: string }>(
+        "POST",
+        "/v1/reports",
+        body,
+      ),
     mine: () => request<MyReport[]>("GET", "/v1/me/reports"),
   },
   decisions: {
     mine: () => request<ModerationDecision[]>("GET", "/v1/me/decisions"),
     appeal: (id: string, appeal: string, counter_notice?: CounterNotice) =>
-      request<ModerationDecision>("POST", `/v1/me/decisions/${encodeURIComponent(id)}/appeal`, { appeal, counter_notice }),
+      request<ModerationDecision>(
+        "POST",
+        `/v1/me/decisions/${encodeURIComponent(id)}/appeal`,
+        { appeal, counter_notice },
+      ),
   },
   /** Everything linked to the account, as JSON text to save. */
   exportData: () => requestText("GET", "/v1/me/export"),
-  closeAccount: (confirm: string) => request<void>("POST", "/v1/me/close", { confirm }),
+  closeAccount: (confirm: string) =>
+    request<void>("POST", "/v1/me/close", { confirm }),
   sessions: () => request<SessionInfo[]>("GET", "/v1/me/sessions"),
-  revokeSession: (id: string) => request<void>("DELETE", `/v1/me/sessions/${encodeURIComponent(id)}`),
+  revokeSession: (id: string) =>
+    request<void>("DELETE", `/v1/me/sessions/${encodeURIComponent(id)}`),
 };

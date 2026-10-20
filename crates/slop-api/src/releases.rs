@@ -382,6 +382,25 @@ pub(crate) struct ReleaseInfo {
     files: Vec<ReleaseFileInfo>,
     /// Slop Build's source checks: possible secrets and vulnerable dependencies.
     source_checks: Option<serde_json::Value>,
+    /// Slop's own source check (source_scan.rs): licence, monetization notes, package count.
+    repo_scan: Option<serde_json::Value>,
+    /// Advisories for its packages (dep_watch.rs), newest first.
+    advisories: Vec<Advisory>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+pub(crate) struct Advisory {
+    vuln_id: String,
+    ecosystem: String,
+    package: String,
+    version: String,
+    summary: String,
+    fixed: Option<String>,
+    malicious: bool,
+    /// Slop Build's check already showed it at build time.
+    known_at_build: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    found_at: OffsetDateTime,
 }
 
 async fn owned_app(state: &AppState, slug: &str, user: &CurrentUser) -> ApiResult<(Uuid, String)> {
@@ -612,13 +631,22 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     .bind(id)
     .fetch_all(&state.db)
     .await?;
-    let source_checks: Option<serde_json::Value> =
-        sqlx::query_scalar("select source_checks from releases where id = $1")
+    let (source_checks, repo_scan): (Option<serde_json::Value>, Option<serde_json::Value>) =
+        sqlx::query_as("select source_checks, repo_scan from releases where id = $1")
             .bind(id)
             .fetch_one(&state.db)
             .await?;
+    let advisories = sqlx::query_as(
+        "select vuln_id, ecosystem, package, version, summary, fixed, malicious, known_at_build, found_at
+         from release_advisories where release_id = $1 order by malicious desc, found_at desc, package limit 200",
+    )
+    .bind(id)
+    .fetch_all(&state.db)
+    .await?;
     Ok(ReleaseInfo {
         source_checks,
+        repo_scan,
+        advisories,
         id: row.0,
         version: row.1,
         commit_sha: row.2,
@@ -655,6 +683,8 @@ async fn list_releases(
         // reasons and the source checks (which point at possible secrets) stay with the maker.
         if !is_mine {
             release.source_checks = None;
+            release.repo_scan = None;
+            release.advisories.clear();
             for f in &mut release.files {
                 f.cleared_reason = None;
                 if let Some(report) = f.scan_report.as_mut().and_then(|r| r.as_object_mut()) {
@@ -972,6 +1002,8 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
             tracing::info!(release = %id, "release fetched; awaiting review");
             // Pictures that changed with this release wait for their own review.
             crate::media::refresh_for_release(state, app_id, &repo_url, &commit).await;
+            // Licence, monetization and packages, before an update can be approved on its own.
+            crate::source_scan::check_release(state, id).await?;
             crate::updates::try_auto_approve(state, id).await?;
         }
         Err(err) => {

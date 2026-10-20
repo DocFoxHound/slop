@@ -79,6 +79,19 @@ Approve only when:
 - no file's `scan_result` is `rejected`, `blocked` or `on_hold`;
 - and, when `checks.maker_signatures_required` is true, every file has a `provenance`.
 
+Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked` or `failed`):
+
+- `licence.problems`: a missing licence file, one that says a different licence from the store
+  page, source files whose headers name another licence, or a licence that isn't OSI-approved.
+  Each is a reason to reject until the maker fixes it, unless the files show it's fine (a
+  dual-licensed project, a vendored library under its own licence).
+- `monetization`: patterns that suggest the app sells something (payment libraries, in-app
+  purchase APIs, checkout links, loot boxes, premium currencies), each with example
+  `path:line`s. Apps on Slop can't sell anything. Open the examples in the repository at the
+  release's commit and decide: a real purchase is a rejection; a word in a comment isn't.
+- `advisories`: known vulnerabilities in its packages (from OSV). `malicious: true` means the
+  package is malware: reject, or for a live release, ask your admin to withdraw it.
+
 If a scan says `note`, read `scan_detail` and decide. When `checks.scanning` is false, the server
 isn't scanning yet. Say so in an `unsure` note rather than approving on trust: a person decides
 those.

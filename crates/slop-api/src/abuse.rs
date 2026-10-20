@@ -9,6 +9,7 @@
 //! - **Lookalike names:** an app named almost exactly like another maker's app in the store
 //!   (ignoring case, spacing, punctuation and look-alike characters such as 0/o, 1/l).
 //! - **Rate limits:** accounts that keep hitting the per-account limits (limits.rs).
+//! - **Malicious dependencies:** a release using a package OSV lists as malware (dep_watch.rs).
 
 use axum::{
     Json, Router,
@@ -97,16 +98,17 @@ pub fn looks_like(a: &str, b: &str) -> bool {
     a == b || edit_distance(&a, &b) <= 1
 }
 
-struct Found {
-    kind: &'static str,
-    key: String,
-    subject_kind: &'static str,
-    subject_id: Uuid,
-    label: String,
-    detail: Value,
+pub(crate) struct Found {
+    pub kind: &'static str,
+    pub key: String,
+    pub subject_kind: &'static str,
+    pub subject_id: Uuid,
+    pub label: String,
+    pub detail: Value,
 }
 
-async fn record(db: &sqlx::PgPool, f: &Found) -> sqlx::Result<bool> {
+/// Records a signal once (by its key). Returns whether it's new.
+pub(crate) async fn record<'c>(db: impl sqlx::PgExecutor<'c>, f: &Found) -> sqlx::Result<bool> {
     let n = sqlx::query(
         "insert into abuse_signals (id, kind, key, subject_kind, subject_id, subject_label, detail)
          values ($1, $2, $3, $4, $5, $6, $7) on conflict (key) do nothing",

@@ -6,7 +6,9 @@ import { currentStep, progressSteps } from "./PublishProgress";
 const app = (over: Partial<AppDetail> = {}) =>
   ({ slug: "game", stage: "beta", status: "draft", ...over }) as AppDetail;
 
-const file = (over: Partial<Release["files"][number]> = {}): Release["files"][number] => ({
+const file = (
+  over: Partial<Release["files"][number]> = {},
+): Release["files"][number] => ({
   platform: "windows",
   kind: "archive",
   url: "https://github.com/me/game/releases/download/v1/game.zip",
@@ -37,11 +39,23 @@ const release = (over: Partial<Release> = {}): Release => ({
   auto_approved: false,
   files: [file()],
   source_checks: null,
+  repo_scan: {
+    status: "checked",
+    licence: {
+      declared: "MIT",
+      files: [{ path: "LICENSE", spdx: "MIT" }],
+      headers: [],
+      problems: [],
+    },
+    monetization: [],
+  },
+  advisories: [],
   ...over,
 });
 
 const testServer = { scanning: false, maker_signatures_required: false };
-const states = (steps: ReturnType<typeof progressSteps>) => Object.fromEntries(steps.map((s) => [s.title, s.state]));
+const states = (steps: ReturnType<typeof progressSteps>) =>
+  Object.fromEntries(steps.map((s) => [s.title, s.state]));
 
 describe("progressSteps", () => {
   it("asks for a release when there's none", () => {
@@ -58,41 +72,123 @@ describe("progressSteps", () => {
       "Files checked": "done",
       "Maker signature": "skipped",
       Scan: "skipped",
+      "Source check": "done",
       Review: "active",
       "In the store": "waiting",
     });
   });
 
+  it("flags source-check notes until a person has looked", () => {
+    const repo_scan = {
+      status: "checked" as const,
+      licence: {
+        declared: "MIT",
+        files: [],
+        headers: [],
+        problems: ["There's no licence file"],
+      },
+      monetization: [
+        {
+          rule: "loot_box",
+          label: "Loot boxes or gacha",
+          count: 2,
+          examples: ["src/a.gd:3"],
+        },
+      ],
+    };
+    const waiting = progressSteps(app(), [release({ repo_scan })], testServer);
+    expect(waiting.find((s) => s.title === "Source check")).toMatchObject({
+      state: "problem",
+    });
+    expect(
+      String(waiting.find((s) => s.title === "Source check")!.detail),
+    ).toContain("2 notes");
+    const approved = progressSteps(
+      app(),
+      [release({ repo_scan, status: "approved" })],
+      testServer,
+    );
+    expect(states(approved)["Source check"]).toBe("done");
+    expect(
+      states(progressSteps(app(), [release({ repo_scan: null })], testServer))[
+        "Source check"
+      ],
+    ).toBe("active");
+  });
+
   it("flags a missing signature when signatures are required", () => {
-    const steps = progressSteps(app(), [release()], { scanning: false, maker_signatures_required: true });
+    const steps = progressSteps(app(), [release()], {
+      scanning: false,
+      maker_signatures_required: true,
+    });
     const signature = steps.find((s) => s.title === "Maker signature")!;
     expect(signature.state).toBe("problem");
     expect(signature.detail).toContain("no build attestation");
   });
 
   it("shows failed checks and rejections with their reasons", () => {
-    const failed = progressSteps(app(), [release({ status: "failed", status_reason: "download failed: HTTP 404" })], testServer);
-    expect(failed.find((s) => s.title === "Files checked")).toMatchObject({ state: "problem", detail: "download failed: HTTP 404" });
-    const rejected = progressSteps(app(), [release({ status: "rejected", status_reason: "loot boxes" })], testServer);
-    expect(String(rejected.find((s) => s.title === "Review")!.detail)).toContain("loot boxes");
+    const failed = progressSteps(
+      app(),
+      [
+        release({
+          status: "failed",
+          status_reason: "download failed: HTTP 404",
+        }),
+      ],
+      testServer,
+    );
+    expect(failed.find((s) => s.title === "Files checked")).toMatchObject({
+      state: "problem",
+      detail: "download failed: HTTP 404",
+    });
+    const rejected = progressSteps(
+      app(),
+      [release({ status: "rejected", status_reason: "loot boxes" })],
+      testServer,
+    );
+    expect(
+      String(rejected.find((s) => s.title === "Review")!.detail),
+    ).toContain("loot boxes");
   });
 
   it("is waiting for staff once a release is approved", () => {
-    expect(states(progressSteps(app(), [release({ status: "approved" })], testServer))).toMatchObject({
+    expect(
+      states(
+        progressSteps(app(), [release({ status: "approved" })], testServer),
+      ),
+    ).toMatchObject({
       Review: "done",
       "In the store": "active",
     });
-    expect(states(progressSteps(app({ status: "listed" }), [release({ status: "approved" })], testServer))).toMatchObject({
+    expect(
+      states(
+        progressSteps(
+          app({ status: "listed" }),
+          [release({ status: "approved" })],
+          testServer,
+        ),
+      ),
+    ).toMatchObject({
       "In the store": "done",
     });
     // Listed apps come back from the API without a status field.
-    expect(states(progressSteps(app({ status: undefined }), [release({ status: "approved" })], testServer))).toMatchObject({
+    expect(
+      states(
+        progressSteps(
+          app({ status: undefined }),
+          [release({ status: "approved" })],
+          testServer,
+        ),
+      ),
+    ).toMatchObject({
       "In the store": "done",
     });
   });
 
   it("needs no release for a Coming soon page", () => {
-    expect(states(progressSteps(app({ stage: "coming_soon" }), [], testServer))).toEqual({
+    expect(
+      states(progressSteps(app({ stage: "coming_soon" }), [], testServer)),
+    ).toEqual({
       "Store page": "done",
       Release: "skipped",
       "In the store": "active",
@@ -100,18 +196,53 @@ describe("progressSteps", () => {
   });
 
   it("says why a release waits for a person, and when Slop approved it", () => {
-    const waiting = progressSteps(app(), [release({ status_reason: "Waiting for a person: an app's first release is always reviewed by a person" })], testServer);
-    expect(String(waiting.find((s) => s.title === "Review")?.detail)).toContain("first release");
-    const auto = progressSteps(app({ status: "listed" }), [release({ status: "approved", auto_approved: true })], testServer);
-    expect(String(auto.find((s) => s.title === "Review")?.detail)).toContain("automatically");
+    const waiting = progressSteps(
+      app(),
+      [
+        release({
+          status_reason:
+            "Waiting for a person: an app's first release is always reviewed by a person",
+        }),
+      ],
+      testServer,
+    );
+    expect(String(waiting.find((s) => s.title === "Review")?.detail)).toContain(
+      "first release",
+    );
+    const auto = progressSteps(
+      app({ status: "listed" }),
+      [release({ status: "approved", auto_approved: true })],
+      testServer,
+    );
+    expect(String(auto.find((s) => s.title === "Review")?.detail)).toContain(
+      "automatically",
+    );
   });
 
   it("points at the step an app is stuck on or waiting for", () => {
-    expect(currentStep(progressSteps(app(), [], testServer)).title).toBe("Release");
-    expect(currentStep(progressSteps(app(), [release()], testServer)).title).toBe("Review");
-    const failed = progressSteps(app(), [release({ status: "failed", status_reason: "HTTP 404" })], testServer);
-    expect(currentStep(failed)).toMatchObject({ title: "Files checked", state: "problem" });
-    const listed = progressSteps(app({ status: "listed" }), [release({ status: "approved" })], testServer);
-    expect(currentStep(listed)).toMatchObject({ title: "In the store", state: "done" });
+    expect(currentStep(progressSteps(app(), [], testServer)).title).toBe(
+      "Release",
+    );
+    expect(
+      currentStep(progressSteps(app(), [release()], testServer)).title,
+    ).toBe("Review");
+    const failed = progressSteps(
+      app(),
+      [release({ status: "failed", status_reason: "HTTP 404" })],
+      testServer,
+    );
+    expect(currentStep(failed)).toMatchObject({
+      title: "Files checked",
+      state: "problem",
+    });
+    const listed = progressSteps(
+      app({ status: "listed" }),
+      [release({ status: "approved" })],
+      testServer,
+    );
+    expect(currentStep(listed)).toMatchObject({
+      title: "In the store",
+      state: "done",
+    });
   });
 });

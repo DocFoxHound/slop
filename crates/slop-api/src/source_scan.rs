@@ -1,0 +1,1159 @@
+//! Slop's own look at an app's source, at the commit a release was built from (DESIGN §10's
+//! "Licence" and "Monetization rules" rows, LEGAL-GUIDANCE IP-2). Slop downloads the
+//! repository's archive at that commit once, reads it in memory, and deletes it:
+//!
+//! - **Licence:** which licence the repository's own licence files are, against the store page's.
+//!   Missing or contradicting licence files, source files whose SPDX headers name a different
+//!   licence, and (for public apps) licences that aren't OSI-approved become notes.
+//! - **Monetization:** apps on Slop can't sell anything (LEGAL §8). Payment libraries, in-app
+//!   purchase APIs, checkout links, loot boxes and premium currencies in the code become notes.
+//! - **Packages:** the dependencies named in lockfiles (Cargo.lock, package-lock.json, yarn.lock,
+//!   go.mod, poetry.lock, Pipfile.lock, requirements.txt, NuGet's packages.lock.json), kept for
+//!   the daily advisory watch (dep_watch.rs).
+//!
+//! Everything here is a note for the reviewer and the maker: patterns in text have false
+//! positives, so nothing is held or rejected by itself. Only GitHub repositories can be read so
+//! far; other hosts are recorded as not checked.
+
+use std::{
+    collections::{BTreeMap, BTreeSet},
+    io::Read,
+    sync::LazyLock,
+};
+
+use anyhow::{Context, bail};
+use regex::Regex;
+use serde::Serialize;
+use serde_json::{Value, json};
+use uuid::Uuid;
+
+use crate::AppState;
+
+/// Largest repository archive Slop downloads (GitHub's archives leave out Git LFS files).
+const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
+/// Text files bigger than this aren't read.
+const MAX_TEXT_FILE: u64 = 2 * 1024 * 1024;
+/// Stop reading after this much text, so one huge repository can't take the server's time.
+const MAX_TEXT_TOTAL: u64 = 256 * 1024 * 1024;
+const MAX_PACKAGES: usize = 5000;
+const EXAMPLES: usize = 3;
+const EVERY: std::time::Duration = std::time::Duration::from_secs(120);
+const PER_ROUND: i64 = 3;
+
+/// A dependency, in OSV's ecosystem names.
+#[derive(Clone, Debug, PartialEq, Eq, PartialOrd, Ord, Serialize)]
+pub struct Package {
+    pub ecosystem: String,
+    pub name: String,
+    pub version: String,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Report {
+    pub status: &'static str,
+    /// Files in the archive, and whether reading stopped early.
+    pub files: u64,
+    pub truncated: bool,
+    pub licence: Licence,
+    /// Lockfiles the package list came from.
+    pub lockfiles: Vec<String>,
+    pub packages: usize,
+    pub monetization: Vec<Hit>,
+}
+
+#[derive(Debug, Default, Serialize)]
+pub struct Licence {
+    pub declared: String,
+    pub files: Vec<LicenceFile>,
+    /// SPDX-License-Identifier headers naming something other than the declared licence.
+    pub headers: Vec<Hit>,
+    pub problems: Vec<String>,
+    /// A short key per problem (`no_file`, `mismatch`, `header:GPL-3.0`…), so an update's check
+    /// can be compared with the last approved release's.
+    pub kinds: Vec<String>,
+}
+
+#[derive(Debug, Serialize)]
+pub struct LicenceFile {
+    pub path: String,
+    /// The licence it is, when Slop recognises the text.
+    pub spdx: Option<&'static str>,
+}
+
+/// A pattern found: what it is, how often, and where (`path:line`).
+#[derive(Debug, Serialize)]
+pub struct Hit {
+    pub rule: String,
+    pub label: String,
+    pub count: u32,
+    pub examples: Vec<String>,
+}
+
+/// OSI-approved licences in common use (opensource.org/licenses), by SPDX ID without
+/// `-only`/`-or-later`.
+const OSI: &[&str] = &[
+    "0BSD",
+    "AFL-3.0",
+    "AGPL-3.0",
+    "Apache-2.0",
+    "APSL-2.0",
+    "Artistic-2.0",
+    "BSD-1-Clause",
+    "BSD-2-Clause",
+    "BSD-2-Clause-Patent",
+    "BSD-3-Clause",
+    "BSL-1.0",
+    "CDDL-1.0",
+    "CECILL-2.1",
+    "ECL-2.0",
+    "EFL-2.0",
+    "EPL-1.0",
+    "EPL-2.0",
+    "EUPL-1.2",
+    "GPL-2.0",
+    "GPL-3.0",
+    "ISC",
+    "LGPL-2.1",
+    "LGPL-3.0",
+    "LPPL-1.3c",
+    "MIT",
+    "MIT-0",
+    "MPL-2.0",
+    "MS-PL",
+    "MS-RL",
+    "MulanPSL-2.0",
+    "NCSA",
+    "OFL-1.1",
+    "OSL-3.0",
+    "PostgreSQL",
+    "UPL-1.0",
+    "Unlicense",
+    "Zlib",
+    "ZPL-2.1",
+    "BlueOak-1.0.0",
+    "CC0-1.0",
+    "WTFPL",
+];
+
+/// Folders whose contents aren't the maker's source (installed packages, build output, engine
+/// caches).
+const SKIP_DIRS: &[&str] = &[
+    ".git",
+    "node_modules",
+    "target",
+    "Library",
+    "Temp",
+    "obj",
+    ".godot",
+    ".import",
+    "dist",
+    "build",
+    "__pycache__",
+    ".venv",
+    "venv",
+];
+
+const SOURCE_EXTS: &[&str] = &[
+    "rs", "go", "cs", "gd", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "lua", "c", "cc", "cpp",
+    "h", "hpp", "java", "kt", "swift", "html", "htm", "vue", "svelte", "dart", "rb", "php",
+];
+
+/// An SPDX ID reduced to its family, so GPL-3.0-only, GPL-3.0-or-later and GPL-3.0+ compare equal.
+fn family(id: &str) -> String {
+    let id = id.trim();
+    let id = id
+        .strip_suffix("-only")
+        .or_else(|| id.strip_suffix("-or-later"))
+        .or_else(|| id.strip_suffix('+'))
+        .unwrap_or(id);
+    id.to_ascii_lowercase()
+}
+
+/// The licence IDs in an SPDX expression (`MIT OR Apache-2.0`, `GPL-3.0-only WITH x`).
+pub fn expression_ids(expr: &str) -> Vec<String> {
+    let mut out = Vec::new();
+    let mut skip_next = false;
+    for word in expr.split(|c: char| c.is_whitespace() || c == '(' || c == ')') {
+        if word.is_empty() {
+            continue;
+        }
+        if skip_next {
+            skip_next = false;
+            continue;
+        }
+        match word.to_ascii_uppercase().as_str() {
+            "AND" | "OR" => {}
+            "WITH" => skip_next = true,
+            _ => out.push(word.to_string()),
+        }
+    }
+    out
+}
+
+/// Recognises a licence file's text. Covers the licences most apps use; anything else is left
+/// for the reviewer.
+pub fn identify_licence(text: &str) -> Option<&'static str> {
+    let t: String = text.split_whitespace().collect::<Vec<_>>().join(" ");
+    let has = |s: &str| t.to_ascii_lowercase().contains(&s.to_ascii_lowercase());
+    if has("GNU AFFERO GENERAL PUBLIC LICENSE") {
+        return Some("AGPL-3.0");
+    }
+    if has("GNU LESSER GENERAL PUBLIC LICENSE") {
+        return Some(if has("Version 2.1") {
+            "LGPL-2.1"
+        } else {
+            "LGPL-3.0"
+        });
+    }
+    if has("GNU GENERAL PUBLIC LICENSE") {
+        return Some(if has("Version 2,") || has("Version 2 ") {
+            "GPL-2.0"
+        } else {
+            "GPL-3.0"
+        });
+    }
+    if has("Mozilla Public License") && (has("Version 2.0") || has("version 2.0")) {
+        return Some("MPL-2.0");
+    }
+    if has("Apache License") && has("Version 2.0") {
+        return Some("Apache-2.0");
+    }
+    if has("Eclipse Public License") && has("2.0") {
+        return Some("EPL-2.0");
+    }
+    if has("Boost Software License") {
+        return Some("BSL-1.0");
+    }
+    if has("This is free and unencumbered software released into the public domain") {
+        return Some("Unlicense");
+    }
+    if has("CC0 1.0") || has("Creative Commons Legal Code CC0") {
+        return Some("CC0-1.0");
+    }
+    if has("Permission is hereby granted, free of charge, to any person obtaining a copy") {
+        return Some(
+            if has("The above copyright notice and this permission notice shall be included") {
+                "MIT"
+            } else {
+                "MIT-0"
+            },
+        );
+    }
+    if has("Permission to use, copy, modify, and/or distribute this software for any purpose") {
+        return Some(
+            if has("with or without fee is hereby granted") && has("copyright notice") {
+                "ISC"
+            } else {
+                "0BSD"
+            },
+        );
+    }
+    if has("Redistribution and use in source and binary forms") {
+        return Some(
+            if has("Neither the name") || has("may be used to endorse") {
+                "BSD-3-Clause"
+            } else {
+                "BSD-2-Clause"
+            },
+        );
+    }
+    if has("This software is provided 'as-is'")
+        && has("Altered source versions must be plainly marked")
+    {
+        return Some("Zlib");
+    }
+    None
+}
+
+fn is_licence_file(path: &str) -> bool {
+    let (dir, name) = match path.rsplit_once('/') {
+        Some((d, n)) => (Some(d), n),
+        None => (None, path),
+    };
+    let upper = name.to_ascii_uppercase();
+    match dir {
+        None => ["LICENSE", "LICENCE", "COPYING", "UNLICENSE"]
+            .iter()
+            .any(|p| upper.starts_with(p)),
+        // REUSE keeps one file per licence in LICENSES/.
+        Some("LICENSES") => true,
+        _ => false,
+    }
+}
+
+struct Rule {
+    rule: &'static str,
+    label: &'static str,
+    re: Regex,
+}
+
+static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
+    let r = |rule, label, re: &str| Rule {
+        rule,
+        label,
+        re: Regex::new(re).unwrap(),
+    };
+    vec![
+        r(
+            "steam_microtransactions",
+            "Steam in-game purchases (microtransactions)",
+            r"ISteamMicroTxn|MicroTxnAuthorizationResponse",
+        ),
+        r(
+            "unity_iap",
+            "Unity In-App Purchasing",
+            r"UnityEngine\.Purchasing|com\.unity\.purchasing",
+        ),
+        r(
+            "play_billing",
+            "Google Play Billing",
+            r"com\.android\.billingclient|launchBillingFlow|GodotGooglePlayBilling",
+        ),
+        r(
+            "apple_iap",
+            "Apple in-app purchases (StoreKit)",
+            r"SKPaymentQueue|SKProductsRequest|\bimport StoreKit\b|get_singleton\(\s*.InAppStore",
+        ),
+        r(
+            "checkout_link",
+            "Checkout or payment links (Stripe, PayPal, Gumroad)",
+            r"(?i)checkout\.stripe\.com|buy\.stripe\.com|js\.stripe\.com|api\.stripe\.com|paypal\.com/(cgi-bin|checkout|sdk)|paypalobjects\.com|gumroad\.com/l/",
+        ),
+        r(
+            "loot_box",
+            "Loot boxes or gacha",
+            r"(?i)\bloot[ _-]?(box|boxes|crate|crates)\b|\bgacha\b|\blootbox",
+        ),
+        r(
+            "premium_currency",
+            "Premium currency or currency packs",
+            r"(?i)\b(premium|paid|hard)[ _-]?currenc(y|ies)\b|\b(gem|coin|diamond|crystal)[ _-]?(pack|bundle)s?\b",
+        ),
+    ]
+});
+
+/// Payment libraries, by ecosystem and name (a trailing `*` matches a prefix).
+const PAYMENT_PACKAGES: &[(&str, &str)] = &[
+    ("npm", "stripe"),
+    ("npm", "@stripe/*"),
+    ("npm", "@paypal/*"),
+    ("npm", "paypal-rest-sdk"),
+    ("npm", "braintree"),
+    ("npm", "react-native-iap"),
+    ("npm", "react-native-purchases"),
+    ("npm", "cordova-plugin-purchase"),
+    ("npm", "@revenuecat/*"),
+    ("npm", "electron-in-app-purchase"),
+    ("PyPI", "stripe"),
+    ("PyPI", "paypalrestsdk"),
+    ("PyPI", "braintree"),
+    ("crates.io", "async-stripe"),
+    ("crates.io", "stripe-rust"),
+    ("NuGet", "Stripe.net"),
+    ("NuGet", "Braintree"),
+    ("NuGet", "PayPalCheckoutSdk"),
+    ("Go", "github.com/stripe/stripe-go*"),
+];
+
+fn is_payment_package(p: &Package) -> bool {
+    PAYMENT_PACKAGES.iter().any(|(eco, name)| {
+        *eco == p.ecosystem
+            && match name.strip_suffix('*') {
+                Some(prefix) => p.name.starts_with(prefix),
+                None => p.name.eq_ignore_ascii_case(name),
+            }
+    })
+}
+
+static SPDX_HEADER: LazyLock<Regex> = LazyLock::new(|| {
+    Regex::new(r"SPDX-License-Identifier:\s*([A-Za-z0-9.+\-() ]+?)\s*(\*/|-->|#|$)").unwrap()
+});
+
+/// The packages a lockfile names. Unknown or damaged files give none.
+pub fn parse_lockfile(name: &str, text: &str) -> Vec<Package> {
+    let pkg = |eco: &str, name: &str, version: &str| Package {
+        ecosystem: eco.into(),
+        name: name.into(),
+        version: version
+            .trim_start_matches('=')
+            .trim_start_matches('v')
+            .into(),
+    };
+    let mut out = Vec::new();
+    match name {
+        "Cargo.lock" | "poetry.lock" => {
+            let eco = if name == "Cargo.lock" {
+                "crates.io"
+            } else {
+                "PyPI"
+            };
+            let Ok(doc) = text.parse::<toml::Table>() else {
+                return out;
+            };
+            for p in doc
+                .get("package")
+                .and_then(|v| v.as_array())
+                .into_iter()
+                .flatten()
+            {
+                let (Some(n), Some(v)) = (
+                    p.get("name").and_then(|v| v.as_str()),
+                    p.get("version").and_then(|v| v.as_str()),
+                ) else {
+                    continue;
+                };
+                // Cargo: only crates from a registry (not the workspace's own or git ones).
+                if eco == "crates.io"
+                    && !p
+                        .get("source")
+                        .and_then(|s| s.as_str())
+                        .is_some_and(|s| s.starts_with("registry+"))
+                {
+                    continue;
+                }
+                out.push(pkg(eco, n, v));
+            }
+        }
+        "package-lock.json" => {
+            let Ok(doc) = serde_json::from_str::<Value>(text) else {
+                return out;
+            };
+            if let Some(packages) = doc["packages"].as_object() {
+                for (path, p) in packages {
+                    let Some(n) = path.rsplit_once("node_modules/").map(|(_, n)| n) else {
+                        continue;
+                    };
+                    if p["dev"].as_bool() == Some(true) || p["link"].as_bool() == Some(true) {
+                        continue;
+                    }
+                    if let Some(v) = p["version"].as_str() {
+                        out.push(pkg("npm", n, v));
+                    }
+                }
+            } else if let Some(deps) = doc["dependencies"].as_object() {
+                fn walk(deps: &serde_json::Map<String, Value>, out: &mut Vec<Package>) {
+                    for (n, p) in deps {
+                        if p["dev"].as_bool() == Some(true) {
+                            continue;
+                        }
+                        if let Some(v) = p["version"].as_str() {
+                            out.push(Package {
+                                ecosystem: "npm".into(),
+                                name: n.clone(),
+                                version: v.into(),
+                            });
+                        }
+                        if let Some(inner) = p["dependencies"].as_object() {
+                            walk(inner, out);
+                        }
+                    }
+                }
+                walk(deps, &mut out);
+            }
+        }
+        "yarn.lock" => {
+            // Yarn 1: `"name@range", "name@range2":` then an indented `version "x"`.
+            let mut current: Option<String> = None;
+            for line in text.lines() {
+                if !line.starts_with(' ') && line.ends_with(':') && !line.starts_with('#') {
+                    let first = line
+                        .trim_end_matches(':')
+                        .split(", ")
+                        .next()
+                        .unwrap_or("")
+                        .trim_matches('"');
+                    current = first
+                        .rfind('@')
+                        .filter(|&i| i > 0)
+                        .map(|i| first[..i].to_string());
+                } else if let (Some(n), Some(v)) =
+                    (current.as_ref(), line.trim().strip_prefix("version "))
+                {
+                    out.push(pkg("npm", n, v.trim_matches('"')));
+                    current = None;
+                }
+            }
+        }
+        "go.mod" => {
+            let mut in_block = false;
+            for line in text.lines() {
+                let line = line.split("//").next().unwrap_or("").trim();
+                let spec = if in_block {
+                    if line == ")" {
+                        in_block = false;
+                        continue;
+                    }
+                    line
+                } else if line == "require (" {
+                    in_block = true;
+                    continue;
+                } else if let Some(rest) = line.strip_prefix("require ") {
+                    rest
+                } else {
+                    continue;
+                };
+                let mut parts = spec.split_whitespace();
+                if let (Some(n), Some(v)) = (parts.next(), parts.next()) {
+                    out.push(pkg("Go", n, v));
+                }
+            }
+        }
+        "Pipfile.lock" => {
+            let Ok(doc) = serde_json::from_str::<Value>(text) else {
+                return out;
+            };
+            for (n, p) in doc["default"].as_object().into_iter().flatten() {
+                if let Some(v) = p["version"].as_str() {
+                    out.push(pkg("PyPI", n, v));
+                }
+            }
+        }
+        "packages.lock.json" => {
+            let Ok(doc) = serde_json::from_str::<Value>(text) else {
+                return out;
+            };
+            for framework in doc["dependencies"]
+                .as_object()
+                .into_iter()
+                .flatten()
+                .map(|(_, f)| f)
+            {
+                for (n, p) in framework.as_object().into_iter().flatten() {
+                    if p["type"].as_str() == Some("Project") {
+                        continue;
+                    }
+                    if let Some(v) = p["resolved"].as_str() {
+                        out.push(pkg("NuGet", n, v));
+                    }
+                }
+            }
+        }
+        _ if name.starts_with("requirements") && name.ends_with(".txt") => {
+            for line in text.lines() {
+                let line = line.split('#').next().unwrap_or("").trim();
+                if let Some((n, v)) = line.split_once("==") {
+                    let n = n.split('[').next().unwrap_or(n).trim();
+                    let v = v.split(';').next().unwrap_or(v).trim();
+                    if !n.is_empty() && !v.is_empty() {
+                        out.push(pkg("PyPI", n, v));
+                    }
+                }
+            }
+        }
+        _ => {}
+    }
+    out
+}
+
+fn is_lockfile(name: &str) -> bool {
+    matches!(
+        name,
+        "Cargo.lock"
+            | "package-lock.json"
+            | "yarn.lock"
+            | "go.mod"
+            | "poetry.lock"
+            | "Pipfile.lock"
+            | "packages.lock.json"
+    ) || (name.starts_with("requirements") && name.ends_with(".txt"))
+}
+
+#[derive(Default)]
+struct Tally {
+    hits: BTreeMap<String, (String, u32, Vec<String>)>,
+}
+
+impl Tally {
+    fn add(&mut self, rule: &str, label: &str, at: String) {
+        let e = self
+            .hits
+            .entry(rule.to_string())
+            .or_insert_with(|| (label.to_string(), 0, Vec::new()));
+        e.1 += 1;
+        if e.2.len() < EXAMPLES {
+            e.2.push(at);
+        }
+    }
+
+    fn into_hits(self) -> Vec<Hit> {
+        self.hits
+            .into_iter()
+            .map(|(rule, (label, count, examples))| Hit {
+                rule,
+                label,
+                count,
+                examples,
+            })
+            .collect()
+    }
+}
+
+/// Reads a repository archive (`.tar.gz`, one top folder, as GitHub makes them).
+pub fn scan_archive(
+    archive: impl Read,
+    declared: &str,
+    public: bool,
+) -> anyhow::Result<(Report, Vec<Package>)> {
+    let mut tar = tar::Archive::new(flate2::read::GzDecoder::new(archive));
+    let mut report = Report {
+        status: "checked",
+        ..Default::default()
+    };
+    let declared_families: BTreeSet<String> = expression_ids(declared)
+        .iter()
+        .map(|id| family(id))
+        .collect();
+    let mut packages = BTreeSet::new();
+    let mut monetization = Tally::default();
+    let mut headers = Tally::default();
+    let mut text_total: u64 = 0;
+    for entry in tar.entries().context("reading the repository archive")? {
+        let mut entry = entry.context("reading the repository archive")?;
+        if !entry.header().entry_type().is_file() {
+            continue;
+        }
+        let full = entry.path()?.to_string_lossy().into_owned();
+        // GitHub's archives put everything under `<owner>-<repo>-<sha>/`.
+        let Some((_, path)) = full.split_once('/') else {
+            continue;
+        };
+        let path = path.to_string();
+        report.files += 1;
+        if path.split('/').any(|part| SKIP_DIRS.contains(&part)) {
+            continue;
+        }
+        let name = path.rsplit('/').next().unwrap_or(&path).to_string();
+        let ext = name
+            .rsplit_once('.')
+            .map(|(_, e)| e.to_ascii_lowercase())
+            .unwrap_or_default();
+        let licence_file = is_licence_file(&path);
+        let lockfile = is_lockfile(&name);
+        let unity_manifest = path.ends_with("Packages/manifest.json");
+        let source = SOURCE_EXTS.contains(&ext.as_str()) || ext == "cfg" && name == "project.godot";
+        if !(licence_file || lockfile || unity_manifest || source) {
+            continue;
+        }
+        let size = entry.header().size().unwrap_or(0);
+        if size > MAX_TEXT_FILE {
+            continue;
+        }
+        if text_total + size > MAX_TEXT_TOTAL {
+            report.truncated = true;
+            break;
+        }
+        text_total += size;
+        let mut bytes = Vec::with_capacity(size as usize);
+        entry.read_to_end(&mut bytes)?;
+        let Ok(text) = String::from_utf8(bytes) else {
+            continue;
+        };
+        if licence_file {
+            report.licence.files.push(LicenceFile {
+                path: path.clone(),
+                spdx: identify_licence(&text),
+            });
+        }
+        if lockfile {
+            let found = parse_lockfile(&name, &text);
+            if !found.is_empty() {
+                report.lockfiles.push(path.clone());
+                packages.extend(found);
+            }
+        }
+        if unity_manifest || source {
+            for (i, line) in text.lines().enumerate() {
+                if line.len() > 2000 {
+                    continue;
+                }
+                for rule in RULES.iter() {
+                    if rule.re.is_match(line) {
+                        monetization.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
+                    }
+                }
+                if i < 30
+                    && let Some(m) = SPDX_HEADER.captures(line)
+                {
+                    let expr = m[1].trim();
+                    let ids = expression_ids(expr);
+                    if !ids.is_empty()
+                        && !ids.iter().any(|id| declared_families.contains(&family(id)))
+                    {
+                        headers.add(expr, expr, format!("{path}:{}", i + 1));
+                    }
+                }
+            }
+        }
+    }
+    let packages: Vec<Package> = packages.into_iter().take(MAX_PACKAGES).collect();
+    for p in packages.iter().filter(|p| is_payment_package(p)) {
+        monetization.add(
+            "payment_library",
+            "A payment library",
+            format!("{} {} ({})", p.name, p.version, p.ecosystem),
+        );
+    }
+    report.packages = packages.len();
+    report.monetization = monetization.into_hits();
+    report.licence.headers = headers.into_hits();
+    report.licence.declared = declared.to_string();
+    (report.licence.kinds, report.licence.problems) =
+        licence_problems(&report.licence, &declared_families, public)
+            .into_iter()
+            .unzip();
+    Ok((report, packages))
+}
+
+fn licence_problems(
+    l: &Licence,
+    declared: &BTreeSet<String>,
+    public: bool,
+) -> Vec<(String, String)> {
+    let mut problems = Vec::new();
+    if l.files.is_empty() {
+        problems.push((
+            "no_file".into(),
+            "There's no licence file (LICENSE or COPYING) at the top of the repository, so nobody has permission to use the code. Add the licence's full text as LICENSE.".into(),
+        ));
+    } else {
+        let known: Vec<&str> = l.files.iter().filter_map(|f| f.spdx).collect();
+        if known.is_empty() {
+            problems.push((
+                "unidentified".into(),
+                format!(
+                    "Slop couldn't tell which licence {} is. A reviewer checks that it's {}.",
+                    l.files[0].path, l.declared
+                ),
+            ));
+        } else if !known.iter().any(|id| declared.contains(&family(id))) {
+            problems.push((
+                "mismatch".into(),
+                format!(
+                    "The licence file says {}, but the store page says {}. Make them match.",
+                    known.join(" and "),
+                    l.declared
+                ),
+            ));
+        }
+    }
+    for h in &l.headers {
+        problems.push((
+            format!("header:{}", h.rule),
+            format!(
+                "{} source file{} say{} {} in their headers (e.g. {}), not the store page's {}.",
+                h.count,
+                if h.count == 1 { "" } else { "s" },
+                if h.count == 1 { "s" } else { "" },
+                h.label,
+                h.examples.join(", "),
+                l.declared
+            ),
+        ));
+    }
+    if public {
+        let not_osi: Vec<String> = expression_ids(&l.declared)
+            .into_iter()
+            .filter(|id| !OSI.iter().any(|o| family(o) == family(id)))
+            .collect();
+        if !not_osi.is_empty() {
+            problems.push((
+                "not_osi".into(),
+                format!(
+                    "{} isn't on Slop's list of OSI-approved licences, which apps in the store need (opensource.org/licenses).",
+                    not_osi.join(", ")
+                ),
+            ));
+        }
+    }
+    problems
+}
+
+/// The repository is bigger than Slop reads: recorded as not checked, not as a failure.
+#[derive(Debug, thiserror::Error)]
+#[error("the repository is bigger than the {} MiB Slop reads, so a reviewer checks the licence by hand", MAX_ARCHIVE / 1024 / 1024)]
+struct TooBig;
+
+/// Downloads the repository archive at a commit to a temporary file.
+async fn download_archive(
+    state: &AppState,
+    repo: &str,
+    commit: &str,
+    path: &std::path::Path,
+) -> anyhow::Result<()> {
+    use tokio::io::AsyncWriteExt;
+    let url = state
+        .config
+        .releases
+        .github_api_base
+        .join(&format!("repos/{repo}/tarball/{commit}"))?;
+    let res = crate::releases::github_get(state, url)
+        .await
+        .send()
+        .await
+        .context("downloading the source")?;
+    match res.status().as_u16() {
+        200 => {}
+        404 => bail!("GitHub can't find that commit (or the repository isn't visible to Slop)"),
+        code => bail!("GitHub answered {code} for the source archive"),
+    }
+    let mut out = tokio::fs::File::create(path).await?;
+    let mut size = 0u64;
+    let mut res = res;
+    while let Some(chunk) = res.chunk().await.context("source download interrupted")? {
+        size += chunk.len() as u64;
+        if size > MAX_ARCHIVE {
+            return Err(TooBig.into());
+        }
+        out.write_all(&chunk).await?;
+    }
+    out.flush().await?;
+    Ok(())
+}
+
+/// The repository's `owner/name` on GitHub, including the test server standing in for it.
+fn github_repo(state: &AppState, repo_url: &str) -> Option<String> {
+    slop_provenance::github_repo_path(repo_url).or_else(|| {
+        // Development and tests: a stand-in GitHub serves repositories under its own address.
+        let base = state.config.releases.github_api_base.as_str();
+        state
+            .config
+            .releases
+            .allow_http_downloads
+            .then(|| repo_url.strip_prefix(base))
+            .flatten()
+            .map(|p| p.trim_matches('/').to_string())
+            .filter(|p| p.split('/').count() == 2)
+    })
+}
+
+/// Looks at one release's source. Returns the report to store and the package list.
+pub async fn scan_release(
+    state: &AppState,
+    repo_url: &str,
+    commit: &str,
+    declared: &str,
+    public: bool,
+) -> (Value, Vec<Package>) {
+    let Some(repo) = github_repo(state, repo_url) else {
+        return (
+            json!({ "status": "not_checked", "detail": "Slop can only read source on GitHub so far; a reviewer checks the licence by hand." }),
+            vec![],
+        );
+    };
+    let path = std::env::temp_dir().join(format!("slop-source-{}.tar.gz", Uuid::now_v7()));
+    let result = async {
+        download_archive(state, &repo, commit, &path).await?;
+        let (declared, file) = (declared.to_string(), std::fs::File::open(&path)?);
+        tokio::task::spawn_blocking(move || {
+            scan_archive(std::io::BufReader::new(file), &declared, public)
+        })
+        .await?
+    }
+    .await;
+    let _ = tokio::fs::remove_file(&path).await;
+    match result {
+        Ok((report, packages)) => (serde_json::to_value(report).unwrap_or_default(), packages),
+        Err(err) if err.downcast_ref::<TooBig>().is_some() => (
+            json!({ "status": "not_checked", "detail": err.to_string() }),
+            vec![],
+        ),
+        Err(err) => (
+            json!({ "status": "failed", "detail": format!("{err:#}") }),
+            vec![],
+        ),
+    }
+}
+
+/// One round: releases waiting for their source check, and failed ones once an hour.
+pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
+    let due: Vec<(Uuid, String, String, String, bool)> = sqlx::query_as(
+        "select r.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public'
+         from releases r join apps a on a.id = r.app_id
+         where r.status in ('awaiting_review', 'approved')
+           and (r.repo_scanned_at is null
+                or (r.repo_scan ->> 'status' = 'failed' and r.repo_scanned_at < now() - interval '1 hour'
+                    and r.created_at > now() - interval '7 days'))
+         order by r.repo_scanned_at nulls first, r.created_at desc
+         limit $1",
+    )
+    .bind(PER_ROUND)
+    .fetch_all(&state.db)
+    .await?;
+    let n = due.len();
+    for (id, ..) in due {
+        check_release(state, id).await?;
+    }
+    Ok(n)
+}
+
+/// Checks one release's source now and stores the result. Called when a release's files are
+/// fetched, before automatic approval, and by the background round for the rest.
+pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
+    let (repo_url, commit, declared, public): (String, String, String, bool) = sqlx::query_as(
+        "select a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public'
+         from releases r join apps a on a.id = r.app_id where r.id = $1",
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
+    {
+        let (report, packages) = scan_release(state, &repo_url, &commit, &declared, public).await;
+        let mut tx = state.db.begin().await?;
+        sqlx::query("update releases set repo_scan = $2, repo_scanned_at = now() where id = $1")
+            .bind(id)
+            .bind(&report)
+            .execute(&mut *tx)
+            .await?;
+        if !packages.is_empty() {
+            sqlx::query("delete from release_packages where release_id = $1")
+                .bind(id)
+                .execute(&mut *tx)
+                .await?;
+            sqlx::query(
+                "insert into release_packages (release_id, ecosystem, name, version)
+                 select $1, * from unnest($2::text[], $3::text[], $4::text[]) on conflict do nothing",
+            )
+            .bind(id)
+            .bind(packages.iter().map(|p| p.ecosystem.clone()).collect::<Vec<_>>())
+            .bind(packages.iter().map(|p| p.name.clone()).collect::<Vec<_>>())
+            .bind(packages.iter().map(|p| p.version.clone()).collect::<Vec<_>>())
+            .execute(&mut *tx)
+            .await?;
+        }
+        tx.commit().await?;
+    }
+    Ok(())
+}
+
+/// The concerns in a check (monetization rules, licence problem kinds), or None when the source
+/// couldn't be read.
+fn concerns(scan: &Value) -> Option<BTreeSet<String>> {
+    match scan["status"].as_str() {
+        Some("checked") => {}
+        Some("not_checked") => return Some(BTreeSet::new()),
+        _ => return None,
+    }
+    let strings = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .into_iter()
+            .flatten()
+            .filter_map(|s| s.as_str().map(String::from))
+            .collect()
+    };
+    let mut out: BTreeSet<String> = strings(&scan["licence"]["kinds"])
+        .into_iter()
+        .map(|k| format!("licence:{k}"))
+        .collect();
+    for hit in scan["monetization"].as_array().into_iter().flatten() {
+        if let Some(rule) = hit["rule"].as_str() {
+            out.insert(format!("monetization:{rule}"));
+        }
+    }
+    Some(out)
+}
+
+/// Why an update needs a person after all: its source check found something the app's last
+/// approved release didn't have (a new monetization pattern or licence problem), or the source
+/// couldn't be read. None when there's nothing new.
+pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result<Option<String>> {
+    let (this, before): (Option<Value>, Option<Value>) = sqlx::query_as(
+        "select r.repo_scan,
+                (select p.repo_scan from releases p
+                 where p.app_id = r.app_id and p.id <> r.id and p.status = 'approved'
+                 order by p.reviewed_at desc limit 1)
+         from releases r where r.id = $1",
+    )
+    .bind(release_id)
+    .fetch_one(db)
+    .await?;
+    let Some(now) = concerns(this.as_ref().unwrap_or(&Value::Null)) else {
+        return Ok(Some(
+            "Slop couldn't read this release's source, so a person checks it".into(),
+        ));
+    };
+    let before = before.as_ref().and_then(concerns).unwrap_or_default();
+    let new: Vec<String> = now.difference(&before).cloned().collect();
+    if new.is_empty() {
+        return Ok(None);
+    }
+    let money = new.iter().any(|k| k.starts_with("monetization:"));
+    let licence = new.iter().any(|k| k.starts_with("licence:"));
+    Ok(Some(
+        match (money, licence) {
+            (true, true) => "the source check found possible purchases and licence problems the last approved release didn't have",
+            (true, false) => "the source check found possible purchases or loot boxes the last approved release didn't have",
+            _ => "the source check found licence problems the last approved release didn't have",
+        }
+        .into(),
+    ))
+}
+
+pub async fn run(state: AppState) {
+    let mut tick = tokio::time::interval(EVERY);
+    loop {
+        tick.tick().await;
+        if let Err(err) = run_once(&state).await {
+            tracing::error!(error = %err, "source checks");
+        }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn licences_are_recognised() {
+        assert_eq!(
+            identify_licence(
+                "MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy\nof this software... The above copyright notice and this permission notice shall be included in all"
+            ),
+            Some("MIT")
+        );
+        assert_eq!(
+            identify_licence(
+                "                                 Apache License\n                           Version 2.0, January 2004"
+            ),
+            Some("Apache-2.0")
+        );
+        assert_eq!(
+            identify_licence("GNU GENERAL PUBLIC LICENSE\n Version 3, 29 June 2007"),
+            Some("GPL-3.0")
+        );
+        assert_eq!(
+            identify_licence("GNU GENERAL PUBLIC LICENSE\n Version 2, June 1991"),
+            Some("GPL-2.0")
+        );
+        assert_eq!(identify_licence("All rights reserved."), None);
+        assert_eq!(
+            expression_ids("(MIT OR Apache-2.0) AND GPL-2.0-only WITH Classpath-exception-2.0"),
+            ["MIT", "Apache-2.0", "GPL-2.0-only"]
+        );
+        assert_eq!(family("GPL-3.0-or-later"), family("GPL-3.0"));
+    }
+
+    #[test]
+    fn lockfiles_give_packages() {
+        let cargo = "[[package]]\nname = \"serde\"\nversion = \"1.0.0\"\nsource = \"registry+https://github.com/rust-lang/crates.io-index\"\n\n[[package]]\nname = \"mygame\"\nversion = \"0.1.0\"\n";
+        assert_eq!(
+            parse_lockfile("Cargo.lock", cargo),
+            [Package {
+                ecosystem: "crates.io".into(),
+                name: "serde".into(),
+                version: "1.0.0".into()
+            }]
+        );
+        let npm = r#"{"lockfileVersion":3,"packages":{"":{"name":"g"},"node_modules/lodash":{"version":"4.17.20"},"node_modules/a/node_modules/@scope/b":{"version":"1.0.0"},"node_modules/vitest":{"version":"1.0.0","dev":true}}}"#;
+        let mut names: Vec<_> = parse_lockfile("package-lock.json", npm)
+            .into_iter()
+            .map(|p| p.name)
+            .collect();
+        names.sort();
+        assert_eq!(names, ["@scope/b", "lodash"]);
+        let yarn = "# yarn\n\n\"@babel/core@^7.0.0\", \"@babel/core@^7.1.0\":\n  version \"7.2.0\"\n  resolved \"x\"\n\nleft-pad@1.0.0:\n  version \"1.0.0\"\n";
+        let got: Vec<_> = parse_lockfile("yarn.lock", yarn)
+            .into_iter()
+            .map(|p| format!("{}@{}", p.name, p.version))
+            .collect();
+        assert_eq!(got, ["@babel/core@7.2.0", "left-pad@1.0.0"]);
+        let go = "module x\n\nrequire github.com/a/b v1.2.3\nrequire (\n\tgolang.org/x/net v0.1.0 // indirect\n)\n";
+        assert_eq!(parse_lockfile("go.mod", go).len(), 2);
+        assert_eq!(
+            parse_lockfile(
+                "requirements.txt",
+                "requests[socks]==2.0.1 ; python_version>'3'\nflask>=2\n"
+            )[0]
+            .name,
+            "requests"
+        );
+        let nuget = r#"{"dependencies":{"net8.0":{"Newtonsoft.Json":{"type":"Direct","resolved":"13.0.1"},"Game.Core":{"type":"Project"}}}}"#;
+        assert_eq!(parse_lockfile("packages.lock.json", nuget).len(), 1);
+    }
+
+    fn archive(files: &[(&str, &str)]) -> Vec<u8> {
+        let mut out = Vec::new();
+        {
+            let gz = flate2::write::GzEncoder::new(&mut out, flate2::Compression::fast());
+            let mut tar = tar::Builder::new(gz);
+            for (path, text) in files {
+                let mut h = tar::Header::new_gnu();
+                h.set_size(text.len() as u64);
+                h.set_mode(0o644);
+                h.set_cksum();
+                tar.append_data(&mut h, format!("octo-game-abc/{path}"), text.as_bytes())
+                    .unwrap();
+            }
+            tar.into_inner().unwrap().finish().unwrap();
+        }
+        out
+    }
+
+    #[test]
+    fn archives_give_licence_monetization_and_package_notes() {
+        let data = archive(&[
+            (
+                "LICENSE",
+                "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007",
+            ),
+            (
+                "src/shop.cs",
+                "// SPDX-License-Identifier: GPL-3.0-or-later\nusing UnityEngine.Purchasing;\nclass Shop { void OpenLootBox() {} string gemPack = \"gem pack\"; }",
+            ),
+            (
+                "src/main.rs",
+                "// SPDX-License-Identifier: MIT\nfn main() {}",
+            ),
+            ("node_modules/stripe/index.js", "api.stripe.com"),
+            (
+                "web/package-lock.json",
+                r#"{"packages":{"node_modules/stripe":{"version":"12.0.0"}}}"#,
+            ),
+        ]);
+        let (report, packages) = scan_archive(&data[..], "MIT", true).unwrap();
+        assert_eq!(report.licence.files[0].spdx, Some("GPL-3.0"));
+        assert!(
+            report
+                .licence
+                .problems
+                .iter()
+                .any(|p| p.contains("says GPL-3.0, but the store page says MIT")),
+            "{:?}",
+            report.licence.problems
+        );
+        assert!(
+            report
+                .licence
+                .problems
+                .iter()
+                .any(|p| p.contains("1 source file says GPL-3.0-or-later")),
+            "{:?}",
+            report.licence.problems
+        );
+        let rules: Vec<_> = report
+            .monetization
+            .iter()
+            .map(|h| h.rule.as_str())
+            .collect();
+        assert_eq!(
+            rules,
+            ["payment_library", "premium_currency", "unity_iap"],
+            "node_modules isn't read; LootBox isn't a word boundary"
+        );
+        assert_eq!(packages.len(), 1);
+        assert_eq!(report.lockfiles, ["web/package-lock.json"]);
+
+        let (clean, _) = scan_archive(&archive(&[("LICENSE", "Permission is hereby granted, free of charge, to any person obtaining a copy. The above copyright notice and this permission notice shall be included")])[..], "MIT", true).unwrap();
+        assert!(clean.licence.problems.is_empty() && clean.monetization.is_empty());
+        let (missing, _) = scan_archive(
+            &archive(&[("README.md", "hi")])[..],
+            "Proprietary-1.0",
+            true,
+        )
+        .unwrap();
+        assert_eq!(
+            missing.licence.problems.len(),
+            2,
+            "no file, and not OSI-approved"
+        );
+    }
+}
