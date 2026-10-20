@@ -636,6 +636,7 @@ async fn invite(
     Path(slug): Path<String>,
     Json(b): Json<InviteBody>,
 ) -> ApiResult<StatusCode> {
+    crate::limits::check(&state, user.id, crate::limits::Action::TeamInvite)?;
     let t = load(&state.db, &slug, Some(user.id)).await?.admin()?;
     let to =
         parse_user(&b.user).ok_or_else(|| ApiError::invalid("user", "paste their profile link"))?;

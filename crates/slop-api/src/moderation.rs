@@ -571,6 +571,9 @@ async fn report(
     headers: HeaderMap,
     Json(body): Json<ReportBody>,
 ) -> ApiResult<Json<Acknowledgement>> {
+    if let Some(u) = &user {
+        crate::limits::check(&state, u.id, crate::limits::Action::Report)?;
+    }
     let reason = reason(&body.reason)
         .filter(|r| r.kinds.contains(&body.kind.as_str()))
         .ok_or_else(|| ApiError::invalid("reason", "choose a reason"))?;

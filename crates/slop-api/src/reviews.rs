@@ -154,6 +154,7 @@ async fn write(
     Path(slug): Path<String>,
     Json(b): Json<WriteBody>,
 ) -> ApiResult<StatusCode> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Review)?;
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     if catalog::is_private(&state.db, app_id).await? {

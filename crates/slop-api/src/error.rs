@@ -35,6 +35,12 @@ pub enum ApiError {
     /// Too many unfinished checkouts: solve a proof-of-work challenge first (challenge.rs).
     #[error("one more step before trying again: your browser needs to do a quick check")]
     ChallengeRequired,
+    /// An account doing something faster than a person would (limits.rs).
+    #[error("too many {what} for now: try again in a while")]
+    TooFast {
+        what: &'static str,
+        retry_after: u64,
+    },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -69,6 +75,7 @@ impl IntoResponse for ApiError {
             Self::Suspended => (StatusCode::FORBIDDEN, "suspended"),
             Self::StepUpRequired => (StatusCode::FORBIDDEN, "step_up_required"),
             Self::ChallengeRequired => (StatusCode::CONFLICT, "challenge_required"),
+            Self::TooFast { .. } => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
             Self::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
@@ -86,7 +93,13 @@ impl IntoResponse for ApiError {
         if let Self::TermsRequired(kind) = &self {
             body["error"]["field"] = json!(kind);
         }
-        (status, Json(body)).into_response()
+        let mut res = (status, Json(body)).into_response();
+        if let Self::TooFast { retry_after, .. } = &self
+            && let Ok(v) = axum::http::HeaderValue::from_str(&retry_after.to_string())
+        {
+            res.headers_mut().insert(axum::http::header::RETRY_AFTER, v);
+        }
+        res
     }
 }
 

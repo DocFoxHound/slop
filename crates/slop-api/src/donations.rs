@@ -422,6 +422,7 @@ async fn start(
     Path(slug): Path<String>,
     Json(b): Json<StartBody>,
 ) -> ApiResult<Json<Started>> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Donation)?;
     let t = target(&state, Some(&user), &headers, &slug).await?;
     if user.id == t.maker_id {
         return Err(ApiError::Conflict(

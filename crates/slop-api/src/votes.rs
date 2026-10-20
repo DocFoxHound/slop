@@ -479,6 +479,7 @@ async fn vote(
     Path(slug): Path<String>,
     Json(body): Json<VoteBody>,
 ) -> ApiResult<Json<Ratings>> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Vote)?;
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, is_mine) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     let value: i16 = match body.vote.as_deref() {

@@ -182,6 +182,7 @@ async fn share(
     Path(slug): Path<String>,
     Json(b): Json<ShareBody>,
 ) -> ApiResult<(StatusCode, Json<Vec<Share>>)> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Share)?;
     let (app_id, title) = owned_private(&state, &user, &slug).await?;
     if let Some(team) = b.team.as_deref().map(str::trim).filter(|t| !t.is_empty()) {
         share_team(&state, &user, app_id, &title, &slug, team).await?;

@@ -1426,6 +1426,7 @@ async fn send(
     Path(id): Path<Uuid>,
     Json(b): Json<MessageBody>,
 ) -> ApiResult<axum::response::Response> {
+    crate::limits::check(&state, device.user.id, crate::limits::Action::ChatMessage)?;
     let body = b64("body", &b.body, MAX_MESSAGE_BYTES)?;
     let tag = b64("franking_tag", &b.franking_tag, 32)?;
     if tag.len() != 32 {

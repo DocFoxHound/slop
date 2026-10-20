@@ -22,6 +22,7 @@ pub mod github_app;
 pub mod interested;
 pub mod legal;
 pub mod library;
+pub mod limits;
 pub mod manage;
 pub mod media;
 pub mod moderation;
@@ -92,6 +93,8 @@ pub struct AppState {
     pub github_app_tokens: Arc<github_app::TokenCache>,
     /// Wakes chat long-polls (chat.rs).
     pub chat_hub: chat::Hub,
+    /// Rate limits per account (limits.rs).
+    pub account_limiter: Arc<limits::AccountLimiter>,
 }
 
 impl AppState {
@@ -119,6 +122,7 @@ impl AppState {
             oidc_keys: Arc::default(),
             github_app_tokens: Arc::default(),
             chat_hub: chat::Hub::default(),
+            account_limiter: Arc::default(),
         })
     }
 }
