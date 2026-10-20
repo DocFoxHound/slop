@@ -4575,6 +4575,14 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
         );
     }
     assert!(!m.decisions_by_action.is_empty(), "{m:#?}");
+    // Donations: 5% of each, every one recorded as a payment.
+    let d = &r.donations;
+    assert!(d.donations > 20, "{d:#?}");
+    assert_eq!(
+        (d.fees_not_5_percent, d.paid_without_payment),
+        (0, 0),
+        "{d:#?}"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -5621,12 +5629,21 @@ async fn fake_stripe() -> String {
                         .into_owned()
                         .collect();
                 let id = format!("cs_{}", sessions.lock().unwrap().len() + 1);
+                let metadata: serde_json::Map<String, Value> = form
+                    .iter()
+                    .filter_map(|(k, v)| {
+                        k.strip_prefix("metadata[")
+                            .map(|k| (k.trim_end_matches(']').to_string(), json!(v)))
+                    })
+                    .collect();
                 let session = json!({
                     "id": id, "status": "open", "payment_status": "unpaid",
                     "url": format!("https://checkout.stripe.example/{id}"),
                     "amount_total": form["line_items[0][price_data][unit_amount]"].parse::<i64>().unwrap(),
-                    "application_fee": form["payment_intent_data[application_fee_amount]"].parse::<i64>().unwrap(),
-                    "metadata": { "job_payment_id": form["metadata[job_payment_id]"], "payer": form["metadata[payer]"] },
+                    "application_fee": form.get("payment_intent_data[application_fee_amount]").map(|f| f.parse::<i64>().unwrap()),
+                    "metadata": metadata,
+                    // What Slop sent, for tests to check.
+                    "form": form,
                 });
                 sessions.lock().unwrap().insert(id, session.clone());
                 axum::Json(session)
@@ -6595,4 +6612,423 @@ async fn interested_players_hear_when_an_app_moves_on(db: PgPool) {
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&fan)).await).await;
     assert_eq!(me["unread_notifications"], 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Donations (DESIGN §12, PAYMENTS §5–6)
+
+async fn donations_on(app: &TestApp, maker: &str, slug: &str, servers: bool) {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/donation-account")
+                .cookie(maker)
+                .json(json!({ "tax_notice_ack": true, "confirm_adult": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
+    let res = app
+        .send(
+            req(Method::PUT, format!("/v1/apps/{slug}/donations/settings"))
+                .cookie(maker)
+                .json(json!({
+                    "donations_on": true, "donation_suggested_minor": 300, "donation_currency": "usd",
+                    "runs_servers": servers,
+                    "servers_statement": if servers { Some("Pays for two game servers and the leaderboard.") } else { None }
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn donations_go_to_the_maker_and_give_nothing_back(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 1000;
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: "smtp://localhost:2525".into(),
+            from: "n@slop.test".into(),
+        });
+    })
+    .await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (donor_id, donor) = app.user("Dee Donor", "US").await;
+    let (_, other) = app.user("Otto Other", "US").await;
+    sqlx::query("update users set email = 'dee@example.com' where id = $1")
+        .bind(donor_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    listed_with(&app, maker_id, "arena", "released", "").await;
+
+    // Enabling: the tax notice first (PAY-9), then the maker's own account.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/donation-account")
+                .cookie(&maker)
+                .json(json!({ "tax_notice_ack": false })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "tax_notice_ack");
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donate").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(info["on"], false);
+    donations_on(&app, &maker, "arena", true).await;
+    let before = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena").cookie(&other))
+            .await,
+    )
+    .await;
+
+    // The box: presets around the suggestion, each with the total first (PAY-10).
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donate").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(info["on"], true);
+    let middle = &info["presets"][1];
+    assert_eq!(middle["donation"], 300);
+    assert_eq!(middle["total"], 340);
+    assert_eq!(middle["slop_fee"], 15);
+    assert_eq!(middle["maker_receives"], 285);
+    assert!(
+        info["servers"]["example_consent"]
+            .as_str()
+            .unwrap()
+            .contains("every month until I cancel")
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donate").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["cant"], "It's your own app.");
+
+    // Donating: 18+, then done (simulated: no Stripe on this server).
+    let donate = |cookie: &str, body: Value| {
+        req(Method::POST, "/v1/apps/arena/donate")
+            .cookie(cookie)
+            .json(body)
+    };
+    let res = app
+        .send(donate(&donor, json!({ "amount_minor": 300 })))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "confirm_adult");
+    let res = app
+        .send(donate(&donor, json!({ "amount_minor": 300, "confirm_adult": true, "share_name": true, "message": "Love the arena!" })))
+        .await;
+    let started = body_json(res).await;
+    assert_eq!(started["done"], true, "{started}");
+    assert_eq!(
+        app.send(donate(
+            &maker,
+            json!({ "amount_minor": 300, "confirm_adult": true })
+        ))
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(donate(&donor, json!({ "amount_minor": 50 })))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // Recorded as a direct charge on the maker's account, with exactly 5% of the donation.
+    let (total, fee_minor, kind): (i32, i32, String) =
+        sqlx::query_as("select amount_minor, slop_fee_minor, kind from payments")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((total, fee_minor, kind.as_str()), (340, 15, "donation"));
+
+    // PAY-5: nothing about the app looks different to anyone because of a donation.
+    let after = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena").cookie(&other))
+            .await,
+    )
+    .await;
+    assert_eq!(before, after);
+    let as_donor = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert!(
+        !as_donor.to_string().to_lowercase().contains("donat"),
+        "{as_donor}"
+    );
+
+    // The donor has the receipt; the maker sees the shared name and message, and totals.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/donations").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["donations"][0]["status"], "paid");
+    assert_eq!(mine["donations"][0]["total_minor"], 340);
+    let summary = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donations").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(summary["currency_totals"][0]["donated_minor"], 300);
+    assert_eq!(summary["shared"][0]["name"], "Dee Donor");
+    assert_eq!(summary["shared"][0]["message"], "Love the arena!");
+    assert_eq!(
+        summary["months"].as_array().unwrap().len(),
+        0,
+        "fewer than 10: no breakdown"
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/arena/donations").cookie(&donor))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let inbox = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(inbox["items"][0]["title"], "Dee Donor donated to arena");
+
+    // The maker refunds a mistake (PAY-3).
+    let id = summary["recent"][0]["id"].as_str().unwrap();
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/donations/{id}/refund")).cookie(&donor))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/donations/{id}/refund")).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/donations").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["donations"][0]["status"], "refunded");
+
+    // A server donation: the exact monthly terms, confirmed with an unticked box and saved.
+    let monthly = json!({ "amount_minor": 500, "monthly": true });
+    assert_eq!(
+        body_json(app.send(donate(&donor, monthly.clone())).await).await["error"]["field"],
+        "consent"
+    );
+    let mut ok = monthly.clone();
+    ok["consent"] = json!(true);
+    assert_eq!(
+        body_json(app.send(donate(&donor, ok.clone())).await).await["done"],
+        true
+    );
+    assert_eq!(
+        app.send(donate(&donor, ok.clone())).await.status(),
+        StatusCode::CONFLICT,
+        "one per app"
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/donations").cookie(&donor))
+            .await,
+    )
+    .await;
+    let sub = &mine["server_donations"][0];
+    assert_eq!(sub["status"], "active");
+    assert!(
+        sub["consent_text"]
+            .as_str()
+            .unwrap()
+            .contains("$5.46 every month until I cancel"),
+        "{sub}"
+    );
+    // A month on: renewed (simulated), and reminded first (PAY-16), by email too.
+    sqlx::query("update server_donations set next_charge_at = now() - interval '1 minute'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::donations::hourly(&app.state).await.unwrap();
+    let months: i64 = sqlx::query_scalar(
+        "select count(*) from donations where kind = 'monthly' and status = 'paid'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(months, 2);
+    let reminders: i64 =
+        sqlx::query_scalar("select count(*) from email_outbox where subject like '%renews on%'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(reminders, 1);
+    // Account closing waits for it.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/close")
+                .cookie(&maker)
+                .json(json!({ "confirm": "close my account" })),
+        )
+        .await;
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("servers")
+    );
+
+    // Shutting the servers down cancels every server donation and tells the donors (PAY-17).
+    let res = app
+        .send(req(Method::POST, "/v1/apps/arena/servers/shut-down").cookie(&maker))
+        .await;
+    assert_eq!(body_json(res).await["cancelled"], 1);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/donations").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        mine["server_donations"][0]["cancelled_by"],
+        "servers_shut_down"
+    );
+    let told: i64 =
+        sqlx::query_scalar("select count(*) from email_outbox where subject like '%has ended%'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(told, 1);
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donate").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert!(info["servers"].is_null());
+
+    // Where a country's setting is off, the donor's amount is the total (PAY-12).
+    sqlx::query("update country_policies set donor_covers_fees = false where country_code = 'US'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let q = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donate/quote?amount_minor=300").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (q["total"].as_i64(), q["maker_receives"].as_i64()),
+        (Some(300), Some(300 - 15 - 39))
+    );
+
+    // Fee statements for the maker.
+    let statements = body_json(
+        app.send(req(Method::GET, "/v1/me/fee-statements").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(statements[0]["kind"], "donation");
+    assert!(statements[0]["slop_fee_minor"].as_i64().unwrap() > 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn stripe_donations_are_direct_charges_named_as_donations(db: PgPool) {
+    let stripe_base = fake_stripe().await;
+    let app = test_app_with(db, |c| {
+        c.payments.stripe = Some(slop_api::config::StripeConfig {
+            secret_key: "sk_test_slop".into(),
+            webhook_secret: "whsec_slop".into(),
+            api_base: stripe_base.parse().unwrap(),
+        })
+    })
+    .await;
+    let (maker_id, maker) = app.user("Vera", "US").await;
+    let (_, donor) = app.user("Dee Donor", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    let on = body_json(
+        app.send(
+            req(Method::POST, "/v1/me/donation-account")
+                .cookie(&maker)
+                .json(json!({ "tax_notice_ack": true, "confirm_adult": true })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(on["status"], "active", "{on}");
+    donations_on(&app, &maker, "arena", false).await;
+    let started = body_json(
+        app.send(
+            req(Method::POST, "/v1/apps/arena/donate")
+                .cookie(&donor)
+                .json(json!({ "amount_minor": 300, "confirm_adult": true })),
+        )
+        .await,
+    )
+    .await;
+    let url = started["url"].as_str().unwrap();
+    let session = url.rsplit('/').next().unwrap();
+    // The Checkout session Slop asked for: the donor's total, Slop's 5% of the donation, "donation".
+    let s: Value = reqwest::Client::new()
+        .get(format!("{stripe_base}v1/checkout/sessions/{session}"))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(s["form"]["line_items[0][price_data][unit_amount]"], "340");
+    assert_eq!(
+        s["form"]["payment_intent_data[application_fee_amount]"],
+        "15"
+    );
+    assert_eq!(
+        s["form"]["payment_intent_data[description]"],
+        "Donation to arena"
+    );
+    assert!(
+        s["form"]
+            .get("payment_intent_data[transfer_data][destination]")
+            .is_none(),
+        "PAY-1: never transfer_data"
+    );
+    // Paid on Stripe, confirmed by a signed webhook; the state comes from Stripe's API.
+    reqwest::Client::new()
+        .post(format!("{stripe_base}test/pay/{session}"))
+        .send()
+        .await
+        .unwrap();
+    let event = json!({
+        "id": "evt_don_1", "type": "checkout.session.completed", "account": "acct_vera",
+        "data": { "object": { "id": session, "metadata": { "donation_id": started["id"] } } }
+    });
+    let (body, sig) = stripe_signed(&event, "whsec_slop");
+    let res = app
+        .router
+        .clone()
+        .oneshot(
+            Request::builder()
+                .method(Method::POST)
+                .uri("/v1/stripe/webhook")
+                .header("stripe-signature", sig)
+                .header(header::CONTENT_TYPE, "application/json")
+                .body(Body::from(body))
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::OK);
+    let (status, object): (String, String) =
+        sqlx::query_as("select status, stripe_object_id from donations")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), object.as_str()),
+        ("paid", format!("ch_{session}").as_str())
+    );
 }

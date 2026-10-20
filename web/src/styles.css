@@ -678,3 +678,22 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .notifications li:not(.unread) b { font-weight: 500; color: var(--text-2); }
 .n-icon { flex: none; width: 22px; text-align: center; }
 .n-text { display: flex; flex-direction: column; gap: 2px; }
+
+/* ---- Donations ------------------------------------------------------------ */
+.donate-box { margin-top: 14px; }
+.donate-box h3 { margin: 0 0 4px; }
+.donate-presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
+.donate-preset { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit; text-align: left; }
+.donate-preset b { font-size: 17px; }
+.donate-preset.on { border-color: var(--slime); background: var(--slime-soft); }
+.donate-total { font-size: 13px; margin: 0; }
+.donate-total b { font-size: 16px; }
+.consent span { font-size: 12.5px; }
+.donation-summary h3 { font-size: 15px; margin: 16px 0 6px; }
+.plain { list-style: none; padding: 0; margin: 0 0 8px; }
+.shared-list { list-style: none; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 6px; }
+.shared-list p { margin: 2px 0 0; }
+.shut-down { margin-top: 12px; }
+.table { width: 100%; border-collapse: collapse; margin-bottom: 14px; }
+.table th, .table td { text-align: left; padding: 6px 10px; border-bottom: 1px solid var(--line); }
+.table th { color: var(--muted); font-weight: 600; }

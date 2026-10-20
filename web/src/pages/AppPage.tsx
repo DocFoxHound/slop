@@ -10,6 +10,7 @@ import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../f
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
+import { DonateBox } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
 import { workflowName } from "./Releases";
 import { isDesktop, openExternal } from "../platform";
@@ -241,6 +242,7 @@ function AppView({ app }: { app: AppDetail }) {
               </span>
             </div>
           </div>
+          {app.stage !== "coming_soon" && <DonateBox slug={app.slug} title={app.title} />}
           {!app.is_mine && (
             <p className="report-row">
               <ReportButton kind="app" subject={app.slug} label="this app" />

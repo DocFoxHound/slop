@@ -146,6 +146,40 @@ pub(crate) async fn email(
     Ok(())
 }
 
+/// Queues an email the user gets whatever their email choices: confirmations and reminders the
+/// law asks for (server donations: PAY-15, PAY-16, PAY-17). Nothing without an email or SMTP.
+pub(crate) async fn email_user(
+    conn: &mut sqlx::PgConnection,
+    config: &Config,
+    user_id: Uuid,
+    subject: &str,
+    body: &str,
+) -> sqlx::Result<()> {
+    if config.email.is_none() {
+        return Ok(());
+    }
+    let row: Option<(String, String)> = sqlx::query_as(
+        "select email, display_name from users where id = $1 and email is not null and closed_at is null",
+    )
+    .bind(user_id)
+    .fetch_optional(&mut *conn)
+    .await?;
+    let Some((to, name)) = row else {
+        return Ok(());
+    };
+    sqlx::query("insert into email_outbox (id, to_address, subject, body) values ($1, $2, $3, $4)")
+        .bind(Uuid::now_v7())
+        .bind(to)
+        .bind(subject)
+        .bind(format!(
+            "Hi {name},\n\n{body}\n\n— Slop\n{}",
+            config.public_url
+        ))
+        .execute(conn)
+        .await?;
+    Ok(())
+}
+
 // ---------------------------------------------------------------------------------------------
 // The bell
 

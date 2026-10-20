@@ -410,3 +410,139 @@ export function AccountNotifications() {
     </section>
   );
 }
+
+export function AccountDonations() {
+  const mine = useLoad(() => api.donations.mine(), []);
+  const statements = useLoad(() => api.donations.feeStatements(), []);
+  const [cancelling, setCancelling] = useState<string>();
+  const [error, setError] = useState<string>();
+  if (mine.error) return <ErrorState error={mine.error} onRetry={mine.reload} />;
+  const d = mine.data;
+  const cancel = async (id: string) => {
+    setError(undefined);
+    try {
+      await api.donations.cancel(id);
+      setCancelling(undefined);
+      mine.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
+  };
+  const fmt = (minor: number, currency: string) => {
+    const symbol = currency === "eur" ? "€" : currency === "gbp" ? "£" : "$";
+    return `${symbol}${(minor / 100).toFixed(2)}`;
+  };
+  return (
+    <>
+      {d && (d.donations.length > 0 || d.server_donations.length > 0) && (
+        <section id="donations">
+          <h2 className="section-title">Your donations</h2>
+          {d.server_donations.length > 0 && (
+            <ul className="panel report-list">
+              {d.server_donations.map((s) => (
+                <li key={s.id}>
+                  <div>
+                    <b>Server donation to {s.app_title}</b>{" "}
+                    <span className="muted small">· {fmt(s.total_minor, s.currency)} a month</span>
+                    <div className="muted small">
+                      {s.status === "active" && s.next_charge_at && `Next payment ${formatDate(s.next_charge_at)}`}
+                      {s.status === "cancelled" &&
+                        `Cancelled ${s.cancelled_at ? formatDate(s.cancelled_at) : ""}${s.cancelled_by === "servers_shut_down" ? " (the servers shut down)" : ""}`}
+                      {s.simulated && " · simulated"}
+                    </div>
+                    <details className="small">
+                      <summary>What you agreed to</summary>
+                      <p>{s.consent_text}</p>
+                    </details>
+                  </div>
+                  {s.status !== "cancelled" &&
+                    (cancelling === s.id ? (
+                      <span className="row-actions">
+                        <button type="button" className="btn small danger" onClick={() => void cancel(s.id)}>
+                          Yes, cancel it
+                        </button>
+                        <button type="button" className="btn small ghost" onClick={() => setCancelling(undefined)}>
+                          Keep it
+                        </button>
+                      </span>
+                    ) : (
+                      <button type="button" className="btn small" onClick={() => setCancelling(s.id)}>
+                        Cancel
+                      </button>
+                    ))}
+                </li>
+              ))}
+            </ul>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          {d.donations.length > 0 && (
+            <table className="table small panel">
+              <thead>
+                <tr>
+                  <th>Date</th>
+                  <th>To</th>
+                  <th>You paid</th>
+                  <th>Status</th>
+                </tr>
+              </thead>
+              <tbody>
+                {d.donations.map((x) => (
+                  <tr key={x.id}>
+                    <td>{formatDate(x.paid_at ?? x.created_at)}</td>
+                    <td>
+                      <Link to={`/app/${x.app_slug}`}>{x.app_title}</Link>
+                      {x.kind === "monthly" && <span className="muted"> · monthly</span>}
+                    </td>
+                    <td>{fmt(x.total_minor, x.currency)}</td>
+                    <td>
+                      {x.status === "paid" ? "Paid" : x.status === "pending" ? "Waiting" : x.status.replace("_", " ")}
+                      {x.simulated && <span className="muted"> · simulated</span>}
+                    </td>
+                  </tr>
+                ))}
+              </tbody>
+            </table>
+          )}
+          <p className="faint small">Receipts for real payments come by email from the maker's Stripe account.</p>
+        </section>
+      )}
+      {(statements.data?.length ?? 0) > 0 && (
+        <section id="fee-statements">
+          <h2 className="section-title">Fee statements</h2>
+          <p className="muted small">
+            Slop's 5% fee on the donations and People payments you received, by month. The fee includes any VAT due.
+          </p>
+          <table className="table small panel">
+            <thead>
+              <tr>
+                <th>Month</th>
+                <th>For</th>
+                <th>Payments</th>
+                <th>Received</th>
+                <th>Slop fee</th>
+              </tr>
+            </thead>
+            <tbody>
+              {statements.data!.map((s) => (
+                <tr key={s.month + s.kind + s.currency}>
+                  <td>{s.month}</td>
+                  <td>{s.kind === "donation" ? "Donations" : "People jobs"}</td>
+                  <td>{s.payments}</td>
+                  <td>{fmt(s.received_minor, s.currency)}</td>
+                  <td>
+                    {fmt(s.slop_fee_minor, s.currency)}
+                    {s.simulated && <span className="muted"> · simulated</span>}
+                  </td>
+                </tr>
+              ))}
+            </tbody>
+          </table>
+        </section>
+      )}
+    </>
+  );
+}

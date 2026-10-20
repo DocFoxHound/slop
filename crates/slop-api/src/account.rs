@@ -128,6 +128,22 @@ const EXPORT: &[(&str, &str)] = &[
          from jobs j where $1 in (j.client_id, j.creative_id)",
     ),
     (
+        "donations",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug) || (to_jsonb(d) - 'donor_id' - 'app_id')
+                order by d.created_at), '[]')
+         from donations d join apps a on a.id = d.app_id where d.donor_id = $1",
+    ),
+    (
+        "server_donations",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug) || (to_jsonb(s) - 'donor_id' - 'app_id')
+                order by s.created_at), '[]')
+         from server_donations s join apps a on a.id = s.app_id where s.donor_id = $1",
+    ),
+    (
+        "donation_account",
+        "select to_jsonb(d) - 'user_id' from donation_accounts d where d.user_id = $1",
+    ),
+    (
         "reviews_written",
         "select coalesce(jsonb_agg(to_jsonb(r) - 'client_id'), '[]') from creative_reviews r where r.client_id = $1",
     ),
@@ -215,7 +231,28 @@ pub async fn blockers(db: &sqlx::PgPool, user_id: Uuid) -> sqlx::Result<Vec<Stri
     .bind(user_id)
     .fetch_one(db)
     .await?;
+    let giving: i64 = sqlx::query_scalar(
+        "select count(*) from server_donations where donor_id = $1 and status in ('pending', 'active')",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
+    let receiving: i64 = sqlx::query_scalar(
+        "select count(*) from server_donations s join apps a on a.id = s.app_id
+         where a.maker_id = $1 and s.status in ('pending', 'active')",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
     let mut out = Vec::new();
+    if giving > 0 {
+        out.push("you give a monthly server donation: cancel it first".into());
+    }
+    if receiving > 0 {
+        out.push(format!(
+            "{receiving} people give monthly to your apps' servers: mark the servers shut down first, which cancels their donations"
+        ));
+    }
     if open_jobs > 0 {
         out.push(format!(
             "{open_jobs} People job{} still open: finish, cancel or withdraw {} first",

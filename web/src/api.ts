@@ -43,6 +43,95 @@ export interface AppSummary {
   updated_at: string;
 }
 
+/** Donations (crates/slop-api/src/donations.rs). Amounts are in minor units (cents). */
+export interface DonationQuote {
+  /** What the donor chose for the maker, before Slop's fee. */
+  donation: number;
+  /** What the donor pays: always shown first and largest. */
+  total: number;
+  slop_fee: number;
+  /** The processing addition (or, when the donor doesn't cover it, the estimate taken from the maker's share). */
+  processing: number;
+  maker_receives: number;
+  donor_covers_fees: boolean;
+}
+
+export interface DonateInfo {
+  on: boolean;
+  off_reason: string | null;
+  currency: string;
+  presets: DonationQuote[];
+  min_minor: number;
+  max_minor: number;
+  donor_covers_fees: boolean;
+  servers: { statement: string; example_consent: string } | null;
+  maker: string;
+  cant: string | null;
+  simulated: boolean;
+}
+
+export interface MyDonation {
+  id: string;
+  kind: "one_off" | "monthly";
+  app_title: string;
+  app_slug: string;
+  currency: string;
+  donation_minor: number;
+  total_minor: number;
+  status: "pending" | "paid" | "refunded" | "partially_refunded" | "expired";
+  refunded_minor: number;
+  share_name: boolean;
+  simulated: boolean;
+  created_at: string;
+  paid_at: string | null;
+}
+
+export interface MyServerDonation {
+  id: string;
+  app_title: string;
+  app_slug: string;
+  currency: string;
+  donation_minor: number;
+  total_minor: number;
+  status: "pending" | "active" | "cancelled";
+  consent_text: string;
+  simulated: boolean;
+  started_at: string | null;
+  next_charge_at: string | null;
+  cancelled_at: string | null;
+  cancelled_by: "donor" | "servers_shut_down" | "stripe" | null;
+}
+
+export interface DonationSettings {
+  donations_on: boolean;
+  donation_suggested_minor: number;
+  donation_currency: string;
+  runs_servers: boolean;
+  servers_statement: string | null;
+  servers_shut_down_at: string | null;
+  account_status: "none" | "pending" | "active" | "restricted";
+  active_server_donations: number;
+  payments: "stripe" | "simulated" | "off";
+}
+
+export interface DonationSummary {
+  currency_totals: Array<{ currency: string; donations: number; donated_minor: number; slop_fee_minor: number; refunded_minor: number }>;
+  months: Array<{ month: string; currency: string; donations: number; donated_minor: number }>;
+  active_server_donations: number | null;
+  shared: Array<{ name: string; message: string | null; currency: string; donation_minor: number; paid_at: string }>;
+  recent: Array<{ id: string; kind: string; currency: string; total_minor: number; status: string; refundable: boolean; paid_at: string }>;
+}
+
+export interface FeeStatement {
+  month: string;
+  currency: string;
+  kind: "donation" | "people_job";
+  payments: number;
+  received_minor: number;
+  slop_fee_minor: number;
+  simulated: boolean;
+}
+
 /** A notification in the bell (crates/slop-api/src/notify.rs). */
 export interface Notification {
   id: string;
@@ -1230,6 +1319,34 @@ export const api = {
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/players`,
     ),
+  donations: {
+    info: (slug: string) => request<DonateInfo>("GET", `/v1/apps/${encodeURIComponent(slug)}/donate`),
+    quote: (slug: string, amount_minor: number) =>
+      request<DonationQuote & { currency: string; consent: string | null }>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/donate/quote${query({ amount_minor })}`,
+      ),
+    start: (
+      slug: string,
+      body: { amount_minor: number; monthly: boolean; share_name: boolean; message?: string; consent: boolean; confirm_adult: boolean },
+    ) => request<{ url: string | null; id: string; done: boolean }>("POST", `/v1/apps/${encodeURIComponent(slug)}/donate`, body),
+    check: (id: string) => request<void>("POST", `/v1/me/donations/${encodeURIComponent(id)}/check`),
+    mine: () => request<{ donations: MyDonation[]; server_donations: MyServerDonation[] }>("GET", "/v1/me/donations"),
+    cancel: (id: string) => request<void>("POST", `/v1/me/server-donations/${encodeURIComponent(id)}/cancel`),
+    settings: (slug: string) => request<DonationSettings>("GET", `/v1/apps/${encodeURIComponent(slug)}/donations/settings`),
+    saveSettings: (
+      slug: string,
+      body: { donations_on: boolean; donation_suggested_minor: number; donation_currency: string; runs_servers: boolean; servers_statement: string | null },
+    ) => request<DonationSettings>("PUT", `/v1/apps/${encodeURIComponent(slug)}/donations/settings`, body),
+    serversShutDown: (slug: string) => request<{ cancelled: number }>("POST", `/v1/apps/${encodeURIComponent(slug)}/servers/shut-down`),
+    summary: (slug: string) => request<DonationSummary>("GET", `/v1/apps/${encodeURIComponent(slug)}/donations`),
+    refund: (id: string) => request<void>("POST", `/v1/donations/${encodeURIComponent(id)}/refund`),
+    account: () => request<{ status: string; payments: string }>("GET", "/v1/me/donation-account"),
+    onboard: (body: { tax_notice_ack: boolean; confirm_adult: boolean; return_to?: string }) =>
+      request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account", body),
+    refreshAccount: () => request<{ url: string | null; status: string }>("POST", "/v1/me/donation-account/refresh"),
+    feeStatements: () => request<FeeStatement[]>("GET", "/v1/me/fee-statements"),
+  },
   interested: {
     mine: () => request<Array<AppSummary & { interested_at: string }>>("GET", "/v1/me/interested"),
     add: (slug: string) => request<void>("PUT", `/v1/me/interested/${encodeURIComponent(slug)}`),

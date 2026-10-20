@@ -13,6 +13,7 @@ import {
   AccountAgreements,
   AccountData,
   AccountDecisions,
+  AccountDonations,
   AccountNotifications,
   AccountReports,
 } from "../components/AccountSections";
@@ -359,6 +360,7 @@ export function Account() {
 
       <AccountNotifications />
       <AccountDecisions />
+      <AccountDonations />
       <AccountReports />
       <AccountAgreements />
 
