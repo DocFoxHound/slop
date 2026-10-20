@@ -70,7 +70,9 @@ polls on the shared `GITHUB_TOKEN`, which runs out at around 800 watched apps.
    - **Homepage URL:** the site, e.g. `https://slop.example`.
    - **Webhook URL:** `https://slop.example/v1/github/webhook`, **Active**. **Webhook secret:** a
      long random string (`openssl rand -hex 32`).
-   - **Repository permissions:** Contents **Read-only**, Metadata **Read-only**. Nothing else.
+   - **Repository permissions:** Contents **Read-only**, Metadata **Read-only**.
+   - **Organization permissions** (for official teams, `teams.rs`): Members **Read-only**, and
+     Administration **Read-only** (to see whether the organization requires 2FA). Nothing else.
    - **Subscribe to events:** **Release**. (Installation events are always sent.)
    - **Where can this GitHub App be installed?** **Any account**, so makers can install it.
 2. After creating it, note the **App ID** and the App's public name (in its public link,

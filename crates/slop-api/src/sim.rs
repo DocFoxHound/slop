@@ -356,6 +356,8 @@ pub struct Generated {
     pub branches: usize,
     /// Private Slop apps, each shared with a few players.
     pub private_apps: usize,
+    /// Player teams, plus one official studio (verified by hand: the sandbox has no GitHub App).
+    pub teams: usize,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -661,6 +663,12 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .await?;
     for table in [
         "notifications",
+        "app_team_shares",
+        "team_events",
+        "team_picks",
+        "team_invites",
+        "team_members",
+        "teams",
         "app_shares",
         "interests",
         "app_reviews",
@@ -1041,6 +1049,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .execute(db)
         .await?;
     }
+    let teams = sim_teams(db, now).await?;
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
     let donations = crate::sim_donations::write(db, &mut rng, now).await?;
 
@@ -1060,6 +1069,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         reviews,
         branches,
         private_apps: private_apps.len(),
+        teams,
     })
 }
 
@@ -1156,6 +1166,103 @@ async fn sim_branches(db: &PgPool, now: OffsetDateTime) -> anyhow::Result<usize>
         .bind(parent)
         .execute(db)
         .await?;
+        made += 1;
+    }
+    Ok(made)
+}
+
+/// Player teams of players who share a taste, with picks and a game night; and one official
+/// studio whose apps (github.com/sim/…) show the badge.
+async fn sim_teams(db: &PgPool, now: OffsetDateTime) -> anyhow::Result<usize> {
+    let names = [
+        ("roguelike-runners", "Roguelike Runners", "roguelike fan"),
+        ("cozy-corner", "Cozy Corner", "cozy gamer"),
+        ("puzzle-night", "Puzzle Night", "puzzler"),
+        ("strategy-table", "The Strategy Table", "strategist"),
+    ];
+    let mut made = 0;
+    for (i, (slug, name, persona)) in names.iter().enumerate() {
+        let members: Vec<Uuid> = sqlx::query_scalar(
+            "select user_id from sim_users where personas like '%' || $1 || '%' order by md5(user_id::text) limit 8",
+        )
+        .bind(persona)
+        .fetch_all(db)
+        .await?;
+        let Some(owner) = members.first() else {
+            continue;
+        };
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "insert into teams (id, slug, name, kind, about, join_policy, created_by, created_at)
+             values ($1, $2, $3, 'player', $4, $5, $6, $7)",
+        )
+        .bind(id)
+        .bind(slug)
+        .bind(name)
+        .bind(format!(
+            "A team of {persona}s. We pick a game and play it together on Friday."
+        ))
+        .bind(if i % 2 == 0 { "open" } else { "invite" })
+        .bind(owner)
+        .bind(now - time::Duration::days(40))
+        .execute(db)
+        .await?;
+        for (k, m) in members.iter().enumerate() {
+            sqlx::query("insert into team_members (team_id, user_id, role, joined_at) values ($1, $2, $3, $4)")
+                .bind(id)
+                .bind(m)
+                .bind(if k == 0 { "owner" } else { "member" })
+                .bind(now - time::Duration::days(40 - k as i64))
+                .execute(db)
+                .await?;
+        }
+        // Picks: the apps members like most.
+        sqlx::query(
+            "insert into team_picks (id, team_id, app_id, user_id, note)
+             select gen_random_uuid(), $1, v.app_id, min(v.user_id::text)::uuid, 'Everyone in the team liked this one.'
+             from votes v join apps a on a.id = v.app_id
+             where v.user_id = any($2) and v.vote = 1 and a.status = 'listed' and a.visibility = 'public'
+             group by v.app_id order by count(*) desc limit 4",
+        )
+        .bind(id)
+        .bind(&members)
+        .execute(db)
+        .await?;
+        sqlx::query(
+            "insert into team_events (id, team_id, app_id, title, starts_at, created_by)
+             select gen_random_uuid(), $1, p.app_id, 'Friday game night', $2, $3 from team_picks p where p.team_id = $1 limit 1",
+        )
+        .bind(id)
+        .bind((now + time::Duration::days(3)).replace_time(time::macros::time!(19:00)))
+        .bind(owner)
+        .execute(db)
+        .await?;
+        made += 1;
+    }
+    // One official studio: the most prolific simulated maker, verified by hand.
+    let studio: Option<Uuid> = sqlx::query_scalar(
+        "select maker_id from apps where status = 'listed' and parent_app_id is null group by 1 order by count(*) desc, maker_id limit 1",
+    )
+    .fetch_optional(db)
+    .await?;
+    if let Some(owner) = studio {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "insert into teams (id, slug, name, kind, about, join_policy, created_by, github_org, verified_at, checked_at, checks)
+             values ($1, 'sim-studio', 'Sim Studio', 'official', 'A made-up studio, to show what an official team looks like.',
+                     'invite', $2, 'sim', $3, $3, $4)",
+        )
+        .bind(id)
+        .bind(owner)
+        .bind(now)
+        .bind(serde_json::json!([{ "check": "owner", "ok": true, "detail": "Simulated: the sandbox has no GitHub App." }]))
+        .execute(db)
+        .await?;
+        sqlx::query("insert into team_members (team_id, user_id, role) values ($1, $2, 'owner')")
+            .bind(id)
+            .bind(owner)
+            .execute(db)
+            .await?;
         made += 1;
     }
     Ok(made)

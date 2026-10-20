@@ -46,6 +46,7 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Written reviews of apps | `app_reviews` | Shown with the vote on the app page, and on the profile when it's public | Contract (it's the feature) / legitimate interest | Until deleted, or the account closes |
 | Profile privacy choice | `users.profile_public` | Whether votes and reviews show on the public profile (PRIV-6 default) | Contract | Life of account |
 | Who a Private Slop app is shared with | `app_shares` | Access control for Private Slop (SECURITY §12) | Contract | Until the owner stops sharing, or either account closes |
+| Teams (name, about, organization, verification results) and membership, invitations, picks, game nights, team shares | `teams`, `team_members`, `team_invites`, `team_picks`, `team_events`, `app_team_shares` | Player and official teams (DESIGN §14) | Contract | Until the member leaves, the team ends, or the account closes |
 | Interested list | `interests` | The user's Interested apps: library, stage notifications, "For you"; only counts are public | Contract; legitimate interest (recommendations) | Until removed or the account closes |
 | Notifications (title, link, read time) | `notifications` | Telling the user about their jobs, Interested apps and moderation decisions | Contract | 180 days after being read, a year at most |
 | Email choices | `users.email_prefs` | Which notification emails the user wants | Contract | Life of account |

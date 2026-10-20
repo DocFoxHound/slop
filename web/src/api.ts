@@ -160,6 +160,39 @@ export interface UserProfile {
   votes: Array<AppSummary & { my_vote: "not_slop" | "slop"; review: string | null; voted_at: string }>;
 }
 
+/** Teams (crates/slop-api/src/teams.rs). */
+export interface TeamCard {
+  slug: string;
+  name: string;
+  kind: "player" | "official";
+  about: string;
+  join_policy: "open" | "invite";
+  members: number;
+  verified: boolean;
+}
+
+export interface TeamPage {
+  slug: string;
+  name: string;
+  kind: "player" | "official";
+  about: string;
+  join_policy: "open" | "invite";
+  github_org: string | null;
+  verified: boolean;
+  checks: Array<{ check: string; ok: boolean; detail: string }>;
+  checked_at: string | null;
+  dns: { domain: string | null; record: string; value: string } | null;
+  role: "owner" | "admin" | "member" | null;
+  invited: boolean;
+  members: Array<{ user_id: string; name: string; role: "owner" | "admin" | "member"; joined_at: string }>;
+  member_count: number;
+  apps: AppSummary[];
+  picks: Array<AppSummary & { id: string; note: string; by: string }>;
+  events: Array<{ id: string; title: string; starts_at: string; app_slug: string | null; app_title: string | null; by: string; mine: boolean }>;
+  shared: AppSummary[];
+  hidden: boolean;
+}
+
 /** A notification in the bell (crates/slop-api/src/notify.rs). */
 export interface Notification {
   id: string;
@@ -278,6 +311,8 @@ export interface AppDetail extends AppSummary {
   /** The viewer marked it Interested. */
   /** Private Slop: only its owner and the people it's shared with see it. */
   private: boolean;
+  /** The verified official team that publishes it. */
+  official_team: { slug: string; name: string } | null;
   is_interested: boolean;
   /** For a community branch: what it branches from. */
   branch: {
@@ -360,7 +395,7 @@ export interface LegalNotice {
 }
 
 /** Reports and moderation (crates/slop-api/src/moderation.rs). */
-export type ReportKind = "app" | "review" | "profile" | "message" | "app_review";
+export type ReportKind = "app" | "review" | "profile" | "message" | "app_review" | "team";
 
 export interface ReportReason {
   code: string;
@@ -1385,11 +1420,47 @@ export const api = {
   private: {
     mine: () => request<{ mine: AppSummary[]; shared: Array<AppSummary & { owner: string }> }>("GET", "/v1/me/private"),
     shares: (slug: string) =>
-      request<Array<{ user_id: string; name: string; shared_at: string }>>("GET", `/v1/apps/${encodeURIComponent(slug)}/shares`),
-    share: (slug: string, user: string) =>
-      request<Array<{ user_id: string; name: string; shared_at: string }>>("POST", `/v1/apps/${encodeURIComponent(slug)}/shares`, { user }),
+      request<Array<{ user_id: string | null; team: string | null; name: string; shared_at: string }>>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/shares`,
+      ),
+    share: (slug: string, to: { user?: string; team?: string }) =>
+      request<Array<{ user_id: string | null; team: string | null; name: string; shared_at: string }>>(
+        "POST",
+        `/v1/apps/${encodeURIComponent(slug)}/shares`,
+        to,
+      ),
+    unshareTeam: (slug: string, team: string) =>
+      request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/team-shares/${encodeURIComponent(team)}`),
     unshare: (slug: string, userId: string) =>
       request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/shares/${encodeURIComponent(userId)}`),
+  },
+  teams: {
+    list: () => request<TeamCard[]>("GET", "/v1/teams"),
+    mine: () => request<{ teams: TeamCard[]; invites: TeamCard[] }>("GET", "/v1/me/teams"),
+    create: (body: { slug: string; name: string; kind: "player" | "official"; about: string; join_policy?: string; github_org?: string }) =>
+      request<{ slug: string }>("POST", "/v1/teams", body),
+    page: (slug: string) => request<TeamPage>("GET", `/v1/teams/${encodeURIComponent(slug)}`),
+    update: (slug: string, body: { name?: string; about?: string; join_policy?: string; dns_domain?: string }) =>
+      request<void>("PATCH", `/v1/teams/${encodeURIComponent(slug)}`, body),
+    join: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/join`),
+    leave: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/leave`),
+    invite: (slug: string, user: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/invites`, { user }),
+    accept: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/invites/accept`),
+    decline: (slug: string) => request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/invites/decline`),
+    removeMember: (slug: string, userId: string) =>
+      request<void>("DELETE", `/v1/teams/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`),
+    setRole: (slug: string, userId: string, role: string) =>
+      request<void>("PUT", `/v1/teams/${encodeURIComponent(slug)}/members/${encodeURIComponent(userId)}`, { role }),
+    pick: (slug: string, app_slug: string, note: string) =>
+      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/picks`, { app_slug, note }),
+    unpick: (slug: string, id: string) => request<void>("DELETE", `/v1/teams/${encodeURIComponent(slug)}/picks/${encodeURIComponent(id)}`),
+    addEvent: (slug: string, body: { title: string; starts_at: string; app_slug?: string }) =>
+      request<void>("POST", `/v1/teams/${encodeURIComponent(slug)}/events`, body),
+    removeEvent: (slug: string, id: string) =>
+      request<void>("DELETE", `/v1/teams/${encodeURIComponent(slug)}/events/${encodeURIComponent(id)}`),
+    verify: (slug: string) =>
+      request<{ verified: boolean; checks: TeamPage["checks"] }>("POST", `/v1/teams/${encodeURIComponent(slug)}/verify`),
   },
   registerBranch: (
     parent: string,

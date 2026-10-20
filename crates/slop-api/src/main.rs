@@ -438,6 +438,7 @@ async fn serve() -> anyhow::Result<()> {
     tokio::spawn(slop_api::pulse::run_sampler(state.clone()));
     tokio::spawn(slop_api::notify::run_email(state.clone()));
     tokio::spawn(slop_api::donations::run(state.clone()));
+    tokio::spawn(slop_api::teams::run(state.clone()));
     let app = router(state)?;
     let listener = tokio::net::TcpListener::bind(bind)
         .await

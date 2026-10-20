@@ -87,6 +87,57 @@ pub async fn auth_for(state: &AppState, url: &Url) -> Option<(String, bool)> {
     cfg.github_token.clone().map(|t| (t, true))
 }
 
+/// A JWT signed with the App's key proves a request is the App's (valid 10 minutes at most;
+/// backdated a minute for clock drift).
+fn app_jwt(app: &GithubAppConfig) -> anyhow::Result<String> {
+    #[derive(Serialize)]
+    struct Claims<'a> {
+        iat: i64,
+        exp: i64,
+        iss: &'a str,
+    }
+    let unix = OffsetDateTime::now_utc().unix_timestamp();
+    Ok(jsonwebtoken::encode(
+        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
+        &Claims {
+            iat: unix - 60,
+            exp: unix + 9 * 60,
+            iss: &app.app_id,
+        },
+        &app.private_key,
+    )?)
+}
+
+/// An installation token for a GitHub organization the App is installed on (official team
+/// checks, teams.rs). None when the App isn't set up or isn't installed there.
+pub(crate) async fn org_token(state: &AppState, org: &str) -> anyhow::Result<Option<String>> {
+    let Some(app) = &state.config.releases.github_app else {
+        return Ok(None);
+    };
+    let url = state
+        .config
+        .releases
+        .github_api_base
+        .join(&format!("orgs/{org}/installation"))?;
+    let res = state
+        .http
+        .get(url)
+        .bearer_auth(app_jwt(app)?)
+        .header("accept", "application/vnd.github+json")
+        .header("user-agent", "slop-api")
+        .send()
+        .await?;
+    if res.status() == StatusCode::NOT_FOUND {
+        return Ok(None);
+    }
+    #[derive(Deserialize)]
+    struct Installation {
+        id: i64,
+    }
+    let inst: Installation = res.error_for_status()?.json().await?;
+    Ok(Some(installation_token(state, app, inst.id).await?))
+}
+
 async fn installation_token(
     state: &AppState,
     app: &GithubAppConfig,
@@ -99,24 +150,7 @@ async fn installation_token(
         return Ok(token.clone());
     }
 
-    // A JWT signed with the App's key proves the request is the App's (valid 10 minutes at most;
-    // backdated a minute for clock drift).
-    #[derive(Serialize)]
-    struct Claims<'a> {
-        iat: i64,
-        exp: i64,
-        iss: &'a str,
-    }
-    let unix = now.unix_timestamp();
-    let jwt = jsonwebtoken::encode(
-        &jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256),
-        &Claims {
-            iat: unix - 60,
-            exp: unix + 9 * 60,
-            iss: &app.app_id,
-        },
-        &app.private_key,
-    )?;
+    let jwt = app_jwt(app)?;
     let url = state
         .config
         .releases

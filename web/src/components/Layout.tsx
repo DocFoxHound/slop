@@ -216,6 +216,7 @@ export function Sidebar({ active }: { active?: string }) {
       <Link to="/search">✨ Everything</Link>
       <Link to="/made-with-people">✋ Made with people</Link>
       <Link to="/community">🍴 Community builds</Link>
+      <Link to="/teams">👥 Teams</Link>
       <h4>Browse</h4>
       <Link to="/browse">🧭 All categories</Link>
       {categories.data?.map((c: Category) => (
