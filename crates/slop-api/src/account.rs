@@ -234,6 +234,20 @@ async fn export(State(state): State<AppState>, user: CurrentUser) -> ApiResult<R
             .await?;
         out.insert((*name).into(), value.unwrap_or(Value::Null));
     }
+    // Encrypted fields, as the person entered them (fields.rs).
+    if let Some(vat) = out
+        .get_mut("account")
+        .and_then(|a| a.get_mut("vat_number"))
+        .filter(|v| v.is_string())
+    {
+        let plain = crate::fields::open(
+            state.config.field_key.as_ref(),
+            "users.vat_number",
+            vat.as_str().unwrap_or_default(),
+        )
+        .map_err(ApiError::Internal)?;
+        *vat = Value::String(plain);
+    }
     let body = serde_json::to_string_pretty(&Value::Object(out)).map_err(anyhow::Error::from)?;
     let mut res = body.into_response();
     res.headers_mut().insert(

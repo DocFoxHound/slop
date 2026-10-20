@@ -216,6 +216,12 @@ what's still open.
 If the whole server is down, nothing on it can say so: point a free outside uptime check
 (UptimeRobot, Healthchecks.io, Better Stack) at `https://<site>/healthz`.
 
+## Encrypted fields
+
+`SLOP_FIELD_KEY` (32 random bytes, base64) encrypts personal fields at rest, VAT numbers today.
+Keep it with the other keys: without it they can't be read. It's set in `slop.env` and the
+sandbox has its own.
+
 ## Private repositories outside GitHub
 
 Makers' read-only tokens for private GitLab, Bitbucket and Gitea/Forgejo repositories

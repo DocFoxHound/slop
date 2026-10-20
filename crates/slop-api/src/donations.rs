@@ -2180,6 +2180,14 @@ async fn vat_treatment(state: &AppState, user: &CurrentUser) -> sqlx::Result<Vat
     .bind(user.id)
     .fetch_one(&state.db)
     .await?;
+    let key = state.config.field_key.as_ref();
+    let number = match number {
+        Some(n) => Some(
+            crate::fields::open(key, "users.vat_number", &n)
+                .map_err(|e| sqlx::Error::Decode(e.into()))?,
+        ),
+        None => None,
+    };
     Ok(VatTreatment {
         kind: match (rate, checked) {
             (None, _) => "none",
@@ -2296,7 +2304,10 @@ async fn set_vat(
         "update users set vat_number = $2, vat_checked_at = case when $3 then now() end where id = $1",
     )
     .bind(user.id)
-    .bind(&number)
+    .bind(
+        crate::fields::seal(state.config.field_key.as_ref(), "users.vat_number", &number)
+            .map_err(ApiError::Internal)?,
+    )
     .bind(checked == Some(true))
     .execute(&state.db)
     .await?;

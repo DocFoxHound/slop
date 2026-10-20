@@ -16,6 +16,7 @@ pub mod desktop_updates;
 pub mod donations;
 pub mod error;
 pub mod featured;
+pub mod fields;
 pub mod foryou;
 pub mod friends;
 pub mod frozen;

@@ -198,6 +198,7 @@ The client installs software, so it's a prime target:
 - No secrets in code or images. Use a secrets manager/KMS with automatic rotation.
 - Signing keys are in an HSM/KMS (§5.3), and their use is logged and alerted on.
 - Separate keys per environment. Staging can never sign production releases.
+- **Encrypted fields (built 2026-10-20, `fields.rs`):** `users.vat_number` is sealed with ChaCha20-Poly1305 under `SLOP_FIELD_KEY`, the column's name bound in, and opened only to show the owner their number, their fee statements and their data export. Values stored before the key was set are sealed at start-up.
 - **Makers' repository tokens** (built 2026-10-20, `repo_tokens.rs`): read-only tokens for private repositories outside GitHub, checked before they're saved, encrypted with ChaCha20-Poly1305 under `SLOP_REPO_TOKEN_KEY` with the app's ID as associated data, never returned by the API, and only sent to the repository's own host (checked against private networks) in the `Authorization` header, which the HTTP client drops on a redirect to another host. Saving one is audit-logged. Today the key sits in the same env file as the others; it moves to the KMS with them.
 
 ### 8.4 Staff and admin access
@@ -241,6 +242,8 @@ Slop **can't** read chat messages (`LEGAL.md` §4.6).
 - **People job conversations** (decided 2026-10-19, `DESIGN.md` §15.5) aren't end-to-end encrypted: they're recorded, which both sides are told. Slop holds the text only while open and 30 days after closing, then keeps SHA-256 fingerprints that prove each side's downloaded copy is unchanged. Staff read one only from a copy a side submits for a problem or review dispute, and every mediator look at a job record is audit-logged.
 
 ## 9. Payment security
+
+**Built 2026-10-20 (migration 0040):** `payments` and `vote_events` refuse every update and delete at the database (a trigger, like `audit_log`'s), so corrections are new rows. The only exceptions: closing an account replaces its ID on `vote_events` and nothing else, and the simulation sandbox may wipe its data in a database named `*_sim`. A separate database role that can only insert is still to do.
 More detail in `PAYMENTS.md`.
 - **Slop never holds money** (`LEGAL.md` §3.1). Payments are direct charges on makers' and creatives' own Stripe accounts, so there are no Slop balances to steal.
 - **PCI DSS:** card data is entered only into Stripe's hosted fields or page, which keeps Slop on the smallest self-assessment (SAQ A). The pages that host checkout still need a strict CSP and monitoring for script changes (PCI DSS v4 requirements 6.4.3 and 11.6.1).

@@ -461,6 +461,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         simulation: false,
         ops: Default::default(),
         approvals_required: 1,
+        field_key: Some([11; 32]),
     };
     let mut config = config;
     adjust(&mut config);
@@ -11274,4 +11275,80 @@ async fn abuse_checks_raise_vote_bursts_and_lookalike_names_once(db: PgPool) {
     )
     .await;
     assert_eq!(queue["abuse"].as_array().unwrap().len(), kinds.len() - 1);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn payments_and_vote_history_are_append_only_and_vat_numbers_sealed(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "game", "released", "").await;
+    let (voter_id, voter) = app.user("Voter", "US").await;
+    app.send(req(Method::POST, "/v1/apps/game/launch").cookie(&voter))
+        .await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/vote")
+                .cookie(&voter)
+                .json(json!({ "vote": "not_slop" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    sqlx::query(
+        "insert into payments (id, kind, amount_minor, currency, simulated) values (gen_random_uuid(), 'people_job', 1000, 'usd', true)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    // No edits or deletions, even from the server's own database account.
+    for sql in [
+        "update payments set amount_minor = 1",
+        "delete from payments",
+        "update vote_events set vote = -1",
+        "delete from vote_events",
+    ] {
+        let err = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&app.db)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains("append-only"), "{sql}: {err}");
+    }
+    // Except replacing the voter's ID when they close their account.
+    sqlx::query("update vote_events set user_id = gen_random_uuid() where user_id = $1")
+        .bind(voter_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // A VAT number is stored sealed and shown as entered.
+    let (_, brit) = app.user("Brit", "GB").await;
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/vat")
+                .cookie(&brit)
+                .json(json!({ "vat_number": "GB 123 4567 89" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let stored: String =
+        sqlx::query_scalar("select vat_number from users where display_name = 'Brit'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(
+        stored.starts_with("enc1:") && !stored.contains("123456789"),
+        "{stored}"
+    );
+    let statements = body_json(
+        app.send(req(Method::GET, "/v1/me/fee-statements").cookie(&brit))
+            .await,
+    )
+    .await;
+    assert_eq!(statements["vat"]["vat_number"], "GB123456789");
+    let export = body_json(
+        app.send(req(Method::GET, "/v1/me/export").cookie(&brit))
+            .await,
+    )
+    .await;
+    assert_eq!(export["account"]["vat_number"], "GB123456789");
 }
