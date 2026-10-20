@@ -88,6 +88,8 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
   - Queued updates, with their scan progress.
   - Uninstall (keeps the app in the library) and Remove.
 
+**Built 2026-10-20:** the desktop app checks installed apps for updates at start and every 30 minutes (`GET /v1/library/updates`). "Update apps automatically" (on by default) installs approved updates one at a time, never while the app is running, and never for apps with their own installer. Each row shows an update that's ready, or a newer version still being checked ("downloading and scanning" or "waiting for a person"). The build switcher lists the official app and its community builds for this platform; switching installs the new one, then uninstalls the old.
+
 ## 7. Ratings: Slop or Not Slop
 
 - **Two buttons only:** 👍 **Not Slop** and 👎 **Slop**, plus an optional written review.

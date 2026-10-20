@@ -219,6 +219,10 @@ export const desktop = {
   },
   platformInfo: () => call<{ platform: Os | null; can_install: boolean }>("platform_info"),
   installed: () => call<InstalledApp[]>("installed_apps"),
+  /** "Update apps automatically": read, or switch on or off. On by default. */
+  autoUpdateSetting: (on?: boolean) => call<boolean>("auto_update_setting", { on: on ?? null }),
+  /** Apps Slop started that are still running; they're updated once they close. */
+  running: () => call<string[]>("running_apps"),
   install: (slug: string) => call<InstalledApp>("install_app", { slug }),
   uninstall: (slug: string) => call<void>("uninstall_app", { slug }),
   launch: (slug: string) => call<void>("launch_app", { slug }),
