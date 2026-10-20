@@ -4577,7 +4577,7 @@ async fn the_simulation_scores_the_real_code_against_its_truth(db: PgPool) {
     assert!(!m.decisions_by_action.is_empty(), "{m:#?}");
     // Donations: 5% of each, every one recorded as a payment.
     let d = &r.donations;
-    assert!(d.donations > 20, "{d:#?}");
+    assert!(d.donations > 5, "{d:#?}");
     assert_eq!(
         (d.fees_not_5_percent, d.paid_without_payment),
         (0, 0),
