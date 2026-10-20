@@ -21,7 +21,7 @@ export function FeaturedCarousel({ slides }: { slides: FeaturedApp[] }) {
     <section className="featured panel" aria-roledescription="carousel" aria-label="Featured" onKeyDown={onKey}>
       <div className="featured-slide" role="group" aria-roledescription="slide" aria-label={`${at + 1} of ${slides.length}: ${app.title}`}>
         <Link to={`/app/${app.slug}`} className="featured-art" tabIndex={-1} aria-hidden="true">
-          <Art app={app} />
+          <Art app={app} withName={false} />
         </Link>
         <div className="featured-text">
           <span className="eyebrow">Featured</span>
