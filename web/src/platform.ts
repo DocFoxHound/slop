@@ -31,6 +31,16 @@ export const OS_LABEL: Record<Os, string> = {
  * Opens a link outside Slop. In the desktop app links must go to the system browser; following
  * them inside the app's window would navigate away from Slop.
  */
+/** Saves text as a file the user downloads (job records, conversation copies, data exports). */
+export function saveFile(name: string, text: string, type: string) {
+  const url = URL.createObjectURL(new Blob([text], { type }));
+  const a = document.createElement("a");
+  a.href = url;
+  a.download = name;
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 export async function openExternal(url: string): Promise<void> {
   if (isDesktop) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");

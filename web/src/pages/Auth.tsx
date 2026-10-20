@@ -9,10 +9,12 @@ import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
+import { AccountAgreements, AccountData, AccountDecisions, AccountReports } from "../components/AccountSections";
 
 const SIGNIN_ERRORS: Record<string, string> = {
   cancelled: "Sign-in was cancelled.",
   provider: "GitHub didn't let us sign you in. Please try again.",
+  closed: "That account was closed, so its sign-in can't be used on Slop again.",
 };
 
 /** Only same-site paths, matching the API's own check. */
@@ -166,6 +168,7 @@ export function SignUp() {
   const [name, setName] = useState<string>();
   const [country, setCountry] = useState("");
   const [ageConfirmed, setAgeConfirmed] = useState(false);
+  const [acceptTerms, setAcceptTerms] = useState(false);
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
 
@@ -191,7 +194,12 @@ export function SignUp() {
     setBusy(true);
     setError(undefined);
     try {
-      const res = await api.signup({ display_name: displayName, country_code: country, age_confirmed: ageConfirmed });
+      const res = await api.signup({
+        display_name: displayName,
+        country_code: country,
+        age_confirmed: ageConfirmed,
+        accept_terms: acceptTerms,
+      });
       await refresh();
       navigate(safeReturnTo(res.return_to), { replace: true });
     } catch (err) {
@@ -243,12 +251,28 @@ export function SignUp() {
         </label>
         {fieldError("age_confirmed")}
 
+        <label className="check">
+          <input type="checkbox" checked={acceptTerms} onChange={(e) => setAcceptTerms(e.target.checked)} />
+          <span>
+            I accept the{" "}
+            <Link to="/legal/terms" target="_blank">
+              Terms of Service
+            </Link>{" "}
+            and have read the{" "}
+            <Link to="/legal/privacy" target="_blank">
+              Privacy Policy
+            </Link>
+            .
+          </span>
+        </label>
+        {fieldError("accept_terms")}
+
         {error && !error.field && (
           <p className="form-error" role="alert">
             {error.message}
           </p>
         )}
-        <button className="btn slime big" disabled={busy || !country || !ageConfirmed}>
+        <button className="btn slime big" disabled={busy || !country || !ageConfirmed || !acceptTerms}>
           {busy ? "Creating…" : "Create account"}
         </button>
       </form>
@@ -327,6 +351,10 @@ export function Account() {
         </label>
       </div>
 
+      <AccountDecisions />
+      <AccountReports />
+      <AccountAgreements />
+
       <h2 className="section-title">Where you're signed in</h2>
       {sessions.error && <ErrorState error={sessions.error} onRetry={sessions.reload} />}
       <ul className="sessions panel">
@@ -356,6 +384,8 @@ export function Account() {
       >
         Sign out
       </button>
+
+      <AccountData />
     </div>
   );
 }

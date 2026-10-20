@@ -7,6 +7,8 @@ import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, type CreativePage, type PeopleQuery, type Section, type Work } from "../api";
 import { AI_USE, AiBadge, Avatar, Lightbox, PersonCard, RatingLine, WorkTile, accentStyle } from "../components/People";
+import { ReportButton } from "../components/Report";
+import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading, SectionHeader, Shelf } from "../components/ui";
 import { formatDate, money } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -229,6 +231,12 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
           <Link to="/people/me">Edit your page</Link>
         </div>
       )}
+      {p.closed && (
+        <div className="notice">
+          {p.name} closed their Slop account. This page is kept as it was, as the record of their work and reviews, and
+          takes no new work.
+        </div>
+      )}
       <div className="person-banner" aria-hidden="true">
         {p.banner_url && <img src={p.banner_url} alt="" />}
       </div>
@@ -273,12 +281,13 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
               </button>
             ) : (
               <button type="button" className="btn big" disabled>
-                {p.taking_work ? "Not taking paid work yet" : "Fully booked"}
+                {p.closed ? "Account closed" : p.taking_work ? "Not taking paid work yet" : "Fully booked"}
               </button>
             ))}
           <span className="muted small">
             {p.trader ? "Offers services as a business" : "Offers services as a private individual"}
           </span>
+          {!p.is_me && <ReportButton kind="profile" subject={p.handle} label="this profile" />}
         </div>
       </div>
 
@@ -332,7 +341,7 @@ function Review({ r, canReply, onSaved }: { r: CreativePage["reviews"][number]; 
     }
   };
   return (
-    <article className="panel review-card">
+    <article className="panel review-card" id={`review-${r.job_id}`}>
       <div className="review-who">
         <b>{r.client_name}</b>
         <span className="badge official">✓ VERIFIED CLIENT</span>
@@ -388,6 +397,11 @@ function Review({ r, canReply, onSaved }: { r: CreativePage["reviews"][number]; 
           </span>
         ))}
       {disputing && <DisputeForm jobId={r.job_id} onDone={() => { setDisputing(false); onSaved(); }} />}
+      {!canReply && (
+        <div className="review-report">
+          <ReportButton kind="review" subject={r.job_id} label="this review" />
+        </div>
+      )}
     </article>
   );
 }
@@ -487,11 +501,12 @@ function HireForm({
   }
   const apps = projects.data ?? [];
   const chosenProject = project || apps[0]?.slug || "";
+  const terms = useTermsGate();
   const send = async (inquiry: boolean) => {
     setBusy(true);
     setError(undefined);
     try {
-      const job = await api.people.hire(p.handle, {
+      const job = await terms.guard(() => api.people.hire(p.handle, {
         app_slug: chosenProject,
         skill,
         service_id: serviceId || undefined,
@@ -501,7 +516,7 @@ function HireForm({
         inquiry,
         exact_wording_ack: exact,
         confirm_adult: adult,
-      });
+      }));
       navigate(`/jobs/${job.id}`);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -518,6 +533,7 @@ function HireForm({
       }}
       aria-label={`Hire ${p.name}`}
     >
+      {terms.prompt}
       <h2>Hire {p.name}</h2>
       {projects.data && apps.length === 0 ? (
         <p>

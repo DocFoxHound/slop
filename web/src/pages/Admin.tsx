@@ -7,6 +7,9 @@ import { Link, useSearchParams } from "react-router";
 import {
   api,
   ApiError,
+  type ModerationDecision,
+  type QueuedAppeal,
+  type QueuedReport,
   type AdminApp,
   type AdminQueue,
   type AdminToken,
@@ -141,6 +144,9 @@ function QueueTab() {
           {error}
         </p>
       )}
+
+      <ReportsSection q={q} onDone={queue.reload} />
+      <AppealsSection q={q} onDone={queue.reload} />
 
       <h2 className="section-title">Releases to review ({q.releases.length})</h2>
       <p className="muted small">
@@ -577,6 +583,8 @@ const STATUSES: Array<AppStatus | ""> = ["", "draft", "listed", "delisted"];
 function AppsTab() {
   const [status, setStatus] = useState<AppStatus | "">("");
   const apps = useLoad(() => api.admin.apps(status || undefined), [status]);
+  // The Content Policy rules, for the statement of reasons when taking an app out.
+  const rules = useLoad(() => api.admin.queue().then((q) => q.rules), []);
   const { busy, error, run } = useAction(apps.reload);
 
   return (
@@ -629,12 +637,10 @@ function AppsTab() {
             </div>
             <div className="row-actions">
               {a.status === "listed" ? (
-                <ReasonButton
-                  label="Take out of the store"
-                  placeholder="Reason (kept in the audit log)"
-                  danger
+                <DelistButton
+                  rules={rules.data ?? []}
                   disabled={busy !== undefined}
-                  onSubmit={(reason) => void run(a.slug, () => api.admin.delist(a.slug, reason))}
+                  onSubmit={(rule, reason) => void run(a.slug, () => api.admin.delist(a.slug, rule, reason))}
                 />
               ) : a.stage !== "coming_soon" && a.releases.length === 0 ? (
                 <span className="muted small">
@@ -943,5 +949,343 @@ function TokensTab() {
         })}
       </ul>
     </>
+  );
+}
+
+const ACTION_LABEL: Record<ModerationDecision["action"], string> = {
+  delist_app: "Take the app out of the store",
+  hide_review: "Hide the review",
+  hide_profile: "Hide the profile",
+  warn: "Warn them (no restriction)",
+  suspend_account: "Suspend their account",
+};
+
+const PRIORITY_LABEL = ["URGENT", "SERIOUS", "NORMAL"] as const;
+
+/** Picks a Content Policy rule for a decision. */
+function RuleSelect({ rules, value, onChange }: { rules: Array<[string, string]>; value: string; onChange: (v: string) => void }) {
+  return (
+    <label>
+      The rule it breaks
+      <select value={value} required onChange={(e) => onChange(e.target.value)}>
+        <option value="" disabled>
+          Choose a Content Policy rule
+        </option>
+        {rules.map(([code, title]) => (
+          <option key={code} value={code}>
+            {title}
+          </option>
+        ))}
+      </select>
+    </label>
+  );
+}
+
+/** Taking an app out of the store from the Apps tab: the maker gets a statement of reasons. */
+function DelistButton({
+  rules,
+  disabled,
+  onSubmit,
+}: {
+  rules: Array<[string, string]>;
+  disabled: boolean;
+  onSubmit: (rule: string, reason: string) => void;
+}) {
+  const [open, setOpen] = useState(false);
+  const [rule, setRule] = useState("");
+  const [reason, setReason] = useState("");
+  if (!open) {
+    return (
+      <button className="btn small ghost danger" disabled={disabled} onClick={() => setOpen(true)}>
+        Take out of the store
+      </button>
+    );
+  }
+  return (
+    <form
+      className="form decide-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        onSubmit(rule, reason.trim());
+      }}
+    >
+      <RuleSelect rules={rules} value={rule} onChange={setRule} />
+      <label>
+        The facts, as the maker will read them
+        <textarea value={reason} rows={2} required onChange={(e) => setReason(e.target.value)} />
+      </label>
+      <div className="row-actions">
+        <button className="btn small danger" disabled={disabled || !rule || !reason.trim()}>
+          Take out of the store
+        </button>
+        <button type="button" className="btn small ghost" onClick={() => setOpen(false)}>
+          Cancel
+        </button>
+      </div>
+    </form>
+  );
+}
+
+function ReportsSection({ q, onDone }: { q: AdminQueue; onDone: () => void }) {
+  const overdue = q.reports.filter((r) => r.overdue).length;
+  return (
+    <>
+      <h2 className="section-title">
+        Reports ({q.reports.length}){overdue > 0 && <span className="badge bad"> {overdue} OVERDUE</span>}
+      </h2>
+      <p className="muted small">
+        Urgent first, then by when they're due: urgent and serious reports within 24 hours, the rest within 7 days. Every
+        action sends the person a statement of reasons they can appeal; never hide something for being negative.
+      </p>
+      {q.reports.length === 0 && <div className="empty-state">No open reports.</div>}
+      <ul className="release-list">
+        {q.reports.map((r) => (
+          <ReportCard key={r.id} r={r} rules={q.rules} onDone={onDone} />
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function ReportCard({ r, rules, onDone }: { r: QueuedReport; rules: Array<[string, string]>; onDone: () => void }) {
+  const { busy, error, run } = useAction(onDone);
+  const [deciding, setDeciding] = useState(false);
+  const [action, setAction] = useState<string>(r.actions[0]);
+  const [rule, setRule] = useState(r.suggested_rule ?? "");
+  const [law, setLaw] = useState("");
+  const [facts, setFacts] = useState("");
+  const [outcome, setOutcome] = useState("");
+  const [external, setExternal] = useState("");
+  const askExternal = r.preserve || r.reason === "threat" || r.reason === "illegal";
+  return (
+    <li className={`panel panel-pad report-card${r.overdue ? " overdue" : ""}`}>
+      <div className="title-row spread">
+        <div className="title-row">
+          <span className={`badge ${r.priority === 0 ? "bad" : r.priority === 1 ? "warn" : "neutral"}`}>{PRIORITY_LABEL[r.priority]}</span>
+          <b>{r.reason_label}</b>
+          <span className="muted">· {r.link ? <Link to={r.link}>{r.subject_label}</Link> : r.subject_label}</span>
+        </div>
+        <span className={`small ${r.overdue ? "bad" : "muted"}`}>
+          {r.reference} · due {formatDate(r.due_at)}
+          {r.overdue && " (overdue)"}
+        </span>
+      </div>
+      <dl className="kv">
+        <dt>Report</dt>
+        <dd className="pre">{r.details}</dd>
+        {r.quoted && (
+          <>
+            <dt>The message</dt>
+            <dd>
+              <blockquote className="pre">{r.quoted}</blockquote>
+            </dd>
+          </>
+        )}
+        <dt>From</dt>
+        <dd>
+          {r.reporter} · {formatDate(r.created_at)}
+          {r.same_subject > 0 && <span className="muted"> · {r.same_subject} more open about this</span>}
+        </dd>
+        {r.account && (
+          <>
+            <dt>About</dt>
+            <dd>
+              {r.account.name}
+              {r.account.suspended && <span className="badge bad"> SUSPENDED</span>}
+              {r.account.closed && <span className="badge neutral"> CLOSED</span>}
+              <span className="muted">
+                {" "}
+                · {r.account.decisions} earlier decision{r.account.decisions === 1 ? "" : "s"}
+                {r.account.copyright_strikes > 0 && `, ${r.account.copyright_strikes} copyright`}
+              </span>
+              {r.account.copyright_strikes >= 2 && r.reason === "copyright" && (
+                <div className="warn small">One more upheld copyright decision ends the account (repeat-infringer policy).</div>
+              )}
+            </dd>
+          </>
+        )}
+        {r.copyright && (
+          <>
+            <dt>Copyright notice</dt>
+            <dd className="small">
+              Work: {r.copyright.work}
+              {r.copyright.owner && <> · owner: {r.copyright.owner}</>}
+              <br />
+              {r.copyright.signature}, {r.copyright.address}, {r.copyright.phone} · both statements made
+            </dd>
+          </>
+        )}
+        {r.preserve && (
+          <>
+            <dt>Preserve</dt>
+            <dd className="warn small">
+              Child abuse report: kept for a year, never deleted with the content. File it with NCMEC (US) and the NCA (UK)
+              and note the references below.
+            </dd>
+          </>
+        )}
+      </dl>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      {!deciding ? (
+        <div className="row-actions">
+          <button className="btn small" onClick={() => setDeciding(true)}>
+            Decide
+          </button>
+        </div>
+      ) : (
+        <form
+          className="form decide-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void run(r.id, () =>
+              api.admin.act(r.id, { action, rule, law: law || undefined, facts, outcome, external_reference: external || undefined }),
+            );
+          }}
+        >
+          <label>
+            What to do
+            <select value={action} onChange={(e) => setAction(e.target.value)}>
+              {r.actions.map((a) => (
+                <option key={a} value={a}>
+                  {ACTION_LABEL[a]}
+                </option>
+              ))}
+            </select>
+          </label>
+          <RuleSelect rules={rules} value={rule} onChange={setRule} />
+          <label>
+            The law, if it's the law and not only Slop's rules <span className="muted">(optional)</span>
+            <input value={law} maxLength={300} placeholder="e.g. 17 U.S.C. §512" onChange={(e) => setLaw(e.target.value)} />
+          </label>
+          <label>
+            The facts, as {r.account?.name ?? "they"} will read them
+            <textarea value={facts} rows={3} maxLength={4000} onChange={(e) => setFacts(e.target.value)} />
+          </label>
+          <label>
+            What the reporter is told
+            <textarea value={outcome} rows={2} maxLength={2000} onChange={(e) => setOutcome(e.target.value)} />
+          </label>
+          {askExternal && (
+            <label>
+              Passed on to (NCMEC, NCA, police) and reference <span className="muted">(optional)</span>
+              <input value={external} maxLength={200} onChange={(e) => setExternal(e.target.value)} />
+            </label>
+          )}
+          <div className="row-actions">
+            <button className="btn small danger" disabled={busy !== undefined || !rule || !facts.trim() || !outcome.trim()}>
+              {ACTION_LABEL[action as ModerationDecision["action"]]}
+            </button>
+            <button
+              type="button"
+              className="btn small"
+              disabled={busy !== undefined || !outcome.trim()}
+              title="Close the report without action; the reporter is told what you wrote above"
+              onClick={() => void run(r.id, () => api.admin.dismiss(r.id, outcome, external || undefined))}
+            >
+              No action
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setDeciding(false)}>
+              Cancel
+            </button>
+          </div>
+        </form>
+      )}
+    </li>
+  );
+}
+
+function AppealsSection({ q, onDone }: { q: AdminQueue; onDone: () => void }) {
+  return (
+    <>
+      <h2 className="section-title">Appeals ({q.appeals.length})</h2>
+      <p className="muted small">
+        Look at the decision again with fresh eyes, ideally not the person who made it. Keeping or reversing it, the person
+        is told why.
+      </p>
+      {q.appeals.length === 0 && <div className="empty-state">No appeals waiting.</div>}
+      <ul className="release-list">
+        {q.appeals.map((a) => (
+          <AppealCard key={a.id} a={a} onDone={onDone} />
+        ))}
+      </ul>
+    </>
+  );
+}
+
+function AppealCard({ a, onDone }: { a: QueuedAppeal; onDone: () => void }) {
+  const { busy, error, run } = useAction(onDone);
+  const [reason, setReason] = useState("");
+  return (
+    <li className="panel panel-pad">
+      <div className="title-row spread">
+        <div className="title-row">
+          <b>{a.action_label}</b>
+          <span className="muted">· {a.link ? <Link to={a.link}>{a.subject_label}</Link> : a.subject_label}</span>
+        </div>
+        <span className="muted small">
+          {a.reference} · appealed {formatDate(a.appealed_at!)}
+        </span>
+      </div>
+      <dl className="kv">
+        <dt>Decision</dt>
+        <dd>
+          {a.rule_title}: {a.facts}
+          <div className="muted small">
+            by {a.decided_by}, {formatDate(a.created_at)}
+          </div>
+        </dd>
+        <dt>Appeal</dt>
+        <dd className="pre">{a.appeal}</dd>
+        <dt>Account</dt>
+        <dd>
+          {a.account.name} · {a.account.decisions} decision{a.account.decisions === 1 ? "" : "s"}
+        </dd>
+        {a.counter_notice && (
+          <>
+            <dt>Counter-notice</dt>
+            <dd className="small">
+              {a.counter_notice.signature}, {a.counter_notice.address}, {a.counter_notice.phone} · both statements made.
+              <div className="warn">
+                Send these details to the person who reported it. Reverse (restore) 10 to 14 working days from now unless
+                they tell you they've started a court case.
+              </div>
+            </dd>
+          </>
+        )}
+      </dl>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <form className="form decide-form" onSubmit={(e) => e.preventDefault()}>
+        <label>
+          Why (the person reads this)
+          <textarea value={reason} rows={2} maxLength={2000} onChange={(e) => setReason(e.target.value)} />
+        </label>
+        <div className="row-actions">
+          <button
+            type="button"
+            className="btn small slime"
+            disabled={busy !== undefined || !reason.trim()}
+            onClick={() => void run(a.id, () => api.admin.decideAppeal(a.id, true, reason))}
+          >
+            Reverse the decision
+          </button>
+          <button
+            type="button"
+            className="btn small"
+            disabled={busy !== undefined || !reason.trim()}
+            onClick={() => void run(a.id, () => api.admin.decideAppeal(a.id, false, reason))}
+          >
+            Keep it
+          </button>
+        </div>
+      </form>
+    </li>
   );
 }

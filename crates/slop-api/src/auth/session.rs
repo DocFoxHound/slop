@@ -46,6 +46,9 @@ pub struct CurrentUser {
     pub session_id: Uuid,
     pub display_name: String,
     pub country_code: String,
+    /// Suspended by a moderation decision: may read, appeal, download their data, sign out or
+    /// close the account, and nothing else (`allowed_while_suspended`).
+    pub suspended: bool,
 }
 
 /// The signed-in user, if any. Never fails because of a missing or stale session.
@@ -125,9 +128,11 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
     let (sql, token) = if let Some(token) = bearer(headers) {
         (
             format!(
-                "select u.id, s.id, u.display_name, u.country_code, s.last_seen_at < now() - $4
+                "select u.id, s.id, u.display_name, u.country_code, s.last_seen_at < now() - $4,
+                        u.suspended_at is not null
                  from access_tokens t join sessions s on s.id = t.session_id join users u on u.id = s.user_id
-                 where t.token_hash = $1 and t.expires_at > now() and s.kind = 'desktop' and {live}"
+                 where t.token_hash = $1 and t.expires_at > now() and s.kind = 'desktop' and u.closed_at is null
+                   and {live}"
             ),
             token.to_string(),
         )
@@ -138,22 +143,24 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
         };
         (
             format!(
-                "select u.id, s.id, u.display_name, u.country_code, s.last_seen_at < now() - $4
+                "select u.id, s.id, u.display_name, u.country_code, s.last_seen_at < now() - $4,
+                        u.suspended_at is not null
                  from sessions s join users u on u.id = s.user_id
-                 where s.token_hash = $1 and s.kind = 'web' and {live}"
+                 where s.token_hash = $1 and s.kind = 'web' and u.closed_at is null and {live}"
             ),
             cookie.value().to_string(),
         )
     };
 
-    let row: Option<(Uuid, Uuid, String, String, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(sql))
-        .bind(hash_token(&token))
-        .bind(IDLE_TIMEOUT)
-        .bind(DESKTOP_IDLE_TIMEOUT)
-        .bind(TOUCH_INTERVAL)
-        .fetch_optional(&state.db)
-        .await?;
-    let Some((id, session_id, display_name, country_code, stale)) = row else {
+    let row: Option<(Uuid, Uuid, String, String, bool, bool)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(sql))
+            .bind(hash_token(&token))
+            .bind(IDLE_TIMEOUT)
+            .bind(DESKTOP_IDLE_TIMEOUT)
+            .bind(TOUCH_INTERVAL)
+            .fetch_optional(&state.db)
+            .await?;
+    let Some((id, session_id, display_name, country_code, stale, suspended)) = row else {
         return Ok(None);
     };
     if stale {
@@ -167,16 +174,34 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
         session_id,
         display_name,
         country_code,
+        suspended,
     }))
+}
+
+/// What a suspended account may still do besides reading: appeal, accept terms, download its
+/// data, sign out (here or on other devices) and close the account.
+pub fn allowed_while_suspended(method: &axum::http::Method, path: &str) -> bool {
+    let path = path.strip_prefix("/v1").unwrap_or(path);
+    method == axum::http::Method::GET
+        || method == axum::http::Method::HEAD
+        || path == "/auth/signout"
+        || path == "/me/close"
+        || path == "/me/legal/accept"
+        || path.starts_with("/me/sessions/")
+        || (path.starts_with("/me/decisions/") && path.ends_with("/appeal"))
 }
 
 impl FromRequestParts<AppState> for CurrentUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
-        lookup(state, &parts.headers)
+        let user = lookup(state, &parts.headers)
             .await?
-            .ok_or(ApiError::Unauthorized)
+            .ok_or(ApiError::Unauthorized)?;
+        if user.suspended && !allowed_while_suspended(&parts.method, parts.uri.path()) {
+            return Err(ApiError::Suspended);
+        }
+        Ok(user)
     }
 }
 

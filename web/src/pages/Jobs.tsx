@@ -8,11 +8,12 @@ import { Link, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, type ConversationCopy, type Job, type JobCard, type Offer } from "../api";
 import { AI_USE } from "../components/People";
+import { ReportButton } from "../components/Report";
 import { ErrorState, ExternalLink, Loading, SectionHeader } from "../components/ui";
 import { formatDate, money, toMinor } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
-import { isDesktop, openExternal } from "../platform";
+import { isDesktop, openExternal, saveFile } from "../platform";
 import { useSession } from "../session";
 
 const STATUS_LABEL: Record<Job["status"], string> = {
@@ -113,15 +114,6 @@ export function JobPage() {
   return <JobView j={j} onChange={setJob} />;
 }
 
-/** Saves text as a file in the browser (the desktop app opens it from the API instead). */
-function saveFile(name: string, text: string, type: string) {
-  const url = URL.createObjectURL(new Blob([text], { type }));
-  const a = document.createElement("a");
-  a.href = url;
-  a.download = name;
-  a.click();
-  URL.revokeObjectURL(url);
-}
 
 function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
   const { me } = useSession();
@@ -927,6 +919,12 @@ function ConversationPanel({ j, busy, step, onError }: { j: Job; busy: boolean; 
             <li key={m.id} className={m.mine ? "mine" : ""}>
               <span className="faint small">
                 {m.mine ? "You" : m.author} · {formatDate(m.created_at)}
+                {!m.mine && m.body && (
+                  <>
+                    {" "}
+                    · <ReportButton kind="message" subject={m.id} label="this message" className="link-btn small faint" />
+                  </>
+                )}
               </span>
               {m.body ? <p className="pre">{m.body}</p> : <p className="faint small">Deleted from Slop · fingerprint {m.sha256.slice(0, 12)}…</p>}
             </li>

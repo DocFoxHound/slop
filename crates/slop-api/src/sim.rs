@@ -346,6 +346,7 @@ pub struct Generated {
     pub current_votes: usize,
     pub player_buckets: usize,
     pub people: crate::sim_people::PeopleGenerated,
+    pub moderation: crate::sim_moderation::ModerationGenerated,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -641,7 +642,14 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     sqlx::query("update creatives set portfolio_set_id = null")
         .execute(&mut *tx)
         .await?;
+    sqlx::query(
+        "delete from legal_acceptances where user_id in (select id from users where display_name like 'Sim %')",
+    )
+    .execute(&mut *tx)
+    .await?;
     for table in [
+        "reports",
+        "moderation_decisions",
         "creative_reviews",
         "job_events",
         "payments",
@@ -954,6 +962,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         now,
     )
     .await?;
+    let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
 
     Ok(Generated {
         apps: apps.len(),
@@ -965,6 +974,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         current_votes: current.len(),
         player_buckets: buckets.len(),
         people,
+        moderation,
     })
 }
 
@@ -1120,6 +1130,8 @@ pub struct Report {
     pub apps_with_30_day_history: usize,
     /// People: creatives, jobs, payments, credits and "since the new work" (sim_people.rs).
     pub people: crate::sim_people::PeopleReport,
+    /// Reports, decisions and appeals (sim_moderation.rs).
+    pub moderation: crate::sim_moderation::ModerationReport,
 }
 
 struct Truth {
@@ -1531,6 +1543,7 @@ pub async fn report(
     .fetch_one(db)
     .await? as usize;
     r.people = crate::sim_people::report(db).await?;
+    r.moderation = crate::sim_moderation::report(db).await?;
     Ok(r)
 }
 

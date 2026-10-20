@@ -18,6 +18,7 @@ import {
   type Skill,
 } from "../api";
 import { ACCENTS, AI_USE, accentStyle } from "../components/People";
+import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, money, toMinor } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -295,6 +296,7 @@ function ProfileForm({
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [saved, setSaved] = useState(false);
+  const terms = useTermsGate();
   const set = <K extends keyof ProfileInput>(k: K, v: ProfileInput[K]) => {
     setSaved(false);
     setP((x) => ({ ...x, [k]: v }));
@@ -304,7 +306,7 @@ function ProfileForm({
     setBusy(true);
     setError(undefined);
     try {
-      const out = await api.people.save({ ...p, confirm_adult: adult });
+      const out = await terms.guard(() => api.people.save({ ...p, confirm_adult: adult }));
       onSaved(out);
       setSaved(true);
     } catch (err) {
@@ -321,6 +323,7 @@ function ProfileForm({
 
   return (
     <form className="panel panel-pad form" onSubmit={submit} style={accentStyle(p.accent)}>
+      {terms.prompt}
       <h2>About you</h2>
       <div className="form-row">
         <label>

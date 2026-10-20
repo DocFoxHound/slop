@@ -40,6 +40,14 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 - Browsing works signed out. Anything personal requires an account: library, Interested, votes, donations, reports, publishing, teams.
 - **One account = one vote per app = one Slop Pulse count per game.** This is the main defence against botting.
 - Users can link devices (computer and phones) to their account.
+- **Your data and closing your account** (built 2026-10-20). The account page downloads everything linked to the account as one file. **Closing** an account bans that sign-in and freezes what others rely on, instead of erasing it:
+  - the sign-in can never be used on Slop again; the email, settings, library and playtime are removed;
+  - votes keep counting, re-keyed to a random ID (METRICS §6);
+  - a creative's page stays readable, frozen, with a "closed" notice, and takes no new work; job records, agreements and reviews stay;
+  - the maker's apps leave the store (installs keep working).
+
+  Open People jobs, unpaid amounts and open problems must be settled first.
+- **Terms** (built 2026-10-20). The Terms of Service are accepted at sign-up, the Publisher Agreement before a first app, and the People Terms before a creative profile or a hire. Each acceptance records the version. Changes are published 15 days before they take effect: a notice shows on every page, and once in effect, only the actions behind that agreement wait for it (accepting takes one tick). Every version stays readable at /legal. The texts are drafts until the lawyer has read them (`crates/slop-api/legal/`).
 
 ## 5. Store & discovery
 
@@ -275,8 +283,15 @@ The maker pays the creative **directly** (Stripe, the creative's own account). S
 
 ## 16. Reporting & moderation
 
-- Every app, branch, review and People profile has a **Report** button. Reasons: malware, license violation, illegal content, scam, pay-to-win/loot boxes, source doesn't match build, misleading page, broken build, other.
-- Serious reports (malware, illegal content, scams, source mismatch) trigger an **automatic re-scan** and a **human review within 24 hours**.
+- Every app, branch, review, People profile and job message has a **Report** button. Reasons depend on what's reported: malware, the build not matching its source, scams, illegal content, child abuse material, intimate images shared without consent, threats, sexual content, copyright, open-source licences, pay-to-win and gambling, misleading pages, harassment, private information, fake reviews, spam, broken builds, other.
+- **Anyone can report**, signed in or not (a signed-out reporter gives a name and email, optional for child abuse). Each report needs a good-faith statement and is **acknowledged with a reference number**; signed-in reporters see the outcome on their account page. One open report per person per thing; 20 a day at most.
+- **Urgent** reports (child abuse, threats, intimate images) and **serious** ones (malware, scams, illegal content, source mismatch, sexual content, copyright) get a **human review within 24 hours**; the rest within 7 days. Serious reports will also trigger an **automatic re-scan** once the scan pipeline exists (§10). Intimate-image requests are removed within 48 hours at the latest (TAKE IT DOWN Act).
+- **Copyright reports** collect what a DMCA notice needs; the appeal against a copyright decision is the counter-notice. Three upheld copyright decisions end an account (repeat-infringer policy).
+- **Decisions:** take an app out of the store, hide a review or profile, warn, or suspend an account. Acting closes every open report about the same thing. Each decision sends the person a **statement of reasons**: what was done, the facts, the Content Policy rule, the law if any, that a person decided it, and how to appeal. Never hide anything for being negative (REV-2).
+- **Appeals** within six months, once per decision, on the account page. A person keeps or reverses the decision and says why; reversing undoes it.
+- **Suspended accounts** can still sign in to read Slop, see the decision, appeal, download their data or close the account; nothing else.
+- Child-abuse reports are preserved for a year, and the moderator notes where they were filed (NCMEC, NCA) and police referrals for threats.
+- The rules are the **Content Policy** (`/legal/content`); each decision names its section.
 
 ## 17. Decisions and open questions
 

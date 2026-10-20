@@ -9,7 +9,7 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Email (verified, from the sign-in provider) | `users.email` | Account and product emails | Contract | Life of account |
 | Country (stated at sign-up) | `users.country_code` | Choosing age and legal rules (AGE-1) | Legal obligation / contract | Life of account |
 | 16+ confirmation time | `users.age_16_confirmed_at` | Proof of the 16+ rule. No date of birth is stored | Legal obligation | Life of account |
-| Provider account ID | `identities.provider_subject` | Sign-in | Contract | Life of account |
+| Provider account ID | `identities.provider_subject` | Sign-in; after an account is closed, refusing that sign-in | Contract; legitimate interest (closed and banned accounts don't return) | Life of account; kept after closing, only to refuse the sign-in |
 | Last sign-in time | `identities.last_sign_in_at` | Security, devices page | Legitimate interest | Life of account |
 | Pending sign-up (name, email) | `pending_signups` | Finishing sign-up | Contract | 30 minutes, then deleted |
 | Session (hashed token, user agent, times) | `sessions` | Keeping the user signed in; devices page | Contract | Until it ends (expiry, idle timeout or sign-out), then deleted after 7 days by the hourly cleanup |
@@ -38,7 +38,11 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | A side's own conversation copy, submitted for a problem or dispute | `job_evidence` | Mediation of a problem or review dispute | Legitimate interest; provided by that side | With the job record |
 | Changes to Agreement, problems, proposals, mediator suggestions | `job_changes`, `job_problems`, `job_problem_proposals` | The contract record and mediation (HUM-16, HUM-19) | Contract | Life of the account + 6 years |
 | Review disputes (statements, decision, reason) | `review_disputes`, `creative_reviews.hidden_reason`, `mediator_note` | Deciding disputes on the rules, with a statement of reasons (DSA Art. 17) | Legal obligation / legitimate interest | Life of the review + 6 years |
-| Reviews of creatives and replies | `creative_reviews` | Verified-client ratings on People pages (LEGAL §4.5) | Legitimate interest (right to object, GDPR Art. 21) | Life of the profile; removed with the reviewer's account |
+| Reviews of creatives and replies | `creative_reviews` | Verified-client ratings on People pages (LEGAL §4.5) | Legitimate interest (right to object, GDPR Art. 21) | Life of the profile; kept, frozen, when either account closes (it's part of the job record) |
+| Account closed / suspended | `users.closed_at`, `users.suspended_at` | Refusing a closed account's sign-in; limiting a suspended account (DESIGN §4, CON-9) | Contract; legitimate interest | Life of the account record |
+| Accepted versions of the Terms, Publisher Agreement and People Terms | `legal_acceptances` | Proof of which words the user agreed to, and when | Legal obligation / legitimate interest (contract claims) | Life of the account + 6 years (LEGAL-GUIDANCE §15) |
+| Reports (subject, reason, details, reporter's account, or a signed-out reporter's name and email; a quoted job message; copyright-notice details) | `reports` | Notice-and-action (DSA Art. 16, CON-8), DMCA notices (CON-3), records of decisions and time taken | Legal obligation | 6 years; child-abuse reports preserved at least 1 year (18 U.S.C. §2258A(h)) |
+| Moderation decisions, statements of reasons, appeals and counter-notices (name, address, phone) | `moderation_decisions` | Statements of reasons (DSA Art. 17, CON-9), appeals (CON-16), the repeat-infringer count (CON-4) | Legal obligation | 6 years (LEGAL-GUIDANCE §15) |
 
 **Not collected:** passwords, provider access tokens (used once at sign-in, never stored), date
 of birth, IP addresses in the database.

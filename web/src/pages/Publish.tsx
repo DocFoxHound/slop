@@ -21,6 +21,7 @@ import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "..
 import { ErrorState, Loading } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
+import { useTermsGate } from "../components/Terms";
 
 function SignInFirst({ what }: { what: string }) {
   return (
@@ -216,6 +217,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const [slugTouched, setSlugTouched] = useState(Boolean(existing));
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
+  const terms = useTermsGate();
 
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
   const toggleTag = (tag: string) =>
@@ -237,7 +239,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             tags: form.tags,
             platforms: form.platforms,
           })
-        : await api.createApp(form);
+        : await terms.guard(() => api.createApp(form));
       navigate(`/app/${saved.slug}`);
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
@@ -261,6 +263,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
 
   return (
     <div className="page narrow">
+      {terms.prompt}
       <div className="crumbs">
         <Link to="/publish">Your apps</Link> › {existing ? existing.title : "New app"}
       </div>

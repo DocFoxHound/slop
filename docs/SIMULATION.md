@@ -27,6 +27,12 @@ unweighted, over time) and **player counts** against a truth we know. The code i
 
   Player counts are recorded per 3 hours, busiest in the evening.
 
+- **Reports and moderation** (`sim_moderation.rs`): every simulated user has accepted the
+  agreements in effect. About 30 apps, reviews and People profiles get one to three reports with
+  realistic reasons, spread over 9 days: recent ones are open (a few overdue), older ones were
+  dismissed or acted on through the real `moderation::decide` (taking at most two apps out,
+  hiding reviews or profiles, warnings). Some decisions are appealed; older appeals were kept or
+  reversed. The report counts them by status and checks every acted-on report has its decision.
 - **People** (`sim_people.rs`): 24 made-up creatives (artists, pixel artists, 3D modellers,
   composers, sound designers, writers, voice actors, testers and studios, including two that
   mostly generate their work with AI) plus 2 whose first portfolio waits for review. Each has a

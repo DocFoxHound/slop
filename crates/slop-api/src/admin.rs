@@ -343,27 +343,45 @@ pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result
 }
 
 /// Takes an app out of the store (moderation). Installs keep working unless a release is revoked.
+/// The maker gets a statement of reasons and can appeal (moderation.rs).
 pub async fn delist_app(
     db: &PgPool,
     slug: &str,
     reviewer: &str,
-    reason: &str,
+    rule: &str,
+    facts: &str,
 ) -> anyhow::Result<()> {
     check_reviewer(reviewer)?;
-    ensure!(!reason.trim().is_empty(), "say why with --reason");
+    ensure!(!facts.trim().is_empty(), "say why with --reason");
     let mut tx = db.begin().await?;
-    let updated = sqlx::query("update apps set status = 'delisted', updated_at = now() where slug = $1 and status = 'listed'")
-        .bind(slug)
-        .execute(&mut *tx)
-        .await?
-        .rows_affected();
-    ensure!(updated == 1, "no listed app with that address");
+    let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
+        "select id, maker_id, title from apps where slug = $1 and status = 'listed' for update",
+    )
+    .bind(slug)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (id, maker, title) = row.context("no listed app with that address")?;
+    crate::moderation::decide(
+        &mut tx,
+        &crate::moderation::NewDecision {
+            user_id: maker,
+            subject_kind: "app",
+            subject_id: id,
+            subject_label: &format!("App: {title}"),
+            action: "delist_app",
+            rule,
+            law: None,
+            facts,
+            decided_by: reviewer,
+        },
+    )
+    .await?;
     audit(
         &mut tx,
         reviewer,
         "app.delist",
         slug,
-        json!({ "reason": reason }),
+        json!({ "rule": rule, "reason": facts }),
     )
     .await?;
     tx.commit().await?;

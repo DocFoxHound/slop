@@ -24,6 +24,11 @@ pub enum ApiError {
     Conflict(String),
     #[error("{0}")]
     Unavailable(&'static str),
+    /// The action needs the current version of a legal document accepted first (legal.rs).
+    #[error("accept the current {} first", crate::legal::title(.0))]
+    TermsRequired(&'static str),
+    #[error("your account is suspended: see the decision on your account page")]
+    Suspended,
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -54,6 +59,8 @@ impl IntoResponse for ApiError {
             Self::Invalid { .. } => (StatusCode::UNPROCESSABLE_ENTITY, "invalid"),
             Self::Conflict(_) => (StatusCode::CONFLICT, "conflict"),
             Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
+            Self::TermsRequired(_) => (StatusCode::CONFLICT, "terms_required"),
+            Self::Suspended => (StatusCode::FORBIDDEN, "suspended"),
             Self::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
@@ -66,6 +73,10 @@ impl IntoResponse for ApiError {
         let mut body = json!({ "error": { "code": code, "message": message } });
         if let Self::Invalid { field, .. } = &self {
             body["error"]["field"] = json!(field);
+        }
+        // The document to accept, so the UI can show it and try again.
+        if let Self::TermsRequired(kind) = &self {
+            body["error"]["field"] = json!(kind);
         }
         (status, Json(body)).into_response()
     }
