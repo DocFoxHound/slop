@@ -233,12 +233,18 @@ jobs:
 |---|---|
 | `app` | Your app's store address on Slop (required) |
 | `slop-url` | The Slop site (required) |
-| `project-type` | `rust` (`cargo build --release`, ships the first binary), `go` (`go build`, binary named after the repository) or `custom` (required) |
+| `project-type` | What to build (required): see **Project types** below |
+| `project-path` | Where the project is in the repository (default: the top) |
 | `platforms` | Comma-separated, from `windows,linux` (default: both). Match your store page. |
 | `linux-packages` | Comma-separated, from `deb,rpm` (default: both). Slop uses the ones your store page lists. Packages install the app in `/opt/<app>` with `/usr/bin/<app>` starting it. |
-| `build-command` | `custom` only: the command that builds your app (run with bash) |
-| `output-dir` | `custom` only: the folder the build produces; it's packed as-is |
-| `exec` | `custom` only: the program to start, relative to `output-dir`; `{ext}` becomes `.exe` on Windows |
+| `build-command` | `custom`: the command that builds your app (run with bash). `web`, `electron`, `tauri`: an extra step before building, e.g. `npm run build` |
+| `output-dir` | `custom`: the folder the build produces; it's packed as-is. `web`: the folder with your built `index.html` |
+| `exec` | The program to start, relative to the build; `{ext}` becomes `.exe` on Windows. Needed for `custom`, worked out for every other type |
+| `godot-version` | `godot`: your Godot version, e.g. `4.3` (default) or `4.4.1`. The standard build, not .NET |
+| `godot-preset-windows`, `godot-preset-linux` | `godot`: the export presets to use (default `Windows Desktop` and `Linux`) |
+| `python-version`, `python-entry`, `python-windowed` | `python`: Python version (default 3.12), the script that starts the app (default `main.py`), and `true` for apps with their own window, such as pygame games |
+| `node-version` | `electron`, `tauri`, `web`: Node.js version (default 22) |
+| `publish` | `false` builds and checks only: no release, nothing sent to Slop, the files kept as the run's artifacts for a day. For trying it out |
 | `sign` | `true` by default; set `false` for private repositories without GitHub Enterprise |
 | `signpath-organization-id` | Optional: sign the Windows program for free with SignPath Foundation (see [Signing](#signing)). Needs the `SIGNPATH_API_TOKEN` secret |
 | `signpath-project-slug` | Your SignPath project (default: the app's store address) |
@@ -250,17 +256,48 @@ on GitHub's Windows runner), looks for secrets committed to your source with
 vulnerabilities with [OSV-Scanner](https://github.com/google/osv-scanner). Only you and Slop's
 reviewers see the source checks; they never stop a release.
 
-Godot, web/HTML5, Electron/Tauri and Python projects use `custom` for now, for example:
+**Project types.** The **Add to my repository** button picks one by looking at your repository.
+
+| `project-type` | What it does |
+|---|---|
+| `rust` | `cargo build --release --locked`; ships the first binary |
+| `go` | `go build`; the program is named after the repository |
+| `godot` | Installs Godot (`godot-version`) and its export templates, imports the project, and exports your presets named `Windows Desktop` and `Linux`. Commit `export_presets.cfg`. GDScript projects; .NET isn't supported yet |
+| `python` | PyInstaller, as a folder: installs `requirements.txt`, then builds `python-entry` |
+| `electron` | `npm ci`, then electron-builder as an unpacked folder (no installer: Slop installs and updates it) |
+| `tauri` | `npm ci` if there's a `package.json`, then `tauri build --no-bundle`; ships the program |
+| `web` | An HTML5 game or web app: builds it (`build-command`), then puts `output-dir` in a small window of its own (a Tauri shell), so it runs like any other app. Linux packages depend on WebKitGTK |
+| `custom` | Any build: `build-command`, `output-dir` and `exec` |
+
+For example, a Godot game:
 
 ```yaml
     with:
       app: my-godot-game
       slop-url: https://slop.example
-      project-type: custom
-      build-command: ./build.sh          # e.g. godot --headless --export-release "Linux" build/game
-      output-dir: build
-      exec: "game{ext}"
+      project-type: godot
+      godot-version: "4.3"
 ```
+
+A Python game: PyInstaller programs are often flagged by antivirus heuristics, so signing them
+([Signing](#signing)) helps most there. Electron on Linux needs unprivileged user namespaces for
+its sandbox; most distributions have them on.
+
+**Launch settings (`slop.toml`).** Optional, at the top of your repository (or the project's
+folder). It says which program to start and with what arguments, for every platform or per
+platform. A workflow's own `exec` wins over it.
+
+```toml
+[launch]
+exec = "game{ext}"          # relative to the build; {ext} is .exe on Windows
+args = ["--fullscreen"]
+
+[launch.windows]
+args = ["--fullscreen", "--renderer=d3d12"]
+```
+
+**Build now.** Every push to your main branch builds. To build without pushing, open the
+workflow on GitHub (the **Build now** button on your Releases page) and press **Run workflow**.
 
 Builds made by Slop Build are labelled **Built by Slop Build from source**.
 
@@ -427,6 +464,24 @@ the build waits (up to an hour). Your Releases page shows **SIGNED by …** once
 Building yourself instead? Use SignPath's
 [GitHub Action](https://github.com/signpath/github-action-submit-signing-request) in your own
 workflow, or any code-signing certificate you have.
+
+### Signing builds you make yourself
+
+Building somewhere other than GitHub Actions (GitLab, Bitbucket, your own server, your computer)?
+Sign each file with an SSH key registered on your account instead:
+
+1. Make an Ed25519 key if you don't have one: `ssh-keygen -t ed25519`.
+2. Add its public half (the line in `~/.ssh/id_ed25519.pub`) under **Account → Signing keys**. It
+   starts counting **72 hours later**, and you're told when a key is added, so nobody with a
+   stolen session can quietly add one and sign a release in your name.
+3. For each file, sign it and attach the `.sig` next to it on the release page:
+
+   ```sh
+   ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n slop-release my-game-1.0.0-windows.zip
+   ```
+
+Slop checks the signature when it fetches the release, and the Slop app checks it again before
+installing. Your Releases page shows **SIGNED BY YOUR KEY**.
 
 ### Slop Check
 

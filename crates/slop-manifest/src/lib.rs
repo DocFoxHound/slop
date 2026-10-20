@@ -12,6 +12,7 @@
 //! Key management is deliberately simple for now: the client trusts a pinned list of public
 //! keys. The TUF-style root / targets / timestamp roles in SECURITY §5.3 replace that later.
 
+pub mod sshsig;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
@@ -138,6 +139,20 @@ pub struct ManifestFile {
     /// themselves before installing (SECURITY §5.3).
     #[serde(default)]
     pub attestation: Option<String>,
+    /// For files the maker built and signed themselves: their SSH signature and the registered
+    /// key that made it (sshsig.rs). Present only when there's no attestation.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub maker_signature: Option<MakerSignature>,
+}
+
+/// A maker's own signature on a file (SECURITY §5.3, files attached by hand).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct MakerSignature {
+    /// `ssh-ed25519 <base64>`: the key registered on the maker's Slop account.
+    pub public_key: String,
+    /// The armored `ssh-keygen -Y sign -n slop-release` signature.
+    pub signature: String,
 }
 
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
@@ -341,6 +356,7 @@ mod tests {
                     args: vec![],
                 }),
                 attestation: None,
+                maker_signature: None,
             }],
             approved_at: "2026-10-18T00:00:00Z".into(),
         }

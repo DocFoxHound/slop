@@ -230,6 +230,13 @@ function FileDetail({ file }: { file: Release["files"][number] }) {
               {file.provenance.runner === "self-hosted" && " · self-hosted runner"}
             </span>
           </div>
+        ) : file.maker_key ? (
+          <div className="small">
+            <span className="badge official">SIGNED BY YOUR KEY</span>{" "}
+            <span className="muted">
+              {file.maker_key.key_name} · <code>{file.maker_key.fingerprint}</code>
+            </span>
+          </div>
         ) : (
           file.provenance_problem && (
             <div className="small">
@@ -253,6 +260,17 @@ steps:
     with:
       subject-path: dist/*`;
 
+const PROJECT_LABEL: Record<string, string> = {
+  rust: "Rust",
+  go: "Go",
+  godot: "Godot",
+  web: "web (HTML5)",
+  electron: "Electron",
+  tauri: "Tauri",
+  python: "Python",
+  custom: "custom",
+};
+
 /** Slop Build: one file in the maker's repo, and releases arrive by themselves (ARCHITECTURE §6.2). */
 function SlopBuildSetup({ slug }: { slug: string }) {
   const setup = useLoad(() => api.slopBuildSetup(slug), [slug]);
@@ -262,7 +280,8 @@ function SlopBuildSetup({ slug }: { slug: string }) {
       <h2>Let Slop Build do it</h2>
       <p>
         Add one file to your repository and every push to your main branch, or every <code>v*</code> tag, builds your app
-        for Windows and Linux on GitHub Actions (a .zip, a .tar.gz and .deb/.rpm packages), signs it, attaches it to a
+        (Rust, Go, Godot, Python, Electron, Tauri, a website, or your own build command) for Windows and Linux on GitHub
+        Actions (a .zip, a .tar.gz and .deb/.rpm packages), signs it, attaches it to a
         release, and sends it here. No
         keys or secrets to set up.
       </p>
@@ -277,8 +296,7 @@ function SlopBuildSetup({ slug }: { slug: string }) {
           {setup.data.note && <p className="notice">{setup.data.note}</p>}
           {!setup.data.note && setup.data.supported && (
             <p className="muted small">
-              Detected a <b>{setup.data.project_type === "rust" ? "Rust" : setup.data.project_type === "go" ? "Go" : "custom"}</b>{" "}
-              project.
+              Detected a <b>{PROJECT_LABEL[setup.data.project_type]}</b> project.
             </p>
           )}
           <p className="muted small">
@@ -293,6 +311,17 @@ function SlopBuildSetup({ slug }: { slug: string }) {
                 <span className="btn slime">Add to my repository on GitHub</span>
               </ExternalLink>{" "}
               <span className="muted small">Opens GitHub with the file filled in; you just commit it.</span>
+            </p>
+          )}
+          {setup.data.build_now_url && (
+            <p>
+              <ExternalLink href={setup.data.build_now_url}>
+                <span className="btn">Build now</span>
+              </ExternalLink>{" "}
+              <span className="muted small">
+                Once the file is in your repository: opens it on GitHub, where Run workflow builds your main branch straight
+                away.
+              </span>
             </p>
           )}
           <details>

@@ -85,6 +85,7 @@ struct FileRow {
     sha256: Option<String>,
     attestation: Option<String>,
     provenance_problem: Option<String>,
+    maker_signature: Option<sqlx::types::Json<slop_manifest::MakerSignature>>,
     scan_result: Option<String>,
     scan_detail: Option<String>,
     defender: Option<sqlx::types::Json<crate::scan::DefenderCheck>>,
@@ -140,6 +141,7 @@ pub async fn approve(
 
     let rows: Vec<FileRow> = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem,
+                (maker_signature - 'fingerprint' - 'key_name') as maker_signature,
                 scan_result, scan_detail, defender, cleared_reason
          from release_files where release_id = $1 order by platform",
     )
@@ -187,7 +189,7 @@ pub async fn approve(
                 ),
             }
         }
-        if rules.require_maker_signature && f.attestation.is_none() {
+        if rules.require_maker_signature && f.attestation.is_none() && f.maker_signature.is_none() {
             bail!(
                 "the {} build has no verified maker signature: {}",
                 f.platform,
@@ -202,6 +204,11 @@ pub async fn approve(
             size: size as u64,
             sha256,
             launch: f.exec.map(|exec| Launch { exec, args: f.args }),
+            maker_signature: if f.attestation.is_none() {
+                f.maker_signature.map(|s| s.0)
+            } else {
+                None
+            },
             attestation: f.attestation,
         });
     }

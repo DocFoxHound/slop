@@ -5,6 +5,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 
 import { api, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
 import { StepUpPrompt } from "../components/PasskeyStepUp";
+import { SigningKeys } from "../components/SigningKeys";
 import { createPasskey, passkeysSupported, signWithPasskey } from "../passkeys";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate } from "../format";
@@ -501,6 +502,7 @@ export function Account() {
       </div>
 
       <SignIns />
+      <SigningKeys />
       <AccountNotifications />
       {isDesktop && <ThisDevice />}
       <AccountDecisions />

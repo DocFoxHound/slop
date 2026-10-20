@@ -74,7 +74,14 @@ async fn fake_github() -> String {
         )
         .route(
             "/octo/game/releases/download/{tag}/{file}",
-            get(|| async { BUILD_BYTES }),
+            // A maker's .sig beside a file, when a test has set one (maker keys).
+            get(|axum::extract::Path((_, file)): axum::extract::Path<(String, String)>| async move {
+                if file.ends_with(".sig") {
+                    let sig = MAKER_SIG.lock().unwrap().clone();
+                    return if sig.is_empty() { StatusCode::NOT_FOUND.into_response() } else { sig.into_response() };
+                }
+                BUILD_BYTES.into_response()
+            }),
         )
         // GitHub Actions' OIDC signing keys (a test key), and a repository for Slop Build setup.
         .route(
@@ -2208,7 +2215,7 @@ fn ci_release() -> Value {
             { "platform": "linux-deb", "file_name": "game_build.12_amd64.deb" },
             // The store page doesn't list .rpm, so this one is left out.
             { "platform": "linux-rpm", "file_name": "game-build.12.x86_64.rpm" },
-            { "platform": "windows", "file_name": "game-build.12-windows.zip", "exec": "game.exe" }
+            { "platform": "windows", "file_name": "game-build.12-windows.zip", "exec": "game.exe", "args": ["--fullscreen"] }
         ]
     })
 }
@@ -2261,6 +2268,17 @@ async fn slop_build_submits_releases_with_a_github_token(db: PgPool) {
         .unwrap();
     assert_eq!(deb["kind"], "installer");
     assert!(deb["exec"].is_null());
+    let windows = release["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["platform"] == "windows")
+        .unwrap();
+    assert_eq!(
+        windows["args"],
+        json!(["--fullscreen"]),
+        "from the maker's slop.toml"
+    );
     assert_eq!(release["files"].as_array().unwrap().len(), 3, "no .rpm");
     let submitter: Uuid = sqlx::query_scalar("select submitted_by from releases")
         .fetch_one(&app.db)
@@ -9533,6 +9551,47 @@ fn form_code(body: &str) -> String {
         .unwrap_or_default()
 }
 
+/// The `.sig` the fake release page serves next to every file (maker keys), when not empty.
+static MAKER_SIG: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+/// An Ed25519 key's OpenSSH public key line, and an `ssh-keygen -Y sign -n slop-release`
+/// signature over `file` (PROTOCOL.sshsig).
+fn ssh_sign(key: &slop_manifest::ed25519_dalek::SigningKey, file: &[u8]) -> (String, String) {
+    use base64::Engine;
+    use sha2::Digest;
+    use slop_manifest::ed25519_dalek::Signer;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let string = |out: &mut Vec<u8>, s: &[u8]| {
+        out.extend_from_slice(&(s.len() as u32).to_be_bytes());
+        out.extend_from_slice(s);
+    };
+    let mut pub_blob = Vec::new();
+    string(&mut pub_blob, b"ssh-ed25519");
+    string(&mut pub_blob, &key.verifying_key().to_bytes());
+    let mut signed = b"SSHSIG".to_vec();
+    string(&mut signed, b"slop-release");
+    string(&mut signed, b"");
+    string(&mut signed, b"sha512");
+    string(&mut signed, &sha2::Sha512::digest(file));
+    let mut sig_blob = Vec::new();
+    string(&mut sig_blob, b"ssh-ed25519");
+    string(&mut sig_blob, &key.sign(&signed).to_bytes());
+    let mut blob = b"SSHSIG".to_vec();
+    blob.extend_from_slice(&1u32.to_be_bytes());
+    string(&mut blob, &pub_blob);
+    string(&mut blob, b"slop-release");
+    string(&mut blob, b"");
+    string(&mut blob, b"sha512");
+    string(&mut blob, &sig_blob);
+    (
+        format!("ssh-ed25519 {} maker@laptop", b64.encode(&pub_blob)),
+        format!(
+            "-----BEGIN SSH SIGNATURE-----\n{}\n-----END SSH SIGNATURE-----\n",
+            b64.encode(&blob)
+        ),
+    )
+}
+
 /// What the fake Gitea repository's README says (the ownership code, once the maker adds it).
 static PROOF: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
 
@@ -11518,4 +11577,130 @@ async fn passkeys_are_added_after_a_recent_sign_in_and_confirm_sensitive_actions
         started["options"]["publicKey"]["challenge"].is_string(),
         "{started}"
     );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_sign_hand_built_files_with_a_registered_key(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let key = slop_manifest::ed25519_dalek::SigningKey::from_bytes(&[21; 32]);
+    let (public_line, signature) = ssh_sign(&key, BUILD_BYTES);
+
+    // Adding a key: refused with an old session, then it waits 72 hours.
+    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let add = || {
+        req(Method::POST, "/v1/me/signing-keys")
+            .cookie(&maker)
+            .json(json!({ "name": "Laptop", "public_key": public_line }))
+    };
+    assert_eq!(
+        body_json(app.send(add()).await).await["error"]["code"],
+        "step_up_required"
+    );
+    sqlx::query("update sessions set created_at = now() where user_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(add()).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let added = body_json(res).await;
+    assert_eq!(added["active"], false);
+    assert!(
+        added["fingerprint"]
+            .as_str()
+            .unwrap()
+            .starts_with("SHA256:")
+    );
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title = 'A signing key was added to your account'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+
+    // A signed file before the wait is over doesn't count.
+    *MAKER_SIG.lock().unwrap() = signature.clone();
+    let early = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let problem: String = sqlx::query_scalar(
+        "select provenance_problem from release_files where release_id = $1::uuid",
+    )
+    .bind(&early)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(problem.contains("72-hour"), "{problem}");
+
+    // After it: the file is the maker's, approval accepts it, and the manifest carries it.
+    sqlx::query("update maker_keys set active_from = now() - interval '1 hour'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let id = submit_and_fetch(&app, &maker, "1.0.1").await;
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    let file = &mine
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|r| r["id"] == id.as_str())
+        .unwrap()["files"][0];
+    assert_eq!(file["maker_key"]["key_name"], "Laptop", "{file}");
+    assert!(file["maker_key"].get("signature").is_none());
+    let strict = admin::ReviewRules {
+        require_maker_signature: true,
+        scanner: slop_api::scan::Scanner::Off,
+    };
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        strict,
+        early.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap_err();
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        strict,
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let manifest: Value =
+        sqlx::query_scalar("select signed_manifest from releases where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    let text = manifest.to_string();
+    assert!(
+        text.contains("maker_signature") && text.contains("BEGIN SSH SIGNATURE"),
+        "{text}"
+    );
+
+    // A wrong signature is refused with the reason.
+    let other = slop_manifest::ed25519_dalek::SigningKey::from_bytes(&[22; 32]);
+    *MAKER_SIG.lock().unwrap() = ssh_sign(&other, BUILD_BYTES).1;
+    let bad = submit_and_fetch(&app, &maker, "1.0.2").await;
+    let problem: String = sqlx::query_scalar(
+        "select provenance_problem from release_files where release_id = $1::uuid",
+    )
+    .bind(&bad)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(problem.contains("different key"), "{problem}");
+    MAKER_SIG.lock().unwrap().clear();
 }

@@ -1244,6 +1244,8 @@ export interface ReleaseFile {
   sha256: string | null;
   provenance: Provenance | null;
   provenance_problem: string | null;
+  /** Signed by hand with the maker's registered SSH key. */
+  maker_key: { fingerprint: string; key_name: string } | null;
   scan_result: "passed" | "note" | "on_hold" | "rejected" | "blocked" | "skipped" | null;
   scan_detail: string | null;
   /** Slop's scanner's report: engines, findings, notable capabilities. */
@@ -1525,7 +1527,7 @@ export const api = {
   slopBuildSetup: (slug: string) =>
     request<{
       supported: boolean;
-      project_type: "rust" | "go" | "custom";
+      project_type: "rust" | "go" | "godot" | "web" | "electron" | "tauri" | "python" | "custom";
       detected: string | null;
       note: string | null;
       file_path: string;
@@ -1534,6 +1536,7 @@ export const api = {
       check_file_path: string;
       check_workflow: string;
       check_create_url: string | null;
+      build_now_url: string | null;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
   manage: (slug: string) => request<ManageOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/manage`),
   /** "Check now" for a frozen app's repository; the freeze if it's still frozen. */
@@ -1610,6 +1613,15 @@ export const api = {
     request<{ redirect_url: string }>("POST", `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`),
 
   providers: () => request<Record<SignInProvider, boolean>>("GET", "/v1/auth/providers"),
+  signingKeys: {
+    list: () =>
+      request<Array<{ id: string; name: string; fingerprint: string; created_at: string; active_from: string; active: boolean }>>(
+        "GET",
+        "/v1/me/signing-keys",
+      ),
+    add: (name: string, public_key: string) => request<unknown>("POST", "/v1/me/signing-keys", { name, public_key }),
+    remove: (id: string) => request<void>("DELETE", `/v1/me/signing-keys/${encodeURIComponent(id)}`),
+  },
   passkeys: {
     list: () =>
       request<Array<{ id: string; name: string; created_at: string; last_used_at: string | null }>>("GET", "/v1/me/passkeys"),

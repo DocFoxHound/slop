@@ -292,6 +292,8 @@ impl Library {
                     .map(Some)
                     .map_err(|e| Error::Verify(format!("maker signature: {e}")))
             }
+            // A maker's own SSH signature is checked once the file is here (install_into).
+            None if file.maker_signature.is_some() => Ok(None),
             None if self.require_maker_signature => Err(Error::Verify(
                 "this build has no maker signature, so it can't be installed".into(),
             )),
@@ -318,15 +320,30 @@ impl Library {
             manifest.release_id,
             platform.as_str()
         );
-        self.download_verified(
-            &file.url,
-            links.map(|api| (api, link_path.as_str())),
-            file.size,
-            &file.sha256,
-            &download,
-            progress,
-        )
-        .await?;
+        let sha512 = self
+            .download_verified(
+                &file.url,
+                links.map(|api| (api, link_path.as_str())),
+                file.size,
+                &file.sha256,
+                &download,
+                progress,
+            )
+            .await?;
+        // Built and signed by hand: the maker's key (vouched for by Slop's signature on the
+        // manifest) must have signed exactly this file.
+        if file.attestation.is_none()
+            && let Some(sig) = &file.maker_signature
+        {
+            let (key, _) = slop_manifest::sshsig::parse_public_key(&sig.public_key)
+                .map_err(|e| Error::Verify(format!("maker signature: {e}")))?;
+            let sha256: [u8; 32] = hex::decode(&file.sha256)
+                .ok()
+                .and_then(|b| b.try_into().ok())
+                .ok_or_else(|| Error::Verify("maker signature: bad digest".into()))?;
+            slop_manifest::sshsig::verify(&key, &sig.signature, &sha512, &sha256)
+                .map_err(|e| Error::Verify(format!("maker signature: {e}")))?;
+        }
 
         let app = staging.join("app");
         fs::create_dir_all(&app)?;
@@ -397,7 +414,7 @@ impl Library {
         sha256: &str,
         dest: &Path,
         progress: &impl Fn(u64, u64),
-    ) -> Result<()> {
+    ) -> Result<[u8; 64]> {
         let mut res = self.http.get(self.download_url(url)?).send().await?;
         // Private repositories: the release file isn't public, so ask Slop for a short-lived link.
         if matches!(res.status().as_u16(), 401 | 403 | 404)
@@ -418,6 +435,7 @@ impl Library {
         }
         let mut out = fs::File::create(dest)?;
         let mut hasher = Sha256::new();
+        let mut hasher512 = sha2::Sha512::new();
         let mut got: u64 = 0;
         while let Some(chunk) = res.chunk().await? {
             got += chunk.len() as u64;
@@ -427,6 +445,7 @@ impl Library {
                 ));
             }
             hasher.update(&chunk);
+            hasher512.update(&chunk);
             out.write_all(&chunk)?;
             progress(got, size);
         }
@@ -436,7 +455,7 @@ impl Library {
                 "the file changed after Slop checked it; not installing".into(),
             ));
         }
-        Ok(())
+        Ok(hasher512.finalize().into())
     }
 
     fn download_url(&self, url: &str) -> Result<url::Url> {
