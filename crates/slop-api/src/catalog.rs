@@ -462,6 +462,14 @@ struct AppDetail {
     community: Vec<crate::branches::CommunityBuild>,
     /// Private Slop (DESIGN §13): only its owner and the people it's shared with see it.
     private: bool,
+    /// The verified official team that publishes it (DESIGN §14): (slug, name).
+    official_team: Option<OfficialTeam>,
+}
+
+#[derive(Serialize)]
+struct OfficialTeam {
+    slug: String,
+    name: String,
 }
 
 #[derive(sqlx::FromRow)]
@@ -507,10 +515,17 @@ pub(crate) fn push_shared_with(qb: &mut QueryBuilder<Postgres>, viewer: Option<U
     qb.push(
         "(a.visibility = 'private'
           and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')
-          and exists (select 1 from app_shares s where s.app_id = a.id and s.user_id = ",
+          and (exists (select 1 from app_shares s where s.app_id = a.id and s.user_id = ",
     )
     .push_bind(viewer)
-    .push("))");
+    .push(
+        ")
+               or exists (select 1 from app_team_shares ts join teams t on t.id = ts.team_id
+                          join team_members m on m.team_id = t.id
+                          where ts.app_id = a.id and t.kind = 'player' and m.user_id = ",
+    )
+    .push_bind(viewer)
+    .push(")))");
 }
 
 /// Private Slop has no store page features: no voting, reviews, donations, Interested or branches.
@@ -578,6 +593,9 @@ async fn load_detail(
         credits: crate::people::credits(&state.db, extra.id).await?,
         is_mine,
         private: extra.private,
+        official_team: crate::teams::official_team_of(&state.db, extra.id)
+            .await?
+            .map(|(slug, name)| OfficialTeam { slug, name }),
         branch: crate::branches::info(&state.db, extra.id).await?,
         community,
         is_interested: match user {

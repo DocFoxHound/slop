@@ -104,7 +104,17 @@ function AppView({ app }: { app: AppDetail }) {
               {age && <span className="badge neutral" title={`Rated ${age}`}>{age}</span>}
             </div>
             <div className="muted">
-              by <b className="text">{app.maker.display_name}</b> · {app.kind === "game" ? "Game" : "App"}
+              by <b className="text">{app.maker.display_name}</b>
+              {app.official_team && (
+                <>
+                  {" "}
+                  of{" "}
+                  <Link to={`/teams/${app.official_team.slug}`} className="official-team">
+                    {app.official_team.name} <span className="badge official" title="A studio verified through its GitHub organization">✓ OFFICIAL</span>
+                  </Link>
+                </>
+              )}{" "}
+              · {app.kind === "game" ? "Game" : "App"}
             </div>
           </div>
           {upcoming && (
@@ -385,31 +395,43 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
   );
 }
 
-/** Who a Private Slop app is shared with (the owner's view). */
+/** Who a Private Slop app is shared with (the owner's view): people, and player teams. */
 function SharePanel({ slug }: { slug: string }) {
   const shares = useLoad(() => api.private.shares(slug), [slug]);
+  const myTeams = useLoad(() => api.teams.mine().then((m) => m.teams.filter((t) => t.kind === "player")), []);
   const [who, setWho] = useState("");
+  const [team, setTeam] = useState("");
   const [error, setError] = useState<string>();
-  const add = async (e: FormEvent) => {
-    e.preventDefault();
+  const run = async (action: () => Promise<unknown>) => {
     setError(undefined);
     try {
-      await api.private.share(slug, who);
-      setWho("");
+      await action();
       shares.reload();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+  const add = async (e: FormEvent) => {
+    e.preventDefault();
+    await run(() => api.private.share(slug, { user: who }));
+    setWho("");
+  };
+  const teamsLeft = (myTeams.data ?? []).filter((t) => !shares.data?.some((s) => s.team === t.slug));
   return (
     <div className="panel panel-pad share-panel">
       <h3>Shared with</h3>
       {shares.data?.length ? (
         <ul className="plain">
           {shares.data.map((s) => (
-            <li key={s.user_id}>
-              <Link to={`/u/${s.user_id}`}>{s.name}</Link>{" "}
-              <button type="button" className="link-btn small muted" onClick={() => void api.private.unshare(slug, s.user_id).then(shares.reload)}>
+            <li key={s.user_id ?? s.team ?? s.name}>
+              {s.user_id ? <Link to={`/u/${s.user_id}`}>{s.name}</Link> : <Link to={`/teams/${s.team}`}>👥 {s.name}</Link>}{" "}
+              <button
+                type="button"
+                className="link-btn small muted"
+                onClick={() =>
+                  void run(() => (s.user_id ? api.private.unshare(slug, s.user_id) : api.private.unshareTeam(slug, s.team!)))
+                }
+              >
                 Stop sharing
               </button>
             </li>
@@ -419,18 +441,29 @@ function SharePanel({ slug }: { slug: string }) {
         <p className="muted small">Nobody yet.</p>
       )}
       <form className="row-actions" onSubmit={(e) => void add(e)}>
-        <input
-          aria-label="Their profile link"
-          placeholder="Paste their profile link"
-          value={who}
-          onChange={(e) => setWho(e.target.value)}
-        />
+        <input aria-label="Their profile link" placeholder="Paste their profile link" value={who} onChange={(e) => setWho(e.target.value)} />
         <button className="btn small" disabled={!who.trim()}>
           Share
         </button>
       </form>
+      {teamsLeft.length > 0 && (
+        <div className="row-actions">
+          <select aria-label="One of your teams" value={team} onChange={(e) => setTeam(e.target.value)}>
+            <option value="">Or one of your player teams…</option>
+            {teamsLeft.map((t) => (
+              <option key={t.slug} value={t.slug}>
+                {t.name}
+              </option>
+            ))}
+          </select>
+          <button type="button" className="btn small" disabled={!team} onClick={() => void run(() => api.private.share(slug, { team })).then(() => setTeam(""))}>
+            Share with the team
+          </button>
+        </div>
+      )}
       <p className="faint small">
         They see it once a release is approved, and download it straight from your release page through short-lived links.
+        Never with official teams.
       </p>
       {error && (
         <p className="form-error" role="alert">

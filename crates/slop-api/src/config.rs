@@ -25,6 +25,8 @@ pub struct Config {
     pub payments: PaymentsConfig,
     /// Product emails (notify.rs). Unset: notifications stay in Slop, nothing is emailed.
     pub email: Option<EmailConfig>,
+    /// DNS-over-HTTPS (JSON) for the official-team domain check (teams.rs).
+    pub doh_url: Url,
     /// The built website (`web/dist`) to serve from the same origin. Unset: API only.
     pub web_dir: Option<std::path::PathBuf>,
     /// Header holding the client's IP, set by the load balancer (e.g. `x-forwarded-for`,
@@ -389,6 +391,9 @@ impl Config {
                 simulated: var_or("SLOP_PAYMENTS", "off") == "simulated"
                     || var_or("SLOP_SIMULATION", "false") == "true",
             },
+            doh_url: var_or("SLOP_DOH_URL", "https://cloudflare-dns.com/dns-query")
+                .parse()
+                .context("SLOP_DOH_URL")?,
             email: match (env::var("SLOP_SMTP_URL"), env::var("SLOP_EMAIL_FROM")) {
                 (Ok(smtp_url), Ok(from)) if !smtp_url.is_empty() && !from.is_empty() => {
                     Some(EmailConfig { smtp_url, from })

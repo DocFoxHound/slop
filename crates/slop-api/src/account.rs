@@ -144,6 +144,11 @@ const EXPORT: &[(&str, &str)] = &[
         "select to_jsonb(d) - 'user_id' from donation_accounts d where d.user_id = $1",
     ),
     (
+        "teams",
+        "select coalesce(jsonb_agg(jsonb_build_object('team', t.slug, 'name', t.name, 'role', m.role, 'joined_at', m.joined_at)), '[]')
+         from team_members m join teams t on t.id = m.team_id where m.user_id = $1",
+    ),
+    (
         "app_reviews",
         "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug) || (to_jsonb(r) - 'user_id' - 'app_id')
                 order by r.created_at), '[]')
@@ -360,6 +365,29 @@ pub async fn close_account(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    // Teams: they leave; a team they owned passes to its longest-standing member, or ends.
+    sqlx::query(
+        "update team_members m set role = 'owner'
+         from (select distinct on (team_id) team_id, user_id from team_members
+               where user_id <> $1 and team_id in (select team_id from team_members where user_id = $1 and role = 'owner')
+                 and team_id not in (select team_id from team_members where role = 'owner' and user_id <> $1)
+               order by team_id, joined_at) heir
+         where m.team_id = heir.team_id and m.user_id = heir.user_id",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("delete from team_members where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("delete from team_invites where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("delete from teams t where not exists (select 1 from team_members m where m.team_id = t.id)")
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("update creatives set taking_work = false, updated_at = now() where user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)

@@ -729,3 +729,15 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .share-panel { margin-bottom: 14px; }
 .share-panel h3 { margin: 0 0 6px; }
 .share-panel input { flex: 1; min-width: 200px; }
+
+/* ---- Teams -------------------------------------------------------------------- */
+.team-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(260px, 1fr)); gap: 10px; margin-bottom: 16px; }
+.team-card { display: block; color: var(--text); }
+.team-card:hover { border-color: var(--slime); }
+.team-members li { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; padding: 4px 0; }
+.team-picks, .team-events { display: flex; flex-direction: column; gap: 8px; }
+.team-picks p { margin: 4px 0; }
+.compact-form input { flex: 1; min-width: 140px; }
+.verification h2 { margin: 0 0 6px; }
+.checks li { padding: 3px 0; }
+.official-team { color: inherit; }

@@ -34,6 +34,7 @@ pub mod sim_donations;
 pub mod sim_moderation;
 pub mod sim_people;
 pub mod slop_build;
+pub mod teams;
 pub mod tokens;
 pub mod updates;
 pub mod votes;
@@ -140,6 +141,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(reviews::routes())
         .merge(branches::routes())
         .merge(private::routes())
+        .merge(teams::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

@@ -181,6 +181,39 @@ async fn fake_github() -> String {
                 }
             }),
         )
+        // Official teams (teams.rs): the "acme" organization has Slop's App installed.
+        .route(
+            "/orgs/{org}/installation",
+            get(|axum::extract::Path(org): axum::extract::Path<String>| async move {
+                if org == "acme" {
+                    (StatusCode::OK, axum::Json(json!({ "id": 77 }))).into_response()
+                } else {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            }),
+        )
+        .route("/user/{id}", get(|| async { axum::Json(json!({ "id": 42, "login": "octo" })) }))
+        .route(
+            "/orgs/{org}/memberships/{login}",
+            get(|axum::extract::Path((org, login)): axum::extract::Path<(String, String)>| async move {
+                if org == "acme" && login == "octo" {
+                    axum::Json(json!({ "role": "admin", "state": "active" })).into_response()
+                } else {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            }),
+        )
+        .route(
+            "/orgs/{org}",
+            get(|| async { axum::Json(json!({ "login": "acme", "is_verified": false, "two_factor_requirement_enabled": true })) }),
+        )
+        .route(
+            "/dns-query",
+            get(|| async {
+                let txt = DNS_TXT.lock().unwrap().clone();
+                axum::Json(json!({ "Answer": txt.map(|t| vec![json!({ "data": format!("\"{t}\"") })]).unwrap_or_default() }))
+            }),
+        )
         .route(
             "/repos/octo/game/commits/{reference}",
             get(|axum::extract::Path(reference): axum::extract::Path<String>| async move {
@@ -256,6 +289,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         },
         payments: Default::default(),
         email: None,
+        doh_url: format!("{github_base}dns-query").parse().unwrap(),
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
         simulation: false,
@@ -3636,6 +3670,9 @@ async fn trending_puts_the_most_played_first(db: PgPool) {
 // Store-page pictures and videos, and similar apps
 
 /// Files the fake GitHub serves from /raw/<owner>/<repo>/<commit>/<path>.
+/// The TXT record the fake DNS answers with (official team checks).
+static DNS_TXT: std::sync::Mutex<Option<String>> = std::sync::Mutex::new(None);
+
 static RAW_FILES: std::sync::LazyLock<
     std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>,
 > = std::sync::LazyLock::new(Default::default);
@@ -7438,4 +7475,301 @@ async fn private_slop_is_seen_only_by_who_it_is_shared_with(db: PgPool) {
             .status(),
         StatusCode::NOT_FOUND
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Teams (DESIGN §14)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn player_teams_share_picks_nights_and_private_slop(db: PgPool) {
+    let app = test_app(db).await;
+    let (owner_id, owner) = app.user("Tess Owner", "US").await;
+    let (pal_id, pal) = app.user("Pat Pal", "US").await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    let create =
+        |cookie: &str, body: Value| req(Method::POST, "/v1/teams").cookie(cookie).json(body);
+    let res = app
+        .send(create(
+            &owner,
+            json!({ "slug": "night-owls", "name": "Night Owls", "kind": "player" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    // Invite-only by default: not visible or joinable for others.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/teams/night-owls").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/teams/night-owls/join").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let res = app
+        .send(
+            req(Method::POST, "/v1/teams/night-owls/invites")
+                .cookie(&owner)
+                .json(json!({ "user": format!("/u/{pal_id}") })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/teams").cookie(&pal))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["invites"][0]["slug"], "night-owls");
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/teams/night-owls").cookie(&pal))
+            .await,
+    )
+    .await;
+    assert_eq!(page["invited"], true);
+    assert_eq!(
+        page["members"].as_array().unwrap().len(),
+        0,
+        "invitees don't see members yet"
+    );
+    app.send(req(Method::POST, "/v1/teams/night-owls/invites/accept").cookie(&pal))
+        .await;
+
+    // Picks and a game night (the others hear about it).
+    listed_with(&app, owner_id, "co-op-caves", "released", "").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/teams/night-owls/picks")
+                .cookie(&pal)
+                .json(json!({ "app_slug": "co-op-caves", "note": "Great with 4" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let starts = (OffsetDateTime::now_utc() + time::Duration::days(2))
+        .format(&Rfc3339)
+        .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/teams/night-owls/events").cookie(&pal).json(json!({ "title": "Cave night", "starts_at": starts, "app_slug": "co-op-caves" })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/teams/night-owls").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(page["picks"][0]["slug"], "co-op-caves");
+    assert_eq!(page["picks"][0]["note"], "Great with 4");
+    assert_eq!(page["events"][0]["title"], "Cave night");
+    assert_eq!(page["members"].as_array().unwrap().len(), 2);
+    let inbox = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(inbox["items"][0]["title"], "Night Owls: Cave night");
+
+    // Private Slop shared with the team: members see it, others don't.
+    let mut body = new_app("team-tool");
+    body["visibility"] = json!("private");
+    app.send(req(Method::POST, "/v1/apps").cookie(&owner).json(body))
+        .await;
+    let id: Uuid = sqlx::query_scalar("select id from apps where slug = 'team-tool'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         values ($1, $2, '1.0.0', repeat('d', 40), 'approved', $3, now(), true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(owner_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/team-tool/shares")
+                .cookie(&owner)
+                .json(json!({ "team": "night-owls" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(body_json(res).await[0]["team"], "night-owls");
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/team-tool").cookie(&pal))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/team-tool").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/teams/night-owls").cookie(&pal))
+            .await,
+    )
+    .await;
+    assert_eq!(page["shared"][0]["slug"], "team-tool");
+
+    // Leaving: the last owner hands over first; the last one out ends the team.
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/teams/night-owls/leave").cookie(&owner))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    app.send(
+        req(
+            Method::PUT,
+            format!("/v1/teams/night-owls/members/{pal_id}"),
+        )
+        .cookie(&owner)
+        .json(json!({ "role": "owner" })),
+    )
+    .await;
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/teams/night-owls/leave").cookie(&owner))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/team-tool").cookie(&pal))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    app.send(req(Method::POST, "/v1/teams/night-owls/leave").cookie(&pal))
+        .await;
+    let left: i64 = sqlx::query_scalar("select count(*) from teams")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(left, 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn official_teams_are_verified_through_their_github_organization(db: PgPool) {
+    let app = test_app_with(db, |config| {
+        config.releases.github_app = Some(slop_api::config::GithubAppConfig {
+            app_id: "123".into(),
+            slug: "slop-test".into(),
+            private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
+                "fixtures/github-app-test-key.pem"
+            ))
+            .unwrap(),
+            webhook_secret: "hook-secret".into(),
+        });
+    })
+    .await;
+    let (owner_id, owner) = app.user("Ada Acme", "US").await;
+    sqlx::query(
+        "insert into identities (provider, provider_subject, user_id) values ('github', '42', $1)",
+    )
+    .bind(owner_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/teams").cookie(&owner).json(json!({ "slug": "acme", "name": "Acme Games", "kind": "official", "github_org": "acme" })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    listed_with(
+        &app,
+        owner_id,
+        "rocket-run",
+        "released",
+        "repo_url = 'https://github.com/acme/rocket-run'",
+    )
+    .await;
+    listed_with(
+        &app,
+        owner_id,
+        "side-thing",
+        "released",
+        "repo_url = 'https://github.com/ada/side-thing'",
+    )
+    .await;
+
+    // Owner and 2FA pass; the domain doesn't yet (no GitHub badge, no DNS record).
+    let res = body_json(
+        app.send(req(Method::POST, "/v1/teams/acme/verify").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(res["verified"], false, "{res}");
+    let check = |name: &str| {
+        res["checks"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["check"] == name)
+            .unwrap()["ok"]
+            .clone()
+    };
+    assert_eq!(check("owner"), true);
+    assert_eq!(check("two_factor"), true);
+    assert_eq!(check("domain"), false);
+    // Not verified: not listed, no badge on apps.
+    let teams = body_json(app.send(req(Method::GET, "/v1/teams")).await).await;
+    assert!(teams.as_array().unwrap().is_empty());
+
+    // The DNS record proves the domain.
+    app.send(
+        req(Method::PATCH, "/v1/teams/acme")
+            .cookie(&owner)
+            .json(json!({ "dns_domain": "acme.example" })),
+    )
+    .await;
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/teams/acme").cookie(&owner))
+            .await,
+    )
+    .await;
+    *DNS_TXT.lock().unwrap() = Some(page["dns"]["value"].as_str().unwrap().to_string());
+    let res = body_json(
+        app.send(req(Method::POST, "/v1/teams/acme/verify").cookie(&owner))
+            .await,
+    )
+    .await;
+    *DNS_TXT.lock().unwrap() = None;
+    assert_eq!(res["verified"], true, "{res}");
+
+    // Verified: listed, its organization's apps shown, and badged on their pages.
+    let page = body_json(app.send(req(Method::GET, "/v1/teams/acme")).await).await;
+    assert_eq!(page["verified"], true);
+    let apps: Vec<&str> = page["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        apps,
+        ["rocket-run"],
+        "only apps from the organization's repositories"
+    );
+    let detail = body_json(app.send(req(Method::GET, "/v1/apps/rocket-run")).await).await;
+    assert_eq!(detail["official_team"]["name"], "Acme Games");
+    let other = body_json(app.send(req(Method::GET, "/v1/apps/side-thing")).await).await;
+    assert!(other["official_team"].is_null());
+
+    // Never Private Slop, never picks.
+    let mut body = new_app("secret");
+    body["visibility"] = json!("private");
+    app.send(req(Method::POST, "/v1/apps").cookie(&owner).json(body))
+        .await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/secret/shares")
+                .cookie(&owner)
+                .json(json!({ "team": "acme" })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "team");
 }

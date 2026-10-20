@@ -22,6 +22,7 @@ import { People, PersonPage } from "./pages/People";
 import { PeopleEdit } from "./pages/PeopleEdit";
 import { Sim } from "./pages/Sim";
 import { Store } from "./pages/Store";
+import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
 import "./styles.css";
 
@@ -54,6 +55,8 @@ const router = createBrowserRouter([
       { path: "/legal", element: <LegalIndex /> },
       { path: "/notifications", element: <Notifications /> },
       { path: "/u/:id", element: <Profile /> },
+      { path: "/teams", element: <Teams /> },
+      { path: "/teams/:slug", element: <Team /> },
       { path: "/legal/:kind", element: <LegalPage /> },
       { path: "/people", element: <People /> },
       { path: "/people/me", element: <PeopleEdit /> },

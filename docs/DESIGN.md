@@ -212,6 +212,10 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
   5. *(If they take donations)* the studio's Stripe account is verified as a **business** by Stripe.
 
   Verification is re-checked regularly. If any of these stop being true, the badge is removed.
+- **Built 2026-10-20** (`crates/slop-api/src/teams.rs`, `/teams`):
+  - **Player teams:** open or invite-only (by profile link); owners, admins and members; picks with a note; game nights that notify the other members; Private Slop shared with the team. The last owner hands over before leaving; the last member out ends the team.
+  - **Official teams:** checked through Slop's GitHub App installed on the organization (owner role of the team's longest-standing owner, GitHub's verified domain or a `_slop-team.<domain>` TXT record, the organization's 2FA requirement, apps only from the organization's repositories, and Stripe business type when they take donations). "Check now" and a daily re-check; the owners are told when the badge goes. Verified teams are listed, show their apps, and their apps carry an "✓ Official" link to the team. Official teams can't receive Private Slop or have picks.
+  - Teams can be reported and hidden by a moderation decision. Not yet: GitLab organizations, and checking that builds are signed by the organization's own CI.
 
 ## 15. People (creative marketplace)
 
