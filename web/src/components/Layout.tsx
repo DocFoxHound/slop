@@ -248,8 +248,12 @@ function AccountNotices() {
       )}
       {legal.map((n) => (
         <div className="account-notice" key={`${n.kind}:${n.version}`}>
-          {n.in_effect ? `The ${n.title} changed on ${formatDate(n.effective_at)}.` : `The ${n.title} changes on ${formatDate(n.effective_at)}.`}{" "}
-          <span className="muted">{n.summary}</span>{" "}
+          {n.first
+            ? `Slop has published its ${n.title}.`
+            : n.in_effect
+              ? `The ${n.title} changed on ${formatDate(n.effective_at)}.`
+              : `The ${n.title} changes on ${formatDate(n.effective_at)}.`}{" "}
+          {!n.first && <span className="muted">{n.summary}</span>}{" "}
           <Link to={`/legal/${n.kind}${n.in_effect ? "" : `?version=${n.version}`}`}>
             {n.action === "accept" ? "Review and accept" : "Read it"}
           </Link>

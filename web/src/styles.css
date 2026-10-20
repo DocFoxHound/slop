@@ -630,7 +630,7 @@ img.pixelated { image-rendering: pixelated; object-fit: contain !important; }
 pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size: 12px; }
 
 /* ---- Reports, moderation decisions, terms ------------------------------- */
-.dialog { background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
+.dialog { text-align: left; background: var(--panel); color: var(--text); border: 1px solid var(--line); border-radius: var(--radius); padding: 20px; width: min(560px, calc(100vw - 32px)); max-height: calc(100vh - 48px); overflow: auto; }
 .dialog.wide { width: min(760px, calc(100vw - 32px)); }
 .dialog::backdrop { background: rgba(0, 0, 0, 0.6); }
 .dialog h2 { margin: 0 0 6px; font-size: 19px; }

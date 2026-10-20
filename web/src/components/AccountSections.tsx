@@ -248,7 +248,9 @@ export function AccountAgreements() {
               <li key={`${n.kind}-${n.version}`}>
                 <b>{n.title}</b>{" "}
                 <span className="muted small">
-                  {n.in_effect ? `changed ${formatDate(n.effective_at)}` : `changes ${formatDate(n.effective_at)}`}: {n.summary}
+                  {n.first
+                    ? `published ${formatDate(n.effective_at)}`
+                    : `${n.in_effect ? "changed" : "changes"} ${formatDate(n.effective_at)}: ${n.summary}`}
                 </span>{" "}
                 {n.action === "accept" ? (
                   <button type="button" className="btn small" onClick={() => setAccepting(n)}>

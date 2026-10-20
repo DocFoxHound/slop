@@ -196,6 +196,8 @@ export interface LegalNotice {
   summary: string;
   effective_at: string;
   in_effect: boolean;
+  /** The document's first version: new, not changed. */
+  first: boolean;
   action: "accept" | "read";
 }
 
