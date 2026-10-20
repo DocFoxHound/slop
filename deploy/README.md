@@ -124,7 +124,7 @@ SLOP_EMAIL_FROM=Slop <notifications@your-domain>
 ```
 Use a provider with a data processing agreement (PRIV-5), and set SPF/DKIM for the From domain.
 
-## More sign-ins (Google, GitLab, Bitbucket)
+## More sign-ins (Google, GitLab, Bitbucket, Microsoft, Discord)
 
 Each turns on once its app keys are in `~/.config/slop/slop.env`:
 
@@ -133,8 +133,11 @@ Each turns on once its app keys are in `~/.config/slop/slop.env`:
 | Google | Google Cloud Console → APIs & Services → Credentials → OAuth client (Web) | `https://<site>/v1/auth/google/callback` | openid, email, profile |
 | GitLab | gitlab.com → Preferences → Applications | `https://<site>/v1/auth/gitlab/callback` | read_user |
 | Bitbucket | Workspace settings → OAuth consumers | `https://<site>/v1/auth/bitbucket/callback` | Account: Read, Email |
+| Microsoft | portal.azure.com → App registrations → New registration ("Accounts in any organizational directory and personal Microsoft accounts"; platform Web), then Certificates & secrets → New client secret | `https://<site>/v1/auth/microsoft/callback` | openid, profile, email (asked at sign-in) |
+| Discord | discord.com/developers/applications → New Application → OAuth2 (Client ID, Reset Secret, add the redirect) | `https://<site>/v1/auth/discord/callback` | identify, email (asked at sign-in) |
 
-Then `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (and likewise `GITLAB_…`, `BITBUCKET_…`) and restart
+Then `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (and likewise `GITLAB_…`, `BITBUCKET_…`, `MICROSOFT_…`,
+`DISCORD_…`) and restart
 the API. The API also needs `git` installed: it reads repositories on other hosts for ownership
 codes (repo_owner.rs).
 

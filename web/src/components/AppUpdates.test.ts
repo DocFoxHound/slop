@@ -6,7 +6,7 @@ const installed = [
   { slug: "setup", title: "Setup", maker: "M", version: "1.0", release_id: "s1", kind: "installer", installed_at: "" },
   { slug: "current", title: "Current", maker: "M", version: "2.0", release_id: "c2", kind: "archive", installed_at: "" },
 ];
-const install = vi.fn(() => Promise.resolve());
+const install = vi.fn((_slug: string) => Promise.resolve());
 
 vi.mock("../platform", () => ({
   isDesktop: true,

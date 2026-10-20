@@ -1,4 +1,4 @@
-//! Sign-in providers: GitHub, Google, GitLab and Bitbucket (SECURITY §4.1).
+//! Sign-in providers: GitHub, Google, GitLab, Bitbucket, Microsoft and Discord (SECURITY §4.1).
 //!
 //! The same authorization-code flow for each (with PKCE where the provider supports it). Slop
 //! reads the account's stable ID, its name at the provider and, where the provider has verified
@@ -16,13 +16,17 @@ pub enum Provider {
     Google,
     Gitlab,
     Bitbucket,
+    Microsoft,
+    Discord,
 }
 
-pub const ALL: [Provider; 4] = [
+pub const ALL: [Provider; 6] = [
     Provider::Github,
     Provider::Google,
     Provider::Gitlab,
     Provider::Bitbucket,
+    Provider::Microsoft,
+    Provider::Discord,
 ];
 
 impl Provider {
@@ -36,6 +40,8 @@ impl Provider {
             Self::Google => "google",
             Self::Gitlab => "gitlab",
             Self::Bitbucket => "bitbucket",
+            Self::Microsoft => "microsoft",
+            Self::Discord => "discord",
         }
     }
 
@@ -45,6 +51,8 @@ impl Provider {
             Self::Google => "Google",
             Self::Gitlab => "GitLab",
             Self::Bitbucket => "Bitbucket",
+            Self::Microsoft => "Microsoft",
+            Self::Discord => "Discord",
         }
     }
 
@@ -61,12 +69,20 @@ impl Provider {
             Self::Google => state.config.google.as_ref(),
             Self::Gitlab => state.config.gitlab.as_ref(),
             Self::Bitbucket => state.config.bitbucket.as_ref(),
+            Self::Microsoft => state.config.microsoft.as_ref(),
+            Self::Discord => state.config.discord.as_ref(),
         }
     }
 
-    /// Bitbucket Cloud doesn't take PKCE; the state cookie still ties the flow to the browser.
+    /// Bitbucket Cloud and Discord don't take PKCE; the state cookie still ties the flow to the
+    /// browser.
     fn pkce(self) -> bool {
-        self != Self::Bitbucket
+        !matches!(self, Self::Bitbucket | Self::Discord)
+    }
+
+    /// Microsoft and Discord take the app's secret in the form rather than as Basic auth.
+    fn secret_in_form(self) -> bool {
+        matches!(self, Self::Microsoft | Self::Discord)
     }
 }
 
@@ -125,6 +141,16 @@ pub fn authorize_url(
                 q.append_pair("redirect_uri", &redirect)
                     .append_pair("scope", "read_user");
             }
+            Provider::Microsoft => {
+                q.append_pair("redirect_uri", &redirect)
+                    .append_pair("scope", "openid profile email")
+                    .append_pair("prompt", "select_account");
+            }
+            Provider::Discord => {
+                q.append_pair("redirect_uri", &redirect)
+                    .append_pair("scope", "identify email")
+                    .append_pair("prompt", "consent");
+            }
             // Bitbucket uses the callback registered with the app.
             Provider::Bitbucket | Provider::Github => {}
         }
@@ -156,10 +182,14 @@ async fn token(
     if provider.pkce() {
         form.push(("code_verifier", verifier));
     }
-    let res: Token = state
-        .http
-        .post(cfg.token_url.clone())
-        .basic_auth(&cfg.client_id, Some(&cfg.client_secret))
+    let mut request = state.http.post(cfg.token_url.clone());
+    if provider.secret_in_form() {
+        form.push(("client_id", cfg.client_id.as_str()));
+        form.push(("client_secret", cfg.client_secret.as_str()));
+    } else {
+        request = request.basic_auth(&cfg.client_id, Some(&cfg.client_secret));
+    }
+    let res: Token = request
         .header("accept", "application/json")
         .form(&form)
         .send()
@@ -313,6 +343,47 @@ pub async fn profile(
                         .find(|e| e.is_primary && e.is_confirmed)
                         .map(|e| e.email)
                 }),
+            })
+        }
+        Provider::Microsoft => {
+            // Microsoft's OpenID userinfo. The `sub` is stable for this app. Microsoft doesn't
+            // promise the email is verified (anyone can put any address on a personal account),
+            // so it's never used.
+            #[derive(Deserialize)]
+            struct User {
+                sub: String,
+                name: Option<String>,
+            }
+            let u: User = get(state, &cfg.api_base, "oidc/userinfo", &token).await?;
+            Ok(Profile {
+                subject: u.sub,
+                name: u
+                    .name
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| "Player".into()),
+                login: None,
+                email: None,
+            })
+        }
+        Provider::Discord => {
+            #[derive(Deserialize)]
+            struct User {
+                id: String,
+                username: String,
+                global_name: Option<String>,
+                email: Option<String>,
+                #[serde(default)]
+                verified: bool,
+            }
+            let u: User = get(state, &cfg.api_base, "users/@me", &token).await?;
+            Ok(Profile {
+                subject: u.id,
+                name: u
+                    .global_name
+                    .filter(|n| !n.trim().is_empty())
+                    .unwrap_or_else(|| u.username.clone()),
+                login: Some(u.username),
+                email: u.email.filter(|_| u.verified),
             })
         }
         Provider::Github => unreachable!(),

@@ -71,6 +71,8 @@ struct Providers {
     google: bool,
     gitlab: bool,
     bitbucket: bool,
+    microsoft: bool,
+    discord: bool,
 }
 
 /// Which sign-in providers this server has set up.
@@ -80,6 +82,8 @@ async fn providers(State(state): State<AppState>) -> Json<Providers> {
         google: Provider::Google.enabled(&state),
         gitlab: Provider::Gitlab.enabled(&state),
         bitbucket: Provider::Bitbucket.enabled(&state),
+        microsoft: Provider::Microsoft.enabled(&state),
+        discord: Provider::Discord.enabled(&state),
     })
 }
 

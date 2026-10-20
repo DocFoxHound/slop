@@ -422,6 +422,8 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
 function SharePanel({ slug }: { slug: string }) {
   const shares = useLoad(() => api.private.shares(slug), [slug]);
   const myTeams = useLoad(() => api.teams.mine().then((m) => m.teams.filter((t) => t.kind === "player")), []);
+  const friends = useLoad(() => api.friends.list().then((f) => f.friends), []);
+  const [friend, setFriend] = useState("");
   const [who, setWho] = useState("");
   const [team, setTeam] = useState("");
   const [error, setError] = useState<string>();
@@ -440,6 +442,7 @@ function SharePanel({ slug }: { slug: string }) {
     setWho("");
   };
   const teamsLeft = (myTeams.data ?? []).filter((t) => !shares.data?.some((s) => s.team === t.slug));
+  const friendsLeft = (friends.data ?? []).filter((f) => !shares.data?.some((s) => s.user_id === f.id));
   return (
     <div className="panel panel-pad share-panel">
       <h3>Shared with</h3>
@@ -463,8 +466,33 @@ function SharePanel({ slug }: { slug: string }) {
       ) : (
         <p className="muted small">Nobody yet.</p>
       )}
+      {friendsLeft.length > 0 && (
+        <div className="row-actions">
+          <select aria-label="One of your friends" value={friend} onChange={(e) => setFriend(e.target.value)}>
+            <option value="">Pick a friend…</option>
+            {friendsLeft.map((f) => (
+              <option key={f.id} value={f.id}>
+                {f.name}
+              </option>
+            ))}
+          </select>
+          <button
+            type="button"
+            className="btn small"
+            disabled={!friend}
+            onClick={() => void run(() => api.private.share(slug, { user: friend })).then(() => setFriend(""))}
+          >
+            Share with them
+          </button>
+        </div>
+      )}
       <form className="row-actions" onSubmit={(e) => void add(e)}>
-        <input aria-label="Their profile link" placeholder="Paste their profile link" value={who} onChange={(e) => setWho(e.target.value)} />
+        <input
+          aria-label="Their profile link"
+          placeholder={friendsLeft.length > 0 ? "Or paste someone's profile link" : "Paste their profile link"}
+          value={who}
+          onChange={(e) => setWho(e.target.value)}
+        />
         <button className="btn small" disabled={!who.trim()}>
           Share
         </button>

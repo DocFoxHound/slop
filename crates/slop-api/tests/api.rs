@@ -92,6 +92,39 @@ async fn fake_github() -> String {
         // Google and GitLab sign-in (auth/oauth.rs): the code is the token, and names the account.
         .route("/google/token", post(|body: String| async move { axum::Json(json!({ "access_token": form_code(&body) })) }))
         .route("/gitlab/token", post(|body: String| async move { axum::Json(json!({ "access_token": form_code(&body) })) }))
+        // Microsoft and Discord take the app's secret in the form.
+        .route(
+            "/microsoft/token",
+            post(|body: String| async move {
+                if !body.contains("client_secret=secret") || !body.contains("code_verifier=") {
+                    return axum::Json(json!({ "error": "invalid_client" }));
+                }
+                axum::Json(json!({ "access_token": form_code(&body) }))
+            }),
+        )
+        .route(
+            "/discord/token",
+            post(|body: String| async move {
+                if !body.contains("client_secret=secret") {
+                    return axum::Json(json!({ "error": "invalid_client" }));
+                }
+                axum::Json(json!({ "access_token": form_code(&body) }))
+            }),
+        )
+        .route(
+            "/microsoft/oidc/userinfo",
+            get(|headers: axum::http::HeaderMap| async move {
+                let token = bearer(&headers);
+                axum::Json(json!({ "sub": format!("ms-{token}"), "name": "Mia Soft", "email": "anyone@example.com" }))
+            }),
+        )
+        .route(
+            "/discord/users/@me",
+            get(|headers: axum::http::HeaderMap| async move {
+                let token = bearer(&headers);
+                axum::Json(json!({ "id": "80351110224678912", "username": token, "global_name": "Dee", "email": "dee@example.com", "verified": true }))
+            }),
+        )
         .route(
             "/google/userinfo",
             get(|headers: axum::http::HeaderMap| async move {
@@ -358,6 +391,8 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         google: None,
         gitlab: None,
         bitbucket: None,
+        microsoft: None,
+        discord: None,
         trusted_origins: vec![],
         country_header: Some("x-country".into()),
         catalog: CatalogRules::default(),
@@ -9515,7 +9550,7 @@ async fn sign_ins_link_only_after_signing_in_to_them(db: PgPool) {
     let providers = body_json(app.send(req(Method::GET, "/v1/auth/providers")).await).await;
     assert_eq!(
         providers,
-        json!({ "github": true, "google": true, "gitlab": true, "bitbucket": false })
+        json!({ "github": true, "google": true, "gitlab": true, "bitbucket": false, "microsoft": false, "discord": false })
     );
 
     // Signing up with Google.
@@ -10322,4 +10357,68 @@ async fn installed_apps_see_updates_queued_releases_and_other_builds(db: PgPool)
         ))
         .await;
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn microsoft_and_discord_sign_in(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        let base = c.doh_url.clone();
+        let oauth = |name: &str| slop_api::config::OAuthConfig {
+            client_id: format!("{name}-client"),
+            client_secret: "secret".into(),
+            authorize_url: base.join(&format!("{name}/auth")).unwrap(),
+            token_url: base.join(&format!("{name}/token")).unwrap(),
+            api_base: base.join(&format!("{name}/")).unwrap(),
+        };
+        c.microsoft = Some(oauth("microsoft"));
+        c.discord = Some(oauth("discord"));
+    })
+    .await;
+    let providers = body_json(app.send(req(Method::GET, "/v1/auth/providers")).await).await;
+    assert_eq!(providers["microsoft"], true);
+    assert_eq!(providers["discord"], true);
+
+    // Microsoft: PKCE, and the email is never taken (Microsoft doesn't verify it).
+    let res = app.send(req(Method::GET, "/v1/auth/microsoft/start")).await;
+    let authorize = location(&res);
+    assert!(authorize.contains("code_challenge="), "{authorize}");
+    assert!(
+        authorize.contains("scope=openid+profile+email"),
+        "{authorize}"
+    );
+    let res = oauth_flow(&app, "/v1/auth/microsoft/start", &[], "mia").await;
+    assert_eq!(location(&res), "/signup");
+    let signup = set_cookie(&res, "slop_signup").unwrap();
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/auth/signup").cookie(&signup))
+            .await,
+    )
+    .await;
+    assert_eq!(info["suggested_name"], "Mia Soft");
+    assert!(info["email"].is_null(), "an unverified email is never used");
+
+    // Discord: no PKCE; the verified email and the username come through.
+    let res = app.send(req(Method::GET, "/v1/auth/discord/start")).await;
+    assert!(!location(&res).contains("code_challenge="));
+    let res = oauth_flow(&app, "/v1/auth/discord/start", &[], "dee").await;
+    let signup = set_cookie(&res, "slop_signup").unwrap();
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/auth/signup").cookie(&signup))
+            .await,
+    )
+    .await;
+    assert_eq!(info["suggested_name"], "Dee");
+    assert_eq!(info["email"], "dee@example.com");
+    let res = app
+        .send(req(Method::POST, "/v1/auth/signup").cookie(&signup).json(json!({
+            "display_name": "Dee", "country_code": "US", "age_confirmed": true, "accept_terms": true
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let login: String =
+        sqlx::query_scalar("select login from identities where provider = 'discord'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(login, "dee");
 }
