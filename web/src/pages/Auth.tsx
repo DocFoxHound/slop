@@ -373,6 +373,7 @@ export function Account() {
       </div>
 
       <AccountNotifications />
+      {isDesktop && <ThisDevice />}
       <AccountDecisions />
       <AccountDonations />
       <AccountReports />
@@ -418,4 +419,63 @@ function describeAgent(ua: string | null): string {
   const browser = /Firefox\//.test(ua) ? "Firefox" : /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
   const os = /Windows/.test(ua) ? "Windows" : /Mac OS/.test(ua) ? "macOS" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Linux/.test(ua) ? "Linux" : "";
   return os ? `${browser} on ${os}` : browser;
+}
+
+/** The desktop app's own settings: chat notifications and the in-game overlay. */
+function ThisDevice() {
+  const [notify, setNotify] = useState<{ on: boolean; show_text: boolean }>();
+  const [overlay, setOverlay] = useState<boolean>();
+  useEffect(() => {
+    desktop.chat<{ on: boolean; show_text: boolean }>({ action: "notification_settings" }).then(setNotify, () => undefined);
+    desktop.overlaySetting().then(setOverlay, () => undefined);
+  }, []);
+  const saveNotify = (next: { on: boolean; show_text: boolean }) => {
+    setNotify(next);
+    void desktop.chat({ action: "notifications", ...next }).catch(() => undefined);
+  };
+  return (
+    <section id="this-device">
+      <h2 className="section-title">This computer</h2>
+      <div className="panel panel-pad">
+        {notify && (
+          <>
+            <label className="check">
+              <input type="checkbox" checked={notify.on} onChange={(e) => saveNotify({ ...notify, on: e.target.checked })} />
+              <span>
+                <b>Notifications for new chat messages</b>
+                <span className="muted small" style={{ display: "block" }}>
+                  Shown when Slop isn't in front. Muted chats never notify.
+                </span>
+              </span>
+            </label>
+            <label className="check">
+              <input
+                type="checkbox"
+                checked={notify.show_text}
+                disabled={!notify.on}
+                onChange={(e) => saveNotify({ ...notify, show_text: e.target.checked })}
+              />
+              <span>Show the message in the notification (otherwise just who it's from)</span>
+            </label>
+          </>
+        )}
+        {overlay !== undefined && (
+          <label className="check">
+            <input
+              type="checkbox"
+              checked={overlay}
+              onChange={(e) => void desktop.overlaySetting(e.target.checked).then(setOverlay, () => undefined)}
+            />
+            <span>
+              <b>In-game overlay (Shift+Tab)</b>
+              <span className="muted small" style={{ display: "block" }}>
+                Chats and friends over a game you started from Slop, when it's fullscreen or maximized. Shift+Tab works as
+                usual everywhere else.
+              </span>
+            </span>
+          </label>
+        )}
+      </div>
+    </section>
+  );
 }

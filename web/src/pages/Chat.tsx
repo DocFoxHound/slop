@@ -83,7 +83,7 @@ function ChatOnWeb() {
   );
 }
 
-function ChatApp() {
+export function ChatApp() {
   const [status, setStatus] = useState<ChatStatus>();
   const [error, setError] = useState<string>();
   const load = useCallback(() => {
@@ -334,6 +334,8 @@ function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () 
   const [error, setError] = useState<string>();
   const [changed, setChanged] = useState<{ ids: string[]; n: number }>({ ids: [], n: 0 });
   const [panel, setPanel] = useState<"devices" | "new" | null>(null);
+  // Who's typing: each entry lasts a few seconds unless renewed.
+  const [typing, setTyping] = useState<Array<{ conversation: string; user: string; name: string; until: number }>>([]);
   const load = useCallback(() => {
     chat<ChatConversation[]>({ action: "conversations" }).then(setList, (e) => setError(errorText(e)));
   }, []);
@@ -344,9 +346,26 @@ function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () 
       .onChatChanged((c) => {
         if (c.list || c.conversations.length) load();
         if (c.conversations.length) setChanged((p) => ({ ids: c.conversations, n: p.n + 1 }));
+        setTyping((old) => {
+          const now = Date.now();
+          // A message from someone ends their "typing…".
+          const sent = new Set((c.new_messages ?? []).map((m) => `${m.conversation}:${m.sender}`));
+          const kept = old.filter((t) => t.until > now && !sent.has(`${t.conversation}:${t.name}`));
+          for (const t of c.typing ?? []) {
+            const i = kept.findIndex((k) => k.conversation === t.conversation && k.user === t.user);
+            const entry = { ...t, until: now + 6000 };
+            if (i >= 0) kept[i] = entry;
+            else kept.push(entry);
+          }
+          return kept;
+        });
       })
       .then((u) => (unlisten = u));
-    return () => unlisten?.();
+    const tick = window.setInterval(() => setTyping((old) => (old.some((t) => t.until <= Date.now()) ? old.filter((t) => t.until > Date.now()) : old)), 1000);
+    return () => {
+      unlisten?.();
+      window.clearInterval(tick);
+    };
   }, [load]);
   const current = list?.find((c) => c.id === id);
   useDocumentTitle(current ? `${current.title} · Chat` : "Chat");
@@ -410,7 +429,13 @@ function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () 
       </aside>
       <section className="chat-main">
         {current ? (
-          <Conversation key={current.id} conv={current} changed={changed} onListChanged={load} />
+          <Conversation
+            key={current.id}
+            conv={current}
+            changed={changed}
+            typing={typing.filter((t) => t.conversation === current.id).map((t) => t.name)}
+            onListChanged={load}
+          />
         ) : (
           <div className="empty-state chat-empty">
             {list && list.length > 0 ? "Pick a chat." : "Your chats will show here."}
@@ -675,10 +700,12 @@ function NewChat({ onStarted }: { onStarted: (id: string) => void }) {
 function Conversation({
   conv,
   changed,
+  typing,
   onListChanged,
 }: {
   conv: ChatConversation;
   changed: { ids: string[]; n: number };
+  typing: string[];
   onListChanged: () => void;
 }) {
   const navigate = useNavigate();
@@ -856,6 +883,15 @@ function Conversation({
           {error}
         </p>
       )}
+      <p className="typing small muted" aria-live="polite">
+        {typing.length === 1
+          ? `${typing[0]} is typing…`
+          : typing.length === 2
+            ? `${typing[0]} and ${typing[1]} are typing…`
+            : typing.length > 2
+              ? "Several people are typing…"
+              : "\u00a0"}
+      </p>
       {conv.closed ? (
         <p className="notice chat-closed">You can't message {conv.title} any more.</p>
       ) : (
@@ -1137,6 +1173,15 @@ function Composer({
   const [dragging, setDragging] = useState(false);
   const input = useRef<HTMLTextAreaElement>(null);
   const fileInput = useRef<HTMLInputElement>(null);
+  // "Typing…" for the others: at most every 3 seconds while typing, never while editing.
+  const lastTyping = useRef(0);
+  const signalTyping = (value: string) => {
+    if (editing || !value.trim()) return;
+    const now = Date.now();
+    if (now - lastTyping.current < 3000) return;
+    lastTyping.current = now;
+    void chat({ action: "typing", conversation: conv.id, typing: true }).catch(() => undefined);
+  };
   useEffect(() => input.current?.focus(), [replyTo, editing]);
 
   const addFiles = (list: FileList | File[]) => {
@@ -1263,7 +1308,10 @@ function Composer({
           placeholder={conv.ready ? `Message ${conv.title}` : "Waiting to be added to this chat…"}
           aria-label={`Message ${conv.title}`}
           disabled={!conv.ready}
-          onChange={(e) => setText(e.target.value)}
+          onChange={(e) => {
+            setText(e.target.value);
+            signalTyping(e.target.value);
+          }}
           onKeyDown={onKey}
           onPaste={onPaste}
         />

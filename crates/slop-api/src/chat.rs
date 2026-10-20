@@ -18,7 +18,7 @@
 //! What Slop sees: who is in which chat, which device sent each message and when, and sizes.
 //! Message franking lets a reported message be checked as genuine without Slop reading others.
 
-use std::{sync::Arc, time::Duration as StdDuration};
+use std::{collections::HashMap, sync::Arc, time::Duration as StdDuration};
 
 use axum::{
     Json, Router,
@@ -64,11 +64,19 @@ pub const APPROVAL_CONTEXT: &str = "slop-chat-device-approval:v1";
 
 /// Wakes the long-polls of the users a change is for.
 #[derive(Clone)]
-pub struct Hub(broadcast::Sender<Arc<Vec<Uuid>>>);
+pub struct Hub(
+    broadcast::Sender<Arc<Vec<Uuid>>>,
+    /// Who is typing where, until when. Kept in memory only, never stored: typing indicators are
+    /// the one chat signal that isn't encrypted, and say nothing but "typing".
+    Arc<std::sync::Mutex<HashMap<(Uuid, Uuid), tokio::time::Instant>>>,
+);
+
+/// How long "typing…" lasts after the last keystroke signal.
+pub const TYPING_FOR: StdDuration = StdDuration::from_secs(6);
 
 impl Default for Hub {
     fn default() -> Self {
-        Self(broadcast::channel(1024).0)
+        Self(broadcast::channel(1024).0, Arc::default())
     }
 }
 
@@ -76,6 +84,41 @@ impl Hub {
     fn wake(&self, users: Vec<Uuid>) {
         let _ = self.0.send(Arc::new(users));
     }
+
+    fn set_typing(&self, conversation: Uuid, user: Uuid, typing: bool) {
+        let mut map = self.1.lock().unwrap();
+        let now = tokio::time::Instant::now();
+        map.retain(|_, until| *until > now);
+        if typing {
+            map.insert((conversation, user), now + TYPING_FOR);
+        } else {
+            map.remove(&(conversation, user));
+        }
+    }
+
+    /// (conversation, user) pairs typing now, in these chats, except `me`.
+    fn typing(&self, conversations: &[Uuid], me: Uuid) -> Vec<Typing> {
+        let now = tokio::time::Instant::now();
+        let mut out: Vec<Typing> = self
+            .1
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|((c, u), until)| **until > now && *u != me && conversations.contains(c))
+            .map(|((c, u), _)| Typing {
+                conversation_id: *c,
+                user_id: *u,
+            })
+            .collect();
+        out.sort_by_key(|t| (t.conversation_id, t.user_id));
+        out
+    }
+}
+
+#[derive(Serialize, Clone, PartialEq, Eq)]
+struct Typing {
+    conversation_id: Uuid,
+    user_id: Uuid,
 }
 
 pub fn routes() -> Router<AppState> {
@@ -100,6 +143,7 @@ pub fn routes() -> Router<AppState> {
         .route("/chat/conversations/{id}/read", post(mark_read))
         .route("/chat/conversations/{id}/mute", put(mute))
         .route("/chat/conversations/{id}/hide", post(hide))
+        .route("/chat/conversations/{id}/typing", post(typing))
         .route("/chat/attachments/{id}", get(attachment))
         .route("/chat/backup", get(backup).delete(delete_backup))
 }
@@ -1081,6 +1125,35 @@ async fn mute(
     Ok(StatusCode::NO_CONTENT)
 }
 
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct TypingBody {
+    #[serde(default = "yes")]
+    typing: bool,
+}
+
+fn yes() -> bool {
+    true
+}
+
+/// "Typing…": shown to the others in the chat for a few seconds. Nothing is stored.
+async fn typing(
+    State(state): State<AppState>,
+    device: ChatDevice,
+    Path(id): Path<Uuid>,
+    body: Option<Json<TypingBody>>,
+) -> ApiResult<StatusCode> {
+    let mut conn = state.db.acquire().await?;
+    let everyone = participants(&mut conn, id).await?;
+    if !everyone.contains(&device.user.id) {
+        return Err(ApiError::NotFound);
+    }
+    let on = body.map(|b| b.typing).unwrap_or(true);
+    state.chat_hub.set_typing(id, device.user.id, on);
+    state.chat_hub.wake(everyone);
+    Ok(StatusCode::NO_CONTENT)
+}
+
 /// Hides a chat from the list until a new message arrives.
 async fn hide(
     State(state): State<AppState>,
@@ -1421,6 +1494,7 @@ async fn send(
     .await?;
     tell_away(&mut tx, id, &kind, &device.user, &everyone).await?;
     tx.commit().await?;
+    state.chat_hub.set_typing(id, device.user.id, false);
     state.chat_hub.wake(everyone);
     Ok(Json(Accepted { seq, epoch }).into_response())
 }
@@ -1524,6 +1598,8 @@ struct Synced {
     key_packages: i64,
     /// Devices of yours waiting for approval.
     pending_devices: i64,
+    /// Who is typing in your chats right now.
+    typing: Vec<Typing>,
 }
 
 /// What's new for this device: messages and commits in its chats, and Welcomes to new ones.
@@ -1537,7 +1613,7 @@ async fn sync(
     let mut rx = state.chat_hub.0.subscribe();
     let deadline = tokio::time::Instant::now() + wait;
     loop {
-        let synced = sync_once(&state.db, &device, q.after).await?;
+        let synced = sync_once(&state, &device, q.after).await?;
         if !synced.events.is_empty() || !synced.welcomes.is_empty() || wait.is_zero() {
             return Ok(Json(synced));
         }
@@ -1552,16 +1628,28 @@ async fn sync(
             }
         };
         if !woke {
-            return Ok(Json(sync_once(&state.db, &device, q.after).await?));
+            return Ok(Json(sync_once(&state, &device, q.after).await?));
         }
-        let again = sync_once(&state.db, &device, q.after).await?;
-        if !again.events.is_empty() || !again.welcomes.is_empty() || again.roster != synced.roster {
+        let again = sync_once(&state, &device, q.after).await?;
+        if !again.events.is_empty()
+            || !again.welcomes.is_empty()
+            || again.roster != synced.roster
+            || again.typing != synced.typing
+        {
             return Ok(Json(again));
         }
     }
 }
 
-async fn sync_once(db: &PgPool, device: &ChatDevice, after: i64) -> ApiResult<Synced> {
+async fn sync_once(state: &AppState, device: &ChatDevice, after: i64) -> ApiResult<Synced> {
+    let db = &state.db;
+    let mine: Vec<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select p.conversation_id from ({PARTICIPANTS}) p where p.user_id = $1"
+    )))
+    .bind(device.user.id)
+    .fetch_all(db)
+    .await?;
+    let typing = state.chat_hub.typing(&mine, device.user.id);
     let events: Vec<Event> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select m.seq, m.conversation_id, m.kind, m.sender_device_id, m.sender_user_id, m.epoch, m.body, m.created_at
          from chat_messages m
@@ -1613,6 +1701,7 @@ async fn sync_once(db: &PgPool, device: &ChatDevice, after: i64) -> ApiResult<Sy
         roster,
         key_packages,
         pending_devices,
+        typing,
     })
 }
 

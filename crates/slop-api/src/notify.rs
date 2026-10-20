@@ -96,7 +96,8 @@ pub(crate) async fn send(conn: &mut sqlx::PgConnection, n: Notice<'_>) -> sqlx::
     }
     if let Some(key) = &n.collapse_key {
         let merged = sqlx::query(
-            "update notifications set count = count + 1, title = $3, body = $4, created_at = now()
+            "update notifications set count = count + 1, title = $3, body = $4, created_at = now(),
+                    pushed_at = case when pushed_at < now() - interval '2 minutes' then null else pushed_at end
              where user_id = $1 and collapse_key = $2 and read_at is null",
         )
         .bind(n.user_id)

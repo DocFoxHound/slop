@@ -1,0 +1,10 @@
+{
+  "name": "Slop",
+  "short_name": "Slop",
+  "description": "Apps and games made with AI. Open source, every one.",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#0d1015",
+  "theme_color": "#0d1015",
+  "icons": [{ "src": "/logo.svg", "sizes": "any", "type": "image/svg+xml", "purpose": "any" }]
+}

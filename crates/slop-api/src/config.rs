@@ -25,6 +25,8 @@ pub struct Config {
     pub payments: PaymentsConfig,
     /// Product emails (notify.rs). Unset: notifications stay in Slop, nothing is emailed.
     pub email: Option<EmailConfig>,
+    /// Phone and browser notifications (push.rs). Unset: switched off.
+    pub push: Option<PushConfig>,
     /// DNS-over-HTTPS (JSON) for the official-team domain check (teams.rs).
     pub doh_url: Url,
     /// The built website (`web/dist`) to serve from the same origin. Unset: API only.
@@ -58,6 +60,28 @@ impl fmt::Debug for DesktopConfig {
                 &self.updater_key.as_ref().map(|_| "<redacted>"),
             )
             .field("repo", &self.repo)
+            .finish()
+    }
+}
+
+/// Phone and browser notifications (push.rs).
+#[derive(Clone)]
+pub struct PushConfig {
+    /// Slop's VAPID key (`SLOP_VAPID_PRIVATE_KEY`).
+    pub key: p256::ecdsa::SigningKey,
+    /// Who push services contact about Slop's pushes (`SLOP_VAPID_SUBJECT`, mailto: or https:).
+    pub subject: String,
+    /// Push hosts besides the known ones. Tests only.
+    pub extra_hosts: Vec<String>,
+    /// Plain-http endpoints. Tests only.
+    pub allow_http: bool,
+}
+
+impl fmt::Debug for PushConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("PushConfig")
+            .field("key", &"<redacted>")
+            .field("subject", &self.subject)
             .finish()
     }
 }
@@ -410,6 +434,15 @@ impl Config {
             doh_url: var_or("SLOP_DOH_URL", "https://cloudflare-dns.com/dns-query")
                 .parse()
                 .context("SLOP_DOH_URL")?,
+            push: match env::var("SLOP_VAPID_PRIVATE_KEY") {
+                Ok(key) if !key.trim().is_empty() => Some(PushConfig {
+                    key: crate::push::parse_key(&key).context("SLOP_VAPID_PRIVATE_KEY")?,
+                    subject: var_or("SLOP_VAPID_SUBJECT", "mailto:support@slop.example"),
+                    extra_hosts: vec![],
+                    allow_http: false,
+                }),
+                _ => None,
+            },
             email: match (env::var("SLOP_SMTP_URL"), env::var("SLOP_EMAIL_FROM")) {
                 (Ok(smtp_url), Ok(from)) if !smtp_url.is_empty() && !from.is_empty() => {
                     Some(EmailConfig { smtp_url, from })

@@ -2,7 +2,7 @@
   "$schema": "../gen/schemas/desktop-schema.json",
   "identifier": "default",
   "description": "What the Slop UI may ask the desktop shell to do. Keep this list short (docs/SECURITY.md §7).",
-  "windows": ["main", "login"],
+  "windows": ["main", "login", "overlay"],
   "permissions": [
     "core:event:allow-listen",
     "core:event:allow-unlisten",
@@ -31,6 +31,8 @@
     "allow-uninstall-app",
     "allow-launch-app",
     "allow-run-installer",
-    "allow-chat"
+    "allow-chat",
+    "allow-overlay-hide",
+    "allow-overlay-setting"
   ]
 }

@@ -89,6 +89,17 @@ async fn fake_github() -> String {
         .route("/repos/octo/open-tool", get(|| async { axum::Json(json!({ "private": false })) }))
         .route("/repos/octo/closed-tool", get(|| async { axum::Json(json!({ "private": true })) }))
         .route("/octo/game/info/refs", get(|| async { "001e# service=git-upload-pack\n" }))
+        // Push services (push.rs): one that takes pushes, one that says the subscription is gone.
+        .route(
+            "/push/ok",
+            post(|headers: axum::http::HeaderMap| async move {
+                PUSHES.lock().unwrap().push(
+                    headers["authorization"].to_str().unwrap().to_string(),
+                );
+                StatusCode::CREATED
+            }),
+        )
+        .route("/push/gone", post(|| async { StatusCode::GONE }))
         // The EU's VIES service (donations.rs): one valid German number.
         .route(
             "/vies",
@@ -301,6 +312,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         },
         payments: Default::default(),
         email: None,
+        push: None,
         doh_url: format!("{github_base}dns-query").parse().unwrap(),
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
@@ -8556,6 +8568,18 @@ async fn chat_is_end_to_end_encrypted_and_slop_only_relays_it(db: PgPool) {
     assert_eq!(list[0].title, "Ann");
     assert!(list[0].ready);
 
+    // Typing: a few seconds of "typing…", ended by the message.
+    ann.typing(conv, true).await.unwrap();
+    let changes = bob.sync(0).await.unwrap();
+    assert_eq!(changes.typing.len(), 1);
+    assert_eq!(
+        (
+            changes.typing[0].conversation,
+            changes.typing[0].name.as_str()
+        ),
+        (conv, "Ann")
+    );
+
     // Messages: Slop stores only ciphertext.
     ann.send(
         conv,
@@ -8568,6 +8592,15 @@ async fn chat_is_end_to_end_encrypted_and_slop_only_relays_it(db: PgPool) {
     .unwrap();
     let changes = bob.sync(0).await.unwrap();
     assert_eq!(changes.conversations, [conv]);
+    assert!(changes.typing.is_empty(), "sending ends typing");
+    assert_eq!(changes.new_messages.len(), 1, "for a notification");
+    assert_eq!(
+        (
+            changes.new_messages[0].sender.as_str(),
+            changes.new_messages[0].title.as_str()
+        ),
+        ("Ann", "Ann")
+    );
     let messages = bob.messages(conv, None, 50).await.unwrap();
     let hello = messages.iter().find(|m| !m.notice).unwrap();
     assert_eq!(hello.text, "hello bob, pay me on paypal for the sprites");
@@ -9100,4 +9133,72 @@ async fn chat_commits_must_build_on_the_current_epoch(db: PgPool) {
         .send(req(Method::GET, format!("/v1/chat/conversations/{conv}")).cookie(&other_web))
         .await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+/// Authorization headers the fake push service received.
+static PUSHES: std::sync::Mutex<Vec<String>> = std::sync::Mutex::new(Vec::new());
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn phones_get_content_free_pushes(db: PgPool) {
+    let (key, _) = slop_api::push::generate();
+    let app = test_app_with(db, |c| {
+        c.push = Some(slop_api::config::PushConfig {
+            key: slop_api::push::parse_key(&key).unwrap(),
+            subject: "mailto:ops@slop.example".into(),
+            extra_hosts: vec!["127.0.0.1".into()],
+            allow_http: true,
+        });
+    })
+    .await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (_, bob) = app.user("Bob", "US").await;
+    let public = body_json(app.send(req(Method::GET, "/v1/push/key")).await).await;
+    assert!(public["public_key"].as_str().unwrap().len() > 80);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/push")
+                .cookie(&ann)
+                .json(json!({ "endpoint": "https://evil.example/x" })),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "only push services"
+    );
+    for path in ["push/ok", "push/gone"] {
+        let res = app
+            .send(req(Method::POST, "/v1/me/push").cookie(&ann).json(json!({
+                "endpoint": format!("{}{path}", app.fake_base), "keys": { "p256dh": "x", "auth": "y" }
+            })))
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+
+    // Bob's friend request makes a notification for Ann: one push, with no content.
+    app.send(
+        req(Method::POST, "/v1/me/friends")
+            .cookie(&bob)
+            .json(json!({ "user": ann_id.to_string() })),
+    )
+    .await;
+    let before = PUSHES.lock().unwrap().len();
+    assert_eq!(slop_api::push::run_once(&app.state).await.unwrap(), 1);
+    assert_eq!(
+        slop_api::push::run_once(&app.state).await.unwrap(),
+        0,
+        "pushed once"
+    );
+    let (count, last) = {
+        let pushes = PUSHES.lock().unwrap();
+        (pushes.len(), pushes.last().cloned().unwrap_or_default())
+    };
+    assert_eq!(count, before + 1);
+    assert!(last.starts_with("vapid t="));
+    let left: Vec<String> = sqlx::query_scalar("select endpoint from push_subscriptions")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(left.len(), 1, "the gone subscription is dropped: {left:?}");
+    assert!(left[0].ends_with("push/ok"));
 }

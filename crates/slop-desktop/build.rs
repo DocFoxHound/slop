@@ -19,6 +19,8 @@ fn main() {
             "launch_app",
             "run_installer",
             "chat",
+            "overlay_hide",
+            "overlay_setting",
         ]),
     ))
     .expect("failed to run tauri-build");

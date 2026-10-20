@@ -123,6 +123,16 @@ SLOP_EMAIL_FROM=Slop <notifications@your-domain>
 ```
 Use a provider with a data processing agreement (PRIV-5), and set SPF/DKIM for the From domain.
 
+## Phone notifications (web push)
+
+Phones and browsers get notifications through web push once the server has a VAPID key:
+```
+slop-api keys generate-vapid          # prints SLOP_VAPID_PRIVATE_KEY=…
+SLOP_VAPID_PRIVATE_KEY=…              # in ~/.config/slop/slop-api.env (and the sandbox's env)
+SLOP_VAPID_SUBJECT=https://your-domain   # or mailto:; push services contact it about abuse
+```
+Changing the key means everyone switches phone notifications on again.
+
 ## Setting it up again
 
 ```sh
