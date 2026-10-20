@@ -9,7 +9,8 @@
 //! - the scanner failing on a release;
 //! - urgent or serious reports as they arrive, and any report past its deadline;
 //! - releases waiting more than a day for review;
-//! - revocations, admin rights granted or removed, and payment records not matching Stripe.
+//! - revocations, admin rights granted or removed, payment records not matching Stripe, and a
+//!   re-scan flagging a live release (rescan.rs).
 //!
 //! If the whole server is down nothing here can say so: an outside uptime check on `/healthz`
 //! covers that (deploy/README.md).
@@ -306,7 +307,7 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
     let after = cursor(db, "audit", "select coalesce(max(id), 0) from audit_log").await?;
     let events: Vec<(i64, String, String, String)> = sqlx::query_as(
         "select id, actor, action, subject from audit_log
-         where id > $1 and action in ('release.revoke', 'admin.grant', 'admin.revoke', 'payments.mismatch')
+         where id > $1 and action in ('release.revoke', 'admin.grant', 'admin.revoke', 'payments.mismatch', 'release.rescan_flagged')
          order by id",
     )
     .bind(after)

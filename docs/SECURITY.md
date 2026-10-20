@@ -148,6 +148,7 @@ Once an update passes scanning, it's available to everyone at once. What replace
 
 ### 5.6 Re-scanning
 - Every live release is **re-scanned when scanner signatures update** (at least weekly) and immediately on credible reports (DESIGN §16).
+  - **Built 2026-10-20 (`rescan.rs`):** the release players get for each app is downloaded again, checked against its approved hash and scanned with the current signatures (refreshed every six hours) at least weekly, five files every 15 minutes; a malware or "doesn't match its source" report re-scans it at once. A new finding, or a file that changed on the maker's page, puts it in the admin queue and alerts the admins (ops.rs); a reviewer withdraws it or keeps it with a logged reason, and a kept finding isn't raised again. Nothing is taken down automatically.
 - Dependency advisories that hit a live release notify the publisher, with a deadline to fix based on severity.
 
 ## 6. Runtime protection on the player's device

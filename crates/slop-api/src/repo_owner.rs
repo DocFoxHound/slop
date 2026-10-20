@@ -228,7 +228,11 @@ async fn github(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Asses
         200 => {}
         404 => {
             return Ok(Assessment::no(
-                "Slop can't see that repository. Check the address; if it's private, install Slop's GitHub App on it first",
+                if state.config.releases.github_app.is_some() {
+                    "Slop can't see that repository. Check the address; if it's private, install Slop's GitHub App on it first"
+                } else {
+                    "Slop can't see that repository. Check the address; private GitHub repositories need Slop's GitHub App, which this server hasn't set up yet, so use a public repository for now"
+                },
             ));
         }
         code => {
