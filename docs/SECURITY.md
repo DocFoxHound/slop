@@ -65,6 +65,7 @@ Since there are no passwords, high-risk actions require a **passkey (WebAuthn)**
   - Adding team admins.
   - Transferring an app.
   - Deleting the account.
+- **Built so far (2026-10-20):** the fresh re-login, for connecting, switching or disconnecting the Stripe account that receives donations: the session must come from a sign-in in the last 10 minutes (`auth::session::require_recent_sign_in`), else the page asks the user to sign in again. Passkeys and the other actions above come later.
 
 ### 4.4 Linking a phone
 The computer shows a QR code holding a short-lived (2 min), single-use pairing code. The phone, already signed in to the same account, confirms it. The link is listed on the devices page and can be revoked.
@@ -224,7 +225,7 @@ More detail in `PAYMENTS.md`.
 - **Slop never holds money** (`LEGAL.md` §3.1). Payments are direct charges on makers' and creatives' own Stripe accounts, so there are no Slop balances to steal.
 - **PCI DSS:** card data is entered only into Stripe's hosted fields or page, which keeps Slop on the smallest self-assessment (SAQ A). The pages that host checkout still need a strict CSP and monitoring for script changes (PCI DSS v4 requirements 6.4.3 and 11.6.1).
 - **Bank details live in Stripe, not Slop.** Changing them happens in the maker's Stripe dashboard, protected by Stripe's own security.
-- **The main risk is a hijacked account pointing donations at a different Stripe account.** Connecting, disconnecting or switching the Stripe account requires step-up auth, a 72-hour delay, and a notice to the account's email and devices.
+- **The main risk is a hijacked account pointing donations at a different Stripe account.** Connecting, disconnecting or switching the Stripe account requires step-up auth, a 72-hour delay, and a notice to the account's email and devices. (Built 2026-10-20 for donations; the delay applies to switching and disconnecting, while a first connection needs only the fresh sign-in. People's Stripe account comes next.)
 - **Payment-record integrity:** the app's database role can only add payment records, never change or delete them. Daily reconciliation against Stripe.
 - **Fraud signals** go from the payment flow to the trust & safety team (`PAYMENTS.md` §9).
 
@@ -287,8 +288,11 @@ Slop **doesn't store makers' source code or builds**, public or private (decided
   - installed copies keep working unless they're revoked for a security reason (§5.5).
 - **What Slop keeps:** hashes, scan reports and signed manifests. That's enough to prove what was scanned and when (`LEGAL.md` §13), without keeping the software.
 
+**Built 2026-10-20** (`crates/slop-api/src/frozen.rs`): a daily check of every app's repository through GitHub's API (or, on other hosts, Git's anonymous discovery request for public repositories), plus "Check now" for the owner. A public app whose repository turns private counts as lost access. Frozen apps take no releases or approvals; public ones are delisted after 14 days and listed again when access returns; Private Slop stops being shared after 14 days.
+
 ### 12.3 Making a private app public
 The repo has to become public under an OSI-approved licence, followed by a fresh full scan.
+**Built 2026-10-20:** the owner asks from the Manage page; Slop checks the repository is readable without signing in; it waits in the admin queue, where listing it checks again and makes it public. Until the scan pipeline exists, the "fresh full scan" is the reviewer's.
 
 ## 13. Detection, response and disclosure
 

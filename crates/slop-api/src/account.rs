@@ -144,6 +144,11 @@ const EXPORT: &[(&str, &str)] = &[
         "select to_jsonb(d) - 'user_id' from donation_accounts d where d.user_id = $1",
     ),
     (
+        "donation_account_changes",
+        "select coalesce(jsonb_agg(to_jsonb(c) - 'user_id' order by c.requested_at), '[]')
+         from stripe_account_changes c where c.user_id = $1",
+    ),
+    (
         "teams",
         "select coalesce(jsonb_agg(jsonb_build_object('team', t.slug, 'name', t.name, 'role', m.role, 'joined_at', m.joined_at)), '[]')
          from team_members m join teams t on t.id = m.team_id where m.user_id = $1",
@@ -316,6 +321,7 @@ pub async fn close_account(
     let mut tx = db.begin().await?;
     let closed = sqlx::query(
         "update users set closed_at = now(), email = null, personalize = null, share_playtime = false,
+                          vat_number = null, vat_checked_at = null,
                 is_admin = false
          where id = $1 and closed_at is null",
     )
@@ -328,6 +334,13 @@ pub async fn close_account(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    sqlx::query(
+        "update stripe_account_changes set cancelled_at = now()
+         where user_id = $1 and cancelled_at is null and applied_at is null",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
     sqlx::query("delete from admin_tokens where user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)

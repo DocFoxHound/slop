@@ -178,6 +178,25 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
     }))
 }
 
+/// How recent a sign-in must be for step-up actions.
+pub const STEP_UP_WINDOW: Duration = Duration::minutes(10);
+
+/// Step-up authentication (SECURITY §4.3): the session must come from a sign-in in the last few
+/// minutes. Until Slop has passkeys, signing in again through the provider is the step up.
+pub async fn require_recent_sign_in(db: &PgPool, user: &CurrentUser) -> ApiResult<()> {
+    let fresh: bool =
+        sqlx::query_scalar("select created_at > now() - $2 from sessions where id = $1")
+            .bind(user.session_id)
+            .bind(STEP_UP_WINDOW)
+            .fetch_one(db)
+            .await?;
+    if fresh {
+        Ok(())
+    } else {
+        Err(ApiError::StepUpRequired)
+    }
+}
+
 /// What a suspended account may still do besides reading: appeal, accept terms, download its
 /// data, sign out (here or on other devices) and close the account.
 pub fn allowed_while_suspended(method: &axum::http::Method, path: &str) -> bool {

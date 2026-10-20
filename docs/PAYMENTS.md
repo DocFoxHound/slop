@@ -135,7 +135,7 @@ payments(id, kind,                  -- donation | server_donation | people_job |
 
 | Threat | Mitigation |
 |---|---|
-| **Card testing** (stolen cards tried with small donations) | Stripe Radar, sign-in required to donate, a $1 minimum, rate limits per account/IP/card, CAPTCHA after failures |
+| **Card testing** (stolen cards tried with small donations) | Stripe Radar, sign-in required to donate, a $1 minimum, rate limits per account/IP/card, a proof-of-work check after unfinished checkouts (built) |
 | **Cashing out stolen cards through your own app** | Stripe's KYC and risk checks on the maker's account, and payout timing set by Stripe. Slop flags donation spikes from new accounts or many countries and can disable donations on an app. |
 | **Hijacked maker account** | Bank details are managed in the maker's **Stripe** dashboard, not in Slop, so taking over a Slop account doesn't redirect money. Disconnecting or switching the Stripe account requires step-up auth and a 72-hour delay, and an email is sent (`SECURITY.md` §9). |
 | **Self-dealing People jobs** | Client and creative can't share payment methods, devices or Stripe accounts. Checks for money going round in loops. |
@@ -156,7 +156,11 @@ The mockup's Donate button (with the donor-pays-fees breakdown) is pure UI.
 - **PAY-5 test:** the app-facing code (Pulse, updates, release manifests, the desktop update feed) never mentions donations, and an app's page is identical before and after someone donates.
 - Webhooks also handle `invoice.paid` and `customer.subscription.deleted`.
 
-Not yet: VAT lines on fee statements (they need Slop's registrations, §11), CAPTCHA after failed attempts (§9), and the step-up check and 72-hour delay for switching a Stripe account (§9).
+- **Fee statements show the VAT inside Slop's fee** (LEGAL §3.5, built 2026-10-20): at the maker's country rate (`country_policies.vat_rate_bp`, EU and UK standard rates) for individuals, or "reverse charge" for VAT-registered businesses whose number the EU's VIES service confirms (UK numbers can't be checked automatically yet, so VAT stays shown as included). Slop's own VAT number appears once `SLOP_VAT_ID` is set.
+- **Card testing** (§9, built 2026-10-20): after 3 unfinished checkouts in a day, starting another donation needs a proof-of-work check the browser solves in a second or two (`challenge.rs`). It's not a third-party CAPTCHA, so nothing goes to another company; Stripe Radar and the rate limits do the rest.
+- **Switching or disconnecting the Stripe account** (§9, built 2026-10-20): needs a sign-in from the last 10 minutes (the step up, until passkeys exist), then waits 72 hours, announced at once in Slop and by email (whatever the maker's email choices), and can be cancelled meanwhile. A switch also waits for the new account to finish Stripe's sign-up; existing server donations stay on the old account. Disconnecting turns donations off and ends server donations, telling the donors. Connecting a first account also needs the fresh sign-in.
+
+Not yet: Slop's VAT registrations and returns (§11).
 
 ## 11. Open questions
 1. **iOS:** whether, and how, donations work in an iOS app (`DESIGN.md` §17).

@@ -504,6 +504,7 @@ function QueueTab() {
                 <span className="muted">
                   {STAGE_LABEL[a.stage]} · by {a.maker} · {a.approved_releases} approved release
                   {a.approved_releases === 1 ? "" : "s"}
+                  {a.going_public && " · Private Slop going public: check the repository and licence from scratch"}
                 </span>
               </div>
               {a.pictures_pending ? (
@@ -514,7 +515,7 @@ function QueueTab() {
                   disabled={busy !== undefined}
                   onClick={() => void run(a.slug, () => api.admin.list(a.slug))}
                 >
-                  {busy === a.slug ? "Listing…" : "Put in the store"}
+                  {busy === a.slug ? "Listing…" : a.going_public ? "Make public and list" : "Put in the store"}
                 </button>
               )}
             </div>

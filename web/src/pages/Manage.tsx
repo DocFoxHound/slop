@@ -77,12 +77,130 @@ export function Manage() {
         settings) changes straight away.
       </p>
 
+      {m.frozen && <Frozen slug={slug} frozen={m.frozen} isPrivate={app.data.private} onChanged={changed} />}
+      {m.pulse_required !== null && <PulseNeeded received={m.pulse_required} />}
       <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
       <UpdatesPanel key={settingsNonce} slug={slug} />
-      <DonationsPanel slug={slug} />
+      {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
       <RepoMove slug={slug} overview={m} onChanged={changed} />
       <Requests slug={slug} changes={m.changes} onChanged={changed} />
     </div>
+  );
+}
+
+/** Slop can't read the repository (SECURITY §12.2): no new releases, and out after 14 days. */
+function Frozen({
+  slug,
+  frozen,
+  isPrivate,
+  onChanged,
+}: {
+  slug: string;
+  frozen: NonNullable<ManageOverview["frozen"]>;
+  isPrivate: boolean;
+  onChanged: () => void;
+}) {
+  const [busy, setBusy] = useState(false);
+  const [still, setStill] = useState(false);
+  const [error, setError] = useState<string>();
+  const check = async () => {
+    setBusy(true);
+    setError(undefined);
+    setStill(false);
+    try {
+      const after = await api.repoCheck(slug);
+      if (after) setStill(true);
+      else onChanged();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const past = new Date(frozen.until).getTime() < Date.now();
+  return (
+    <section className="panel panel-pad notice-panel" role="status">
+      <h2>Frozen: Slop can't check the repository</h2>
+      <p>
+        Since {formatDate(frozen.since)}, {frozen.reason}. Until Slop can read it again, this app takes no new releases.
+        Copies people installed keep working.
+      </p>
+      <p>
+        {past
+          ? isPrivate
+            ? "It's no longer shared, since it stayed frozen for 14 days."
+            : "It left the store, since it stayed frozen for 14 days. It comes back once Slop can read the repository."
+          : isPrivate
+            ? `If it's still frozen on ${formatDate(frozen.until)}, it stops being shared.`
+            : `If it's still frozen on ${formatDate(frozen.until)}, it leaves the store.`}
+      </p>
+      <div className="row-actions">
+        <button type="button" className="btn" disabled={busy} onClick={() => void check()}>
+          {busy ? "Checking…" : "Check now"}
+        </button>
+        {still && <span className="muted small">Still can't read it. Check the repository's address and Slop's access.</span>}
+      </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Community builds of games whose original counts players with Slop Pulse need it too (DESIGN §9). */
+function PulseNeeded({ received }: { received: boolean }) {
+  return (
+    <section className="panel panel-pad">
+      <h2>Slop Pulse</h2>
+      {received ? (
+        <p>✓ Slop has had a Pulse handshake from this build, so it can be listed once a reviewer looks at it.</p>
+      ) : (
+        <p>
+          The game this branches from counts players with Slop Pulse, so community builds of it must include it too, and a
+          reviewer can't list this one before its first Pulse handshake. Keep the Pulse code from the original, then
+          install your approved build through Slop and launch it once. See the{" "}
+          <Link to="/publish/guide#slop-pulse-player-counts">publishing guide</Link>.
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Private Slop going public (SECURITY §12.3): a public repository, then a fresh review. */
+function GoPublic({ slug, requested, onChanged }: { slug: string; requested: boolean; onChanged: () => void }) {
+  const { busy, error, submit } = useSubmit(onChanged);
+  return (
+    <section className="panel panel-pad">
+      <h2>Make it public</h2>
+      {requested ? (
+        <>
+          <p>
+            Waiting for a reviewer. They check the repository again from scratch; once they list it, it's in the store for
+            everyone, and the people you shared it with keep it like anyone else. It stays private until then.
+          </p>
+          <button type="button" className="btn" disabled={busy} onClick={() => void submit(() => api.cancelMakePublic(slug))}>
+            Keep it private
+          </button>
+        </>
+      ) : (
+        <>
+          <p>
+            Apps in the store need public source. Make the repository public under its open-source licence first, then ask
+            here. A reviewer checks it again before it goes in the store.
+          </p>
+          <button type="button" className="btn" disabled={busy} onClick={() => void submit(() => api.makePublic(slug))}>
+            Ask to make it public
+          </button>
+        </>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
   );
 }
 

@@ -9,7 +9,16 @@ import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 
-const ICON: Record<Notification["category"], string> = { jobs: "🎨", interested: "★", moderation: "⚑" };
+const ICON: Record<Notification["category"], string> = {
+  jobs: "🎨",
+  interested: "★",
+  moderation: "⚑",
+  donations: "♥",
+  shared: "🔒",
+  teams: "👥",
+  apps: "📦",
+  chat: "💬",
+};
 
 export function Notifications() {
   useDocumentTitle("Notifications");

@@ -70,7 +70,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 - **Specific tags** sit under each category (Roguelike, Note-taking, Pixel Art, Touch Controls…).
 - Every app has several tags. Every category and tag has its own browsable page.
 
-**Search and filters:** filter by tag, % Not Slop, runs on my platform (including community builds), and released/upcoming. Sort by Not Slop, popular this month, most reviewed, or recently updated.
+**Search and filters:** filter by tag, % Not Slop, runs on my platform (including community builds), and released/upcoming. Sort by Not Slop, popular this month, most reviewed, or recently updated. **Built 2026-10-20:** all of these on every list page ("this computer" marks your platform; a community build counts only while it's in the store).
 
 ## 6. Library
 
@@ -144,7 +144,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
   - May lag behind official updates.
   - Links to the branch's README, and requires an "I understand" checkbox before installing.
 - Community builds of games must include Slop Pulse too.
-- **Built 2026-10-20** (`crates/slop-api/src/branches.rs`): a branch is an app of its own (the author's fork, releases reviewed and signed like any app, its own votes, reviews and Donate button) linked to the original. "Register a branch" on an app's page (mod, fix, translation, port or other; your own fork, not the original repository). It isn't listed in the store on its own: the original's page lists its Community builds, ones that add a platform first ("adds Linux"), and there's a Community builds shelf and page. A branch's page says whose it is, and installing needs the caveats ticked. Not yet: requiring Pulse in community builds of games, and "runs on my platform (including community builds)" in search.
+- **Built 2026-10-20** (`crates/slop-api/src/branches.rs`): a branch is an app of its own (the author's fork, releases reviewed and signed like any app, its own votes, reviews and Donate button) linked to the original. "Register a branch" on an app's page (mod, fix, translation, port or other; your own fork, not the original repository). It isn't listed in the store on its own: the original's page lists its Community builds, ones that add a platform first ("adds Linux"), and there's a Community builds shelf and page. A branch's page says whose it is, and installing needs the caveats ticked. Built since: community builds of games whose original counts players with Pulse can't be listed before their own first Pulse handshake (the branch's Manage page says so), and "runs on my platform" in search includes community builds.
 
 ## 10. Security & compliance pipeline
 
@@ -198,7 +198,7 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 - Publish something **only you can see**. It never appears in the store, search, recommendations or official team pages.
 - **Same requirements** as public apps (at least one build, every scan) **except Slop Pulse**, and the source can be in a **private repo** that Slop is allowed to read (`SECURITY.md` §12). Builds stay on the owner's private release page. People it's shared with download through short-lived links, and Slop never stores the software. No store page, no donations, no voting.
 - **Sharing:** with specific friends and/or **player teams** you belong to. **Never with or to official teams.**
-- **Built 2026-10-20** (`crates/slop-api/src/private.rs`): "Who can see it?" when publishing; the owner shares by pasting someone's profile link (there are no friends lists yet) and can stop sharing; people see it once it has an approved release, in a Private Slop section of their library, and are notified. Every request checks access on the server (`catalog::push_shared_with`); private apps can't be listed, and have no voting, reviews, donations, Interested or branches. Sharing with player teams comes with teams (§14). Not yet: making a private app public (SECURITY §12.3), and the 14-day freeze when Slop loses access to the repository (§12.2).
+- **Built 2026-10-20** (`crates/slop-api/src/private.rs`): "Who can see it?" when publishing; the owner shares by pasting someone's profile link (there are no friends lists yet) and can stop sharing; people see it once it has an approved release, in a Private Slop section of their library, and are notified. Every request checks access on the server (`catalog::push_shared_with`); private apps can't be listed, and have no voting, reviews, donations, Interested or branches. Sharing with player teams comes with teams (§14). Also built: **making it public** (the owner asks once the repository is public; a reviewer lists it after Slop checks again, and the shares end since everyone can see it) and **the 14-day freeze** when Slop can't read the repository (`frozen.rs`, for every app: no new releases, the owner is told, then out of the store or no longer shared after 14 days; back when access returns, with "Check now" on the Manage page). Repositories outside GitHub are checked only when public, since Slop doesn't take deploy tokens yet.
 
 ## 14. Teams
 

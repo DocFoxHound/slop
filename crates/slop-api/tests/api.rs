@@ -84,6 +84,18 @@ async fn fake_github() -> String {
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
+        // Repository checks (frozen.rs): a public repository, a private one, and Git's discovery
+        // request for a repository on another host.
+        .route("/repos/octo/open-tool", get(|| async { axum::Json(json!({ "private": false })) }))
+        .route("/repos/octo/closed-tool", get(|| async { axum::Json(json!({ "private": true })) }))
+        .route("/octo/game/info/refs", get(|| async { "001e# service=git-upload-pack\n" }))
+        // The EU's VIES service (donations.rs): one valid German number.
+        .route(
+            "/vies",
+            post(|axum::Json(b): axum::Json<Value>| async move {
+                axum::Json(json!({ "valid": b["countryCode"] == "DE" && b["vatNumber"] == "123456789" }))
+            }),
+        )
         // GitHub's raw files (media.rs): whatever a test put in RAW_FILES.
         .route(
             "/raw/{*path}",
@@ -6969,8 +6981,17 @@ async fn donations_go_to_the_maker_and_give_nothing_back(db: PgPool) {
             .await,
     )
     .await;
-    assert_eq!(statements[0]["kind"], "donation");
-    assert!(statements[0]["slop_fee_minor"].as_i64().unwrap() > 0);
+    assert_eq!(statements["statements"][0]["kind"], "donation");
+    assert!(
+        statements["statements"][0]["slop_fee_minor"]
+            .as_i64()
+            .unwrap()
+            > 0
+    );
+    assert_eq!(
+        statements["vat"]["kind"], "none",
+        "no VAT on Slop's fee in the US"
+    );
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -7772,4 +7793,689 @@ async fn official_teams_are_verified_through_their_github_organization(db: PgPoo
         )
         .await;
     assert_eq!(body_json(res).await["error"]["field"], "team");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Search filters, frozen apps, going public, Pulse in community builds, donation safeguards, VAT
+
+/// Weighted 👍 votes from new players, enough for a rating.
+async fn votes_for(app: &TestApp, slug: &str, up: usize, down: usize) {
+    for (i, vote) in std::iter::repeat_n(1i16, up)
+        .chain(std::iter::repeat_n(-1i16, down))
+        .enumerate()
+    {
+        let (voter, _) = app.user(&format!("Voter {slug} {i}"), "US").await;
+        sqlx::query(
+            "insert into votes (user_id, app_id, vote, weight) select $1, id, $2, 1 from apps where slug = $3",
+        )
+        .bind(voter)
+        .bind(vote)
+        .bind(slug)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn search_finds_what_runs_on_a_platform_including_community_builds(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (author, _) = app.user("Bo Brancher", "US").await;
+    listed_with(&app, maker, "castle", "released", "platforms = '{windows}'").await;
+    listed_with(
+        &app,
+        maker,
+        "tower",
+        "released",
+        "platforms = '{linux,linux-deb}'",
+    )
+    .await;
+    listed_with(&app, maker, "moat", "beta", "platforms = '{windows}'").await;
+    listed_with(
+        &app,
+        author,
+        "castle-linux",
+        "released",
+        "platforms = '{linux,linux-deb}', parent_app_id = (select id from apps where slug = 'castle'), branch_kind = 'port'",
+    )
+    .await;
+    let mut linux = list_slugs(&app, req(Method::GET, "/v1/apps?platform=linux")).await;
+    linux.sort();
+    assert_eq!(
+        linux,
+        ["castle", "tower"],
+        "castle runs on Linux through its port"
+    );
+    let mut windows = list_slugs(&app, req(Method::GET, "/v1/apps?platform=windows")).await;
+    windows.sort();
+    assert_eq!(windows, ["castle", "moat"]);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps?platform=amiga"))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // A delisted port doesn't count.
+    sqlx::query("update apps set status = 'delisted' where slug = 'castle-linux'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?platform=linux")).await,
+        ["tower"]
+    );
+
+    // Upcoming or released, % Not Slop, and the sorts.
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?upcoming=true")).await,
+        ["moat"]
+    );
+    votes_for(&app, "castle", 9, 1).await;
+    votes_for(&app, "tower", 3, 3).await;
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?min_not_slop=80")).await,
+        ["castle"]
+    );
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?sort=rating")).await[..2],
+        ["castle", "tower"]
+    );
+    let (reviewer, _) = app.user("Rita Reviewer", "US").await;
+    sqlx::query(
+        "insert into app_reviews (id, user_id, app_id, body) select $1, $2, id, 'Great.' from apps where slug = 'moat'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(reviewer)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?sort=reviewed")).await[0],
+        "moat"
+    );
+    sqlx::query(
+        "insert into pulse_counts (app_id, bucket, players) select id, now() - interval '20 days', 50 from apps where slug = 'tower'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?sort=popular")).await[0],
+        "tower"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn apps_freeze_when_slop_cannot_read_the_repository(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    sqlx::query("update apps set status = 'listed'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let repo = format!("{}octo/game", app.fake_base);
+
+    // Readable: nothing happens.
+    assert_eq!(slop_api::frozen::run_once(&app.state).await.unwrap(), 1);
+    assert_eq!(
+        slop_api::frozen::run_once(&app.state).await.unwrap(),
+        0,
+        "checked daily"
+    );
+    let overview = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(overview["frozen"], Value::Null);
+
+    // The repository goes away: frozen, the maker is told, and no new releases.
+    sqlx::query("update apps set repo_url = $1, repo_checked_at = null")
+        .bind(format!("{}octo/gone", app.fake_base))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    let overview = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(
+        overview["frozen"]["reason"]
+            .as_str()
+            .unwrap()
+            .contains("can't be read")
+    );
+    let notices: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and category = 'apps'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notices, 1);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(release_body(&app, "2.0.0", "game-windows.zip")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps")).await,
+        ["game"],
+        "still in the store during the grace period"
+    );
+
+    // 14 days later it leaves the store.
+    sqlx::query("update apps set frozen_at = now() - interval '15 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::frozen::end_grace(&app.state).await.unwrap(), 1);
+    assert!(
+        list_slugs(&app, req(Method::GET, "/v1/apps"))
+            .await
+            .is_empty()
+    );
+
+    // Access back: "Check now" unfreezes it and puts it back in the store.
+    sqlx::query("update apps set repo_url = $1")
+        .bind(&repo)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/apps/game/repo-check").cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await, Value::Null);
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps")).await,
+        ["game"]
+    );
+    let (_, other) = app.user("Otto Other", "US").await;
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/apps/game/repo-check").cookie(&other))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn private_slop_goes_public_after_a_fresh_review(db: PgPool) {
+    let app = test_app(db).await;
+    let (owner_id, owner) = app.user("Olive Owner", "US").await;
+    let (friend_id, friend) = app.user("Finn Friend", "US").await;
+    let (admin_id, admin_cookie) = app.user("Ada Admin", "US").await;
+    admin::set_admin(&app.db, &admin_id.to_string(), true, "test")
+        .await
+        .unwrap();
+    let mut body = new_app("secret-tool");
+    body["visibility"] = json!("private");
+    body["repo_url"] = json!("https://github.com/octo/closed-tool");
+    let res = app
+        .send(req(Method::POST, "/v1/apps").cookie(&owner).json(body))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id: Uuid = sqlx::query_scalar("select id from apps where slug = 'secret-tool'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         values ($1, $2, '1.0.0', repeat('c', 40), 'approved', $3, now(), true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(owner_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    app.send(
+        req(Method::POST, "/v1/apps/secret-tool/shares")
+            .cookie(&owner)
+            .json(json!({ "user": friend_id.to_string() })),
+    )
+    .await;
+
+    // The repository is still private: refused.
+    let make_public =
+        |cookie: &str| req(Method::POST, "/v1/apps/secret-tool/make-public").cookie(cookie);
+    let res = app.send(make_public(&owner)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("public")
+    );
+    assert_eq!(
+        app.send(make_public(&friend)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Public now: it waits for a reviewer, still private meanwhile.
+    sqlx::query("update apps set repo_url = 'https://github.com/octo/open-tool' where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(make_public(&owner)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let overview = body_json(
+        app.send(req(Method::GET, "/v1/apps/secret-tool/manage").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(overview["public_requested"], true);
+    assert!(
+        list_slugs(&app, req(Method::GET, "/v1/apps"))
+            .await
+            .is_empty()
+    );
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    let ready = queue["ready_to_list"].as_array().unwrap();
+    assert_eq!(ready.len(), 1);
+    assert_eq!(ready[0]["going_public"], true);
+    assert!(
+        admin::list_app(&app.db, "secret-tool", "test")
+            .await
+            .is_err(),
+        "only through the panel, which checks the repository again"
+    );
+
+    // The reviewer lists it: public, in the store, shares no longer needed.
+    let res = app
+        .send(req(Method::POST, "/v1/admin/apps/secret-tool/list").cookie(&admin_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps")).await,
+        ["secret-tool"]
+    );
+    let shares: i64 = sqlx::query_scalar("select count(*) from app_shares")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(shares, 0);
+    let detail = body_json(app.send(req(Method::GET, "/v1/apps/secret-tool")).await).await;
+    assert_eq!(detail["private"], false);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn frozen_private_slop_stops_being_shared_after_14_days(db: PgPool) {
+    let app = test_app(db).await;
+    let (owner_id, owner) = app.user("Olive Owner", "US").await;
+    let (friend_id, friend) = app.user("Finn Friend", "US").await;
+    let mut body = new_app("secret-tool");
+    body["visibility"] = json!("private");
+    body["repo_url"] = json!("https://github.com/octo/deleted-tool");
+    app.send(req(Method::POST, "/v1/apps").cookie(&owner).json(body))
+        .await;
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         select $1, id, '1.0.0', repeat('c', 40), 'approved', $2, now(), true from apps where slug = 'secret-tool'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(owner_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    app.send(
+        req(Method::POST, "/v1/apps/secret-tool/shares")
+            .cookie(&owner)
+            .json(json!({ "user": friend_id.to_string() })),
+    )
+    .await;
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&friend))
+            .await
+            .status(),
+        StatusCode::OK,
+        "still shared during the grace period"
+    );
+    sqlx::query("update apps set frozen_at = now() - interval '15 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&friend))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret-tool").cookie(&owner))
+            .await
+            .status(),
+        StatusCode::OK,
+        "the owner still sees it"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn community_builds_of_pulse_games_need_a_pulse_handshake(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (author_id, _) = app.user("Bo Brancher", "US").await;
+    listed_with(&app, maker, "castle", "released", "").await;
+    listed_with(
+        &app,
+        author_id,
+        "castle-mod",
+        "released",
+        "status = 'draft', parent_app_id = (select id from apps where slug = 'castle'), branch_kind = 'mod'",
+    )
+    .await;
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         select $1, id, '1.0.0', repeat('b', 40), 'approved', $2, now(), true from apps where slug = 'castle-mod'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(author_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let session = |slug: &'static str, user: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(
+                "insert into pulse_sessions (id, token_hash, app_id, user_id, started_at)
+                 select $1, $2, id, $3, now() from apps where slug = $4",
+            )
+            .bind(Uuid::now_v7())
+            .bind(Uuid::now_v7().as_bytes().to_vec())
+            .bind(user)
+            .bind(slug)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    // The original doesn't use Pulse: no requirement.
+    let (player, _) = app.user("Pat Player", "US").await;
+    session("castle", player).await;
+    let err = admin::list_app(&app.db, "castle-mod", "test")
+        .await
+        .unwrap_err();
+    assert!(err.to_string().contains("Pulse"), "{err}");
+    session("castle-mod", author_id).await;
+    admin::list_app(&app.db, "castle-mod", "test")
+        .await
+        .unwrap();
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn changing_where_donations_go_needs_a_fresh_sign_in_and_72_hours(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (donor_id, donor) = app.user("Dee Donor", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    donations_on(&app, &maker, "arena", true).await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/arena/donate")
+                .cookie(&donor)
+                .json(json!({ "amount_minor": 300, "monthly": true, "consent": true, "confirm_adult": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
+    let old: String = sqlx::query_scalar("select stripe_account_id from donation_accounts")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let change = |kind: &str| {
+        req(Method::POST, "/v1/me/donation-account/change")
+            .cookie(&maker)
+            .json(json!({ "kind": kind }))
+    };
+
+    // A sign-in from more than a few minutes ago isn't enough.
+    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(change("switch")).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    sqlx::query("update sessions set created_at = now() where user_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // A switch waits 72 hours, announced at once; another can't be stacked; it can be cancelled.
+    let res = app.send(change("switch")).await;
+    assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
+    let account = body_json(
+        app.send(req(Method::GET, "/v1/me/donation-account").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(account["change"]["kind"], "switch");
+    let notices: Vec<String> = sqlx::query_scalar(
+        "select title from notifications where user_id = $1 and category = 'donations'",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert!(
+        notices
+            .iter()
+            .any(|t| t.contains("different Stripe account"))
+    );
+    assert_eq!(
+        app.send(change("disconnect")).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        slop_api::donations::apply_account_changes(&app.state)
+            .await
+            .unwrap(),
+        0,
+        "not before 72 hours"
+    );
+    sqlx::query("update stripe_account_changes set effective_at = now()")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        slop_api::donations::apply_account_changes(&app.state)
+            .await
+            .unwrap(),
+        1
+    );
+    let new: String = sqlx::query_scalar("select stripe_account_id from donation_accounts")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_ne!(new, old);
+    let monthly: String = sqlx::query_scalar("select status from server_donations")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(monthly, "active", "server donations carry on");
+
+    // Disconnecting: cancelled once, then done after 72 hours; donations off, monthly ones end.
+    assert_eq!(
+        app.send(change("disconnect")).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/me/donation-account/change/cancel").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(change("disconnect")).await.status(),
+        StatusCode::OK
+    );
+    sqlx::query("update stripe_account_changes set effective_at = now() where applied_at is null and cancelled_at is null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::donations::apply_account_changes(&app.state)
+        .await
+        .unwrap();
+    let on: bool = sqlx::query_scalar("select donations_on from apps where slug = 'arena'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(!on);
+    let (status, by): (String, String) =
+        sqlx::query_as("select status, cancelled_by from server_donations")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), by.as_str()),
+        ("cancelled", "maker_disconnected")
+    );
+    let donor_told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like '%has ended%'",
+    )
+    .bind(donor_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(donor_told, 1);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn repeated_unfinished_checkouts_need_a_proof_of_work(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (donor_id, donor) = app.user("Dee Donor", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    donations_on(&app, &maker, "arena", false).await;
+    for _ in 0..3 {
+        sqlx::query(
+            "insert into donations (id, kind, app_id, donor_id, stripe_account_id, currency, donation_minor,
+                                    slop_fee_minor, processing_minor, total_minor, donor_covers_fees, status)
+             select $1, 'one_off', id, $2, 'acct_x', 'usd', 300, 15, 25, 340, true, 'expired' from apps where slug = 'arena'",
+        )
+        .bind(Uuid::now_v7())
+        .bind(donor_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let donate = |extra: Value| {
+        let mut body = json!({ "amount_minor": 300, "confirm_adult": true });
+        if let Value::Object(map) = extra {
+            body.as_object_mut().unwrap().extend(map);
+        }
+        req(Method::POST, "/v1/apps/arena/donate")
+            .cookie(&donor)
+            .json(body)
+    };
+    let res = app.send(donate(json!({}))).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(res).await["error"]["code"], "challenge_required");
+
+    let challenge = body_json(
+        app.send(req(Method::POST, "/v1/donations/challenge").cookie(&donor))
+            .await,
+    )
+    .await;
+    let prefix = challenge["prefix"].as_str().unwrap();
+    let difficulty = challenge["difficulty"].as_i64().unwrap() as i16;
+    let answer = json!({ "challenge": { "id": challenge["id"], "nonce": "nope" } });
+    assert_eq!(
+        body_json(app.send(donate(answer)).await).await["error"]["code"],
+        "challenge_required",
+        "a wrong answer uses the challenge up"
+    );
+    let challenge = body_json(
+        app.send(req(Method::POST, "/v1/donations/challenge").cookie(&donor))
+            .await,
+    )
+    .await;
+    let prefix2 = challenge["prefix"].as_str().unwrap();
+    assert_ne!(prefix, prefix2);
+    let nonce = slop_api::challenge::solve(prefix2, difficulty);
+    let answer = json!({ "challenge": { "id": challenge["id"], "nonce": nonce } });
+    let res = app.send(donate(answer.clone())).await;
+    assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
+    assert_eq!(
+        body_json(app.send(donate(answer)).await).await["error"]["code"],
+        "challenge_required",
+        "each challenge works once"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn fee_statements_show_the_vat_inside_slops_fee(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        // The fake GitHub server also plays VIES.
+        c.payments.vies_url = Some(c.doh_url.join("vies").unwrap());
+    })
+    .await;
+    let (maker_id, maker) = app.user("Mia Maker", "DE").await;
+    let (_, donor) = app.user("Dee Donor", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    donations_on(&app, &maker, "arena", false).await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/arena/donate")
+                .cookie(&donor)
+                .json(json!({ "amount_minor": 2000, "confirm_adult": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let statements = |cookie: String| {
+        let app = &app;
+        async move {
+            body_json(
+                app.send(req(Method::GET, "/v1/me/fee-statements").cookie(cookie))
+                    .await,
+            )
+            .await
+        }
+    };
+    // An individual in Germany: 19% VAT inside Slop's 5% (100 cents fee → 16 cents VAT).
+    let s = statements(maker.clone()).await;
+    assert_eq!(s["vat"]["kind"], "included");
+    assert_eq!(s["vat"]["rate_bp"], 1900);
+    assert_eq!(s["statements"][0]["slop_fee_minor"], 100);
+    assert_eq!(s["statements"][0]["vat_minor"], 16);
+
+    // A business with a VAT number VIES confirms: reverse charge.
+    let vat = |n: &str| {
+        req(Method::PUT, "/v1/me/vat")
+            .cookie(&maker)
+            .json(json!({ "vat_number": n }))
+    };
+    let res = app.send(vat("FR12345678901")).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "another country's number"
+    );
+    let saved = body_json(app.send(vat("DE 999 999 999")).await).await;
+    assert_eq!(saved["checked"], false);
+    assert!(saved["note"].as_str().unwrap().contains("VIES"));
+    let saved = body_json(app.send(vat("de123456789")).await).await;
+    assert_eq!(saved["vat_number"], "DE123456789");
+    assert_eq!(saved["checked"], true);
+    let s = statements(maker.clone()).await;
+    assert_eq!(s["vat"]["kind"], "reverse_charge");
+    assert_eq!(s["statements"][0]["vat_minor"], 0);
+    assert_eq!(slop_api::donations::vat_included(100, 2000), 17);
 }

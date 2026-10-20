@@ -99,11 +99,25 @@ pub(crate) fn push_store_visible(
     rules: CatalogRules,
     policy: ViewerPolicy,
 ) {
-    qb.push("a.status = 'listed' and a.visibility = 'public' and a.min_age <= ")
+    push_store_visible_as(qb, rules, policy, "a");
+}
+
+/// `push_store_visible` for an `apps` row under another alias (static SQL).
+pub(crate) fn push_store_visible_as(
+    qb: &mut QueryBuilder<Postgres>,
+    rules: CatalogRules,
+    policy: ViewerPolicy,
+    t: &'static str,
+) {
+    qb.push(format!("{t}.status = 'listed' and {t}.visibility = 'public' and {t}.min_age <= "))
         .push_bind(policy.max_min_age)
-        .push(" and not ((a.stage = 'coming_soon' and a.stage_entered_at < now() - make_interval(days => ")
+        .push(format!(
+            " and not (({t}.stage = 'coming_soon' and {t}.stage_entered_at < now() - make_interval(days => "
+        ))
         .push_bind(rules.coming_soon_days)
-        .push(")) or (a.stage = 'beta' and a.stage_entered_at < now() - make_interval(days => ")
+        .push(format!(
+            ")) or ({t}.stage = 'beta' and {t}.stage_entered_at < now() - make_interval(days => "
+        ))
         .push_bind(rules.beta_days)
         .push(")))");
 }
@@ -198,6 +212,10 @@ enum Sort {
     Anticipated,
     /// Best rated (weighted % Not Slop, with enough votes), then most votes.
     Rating,
+    /// Most players at once over the last 30 days ("popular this month").
+    Popular,
+    /// Most written reviews showing.
+    Reviewed,
 }
 
 #[derive(Deserialize)]
@@ -213,6 +231,13 @@ struct ListQuery {
     /// Community branches instead of apps (DESIGN §9): the store lists branches only here.
     #[serde(default)]
     community: bool,
+    /// Runs on this platform ("windows" or "linux"), directly or through a community build
+    /// that adds it (DESIGN §5).
+    platform: Option<String>,
+    /// Only Coming soon and Beta (`true`) or only released (`false`).
+    upcoming: Option<bool>,
+    /// At least this weighted % Not Slop (apps without enough votes don't match).
+    min_not_slop: Option<i32>,
     sort: Option<Sort>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -278,6 +303,36 @@ async fn list_apps(
     if let Some(kind) = query.kind {
         qb.push(" and a.kind = ").push_bind(kind);
     }
+    if let Some(platform) = query.platform.as_deref() {
+        if !["windows", "linux"].contains(&platform) {
+            return Err(ApiError::invalid("platform", "use windows or linux"));
+        }
+        // The app itself, or one of its community builds this viewer could see in the store.
+        qb.push(" and (")
+            .push_bind(platform)
+            .push(" = any(a.platforms) or exists (select 1 from apps b where b.parent_app_id = a.id and ")
+            .push_bind(platform)
+            .push(" = any(b.platforms) and ");
+        push_store_visible_as(&mut qb, rules, policy, "b");
+        qb.push("))");
+    }
+    match query.upcoming {
+        Some(true) => {
+            qb.push(" and a.stage <> 'released'");
+        }
+        Some(false) => {
+            qb.push(" and a.stage = 'released'");
+        }
+        None => {}
+    }
+    if let Some(min) = query.min_not_slop {
+        qb.push(
+            " and (select count(*) >= 5 and sum(v.weight) > 0
+                          and 100 * coalesce(sum(v.weight) filter (where v.vote = 1), 0) / nullif(sum(v.weight), 0) >= ",
+        )
+        .push_bind(f64::from(min.clamp(0, 100)))
+        .push(" from votes v where v.app_id = a.id)");
+    }
     if query.made_with_people {
         qb.push(" and exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null)");
     }
@@ -307,6 +362,18 @@ async fn list_apps(
         (Sort::Anticipated, _) => {
             qb.push(
                 " order by (select count(*) from interests i where i.app_id = a.id) desc, a.updated_at desc, a.slug",
+            );
+        }
+        (Sort::Popular, _) => {
+            qb.push(
+                " order by (select coalesce(max(p.players), 0) from pulse_counts p
+                            where p.app_id = a.id and p.bucket > now() - interval '30 days') desc, a.updated_at desc, a.slug",
+            );
+        }
+        (Sort::Reviewed, _) => {
+            qb.push(
+                " order by (select count(*) from app_reviews r where r.app_id = a.id and r.hidden_at is null) desc,
+                           a.updated_at desc, a.slug",
             );
         }
         (Sort::Trending, _) => {
@@ -515,6 +582,7 @@ pub(crate) fn push_shared_with(qb: &mut QueryBuilder<Postgres>, viewer: Option<U
     qb.push(
         "(a.visibility = 'private'
           and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')
+          and (a.frozen_at is null or a.frozen_at > now() - interval '14 days')
           and (exists (select 1 from app_shares s where s.app_id = a.id and s.user_id = ",
     )
     .push_bind(viewer)

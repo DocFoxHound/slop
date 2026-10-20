@@ -5,10 +5,10 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
-import { api, ApiError, type CounterNotice, type LegalNotice, type ModerationDecision } from "../api";
+import { api, ApiError, type CounterNotice, type FeeStatement, type LegalNotice, type ModerationDecision, type VatTreatment } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
-import { saveFile } from "../platform";
+import { openExternal, saveFile } from "../platform";
 import { useSession } from "../session";
 import { AcceptDocument } from "./Terms";
 import { ErrorState } from "./ui";
@@ -510,39 +510,203 @@ export function AccountDonations() {
           <p className="faint small">Receipts for real payments come by email from the maker's Stripe account.</p>
         </section>
       )}
-      {(statements.data?.length ?? 0) > 0 && (
-        <section id="fee-statements">
-          <h2 className="section-title">Fee statements</h2>
-          <p className="muted small">
-            Slop's 5% fee on the donations and People payments you received, by month. The fee includes any VAT due.
-          </p>
-          <table className="table small panel">
-            <thead>
-              <tr>
-                <th>Month</th>
-                <th>For</th>
-                <th>Payments</th>
-                <th>Received</th>
-                <th>Slop fee</th>
-              </tr>
-            </thead>
-            <tbody>
-              {statements.data!.map((s) => (
-                <tr key={s.month + s.kind + s.currency}>
-                  <td>{s.month}</td>
-                  <td>{s.kind === "donation" ? "Donations" : "People jobs"}</td>
-                  <td>{s.payments}</td>
-                  <td>{fmt(s.received_minor, s.currency)}</td>
-                  <td>
-                    {fmt(s.slop_fee_minor, s.currency)}
-                    {s.simulated && <span className="muted"> · simulated</span>}
-                  </td>
-                </tr>
-              ))}
-            </tbody>
-          </table>
-        </section>
+      <ReceivingDonations />
+      {statements.data && statements.data.statements.length > 0 && (
+        <FeeStatements statements={statements.data.statements} vat={statements.data.vat} onVat={statements.reload} />
       )}
     </>
+  );
+}
+
+/** A sign-in link for actions that need a fresh one (SECURITY §4.3). */
+function StepUp({ error }: { error: ApiError }) {
+  if (error.code !== "step_up_required") return <>{error.message}</>;
+  const back = window.location.pathname + "#receiving";
+  return (
+    <>
+      For your safety, this needs a sign-in from the last few minutes.{" "}
+      <a href={api.githubSignInUrl(back)}>Sign in again</a>, then try once more.
+    </>
+  );
+}
+
+/** Where donations are paid, and switching or disconnecting it: 72 hours' wait (SECURITY §9). */
+function ReceivingDonations() {
+  const account = useLoad(() => api.donations.account(), []);
+  const [confirm, setConfirm] = useState<"switch" | "disconnect">();
+  const [error, setError] = useState<ApiError | string>();
+  const [busy, setBusy] = useState(false);
+  const a = account.data;
+  if (!a || a.status === "none" || a.payments === "off") return null;
+  const run = async (action: () => Promise<{ url: string | null } | void>) => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      const res = await action();
+      setConfirm(undefined);
+      if (res && res.url) await openExternal(res.url);
+      account.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const c = a.change;
+  return (
+    <section id="receiving">
+      <h2 className="section-title">Receiving donations</h2>
+      <div className="panel panel-pad">
+        <p>
+          Donations to your apps go to your own Stripe account
+          {a.status === "active" ? "." : a.status === "pending" ? ", which Stripe is still checking." : ", which Stripe has restricted: open Stripe to fix it."}{" "}
+          Bank details are changed in Stripe, not here.
+        </p>
+        {c ? (
+          <div className="notice" role="status">
+            <p>
+              <b>{c.kind === "switch" ? "Switching to a new Stripe account" : "Disconnecting your Stripe account"}</b>, asked{" "}
+              {formatDate(c.requested_at)}. It happens on {formatDate(c.effective_at)}
+              {c.kind === "switch" && !c.new_account_ready ? ", once you've finished the new account's sign-up on Stripe" : ""}.
+              {c.kind === "disconnect" && " Donations then turn off on all your apps, and monthly server donations end."}
+            </p>
+            <p className="small">If you didn't ask for this, cancel it now and sign out your other sessions below.</p>
+            <div className="row-actions">
+              <button type="button" className="btn small" disabled={busy} onClick={() => void run(() => api.donations.cancelAccountChange())}>
+                Cancel the change
+              </button>
+              {c.kind === "switch" && !c.new_account_ready && (
+                <button type="button" className="btn small ghost" disabled={busy} onClick={() => void run(() => api.donations.refreshAccount())}>
+                  I've finished on Stripe
+                </button>
+              )}
+            </div>
+          </div>
+        ) : confirm ? (
+          <div className="notice">
+            <p>
+              {confirm === "switch"
+                ? "You'll set up a new Stripe account now. For your safety, new donations start going to it 72 hours from now, and we email you straight away."
+                : "In 72 hours donations turn off on all your apps and monthly server donations end. We email you straight away, and you can cancel until then."}
+            </p>
+            <div className="row-actions">
+              <button
+                type="button"
+                className={confirm === "disconnect" ? "btn small danger" : "btn small slime"}
+                disabled={busy}
+                onClick={() => void run(() => api.donations.changeAccount(confirm, "/account#receiving"))}
+              >
+                {confirm === "switch" ? "Set up the new account" : "Disconnect in 72 hours"}
+              </button>
+              <button type="button" className="btn small ghost" onClick={() => setConfirm(undefined)}>
+                Never mind
+              </button>
+            </div>
+          </div>
+        ) : (
+          <div className="row-actions">
+            <button type="button" className="btn small" onClick={() => setConfirm("switch")}>
+              Use a different Stripe account
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setConfirm("disconnect")}>
+              Disconnect Stripe
+            </button>
+          </div>
+        )}
+        {error && (
+          <p className="form-error" role="alert">
+            {typeof error === "string" ? error : <StepUp error={error} />}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+const money = (minor: number, currency: string) => {
+  const symbol = currency === "eur" ? "€" : currency === "gbp" ? "£" : "$";
+  return `${symbol}${(minor / 100).toFixed(2)}`;
+};
+
+/** Slop's fee by month, with the VAT inside it (LEGAL §3.5). */
+function FeeStatements({ statements, vat, onVat }: { statements: FeeStatement[]; vat: VatTreatment; onVat: () => void }) {
+  const showVat = vat.kind !== "none";
+  return (
+    <section id="fee-statements">
+      <h2 className="section-title">Fee statements</h2>
+      <p className="muted small">
+        Slop's 5% fee on the donations and People payments you received, by month.{" "}
+        {vat.kind === "none" && "There's no VAT on Slop's fee where you are."}
+        {vat.kind === "included" &&
+          `The fee includes ${(vat.rate_bp! / 100).toFixed(vat.rate_bp! % 100 ? 1 : 0)}% VAT, which Slop pays out of its 5%; it's never added on top.`}
+        {vat.kind === "reverse_charge" &&
+          `Reverse charge: you account for the VAT on Slop's fee yourself (VAT number ${vat.vat_number}).`}{" "}
+        {showVat && (vat.slop_vat_id ? `Slop's VAT number: ${vat.slop_vat_id}.` : "Slop's VAT registration is still being set up.")}
+      </p>
+      <table className="table small panel">
+        <thead>
+          <tr>
+            <th>Month</th>
+            <th>For</th>
+            <th>Payments</th>
+            <th>Received</th>
+            <th>Slop fee</th>
+            {showVat && <th>VAT in the fee</th>}
+          </tr>
+        </thead>
+        <tbody>
+          {statements.map((s) => (
+            <tr key={s.month + s.kind + s.currency}>
+              <td>{s.month}</td>
+              <td>{s.kind === "donation" ? "Donations" : "People jobs"}</td>
+              <td>{s.payments}</td>
+              <td>{money(s.received_minor, s.currency)}</td>
+              <td>
+                {money(s.slop_fee_minor, s.currency)}
+                {s.simulated && <span className="muted"> · simulated</span>}
+              </td>
+              {showVat && <td>{vat.kind === "reverse_charge" ? "Reverse charge" : money(s.vat_minor, s.currency)}</td>}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {showVat && <VatNumber vat={vat} onSaved={onVat} />}
+    </section>
+  );
+}
+
+function VatNumber({ vat, onSaved }: { vat: VatTreatment; onSaved: () => void }) {
+  const [value, setValue] = useState(vat.vat_number ?? "");
+  const [note, setNote] = useState<string>();
+  const [error, setError] = useState<string>();
+  const save = async (e: FormEvent) => {
+    e.preventDefault();
+    setError(undefined);
+    setNote(undefined);
+    try {
+      const res = await api.donations.setVat(value.trim() || null);
+      setNote(res.note ?? (res.checked ? "Confirmed. Slop's fee is reverse-charged from now on." : "Removed."));
+      onSaved();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
+  };
+  return (
+    <form className="form inline-form" onSubmit={(e) => void save(e)}>
+      <label>
+        VAT number, if you're a VAT-registered business{" "}
+        <input value={value} onChange={(e) => setValue(e.target.value)} placeholder={`${vat.country === "GR" ? "EL" : vat.country}123456789`} />
+      </label>
+      <button className="btn small">Save</button>
+      {vat.vat_number && !vat.vat_number_checked && !note && (
+        <p className="muted small">Not confirmed yet, so VAT is shown as included in Slop's fee.</p>
+      )}
+      {note && <p className="muted small">{note}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </form>
   );
 }

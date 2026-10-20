@@ -59,6 +59,10 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/{slug}/servers/shut-down", post(servers_shut_down))
         .route("/me/donation-account", get(my_account).post(onboard))
         .route("/me/donation-account/refresh", post(refresh_account))
+        .route("/me/donation-account/change", post(request_change))
+        .route("/me/donation-account/change/cancel", post(cancel_change))
+        .route("/me/vat", axum::routing::put(set_vat))
+        .route("/donations/challenge", post(crate::challenge::issue_route))
         .route("/me/donations", get(my_donations))
         .route("/me/donations/{id}/check", post(check))
         .route("/me/server-donations/{id}/cancel", post(cancel))
@@ -374,7 +378,12 @@ struct StartBody {
     consent: bool,
     #[serde(default)]
     confirm_adult: bool,
+    /// Needed after a few unfinished checkouts (challenge.rs).
+    challenge: Option<crate::challenge::Answer>,
 }
+
+/// Unfinished checkouts in a day after which starting another needs a proof-of-work check.
+const UNFINISHED_BEFORE_CHALLENGE: i64 = 3;
 
 #[derive(Serialize)]
 struct Started {
@@ -455,6 +464,18 @@ async fn start(
         return Err(ApiError::Conflict(
             "that's a lot of donations in an hour; try again later".into(),
         ));
+    }
+    let unfinished: i64 = sqlx::query_scalar(
+        "select (select count(*) from donations where donor_id = $1 and kind = 'one_off'
+                   and status in ('pending', 'expired') and created_at > now() - interval '1 day')
+              + (select count(*) from server_donations where donor_id = $1 and started_at is null
+                   and created_at > now() - interval '1 day')",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+    if unfinished >= UNFINISHED_BEFORE_CHALLENGE {
+        crate::challenge::check(&state.db, user.id, b.challenge.as_ref()).await?;
     }
     let message = b
         .message
@@ -1223,6 +1244,14 @@ async fn end_server_donations(
                     money(i64::from(*total), currency)
                 ),
             )
+        } else if by == "maker_disconnected" {
+            (
+                format!("Your server donation to {title} has ended"),
+                format!(
+                    "{title}'s maker stopped taking donations, so your monthly server donation of {} has been cancelled. No further payments will be taken.",
+                    money(i64::from(*total), currency)
+                ),
+            )
         } else {
             (
                 format!("Your server donation to {title} is cancelled"),
@@ -1567,6 +1596,32 @@ async fn refund(
 struct Account {
     status: String,
     payments: &'static str,
+    /// A switch or disconnection waiting out its 72 hours.
+    change: Option<AccountChange>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct AccountChange {
+    kind: String,
+    #[serde(with = "time::serde::rfc3339")]
+    requested_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    effective_at: OffsetDateTime,
+    /// Switch: whether the new Stripe account has finished Stripe's sign-up. The switch happens
+    /// at `effective_at` or once it has, whichever is later.
+    new_account_ready: Option<bool>,
+}
+
+async fn open_change(db: &PgPool, user_id: Uuid) -> sqlx::Result<Option<AccountChange>> {
+    sqlx::query_as(
+        "select kind, requested_at, effective_at,
+                case when new_account_id is not null then new_account_status = 'active' end as new_account_ready
+         from stripe_account_changes
+         where user_id = $1 and cancelled_at is null and applied_at is null",
+    )
+    .bind(user_id)
+    .fetch_optional(db)
+    .await
 }
 
 async fn my_account(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Account>> {
@@ -1578,7 +1633,330 @@ async fn my_account(State(state): State<AppState>, user: CurrentUser) -> ApiResu
     Ok(Json(Account {
         status: status.unwrap_or_else(|| "none".into()),
         payments: stripe::mode(&state).name(),
+        change: open_change(&state.db, user.id).await?,
     }))
+}
+
+/// How long a change to where donations are paid waits (SECURITY §9).
+pub const CHANGE_DELAY: Duration = Duration::hours(72);
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ChangeBody {
+    /// switch or disconnect
+    kind: String,
+    return_to: Option<String>,
+}
+
+/// Switching or disconnecting the Stripe account that receives donations (SECURITY §9,
+/// PAYMENTS §9): a fresh sign-in, then 72 hours' wait, announced by email at once so the real
+/// owner can cancel it if it wasn't them. A switch sets up the new account through Stripe's
+/// sign-up meanwhile.
+async fn request_change(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(b): Json<ChangeBody>,
+) -> ApiResult<Json<Onboarding>> {
+    if !["switch", "disconnect"].contains(&b.kind.as_str()) {
+        return Err(ApiError::invalid("kind", "switch or disconnect"));
+    }
+    let current: Option<String> =
+        sqlx::query_scalar("select stripe_account_id from donation_accounts where user_id = $1")
+            .bind(user.id)
+            .fetch_optional(&state.db)
+            .await?;
+    if current.is_none() {
+        return Err(ApiError::Conflict(
+            "there's no donations account to change: enable donations first".into(),
+        ));
+    }
+    crate::auth::session::require_recent_sign_in(&state.db, &user).await?;
+    let return_to = b
+        .return_to
+        .filter(|p| p.starts_with('/') && !p.starts_with("//") && p.len() <= 200)
+        .unwrap_or_else(|| "/account".into());
+    let mode = stripe::mode(&state);
+    let new_account = match (b.kind.as_str(), &mode) {
+        ("disconnect", _) => None,
+        (_, Mode::Off) => {
+            return Err(ApiError::Unavailable(
+                "payments aren't switched on yet on this server",
+            ));
+        }
+        (_, Mode::Simulated) => Some(format!("acct_sim_{}", Uuid::new_v4().simple())),
+        (_, Mode::Stripe(stripe)) => {
+            let created = call(
+                &state,
+                stripe,
+                reqwest::Method::POST,
+                "v1/accounts",
+                None,
+                &[
+                    ("controller[stripe_dashboard][type]", "full".into()),
+                    ("controller[fees][payer]", "account".into()),
+                    ("controller[losses][payments]", "stripe".into()),
+                    ("controller[requirement_collection]", "stripe".into()),
+                    ("metadata[slop_user]", user.id.to_string()),
+                ],
+            )
+            .await?;
+            Some(
+                created["id"]
+                    .as_str()
+                    .ok_or_else(|| anyhow::anyhow!("Stripe gave no account ID"))?
+                    .to_string(),
+            )
+        }
+    };
+    let mut tx = state.db.begin().await?;
+    let inserted = sqlx::query(
+        "insert into stripe_account_changes (id, user_id, kind, new_account_id, new_account_status, effective_at)
+         values ($1, $2, $3, $4, $5, now() + $6)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(user.id)
+    .bind(&b.kind)
+    .bind(&new_account)
+    .bind(if matches!(mode, Mode::Simulated) {
+        "active"
+    } else {
+        "pending"
+    })
+    .bind(CHANGE_DELAY)
+    .execute(&mut *tx)
+    .await;
+    if let Err(err) = inserted {
+        if crate::error::is_unique_violation(&err) {
+            return Err(ApiError::Conflict(
+                "a change is already waiting; cancel it first".into(),
+            ));
+        }
+        return Err(err.into());
+    }
+    let (title, body) = if b.kind == "switch" {
+        (
+            "Your donations will be paid to a different Stripe account".to_string(),
+            "Someone signed in to your Slop account and asked to pay your donations into a new \
+             Stripe account. If it was you, finish the new account's set-up; the switch happens in \
+             72 hours. If it wasn't you, cancel it on your account page now and sign out your \
+             other sessions."
+                .to_string(),
+        )
+    } else {
+        (
+            "Donations to your apps will stop in 72 hours".to_string(),
+            "Someone signed in to your Slop account and asked to disconnect your Stripe account. \
+             In 72 hours donations to your apps turn off and monthly server donations end. If it \
+             wasn't you, cancel it on your account page now and sign out your other sessions."
+                .to_string(),
+        )
+    };
+    notify::send(
+        &mut tx,
+        Notice {
+            user_id: user.id,
+            category: "donations",
+            title: title.clone(),
+            body: body.clone(),
+            link: "/account#donations".into(),
+            collapse_key: None,
+        },
+    )
+    .await?;
+    notify::email_user(&mut tx, &state.config, user.id, &title, &body).await?;
+    admin::audit(
+        &mut tx,
+        &user.display_name,
+        "donations.account_change_requested",
+        &user.id.to_string(),
+        json!({ "kind": b.kind }),
+    )
+    .await?;
+    tx.commit().await?;
+
+    let url = match (&new_account, &mode) {
+        (Some(acct), Mode::Stripe(stripe)) => {
+            let base = &state.config.public_url;
+            let back = format!("{base}{}", return_to.trim_start_matches('/'));
+            let link = call(
+                &state,
+                stripe,
+                reqwest::Method::POST,
+                "v1/account_links",
+                None,
+                &[
+                    ("account", acct.clone()),
+                    ("type", "account_onboarding".into()),
+                    ("refresh_url", back.clone()),
+                    ("return_url", back),
+                ],
+            )
+            .await?;
+            link["url"].as_str().map(String::from)
+        }
+        _ => None,
+    };
+    Ok(Json(Onboarding {
+        url,
+        status: "waiting".into(),
+    }))
+}
+
+/// Cancelling is the safe direction, so it needs no fresh sign-in.
+async fn cancel_change(State(state): State<AppState>, user: CurrentUser) -> ApiResult<StatusCode> {
+    let mut tx = state.db.begin().await?;
+    let done = sqlx::query(
+        "update stripe_account_changes set cancelled_at = now()
+         where user_id = $1 and cancelled_at is null and applied_at is null",
+    )
+    .bind(user.id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if done == 0 {
+        return Err(ApiError::NotFound);
+    }
+    admin::audit(
+        &mut tx,
+        &user.display_name,
+        "donations.account_change_cancelled",
+        &user.id.to_string(),
+        json!({}),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Hourly: changes whose 72 hours are up. A switch waits on until the new account has finished
+/// Stripe's sign-up.
+pub async fn apply_account_changes(state: &AppState) -> anyhow::Result<usize> {
+    if let Mode::Stripe(stripe) = stripe::mode(state) {
+        // In case a webhook about the new account went missing.
+        let waiting: Vec<String> = sqlx::query_scalar(
+            "select new_account_id from stripe_account_changes
+             where cancelled_at is null and applied_at is null and effective_at <= now()
+               and new_account_id is not null and new_account_status <> 'active'",
+        )
+        .fetch_all(&state.db)
+        .await?;
+        for acct in &waiting {
+            stripe::sync_account(state, stripe, acct).await?;
+        }
+    }
+    let due: Vec<(Uuid, Uuid, String, Option<String>)> = sqlx::query_as(
+        "select c.id, c.user_id, c.kind, c.new_account_id from stripe_account_changes c
+         where c.cancelled_at is null and c.applied_at is null and c.effective_at <= now()
+           and (c.kind = 'disconnect' or c.new_account_status = 'active')",
+    )
+    .fetch_all(&state.db)
+    .await?;
+    for (id, user_id, kind, new_account) in &due {
+        if kind == "disconnect" {
+            // Stop the subscriptions at Stripe first; they're on the maker's account.
+            let subs: Vec<(String, Option<String>, bool)> = sqlx::query_as(
+                "select s.stripe_account_id, s.stripe_subscription_id, s.simulated from server_donations s
+                 join apps a on a.id = s.app_id
+                 where a.maker_id = $1 and s.status in ('pending', 'active')",
+            )
+            .bind(user_id)
+            .fetch_all(&state.db)
+            .await?;
+            if let Mode::Stripe(stripe) = stripe::mode(state) {
+                for (acct, sub, simulated) in &subs {
+                    if let (Some(sub), false) = (sub, simulated) {
+                        call(
+                            state,
+                            stripe,
+                            reqwest::Method::DELETE,
+                            &format!("v1/subscriptions/{sub}"),
+                            Some(acct),
+                            &[],
+                        )
+                        .await?;
+                    }
+                }
+            }
+        }
+        let mut tx = state.db.begin().await?;
+        let (title, body) = if kind == "disconnect" {
+            let apps: Vec<Uuid> = sqlx::query_scalar(
+                "update apps set donations_on = false where maker_id = $1 and donations_on returning id",
+            )
+            .bind(user_id)
+            .fetch_all(&mut *tx)
+            .await?;
+            let all: Vec<Uuid> = sqlx::query_scalar("select id from apps where maker_id = $1")
+                .bind(user_id)
+                .fetch_all(&mut *tx)
+                .await?;
+            for app in &all {
+                end_server_donations(
+                    &mut tx,
+                    &state.config,
+                    None,
+                    Some(*app),
+                    "maker_disconnected",
+                )
+                .await?;
+            }
+            sqlx::query("delete from donation_accounts where user_id = $1")
+                .bind(user_id)
+                .execute(&mut *tx)
+                .await?;
+            (
+                "Your Stripe account is disconnected".to_string(),
+                format!(
+                    "Donations are off on your {} app{} and monthly server donations have ended. \
+                     Your donation records stay on your account page.",
+                    apps.len(),
+                    if apps.len() == 1 { "" } else { "s" }
+                ),
+            )
+        } else {
+            sqlx::query(
+                "update donation_accounts set stripe_account_id = $2, stripe_status = 'active', updated_at = now()
+                 where user_id = $1",
+            )
+            .bind(user_id)
+            .bind(new_account)
+            .execute(&mut *tx)
+            .await?;
+            (
+                "Donations now go to your new Stripe account".to_string(),
+                "New donations are paid into your new Stripe account. Monthly server donations \
+                 that already started stay on the old one until they end."
+                    .to_string(),
+            )
+        };
+        sqlx::query("update stripe_account_changes set applied_at = now() where id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        notify::send(
+            &mut tx,
+            Notice {
+                user_id: *user_id,
+                category: "donations",
+                title: title.clone(),
+                body: body.clone(),
+                link: "/account#donations".into(),
+                collapse_key: None,
+            },
+        )
+        .await?;
+        notify::email_user(&mut tx, &state.config, *user_id, &title, &body).await?;
+        admin::audit(
+            &mut tx,
+            "slop",
+            "donations.account_change_applied",
+            &user_id.to_string(),
+            json!({ "kind": kind }),
+        )
+        .await?;
+        tx.commit().await?;
+    }
+    Ok(due.len())
 }
 
 #[derive(Deserialize)]
@@ -1626,6 +2004,11 @@ async fn onboard(
     .bind(user.id)
     .fetch_one(&state.db)
     .await?;
+    // Connecting a Stripe account to receive money is a step-up action (SECURITY §4.3).
+    // Finishing the sign-up of one already connected isn't.
+    if existing.is_none() {
+        crate::auth::session::require_recent_sign_in(&state.db, &user).await?;
+    }
     let save = |acct: String, status: &'static str| {
         let db = state.db.clone();
         let user_id = user.id;
@@ -1756,16 +2139,68 @@ struct Statement {
     received_minor: i64,
     slop_fee_minor: i64,
     simulated: bool,
+    /// The VAT included in Slop's fee (LEGAL §3.5); zero under the reverse charge.
+    #[sqlx(skip)]
+    vat_minor: i64,
+}
+
+#[derive(Serialize)]
+struct Statements {
+    statements: Vec<Statement>,
+    vat: VatTreatment,
+}
+
+/// How VAT applies to Slop's fee for this user (LEGAL §3.5): the 5% always includes it.
+#[derive(Serialize)]
+struct VatTreatment {
+    /// none (no VAT where they are), included (Slop pays it out of its 5%), or reverse_charge
+    /// (a VAT-registered business: they account for it).
+    kind: &'static str,
+    /// The country's standard rate, in basis points.
+    rate_bp: Option<i32>,
+    country: String,
+    vat_number: Option<String>,
+    /// Whether the VAT number was confirmed with the EU's VIES service.
+    vat_number_checked: bool,
+    /// Slop's own VAT registration, once it has one (SLOP_VAT_ID).
+    slop_vat_id: Option<String>,
+}
+
+/// The VAT inside a VAT-inclusive amount: amount × rate / (1 + rate), to the nearest cent.
+pub fn vat_included(amount_minor: i64, rate_bp: i64) -> i64 {
+    (amount_minor * rate_bp * 2 + (10_000 + rate_bp)) / (2 * (10_000 + rate_bp))
+}
+
+async fn vat_treatment(state: &AppState, user: &CurrentUser) -> sqlx::Result<VatTreatment> {
+    let (rate, number, checked): (Option<i32>, Option<String>, bool) = sqlx::query_as(
+        "select c.vat_rate_bp, u.vat_number, u.vat_checked_at is not null
+         from users u join country_policies c on c.country_code = u.country_code where u.id = $1",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(VatTreatment {
+        kind: match (rate, checked) {
+            (None, _) => "none",
+            (Some(_), true) => "reverse_charge",
+            (Some(_), false) => "included",
+        },
+        rate_bp: rate,
+        country: user.country_code.clone(),
+        vat_number: number,
+        vat_number_checked: checked,
+        slop_vat_id: state.config.payments.vat_id.clone(),
+    })
 }
 
 /// Monthly fee statements (PAYMENTS §8, TAX-4): what Slop's fee came to on the user's donations
-/// and People jobs. The fee includes any VAT due; the VAT lines come with Slop's registrations.
+/// and People jobs, and the VAT included in it.
 async fn fee_statements(
     State(state): State<AppState>,
     user: CurrentUser,
-) -> ApiResult<Json<Vec<Statement>>> {
-    Ok(Json(
-        sqlx::query_as(
+) -> ApiResult<Json<Statements>> {
+    let vat = vat_treatment(&state, &user).await?;
+    let mut statements: Vec<Statement> = sqlx::query_as(
             "select to_char(date_trunc('month', p.created_at), 'YYYY-MM') as month, p.currency, p.kind,
                     count(*) as payments, sum(p.amount_minor)::int8 as received_minor,
                     sum(p.slop_fee_minor)::int8 as slop_fee_minor, bool_or(p.simulated) as simulated
@@ -1774,11 +2209,140 @@ async fn fee_statements(
                  select stripe_account_id from donation_accounts where user_id = $1
                  union select stripe_account_id from creatives where user_id = $1 and stripe_account_id is not null)
              group by 1, 2, 3 order by 1 desc, 3",
-        )
-        .bind(user.id)
-        .fetch_all(&state.db)
-        .await?,
-    ))
+    )
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await?;
+    if let ("included", Some(rate)) = (vat.kind, vat.rate_bp) {
+        for s in &mut statements {
+            s.vat_minor = vat_included(s.slop_fee_minor, i64::from(rate));
+        }
+    }
+    Ok(Json(Statements { statements, vat }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct VatBody {
+    /// With its country prefix (DE…, FR…, GB…); empty or null to remove it.
+    vat_number: Option<String>,
+}
+
+#[derive(Serialize)]
+struct VatSaved {
+    vat_number: Option<String>,
+    checked: bool,
+    note: Option<String>,
+}
+
+/// A maker's or creative's VAT number, for the reverse charge on Slop's fee. EU numbers are
+/// confirmed with the EU's VIES service; until a number is confirmed, statements show the VAT as
+/// included in the fee.
+async fn set_vat(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(b): Json<VatBody>,
+) -> ApiResult<Json<VatSaved>> {
+    let number = b
+        .vat_number
+        .as_deref()
+        .map(|n| {
+            n.chars()
+                .filter(|c| !c.is_whitespace() && *c != '.' && *c != '-')
+                .collect::<String>()
+                .to_ascii_uppercase()
+        })
+        .filter(|n| !n.is_empty());
+    let Some(number) = number else {
+        sqlx::query("update users set vat_number = null, vat_checked_at = null where id = $1")
+            .bind(user.id)
+            .execute(&state.db)
+            .await?;
+        return Ok(Json(VatSaved {
+            vat_number: None,
+            checked: false,
+            note: None,
+        }));
+    };
+    let valid_shape = number.len() >= 4
+        && number.len() <= 15
+        && number[..2].chars().all(|c| c.is_ascii_uppercase())
+        && number[2..]
+            .chars()
+            .all(|c| c.is_ascii_alphanumeric() || c == '+' || c == '*');
+    if !valid_shape {
+        return Err(ApiError::invalid(
+            "vat_number",
+            "a VAT number starts with its country code, like DE123456789",
+        ));
+    }
+    // Greece's VAT numbers start with EL.
+    let country = match &number[..2] {
+        "EL" => "GR",
+        c => c,
+    };
+    if country != user.country_code {
+        return Err(ApiError::invalid(
+            "vat_number",
+            "the VAT number has to be from the country on your account",
+        ));
+    }
+    let checked = match country {
+        "GB" => None,
+        _ => vies_check(&state, &number).await,
+    };
+    sqlx::query(
+        "update users set vat_number = $2, vat_checked_at = case when $3 then now() end where id = $1",
+    )
+    .bind(user.id)
+    .bind(&number)
+    .bind(checked == Some(true))
+    .execute(&state.db)
+    .await?;
+    let note = match checked {
+        Some(true) => None,
+        Some(false) => Some(
+            "The EU's VIES service says this number isn't valid for cross-border trade, so VAT \
+             stays included in Slop's fee. Check it, or ask your tax office to enable it for \
+             trade within the EU."
+                .into(),
+        ),
+        None if country == "GB" => Some(
+            "Saved. Slop can't check UK VAT numbers automatically yet, so VAT stays included in \
+             Slop's fee until it's confirmed."
+                .into(),
+        ),
+        None => Some(
+            "Saved, but the EU's VIES service didn't answer. Slop will check it again later; \
+             until then VAT stays included in Slop's fee."
+                .into(),
+        ),
+    };
+    Ok(Json(VatSaved {
+        vat_number: Some(number),
+        checked: checked == Some(true),
+        note,
+    }))
+}
+
+/// Asks the EU's VIES service whether a VAT number is valid. None when it couldn't say.
+async fn vies_check(state: &AppState, number: &str) -> Option<bool> {
+    let url = state.config.payments.vies_url.as_ref()?;
+    #[derive(Deserialize)]
+    struct Answer {
+        valid: bool,
+    }
+    let res = state
+        .http
+        .post(url.clone())
+        .json(&json!({ "countryCode": &number[..2], "vatNumber": &number[2..] }))
+        .send()
+        .await
+        .ok()?;
+    if !res.status().is_success() {
+        return None;
+    }
+    res.json::<Answer>().await.ok().map(|a| a.valid)
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1946,6 +2510,9 @@ pub async fn run(state: AppState) {
     loop {
         if let Err(err) = hourly(&state).await {
             tracing::error!(error = ?err, "donation reminders and renewals failed");
+        }
+        if let Err(err) = apply_account_changes(&state).await {
+            tracing::error!(error = ?err, "donation account changes failed");
         }
         let day = OffsetDateTime::now_utc().date();
         if last_day != Some(day) {

@@ -39,6 +39,16 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/{slug}/manage", get(overview))
         .route("/apps/{slug}/changes", post(request_change))
         .route("/apps/{slug}/changes/{id}/cancel", post(cancel_change))
+        .route("/apps/{slug}/repo-check", post(repo_check))
+}
+
+/// "Check now" for a frozen app's repository (frozen.rs).
+async fn repo_check(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Option<crate::frozen::Frozen>>> {
+    Ok(Json(crate::frozen::check_now(&state, &user, &slug).await?))
 }
 
 /// The longest reason a maker can give with a request.
@@ -159,6 +169,13 @@ struct Overview {
     auto_approval_note: Option<String>,
     /// Open requests first, then the latest decisions.
     changes: Vec<ChangeInfo>,
+    /// Slop can't read the repository (frozen.rs): no new releases until it can.
+    frozen: Option<crate::frozen::Frozen>,
+    /// Private Slop: the owner asked to make it public and it waits for a reviewer.
+    public_requested: bool,
+    /// Community builds of games whose original counts players with Slop Pulse need a Pulse
+    /// handshake before they're listed (DESIGN §9): none, waiting, or received.
+    pulse_required: Option<bool>,
 }
 
 async fn overview(
@@ -191,7 +208,19 @@ async fn overview(
     .bind(app_id)
     .fetch_all(&mut *conn)
     .await?;
+    let public_requested: bool =
+        sqlx::query_scalar("select public_requested_at is not null from apps where id = $1")
+            .bind(app_id)
+            .fetch_one(&mut *conn)
+            .await?;
+    let pulse_required = match crate::branches::needs_pulse(&mut conn, app_id).await? {
+        true => Some(crate::branches::has_pulse(&mut conn, app_id).await?),
+        false => None,
+    };
     Ok(Json(Overview {
+        frozen: crate::frozen::status(&state.db, app_id).await?,
+        public_requested,
+        pulse_required,
         held: pinned.is_some() && pinned == serving.as_ref().map(|r| r.id),
         serving,
         approved,

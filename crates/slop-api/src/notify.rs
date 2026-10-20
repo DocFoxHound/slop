@@ -43,6 +43,20 @@ pub const CATEGORIES: &[(&str, &str)] = &[
         "moderation",
         "Decisions about your content, appeals and your reports",
     ),
+    (
+        "donations",
+        "Donations: receipts, server donation reminders and changes to where yours are paid",
+    ),
+    ("shared", "Private Slop someone shares with you"),
+    (
+        "teams",
+        "Your teams: invitations, game nights and verification",
+    ),
+    (
+        "apps",
+        "Your apps: going public, and when Slop can't read a repository",
+    ),
+    ("chat", "New chat messages while you're away"),
 ];
 
 /// Pending notifications older than this aren't emailed (e.g. when email is switched on later).

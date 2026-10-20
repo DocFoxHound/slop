@@ -157,6 +157,9 @@ struct ReadyApp {
     approved_releases: i64,
     /// New pictures wait for review before the app can be listed.
     pictures_pending: bool,
+    /// Private Slop its owner asked to make public: listing it makes it public (SECURITY §12.3),
+    /// after Slop checks the repository is public again.
+    going_public: bool,
     #[sqlx(skip)]
     notes: Vec<Note>,
     #[sqlx(skip)]
@@ -224,9 +227,10 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
     let mut ready_to_list: Vec<ReadyApp> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select {APP_COLUMNS},
                 (select count(*) from releases r where r.app_id = a.id and r.status = 'approved') as approved_releases,
-                exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending
+                exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending,
+                a.visibility = 'private' as going_public
          from apps a join users u on u.id = a.maker_id
-         where a.status = 'draft' and a.visibility = 'public'
+         where a.status = 'draft' and (a.visibility = 'public' or a.public_requested_at is not null)
            and (a.stage = 'coming_soon' or exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved'))
          order by a.updated_at"
     )))
@@ -455,9 +459,36 @@ async fn list_app(
     Path(slug): Path<String>,
 ) -> ApiResult<StatusCode> {
     admin.may_decide()?;
-    admin::list_app(&state.db, &slug, &admin.actor)
-        .await
-        .map_err(refused)?;
+    let going_public: Option<(String,)> = sqlx::query_as(
+        "select repo_url from apps where slug = $1 and visibility = 'private' and public_requested_at is not null",
+    )
+    .bind(&slug)
+    .fetch_optional(&state.db)
+    .await?;
+    match going_public {
+        Some((repo,)) => {
+            // Check again now that the repository is public (SECURITY §12.3).
+            match crate::frozen::check(&state, &repo, true).await {
+                crate::frozen::Access::Readable => {}
+                crate::frozen::Access::Lost(reason) => {
+                    return Err(ApiError::Conflict(format!(
+                        "it can't go public yet: {reason}"
+                    )));
+                }
+                crate::frozen::Access::Unknown => {
+                    return Err(ApiError::Conflict(
+                        "Slop couldn't confirm the repository is public; try again shortly".into(),
+                    ));
+                }
+            }
+            admin::make_public(&state.db, &slug, &admin.actor)
+                .await
+                .map_err(refused)?;
+        }
+        None => admin::list_app(&state.db, &slug, &admin.actor)
+            .await
+            .map_err(refused)?,
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

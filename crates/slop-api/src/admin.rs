@@ -132,6 +132,9 @@ pub async fn approve(
         status == "awaiting_review",
         "release is {status}, not awaiting review"
     );
+    if let Some(reason) = crate::frozen::frozen_reason(&mut *tx, release.app_id).await? {
+        bail!("the app is frozen ({reason}), so its releases can't be checked or approved");
+    }
 
     let rows: Vec<FileRow> = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem,
@@ -305,6 +308,22 @@ async fn has_approved_release(tx: &mut sqlx::PgConnection, app_id: Uuid) -> anyh
 /// Puts a reviewed draft in the store. Beta and Released apps need an approved release first;
 /// Coming soon pages have no build (DESIGN §8).
 pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result<()> {
+    list_app_as(db, slug, reviewer, false).await
+}
+
+/// Private Slop whose owner asked to make it public (SECURITY §12.3), once the admin panel has
+/// checked its repository is public (frozen.rs): it becomes public and goes in the store. Its
+/// private shares end, since everyone can see it now.
+pub async fn make_public(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result<()> {
+    list_app_as(db, slug, reviewer, true).await
+}
+
+async fn list_app_as(
+    db: &PgPool,
+    slug: &str,
+    reviewer: &str,
+    going_public: bool,
+) -> anyhow::Result<()> {
     check_reviewer(reviewer)?;
     let mut tx = db.begin().await?;
     let row: Option<(Uuid, AppStage, String)> =
@@ -314,10 +333,44 @@ pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result
             .await?;
     let (id, stage, status) = row.context("no such app")?;
     ensure!(status != "listed", "already listed");
+    if going_public {
+        let requested: bool = sqlx::query_scalar(
+            "select visibility = 'private' and public_requested_at is not null from apps where id = $1",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?;
+        ensure!(requested, "its owner hasn't asked to make it public");
+        sqlx::query(
+            "update apps set visibility = 'public', public_requested_at = null where id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+        sqlx::query("delete from app_shares where app_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        sqlx::query("delete from app_team_shares where app_id = $1")
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+    }
     ensure!(
         !crate::catalog::is_private(&mut *tx, id).await?,
-        "it's Private Slop: private apps are never listed in the store"
+        "it's Private Slop: private apps are never listed in the store (unless the owner asks to make it public)"
     );
+    if let Some(reason) = crate::frozen::frozen_reason(&mut *tx, id).await? {
+        bail!("the app is frozen ({reason}); it can be listed once Slop can read its repository");
+    }
+    if crate::branches::needs_pulse(&mut tx, id).await? {
+        ensure!(
+            crate::branches::has_pulse(&mut tx, id).await?,
+            "this community build's original counts players with Slop Pulse, so the build must \
+             too (DESIGN §9): no Pulse handshake from it yet. The author launches it through \
+             Slop once and the handshake is recorded."
+        );
+    }
     if stage != AppStage::ComingSoon {
         ensure!(
             has_approved_release(&mut tx, id).await?,
@@ -337,11 +390,36 @@ pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result
     audit(
         &mut tx,
         reviewer,
-        "app.list",
+        if going_public {
+            "app.make_public"
+        } else {
+            "app.list"
+        },
         slug,
         json!({ "from": status }),
     )
     .await?;
+    if going_public {
+        let (maker, title): (Uuid, String) =
+            sqlx::query_as("select maker_id, title from apps where id = $1")
+                .bind(id)
+                .fetch_one(&mut *tx)
+                .await?;
+        crate::notify::send(
+            &mut tx,
+            crate::notify::Notice {
+                user_id: maker,
+                category: "apps",
+                title: format!("{title} is public and in the store"),
+                body: "A reviewer checked it again from scratch. Anyone can find it now; the \
+                       people you'd shared it with keep it in their library like everyone else."
+                    .into(),
+                link: format!("/app/{slug}"),
+                collapse_key: None,
+            },
+        )
+        .await?;
+    }
     tx.commit().await?;
     Ok(())
 }
