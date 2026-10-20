@@ -11,6 +11,7 @@ import {
   type QueuedAppeal,
   type QueuedReport,
   type AdminApp,
+  type AdminFeatured,
   type AdminQueue,
   type AdminToken,
   type AppStage,
@@ -611,6 +612,98 @@ function ServerChecks({ checks }: { checks: AdminQueue["checks"] }) {
 
 const STATUSES: Array<AppStatus | ""> = ["", "draft", "listed", "delisted"];
 
+/** The front page's Featured carousel (featured.rs): apps in order, each with one line. */
+function FeaturedEditor() {
+  const current = useLoad(() => api.admin.featured(), []);
+  const [draft, setDraft] = useState<AdminFeatured[]>();
+  const [slug, setSlug] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const list = draft ?? current.data ?? [];
+  const edit = (next: AdminFeatured[]) => setDraft(next);
+  const move = (i: number, by: number) => {
+    const next = [...list];
+    const [item] = next.splice(i, 1);
+    next.splice(i + by, 0, item);
+    edit(next);
+  };
+  const save = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.admin.setFeatured(list.map((f) => ({ slug: f.slug, blurb: f.blurb })));
+      setDraft(undefined);
+      current.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <details className="panel panel-pad">
+      <summary>
+        <b>Featured on the front page</b> <span className="muted">({current.data?.length ?? "…"} of 8)</span>
+      </summary>
+      <p className="muted small">
+        Shown in this order at the top of the store. Only apps in the store show; the line under each title says why it's
+        featured (up to 160 characters). Changes are logged.
+      </p>
+      {current.error && <ErrorState error={current.error} onRetry={current.reload} />}
+      <ol className="featured-edit">
+        {list.map((f, i) => (
+          <li key={f.slug}>
+            <div className="title-row">
+              <Link to={`/app/${f.slug}`}>
+                <b>{f.title || f.slug}</b>
+              </Link>
+              {!f.listed && f.title && <span className="badge warn">NOT IN THE STORE: HIDDEN</span>}
+              <button className="btn small ghost" disabled={i === 0} onClick={() => move(i, -1)} aria-label={`Move ${f.slug} up`}>
+                ↑
+              </button>
+              <button className="btn small ghost" disabled={i === list.length - 1} onClick={() => move(i, 1)} aria-label={`Move ${f.slug} down`}>
+                ↓
+              </button>
+              <button className="btn small ghost danger" onClick={() => edit(list.filter((_, j) => j !== i))}>
+                Remove
+              </button>
+            </div>
+            <input
+              aria-label={`Why ${f.slug} is featured`}
+              value={f.blurb}
+              maxLength={160}
+              placeholder="Why it's featured, e.g. A cozy roguelike that just hit 1.0"
+              onChange={(e) => edit(list.map((x, j) => (j === i ? { ...x, blurb: e.target.value } : x)))}
+            />
+          </li>
+        ))}
+      </ol>
+      <form
+        className="reason-form"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const s = slug.trim().replace(/^.*\/app\//, "");
+          if (s && !list.some((f) => f.slug === s)) edit([...list, { slug: s, title: "", blurb: "", listed: true }]);
+          setSlug("");
+        }}
+      >
+        <input aria-label="App address to feature" value={slug} placeholder="App address or link" onChange={(e) => setSlug(e.target.value)} />
+        <button className="btn small" disabled={!slug.trim() || list.length >= 8}>
+          Add
+        </button>
+        <button type="button" className="btn small slime" disabled={busy || !draft} onClick={() => void save()}>
+          {busy ? "Saving…" : "Save"}
+        </button>
+      </form>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </details>
+  );
+}
+
 function AppsTab() {
   const [status, setStatus] = useState<AppStatus | "">("");
   const apps = useLoad(() => api.admin.apps(status || undefined), [status]);
@@ -620,6 +713,7 @@ function AppsTab() {
 
   return (
     <>
+      <FeaturedEditor />
       <div className="filters">
         <label>
           Show{" "}

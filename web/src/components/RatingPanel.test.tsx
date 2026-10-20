@@ -1,5 +1,6 @@
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
+import { MemoryRouter } from "react-router";
 
 import type { Ratings } from "../api";
 import { LineChart } from "./Charts";
@@ -24,13 +25,15 @@ describe("RatingSummary", () => {
   afterEach(cleanup);
 
   it("waits for enough votes before showing a percentage", () => {
-    render(<RatingSummary ratings={base} />);
+    render(<RatingSummary ratings={base} />, { wrapper: MemoryRouter });
     expect(screen.getByText("4 votes")).toBeTruthy();
     expect(screen.queryByText(/% Not Slop/)).toBeNull();
   });
 
   it("shows weighted first, unweighted beside it, with the label", () => {
-    render(<RatingSummary ratings={{ ...base, not_slop: 8, slop: 2, percent: 80, percent_weighted: 91, label: "Very Not Slop" }} />);
+    render(<RatingSummary ratings={{ ...base, not_slop: 8, slop: 2, percent: 80, percent_weighted: 91, label: "Very Not Slop" }} />, {
+      wrapper: MemoryRouter,
+    });
     expect(screen.getByText("91% Not Slop")).toBeTruthy();
     expect(screen.getByText("Very Not Slop")).toBeTruthy();
     expect(screen.getByText(/80% unweighted · 10 votes/)).toBeTruthy();

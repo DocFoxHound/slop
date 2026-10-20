@@ -687,6 +687,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         "teams",
         "app_shares",
         "interests",
+        "featured_apps",
         "app_reviews",
         "reports",
         "moderation_decisions",
@@ -1021,6 +1022,27 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .execute(db)
     .await?
     .rows_affected();
+    // The front page: the five best-rated released games featured, and content labels on about
+    // one app in eight.
+    sqlx::query(
+        "insert into featured_apps (app_id, position, blurb)
+         select a.id, row_number() over (order by sum(v.weight) filter (where v.vote = 1) / nullif(sum(v.weight), 0) desc nulls last, a.slug),
+                (array['A player favourite this month', 'Small, polished and well loved', 'Just got a big update',
+                       'Players keep coming back to this one', 'Hidden gem'])[1 + abs(hashtext(a.slug)) % 5]
+         from apps a join votes v on v.app_id = a.id
+         where a.stage = 'released' and a.status = 'listed' and a.visibility = 'public' and a.parent_app_id is null
+         group by a.id having count(*) >= 5
+         order by sum(v.weight) filter (where v.vote = 1) / nullif(sum(v.weight), 0) desc nulls last, a.slug
+         limit 5",
+    )
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "update apps set content_labels = array[(array['romance', 'violence', 'horror', 'strong_language'])[1 + abs(hashtext(slug)) % 4]]
+         where abs(hashtext(slug || 'labels')) % 8 = 0",
+    )
+    .execute(db)
+    .await?;
     // Written reviews: about one vote in seven, in a few voices for each side.
     let reviews = sqlx::query(
         "insert into app_reviews (id, user_id, app_id, body, created_at, updated_at)

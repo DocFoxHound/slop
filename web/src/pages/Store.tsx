@@ -2,6 +2,7 @@ import { useState } from "react";
 import { Link } from "react-router";
 
 import { api } from "../api";
+import { FeaturedCarousel } from "../components/Featured";
 import { Sidebar } from "../components/Layout";
 import { ErrorState, SectionHeader, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -56,13 +57,16 @@ export function Store() {
   const categories = useLoad(() => api.categories(), []);
   const community = useLoad(() => api.apps({ community: true, sort: "rating", limit: 4 }).then((p) => p.apps), []);
   const server = useLoad(() => api.server(), []);
-  const trending = useLoad(
+  const featured = useLoad(() => api.featured(), []);
+  const popular = useLoad(
     () =>
       api
-        .apps({ sort: "trending", limit: 12 })
+        .apps({ sort: "popular", limit: 12 })
         .then((page) => page.apps.filter((a) => a.stage !== "coming_soon" && !a.is_dead).slice(0, 8)),
     [],
   );
+  const notSlop = useLoad(() => api.apps({ sort: "not_slop_now", limit: 8 }).then((p) => p.apps), []);
+  const freshSlop = useLoad(() => api.apps({ sort: "fresh_slop", limit: 4 }).then((p) => p.apps), []);
 
   return (
     <div className="page">
@@ -103,13 +107,19 @@ export function Store() {
           </section>
           )}
 
+          {featured.data && <FeaturedCarousel slides={featured.data} />}
+
           {me && <ForYouShelf />}
 
-          <SectionHeader title="Trending" sub="Most played this week" />
-          {trending.error ? (
-            <ErrorState error={trending.error} onRetry={trending.reload} />
+          <SectionHeader title="Popular this month" sub="Most added to libraries this month">
+            <Link to="/search?sort=popular" className="sub">
+              See all →
+            </Link>
+          </SectionHeader>
+          {popular.error ? (
+            <ErrorState error={popular.error} onRetry={popular.reload} />
           ) : (
-            <Shelf apps={trending.data} empty="Nothing to play yet." />
+            <Shelf apps={popular.data} empty="Nothing to play yet." />
           )}
 
           <SectionHeader title="Coming soon & in beta" sub="Projects on their way to release">
@@ -118,17 +128,6 @@ export function Store() {
             </Link>
           </SectionHeader>
           <UpcomingShelf />
-
-          <SectionHeader title="Community branches worth installing" sub="Mods, fixes, translations and ports from forks">
-            <Link to="/community" className="sub">
-              See all →
-            </Link>
-          </SectionHeader>
-          {community.error ? (
-            <ErrorState error={community.error} onRetry={community.reload} />
-          ) : (
-            <Shelf apps={community.data} empty="No community builds yet." />
-          )}
 
           <SectionHeader title="Browse by category">
             <Link to="/browse" className="sub">
@@ -144,6 +143,24 @@ export function Store() {
             ))}
           </div>
 
+          <SectionHeader title="Most Not Slop right now" sub="Best rated by votes from the last 30 days" />
+          {notSlop.error ? (
+            <ErrorState error={notSlop.error} onRetry={notSlop.reload} />
+          ) : (
+            <Shelf apps={notSlop.data} empty="Not enough recent votes yet." />
+          )}
+
+          <SectionHeader title="Community branches worth installing" sub="Mods, fixes, translations and ports from forks">
+            <Link to="/community" className="sub">
+              See all →
+            </Link>
+          </SectionHeader>
+          {community.error ? (
+            <ErrorState error={community.error} onRetry={community.reload} />
+          ) : (
+            <Shelf apps={community.data} empty="No community builds yet." />
+          )}
+
           <SectionHeader title="New & updated" />
           {fresh.error ? (
             <ErrorState error={fresh.error} onRetry={fresh.reload} />
@@ -156,6 +173,13 @@ export function Store() {
                 </>
               }
             />
+          )}
+
+          {freshSlop.data && freshSlop.data.length > 0 && (
+            <>
+              <SectionHeader title="Fresh slop" sub="The most 👎 Slop votes this month. For fun: be kind in reviews." />
+              <Shelf apps={freshSlop.data} empty="" />
+            </>
           )}
         </div>
       </div>

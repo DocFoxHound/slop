@@ -508,7 +508,8 @@ async fn launch_app(
     // Slop Pulse: a signed-in launch gets a one-time token for the game to ping with
     // (DESIGN §11). Best effort: the game starts either way.
     if desktop.api.has_session() {
-        let path = format!("/v1/apps/{}/launch", urlencode(&slug));
+        let platform = if cfg!(windows) { "windows" } else { "linux" };
+        let path = format!("/v1/apps/{}/launch?platform={platform}", urlencode(&slug));
         let launched = tokio::time::timeout(
             Duration::from_secs(3),
             desktop.api.request(slop_client::Method::POST, &path, None),

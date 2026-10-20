@@ -33,6 +33,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/apps/{slug}/ratings", get(ratings))
         .route("/apps/{slug}/vote", post(vote))
+        .route("/apps/{slug}/ratings/breakdown", get(breakdown))
 }
 
 /// How much a vote counts (METRICS §2), from 0.1 to 1.
@@ -221,6 +222,98 @@ pub async fn daily(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<Day>> {
     .await
 }
 
+/// One group of current votes in the maker's breakdown.
+#[derive(Serialize)]
+pub struct Group {
+    /// A version, or a platform (windows, linux); null when it wasn't recorded.
+    pub key: Option<String>,
+    #[serde(flatten)]
+    pub tally: Tally,
+}
+
+/// Changes of vote made while players had one version ("after 1.4, 212 players changed 👎 → 👍").
+#[derive(Serialize, sqlx::FromRow)]
+pub struct Impact {
+    pub version: String,
+    pub to_not_slop: i64,
+    pub to_slop: i64,
+    /// New votes (no earlier vote) cast on that version.
+    pub new_votes: i64,
+}
+
+/// The maker's view of their ratings (METRICS §3, §5): current votes by the version and platform
+/// each was cast on, and how each version changed people's minds.
+#[derive(Serialize)]
+pub struct Breakdown {
+    pub by_version: Vec<Group>,
+    pub by_platform: Vec<Group>,
+    pub impact: Vec<Impact>,
+}
+
+/// Groups each account's current vote by a column of the event that set it.
+async fn grouped(
+    db: &sqlx::PgPool,
+    app_id: Uuid,
+    column: &'static str,
+) -> sqlx::Result<Vec<Group>> {
+    let rows: Vec<(Option<String>, i64, i64, f64, f64)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "with current as (
+             select distinct on (e.user_id) e.{column} as key, e.vote, e.weight
+             from vote_events e where e.app_id = $1
+             order by e.user_id, e.created_at desc, e.id desc
+         )
+         select key, count(*) filter (where vote = 1), count(*) filter (where vote = -1),
+                coalesce(sum(weight) filter (where vote = 1), 0)::float8,
+                coalesce(sum(weight) filter (where vote = -1), 0)::float8
+         from current where vote <> 0
+         group by key order by count(*) desc limit 20"
+        )))
+        .bind(app_id)
+        .fetch_all(db)
+        .await?;
+    Ok(rows
+        .into_iter()
+        .map(|(key, up, down, upw, downw)| Group {
+            key,
+            tally: Tally::new(up, down, upw, downw),
+        })
+        .collect())
+}
+
+pub async fn breakdown_for(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Breakdown> {
+    Ok(Breakdown {
+        by_version: grouped(db, app_id, "release_version").await?,
+        by_platform: grouped(db, app_id, "platform").await?,
+        impact: sqlx::query_as(
+            "select release_version as version,
+                    count(*) filter (where vote = 1 and prev_vote = -1) as to_not_slop,
+                    count(*) filter (where vote = -1 and prev_vote = 1) as to_slop,
+                    count(*) filter (where vote <> 0 and prev_vote is null) as new_votes
+             from vote_events where app_id = $1 and release_version is not null
+             group by release_version order by max(created_at) desc limit 10",
+        )
+        .bind(app_id)
+        .fetch_all(db)
+        .await?,
+    })
+}
+
+/// Only the maker; anyone else gets 404.
+async fn breakdown(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Breakdown>> {
+    let app_id: Uuid = sqlx::query_scalar("select id from apps where slug = $1 and maker_id = $2")
+        .bind(&slug)
+        .bind(user.id)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    Ok(Json(breakdown_for(&state.db, app_id).await?))
+}
+
 /// Records a vote (1, -1, or 0 to withdraw) as an event plus the current vote. `at` is for the
 /// simulator; real votes happen now. Returns false when nothing changed.
 pub async fn cast(
@@ -231,14 +324,15 @@ pub async fn cast(
     at: Option<OffsetDateTime>,
 ) -> anyhow::Result<bool> {
     let mut tx = db.begin().await?;
-    let usage: Option<(i64, i32)> = sqlx::query_as(
-        "select playtime_seconds, days_launched from user_app_usage where user_id = $1 and app_id = $2",
+    let usage: Option<(i64, i32, Option<String>)> = sqlx::query_as(
+        "select playtime_seconds, days_launched, last_platform from user_app_usage where user_id = $1 and app_id = $2",
     )
     .bind(user_id)
     .bind(app_id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (playtime, days) = usage.ok_or_else(|| anyhow::anyhow!("hasn't launched the app"))?;
+    let (playtime, days, platform) =
+        usage.ok_or_else(|| anyhow::anyhow!("hasn't launched the app"))?;
     let prev: Option<i16> =
         sqlx::query_scalar("select vote from votes where user_id = $1 and app_id = $2 for update")
             .bind(user_id)
@@ -258,8 +352,8 @@ pub async fn cast(
     .fetch_optional(&mut *tx)
     .await?;
     sqlx::query(
-        "insert into vote_events (id, user_id, app_id, vote, prev_vote, release_version, playtime_seconds, days_launched, weight, created_at)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        "insert into vote_events (id, user_id, app_id, vote, prev_vote, release_version, playtime_seconds, days_launched, weight, created_at, platform)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
     )
     .bind(Uuid::now_v7())
     .bind(user_id)
@@ -271,6 +365,7 @@ pub async fn cast(
     .bind(days)
     .bind(weight)
     .bind(at)
+    .bind(&platform)
     .execute(&mut *tx)
     .await?;
     if vote == 0 {

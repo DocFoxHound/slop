@@ -22,7 +22,7 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
         <b>{total === 0 ? "No votes yet" : `${total} vote${total === 1 ? "" : "s"}`}</b>
         <span className="muted small">
           {" "}
-          · a rating shows from {ratings.min_votes} votes
+          · a rating shows from {ratings.min_votes} votes · <Link to="/ratings">how ratings work</Link>
         </span>
       </div>
     );
@@ -34,7 +34,7 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
       <span className={`rating-big ${good ? "good" : bad ? "bad" : "mixed"}`}>{ratings.percent_weighted}% Not Slop</span>{" "}
       <b>{ratings.label}</b>
       <div className="muted small">
-        weighted by playtime · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()}{" "}
+        <Link to="/ratings">weighted by playtime</Link> · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()}{" "}
         👍 / {ratings.slop.toLocaleString()} 👎)
       </div>
     </div>

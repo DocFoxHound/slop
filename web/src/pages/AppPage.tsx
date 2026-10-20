@@ -8,7 +8,7 @@ import { RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
 import { Reviews } from "../components/Reviews";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
-import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
+import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
@@ -106,6 +106,15 @@ function AppView({ app }: { app: AppDetail }) {
               <StageBadge app={app} />
               {age && <span className="badge neutral" title={`Rated ${age}`}>{age}</span>}
             </div>
+            {app.content_labels.length > 0 && (
+              <div className="label-chips" aria-label="Content labels">
+                {app.content_labels.map((l) => (
+                  <span key={l} className="badge neutral">
+                    {CONTENT_LABEL[l].toUpperCase()}
+                  </span>
+                ))}
+              </div>
+            )}
             <div className="muted">
               by <b className="text">{app.maker.display_name}</b>
               {app.official_team && (

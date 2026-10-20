@@ -7977,9 +7977,11 @@ async fn search_finds_what_runs_on_a_platform_including_community_builds(db: PgP
         list_slugs(&app, req(Method::GET, "/v1/apps?sort=reviewed")).await[0],
         "moat"
     );
+    // Popular this month: most added to libraries since the month began.
     sqlx::query(
-        "insert into pulse_counts (app_id, bucket, players) select id, now() - interval '20 days', 50 from apps where slug = 'tower'",
+        "insert into library_entries (user_id, app_id) select $1, id from apps where slug = 'tower'",
     )
+    .bind(reviewer)
     .execute(&app.db)
     .await
     .unwrap();
@@ -10109,4 +10111,141 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
         }
     }
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn storefront_shelves_featured_and_rating_breakdown(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    for slug in ["good-game", "sloppy-game", "hidden-game"] {
+        listed_with(&app, maker_id, slug, "released", "").await;
+    }
+    sqlx::query("update apps set status = 'delisted' where slug = 'hidden-game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // Six players launch both games on Windows and vote: good-game 👍, sloppy-game 👎.
+    for i in 0..6 {
+        let (_, player) = app.user(&format!("Player {i}"), "US").await;
+        for (slug, vote) in [("good-game", "not_slop"), ("sloppy-game", "slop")] {
+            let res = app
+                .send(
+                    req(
+                        Method::POST,
+                        format!("/v1/apps/{slug}/launch?platform=windows"),
+                    )
+                    .cookie(&player),
+                )
+                .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let res = app
+                .send(
+                    req(Method::POST, format!("/v1/apps/{slug}/vote"))
+                        .cookie(&player)
+                        .json(json!({ "vote": vote })),
+                )
+                .await;
+            assert_eq!(res.status(), StatusCode::OK);
+        }
+        if i < 2 {
+            app.send(req(Method::PUT, "/v1/me/library/sloppy-game").cookie(&player))
+                .await;
+        }
+    }
+
+    let now = list_slugs(&app, req(Method::GET, "/v1/apps?sort=not_slop_now")).await;
+    assert_eq!(now.first().map(String::as_str), Some("good-game"));
+    let fresh = list_slugs(&app, req(Method::GET, "/v1/apps?sort=fresh_slop")).await;
+    assert_eq!(
+        fresh,
+        vec!["sloppy-game"],
+        "only apps with 👎 votes this month"
+    );
+    let popular = list_slugs(&app, req(Method::GET, "/v1/apps?sort=popular")).await;
+    assert_eq!(
+        popular.first().map(String::as_str),
+        Some("sloppy-game"),
+        "most library adds this month"
+    );
+
+    // The maker's breakdown: by platform, and only for the maker.
+    let b = body_json(
+        app.send(req(Method::GET, "/v1/apps/good-game/ratings/breakdown").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(b["by_platform"][0]["key"], "windows");
+    assert_eq!(b["by_platform"][0]["not_slop"], 6);
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let res = app
+        .send(req(Method::GET, "/v1/apps/good-game/ratings/breakdown").cookie(&stranger))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Content labels: only the known ones.
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/good-game")
+                .cookie(&maker)
+                .json(json!({ "content_labels": ["romance", "romance"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["content_labels"], json!(["romance"]));
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/good-game")
+                .cookie(&maker)
+                .json(json!({ "content_labels": ["explicit"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Featured: admins only, in order, and only apps in the store show.
+    let slides = json!({ "apps": [
+        { "slug": "sloppy-game", "blurb": "Gloriously bad" },
+        { "slug": "hidden-game", "blurb": "" },
+        { "slug": "good-game", "blurb": "Just hit 1.0" },
+    ] });
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/admin/featured")
+                .cookie(&maker)
+                .json(slides.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let (_, admin) = make_admin(&app, "Admin").await;
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/admin/featured")
+                .cookie(&admin)
+                .json(slides),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let shown = body_json(app.send(req(Method::GET, "/v1/featured")).await).await;
+    let order: Vec<&str> = shown
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, vec!["sloppy-game", "good-game"]);
+    assert_eq!(shown[0]["blurb"], "Gloriously bad");
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/admin/featured")
+                .cookie(&admin)
+                .json(json!({ "apps": [{ "slug": "good-game", "blurb": "x".repeat(161) }] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let logged: i64 =
+        sqlx::query_scalar("select count(*) from audit_log where action = 'featured.set'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(logged, 1);
 }

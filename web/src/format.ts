@@ -1,6 +1,6 @@
 // Display helpers shared by the pages.
 
-import type { AppStage, AppSummary } from "./api";
+import type { AppStage, AppSummary, ContentLabel } from "./api";
 
 export const STAGE_LABEL: Record<AppStage, string> = {
   coming_soon: "Coming soon",
@@ -62,3 +62,13 @@ export function toMinor(text: string): number | null {
   const [whole, frac = ""] = t.split(".");
   return Number(whole) * 100 + Number(frac.padEnd(2, "0"));
 }
+
+/** Content labels (DESIGN §5), as players read them. */
+export const CONTENT_LABEL: Record<ContentLabel, string> = {
+  romance: "Romance",
+  suggestive: "Suggestive themes",
+  violence: "Violence",
+  horror: "Horror",
+  strong_language: "Strong language",
+  gambling_themes: "Gambling themes",
+};

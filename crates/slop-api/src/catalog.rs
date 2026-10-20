@@ -136,7 +136,9 @@ pub(crate) fn push_summary_columns_with(
 ) {
     let rules = config.catalog;
     qb.push(
-        "select a.slug, a.title, a.summary, a.kind, a.stage, a.status, a.min_age, a.updated_at,
+        "select a.slug, a.title, a.summary, a.kind, a.stage, a.status, a.min_age, a.updated_at, a.content_labels,
+                (select p.players from pulse_counts p where p.app_id = a.id and a.kind = 'game'
+                   and p.bucket > now() - interval '15 minutes' order by p.bucket desc limit 1) as players_now,
                 coalesce(array(select t.slug from app_tags at join tags t on t.id = at.tag_id
                                where at.app_id = a.id order by t.slug), '{}') as tags,
                 (select ms.thumbnail->>'url' from media_sets ms where ms.id = a.media_set_id) as thumbnail_url,
@@ -174,6 +176,10 @@ pub struct AppSummary {
     #[serde(skip_serializing_if = "is_listed")]
     status: AppStatus,
     pub min_age: i16,
+    /// Themes players may want to know about (DESIGN §5): romance, suggestive, violence…
+    pub content_labels: Vec<String>,
+    /// Games: players in Slop Pulse's latest count, if it's recent.
+    pub players_now: Option<i32>,
     pub tags: Vec<String>,
     /// The maker's store tile, if they set one (media.rs).
     thumbnail_url: Option<String>,
@@ -212,8 +218,14 @@ enum Sort {
     Anticipated,
     /// Best rated (weighted % Not Slop, with enough votes), then most votes.
     Rating,
-    /// Most players at once over the last 30 days ("popular this month").
+    /// Most added to libraries this calendar month ("Popular this month", DESIGN §5), then most
+    /// players this month.
     Popular,
+    /// Best weighted % Not Slop among votes cast or changed in the last 30 days ("Most Not Slop
+    /// right now").
+    NotSlopNow,
+    /// Most weighted 👎 Slop votes in the last 30 days ("Fresh slop", for fun).
+    FreshSlop,
     /// Most written reviews showing.
     Reviewed,
 }
@@ -366,8 +378,26 @@ async fn list_apps(
         }
         (Sort::Popular, _) => {
             qb.push(
-                " order by (select coalesce(max(p.players), 0) from pulse_counts p
-                            where p.app_id = a.id and p.bucket > now() - interval '30 days') desc, a.updated_at desc, a.slug",
+                " order by (select count(*) from library_entries l
+                            where l.app_id = a.id and l.added_at >= date_trunc('month', now())) desc,
+                           (select coalesce(max(p.players), 0) from pulse_counts p
+                            where p.app_id = a.id and p.bucket >= date_trunc('month', now())) desc, a.updated_at desc, a.slug",
+            );
+        }
+        (Sort::NotSlopNow, _) => {
+            qb.push(" and (select count(*) from votes v where v.app_id = a.id and v.updated_at > now() - interval '30 days') >= ")
+                .push_bind(crate::votes::MIN_VOTES)
+                .push(
+                    " order by (select sum(v.weight) filter (where v.vote = 1) / nullif(sum(v.weight), 0)
+                                from votes v where v.app_id = a.id and v.updated_at > now() - interval '30 days') desc nulls last,
+                               (select count(*) from votes v where v.app_id = a.id) desc, a.slug",
+                );
+        }
+        (Sort::FreshSlop, _) => {
+            qb.push(
+                " and exists (select 1 from votes v where v.app_id = a.id and v.vote = -1 and v.updated_at > now() - interval '30 days')
+                  order by (select sum(v.weight) from votes v
+                            where v.app_id = a.id and v.vote = -1 and v.updated_at > now() - interval '30 days') desc, a.slug",
             );
         }
         (Sort::Reviewed, _) => {
@@ -810,6 +840,8 @@ struct NewApp {
     license_spdx: String,
     min_age: i16,
     #[serde(default)]
+    content_labels: Vec<String>,
+    #[serde(default)]
     tags: Vec<String>,
     platforms: Vec<String>,
     /// "public" (the default) or "private" (Private Slop, DESIGN §13).
@@ -828,8 +860,35 @@ struct AppChanges {
     repo_url: Option<String>,
     license_spdx: Option<String>,
     min_age: Option<i16>,
+    content_labels: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     platforms: Option<Vec<String>>,
+}
+
+/// Content labels makers can set (DESIGN §5); the database checks the same list.
+pub const CONTENT_LABELS: [&str; 6] = [
+    "romance",
+    "suggestive",
+    "violence",
+    "horror",
+    "strong_language",
+    "gambling_themes",
+];
+
+fn validate_content_labels(labels: &[String]) -> ApiResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for l in labels {
+        if !CONTENT_LABELS.contains(&l.as_str()) {
+            return Err(ApiError::invalid(
+                "content_labels",
+                "use romance, suggestive, violence, horror, strong_language or gambling_themes",
+            ));
+        }
+        if !out.contains(l) {
+            out.push(l.clone());
+        }
+    }
+    Ok(out)
 }
 
 const MAX_TAGS: usize = 10;
@@ -1005,6 +1064,7 @@ async fn create_app(
     let repo_url = validate_repo_url_in(&state, &req.repo_url)?;
     let license = validate_license(&req.license_spdx)?;
     let min_age = validate_min_age(req.min_age)?;
+    let content_labels = validate_content_labels(&req.content_labels)?;
     let platforms = validate_platforms(&req.platforms)?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
@@ -1020,8 +1080,8 @@ async fn create_app(
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
-                           platforms, visibility)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                           platforms, visibility, content_labels)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -1036,6 +1096,7 @@ async fn create_app(
     .bind(min_age)
     .bind(&platforms)
     .bind(visibility)
+    .bind(&content_labels)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -1117,6 +1178,10 @@ async fn update_app(
     if let Some(platforms) = &changes.platforms {
         qb.push(", platforms = ")
             .push_bind(validate_platforms(platforms)?);
+    }
+    if let Some(labels) = &changes.content_labels {
+        qb.push(", content_labels = ")
+            .push_bind(validate_content_labels(labels)?);
     }
     qb.push(" where id = ").push_bind(app_id);
     qb.build().execute(&mut *tx).await?;

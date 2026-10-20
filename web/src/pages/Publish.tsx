@@ -12,6 +12,7 @@ import {
   type AppStage,
   type AppSummary,
   type Category,
+  type ContentLabel,
   type NewApp,
   PROVIDER_LABEL,
   type Release,
@@ -21,6 +22,7 @@ import { LicensePicker } from "../components/LicensePicker";
 import { MediaEditor } from "../components/MediaEditor";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
 import { ErrorState, Loading } from "../components/ui";
+import { CONTENT_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { useTermsGate } from "../components/Terms";
@@ -161,6 +163,7 @@ const EMPTY: NewApp = {
   repo_url: "",
   license_spdx: "",
   min_age: 0,
+  content_labels: [],
   tags: [],
   platforms: [],
 };
@@ -206,6 +209,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           repo_url: existing.repo_url,
           license_spdx: existing.license_spdx,
           min_age: existing.min_age,
+          content_labels: existing.content_labels,
           tags: existing.tags,
           platforms: existing.platforms,
         }
@@ -238,6 +242,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             repo_url: form.repo_url,
             license_spdx: form.license_spdx,
             min_age: form.min_age,
+            content_labels: form.content_labels,
             tags: form.tags,
             platforms: form.platforms,
           })
@@ -406,6 +411,31 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             "18+ apps are hidden in the UK under-18 view.",
           )}
         </div>
+
+        <fieldset className="tag-picker">
+          <legend>Content labels</legend>
+          <p className="muted small">
+            Tick any that apply, so players know what to expect. Sexually explicit content isn't allowed on Slop at all.
+          </p>
+          <div className="chips">
+            {(Object.keys(CONTENT_LABEL) as ContentLabel[]).map((l) => {
+              const on = (form.content_labels ?? []).includes(l);
+              return (
+                <button
+                  type="button"
+                  key={l}
+                  className={`chip ${on ? "on" : ""}`}
+                  aria-pressed={on}
+                  onClick={() =>
+                    set("content_labels", on ? (form.content_labels ?? []).filter((x) => x !== l) : [...(form.content_labels ?? []), l])
+                  }
+                >
+                  {CONTENT_LABEL[l]}
+                </button>
+              );
+            })}
+          </div>
+        </fieldset>
 
         <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
 

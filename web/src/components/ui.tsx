@@ -74,6 +74,11 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
             {app.not_slop_percent}% Not Slop <span className="faint">· {app.vote_count.toLocaleString()} votes</span>
           </span>
         )}
+        {app.players_now !== null && app.players_now > 0 && (
+          <div className="tile-stat live">
+            <span className="live-dot" aria-hidden="true" /> {app.players_now.toLocaleString()} playing now
+          </div>
+        )}
         {app.stage !== "released" && app.interested > 0 && (
           <div className="tile-stat">★ {app.interested.toLocaleString()} interested</div>
         )}

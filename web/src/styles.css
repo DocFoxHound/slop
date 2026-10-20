@@ -843,3 +843,30 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .ownership.ok { color: var(--good); }
 .ownership p { margin-bottom: 8px; }
 .ownership-code { user-select: all; font-size: 13px; }
+
+/* Featured carousel (components/Featured.tsx) */
+.featured { padding: 0; overflow: hidden; margin-bottom: 18px; }
+.featured-slide { display: grid; grid-template-columns: minmax(0, 1.3fr) minmax(0, 1fr); gap: 0; }
+.featured-art .art { aspect-ratio: 920 / 430; height: 100%; border-radius: 0; }
+.featured-text { padding: 18px 20px; display: flex; flex-direction: column; gap: 6px; }
+.featured-text h2 { margin: 0; font-size: 22px; }
+.featured-text h2 a { color: inherit; }
+.featured-blurb { font-weight: 600; margin: 0; }
+.eyebrow { font-size: 11px; letter-spacing: 0.08em; text-transform: uppercase; color: var(--slime); font-weight: 700; }
+.featured-nav { display: flex; justify-content: center; align-items: center; gap: 2px; padding: 6px; border-top: 1px solid var(--line); }
+.featured-nav .dot { width: 24px; height: 24px; border: 0; background: transparent; padding: 0; display: grid; place-items: center; cursor: pointer; }
+.featured-nav .dot::before { content: ""; width: 8px; height: 8px; border-radius: 50%; background: var(--line); }
+.featured-nav .dot.on::before { background: var(--slime); }
+.tile-stat.live { color: var(--good); }
+.live-dot { display: inline-block; width: 7px; height: 7px; border-radius: 50%; background: var(--good); margin-right: 2px; }
+.label-chips { display: flex; flex-wrap: wrap; gap: 6px; }
+@media (max-width: 720px) {
+  .featured-slide { grid-template-columns: 1fr; }
+}
+.prose h2 { font-size: 20px; margin: 24px 0 8px; color: var(--text); }
+.prose .lead { font-size: 16px; color: var(--text); }
+.kv-table { border-collapse: collapse; margin: 8px 0 14px; font-size: 14px; }
+.kv-table th, .kv-table td { text-align: left; padding: 5px 14px 5px 0; border-bottom: 1px solid var(--line); }
+.kv-table th { color: var(--muted); font-weight: 600; }
+.featured-edit { padding-left: 20px; display: grid; gap: 10px; }
+.featured-edit input { width: 100%; margin-top: 4px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; }

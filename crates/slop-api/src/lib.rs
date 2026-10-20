@@ -13,6 +13,7 @@ pub mod config;
 pub mod desktop_updates;
 pub mod donations;
 pub mod error;
+pub mod featured;
 pub mod foryou;
 pub mod friends;
 pub mod frozen;
@@ -139,6 +140,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(review::routes())
         .merge(pulse::routes())
         .merge(votes::routes())
+        .merge(featured::routes())
         .merge(foryou::routes())
         .merge(sim::routes())
         .merge(people::routes())
