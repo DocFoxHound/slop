@@ -151,6 +151,9 @@ export interface ChatChanges {
   conversations: string[];
   list: boolean;
   devices: boolean;
+  /** Who is typing where right now; shown for a few seconds. */
+  typing: Array<{ conversation: string; user: string; name: string }>;
+  new_messages: Array<{ conversation: string; title: string; sender: string; text: string }>;
 }
 
 export type ChatAction =
@@ -186,7 +189,10 @@ export type ChatAction =
   | { action: "security_codes"; conversation: string }
   | { action: "report"; conversation: string; message: string; reason: string; details: string }
   | { action: "set_backups"; on: boolean }
-  | { action: "restore"; code: string };
+  | { action: "restore"; code: string }
+  | { action: "typing"; conversation: string; typing: boolean }
+  | { action: "notifications"; on: boolean; show_text: boolean }
+  | { action: "notification_settings" };
 
 export const desktop = {
   sessionStatus: () => call<{ signed_in: boolean }>("session_status"),
@@ -219,6 +225,14 @@ export const desktop = {
   runInstaller: (slug: string) => call<void>("run_installer", { slug }),
   /** Chat, encrypted in the app (see ChatAction). */
   chat: <T>(action: ChatAction) => call<T>("chat", { action }),
+  /** The in-game overlay (Shift+Tab over a fullscreen Slop game): read, or switch on or off. */
+  overlaySetting: (on?: boolean) => call<boolean>("overlay_setting", { on: on ?? null }),
+  /** Closes the overlay and returns to the game. */
+  overlayHide: () => call<void>("overlay_hide"),
+  onOverlayShown: async (handler: (e: { game: string | null }) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<{ game: string | null }>("overlay-shown", (e) => handler(e.payload));
+  },
   /** Fires when chat has something new. Returns an unsubscribe function. */
   onChatChanged: async (handler: (c: ChatChanges) => void) => {
     const { listen } = await import("@tauri-apps/api/event");

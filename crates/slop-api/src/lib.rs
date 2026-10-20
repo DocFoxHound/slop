@@ -28,6 +28,7 @@ pub mod people;
 pub mod policy;
 pub mod private;
 pub mod pulse;
+pub mod push;
 pub mod ratelimit;
 pub mod releases;
 pub mod review;
@@ -151,6 +152,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(teams::routes())
         .merge(frozen::routes())
         .merge(friends::routes())
+        .merge(push::routes())
         .merge(chat::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.

@@ -8,7 +8,8 @@ import { Link, useNavigate } from "react-router";
 import { api, ApiError, type CounterNotice, type FeeStatement, type LegalNotice, type ModerationDecision, type VatTreatment } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
-import { openExternal, saveFile } from "../platform";
+import { isDesktop, openExternal, saveFile } from "../platform";
+import { disablePush, enablePush, pushState, type PushState } from "../push";
 import { useSession } from "../session";
 import { AcceptDocument } from "./Terms";
 import { ErrorState } from "./ui";
@@ -395,6 +396,7 @@ export function AccountNotifications() {
           {p.has_email ? "" : " (you don't have an email on your account, so nothing is emailed)"}
           {p.email_on ? "" : ". This server doesn't send email yet"}. Slop never sends marketing.
         </p>
+        {!isDesktop && <PushSwitch />}
         {p.categories.map((c) => (
           <label className="check" key={c.category}>
             <input type="checkbox" checked={c.email} onChange={(e) => void set(c.category, e.target.checked)} />
@@ -708,5 +710,49 @@ function VatNumber({ vat, onSaved }: { vat: VatTreatment; onSaved: () => void })
         </p>
       )}
     </form>
+  );
+}
+
+/** Notifications on this phone or browser (web push). */
+function PushSwitch() {
+  const [state, setState] = useState<PushState>();
+  const [busy, setBusy] = useState(false);
+  useEffect(() => {
+    pushState().then(setState, () => setState("unsupported"));
+  }, []);
+  if (!state || state === "unsupported") return null;
+  const flip = async (on: boolean) => {
+    setBusy(true);
+    try {
+      setState(await (on ? enablePush() : disablePush()));
+    } catch {
+      setState("off");
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="push-switch">
+      {state === "needs-home-screen" ? (
+        <p className="muted small">
+          📱 To get notifications on this iPhone or iPad, add Slop to your Home Screen (Share → Add to Home Screen), open it
+          from there, and come back here.
+        </p>
+      ) : state === "blocked" ? (
+        <p className="muted small">📱 Notifications are blocked for Slop in this browser's settings.</p>
+      ) : state === "unavailable" ? (
+        <p className="muted small">📱 Notifications on phones aren't switched on on this server yet.</p>
+      ) : (
+        <label className="check">
+          <input type="checkbox" checked={state === "on"} disabled={busy} onChange={(e) => void flip(e.target.checked)} />
+          <span>
+            <b>Notifications on this phone or browser</b>
+            <span className="muted small" style={{ display: "block" }}>
+              Everything that shows under the 🔔. Slop's push says nothing until your device fetches it from Slop.
+            </span>
+          </span>
+        </label>
+      )}
+    </div>
   );
 }

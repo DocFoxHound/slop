@@ -51,7 +51,7 @@ export default defineConfig({
     target: "es2022",
     sourcemap: true,
     // The desktop app's small sign-in window is its own page (crates/slop-desktop).
-    rollupOptions: { input: { main: "index.html", login: "login.html" } },
+    rollupOptions: { input: { main: "index.html", login: "login.html", overlay: "overlay.html" } },
   },
   test: { environment: "jsdom" },
 });

@@ -7,6 +7,8 @@
 // No console window on Windows release builds.
 #![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]
 
+mod overlay;
+
 use std::{sync::Arc, time::Duration};
 
 use serde::Serialize;
@@ -287,6 +289,8 @@ async fn install_update(app: AppHandle) -> CommandResult<()> {
 // Windows: a small sign-in window first, then the store (docs: like Steam's launcher).
 
 const LOGIN_WINDOW: &str = "login";
+/// The in-game overlay (overlay.rs).
+const OVERLAY_WINDOW: &str = "overlay";
 
 fn open_login(app: &AppHandle) {
     if let Some(window) = app.get_webview_window(LOGIN_WINDOW) {
@@ -492,7 +496,11 @@ fn uninstall_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()>
 
 /// Starts an installed app after checking its signature, revocation and files.
 #[tauri::command]
-async fn launch_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()> {
+async fn launch_app(
+    app: AppHandle,
+    desktop: State<'_, Desktop>,
+    slug: String,
+) -> CommandResult<()> {
     let revocations = desktop.library.revocations_for_launch(&desktop.api).await;
     let mut command = desktop
         .library
@@ -524,9 +532,18 @@ async fn launch_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<
         code: "launch",
         message: format!("couldn't start the app: {e}"),
     })?;
-    // Reap the process when it exits.
+    // Known while it runs, for the in-game overlay (overlay.rs); reaped when it exits.
+    let pid = child.id();
+    let running = app.state::<overlay::Running>();
+    running.0.lock().unwrap().insert(pid, slug);
+    let app = app.clone();
     std::thread::spawn(move || {
         let _ = child.wait();
+        app.state::<overlay::Running>()
+            .0
+            .lock()
+            .unwrap()
+            .remove(&pid);
     });
     Ok(())
 }
@@ -646,6 +663,99 @@ enum ChatAction {
     Restore {
         code: String,
     },
+    Typing {
+        conversation: uuid::Uuid,
+        typing: bool,
+    },
+    /// Desktop notifications for new messages: on or off, and whether they show the text.
+    Notifications {
+        on: bool,
+        show_text: bool,
+    },
+    NotificationSettings,
+}
+
+/// Desktop notification settings, kept in the app's data folder.
+#[derive(Clone, Copy, serde::Serialize, serde::Deserialize)]
+struct NotifySettings {
+    on: bool,
+    show_text: bool,
+}
+
+impl Default for NotifySettings {
+    fn default() -> Self {
+        Self {
+            on: true,
+            show_text: true,
+        }
+    }
+}
+
+fn notify_settings_path(desktop: &Desktop) -> std::path::PathBuf {
+    desktop.chat_dir.join("notifications.json")
+}
+
+fn load_notify_settings(desktop: &Desktop) -> NotifySettings {
+    std::fs::read(notify_settings_path(desktop))
+        .ok()
+        .and_then(|b| serde_json::from_slice(&b).ok())
+        .unwrap_or_default()
+}
+
+/// A desktop notification for new messages while Slop isn't in front (DESIGN §19). Muted chats
+/// never notify; the text is left out if the user chose that.
+fn notify_new_messages(app: &AppHandle, messages: &[slop_client::chat::NewMessage]) {
+    use tauri_plugin_notification::NotificationExt;
+    if messages.is_empty() {
+        return;
+    }
+    let focused = ["main", OVERLAY_WINDOW].iter().any(|label| {
+        app.get_webview_window(label)
+            .and_then(|w| Some(w.is_focused().ok()? && w.is_visible().ok()?))
+            .unwrap_or(false)
+    });
+    if focused {
+        return;
+    }
+    let settings = load_notify_settings(&app.state::<Desktop>());
+    if !settings.on {
+        return;
+    }
+    // A burst from one chat is one notification.
+    let mut by_chat: Vec<(&slop_client::chat::NewMessage, usize)> = Vec::new();
+    for m in messages {
+        match by_chat
+            .iter_mut()
+            .find(|(x, _)| x.conversation == m.conversation)
+        {
+            Some((last, n)) => {
+                *last = m;
+                *n += 1;
+            }
+            None => by_chat.push((m, 1)),
+        }
+    }
+    for (m, n) in by_chat {
+        let title = if m.title == m.sender {
+            m.sender.clone()
+        } else {
+            format!("{} in {}", m.sender, m.title)
+        };
+        let body = if !settings.show_text {
+            if n == 1 {
+                "New message".to_string()
+            } else {
+                format!("{n} new messages")
+            }
+        } else if n == 1 {
+            m.text.clone()
+        } else {
+            format!("{} (+{} more)", m.text, n - 1)
+        };
+        if let Err(e) = app.notification().builder().title(title).body(body).show() {
+            tracing::warn!(error = %e, "couldn't show a notification");
+        }
+    }
 }
 
 #[derive(serde::Deserialize)]
@@ -693,7 +803,11 @@ async fn chat_loop(app: AppHandle, chat: std::sync::Weak<Chat>) {
         match c.sync(25).await {
             Ok(changes) => {
                 backoff = 2;
-                let changed = changes.list || changes.devices || !changes.conversations.is_empty();
+                let changed = changes.list
+                    || changes.devices
+                    || !changes.conversations.is_empty()
+                    || !changes.typing.is_empty();
+                notify_new_messages(&app, &changes.new_messages);
                 if changed {
                     let _ = app.emit("chat-changed", changes);
                 }
@@ -861,7 +975,40 @@ async fn chat(
             .await?),
         ChatAction::SetBackups { on } => to_value(chat.set_backups(on).await?),
         ChatAction::Restore { code } => to_value(chat.restore_backup(&code).await?),
+        ChatAction::Typing {
+            conversation,
+            typing,
+        } => {
+            chat.typing(conversation, typing).await?;
+            ok()
+        }
+        ChatAction::Notifications { on, show_text } => {
+            let settings = NotifySettings { on, show_text };
+            std::fs::create_dir_all(&desktop.chat_dir).map_err(Error::from)?;
+            std::fs::write(
+                notify_settings_path(&desktop),
+                serde_json::to_vec(&settings).unwrap_or_default(),
+            )
+            .map_err(Error::from)?;
+            to_value(settings)
+        }
+        ChatAction::NotificationSettings => to_value(load_notify_settings(&desktop)),
     }
+}
+
+/// The overlay's Esc or "Back to the game".
+#[tauri::command]
+fn overlay_hide(app: AppHandle) {
+    overlay::hide(&app);
+}
+
+/// The in-game overlay switch: reads it, or sets it when `on` is given.
+#[tauri::command]
+fn overlay_setting(desktop: State<'_, Desktop>, on: Option<bool>) -> CommandResult<bool> {
+    if let Some(on) = on {
+        overlay::set_enabled(&desktop, on).map_err(Error::from)?;
+    }
+    Ok(overlay::enabled(&desktop))
 }
 
 fn urlencode(s: &str) -> String {
@@ -894,6 +1041,8 @@ fn main() {
             bring_back(app)
         }))
         .plugin(tauri_plugin_opener::init())
+        .plugin(tauri_plugin_notification::init())
+        .plugin(overlay::plugin())
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let base = API_URL.parse().expect("SLOP_API_URL is a valid URL");
@@ -920,6 +1069,9 @@ fn main() {
             if let Err(e) = make_tray(app) {
                 tracing::error!(error = %e, "couldn't add the tray icon");
             }
+            app.manage(overlay::Running::default());
+            app.manage(overlay::State::default());
+            tauri::async_runtime::spawn(overlay::watch(app.handle().clone()));
             tauri::async_runtime::spawn(startup(app.handle().clone()));
             Ok(())
         })
@@ -963,6 +1115,8 @@ fn main() {
             launch_app,
             run_installer,
             chat,
+            overlay_hide,
+            overlay_setting,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Slop desktop app");

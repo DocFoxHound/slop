@@ -119,6 +119,8 @@ enum KeysCommand {
     /// Make a new Ed25519 signing key. Prints the secret (for SLOP_SIGNING_KEY) and the public key
     /// (for SLOP_TRUSTED_KEYS when building the desktop app).
     Generate,
+    /// Make a new VAPID key for phone and browser notifications (SLOP_VAPID_PRIVATE_KEY).
+    GenerateVapid,
 }
 
 #[derive(Subcommand)]
@@ -195,6 +197,17 @@ async fn main() -> anyhow::Result<()> {
             println!("SLOP_UPDATER_KEY={secret}");
             println!("updater pubkey: {public}");
             eprintln!("Keep SLOP_UPDATER_KEY secret: it signs every desktop update.");
+            Ok(())
+        }
+        Command::Keys {
+            command: KeysCommand::GenerateVapid,
+        } => {
+            let (private, public) = slop_api::push::generate();
+            println!("SLOP_VAPID_PRIVATE_KEY={private}");
+            println!("public key: {public}");
+            eprintln!(
+                "Keep SLOP_VAPID_PRIVATE_KEY secret. Changing it means everyone turns phone notifications on again."
+            );
             Ok(())
         }
         Command::Keys {
@@ -437,6 +450,7 @@ async fn serve() -> anyhow::Result<()> {
     tokio::spawn(slop_api::cleanup::run(state.clone()));
     tokio::spawn(slop_api::pulse::run_sampler(state.clone()));
     tokio::spawn(slop_api::notify::run_email(state.clone()));
+    tokio::spawn(slop_api::push::run(state.clone()));
     tokio::spawn(slop_api::donations::run(state.clone()));
     tokio::spawn(slop_api::teams::run(state.clone()));
     // The sandbox's repositories are invented, so checking them would freeze every app.

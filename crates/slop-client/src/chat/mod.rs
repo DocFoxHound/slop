@@ -214,6 +214,14 @@ struct Synced {
     roster: String,
     key_packages: i64,
     pending_devices: i64,
+    #[serde(default)]
+    typing: Vec<TypingIn>,
+}
+
+#[derive(Deserialize)]
+struct TypingIn {
+    conversation_id: Uuid,
+    user_id: Uuid,
 }
 
 #[derive(Deserialize)]
@@ -350,6 +358,27 @@ pub struct Changes {
     pub conversations: Vec<Uuid>,
     pub list: bool,
     pub devices: bool,
+    /// Who is typing in which chat right now (shown for a few seconds).
+    pub typing: Vec<TypingView>,
+    /// New messages from other people, for notifications. Muted chats are left out.
+    pub new_messages: Vec<NewMessage>,
+}
+
+#[derive(Serialize, Debug, Clone, PartialEq)]
+pub struct TypingView {
+    pub conversation: Uuid,
+    pub user: Uuid,
+    pub name: String,
+}
+
+#[derive(Serialize, Debug, Clone)]
+pub struct NewMessage {
+    pub conversation: Uuid,
+    /// The chat's name ("Mia" for a direct chat, the group's or team's name).
+    pub title: String,
+    pub sender: String,
+    /// A short line to show: the text, or "Sent a picture".
+    pub text: String,
 }
 
 /// A file to send.
@@ -768,6 +797,10 @@ impl Chat {
         }
         let synced: Synced =
             serde_json::from_slice(&res.bytes).map_err(|e| Error::Verify(format!("sync: {e}")))?;
+        // Names and mute settings for notifications, the first time round.
+        if self.inner.lock().await.server.is_empty() {
+            self.refresh_list().await?;
+        }
         let mut changes = Changes {
             devices: synced.pending_devices > 0,
             ..Default::default()
@@ -839,6 +872,36 @@ impl Chat {
                         match Content::parse(&plaintext) {
                             Ok(content) => {
                                 let raw = String::from_utf8_lossy(&plaintext).to_string();
+                                if let Body::Text {
+                                    text, attachments, ..
+                                } = &content.body
+                                    && let Some(c) = inner.server.get(&e.conversation_id)
+                                    && !c.muted
+                                    && c.kind != "self"
+                                {
+                                    let me = inner.state.user;
+                                    let local = inner.state.conversations.get(&e.conversation_id);
+                                    changes.new_messages.push(NewMessage {
+                                        conversation: e.conversation_id,
+                                        title: title(c, local, me),
+                                        sender: c
+                                            .members
+                                            .iter()
+                                            .find(|m| m.id == user)
+                                            .map(|m| m.name.clone())
+                                            .unwrap_or_else(|| "Someone".into()),
+                                        text: if !text.trim().is_empty() {
+                                            text.chars().take(140).collect()
+                                        } else if attachments
+                                            .iter()
+                                            .any(|a| a.mime.starts_with("image/"))
+                                        {
+                                            "Sent a picture".into()
+                                        } else {
+                                            "Sent a file".into()
+                                        },
+                                    });
+                                }
                                 if let Some(sync) = apply(
                                     &mut inner.state,
                                     e.conversation_id,
@@ -892,9 +955,40 @@ impl Chat {
         if let Err(e) = self.maybe_backup().await {
             tracing::warn!(error = %e, "chat backup");
         }
+        {
+            let inner = self.inner.lock().await;
+            changes.typing = synced
+                .typing
+                .iter()
+                .map(|t| TypingView {
+                    conversation: t.conversation_id,
+                    user: t.user_id,
+                    name: inner
+                        .server
+                        .get(&t.conversation_id)
+                        .and_then(|c| c.members.iter().find(|m| m.id == t.user_id))
+                        .map(|m| m.name.clone())
+                        .unwrap_or_else(|| "Someone".into()),
+                })
+                .collect();
+        }
         changes.conversations.sort();
         changes.conversations.dedup();
         Ok(changes)
+    }
+
+    /// Tells the others in a chat this user is typing (or stopped). Not encrypted, not stored:
+    /// it says nothing but "typing", for a few seconds.
+    pub async fn typing(&self, conversation: Uuid, typing: bool) -> Result<()> {
+        let device = Self::device_id(&*self.inner.lock().await)?;
+        self.call_ok(
+            Some(device),
+            Method::POST,
+            &format!("/v1/chat/conversations/{conversation}/typing"),
+            RawBody::Json(json!({ "typing": typing })),
+        )
+        .await?;
+        Ok(())
     }
 
     async fn top_up_key_packages(&self, device: Uuid) -> Result<()> {

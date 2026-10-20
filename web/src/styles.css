@@ -818,3 +818,19 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
   .chat-layout:not(:has(.conversation)) .chat-main { display: none; }
 }
 .tab-badge { margin-left: 6px; font-size: 10px; vertical-align: middle; }
+.typing { margin: 0; padding: 0 18px 2px; min-height: 18px; }
+
+/* The in-game overlay (src/overlay.tsx): the game shows through, dimmed. */
+.overlay-root, .overlay-root body, .overlay-root #root { background: transparent; }
+.overlay-backdrop { position: fixed; inset: 0; background: rgba(5, 8, 12, 0.72); display: grid; place-items: center; }
+.overlay-panel { width: min(1040px, calc(100vw - 48px)); height: min(680px, calc(100vh - 48px)); background: var(--bg); border: 1px solid var(--line); border-radius: 14px; box-shadow: 0 20px 60px rgba(0, 0, 0, 0.6); display: flex; flex-direction: column; overflow: hidden; }
+.overlay-head { display: flex; align-items: center; gap: 14px; padding: 10px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.overlay-head .logo-text { font-weight: 900; letter-spacing: 0.04em; }
+.overlay-head .logo-text b { color: var(--slime); }
+.overlay-head kbd { font: 11px ui-monospace, monospace; background: var(--panel-3); border-radius: 4px; padding: 1px 5px; margin-left: 6px; }
+.overlay-tabs { display: flex; gap: 4px; }
+.overlay-tabs a { color: var(--muted); padding: 4px 10px; border-radius: 6px; font-weight: 700; font-size: 13px; }
+.overlay-tabs a.on { color: var(--text); background: var(--panel-3); text-decoration: none; }
+.overlay-content { flex: 1; min-height: 0; overflow-y: auto; }
+.overlay-content .page { padding-top: 16px; }
+.overlay-head .grow { flex: 1; }

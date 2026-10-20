@@ -1500,6 +1500,11 @@ export const api = {
     unshare: (slug: string, userId: string) =>
       request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/shares/${encodeURIComponent(userId)}`),
   },
+  push: {
+    key: () => request<{ public_key: string }>("GET", "/v1/push/key"),
+    subscribe: (subscription: PushSubscriptionJSON) => request<void>("POST", "/v1/me/push", subscription),
+    unsubscribe: (endpoint: string) => request<void>("DELETE", "/v1/me/push", { endpoint }),
+  },
   friends: {
     list: () => request<Friends>("GET", "/v1/me/friends"),
     /** A profile link or user ID; "friends" when they had already asked you. */
