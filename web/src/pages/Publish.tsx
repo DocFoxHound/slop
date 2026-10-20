@@ -13,7 +13,9 @@ import {
   type AppSummary,
   type Category,
   type NewApp,
+  PROVIDER_LABEL,
   type Release,
+  type RepoOwnership as Ownership,
 } from "../api";
 import { LicensePicker } from "../components/LicensePicker";
 import { MediaEditor } from "../components/MediaEditor";
@@ -380,9 +382,10 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
               <Link to={`/publish/${existing.slug}/manage`}>Request a move from Manage</Link>.
             </>
           ) : (
-            "On GitHub, and yours: your own account's, or an organization you're an owner of (with Slop's GitHub App installed on it). Collaborators can't publish someone else's repository."
+            "Yours: owned by an account you've linked (GitHub, GitLab, Bitbucket), an organization you own, or proved with a code in its README on any other host. Collaborators can't publish someone else's repository."
           ),
         )}
+        {(!existing || form.repo_url !== existing.repo_url) && !repoLocked && <RepoOwnership repoUrl={form.repo_url} />}
         <div className="row-2">
           <LicensePicker
             repoUrl={form.repo_url}
@@ -517,5 +520,57 @@ export function PlatformPicker({
         </span>
       )}
     </fieldset>
+  );
+}
+
+/** Whether the repository is yours, and how to prove it if not yet (crates/slop-api/src/repo_owner.rs). */
+function RepoOwnership({ repoUrl }: { repoUrl: string }) {
+  const [result, setResult] = useState<Ownership>();
+  const [checking, setChecking] = useState(false);
+  const [error, setError] = useState<string>();
+  const url = repoUrl.trim();
+  useEffect(() => {
+    setResult(undefined);
+    setError(undefined);
+    if (!/^https?:\/\/[^/]+\/.+/.test(url)) return;
+    const timer = window.setTimeout(() => {
+      api.repoOwnership(url).then(setResult, (err: unknown) => setError(err instanceof ApiError ? err.message : String(err)));
+    }, 600);
+    return () => window.clearTimeout(timer);
+  }, [url]);
+  const check = async () => {
+    setChecking(true);
+    setError(undefined);
+    try {
+      setResult(await api.checkRepoCode(url));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setChecking(false);
+    }
+  };
+  if (error) return <p className="form-error small">{error}</p>;
+  if (!result) return null;
+  if (result.ok) return <p className="small ownership ok">✓ {result.message}</p>;
+  return (
+    <div className="notice ownership small" role="status">
+      <p>{result.message.charAt(0).toUpperCase() + result.message.slice(1)}</p>
+      {result.link && (
+        <a className="btn small" href={api.linkUrl(result.link, window.location.pathname)}>
+          Link {PROVIDER_LABEL[result.link]}
+        </a>
+      )}
+      {result.method === "code" && result.code && (
+        <div className="row-actions">
+          <code className="ownership-code">{result.code}</code>
+          <button type="button" className="btn small ghost" onClick={() => void navigator.clipboard?.writeText(result.code!)}>
+            Copy
+          </button>
+          <button type="button" className="btn small" disabled={checking} onClick={() => void check()}>
+            {checking ? "Checking…" : "Check"}
+          </button>
+        </div>
+      )}
+    </div>
   );
 }

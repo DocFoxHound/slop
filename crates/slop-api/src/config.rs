@@ -13,6 +13,10 @@ pub struct Config {
     pub public_url: Url,
     /// GitHub sign-in. `None` turns sign-in off.
     pub github: Option<GithubConfig>,
+    /// More sign-in providers (auth/oauth.rs), each off unless its client ID is set.
+    pub google: Option<OAuthConfig>,
+    pub gitlab: Option<OAuthConfig>,
+    pub bitbucket: Option<OAuthConfig>,
     /// Extra origins allowed to make state-changing requests (e.g. a dev server on another port).
     pub trusted_origins: Vec<String>,
     /// Header set by the CDN or load balancer with the viewer's ISO country code.
@@ -271,6 +275,60 @@ impl fmt::Debug for GithubConfig {
     }
 }
 
+/// An OAuth provider's app and addresses (auth/oauth.rs).
+#[derive(Clone)]
+pub struct OAuthConfig {
+    pub client_id: String,
+    pub client_secret: String,
+    pub authorize_url: Url,
+    pub token_url: Url,
+    /// Where the account's profile is read (and, for Git hosts, who owns a repository).
+    pub api_base: Url,
+}
+
+impl fmt::Debug for OAuthConfig {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        f.debug_struct("OAuthConfig")
+            .field("client_id", &self.client_id)
+            .field("client_secret", &"<redacted>")
+            .field("authorize_url", &self.authorize_url.as_str())
+            .finish()
+    }
+}
+
+impl OAuthConfig {
+    /// From `{PREFIX}_CLIENT_ID` and `{PREFIX}_CLIENT_SECRET`, with the provider's usual
+    /// addresses (overridable with `{PREFIX}_AUTHORIZE_URL`, `_TOKEN_URL`, `_API_BASE`).
+    fn from_env(
+        prefix: &str,
+        authorize: &str,
+        token: &str,
+        api: &str,
+    ) -> anyhow::Result<Option<Self>> {
+        let (Ok(client_id), Ok(client_secret)) = (
+            env::var(format!("{prefix}_CLIENT_ID")),
+            env::var(format!("{prefix}_CLIENT_SECRET")),
+        ) else {
+            return Ok(None);
+        };
+        if client_id.is_empty() {
+            return Ok(None);
+        }
+        let url = |name: &str, default: &str| -> anyhow::Result<Url> {
+            var_or(&format!("{prefix}_{name}"), default)
+                .parse()
+                .with_context(|| format!("{prefix}_{name}"))
+        };
+        Ok(Some(Self {
+            client_id,
+            client_secret,
+            authorize_url: url("AUTHORIZE_URL", authorize)?,
+            token_url: url("TOKEN_URL", token)?,
+            api_base: url("API_BASE", api)?,
+        }))
+    }
+}
+
 /// Stage time limits and the dead-project rule (DESIGN §8).
 #[derive(Clone, Copy, Debug)]
 pub struct CatalogRules {
@@ -318,6 +376,24 @@ impl Config {
             }),
             _ => None,
         };
+        let google = OAuthConfig::from_env(
+            "GOOGLE",
+            "https://accounts.google.com/o/oauth2/v2/auth",
+            "https://oauth2.googleapis.com/token",
+            "https://openidconnect.googleapis.com/v1/",
+        )?;
+        let gitlab = OAuthConfig::from_env(
+            "GITLAB",
+            "https://gitlab.com/oauth/authorize",
+            "https://gitlab.com/oauth/token",
+            "https://gitlab.com/api/v4/",
+        )?;
+        let bitbucket = OAuthConfig::from_env(
+            "BITBUCKET",
+            "https://bitbucket.org/site/oauth2/authorize",
+            "https://bitbucket.org/site/oauth2/access_token",
+            "https://api.bitbucket.org/2.0/",
+        )?;
 
         let trusted_origins = list_var("SLOP_TRUSTED_ORIGINS");
 
@@ -374,6 +450,9 @@ impl Config {
             database_url,
             public_url,
             github,
+            google,
+            gitlab,
+            bitbucket,
             trusted_origins,
             country_header,
             catalog,

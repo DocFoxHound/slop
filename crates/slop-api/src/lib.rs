@@ -154,6 +154,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(frozen::routes())
         .merge(friends::routes())
         .merge(push::routes())
+        .merge(repo_owner::routes())
         .merge(chat::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.

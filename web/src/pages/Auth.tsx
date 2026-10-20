@@ -3,7 +3,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { api, ApiError } from "../api";
+import { api, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -20,8 +20,9 @@ import {
 
 const SIGNIN_ERRORS: Record<string, string> = {
   cancelled: "Sign-in was cancelled.",
-  provider: "GitHub didn't let us sign you in. Please try again.",
+  provider: "That sign-in didn't work. Please try again.",
   closed: "That account was closed, so its sign-in can't be used on Slop again.",
+  link_expired: "Linking was started in another session. Start it again from your account page.",
 };
 
 /** Only same-site paths, matching the API's own check. */
@@ -41,6 +42,9 @@ export function SignIn() {
 
 function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null }) {
   const providers = useLoad(() => api.providers(), []);
+  const [params] = useSearchParams();
+  const linking = params.get("reason") === "link";
+  const available = (Object.keys(PROVIDER_LABEL) as SignInProvider[]).filter((p) => providers.data?.[p]);
   return (
     <div className="page narrow">
       <div className="panel panel-pad auth-card">
@@ -51,15 +55,23 @@ function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null
             {SIGNIN_ERRORS[error] ?? "Sign-in failed. Please try again."}
           </p>
         )}
-        {providers.data?.github === false && <p className="notice">Sign-in isn't set up on this server yet.</p>}
-        <a
-          className={`btn big provider ${providers.data?.github ? "" : "disabled"}`}
-          href={providers.data?.github ? api.githubSignInUrl(returnTo) : undefined}
-          aria-disabled={!providers.data?.github}
-        >
-          Continue with GitHub
-        </a>
-        <p className="faint small">More sign-in options (Google, Apple, Microsoft, Discord) are on the way.</p>
+        {linking && (
+          <p className="notice">
+            To link another sign-in, first sign in again with one you already use. Then you'll go straight on to linking.
+          </p>
+        )}
+        {providers.data && available.length === 0 && <p className="notice">Sign-in isn't set up on this server yet.</p>}
+        <div className="provider-list">
+          {available.map((p) => (
+            <a key={p} className="btn big provider" href={api.signInUrl(p, returnTo)}>
+              Continue with {PROVIDER_LABEL[p]}
+            </a>
+          ))}
+        </div>
+        <p className="faint small">
+          Already have an account with another sign-in? Sign in with that one, then link this one under Account → Sign-ins.
+          Slop never joins accounts just because their emails match.
+        </p>
       </div>
     </div>
   );
@@ -372,6 +384,7 @@ export function Account() {
         </label>
       </div>
 
+      <SignIns />
       <AccountNotifications />
       {isDesktop && <ThisDevice />}
       <AccountDecisions />
@@ -477,5 +490,168 @@ function ThisDevice() {
         )}
       </div>
     </section>
+  );
+}
+
+/** Account → Sign-ins: the accounts you can sign in with, and linking more. */
+export function SignIns() {
+  const identities = useLoad(() => api.identities(), []);
+  const providers = useLoad(() => api.providers(), []);
+  const [params] = useSearchParams();
+  const [error, setError] = useState<string>();
+  const linked = params.get("linked");
+  const failed = params.get("error");
+  const unlink = async (provider: string, subject: string) => {
+    setError(undefined);
+    try {
+      await api.unlink(provider, subject);
+      identities.reload();
+    } catch (err) {
+      if (err instanceof ApiError && err.code === "step_up_required") {
+        setError("For your safety, unlinking needs a recent sign-in. Sign out and in again, then try once more.");
+      } else {
+        setError(err instanceof ApiError ? err.message : String(err));
+      }
+    }
+  };
+  const available = (Object.keys(PROVIDER_LABEL) as SignInProvider[]).filter((p) => providers.data?.[p]);
+  return (
+    <section id="sign-ins">
+      <h2 className="section-title">Sign-ins</h2>
+      <div className="panel panel-pad">
+        {linked && linked !== "already" && (
+          <p className="notice" role="status">
+            {PROVIDER_LABEL[linked as SignInProvider] ?? linked} is linked: you can sign in with it, and Slop knows the
+            repositories it owns are yours.
+          </p>
+        )}
+        {linked === "already" && <p className="notice">That account was already linked.</p>}
+        {failed === "provider" && <p className="form-error">That sign-in didn't work. Please try again.</p>}
+        <ul className="report-list">
+          {identities.data?.map((i) => (
+            <li key={`${i.provider}:${i.provider_subject}`}>
+              <span>
+                <b>{PROVIDER_LABEL[i.provider] ?? i.provider}</b> {i.login && <span className="mono">{i.login}</span>}{" "}
+                <span className="muted small">linked {formatDate(i.created_at)}</span>
+              </span>
+              {(identities.data?.length ?? 0) > 1 && (
+                <button className="btn small ghost" onClick={() => void unlink(i.provider, i.provider_subject)}>
+                  Unlink
+                </button>
+              )}
+            </li>
+          ))}
+        </ul>
+        <p className="muted small">
+          Link the accounts you use: to sign in with any of them, and to publish repositories they own (GitHub, GitLab and
+          Bitbucket check who owns a repository by the linked account). Linking asks you to sign in to that account, so
+          nobody can link someone else's. If it already has its own Slop account, you can combine the two.
+        </p>
+        <div className="row-actions">
+          {available.map((p) => (
+            <a key={p} className="btn small" href={api.linkUrl(p)}>
+              Link {PROVIDER_LABEL[p]}
+            </a>
+          ))}
+        </div>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** After linking a sign-in that has its own Slop account: combine the two? */
+export function CombineAccounts() {
+  useDocumentTitle("Combine accounts");
+  const navigate = useNavigate();
+  const { refresh } = useSession();
+  const preview = useLoad(() => api.combine.preview(), []);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  if (preview.error) {
+    return (
+      <div className="page narrow">
+        <div className="empty-state">
+          Nothing to combine (it may have expired). <Link to="/account#sign-ins">Back to your account</Link>
+        </div>
+      </div>
+    );
+  }
+  if (!preview.data) return <Loading />;
+  const p = preview.data;
+  const go = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.combine.confirm();
+      await refresh();
+      navigate("/account?linked=" + p.provider + "#sign-ins");
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const keep = async () => {
+    await api.combine.cancel().catch(() => undefined);
+    navigate("/account#sign-ins");
+  };
+  const things = [
+    [p.apps, "app"],
+    [p.library, "game in the library", "games in the library"],
+    [p.votes, "vote"],
+    [p.friends, "friend"],
+    [p.teams, "team"],
+    [p.jobs, "People job"],
+    [p.chats, "chat"],
+  ] as Array<[number, string, string?]>;
+  return (
+    <div className="page narrow">
+      <h1 className="page-title">Combine accounts?</h1>
+      <div className="panel panel-pad">
+        <p>
+          That {PROVIDER_LABEL[p.provider]} sign-in already has its own Slop account, <b>{p.name}</b>. You've just proved it's
+          yours by signing in to it.
+        </p>
+        <p>Combining moves everything from it into the account you're signed in to now:</p>
+        <ul>
+          {things
+            .filter(([n]) => n > 0)
+            .map(([n, one, many]) => (
+              <li key={one}>
+                {n} {n === 1 ? one : (many ?? `${one}s`)}
+              </li>
+            ))}
+          <li>its sign-ins, reports, donations and everything else</li>
+        </ul>
+        <p className="muted small">
+          Where both accounts have the same thing (both voted on an app, both in a team), this account's stays. {p.name} is
+          then closed, and its sign-in opens this account. Chat history stays on that account's devices; its chats continue
+          here. This can't be undone.
+        </p>
+        {p.blocked && (
+          <p className="notice" role="alert">
+            These accounts can't be combined: {p.blocked}.
+          </p>
+        )}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <div className="row-actions">
+          <button className="btn slime" disabled={busy || Boolean(p.blocked)} onClick={() => void go()}>
+            Combine them
+          </button>
+          <button className="btn ghost" onClick={() => void keep()}>
+            Keep them separate
+          </button>
+        </div>
+      </div>
+    </div>
   );
 }

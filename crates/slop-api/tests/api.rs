@@ -89,6 +89,48 @@ async fn fake_github() -> String {
         .route("/repos/octo/open-tool", get(|| async { axum::Json(json!({ "private": false })) }))
         .route("/repos/octo/closed-tool", get(|| async { axum::Json(json!({ "private": true })) }))
         .route("/octo/game/info/refs", get(|| async { "001e# service=git-upload-pack\n" }))
+        // Google and GitLab sign-in (auth/oauth.rs): the code is the token, and names the account.
+        .route("/google/token", post(|body: String| async move { axum::Json(json!({ "access_token": form_code(&body) })) }))
+        .route("/gitlab/token", post(|body: String| async move { axum::Json(json!({ "access_token": form_code(&body) })) }))
+        .route(
+            "/google/userinfo",
+            get(|headers: axum::http::HeaderMap| async move {
+                let token = bearer(&headers);
+                axum::Json(json!({ "sub": token, "name": format!("Google {token}"), "email": format!("{token}@example.com"), "email_verified": true }))
+            }),
+        )
+        .route(
+            "/gitlab/api/user",
+            get(|headers: axum::http::HeaderMap| async move {
+                let (id, username) = match bearer(&headers).as_str() {
+                    "gl-ann" => (501, "ann"),
+                    "gl-bob" => (502, "bob"),
+                    _ => (599, "someone"),
+                };
+                axum::Json(json!({ "id": id, "username": username, "name": username, "email": format!("{username}@example.com"), "confirmed_at": "2026-01-01T00:00:00Z" }))
+            }),
+        )
+        // GitLab projects (repo_owner.rs): ann's own, and a group's where ann (501) is an Owner.
+        .route(
+            "/gitlab/api/projects/{path}",
+            get(|axum::extract::Path(path): axum::extract::Path<String>| async move {
+                match path.as_str() {
+                    "ann/game" => axum::Json(json!({ "id": 9, "namespace": { "kind": "user", "full_path": "ann" }, "owner": { "id": 501 } })).into_response(),
+                    "studio/game" => axum::Json(json!({ "id": 10, "namespace": { "kind": "group", "full_path": "studio" } })).into_response(),
+                    _ => StatusCode::NOT_FOUND.into_response(),
+                }
+            }),
+        )
+        .route(
+            "/gitlab/api/projects/{id}/members/all/{user}",
+            get(|axum::extract::Path((id, user)): axum::extract::Path<(i64, i64)>| async move {
+                if id == 10 && user == 501 {
+                    axum::Json(json!({ "access_level": 50 })).into_response()
+                } else {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            }),
+        )
         // Push services (push.rs): one that takes pushes, one that says the subscription is gone.
         .route(
             "/push/ok",
@@ -313,6 +355,9 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             oauth_base: github_base.parse().unwrap(),
             api_base: github_base.parse().unwrap(),
         }),
+        google: None,
+        gitlab: None,
+        bitbucket: None,
         trusted_origins: vec![],
         country_header: Some("x-country".into()),
         catalog: CatalogRules::default(),
@@ -897,7 +942,7 @@ async fn only_the_maker_can_edit(db: PgPool) {
         .send(
             req(Method::PATCH, "/v1/apps/pixel-dungeon")
                 .cookie(&maker)
-                .json(json!({ "repo_url": "http://insecure.example/x" })),
+                .json(json!({ "repo_url": "ftp://insecure.example/x" })),
         )
         .await;
     assert_eq!(body_json(res).await["error"]["field"], "repo_url");
@@ -9293,7 +9338,10 @@ async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
         .await,
     )
     .await;
-    assert!(why.contains("sign in with GitHub"), "{why}");
+    assert!(
+        why.contains("link the GitHub account that owns this repository"),
+        "{why}"
+    );
     let res = app
         .send(publish(
             &octo,
@@ -9348,16 +9396,7 @@ async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
     .await;
     assert!(why.contains("install Slop's GitHub App"), "{why}");
 
-    // Other hosts can't be checked yet; a repository Slop can't see isn't accepted either.
-    let why = refused(
-        app.send(publish(&octo, "lab", "https://gitlab.com/octo/game"))
-            .await,
-    )
-    .await;
-    assert!(
-        why.contains("only check who owns GitHub repositories"),
-        "{why}"
-    );
+    // A repository Slop can't see isn't accepted.
     let why = refused(
         app.send(publish(
             &octo,
@@ -9402,4 +9441,480 @@ async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
             .status(),
         StatusCode::CREATED
     );
+}
+
+fn form_code(body: &str) -> String {
+    url::form_urlencoded::parse(body.as_bytes())
+        .find(|(k, _)| k == "code")
+        .map(|(_, v)| v.into_owned())
+        .unwrap_or_default()
+}
+
+fn bearer(headers: &axum::http::HeaderMap) -> String {
+    headers
+        .get("authorization")
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or("")
+        .to_string()
+}
+
+/// Google and GitLab sign-in against the fake provider.
+fn with_providers(c: &mut Config) {
+    let base = c.doh_url.clone();
+    let oauth = |name: &str| slop_api::config::OAuthConfig {
+        client_id: format!("{name}-client"),
+        client_secret: "secret".into(),
+        authorize_url: base.join(&format!("{name}/auth")).unwrap(),
+        token_url: base.join(&format!("{name}/token")).unwrap(),
+        api_base: base
+            .join(if name == "gitlab" {
+                "gitlab/api/"
+            } else {
+                "google/"
+            })
+            .unwrap(),
+    };
+    c.google = Some(oauth("google"));
+    c.gitlab = Some(oauth("gitlab"));
+}
+
+/// Runs a provider flow from `start` (a /start or /link path) with `cookies`, through the
+/// callback with `code`. Returns the callback's response.
+async fn oauth_flow(app: &TestApp, start: &str, cookies: &[&str], code: &str) -> Response {
+    let mut r = req(Method::GET, start);
+    for c in cookies {
+        r = r.cookie(*c);
+    }
+    let res = app.send(r).await;
+    assert!(
+        res.status().is_redirection(),
+        "{}: {:?}",
+        start,
+        res.status()
+    );
+    let state = query_param(&location(&res), "state");
+    let state_cookie = set_cookie(&res, "slop_oauth_state").unwrap();
+    let provider = start.split('/').nth(3).unwrap();
+    let mut r = req(
+        Method::GET,
+        format!("/v1/auth/{provider}/callback?code={code}&state={state}"),
+    )
+    .cookie(state_cookie);
+    for c in cookies {
+        r = r.cookie(*c);
+    }
+    app.send(r).await
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn sign_ins_link_only_after_signing_in_to_them(db: PgPool) {
+    let app = test_app_with(db, with_providers).await;
+    let providers = body_json(app.send(req(Method::GET, "/v1/auth/providers")).await).await;
+    assert_eq!(
+        providers,
+        json!({ "github": true, "google": true, "gitlab": true, "bitbucket": false })
+    );
+
+    // Signing up with Google.
+    let res = oauth_flow(
+        &app,
+        "/v1/auth/google/start?return_to=/library",
+        &[],
+        "g-ann",
+    )
+    .await;
+    assert_eq!(location(&res), "/signup");
+    let signup = set_cookie(&res, "slop_signup").unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/auth/signup").cookie(&signup).json(json!({
+            "display_name": "Ann", "country_code": "US", "age_confirmed": true, "accept_terms": true
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let ann = set_cookie(&res, "slop_session").unwrap();
+    let ann_id: Uuid =
+        sqlx::query_scalar("select user_id from identities where provider = 'google'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+
+    // Linking GitLab: from the signed-in session, by signing in to GitLab.
+    let res = oauth_flow(&app, "/v1/auth/gitlab/link", &[&ann], "gl-ann").await;
+    assert_eq!(location(&res), "/account?linked=gitlab#sign-ins");
+    let linked = body_json(
+        app.send(req(Method::GET, "/v1/me/identities").cookie(&ann))
+            .await,
+    )
+    .await;
+    let names: Vec<&str> = linked
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["provider"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["google", "gitlab"]);
+    assert_eq!(linked[1]["login"], "ann");
+    // Signing in with the linked GitLab account opens the same Slop account.
+    let res = oauth_flow(&app, "/v1/auth/gitlab/start", &[], "gl-ann").await;
+    let other = set_cookie(&res, "slop_session").unwrap();
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&other)).await).await;
+    assert_eq!(me["id"], json!(ann_id));
+
+    // Not without a session, and not with an old sign-in (a stolen session can't add one).
+    // Both go to sign-in first, then straight back to linking.
+    let res = app.send(req(Method::GET, "/v1/auth/gitlab/link")).await;
+    assert!(
+        location(&res).starts_with("/signin?reason=link&return_to=%2Fv1%2Fauth%2Fgitlab%2Flink")
+    );
+    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
+        .bind(ann_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(req(Method::GET, "/v1/auth/github/link").cookie(&ann))
+        .await;
+    assert!(
+        location(&res).starts_with("/signin?reason=link"),
+        "sign in again first"
+    );
+    sqlx::query("update sessions set created_at = now() where user_id = $1")
+        .bind(ann_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // A link started in one session can't be finished in another.
+    let res = app
+        .send(req(Method::GET, "/v1/auth/github/link").cookie(&ann))
+        .await;
+    let state = query_param(&location(&res), "state");
+    let state_cookie = set_cookie(&res, "slop_oauth_state").unwrap();
+    let res = app
+        .send(
+            req(
+                Method::GET,
+                format!("/v1/auth/github/callback?code=ok&state={state}"),
+            )
+            .cookie(state_cookie)
+            .cookie(&other),
+        )
+        .await;
+    assert_eq!(location(&res), "/signin?error=link_expired");
+
+    // Unlinking: not the last way in.
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/identities/gitlab/501").cookie(&ann))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let res = app
+        .send(req(Method::DELETE, "/v1/me/identities/google/g-ann").cookie(&ann))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn linking_a_sign_in_with_its_own_account_combines_them(db: PgPool) {
+    let app = test_app_with(db, with_providers).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    let (cara_id, _) = app.user("Cara", "US").await;
+    for (user, provider, subject) in [(ann_id, "google", "g-ann"), (bob_id, "gitlab", "502")] {
+        sqlx::query(
+            "insert into identities (provider, provider_subject, user_id) values ($1, $2, $3)",
+        )
+        .bind(provider)
+        .bind(subject)
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // Bob's account: an app, a friend, a vote; both voted on Ann's app.
+    listed_with(&app, bob_id, "bobs-game", "released", "").await;
+    listed_with(&app, ann_id, "anns-game", "released", "").await;
+    befriend(&app, bob_id, cara_id).await;
+    befriend(&app, bob_id, ann_id).await;
+    for (user, vote) in [(ann_id, 1i16), (bob_id, -1)] {
+        sqlx::query("insert into votes (user_id, app_id, vote, weight) select $1, id, $2, 1 from apps where slug = 'bobs-game'")
+            .bind(user)
+            .bind(vote)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+
+    // Linking Bob's GitLab: it has its own account, so Ann is asked first.
+    let res = oauth_flow(&app, "/v1/auth/gitlab/link", &[&ann], "gl-bob").await;
+    assert_eq!(location(&res), "/account/combine");
+    let combine = set_cookie(&res, "slop_combine").unwrap();
+    let preview = body_json(
+        app.send(
+            req(Method::GET, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            preview["name"].as_str(),
+            preview["apps"].as_i64(),
+            preview["friends"].as_i64()
+        ),
+        (Some("Bob"), Some(1), Some(2))
+    );
+    assert_eq!(preview["blocked"], Value::Null);
+    // Someone else's session can't confirm it.
+    let (_, eve) = app.user("Eve", "US").await;
+    assert_eq!(
+        app.send(
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&eve)
+                .cookie(&combine)
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine)
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    // Everything is Ann's now; Ann's own vote stays; Bob's account is closed into Ann's.
+    let maker: Uuid = sqlx::query_scalar("select maker_id from apps where slug = 'bobs-game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(maker, ann_id);
+    let votes: Vec<(Uuid, i16)> = sqlx::query_as("select user_id, vote from votes")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(votes, [(ann_id, 1)]);
+    let friends: Vec<(Uuid, Uuid)> = sqlx::query_as("select user_a, user_b from friends")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        friends,
+        [(ann_id.min(cara_id), ann_id.max(cara_id))],
+        "no friendship with herself"
+    );
+    let (closed, into): (bool, Option<Uuid>) =
+        sqlx::query_as("select closed_at is not null, merged_into from users where id = $1")
+            .bind(bob_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(closed);
+    assert_eq!(into, Some(ann_id));
+    let res = oauth_flow(&app, "/v1/auth/gitlab/start", &[], "gl-bob").await;
+    let session = set_cookie(&res, "slop_session").unwrap();
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&session)).await).await;
+    assert_eq!(
+        me["id"],
+        json!(ann_id),
+        "Bob's sign-in opens the combined account"
+    );
+
+    // A suspended account is never combined.
+    let (_, dee) = app.user("Dee", "US").await;
+    let (zed_id, _) = app.user("Zed", "US").await;
+    sqlx::query(
+        "insert into identities (provider, provider_subject, user_id) values ('gitlab', '599', $1)",
+    )
+    .bind(zed_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update users set suspended_at = now() where id = $1")
+        .bind(zed_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = oauth_flow(&app, "/v1/auth/gitlab/link", &[&dee], "gl-zed").await;
+    let combine = set_cookie(&res, "slop_combine").unwrap();
+    let preview = body_json(
+        app.send(
+            req(Method::GET, "/v1/auth/combine")
+                .cookie(&dee)
+                .cookie(&combine),
+        )
+        .await,
+    )
+    .await;
+    assert!(preview["blocked"].as_str().unwrap().contains("suspended"));
+    assert_eq!(
+        app.send(
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&dee)
+                .cookie(&combine)
+        )
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn other_hosts_prove_ownership_by_account_or_readme_code(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        with_providers(c);
+        c.releases.require_repo_owner = true;
+    })
+    .await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (_, bob) = app.user("Bob", "US").await;
+    sqlx::query("insert into identities (provider, provider_subject, user_id, login) values ('gitlab', '501', $1, 'ann')")
+        .bind(ann_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let publish = |cookie: &str, slug: &str, repo: &str| {
+        let mut body = new_app(slug);
+        body["repo_url"] = json!(repo);
+        req(Method::POST, "/v1/apps").cookie(cookie).json(body)
+    };
+    let ownership = |cookie: &str, repo: &str, check: bool| {
+        req(
+            Method::POST,
+            if check {
+                "/v1/repos/ownership/check"
+            } else {
+                "/v1/repos/ownership"
+            },
+        )
+        .cookie(cookie)
+        .json(json!({ "repo_url": repo }))
+    };
+
+    // GitLab (the fake one): ann's own project through her linked account; a group's project
+    // through being its Owner.
+    let gitlab = app.fake_base.trim_end_matches('/');
+    let a = body_json(
+        app.send(ownership(&ann, &format!("{gitlab}/ann/game"), false))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["method"].as_str()),
+        (Some(true), Some("account"))
+    );
+    let a = body_json(
+        app.send(ownership(&bob, &format!("{gitlab}/ann/game"), false))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["link"].as_str()),
+        (Some(false), Some("gitlab"))
+    );
+    assert_eq!(
+        app.send(publish(&ann, "studio", &format!("{gitlab}/studio/game")))
+            .await
+            .status(),
+        StatusCode::CREATED
+    );
+
+    // Anywhere else: a code in the README, read with Git.
+    let root = std::env::temp_dir().join(format!("slop-git-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&root).unwrap();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let serve_root = root.clone();
+    tokio::spawn(async move {
+        axum::serve(
+            listener,
+            Router::new().fallback_service(tower_http::services::ServeDir::new(serve_root)),
+        )
+        .await
+        .unwrap()
+    });
+    let repo = format!("http://localhost:{port}/game.git");
+    let a = body_json(app.send(ownership(&ann, &repo, false)).await).await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["method"].as_str()),
+        (Some(false), Some("code"))
+    );
+    let code = a["code"].as_str().unwrap().to_string();
+    assert!(
+        app.send(publish(&ann, "self-hosted", &repo)).await.status()
+            == StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // The repository, served the way plain web servers serve Git ("dumb" HTTP).
+    let git = |args: &[&str], dir: &std::path::Path| {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Ann",
+                "-c",
+                "user.email=ann@example.com",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let work = root.join("work");
+    std::fs::create_dir_all(&work).unwrap();
+    git(&["init", "-q"], &work);
+    std::fs::write(work.join("README.md"), "# My game\n\nNothing yet.\n").unwrap();
+    git(&["add", "."], &work);
+    git(&["commit", "-qm", "first"], &work);
+    let publish_repo = |root: &std::path::Path, work: &std::path::Path| {
+        let _ = std::fs::remove_dir_all(root.join("game.git"));
+        git(
+            &[
+                "clone",
+                "-q",
+                "--bare",
+                work.to_str().unwrap(),
+                root.join("game.git").to_str().unwrap(),
+            ],
+            root,
+        );
+        git(&["update-server-info"], &root.join("game.git"));
+    };
+    publish_repo(&root, &work);
+    let a = body_json(app.send(ownership(&ann, &repo, true)).await).await;
+    assert_eq!(a["ok"], false, "not there yet: {a}");
+    std::fs::write(
+        work.join("README.md"),
+        format!("# My game\n\n<!-- {code} -->\n"),
+    )
+    .unwrap();
+    git(&["commit", "-qam", "prove it"], &work);
+    publish_repo(&root, &work);
+    let a = body_json(app.send(ownership(&ann, &repo, true)).await).await;
+    assert_eq!(a["ok"], true, "{a}");
+    assert_eq!(
+        app.send(publish(&ann, "self-hosted", &repo)).await.status(),
+        StatusCode::CREATED
+    );
+
+    // The code is Ann's: Bob gets his own, and the repository is taken anyway.
+    let a = body_json(app.send(ownership(&bob, &repo, false)).await).await;
+    assert_eq!(a["ok"], false);
+    assert!(a["message"].as_str().unwrap().contains("already on Slop"));
+    let _ = std::fs::remove_dir_all(&root);
 }
