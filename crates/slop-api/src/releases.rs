@@ -318,6 +318,8 @@ struct ReleaseFileInfo {
     provenance: Option<slop_provenance::Provenance>,
     /// Why there's no verified maker signature.
     provenance_problem: Option<String>,
+    /// Signed by hand with the maker's registered key: its fingerprint and name.
+    maker_key: Option<serde_json::Value>,
     /// passed, note, on_hold, rejected, blocked, or skipped (scanning off).
     scan_result: Option<String>,
     scan_detail: Option<String>,
@@ -562,7 +564,8 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     .await?;
     let files = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, provenance, provenance_problem,
-                scan_result, scan_detail, scan_report, defender, cleared_reason
+                scan_result, scan_detail, scan_report, defender, cleared_reason,
+                maker_signature - 'signature' - 'public_key' as maker_key
          from release_files where release_id = $1 order by platform",
     )
     .bind(id)
@@ -969,7 +972,7 @@ async fn fetch_release(
         let local = scanner
             .is_on()
             .then(|| std::env::temp_dir().join(format!("slop-release-{}", Uuid::now_v7())));
-        let downloaded = download_with(
+        let downloaded = download_full(
             &state.fetch_http,
             &source,
             auth.as_deref(),
@@ -978,7 +981,7 @@ async fn fetch_release(
         )
         .await
         .with_context(|| format!("{platform} build"));
-        let (size, sha256) = match downloaded {
+        let file = match downloaded {
             Ok(d) => d,
             Err(e) => {
                 if let Some(p) = &local {
@@ -987,11 +990,29 @@ async fn fetch_release(
                 return Err(e);
             }
         };
+        let (size, sha256) = (file.size, file.sha256.clone());
         let signature = find_attestation(state, repo_url, commit, &sha256).await;
-        let (attestation, provenance, problem) = match signature {
+        let (attestation, provenance, mut problem) = match signature {
             Ok((bundle, provenance)) => (Some(bundle), Some(sqlx::types::Json(provenance)), None),
             Err(problem) => (None, None, Some(problem)),
         };
+        // No attestation: maybe the maker signed it by hand with their registered key.
+        let mut maker_sig = None;
+        if attestation.is_none() {
+            match maker_signature(state, app_id, &url, auth.as_deref(), &file).await? {
+                Ok(sig) => {
+                    maker_sig = Some(sig);
+                    problem = None;
+                }
+                Err(why) => {
+                    // Keep the attestation problem for Git hosts that have attestations.
+                    problem = Some(match problem {
+                        Some(p) => format!("{p}; {why}"),
+                        None => why,
+                    });
+                }
+            }
+        }
         let verdict = match &local {
             Some(path) => {
                 let v = scanner
@@ -1017,7 +1038,7 @@ async fn fetch_release(
         sqlx::query(
             "update release_files
              set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7,
-                 scan_result = $8, scan_detail = $9, scan_report = $10
+                 scan_result = $8, scan_detail = $9, scan_report = $10, maker_signature = $11
              where release_id = $1 and platform = $2",
         )
         .bind(id)
@@ -1030,6 +1051,7 @@ async fn fetch_release(
         .bind(verdict.result.as_str())
         .bind(verdict.detail)
         .bind(verdict.report.map(sqlx::types::Json))
+        .bind(maker_sig)
         .execute(&state.db)
         .await?;
         // A Defender check of exactly this file, from Slop Build or Slop Check.
@@ -1196,6 +1218,26 @@ pub async fn download_with(
     max: u64,
     keep: Option<&std::path::Path>,
 ) -> anyhow::Result<(u64, String)> {
+    download_full(http, url, auth, max, keep)
+        .await
+        .map(|d| (d.size, d.sha256))
+}
+
+/// A downloaded file's size and digests (SHA-512 too, for makers' SSH signatures).
+pub struct Downloaded {
+    pub size: u64,
+    pub sha256: String,
+    pub sha512: [u8; 64],
+}
+
+pub async fn download_full(
+    http: &reqwest::Client,
+    url: &str,
+    auth: Option<&str>,
+    max: u64,
+    keep: Option<&std::path::Path>,
+) -> anyhow::Result<Downloaded> {
+    use sha2::Sha512;
     use tokio::io::AsyncWriteExt;
     let mut out = match keep {
         Some(p) => Some(tokio::fs::File::create(p).await.context("temporary file")?),
@@ -1213,6 +1255,7 @@ pub async fn download_with(
         bail!("file is larger than the {max}-byte limit");
     }
     let mut hasher = Sha256::new();
+    let mut hasher512 = Sha512::new();
     let mut size: u64 = 0;
     let mut res = res;
     while let Some(chunk) = res.chunk().await.context("download interrupted")? {
@@ -1221,6 +1264,7 @@ pub async fn download_with(
             return Err(anyhow!("file is larger than the {max}-byte limit"));
         }
         hasher.update(&chunk);
+        hasher512.update(&chunk);
         if let Some(f) = out.as_mut() {
             f.write_all(&chunk).await.context("temporary file")?;
         }
@@ -1231,7 +1275,73 @@ pub async fn download_with(
     if size == 0 {
         bail!("file is empty");
     }
-    Ok((size, hex::encode(hasher.finalize())))
+    Ok(Downloaded {
+        size,
+        sha256: hex::encode(hasher.finalize()),
+        sha512: hasher512.finalize().into(),
+    })
+}
+
+/// The maker's own signature on a file without an attestation (SECURITY §5.3): `<file>.sig` on
+/// the release page, made with one of the maker's registered keys that's past its 72-hour wait.
+/// `Ok(None)` when the maker has no usable key or there's no .sig.
+async fn maker_signature(
+    state: &AppState,
+    app_id: Uuid,
+    url: &str,
+    auth: Option<&str>,
+    file: &Downloaded,
+) -> anyhow::Result<Result<serde_json::Value, String>> {
+    let keys: Vec<(String, String, String)> = sqlx::query_as(
+        "select k.public_key, k.fingerprint, k.name from maker_keys k join apps a on a.maker_id = k.user_id
+         where a.id = $1 and k.revoked_at is null and k.active_from <= now()",
+    )
+    .bind(app_id)
+    .fetch_all(&state.db)
+    .await?;
+    if keys.is_empty() {
+        return Ok(Err("no maker signature: no build attestation, and the maker has no signing key that's past its 72-hour wait".into()));
+    }
+    let mut request = state.fetch_http.get(format!("{url}.sig"));
+    if let Some(auth) = auth {
+        request = request.header(reqwest::header::AUTHORIZATION, auth);
+    }
+    let res = match request.send().await {
+        Ok(r) if r.status().is_success() => r,
+        _ => {
+            return Ok(Err(format!(
+                "no maker signature: no build attestation, and no {} file next to it on the release page",
+                url.rsplit('/')
+                    .next()
+                    .map(|n| format!("{n}.sig"))
+                    .unwrap_or_else(|| ".sig".into())
+            )));
+        }
+    };
+    let bytes = res.bytes().await?;
+    if bytes.len() > 16 * 1024 {
+        return Ok(Err("the .sig file is too big to be an SSH signature".into()));
+    }
+    let armored = String::from_utf8_lossy(&bytes).to_string();
+    let sha256: [u8; 32] = hex::decode(&file.sha256)?
+        .try_into()
+        .map_err(|_| anyhow!("bad digest"))?;
+    let mut last = String::new();
+    for (public_key, fingerprint, name) in keys {
+        let (key, _) = slop_manifest::sshsig::parse_public_key(&public_key)?;
+        match slop_manifest::sshsig::verify(&key, &armored, &file.sha512, &sha256) {
+            Ok(()) => {
+                return Ok(Ok(serde_json::json!({
+                    "public_key": public_key,
+                    "signature": armored,
+                    "fingerprint": fingerprint,
+                    "key_name": name,
+                })));
+            }
+            Err(e) => last = e.to_string(),
+        }
+    }
+    Ok(Err(format!("the .sig file doesn't check out: {last}")))
 }
 
 #[cfg(test)]

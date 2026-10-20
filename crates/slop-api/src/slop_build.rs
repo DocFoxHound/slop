@@ -135,6 +135,9 @@ struct CiFile {
     /// The program to start, for zips and .tar.gz; packages (.deb, .rpm) have none.
     #[serde(default)]
     exec: Option<String>,
+    /// Arguments to start it with (from the maker's slop.toml).
+    #[serde(default)]
+    args: Vec<String>,
     /// Windows builds: Microsoft Defender's check of the file, on GitHub's Windows runner.
     #[serde(default)]
     defender: Option<crate::scan::DefenderCheck>,
@@ -237,7 +240,7 @@ async fn submit_from_ci(
             },
             platform: f.platform,
             exec: f.exec,
-            args: vec![],
+            args: f.args,
         })
         .collect();
     let release = releases::create_release(
@@ -384,6 +387,8 @@ struct Setup {
     check_file_path: &'static str,
     check_workflow: String,
     check_create_url: Option<String>,
+    /// "Build now": the workflow's page on GitHub, whose Run workflow button starts a build.
+    build_now_url: Option<String>,
 }
 
 const WORKFLOW_PATH: &str = ".github/workflows/slop.yml";
@@ -437,14 +442,32 @@ fn workflow_yaml(
     project_type: &str,
     branch: &str,
 ) -> String {
-    let custom = if project_type == "custom" {
-        "\n      # Fill these in: how to build, where the build ends up, and the program to start\n      \
-         # (\"{ext}\" becomes .exe on Windows).\n      \
-         build-command: \"make release\"\n      \
-         output-dir: \"dist\"\n      \
-         exec: \"my-app{ext}\"\n"
-    } else {
-        "\n"
+    let custom = match project_type {
+        "custom" => {
+            "\n      # Fill these in: how to build, where the build ends up, and the program to start\n      \
+             # (\"{ext}\" becomes .exe on Windows).\n      \
+             build-command: \"make release\"\n      \
+             output-dir: \"dist\"\n      \
+             exec: \"my-app{ext}\"\n"
+        }
+        "godot" => {
+            "\n      # Your Godot version (standard, not .NET). Exports use the presets named\n      \
+             # \"Windows Desktop\" and \"Linux\" in export_presets.cfg (commit that file).\n      \
+             godot-version: \"4.3\"\n"
+        }
+        "web" => {
+            "\n      # Your site goes in a small window of its own (a Tauri shell). How it's built, and\n      \
+             # the folder with its index.html. For a plain site, remove build-command and use \".\".\n      \
+             build-command: \"npm run build\"\n      \
+             output-dir: \"dist\"\n"
+        }
+        "python" => {
+            "\n      # The script that starts your app (built with PyInstaller). Uncomment windowed for\n      \
+             # apps with their own window, such as pygame games.\n      \
+             python-entry: \"main.py\"\n      \
+             # python-windowed: true\n"
+        }
+        _ => "\n",
     };
     format!(
         "# Slop Build: builds, signs and attaches your app to a release, then sends it to Slop.\n\
@@ -477,23 +500,27 @@ fn workflow_yaml(
     )
 }
 
-/// What a repository looks like from its top-level file names.
-fn detect(names: &[String]) -> (&'static str, Option<&'static str>) {
+/// What a repository looks like from its top-level file names (and, when it has one, whether
+/// its package.json depends on Electron). Returns the project type and, for a guess the maker
+/// should check, what it looks like.
+fn detect(names: &[String], electron: bool) -> (&'static str, Option<&'static str>) {
     let has = |n: &str| names.iter().any(|x| x == n);
     if has("Cargo.toml") && !has("src-tauri") {
         ("rust", None)
     } else if has("go.mod") {
         ("go", None)
     } else if has("project.godot") {
-        ("custom", Some("godot"))
+        ("godot", None)
     } else if has("src-tauri") {
-        ("custom", Some("tauri"))
+        ("tauri", None)
+    } else if has("package.json") && electron {
+        ("electron", None)
     } else if has("package.json") {
-        ("custom", Some("node"))
-    } else if has("pyproject.toml") || has("requirements.txt") {
-        ("custom", Some("python"))
+        ("web", Some("web"))
+    } else if has("pyproject.toml") || has("requirements.txt") || has("main.py") {
+        ("python", Some("python"))
     } else if has("index.html") {
-        ("custom", Some("web"))
+        ("web", Some("web"))
     } else {
         ("custom", None)
     }
@@ -536,6 +563,7 @@ async fn setup(
             check_file_path: CHECK_PATH,
             check_workflow: check_yaml(&recipe, version, &slug, &site),
             check_create_url: None,
+            build_now_url: None,
         }));
     };
 
@@ -551,12 +579,43 @@ async fn setup(
     let entries: Vec<Entry> =
         github_json(&state, &format!("repos/{repo_path}/contents/"), &repo_url).await?;
     let names: Vec<String> = entries.into_iter().map(|e| e.name).collect();
-    let (project_type, detected) = detect(&names);
-    let note = detected.map(|kind| {
-        format!(
-            "This looks like a {kind} project. Slop Build can't build {kind} projects on its own yet, \
-             so fill in the build command, output folder and program in the workflow."
+    // Electron or a website: package.json says.
+    let electron = if names.iter().any(|n| n == "package.json") {
+        #[derive(Deserialize)]
+        struct File {
+            content: String,
+        }
+        let file: Option<File> = github_json(
+            &state,
+            &format!("repos/{repo_path}/contents/package.json"),
+            &repo_url,
         )
+        .await
+        .ok();
+        file.and_then(|f| {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(f.content.replace('\n', ""))
+                .ok()
+        })
+        .and_then(|b| serde_json::from_slice::<serde_json::Value>(&b).ok())
+        .is_some_and(|pkg| {
+            ["dependencies", "devDependencies"]
+                .iter()
+                .any(|k| pkg[k].get("electron").is_some())
+        })
+    } else {
+        false
+    };
+    let (project_type, detected) = detect(&names, electron);
+    let note = detected.map(|kind| match kind {
+        "web" => "This looks like a website: check build-command and output-dir in the workflow \
+                  match how your site is built and where its index.html ends up."
+            .to_string(),
+        "python" => "This looks like a Python app: check python-entry names the script that \
+                     starts it."
+            .to_string(),
+        other => format!("This looks like a {other} project: check the workflow's settings."),
     });
 
     let workflow = workflow_yaml(
@@ -586,6 +645,10 @@ async fn setup(
         check_file_path: CHECK_PATH,
         check_workflow,
         check_create_url: Some(check_create),
+        build_now_url: Some(format!(
+            "https://github.com/{repo_path}/actions/workflows/{}",
+            WORKFLOW_PATH.rsplit('/').next().unwrap_or("slop.yml")
+        )),
     }))
 }
 
@@ -628,7 +691,9 @@ mod tests {
     #[test]
     #[ignore]
     fn print_sample_workflows() {
-        for kind in ["rust", "custom"] {
+        for kind in [
+            "rust", "custom", "godot", "web", "python", "electron", "tauri",
+        ] {
             println!("=== {kind}");
             println!(
                 "{}",
@@ -646,17 +711,43 @@ mod tests {
 
     #[test]
     fn detection() {
-        assert_eq!(detect(&names(&["Cargo.toml", "src"])), ("rust", None));
-        assert_eq!(detect(&names(&["go.mod", "main.go"])), ("go", None));
+        let d = |n: &[&str]| detect(&names(n), false);
+        assert_eq!(d(&["Cargo.toml", "src"]), ("rust", None));
+        assert_eq!(d(&["go.mod", "main.go"]), ("go", None));
+        assert_eq!(d(&["project.godot"]), ("godot", None));
         assert_eq!(
-            detect(&names(&["project.godot"])),
-            ("custom", Some("godot"))
+            d(&["package.json", "src-tauri", "Cargo.toml"]),
+            ("tauri", None)
         );
         assert_eq!(
-            detect(&names(&["package.json", "src-tauri", "Cargo.toml"])),
-            ("custom", Some("tauri"))
+            detect(&names(&["package.json", "main.js"]), true),
+            ("electron", None)
         );
-        assert_eq!(detect(&names(&["README.md"])), ("custom", None));
+        assert_eq!(d(&["package.json", "vite.config.ts"]), ("web", Some("web")));
+        assert_eq!(d(&["index.html"]), ("web", Some("web")));
+        assert_eq!(
+            d(&["main.py", "requirements.txt"]),
+            ("python", Some("python"))
+        );
+        assert_eq!(d(&["README.md"]), ("custom", None));
+    }
+
+    #[test]
+    fn workflows_for_each_type_carry_their_settings() {
+        let y = |t: &str| {
+            workflow_yaml(
+                "org/x/.github/workflows/build.yml",
+                "v1",
+                "a",
+                "https://s",
+                t,
+                "main",
+            )
+        };
+        assert!(y("godot").contains("godot-version: \"4.3\""));
+        assert!(y("web").contains("output-dir: \"dist\""));
+        assert!(y("python").contains("python-entry: \"main.py\""));
+        assert!(y("tauri").contains("project-type: tauri\n"));
     }
 
     #[test]

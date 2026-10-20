@@ -25,6 +25,7 @@ pub mod interested;
 pub mod legal;
 pub mod library;
 pub mod limits;
+pub mod maker_keys;
 pub mod manage;
 pub mod media;
 pub mod moderation;
@@ -147,6 +148,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(slop_build::routes())
         .merge(staff::routes())
         .merge(updates::routes())
+        .merge(maker_keys::routes())
         .merge(manage::routes())
         .merge(media::routes())
         .merge(desktop_updates::routes())

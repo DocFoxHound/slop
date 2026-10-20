@@ -14,6 +14,10 @@
 #   5. attaches the files to a release on the maker's repo (Slop stores no builds),
 #   6. tells Slop, using the run's GitHub OIDC token instead of any secret.
 #
+# Project types: rust, go, godot (the project's export presets), python (PyInstaller), electron
+# (electron-builder, unpacked), tauri (no bundle), web (the built site in a small Tauri window),
+# and custom (any build command). With publish: false it builds and checks only.
+#
 # This recipe is trusted by every app built with it. Changes need two-person review, releases are
 # tagged, and makers pin a tag (SECURITY §5.1). It never handles Slop secrets.
 
@@ -31,7 +35,7 @@ on:
         required: true
         type: string
       project-type:
-        description: rust, go or custom.
+        description: rust, go, godot, web, electron, tauri, python or custom.
         required: true
         type: string
       platforms:
@@ -66,11 +70,58 @@ on:
         default: true
       exec:
         description: >-
-          custom only: the program to start, relative to output-dir. "{ext}" becomes .exe on
-          Windows. For rust and go this is worked out automatically.
+          The program to start, relative to the build. "{ext}" becomes .exe on Windows. Needed
+          for custom; worked out automatically for every other type (set it to override).
         required: false
         type: string
         default: ""
+      project-path:
+        description: Where the project is in the repository (godot, electron, tauri, python, web).
+        required: false
+        type: string
+        default: "."
+      godot-version:
+        description: "godot only: the Godot version, e.g. 4.3 or 4.4.1 (standard, not .NET)."
+        required: false
+        type: string
+        default: "4.3"
+      godot-preset-windows:
+        description: "godot only: the export preset for Windows (export_presets.cfg)."
+        required: false
+        type: string
+        default: Windows Desktop
+      godot-preset-linux:
+        description: "godot only: the export preset for Linux (export_presets.cfg)."
+        required: false
+        type: string
+        default: Linux
+      python-version:
+        description: "python only: the Python version."
+        required: false
+        type: string
+        default: "3.12"
+      python-entry:
+        description: "python only: the script that starts the app, relative to project-path."
+        required: false
+        type: string
+        default: main.py
+      python-windowed:
+        description: "python only: no console window (for apps with their own window, e.g. pygame)."
+        required: false
+        type: boolean
+        default: false
+      node-version:
+        description: Node.js version (electron, tauri, and web when it has a package.json).
+        required: false
+        type: string
+        default: "22"
+      publish:
+        description: >-
+          false builds and checks only: no release, nothing sent to Slop. For trying a build
+          (the files are kept as the run's artifacts for a day).
+        required: false
+        type: boolean
+        default: true
       signpath-organization-id:
         description: >-
           Optional: your SignPath organization ID, to sign the Windows program with a free
@@ -97,7 +148,8 @@ on:
 permissions: {}
 
 concurrency:
-  group: slop-build-${{ github.repository }}-${{ github.ref }}
+  # One build at a time per app and branch (a repository can hold several apps).
+  group: slop-build-${{ github.repository }}-${{ inputs.app }}-${{ github.ref }}
   cancel-in-progress: false
 
 jobs:
@@ -118,7 +170,7 @@ jobs:
           SLOP_URL: ${{ inputs.slop-url }}
         run: |
           [[ "$APP" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "::error::app must be your app's Slop address, e.g. my-game"; exit 1; }
-          [[ "$TYPE" =~ ^(rust|go|custom)$ ]] || { echo "::error::project-type must be rust, go or custom"; exit 1; }
+          [[ "$TYPE" =~ ^(rust|go|godot|web|electron|tauri|python|custom)$ ]] || { echo "::error::project-type must be rust, go, godot, web, electron, tauri, python or custom"; exit 1; }
           [[ "$SLOP_URL" =~ ^https?://[^/]+/?$ ]] || { echo "::error::slop-url must be a site address like https://slop.example"; exit 1; }
 
       - name: Choose version and release
@@ -128,6 +180,7 @@ jobs:
           REF_TYPE: ${{ github.ref_type }}
           REF_NAME: ${{ github.ref_name }}
           RUN: ${{ github.run_number }}
+          PUBLISH: ${{ inputs.publish }}
         run: |
           # A tag push builds that tag; anything else gets a numbered build release.
           if [ "$REF_TYPE" = "tag" ]; then
@@ -135,7 +188,9 @@ jobs:
           else
             tag="slop-build-$RUN"; version="build.$RUN"
           fi
-          if ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
+          if [ "$PUBLISH" != "true" ]; then
+            echo "Build and check only: no release."
+          elif ! gh release view "$tag" --repo "$GITHUB_REPOSITORY" >/dev/null 2>&1; then
             gh release create "$tag" --repo "$GITHUB_REPOSITORY" --target "$GITHUB_SHA" \
               --title "$version" --notes "Built by Slop Build from ${GITHUB_SHA}."
           fi
@@ -183,6 +238,69 @@ jobs:
         with:
           go-version-file: go.mod
 
+      - name: Set up Python
+        if: inputs.project-type == 'python'
+        uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+
+      - name: Set up Node.js
+        if: inputs.project-type == 'electron' || inputs.project-type == 'tauri' || inputs.project-type == 'web'
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ inputs.node-version }}
+
+      # Tauri, and the web shell (which is a small Tauri app), use the system's web view: WebKitGTK
+      # on Linux. Players' packages depend on it (see the Linux packages step).
+      - name: Linux libraries for a web view
+        if: matrix.platform == 'linux' && (inputs.project-type == 'tauri' || inputs.project-type == 'web')
+        run: |
+          sudo apt-get update -qq
+          sudo apt-get install -y -qq libwebkit2gtk-4.1-dev libgtk-3-dev librsvg2-dev libsoup-3.0-dev
+          echo "SLOP_DEB_DEPENDS=libwebkit2gtk-4.1-0, libgtk-3-0" >> "$GITHUB_ENV"
+          echo "SLOP_RPM_REQUIRES=webkit2gtk4.1, gtk3" >> "$GITHUB_ENV"
+
+      - name: Cache Rust builds
+        if: inputs.project-type == 'rust' || inputs.project-type == 'tauri' || inputs.project-type == 'web'
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+            ${{ inputs.project-path }}/src-tauri/target
+            ${{ runner.temp }}/slop-web-shell/target
+          key: slop-build-${{ matrix.platform }}-${{ inputs.project-type }}-${{ hashFiles('**/Cargo.lock') }}
+          restore-keys: slop-build-${{ matrix.platform }}-${{ inputs.project-type }}-
+
+      - name: Set up Godot
+        if: inputs.project-type == 'godot'
+        env:
+          GODOT: ${{ inputs.godot-version }}
+          PLATFORM: ${{ matrix.platform }}
+        run: |
+          ver="${GODOT%-stable}"
+          [[ "$ver" =~ ^[0-9]+\.[0-9]+(\.[0-9]+)?$ ]] || { echo "::error::godot-version must look like 4.3 or 4.4.1"; exit 1; }
+          base="https://github.com/godotengine/godot/releases/download/${ver}-stable"
+          tools="$RUNNER_TEMP/godot"; mkdir -p "$tools"
+          if [ "$PLATFORM" = "windows" ]; then
+            curl -sSfL -o "$tools/godot.zip" "$base/Godot_v${ver}-stable_win64.exe.zip"
+            templates="$APPDATA/Godot/export_templates/${ver}.stable"
+          else
+            curl -sSfL -o "$tools/godot.zip" "$base/Godot_v${ver}-stable_linux.x86_64.zip"
+            templates="$HOME/.local/share/godot/export_templates/${ver}.stable"
+          fi
+          (cd "$tools" && unzip -q godot.zip && rm godot.zip)
+          if [ "$PLATFORM" = "windows" ]; then
+            bin=$(ls "$tools"/*_console.exe | head -n 1)
+          else
+            bin=$(ls "$tools"/Godot_v*_linux.x86_64 | head -n 1); chmod +x "$bin"
+          fi
+          curl -sSfL -o "$tools/templates.tpz" "$base/Godot_v${ver}-stable_export_templates.tpz"
+          mkdir -p "$templates"
+          (cd "$tools" && unzip -q templates.tpz && cp -R templates/. "$templates/")
+          echo "SLOP_GODOT=$bin" >> "$GITHUB_ENV"
+
       - name: Build
         env:
           TYPE: ${{ inputs.project-type }}
@@ -191,9 +309,36 @@ jobs:
           OUTPUT_DIR: ${{ inputs.output-dir }}
           EXEC: ${{ inputs.exec }}
           REPO_NAME: ${{ github.event.repository.name }}
+          APP: ${{ inputs.app }}
+          PROJECT: ${{ inputs.project-path }}
+          PRESET_WINDOWS: ${{ inputs.godot-preset-windows }}
+          PRESET_LINUX: ${{ inputs.godot-preset-linux }}
+          PY_ENTRY: ${{ inputs.python-entry }}
+          PY_WINDOWED: ${{ inputs.python-windowed }}
         run: |
           ext=""; [ "$PLATFORM" = "windows" ] && ext=".exe"
-          mkdir -p slop-dist/app
+          out="$PWD/slop-dist/app"
+          mkdir -p "$out"
+          # A program inside a folder, for types whose output has one (Electron, PyInstaller).
+          find_program() {
+            python3 - "$1" "$PLATFORM" <<'PY'
+          import os, sys
+          root, platform = sys.argv[1], sys.argv[2]
+          skip = ("uninstall", "chrome-sandbox", "chrome_crashpad_handler", "crashpad_handler")
+          found = []
+          for name in os.listdir(root):
+              path = os.path.join(root, name)
+              if not os.path.isfile(path) or name.lower().startswith(skip):
+                  continue
+              with open(path, "rb") as fh:
+                  magic = fh.read(4)
+              if (platform == "windows" and name.lower().endswith(".exe")) or (platform != "windows" and magic == b"\x7fELF" and os.access(path, os.X_OK)):
+                  found.append((os.path.getsize(path), name))
+          if not found:
+              raise SystemExit(f"::error::no program found in {root}; set exec")
+          print(max(found)[1])
+          PY
+          }
           case "$TYPE" in
             rust)
               cargo build --release --locked
@@ -204,23 +349,175 @@ jobs:
           bins = [t["name"] for p in meta["packages"] for t in p["targets"] if "bin" in t["kind"]]
           if not bins: raise SystemExit("no binary target in Cargo.toml")
           print(bins[0])')
-              cp "target/release/$name$ext" slop-dist/app/
+              cp "target/release/$name$ext" "$out/"
               exec="$name$ext"
               ;;
             go)
-              go build -trimpath -o "slop-dist/app/$REPO_NAME$ext" .
+              go build -trimpath -o "$out/$REPO_NAME$ext" .
               exec="$REPO_NAME$ext"
+              ;;
+            godot)
+              cd "$PROJECT"
+              [ -f project.godot ] || { echo "::error::no project.godot in $PROJECT (set project-path)"; exit 1; }
+              preset="$PRESET_LINUX"; [ "$PLATFORM" = "windows" ] && preset="$PRESET_WINDOWS"
+              grep -q "^name=\"$preset\"" export_presets.cfg 2>/dev/null || {
+                echo "::error::export_presets.cfg has no preset named \"$preset\": in Godot, open Project → Export, add it, and commit export_presets.cfg"; exit 1; }
+              # Import once, so a clean checkout exports like the editor does.
+              "$SLOP_GODOT" --headless --import >/dev/null 2>&1 || true
+              "$SLOP_GODOT" --headless --export-release "$preset" "$out/$REPO_NAME$ext"
+              exec="$REPO_NAME$ext"
+              ;;
+            python)
+              cd "$PROJECT"
+              [ -f "$PY_ENTRY" ] || { echo "::error::no $PY_ENTRY in $PROJECT (set python-entry)"; exit 1; }
+              python -m pip install --quiet --upgrade pip
+              [ -f requirements.txt ] && python -m pip install --quiet -r requirements.txt
+              python -m pip install --quiet "pyinstaller==6.11.1"
+              windowed=""; [ "$PY_WINDOWED" = "true" ] && windowed="--windowed"
+              python -m PyInstaller --noconfirm --clean --onedir $windowed --name "$REPO_NAME" --distpath "$RUNNER_TEMP/pyi" "$PY_ENTRY"
+              cp -R "$RUNNER_TEMP/pyi/$REPO_NAME"/. "$out/"
+              exec="$REPO_NAME$ext"
+              ;;
+            electron)
+              cd "$PROJECT"
+              [ -f package.json ] || { echo "::error::no package.json in $PROJECT (set project-path)"; exit 1; }
+              npm ci
+              [ -n "$BUILD_COMMAND" ] && bash -euo pipefail -c "$BUILD_COMMAND"
+              # An unpacked folder (no installer): Slop installs and updates it.
+              npx --yes electron-builder@25 --dir --publish never
+              unpacked=dist/linux-unpacked; [ "$PLATFORM" = "windows" ] && unpacked=dist/win-unpacked
+              [ -d "$unpacked" ] || { echo "::error::electron-builder made no $unpacked"; exit 1; }
+              cp -R "$unpacked"/. "$out/"
+              exec=$(find_program "$out")
+              ;;
+            tauri)
+              cd "$PROJECT"
+              [ -d src-tauri ] || { echo "::error::no src-tauri folder in $PROJECT (set project-path)"; exit 1; }
+              [ -f package.json ] && npm ci
+              [ -n "$BUILD_COMMAND" ] && bash -euo pipefail -c "$BUILD_COMMAND"
+              # The program only: Tauri builds its web assets in, and Slop installs it.
+              if [ -f package.json ] && npm ls @tauri-apps/cli >/dev/null 2>&1; then
+                npx tauri build --no-bundle
+              else
+                npx --yes @tauri-apps/cli@2 build --no-bundle
+              fi
+              name=$(cd src-tauri && cargo metadata --no-deps --format-version 1 | python3 -c '
+          import json, sys
+          meta = json.load(sys.stdin)
+          bins = [t["name"] for p in meta["packages"] for t in p["targets"] if "bin" in t["kind"]]
+          if not bins: raise SystemExit("no binary in src-tauri/Cargo.toml")
+          print(bins[0])')
+              bin=$(ls src-tauri/target/release/"$name$ext" 2>/dev/null || true)
+              [ -n "$bin" ] || bin=$(find_program src-tauri/target/release)
+              cp "$bin" "$out/$APP$ext"
+              exec="$APP$ext"
+              ;;
+            web)
+              # A website (HTML5 game or app) in Slop's small Tauri shell: a window showing the
+              # built site, nothing else. The site is built into the program.
+              [ -n "$OUTPUT_DIR" ] || { echo "::error::web builds need output-dir: the folder with index.html"; exit 1; }
+              (cd "$PROJECT" && { [ -f package.json ] && npm ci || true; } && { [ -z "$BUILD_COMMAND" ] || bash -euo pipefail -c "$BUILD_COMMAND"; })
+              site="$PROJECT/$OUTPUT_DIR"
+              [ -f "$site/index.html" ] || { echo "::error::$site has no index.html"; exit 1; }
+              shell="$RUNNER_TEMP/slop-web-shell"
+              mkdir -p "$shell/src" "$shell/icons"
+              rm -rf "$shell/site" && cp -R "$site" "$shell/site"
+              python3 - "$shell" "$APP" <<'PY'
+          import json, os, struct, sys, zlib
+          shell, app = sys.argv[1], sys.argv[2]
+          title = app.replace("-", " ").title()
+          crate = app.replace("-", "_")
+          open(os.path.join(shell, "Cargo.toml"), "w").write(f"""[package]
+          name = "{crate}"
+          version = "0.1.0"
+          edition = "2021"
+
+          [[bin]]
+          name = "{app}"
+          path = "src/main.rs"
+
+          [build-dependencies]
+          tauri-build = {{ version = "2", features = [] }}
+
+          [dependencies]
+          tauri = {{ version = "2", features = ["custom-protocol"] }}
+
+          [profile.release]
+          strip = true
+          lto = true
+          """)
+          open(os.path.join(shell, "build.rs"), "w").write("fn main() { tauri_build::build() }\n")
+          open(os.path.join(shell, "src", "main.rs"), "w").write(
+              '#![cfg_attr(not(debug_assertions), windows_subsystem = "windows")]\n'
+              "fn main() {\n    tauri::Builder::default()\n        .run(tauri::generate_context!())\n        .expect(\"the app couldn't start\");\n}\n")
+          json.dump({
+              "productName": title,
+              "version": "0.1.0",
+              "identifier": f"build.slop.{crate}",
+              "build": {"frontendDist": "site"},
+              "app": {"windows": [{"title": title, "width": 1280, "height": 800, "resizable": True}],
+                      "security": {"csp": None}},
+              "bundle": {"active": False, "icon": ["icons/icon.png", "icons/icon.ico"]},
+          }, open(os.path.join(shell, "tauri.conf.json"), "w"), indent=2)
+          # A plain icon (Windows needs one to build): Slop's green.
+          def png(size):
+              raw = b"".join(b"\x00" + bytes([0xA3, 0xE6, 0x35, 0xFF]) * size for _ in range(size))
+              chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
+              return b"\x89PNG\r\n\x1a\n" + chunk(b"IHDR", struct.pack(">IIBBBBB", size, size, 8, 6, 0, 0, 0)) + chunk(b"IDAT", zlib.compress(raw)) + chunk(b"IEND", b"")
+          p = png(256)
+          open(os.path.join(shell, "icons", "icon.png"), "wb").write(p)
+          ico = struct.pack("<HHH", 0, 1, 1) + struct.pack("<BBBBHHII", 0, 0, 0, 0, 1, 32, len(p), 22) + p
+          open(os.path.join(shell, "icons", "icon.ico"), "wb").write(ico)
+          PY
+              # The shell's own crates, at the versions this recipe was tested with.
+              (cd "$shell" && cargo build --release)
+              cp "$shell/target/release/$APP$ext" "$out/"
+              exec="$APP$ext"
               ;;
             custom)
               [ -n "$BUILD_COMMAND" ] && [ -n "$OUTPUT_DIR" ] && [ -n "$EXEC" ] || {
                 echo "::error::custom builds need build-command, output-dir and exec"; exit 1; }
               bash -euo pipefail -c "$BUILD_COMMAND"
-              cp -R "$OUTPUT_DIR"/. slop-dist/app/
+              cp -R "$OUTPUT_DIR"/. "$out/"
               exec="${EXEC//\{ext\}/$ext}"
               ;;
           esac
-          [ -f "slop-dist/app/$exec" ] || { echo "::error::the build has no $exec"; exit 1; }
+          cd "$GITHUB_WORKSPACE"
+          # slop.toml (optional, at the top of the repository or the project): which program to
+          # start and with what arguments, for every platform or per platform:
+          #   [launch]                 [launch.windows]
+          #   exec = "game{ext}"        exec = "Game.exe"
+          #   args = ["--fullscreen"]   args = []
+          launch=$(python3 - "$PLATFORM" "$PROJECT" "$ext" <<'PY'
+          import json, os, sys, tomllib
+          platform, project, ext = sys.argv[1:4]
+          cfg = {}
+          for path in ("slop.toml", os.path.join(project, "slop.toml")):
+              if os.path.isfile(path):
+                  with open(path, "rb") as fh:
+                      cfg = tomllib.load(fh)
+                  break
+          launch = cfg.get("launch", {})
+          if not isinstance(launch, dict):
+              raise SystemExit("::error::slop.toml: [launch] must be a table")
+          own = launch.get(platform, {})
+          exec_ = own.get("exec", launch.get("exec", ""))
+          args = own.get("args", launch.get("args", []))
+          if not isinstance(exec_, str) or not isinstance(args, list) or not all(isinstance(a, str) for a in args):
+              raise SystemExit("::error::slop.toml: exec is a string and args a list of strings")
+          if len(args) > 16 or any(len(a) > 200 for a in args):
+              raise SystemExit("::error::slop.toml: at most 16 arguments of up to 200 characters")
+          print(json.dumps({"exec": exec_.replace("{ext}", ext), "args": args}))
+          PY
+          )
+          toml_exec=$(echo "$launch" | jq -r .exec)
+          # The workflow's exec wins, then slop.toml's, then what the build type worked out.
+          if [ -n "$EXEC" ] && [ "$TYPE" != "custom" ]; then exec="${EXEC//\{ext\}/$ext}";
+          elif [ -n "$toml_exec" ] && [ -z "$EXEC" ]; then exec="$toml_exec"; fi
+          case "$exec" in /*|*..*) echo "::error::the program must be inside the build: $exec"; exit 1;; esac
+          [ -f "$out/$exec" ] || { echo "::error::the build has no $exec"; exit 1; }
           echo "SLOP_EXEC=$exec" >> "$GITHUB_ENV"
+          echo "SLOP_ARGS=$(echo "$launch" | jq -c .args)" >> "$GITHUB_ENV"
 
       # Optional: sign the Windows program with the maker's SignPath Foundation certificate (free
       # for open-source projects). SignPath checks the build came from this repository on GitHub's
@@ -291,7 +588,7 @@ jobs:
                       info.mode, info.uid, info.gid, info.uname, info.gname = mode, 0, 0, "", ""
                       with open(path, "rb") as fh:
                           t.addfile(info, fh)
-          files = [{"platform": platform, "file_name": name, "exec": exe}]
+          files = [{"platform": platform, "file_name": name, "exec": exe, "args": json.loads(os.environ.get("SLOP_ARGS") or "[]")}]
           with open(os.path.join("slop-dist", "files.json"), "w") as fh:
               json.dump(files, fh)
           print(f"packed {name}")
@@ -371,6 +668,7 @@ jobs:
             mkdir -p "$stage/DEBIAN"
             printf 'Package: %s\nVersion: %s\nArchitecture: amd64\nMaintainer: %s\nHomepage: %s\nDescription: %s, built by Slop Build\n' \
               "$APP" "$pkgver" "$GITHUB_REPOSITORY_OWNER" "$REPO_URL" "$APP" > "$stage/DEBIAN/control"
+            [ -n "${SLOP_DEB_DEPENDS:-}" ] && echo "Depends: $SLOP_DEB_DEPENDS" >> "$stage/DEBIAN/control"
             # File names use the plain version: GitHub renames uploads with characters like "~".
             name="${APP}_${VERSION}_amd64.deb"
             dpkg-deb --root-owner-group --build "$stage" "slop-dist/out/$name"
@@ -389,6 +687,7 @@ jobs:
           License: see $REPO_URL
           URL: $REPO_URL
           AutoReqProv: no
+          ${SLOP_RPM_REQUIRES:+Requires: $SLOP_RPM_REQUIRES}
           %description
           $APP, built by Slop Build from $REPO_URL.
           %install
@@ -405,16 +704,25 @@ jobs:
           ls -l slop-dist/out
 
       - name: Sign (maker's attestation)
-        if: inputs.sign
+        if: inputs.sign && inputs.publish
         uses: actions/attest-build-provenance@v2
         with:
           subject-path: slop-dist/out/*
 
       - name: Attach to the release
+        if: inputs.publish
         env:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release upload "$TAG" slop-dist/out/* --repo "$GITHUB_REPOSITORY" --clobber
+
+      - name: Keep the build (build and check only)
+        if: ${{ !inputs.publish }}
+        uses: actions/upload-artifact@v4
+        with:
+          name: slop-build-${{ matrix.platform }}
+          path: slop-dist/out
+          retention-days: 1
 
       - name: Describe the files for Slop
         run: mv slop-dist/files.json "slop-dist/${{ matrix.platform }}.json"
@@ -482,6 +790,7 @@ jobs:
   notify:
     name: Tell Slop
     needs: [prepare, build, source-checks]
+    if: inputs.publish
     runs-on: ubuntu-latest
     permissions:
       id-token: write

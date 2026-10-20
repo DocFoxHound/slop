@@ -17,6 +17,7 @@ const file = (over: Partial<Release["files"][number]> = {}): Release["files"][nu
   sha256: "ab".repeat(32),
   provenance: null,
   provenance_problem: "no build attestation found",
+  maker_key: null,
   scan_result: "skipped",
   scan_detail: "not scanned: scanning is off on this server",
   scan_report: null,

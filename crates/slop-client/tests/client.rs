@@ -340,6 +340,7 @@ fn manifest_for(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signe
                 args: vec!["hello".into()],
             }),
             attestation: None,
+            maker_signature: None,
         }],
         approved_at: "2026-10-18T00:00:00Z".into(),
     };
@@ -665,4 +666,89 @@ async fn tar_gz_builds_install_and_launch() {
     assert!(err.to_string().contains("unsafe"), "{err}");
     assert!(!dir.join("apps/escape").exists() && !dir.join("escape").exists());
     assert!(lib.installed().is_empty());
+}
+
+/// An `ssh-keygen -Y sign -n slop-release` signature over `file`, and the key's OpenSSH line.
+fn ssh_sign(key: &SigningKey, file: &[u8]) -> (String, String) {
+    use base64::Engine;
+    use slop_manifest::ed25519_dalek::Signer;
+    let b64 = base64::engine::general_purpose::STANDARD;
+    let string = |out: &mut Vec<u8>, s: &[u8]| {
+        out.extend_from_slice(&(s.len() as u32).to_be_bytes());
+        out.extend_from_slice(s);
+    };
+    let mut pub_blob = Vec::new();
+    string(&mut pub_blob, b"ssh-ed25519");
+    string(&mut pub_blob, &key.verifying_key().to_bytes());
+    let mut signed = b"SSHSIG".to_vec();
+    string(&mut signed, b"slop-release");
+    string(&mut signed, b"");
+    string(&mut signed, b"sha512");
+    string(&mut signed, &sha2::Sha512::digest(file));
+    let mut sig_blob = Vec::new();
+    string(&mut sig_blob, b"ssh-ed25519");
+    string(&mut sig_blob, &key.sign(&signed).to_bytes());
+    let mut blob = b"SSHSIG".to_vec();
+    blob.extend_from_slice(&1u32.to_be_bytes());
+    string(&mut blob, &pub_blob);
+    string(&mut blob, b"slop-release");
+    string(&mut blob, b"");
+    string(&mut blob, b"sha512");
+    string(&mut blob, &sig_blob);
+    (
+        format!("ssh-ed25519 {}", b64.encode(&pub_blob)),
+        format!(
+            "-----BEGIN SSH SIGNATURE-----\n{}\n-----END SSH SIGNATURE-----\n",
+            b64.encode(&blob)
+        ),
+    )
+}
+
+/// Builds the maker signed by hand: the app checks the maker's key signed exactly this file.
+#[tokio::test]
+async fn hand_built_files_need_the_makers_signature() {
+    let (base, fake) = fake_api().await;
+    let zip = zip_of(&[("bin/game", GAME, 0o755)]);
+    fake.files
+        .lock()
+        .unwrap()
+        .push(("game.zip".into(), zip.clone()));
+    let maker = SigningKey::from_bytes(&[30; 32]);
+    let with_signature = |signer: &SigningKey| {
+        let (public_key, signature) = ssh_sign(signer, &zip);
+        let mut manifest: ReleaseManifest =
+            serde_json::from_str(&manifest_for(&base, "game.zip", &zip, "r1").payload).unwrap();
+        manifest.files[0].maker_signature = Some(slop_manifest::MakerSignature {
+            // Slop vouches for the maker's registered key; here it's the signer's own line, or
+            // the maker's when testing a stranger's signature.
+            public_key: if signer == &maker {
+                public_key
+            } else {
+                ssh_sign(&maker, &zip).0
+            },
+            signature,
+        });
+        slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
+    };
+    let dir = tempdir();
+    let strict = Library::new(&dir, vec![key().verifying_key()])
+        .unwrap()
+        .allow_http_downloads(true)
+        .require_maker_signature(true);
+    let installed = strict
+        .install(&with_signature(&maker), Platform::Linux, None, |_, _| {})
+        .await
+        .unwrap();
+    assert_eq!(installed.version, "1.0.0");
+    strict.uninstall("game").unwrap();
+    let stranger = SigningKey::from_bytes(&[31; 32]);
+    let err = strict
+        .install(&with_signature(&stranger), Platform::Linux, None, |_, _| {})
+        .await
+        .unwrap_err();
+    assert!(
+        matches!(&err, Error::Verify(m) if m.contains("maker signature")),
+        "{err:?}"
+    );
+    std::fs::remove_dir_all(dir).unwrap();
 }

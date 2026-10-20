@@ -27,6 +27,7 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Library | `library_entries` | The user's library; later, recommendations | Contract | Until removed or account deleted |
 | Scan reports, Defender checks, source checks | `release_files.scan_report`, `release_files.defender`, `defender_checks`, `releases.source_checks` | Deciding whether a release can be published; showing makers and reviewers what was found | Not personal data: file names, detections, signer certificate names and, for possible secrets, only the file, line and rule (never the secret itself) | Life of app + 6 years (scan records) |
 | Repository access tokens (encrypted), who saved them, when last used | `repo_tokens` | Reading a maker's private repository outside GitHub to fetch, check and share their releases | Contract | Until removed, the app is deleted, or it moves to another repository (then unused) |
+| Makers' signing keys (public keys, fingerprints, names) | `maker_keys` | Checking hand-attached release files were signed by their maker | Contract | Until removed; kept (revoked) with the releases they signed |
 | Passkeys (public keys, names, when used) | `passkeys` | Signing in and confirming sensitive actions | Contract | Until removed, or the account is closed |
 | Passkey ceremonies in progress | `webauthn_challenges` | Checking a passkey answer is to Slop's own question | Contract | 5 minutes |
 | Staff roles (who gave them) | `staff_roles` | Limiting what each staff member can do | Legitimate interest (security) | While they're staff |

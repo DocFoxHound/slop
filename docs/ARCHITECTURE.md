@@ -126,6 +126,8 @@
    - tells Slop.
 5. **Slop updates the recipe centrally** (it's a versioned shared workflow), so makers never maintain it.
 
+**Built (updated 2026-10-20):** the recipe (`slop-build/`) builds Windows and Linux (not macOS yet) for `rust`, `go`, `godot`, `python` (PyInstaller), `electron` (electron-builder, unpacked), `tauri` (no bundle), `web` (the built site in a minimal Tauri shell generated in the run) and `custom`, each tested on GitHub's runners. Slop's setup panel detects the type (package.json decides Electron or web). `slop.toml` sets the program and arguments; `publish: false` builds and checks without a release. "Build now" opens the workflow on GitHub, where Run workflow starts it; starting it from Slop needs the GitHub App. Still to do: macOS, Android, .NET/Unity/Unreal, files over 2 GiB, and Slop-run builders for other hosts.
+
 **Why this costs Slop almost nothing:** GitHub's standard runners are **free for public repos**, including macOS. Private repos get a monthly allowance on GitHub's free plan. Slop pays for no build machines and no storage.
 
 **GitLab, Bitbucket and self-hosted Git:** the same idea using their CI (`.gitlab-ci.yml` and so on). Their free build minutes are much smaller than GitHub's for public projects, so there are two options:

@@ -25,10 +25,16 @@ Slop then fetches and hashes the files, verifies the attestations, and the relea
 |---|---|
 | `rust` | `cargo build --release --locked`; ships the first binary target |
 | `go` | `go build -trimpath`; ships a binary named after the repository |
+| `godot` | Installs Godot and export templates (`godot-version`), imports, exports the `Windows Desktop` / `Linux` presets |
+| `python` | PyInstaller `--onedir` of `python-entry`, after `requirements.txt` |
+| `electron` | `npm ci`, electron-builder `--dir`; ships the unpacked folder |
+| `tauri` | `npm ci` (if any), `tauri build --no-bundle`; ships the program |
+| `web` | Builds the site, then wraps `output-dir` in a minimal Tauri shell generated in the run |
 | `custom` | Runs `build-command`, ships `output-dir`, starts `exec` (`{ext}` becomes `.exe` on Windows) |
 
-Godot, web/HTML5, Electron/Tauri and Python projects use `custom` for now; built-in support comes
-next (`docs/ARCHITECTURE.md` §6.2).
+An optional `slop.toml` (`[launch]` and `[launch.<platform>]`, with `exec` and `args`) sets the
+program and arguments. `publish: false` builds and checks without a release, which is how the
+types are tried on GitHub's runners (all eight built on Windows and Linux, 2026-10-20).
 
 ## Inputs
 
@@ -41,6 +47,11 @@ next (`docs/ARCHITECTURE.md` §6.2).
 | `linux-packages` | `deb,rpm` by default; Slop keeps the ones the store page lists |
 | `build-command`, `output-dir`, `exec` | `custom` only |
 | `sign` | `true` by default; `false` for private repositories without GitHub Enterprise |
+| `project-path` | Where the project is (default `.`) |
+| `godot-version`, `godot-preset-windows`, `godot-preset-linux` | `godot` |
+| `python-version`, `python-entry`, `python-windowed` | `python` |
+| `node-version` | `electron`, `tauri`, `web` |
+| `publish` | `false`: build and check only, no release, nothing sent to Slop |
 | `signpath-organization-id` | Optional: sign the Windows program with SignPath (needs the `SIGNPATH_API_TOKEN` secret) |
 | `signpath-project-slug` | SignPath project; defaults to `app` |
 | `signpath-signing-policy-slug` | `release-signing` by default |
