@@ -1260,6 +1260,7 @@ async fn hire(
     Path(handle): Path<String>,
     Json(body): Json<HireBody>,
 ) -> ApiResult<Json<JobView>> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Hire)?;
     require_adult(&state, &user, body.confirm_adult).await?;
     crate::legal::require(&state.db, user.id, "people").await?;
     if !body.exact_wording_ack {
@@ -2651,6 +2652,7 @@ async fn post_message(
     Path(id): Path<Uuid>,
     Json(body): Json<MessageBody>,
 ) -> ApiResult<Json<JobView>> {
+    crate::limits::check(&state, user.id, crate::limits::Action::JobMessage)?;
     let (j, role) = load(&state, id, &user).await?;
     if !j.conversation_open {
         return Err(ApiError::Conflict(

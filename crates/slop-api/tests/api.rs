@@ -11168,3 +11168,25 @@ async fn sensitive_actions_need_two_people_and_roles_limit_staff(db: PgPool) {
     assert!(!suspended);
     let _ = a_id;
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn accounts_are_rate_limited_per_action(db: PgPool) {
+    // Per-IP limits off (every test request comes from one address), to reach the account's.
+    let app = test_app_with(db, |c| c.rate_limits.write_per_minute = 10_000).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "soon-game", "coming_soon", "").await;
+    let (_, player) = app.user("Busy Player", "US").await;
+    let (_, other) = app.user("Other Player", "US").await;
+    let mark = |cookie: &str| req(Method::PUT, "/v1/me/interested/soon-game").cookie(cookie);
+    for _ in 0..120 {
+        assert!(app.send(mark(&player)).await.status().is_success());
+    }
+    let res = app.send(mark(&player)).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(res.headers().get("retry-after").is_some());
+    assert_eq!(body_json(res).await["error"]["code"], "rate_limited");
+    assert!(
+        app.send(mark(&other)).await.status().is_success(),
+        "others aren't affected"
+    );
+}

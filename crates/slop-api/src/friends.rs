@@ -179,6 +179,7 @@ async fn request(
     user: CurrentUser,
     Json(b): Json<RequestBody>,
 ) -> ApiResult<Json<Requested>> {
+    crate::limits::check(&state, user.id, crate::limits::Action::FriendRequest)?;
     let to = parse_user(&b.user)?;
     if to == user.id {
         return Err(ApiError::invalid("user", "that's you"));

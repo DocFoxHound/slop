@@ -58,6 +58,7 @@ async fn add(
     headers: HeaderMap,
     Path(slug): Path<String>,
 ) -> ApiResult<StatusCode> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Interest)?;
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, mine) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     if mine {

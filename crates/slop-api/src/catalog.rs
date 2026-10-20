@@ -1060,6 +1060,7 @@ async fn create_app(
     headers: HeaderMap,
     Json(req): Json<NewApp>,
 ) -> ApiResult<(StatusCode, Json<AppDetail>)> {
+    crate::limits::check(&state, user.id, crate::limits::Action::NewApp)?;
     validate_slug(&req.slug)?;
     let title = validate_text("title", &req.title, 80, false)?;
     let summary = validate_text("summary", &req.summary, 200, false)?;
