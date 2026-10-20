@@ -6,6 +6,7 @@
 //! | Signal | Weight per tag |
 //! |---|---|
 //! | in their library | +1 |
+//! | marked Interested | +2 |
 //! | launched it | + its vote weight (0.1–1: more for more playtime or launch days) |
 //! | voted 👍 Not Slop | +2 |
 //! | voted 👎 Slop | −2 |
@@ -20,7 +21,7 @@
 //! but not against it: good ratings and players count, plus a shuffle that changes daily, and
 //! no two from the same first tag.
 //!
-//! Never recommended: what's in their library, launched or voted on, their own apps, dead
+//! Never recommended: what's in their library or Interested list, launched or voted on, their own apps, dead
 //! projects, and anything their age view hides. Each card says why it's there. With
 //! recommendations switched off (or no activity yet), everyone gets the same popular, well-rated
 //! and new apps.
@@ -66,6 +67,8 @@ pub struct Candidate {
 #[derive(Default, Clone)]
 pub struct Signals {
     pub library: HashSet<Uuid>,
+    /// Upcoming apps they marked Interested.
+    pub interested: HashSet<Uuid>,
     /// app → (playtime seconds, days launched)
     pub launched: HashMap<Uuid, (i64, i32)>,
     /// app → 1 or -1
@@ -103,6 +106,9 @@ pub fn taste(signals: &Signals, tags_of: &HashMap<Uuid, Vec<String>>) -> HashMap
     };
     for app in &signals.library {
         add(app, 1.0);
+    }
+    for app in &signals.interested {
+        add(app, 2.0);
     }
     for (app, (playtime, days)) in &signals.launched {
         add(app, f64::from(vote_weight(*playtime, *days)));
@@ -183,6 +189,7 @@ pub fn recommend(
             let c = &candidates[i];
             !c.app.is_dead
                 && !signals.library.contains(&c.id)
+                && !signals.interested.contains(&c.id)
                 && !signals.launched.contains_key(&c.id)
                 && !signals.votes.contains_key(&c.id)
                 && signals.user_id != Some(c.maker_id)
@@ -429,6 +436,11 @@ pub async fn signals(db: &PgPool, user_id: Uuid) -> sqlx::Result<Signals> {
             .bind(user_id)
             .fetch_all(db)
             .await?;
+    let interested: Vec<Uuid> =
+        sqlx::query_scalar("select app_id from interests where user_id = $1")
+            .bind(user_id)
+            .fetch_all(db)
+            .await?;
     let launched: Vec<(Uuid, i64, i32)> = sqlx::query_as(
         "select app_id, playtime_seconds, days_launched from user_app_usage where user_id = $1",
     )
@@ -442,6 +454,7 @@ pub async fn signals(db: &PgPool, user_id: Uuid) -> sqlx::Result<Signals> {
             .await?;
     Ok(Signals {
         library: library.into_iter().collect(),
+        interested: interested.into_iter().collect(),
         launched: launched.into_iter().map(|(a, p, d)| (a, (p, d))).collect(),
         votes: votes.into_iter().collect(),
         user_id: Some(user_id),

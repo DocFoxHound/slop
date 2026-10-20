@@ -347,6 +347,8 @@ pub struct Generated {
     pub player_buckets: usize,
     pub people: crate::sim_people::PeopleGenerated,
     pub moderation: crate::sim_moderation::ModerationGenerated,
+    /// Interested marks on upcoming apps.
+    pub interests: u64,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -648,6 +650,8 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .execute(&mut *tx)
     .await?;
     for table in [
+        "notifications",
+        "interests",
         "reports",
         "moderation_decisions",
         "creative_reviews",
@@ -962,6 +966,22 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         now,
     )
     .await?;
+    // Interested: players mark upcoming apps that share at least two tags with their library,
+    // about one in six of them (the same ones for the same seed of users and apps).
+    let interests = sqlx::query(
+        "insert into interests (user_id, app_id, created_at)
+         select u.user_id, a.id, a.stage_entered_at + (abs(hashtext(u.user_id::text || a.id::text)) % 20) * interval '1 day' / 2
+         from sim_users u cross join apps a
+         where a.stage <> 'released' and a.status = 'listed'
+           and abs(hashtext(a.id::text || u.user_id::text)) % 6 = 0
+           and (select count(*) from app_tags at where at.app_id = a.id and at.tag_id in
+                  (select at2.tag_id from library_entries l join app_tags at2 on at2.app_id = l.app_id
+                   where l.user_id = u.user_id)) >= 2
+         on conflict do nothing",
+    )
+    .execute(db)
+    .await?
+    .rows_affected();
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
 
     Ok(Generated {
@@ -975,6 +995,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         player_buckets: buckets.len(),
         people,
         moderation,
+        interests,
     })
 }
 
@@ -1398,6 +1419,9 @@ pub async fn report(
     let (mut before, mut after, mut n) = (0.0f64, 0.0f64, 0.0f64);
     for user in &fans {
         let mut s = foryou::signals(db, *user).await?;
+        // The experiment is about votes: Interested apps (left out of the feed) would hide the
+        // upcoming roguelikes it measures.
+        s.interested.clear();
         let seed = rng.next_u64();
         let picks = foryou::recommend(&s, &full, &names, true, seed, foryou::SLATE);
         let disliked: Vec<Uuid> = full

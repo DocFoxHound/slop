@@ -73,6 +73,16 @@ const EXPORT: &[(&str, &str)] = &[
          from library_entries l join apps a on a.id = l.app_id where l.user_id = $1",
     ),
     (
+        "interested",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'since', i.created_at)), '[]')
+         from interests i join apps a on a.id = i.app_id where i.user_id = $1",
+    ),
+    (
+        "notifications",
+        "select coalesce(jsonb_agg(to_jsonb(n) - 'user_id' order by n.created_at), '[]')
+         from notifications n where n.user_id = $1",
+    ),
+    (
         "playtime",
         "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug) || (to_jsonb(p) - 'user_id' - 'app_id')), '[]')
          from user_app_usage p join apps a on a.id = p.app_id where p.user_id = $1",
@@ -285,7 +295,13 @@ pub async fn close_account(
         .execute(&mut *tx)
         .await?;
     }
-    for table in ["library_entries", "user_app_usage", "pulse_sessions"] {
+    for table in [
+        "library_entries",
+        "interests",
+        "user_app_usage",
+        "pulse_sessions",
+        "notifications",
+    ] {
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "delete from {table} where user_id = $1"
         )))

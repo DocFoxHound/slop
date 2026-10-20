@@ -68,6 +68,9 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "pulse cleanup failed"),
         }
+        if let Err(err) = crate::notify::cleanup(&state.db).await {
+            tracing::error!(error = ?err, "notification cleanup failed");
+        }
         match crate::people::jobs::auto_complete(&state.db, time::OffsetDateTime::now_utc()).await {
             Ok(n) if n > 0 => tracing::info!(completed = n, "people jobs completed after 7 days"),
             Ok(_) => {}

@@ -126,7 +126,12 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 
 - **Dead project:** a Coming soon or Beta project with **no commits for 90 days** is labelled dead (decided; **only** for Coming soon and Beta, never Released; the value is configurable). It stays visible but is never recommended, and it comes back with the next commit.
 - **Missed deadline:** the page is **delisted** (hidden from the store, search and recommendations) until it moves to the next stage (decided). Existing installs and libraries keep working.
-- People can mark Coming soon and Beta apps **Interested**, which puts them in their library and gives publishers a demand signal.
+- People can mark Coming soon and Beta apps **Interested**, which puts them in their library and gives publishers a demand signal. (Built 2026-10-20: the count shows on tiles and pages, "Most anticipated" sorts by it, Interested tags count double in "For you", and everyone Interested is notified when the app reaches beta or release.)
+
+### Notifications (built 2026-10-20)
+- A 🔔 in the top bar with an unread count, and a notifications page. Kinds: **People jobs** (every step by the other side, and new messages, merged while unread), **Interested** apps moving on, and **moderation** (decisions, appeal answers, report outcomes).
+- Each kind can also be **emailed**, on by default and switched off per kind on the account page. Product emails only, never marketing (TERMS-3). Signed-out reporters get their report's outcome by email.
+- Emails go out only when the server has SMTP set (`deploy/README.md`).
 
 ## 9. Branches & community builds
 

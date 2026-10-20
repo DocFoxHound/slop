@@ -660,3 +660,21 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .report-card blockquote { margin: 0; padding: 6px 10px; border-left: 3px solid var(--line); background: var(--panel-2); border-radius: 0 6px 6px 0; }
 .close-account ul { margin: 0 0 8px; padding-left: 20px; color: var(--text-2); font-size: 13px; }
 .mono { font-family: ui-monospace, "Cascadia Code", Menlo, monospace; }
+
+/* ---- Interested and notifications ---------------------------------------- */
+.interested { margin-top: 12px; display: flex; flex-direction: column; gap: 6px; }
+.interested p { margin: 0; }
+.interested-count { margin: 10px 0 0; }
+.small-seg { margin-bottom: 10px; }
+.bell { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; color: var(--text); font-size: 17px; }
+.bell:hover, .bell.on { background: var(--panel-2); }
+.bell-count { position: absolute; top: 1px; right: 0; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 10px; font-weight: 700; line-height: 17px; text-align: center; }
+.notifications { list-style: none; margin: 0 0 14px; padding: 0; }
+.notifications li { border-bottom: 1px solid var(--line); }
+.notifications li:last-child { border-bottom: 0; }
+.notification { display: flex; gap: 12px; width: 100%; padding: 12px 16px; background: none; border: 0; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.notification:hover { background: var(--panel-2); }
+.notifications li.unread .notification { border-left: 3px solid var(--slime); padding-left: 13px; }
+.notifications li:not(.unread) b { font-weight: 500; color: var(--text-2); }
+.n-icon { flex: none; width: 22px; text-align: center; }
+.n-text { display: flex; flex-direction: column; gap: 2px; }

@@ -370,3 +370,43 @@ export function AccountData() {
     </section>
   );
 }
+
+export function AccountNotifications() {
+  const prefs = useLoad(() => api.notifications.prefs(), []);
+  const [error, setError] = useState<string>();
+  if (prefs.error) return <ErrorState error={prefs.error} onRetry={prefs.reload} />;
+  if (!prefs.data) return null;
+  const p = prefs.data;
+  const set = async (category: string, email: boolean) => {
+    setError(undefined);
+    try {
+      await api.notifications.setPrefs({ [category]: email });
+      prefs.reload();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
+  };
+  return (
+    <section id="notifications">
+      <h2 className="section-title">Notifications</h2>
+      <div className="panel panel-pad">
+        <p className="muted small">
+          Everything shows under the 🔔 in Slop. Choose what's also emailed to you
+          {p.has_email ? "" : " (you don't have an email on your account, so nothing is emailed)"}
+          {p.email_on ? "" : ". This server doesn't send email yet"}. Slop never sends marketing.
+        </p>
+        {p.categories.map((c) => (
+          <label className="check" key={c.category}>
+            <input type="checkbox" checked={c.email} onChange={(e) => void set(c.category, e.target.checked)} />
+            <span>Email me about {c.label.charAt(0).toLowerCase() + c.label.slice(1)}</span>
+          </label>
+        ))}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+      </div>
+    </section>
+  );
+}

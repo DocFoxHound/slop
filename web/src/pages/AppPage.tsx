@@ -10,6 +10,7 @@ import { ageLabel, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../f
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
+import { InterestedButton } from "../components/Interested";
 import { workflowName } from "./Releases";
 import { isDesktop, openExternal } from "../platform";
 import { useSession } from "../session";
@@ -198,6 +199,7 @@ function AppView({ app }: { app: AppDetail }) {
             ) : (
               <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
             )}
+            <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />
             {packages.length > 0 && (
               <p className="muted small packages">
                 Linux packages:{" "}

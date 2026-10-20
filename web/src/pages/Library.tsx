@@ -22,6 +22,7 @@ export function Library() {
   const { me } = useSession();
   const library = useLoad(() => (me ? api.library() : Promise.resolve([])), [me?.id]);
   const installed = useLoad(() => (isDesktop ? desktop.installed() : Promise.resolve([])), []);
+  const interested = useLoad(() => (me ? api.interested.mine() : Promise.resolve([])), [me?.id]);
 
   if (me === undefined || library.loading || installed.loading) return <Loading />;
 
@@ -47,7 +48,7 @@ export function Library() {
         </p>
       )}
       {library.error && <ErrorState error={library.error} onRetry={library.reload} />}
-      {rows.length === 0 ? (
+      {rows.length === 0 && !interested.data?.length ? (
         <div className="empty-state">
           Nothing here yet. <Link to="/">Find something in the store</Link>.
         </div>
@@ -74,6 +75,46 @@ export function Library() {
             </li>
           ))}
         </ul>
+      )}
+
+      {(interested.data?.length ?? 0) > 0 && (
+        <>
+          <h2 className="section-title">Interested</h2>
+          <p className="muted small">Upcoming apps you're waiting for. We tell you when each reaches beta or is released.</p>
+          <ul className="library-list">
+            {interested.data!.map((a) => (
+              <li key={a.slug} className="panel library-row">
+                <Link to={`/app/${a.slug}`} className="library-art" aria-label={a.title}>
+                  <Art app={a} withName={false} />
+                </Link>
+                <div className="library-info">
+                  <div className="title-row">
+                    <Link to={`/app/${a.slug}`} className="text">
+                      <b>{a.title}</b>
+                    </Link>
+                    <StageBadge app={a} />
+                  </div>
+                  <div className="muted small">
+                    {a.stage === "released" ? "Released: add it to your library to install it." : a.summary}
+                  </div>
+                </div>
+                <div className="library-actions">
+                  {a.stage === "released" ? (
+                    <InstallControls slug={a.slug} title={a.title} inLibrary={false} />
+                  ) : (
+                    <button
+                      type="button"
+                      className="btn small ghost"
+                      onClick={() => void api.interested.remove(a.slug).then(interested.reload)}
+                    >
+                      Not interested
+                    </button>
+                  )}
+                </div>
+              </li>
+            ))}
+          </ul>
+        </>
       )}
     </div>
   );

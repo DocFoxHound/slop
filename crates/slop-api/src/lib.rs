@@ -11,11 +11,13 @@ pub mod desktop_updates;
 pub mod error;
 pub mod foryou;
 pub mod github_app;
+pub mod interested;
 pub mod legal;
 pub mod library;
 pub mod manage;
 pub mod media;
 pub mod moderation;
+pub mod notify;
 pub mod people;
 pub mod policy;
 pub mod pulse;
@@ -128,6 +130,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(legal::routes())
         .merge(moderation::routes())
         .merge(account::routes())
+        .merge(notify::routes())
+        .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
