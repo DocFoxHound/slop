@@ -33,6 +33,16 @@ export interface RatingBreakdown {
   impact: Array<{ version: string; to_not_slop: number; to_slop: number; new_votes: number }>;
 }
 
+/** Updates for an installed app (crates/slop-api/src/library.rs). */
+export interface AppUpdate {
+  slug: string;
+  latest: { release_id: string; version: string } | null;
+  /** A newer release still being checked: "fetching" (downloading and scanning) or "awaiting_review". */
+  pending: { version: string; status: "fetching" | "awaiting_review" } | null;
+  /** The official app and its community builds, when there's more than one. */
+  builds: Array<{ slug: string; title: string; official: boolean; platforms: string[] }>;
+}
+
 export interface AppSummary {
   slug: string;
   title: string;
@@ -1437,6 +1447,9 @@ export const api = {
   submitRelease: (slug: string, release: NewRelease) =>
     request<Release>("POST", `/v1/apps/${encodeURIComponent(slug)}/releases`, release),
   /** Whether an approved, signed build exists (the manifest itself is checked in Rust). */
+  /** For installed apps: the release players get, a newer one being checked, and other builds. */
+  libraryUpdates: (slugs: string[]) =>
+    request<AppUpdate[]>("GET", `/v1/library/updates?apps=${encodeURIComponent(slugs.join(","))}`),
   hasBuild: (slug: string) =>
     request<unknown>("GET", `/v1/apps/${encodeURIComponent(slug)}/manifest`).then(
       () => true,

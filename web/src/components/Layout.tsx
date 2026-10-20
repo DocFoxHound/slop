@@ -5,6 +5,7 @@ import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
 import { formatDate } from "../format";
 import { desktop, isDesktop } from "../platform";
+import { useAutoUpdates } from "./AppUpdates";
 import { UpdateNotice } from "./UpdateNotice";
 import { WindowControls } from "./WindowControls";
 import { useSession } from "../session";
@@ -64,6 +65,7 @@ export function Layout() {
   const location = useLocation();
   const view = useRef<HTMLElement>(null);
   const chatUnread = useChatUnread();
+  useAutoUpdates();
 
   // New page, back to the top. The page scrolls inside <main>, not the window.
   useEffect(() => {

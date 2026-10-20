@@ -10249,3 +10249,77 @@ async fn storefront_shelves_featured_and_rating_breakdown(db: PgPool) {
             .unwrap();
     assert_eq!(logged, 1);
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn installed_apps_see_updates_queued_releases_and_other_builds(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    sqlx::query("update apps set status = 'listed'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+
+    let check = || req(Method::GET, "/v1/library/updates?apps=game,nope");
+    let u = body_json(app.send(check()).await).await;
+    assert_eq!(u.as_array().unwrap().len(), 1, "unknown apps are left out");
+    assert_eq!(u[0]["latest"]["version"], "1.0.0");
+    assert_eq!(u[0]["latest"]["release_id"], first);
+    assert!(u[0]["pending"].is_null());
+    assert_eq!(u[0]["builds"], json!([]), "no other builds to switch to");
+
+    // A newer release being checked is the queued update.
+    sqlx::query("update apps set auto_update = false")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    submit_and_fetch(&app, &maker, "1.1.0").await;
+    let u = body_json(app.send(check()).await).await;
+    assert_eq!(u[0]["latest"]["version"], "1.0.0");
+    assert_eq!(u[0]["pending"]["version"], "1.1.0");
+    assert_eq!(u[0]["pending"]["status"], "awaiting_review");
+
+    // A community build in the store makes a family to switch between.
+    listed_with(&app, maker_id, "game-fix", "released", "").await;
+    sqlx::query(
+        "update apps set parent_app_id = (select id from apps where slug = 'game'), branch_kind = 'fix',
+                platforms = '{windows}' where slug = 'game-fix'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let u = body_json(app.send(check()).await).await;
+    let builds: Vec<(&str, bool)> = u[0]["builds"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| {
+            (
+                b["slug"].as_str().unwrap(),
+                b["official"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(builds, vec![("game", true), ("game-fix", false)]);
+
+    let too_many = (0..101)
+        .map(|i| format!("a{i}"))
+        .collect::<Vec<_>>()
+        .join(",");
+    let res = app
+        .send(req(
+            Method::GET,
+            format!("/v1/library/updates?apps={too_many}"),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+}

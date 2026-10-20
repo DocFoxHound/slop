@@ -1003,6 +1003,37 @@ fn overlay_hide(app: AppHandle) {
     overlay::hide(&app);
 }
 
+/// "Update apps automatically" (DESIGN §6): on unless the player turned it off. The library
+/// installs approved updates for apps that aren't running.
+#[tauri::command]
+fn auto_update_setting(desktop: State<'_, Desktop>, on: Option<bool>) -> CommandResult<bool> {
+    let path = desktop.chat_dir.join("auto-update.json");
+    if let Some(on) = on {
+        std::fs::create_dir_all(&desktop.chat_dir).map_err(Error::from)?;
+        std::fs::write(&path, if on { "true" } else { "false" }).map_err(Error::from)?;
+    }
+    Ok(std::fs::read(&path)
+        .ok()
+        .and_then(|b| serde_json::from_slice::<bool>(&b).ok())
+        .unwrap_or(true))
+}
+
+/// The apps Slop started that are still running: they're not updated until they close.
+#[tauri::command]
+fn running_apps(app: AppHandle) -> Vec<String> {
+    let mut slugs: Vec<String> = app
+        .state::<overlay::Running>()
+        .0
+        .lock()
+        .unwrap()
+        .values()
+        .cloned()
+        .collect();
+    slugs.sort();
+    slugs.dedup();
+    slugs
+}
+
 /// The in-game overlay switch: reads it, or sets it when `on` is given.
 #[tauri::command]
 fn overlay_setting(desktop: State<'_, Desktop>, on: Option<bool>) -> CommandResult<bool> {
@@ -1118,6 +1149,8 @@ fn main() {
             chat,
             overlay_hide,
             overlay_setting,
+            auto_update_setting,
+            running_apps,
         ])
         .run(tauri::generate_context!())
         .expect("error while running the Slop desktop app");
