@@ -460,6 +460,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         client_ip_header: Some("x-test-client-ip".into()),
         simulation: false,
         ops: Default::default(),
+        approvals_required: 1,
     };
     let mut config = config;
     adjust(&mut config);
@@ -2824,7 +2825,11 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
                 .json(json!({ "reason": "" })),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::CONFLICT, "a reason is required");
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a reason is required"
+    );
     let res = app
         .send(
             req(Method::POST, format!("/v1/admin/releases/{id}/revoke"))
@@ -2859,7 +2864,9 @@ async fn the_admin_panel_reviews_and_moderates(db: PgPool) {
         [
             "app.delist",
             "moderation.delist_app",
+            "staff_action.request",
             "release.revoke",
+            "staff_action.request",
             "app.stage",
             "app.list",
             "release.approve",
@@ -11007,4 +11014,157 @@ async fn agents_watch_and_moderate_through_the_api_and_mcp(db: PgPool) {
     );
     let unknown = body_json(app.send(call("moderate", "drop_database", json!({}))).await).await;
     assert!(unknown["error"].is_object());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn sensitive_actions_need_two_people_and_roles_limit_staff(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (a_id, a) = make_admin(&app, "Ada Owner").await;
+    let (_, b) = make_admin(&app, "Ben Owner").await;
+    let (c_id, c) = app.user("Cleo", "US").await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let release_status = || async {
+        sqlx::query_scalar::<_, String>("select status::text from releases where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+
+    // Ada asks to withdraw it: recorded, waiting for someone else.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/releases/{id}/revoke"))
+                .cookie(&a)
+                .json(json!({ "reason": "Ships a crypto miner." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let pending = body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(release_status().await, "approved");
+    let approve = |cookie: &str| {
+        req(Method::POST, format!("/v1/admin/actions/{pending}/approve")).cookie(cookie)
+    };
+    assert_eq!(
+        app.send(approve(&a)).await.status(),
+        StatusCode::CONFLICT,
+        "not twice by Ada"
+    );
+    // Nor through any agent: only people approve.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/tokens")
+                .cookie(&a)
+                .json(json!({ "name": "Ada's agent", "scope": "moderate", "days": 7 })),
+        )
+        .await;
+    let token = format!("Bearer {}", body_json(res).await["token"].as_str().unwrap());
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/actions/{pending}/approve"))
+                .header("authorization", token),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/admin/actions").cookie(&b))
+            .await,
+    )
+    .await;
+    assert_eq!(listed["approvals_required"], 2);
+    assert_eq!(listed["actions"][0]["kind"], "release.revoke");
+    // Ben approves: now it happens, in both names.
+    assert_eq!(app.send(approve(&b)).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(release_status().await, "revoked");
+    let actor: String =
+        sqlx::query_scalar("select actor from audit_log where action = 'release.revoke'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(
+        actor.contains("Ada Owner") && actor.contains("approved by Ben Owner"),
+        "{actor}"
+    );
+
+    // Ada makes Cleo support staff; Ben approves.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/staff/{c_id}/roles"))
+                .cookie(&a)
+                .json(json!({ "role": "support", "grant": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let role_action = body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/actions/{role_action}/approve"),
+            )
+            .cookie(&b),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let staff = body_json(
+        app.send(req(Method::GET, "/v1/admin/staff").cookie(&c))
+            .await,
+    )
+    .await;
+    assert!(staff["my_roles"] == json!(["support"]), "{staff}");
+
+    // Support staff look and handle reports, but don't review releases or act on sensitive ones.
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/releases/{second}/approve")).cookie(&c))
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{pending}/approve")).cookie(&c))
+        .await;
+    assert!(res.status() == StatusCode::FORBIDDEN || res.status() == StatusCode::CONFLICT);
+
+    // A suspension request Ben turns down never happens.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/users/{c_id}/decide"))
+                .cookie(&a)
+                .json(
+                    json!({ "action": "suspend_account", "rule": "harassment", "facts": "Test." }),
+                ),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let suspend = body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{suspend}/cancel")).cookie(&b))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let suspended: bool =
+        sqlx::query_scalar("select suspended_at is not null from users where id = $1")
+            .bind(c_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(!suspended);
+    let _ = a_id;
 }

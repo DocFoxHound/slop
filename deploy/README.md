@@ -196,6 +196,13 @@ podman exec -i slop-pg pg_restore -U slop --no-owner --role=slop_prod -d slop_re
 arguments somewhere else, encrypted (for example `rclone copy --` to an rclone crypt remote on
 Backblaze B2 or Cloudflare R2, whose free tiers fit).
 
+## Staff and approvals
+
+`slop-api admin grant <who>` makes someone staff with the owner role; the Admin → Staff tab gives
+and takes the other roles. `SLOP_APPROVALS_REQUIRED` in `slop.env` is how many different staff
+approve a sensitive action (withdrawing a release, delisting, suspending, changing roles). It's 1
+while there's one person; set it to 2 and restart once there's a second.
+
 ## Alerts
 
 The API checks every five minutes (`ops.rs`) and tells every admin under the 🔔, by phone push,

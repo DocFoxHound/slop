@@ -12,6 +12,7 @@ import {
   type QueuedReport,
   type AdminApp,
   type AdminFeatured,
+  type StaffRole,
   type AdminQueue,
   type AdminToken,
   type AppStage,
@@ -30,7 +31,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { NotFound } from "./Listing";
 
-type Tab = "queue" | "apps" | "audit" | "ai";
+type Tab = "queue" | "apps" | "audit" | "ai" | "staff";
 
 export function Admin() {
   useDocumentTitle("Admin");
@@ -51,6 +52,7 @@ export function Admin() {
             ["apps", "Apps"],
             ["audit", "Audit log"],
             ["ai", "AI reviewers"],
+            ["staff", "Staff"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -68,6 +70,7 @@ export function Admin() {
       {tab === "apps" && <AppsTab />}
       {tab === "audit" && <AuditTab />}
       {tab === "ai" && <TokensTab />}
+      {tab === "staff" && <StaffTab />}
     </div>
   );
 }
@@ -76,11 +79,17 @@ export function Admin() {
 function useAction(onDone: () => void) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
+  const [notice, setNotice] = useState<string>();
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key);
     setError(undefined);
+    setNotice(undefined);
     try {
-      await action();
+      const result = await action();
+      // Sensitive actions may wait for another staff member (staff.rs).
+      if (result && typeof result === "object" && "pending_action" in result) {
+        setNotice("Recorded. It happens once another staff member approves it under Waiting for approval.");
+      }
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -88,7 +97,7 @@ function useAction(onDone: () => void) {
       setBusy(undefined);
     }
   };
-  return { busy, error, run };
+  return { busy, error, notice, run };
 }
 
 function ReasonButton({
@@ -134,7 +143,7 @@ function ReasonButton({
 
 function QueueTab() {
   const queue = useLoad(() => api.admin.queue(), []);
-  const { busy, error, run } = useAction(queue.reload);
+  const { busy, error, notice, run } = useAction(queue.reload);
   if (queue.error) return <ErrorState error={queue.error} onRetry={queue.reload} />;
   if (!queue.data) return <Loading />;
   const q: AdminQueue = queue.data;
@@ -142,6 +151,12 @@ function QueueTab() {
   return (
     <>
       <OpsAlerts />
+      <PendingActions />
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
       <ServerChecks checks={q.checks} />
       {error && (
         <p className="form-error" role="alert">
@@ -641,6 +656,168 @@ function FileRow({
   );
 }
 
+/** Sensitive actions waiting for another staff member's approval (staff.rs). */
+function PendingActions() {
+  const actions = useLoad(() => api.admin.actions(), []);
+  const { busy, error, run } = useAction(actions.reload);
+  const list = actions.data?.actions ?? [];
+  if (!list.length) return null;
+  return (
+    <section className="panel panel-pad">
+      <h2>Waiting for approval ({list.length})</h2>
+      <p className="muted small">
+        Sensitive actions need {actions.data?.approvals_required} different staff members, counting the one who asked.
+        Approving makes it happen; requests lapse after three days.
+      </p>
+      <ul className="release-list">
+        {list.map((a) => (
+          <li key={a.id}>
+            <b>{a.summary}</b>
+            <div className="muted small">
+              Asked by {a.requested_actor} · {formatDate(a.requested_at)} · {a.approvals.length} of {a.approvals_needed} approvals
+            </div>
+            <div className="row-actions">
+              <button className="btn small slime" disabled={busy !== undefined} onClick={() => void run(a.id, () => api.admin.approveAction(a.id))}>
+                Approve
+              </button>
+              <button className="btn small ghost danger" disabled={busy !== undefined} onClick={() => void run(a.id, () => api.admin.cancelAction(a.id))}>
+                Turn down
+              </button>
+            </div>
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
+/** Staff and their roles (staff.rs). Changing a role is itself a sensitive action. */
+function StaffTab() {
+  const staff = useLoad(() => api.admin.staff(), []);
+  const history = useLoad(() => api.admin.actions(true), []);
+  const { busy, error, notice, run } = useAction(() => {
+    staff.reload();
+    history.reload();
+  });
+  const [newId, setNewId] = useState("");
+  const [newRole, setNewRole] = useState<StaffRole>("reviewer");
+  if (staff.error) return <ErrorState error={staff.error} onRetry={staff.reload} />;
+  if (!staff.data) return <Loading />;
+  const s = staff.data;
+  const canManage = s.my_roles.includes("owner") || s.my_roles.includes("security");
+  const ROLE_HELP: Record<StaffRole, string> = {
+    owner: "everything",
+    moderator: "reviews, reports, appeals and sensitive actions",
+    reviewer: "releases, changes, pictures, portfolios and listings",
+    support: "reports, appeals and People problems",
+    finance: "payments",
+    security: "tokens, staff roles and the audit log",
+  };
+  return (
+    <>
+      <p className="muted">
+        Sensitive actions (withdrawing a release, taking an app out of the store, suspending or reinstating an account,
+        changing roles) need <b>{s.approvals_required}</b> different staff member{s.approvals_required === 1 ? "" : "s"}
+        {s.approvals_required === 1
+          ? ": they happen at once but are recorded as approvals. Set SLOP_APPROVALS_REQUIRED=2 on the server once there's a second person."
+          : ", counting the one who asks."}
+      </p>
+      <ul className="small">
+        {s.roles.map((r) => (
+          <li key={r}>
+            <b>{r}</b>: {ROLE_HELP[r]}
+          </li>
+        ))}
+      </ul>
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <table className="kv-table">
+        <thead>
+          <tr>
+            <th scope="col">Staff</th>
+            {s.roles.map((r) => (
+              <th scope="col" key={r}>
+                {r}
+              </th>
+            ))}
+          </tr>
+        </thead>
+        <tbody>
+          {s.staff.map((m) => (
+            <tr key={m.id}>
+              <td>
+                <Link to={`/u/${m.id}`}>{m.display_name}</Link>
+                {m.suspended && <span className="badge bad">SUSPENDED</span>}
+              </td>
+              {s.roles.map((r) => {
+                const on = m.roles.includes(r);
+                return (
+                  <td key={r}>
+                    <input
+                      type="checkbox"
+                      aria-label={`${m.display_name}: ${r}`}
+                      checked={on}
+                      disabled={!canManage || busy !== undefined || (r === "owner" && !s.my_roles.includes("owner"))}
+                      onChange={() => void run(`${m.id}/${r}`, () => api.admin.changeRole(m.id, r, !on))}
+                    />
+                  </td>
+                );
+              })}
+            </tr>
+          ))}
+        </tbody>
+      </table>
+      {canManage && (
+        <form
+          className="reason-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const id = newId.trim().replace(/^.*\/u\//, "");
+            void run("new", () => api.admin.changeRole(id, newRole, true)).then(() => setNewId(""));
+          }}
+        >
+          <input aria-label="Account ID or profile link" placeholder="Account ID or profile link" value={newId} onChange={(e) => setNewId(e.target.value)} />
+          <select aria-label="Role" value={newRole} onChange={(e) => setNewRole(e.target.value as StaffRole)}>
+            {s.roles.map((r) => (
+              <option key={r} value={r}>
+                {r}
+              </option>
+            ))}
+          </select>
+          <button className="btn small" disabled={!newId.trim() || busy !== undefined}>
+            Add to staff
+          </button>
+        </form>
+      )}
+      <h2 className="section-title">Sensitive actions</h2>
+      {history.data?.actions.length === 0 && <div className="empty-state">None yet.</div>}
+      <ul className="release-list">
+        {history.data?.actions.map((a) => (
+          <li key={a.id} className="small">
+            <span className={`badge ${a.status === "done" ? "official" : a.status === "pending" ? "soon" : "neutral"}`}>
+              {a.status.toUpperCase()}
+            </span>{" "}
+            {a.summary} <span className="muted">· {a.approvals.join(", ")} · {formatDate(a.requested_at)}</span>
+          </li>
+        ))}
+      </ul>
+    </>
+  );
+}
+
 /** Alerts from ops.rs; each admin also gets them under the 🔔 and by push. */
 function OpsAlerts() {
   const alerts = useLoad(() => api.admin.ops(), []);
@@ -777,7 +954,7 @@ function AppsTab() {
   const apps = useLoad(() => api.admin.apps(status || undefined), [status]);
   // The Content Policy rules, for the statement of reasons when taking an app out.
   const rules = useLoad(() => api.admin.queue().then((q) => q.rules), []);
-  const { busy, error, run } = useAction(apps.reload);
+  const { busy, error, notice, run } = useAction(apps.reload);
 
   return (
     <>
@@ -794,6 +971,11 @@ function AppsTab() {
           </select>
         </label>
       </div>
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}

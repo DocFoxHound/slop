@@ -59,31 +59,39 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/portfolio/{id}/reject", post(reject_portfolio))
 }
 
-/// A signed-in admin, or an admin's API token. Anyone else gets 404, so the admin API can't be
-/// discovered.
+/// A signed-in staff member (`users.is_admin`), or a staff member's API token. Anyone else gets
+/// 404, so the admin API can't be discovered. What they may do is `need`: their roles
+/// (staff.rs), capped by the token's level when it's a token.
 pub struct AdminUser {
     /// How the audit log names them.
     pub actor: String,
     pub user_id: Uuid,
     /// Set when the request came with an admin API token rather than a session.
     pub token: Option<crate::review::TokenUse>,
+    /// Their staff roles (staff.rs).
+    pub roles: Vec<crate::staff::Role>,
 }
 
 impl AdminUser {
-    /// Approving, rejecting and moderating: not for `read` tokens.
-    pub fn may_decide(&self) -> ApiResult<()> {
-        match &self.token {
-            Some(t) if !t.can_decide => Err(ApiError::Forbidden),
-            _ => Ok(()),
+    /// Refuses (403) what neither their roles nor their token's level allow.
+    pub fn need(&self, perm: crate::staff::Perm) -> ApiResult<()> {
+        use crate::staff::Perm;
+        if !self.roles.iter().any(|r| r.allows(perm)) && perm != Perm::Read {
+            return Err(ApiError::Forbidden);
         }
-    }
-
-    /// Suspensions, withdrawn releases, apps out of the store: not for `read` or `review` tokens.
-    pub fn may_moderate(&self) -> ApiResult<()> {
-        match &self.token {
-            Some(t) if !t.can_moderate => Err(ApiError::Forbidden),
-            _ => Ok(()),
+        if let Some(t) = &self.token {
+            let ok = match perm {
+                Perm::Read => true,
+                Perm::Review | Perm::Moderate => t.can_decide,
+                Perm::Sensitive => t.can_moderate,
+                // Tokens never manage staff, tokens or money.
+                Perm::Security | Perm::Finance => false,
+            };
+            if !ok {
+                return Err(ApiError::Forbidden);
+            }
         }
+        Ok(())
     }
 
     /// Managing tokens: only an admin signed in themselves.
@@ -116,6 +124,7 @@ impl FromRequestParts<AppState> for AdminUser {
             actor: format!("{} ({})", user.display_name, user.id),
             user_id: user.id,
             token: None,
+            roles: crate::staff::roles_of(&state.db, user.id).await?,
         })
     }
 }
@@ -447,7 +456,7 @@ async fn approve(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     let cfg = &state.config;
     admin::approve(
         &state.db,
@@ -467,7 +476,7 @@ async fn reject(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     admin::reject(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -480,7 +489,7 @@ async fn clear_scan(
     Path((id, platform)): Path<(Uuid, String)>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     admin::clear_scan(&state.db, id, &platform, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -508,7 +517,7 @@ async fn clear_rescan(
     Path((id, platform)): Path<(Uuid, String)>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     let reason = body.reason.trim();
     if !(10..=1000).contains(&reason.chars().count()) {
         return Err(ApiError::invalid(
@@ -548,12 +557,29 @@ async fn revoke(
     admin: AdminUser,
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
-) -> ApiResult<StatusCode> {
-    admin.may_moderate()?;
-    admin::revoke(&state.db, id, &admin.actor, &body.reason)
-        .await
-        .map_err(refused)?;
-    Ok(StatusCode::NO_CONTENT)
+) -> ApiResult<crate::staff::Outcome> {
+    admin.need(crate::staff::Perm::Sensitive)?;
+    let reason = body.reason.trim();
+    if reason.is_empty() {
+        return Err(ApiError::invalid("reason", "say why"));
+    }
+    let what: Option<(String, String)> = sqlx::query_as(
+        "select a.title, r.version from releases r join apps a on a.id = r.app_id
+         where r.id = $1 and r.status = 'approved'",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (title, version) =
+        what.ok_or_else(|| ApiError::Conflict("only an approved release can be withdrawn".into()))?;
+    crate::staff::request(
+        &state,
+        &admin,
+        "release.revoke",
+        &format!("Withdraw {title} {version}: {reason}"),
+        serde_json::json!({ "release_id": id, "reason": reason }),
+    )
+    .await
 }
 
 async fn list_app(
@@ -561,7 +587,7 @@ async fn list_app(
     admin: AdminUser,
     Path(slug): Path<String>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     let going_public: Option<(String,)> = sqlx::query_as(
         "select repo_url from apps where slug = $1 and visibility = 'private' and public_requested_at is not null",
     )
@@ -609,12 +635,34 @@ async fn delist_app(
     admin: AdminUser,
     Path(slug): Path<String>,
     Json(body): Json<Delist>,
-) -> ApiResult<StatusCode> {
-    admin.may_moderate()?;
-    admin::delist_app(&state.db, &slug, &admin.actor, &body.rule, &body.reason)
-        .await
-        .map_err(refused)?;
-    Ok(StatusCode::NO_CONTENT)
+) -> ApiResult<crate::staff::Outcome> {
+    admin.need(crate::staff::Perm::Sensitive)?;
+    if !crate::moderation::RULES
+        .iter()
+        .any(|(code, _)| *code == body.rule)
+    {
+        return Err(ApiError::invalid(
+            "rule",
+            "use one of the Content Policy rules",
+        ));
+    }
+    if body.reason.trim().is_empty() {
+        return Err(ApiError::invalid("reason", "state the facts"));
+    }
+    let title: String =
+        sqlx::query_scalar("select title from apps where slug = $1 and status = 'listed'")
+            .bind(&slug)
+            .fetch_optional(&state.db)
+            .await?
+            .ok_or_else(|| ApiError::Conflict("that app isn't in the store".into()))?;
+    crate::staff::request(
+        &state,
+        &admin,
+        "app.delist",
+        &format!("Take {title} out of the store ({})", body.rule),
+        serde_json::json!({ "slug": slug, "rule": body.rule, "reason": body.reason.trim() }),
+    )
+    .await
 }
 
 async fn set_stage(
@@ -623,7 +671,7 @@ async fn set_stage(
     Path(slug): Path<String>,
     Json(body): Json<Stage>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     admin::set_stage(&state.db, &slug, body.stage, &admin.actor)
         .await
         .map_err(refused)?;
@@ -635,7 +683,7 @@ async fn approve_change(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     manage::approve_change(&state.db, id, &admin.actor)
         .await
         .map_err(refused)?;
@@ -649,7 +697,7 @@ async fn reject_change(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     manage::reject_change(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -698,7 +746,7 @@ async fn approve_media(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     media::approve_set(&state.db, id, &admin.actor)
         .await
         .map_err(refused)?;
@@ -711,7 +759,7 @@ async fn reject_media(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     media::reject_set(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;
@@ -723,7 +771,7 @@ async fn approve_portfolio(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     crate::people::portfolio::approve_set(&state.db, id, &admin.actor)
         .await
         .map_err(refused)?;
@@ -736,7 +784,7 @@ async fn reject_portfolio(
     Path(id): Path<Uuid>,
     Json(body): Json<Reason>,
 ) -> ApiResult<StatusCode> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     crate::people::portfolio::reject_set(&state.db, id, &admin.actor, &body.reason)
         .await
         .map_err(refused)?;

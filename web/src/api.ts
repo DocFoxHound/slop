@@ -1083,6 +1083,28 @@ export type ChangeRequest =
   | { kind: "release"; release_id: string | null; note?: string }
   | { kind: "repo"; repo_url: string; note?: string };
 
+export type StaffRole = "owner" | "moderator" | "reviewer" | "support" | "finance" | "security";
+export interface StaffActions {
+  approvals_required: number;
+  actions: Array<{
+    id: string;
+    kind: string;
+    summary: string;
+    requested_actor: string;
+    approvals_needed: number;
+    status: "pending" | "done" | "failed" | "cancelled" | "expired";
+    result: string | null;
+    requested_at: string;
+    approvals: string[];
+  }>;
+}
+export interface StaffList {
+  staff: Array<{ id: string; display_name: string; roles: StaffRole[]; suspended: boolean }>;
+  roles: StaffRole[];
+  my_roles: StaffRole[];
+  approvals_required: number;
+}
+
 export interface AdminFeatured {
   slug: string;
   title: string;
@@ -1517,6 +1539,13 @@ export const api = {
     queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
     /** What needs an admin right now (ops.rs): stale backups, failed deploys, overdue reports… */
     ops: () => request<Array<{ key: string; title: string; detail: string; link: string; first_seen: string }>>("GET", "/v1/admin/ops"),
+    /** Sensitive actions waiting for (or done after) enough staff approvals (staff.rs). */
+    actions: (all = false) => request<StaffActions>("GET", `/v1/admin/actions${all ? "?status=all" : ""}`),
+    approveAction: (id: string) => request<unknown>("POST", `/v1/admin/actions/${id}/approve`),
+    cancelAction: (id: string) => request<void>("POST", `/v1/admin/actions/${id}/cancel`),
+    staff: () => request<StaffList>("GET", "/v1/admin/staff"),
+    changeRole: (userId: string, role: StaffRole, grant: boolean) =>
+      request<unknown>("POST", `/v1/admin/staff/${encodeURIComponent(userId)}/roles`, { role, grant }),
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
       request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),

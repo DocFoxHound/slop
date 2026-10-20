@@ -45,6 +45,7 @@ pub mod sim_donations;
 pub mod sim_moderation;
 pub mod sim_people;
 pub mod slop_build;
+pub mod staff;
 pub mod teams;
 pub mod tokens;
 pub mod updates;
@@ -136,6 +137,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(releases::routes())
         .merge(library::routes())
         .merge(slop_build::routes())
+        .merge(staff::routes())
         .merge(updates::routes())
         .merge(manage::routes())
         .merge(media::routes())

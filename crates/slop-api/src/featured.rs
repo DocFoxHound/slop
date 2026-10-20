@@ -90,7 +90,7 @@ async fn admin_set(
     admin: AdminUser,
     Json(body): Json<SetBody>,
 ) -> ApiResult<Json<Vec<AdminSlide>>> {
-    admin.may_decide()?;
+    admin.need(crate::staff::Perm::Review)?;
     if body.apps.len() > MAX_FEATURED {
         return Err(ApiError::invalid(
             "apps",
