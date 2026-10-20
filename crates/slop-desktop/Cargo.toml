@@ -18,6 +18,8 @@ tokio = { version = "1.53.3", features = ["rt", "sync"] }
 tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter"] }
 url = "2.5.8"
+uuid = { version = "1.28.0", features = ["serde"] }
+base64 = "0.23.1"
 
 # The tray (close to tray) is Windows-only: on Linux it needs an appindicator library.
 [target.'cfg(windows)'.dependencies]

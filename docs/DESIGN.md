@@ -335,9 +335,17 @@ The maker pays the creative **directly** (Stripe, the creative's own account). S
 
 All data is invented. Sign-in, scans, installs, Pulse handshakes, donations, reports, GitHub links, phone sending and quotes are simulated in the browser. Everything you do is saved only in your browser. Use the **Preview as** switch in the title bar to see Windows, macOS, Linux, iOS and Android.
 
-## 19. Chat (first draft)
+## 19. Chat
 
-A Steam-style communication system. Not designed in detail yet.
+A Steam-style communication system: lightweight, not a Discord. **Built 2026-10-20** (`crates/slop-api/src/chat.rs` and `friends.rs` on the server, `crates/slop-client/src/chat/` in the app, `web/src/pages/Chat.tsx` and `Friends.tsx`):
+- **Friends:** requests from someone's profile (or by pasting their profile link), accepted under the 🔔; a friends page with requests, blocked people and "who can message you". Works on the website too.
+- **Chats:** direct messages, group chats (up to 50 people, named inside the encryption, the starter can remove people) and one chat per player team (following who's in the team). Unread counts, mute, hide.
+- **Messages:** Markdown-lite text (bold, italics, code, quotes, lists, links), replies, emoji reactions, editing and deleting your own, pictures, GIFs, short videos and files up to 15 MB (attach, paste or drop). A link to a picture or GIF (a meme) is fetched by the **sender's** app and sent as an encrypted attachment, shown inline; other links get a preview card made the same way, so recipients' apps never contact the site. Previews can be switched off.
+- **Encryption:** MLS through OpenMLS in the app (SECURITY §8.5); Slop orders and relays encrypted messages and deletes them after 30 days. A new device is approved on an existing one by comparing a 9-character code; the approving device sends it the chat history. Encrypted backups are on by default with a 24-character recovery code shown once; "start over" (every device lost) needs a fresh sign-in and changes the person's security code, which every chat shows. Security codes can be compared per person.
+- **Safety:** messages only between connections (friends, player teammates, People job partners) unless someone allows messages from anyone (never in the UK under-18 view); blocking ends a friendship, stops their messages and hides the chat; every message from someone else has Report (the app sends that one decrypted message with its franking key, checked by Slop; nothing else is revealed), with an option to block too; a warning before opening any link, and on messages asking for payment outside Slop (PayPal, gift cards, crypto…). Away from the app, a 🔔 notice (and email, if wanted) says there are new messages without saying what.
+- Not yet: typing indicators, voice, GIF search (paste a link instead), chat on phones, and desktop notifications.
+
+The first draft, for reference:
 - **Friends and direct messages** between users, plus **group chats** for player teams.
 - **People job conversations** are different: recorded, opened by the creative, kept by the two sides with fingerprints at Slop (§15.5). They aren't part of this end-to-end encrypted chat.
 - **History backups are on by default** (opt-out). They're encrypted with a key only the user holds, so they stay end-to-end (`SECURITY.md` §8.5).

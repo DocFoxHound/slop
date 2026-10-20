@@ -358,6 +358,8 @@ pub struct Generated {
     pub private_apps: usize,
     /// Player teams, plus one official studio (verified by hand: the sandbox has no GitHub App).
     pub teams: usize,
+    /// Friendships between players.
+    pub friends: u64,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -662,6 +664,20 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .execute(&mut *tx)
         .await?;
     for table in [
+        "chat_backups",
+        "chat_attachments",
+        "chat_welcomes",
+        "chat_messages",
+        "chat_member_state",
+        "chat_members",
+        "chat_conversations",
+        "chat_key_packages",
+        "chat_devices",
+        "user_blocks",
+        "friend_requests",
+        "friends",
+        "stripe_account_changes",
+        "donation_challenges",
         "notifications",
         "app_team_shares",
         "team_events",
@@ -1068,6 +1084,31 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
             .await?;
     }
     let teams = sim_teams(db, now).await?;
+    // Friends: each player has a handful, and a few requests wait for an answer. Chats themselves
+    // can't be simulated: they're encrypted on real devices (chat.rs).
+    let friends = sqlx::query(
+        "insert into friends (user_a, user_b, since)
+         select least(a.user_id, b.user_id), greatest(a.user_id, b.user_id),
+                $1 - make_interval(days => abs(hashtext(a.user_id::text || b.user_id::text)) % 300)
+         from sim_users a join sim_users b on a.user_id < b.user_id
+         where abs(hashtext(a.user_id::text || ':' || b.user_id::text)) % 40 = 0
+         on conflict do nothing",
+    )
+    .bind(now)
+    .execute(db)
+    .await?
+    .rows_affected();
+    sqlx::query(
+        "insert into friend_requests (from_id, to_id, created_at)
+         select a.user_id, b.user_id, $1 - make_interval(hours => abs(hashtext(b.user_id::text)) % 200)
+         from sim_users a join sim_users b on a.user_id <> b.user_id
+         where abs(hashtext(a.user_id::text || '>' || b.user_id::text)) % 150 = 0
+           and not exists (select 1 from friends f where f.user_a = least(a.user_id, b.user_id) and f.user_b = greatest(a.user_id, b.user_id))
+         on conflict do nothing",
+    )
+    .bind(now)
+    .execute(db)
+    .await?;
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
     let donations = crate::sim_donations::write(db, &mut rng, now).await?;
 
@@ -1088,6 +1129,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         branches,
         private_apps: private_apps.len(),
         teams,
+        friends,
     })
 }
 

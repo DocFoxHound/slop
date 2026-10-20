@@ -153,6 +153,26 @@ export interface DonationAccount {
   change: { kind: "switch" | "disconnect"; requested_at: string; effective_at: string; new_account_ready: boolean | null } | null;
 }
 
+/** Someone in a friends list, request list or block list (crates/slop-api/src/friends.rs). */
+export interface FriendPerson {
+  id: string;
+  name: string;
+  since: string;
+}
+
+export interface Friends {
+  friends: FriendPerson[];
+  incoming: FriendPerson[];
+  outgoing: FriendPerson[];
+}
+
+/** The friend and message buttons on a profile. */
+export interface Connection {
+  friend: "friends" | "requested" | "incoming" | "none";
+  blocked: boolean;
+  can_message: boolean;
+}
+
 /** A proof-of-work check after repeated unfinished checkouts (crates/slop-api/src/challenge.rs). */
 export interface PowChallenge {
   id: string;
@@ -222,7 +242,7 @@ export interface TeamPage {
 /** A notification in the bell (crates/slop-api/src/notify.rs). */
 export interface Notification {
   id: string;
-  category: "jobs" | "interested" | "moderation" | "donations" | "shared" | "teams" | "apps" | "chat";
+  category: "jobs" | "interested" | "moderation" | "donations" | "shared" | "teams" | "apps" | "chat" | "friends";
   title: string;
   body: string;
   link: string;
@@ -421,7 +441,7 @@ export interface LegalNotice {
 }
 
 /** Reports and moderation (crates/slop-api/src/moderation.rs). */
-export type ReportKind = "app" | "review" | "profile" | "message" | "app_review" | "team";
+export type ReportKind = "app" | "review" | "profile" | "message" | "app_review" | "team" | "chat_message";
 
 export interface ReportReason {
   code: string;
@@ -1479,6 +1499,21 @@ export const api = {
       request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/team-shares/${encodeURIComponent(team)}`),
     unshare: (slug: string, userId: string) =>
       request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/shares/${encodeURIComponent(userId)}`),
+  },
+  friends: {
+    list: () => request<Friends>("GET", "/v1/me/friends"),
+    /** A profile link or user ID; "friends" when they had already asked you. */
+    request: (user: string) => request<{ status: "requested" | "friends" }>("POST", "/v1/me/friends", { user }),
+    accept: (id: string) => request<void>("POST", `/v1/me/friends/${encodeURIComponent(id)}/accept`),
+    /** Removes a friend, declines their request or cancels yours. */
+    remove: (id: string) => request<void>("DELETE", `/v1/me/friends/${encodeURIComponent(id)}`),
+    blocks: () => request<FriendPerson[]>("GET", "/v1/me/blocks"),
+    block: (id: string) => request<void>("PUT", `/v1/me/blocks/${encodeURIComponent(id)}`),
+    unblock: (id: string) => request<void>("DELETE", `/v1/me/blocks/${encodeURIComponent(id)}`),
+    connection: (id: string) => request<Connection>("GET", `/v1/users/${encodeURIComponent(id)}/connection`),
+    chatSettings: () => request<{ from_anyone: boolean; locked: boolean }>("GET", "/v1/me/chat-settings"),
+    setChatSettings: (from_anyone: boolean) =>
+      request<{ from_anyone: boolean; locked: boolean }>("PUT", "/v1/me/chat-settings", { from_anyone }),
   },
   teams: {
     list: () => request<TeamCard[]>("GET", "/v1/teams"),

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 
-import { renderMarkdown } from "./markdown";
+import { renderMarkdown, renderChat } from "./markdown";
 
 describe("renderMarkdown", () => {
   it("escapes raw HTML", () => {
@@ -39,5 +39,22 @@ describe("renderDocument", () => {
     expect(html).toContain('<h2 id="slop-pulse-player-counts">');
     expect(html).toContain('href="#slop-pulse-player-counts"');
     expect(html).not.toContain("<b>raw</b>");
+  });
+});
+
+describe("chat messages", () => {
+  it("keeps chat Markdown small and safe", () => {
+    const html = renderChat("**hi** <script>alert(1)</script> ![x](https://evil.example/t.png)\n# not a heading");
+    expect(html).toContain("<strong>hi</strong>");
+    expect(html).not.toContain("<script");
+    expect(html).not.toContain("<img");
+    expect(html).not.toContain("<h1");
+  });
+
+  it("marks links so the chat warns before opening them", () => {
+    const html = renderChat("look https://example.com/meme.gif");
+    expect(html).toContain('data-external=""');
+    expect(html).toContain('rel="noopener noreferrer nofollow"');
+    expect(renderChat("[x](javascript:alert(1))")).not.toContain("<a");
   });
 });

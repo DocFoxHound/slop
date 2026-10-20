@@ -49,4 +49,5 @@ http-body-util = "0.1.5"
 minisign-verify = "0.3"
 semver = "1.0.28"
 sha2 = "0.11.1"
+slop-client = { path = "../slop-client" }
 slop-manifest = { path = "../slop-manifest" }

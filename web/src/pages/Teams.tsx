@@ -9,6 +9,7 @@ import { ReportButton } from "../components/Report";
 import { ErrorState, Loading, Shelf } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
 
 function Card({ t }: { t: TeamCard }) {
@@ -245,6 +246,22 @@ export function Team() {
             <button type="button" className="btn slime" onClick={() => void run(() => api.teams.join(slug))}>
               Join
             </button>
+          )}
+          {t.role && t.kind === "player" && !t.hidden && (
+            // Team chat: everyone in the team, end-to-end encrypted (pages/Chat.tsx).
+            isDesktop ? (
+              <button
+                type="button"
+                className="btn"
+                onClick={() => void run(async () => navigate(`/chat/${await desktop.chat<string>({ action: "start_team", team: slug })}`), () => undefined)}
+              >
+                💬 Team chat
+              </button>
+            ) : (
+              <Link className="btn" to="/chat">
+                💬 Team chat in the app
+              </Link>
+            )
           )}
           {t.role && (
             <button type="button" className="btn ghost" onClick={() => void run(() => api.teams.leave(slug), () => navigate("/teams"))}>

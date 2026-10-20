@@ -54,7 +54,15 @@ pub struct Reason {
     pub rule: Option<&'static str>,
 }
 
-const ALL: &[&str] = &["app", "review", "profile", "message", "app_review", "team"];
+const ALL: &[&str] = &[
+    "app",
+    "review",
+    "profile",
+    "message",
+    "app_review",
+    "team",
+    "chat_message",
+];
 
 pub const REASONS: &[Reason] = &[
     Reason {
@@ -67,7 +75,14 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "threat",
         label: "A threat to someone's life or safety",
-        kinds: &["review", "app_review", "profile", "team", "message"],
+        kinds: &[
+            "review",
+            "app_review",
+            "profile",
+            "team",
+            "message",
+            "chat_message",
+        ],
         priority: 0,
         rule: Some("threat"),
     },
@@ -123,14 +138,28 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "harassment",
         label: "Harassment, hate or bullying",
-        kinds: &["review", "app_review", "profile", "team", "message"],
+        kinds: &[
+            "review",
+            "app_review",
+            "profile",
+            "team",
+            "message",
+            "chat_message",
+        ],
         priority: 2,
         rule: Some("harassment"),
     },
     Reason {
         code: "private_info",
         label: "Someone's private information",
-        kinds: &["review", "app_review", "profile", "team", "message"],
+        kinds: &[
+            "review",
+            "app_review",
+            "profile",
+            "team",
+            "message",
+            "chat_message",
+        ],
         priority: 2,
         rule: Some("private_info"),
     },
@@ -165,7 +194,14 @@ pub const REASONS: &[Reason] = &[
     Reason {
         code: "spam",
         label: "Spam",
-        kinds: &["review", "app_review", "profile", "team", "message"],
+        kinds: &[
+            "review",
+            "app_review",
+            "profile",
+            "team",
+            "message",
+            "chat_message",
+        ],
         priority: 2,
         rule: Some("spam"),
     },
@@ -343,6 +379,9 @@ struct ReportBody {
     name: Option<String>,
     email: Option<String>,
     copyright: Option<CopyrightNotice>,
+    /// A chat message (kind chat_message): the reporter's decrypted copy and its franking key,
+    /// checked against what Slop stored when it was sent (chat.rs).
+    chat: Option<crate::chat::ChatEvidence>,
 }
 
 #[derive(Serialize)]
@@ -366,6 +405,7 @@ async fn find_subject(
     headers: &HeaderMap,
     kind: &str,
     subject: &str,
+    chat: Option<&crate::chat::ChatEvidence>,
 ) -> ApiResult<Subject> {
     let subject = subject.trim();
     match kind {
@@ -480,9 +520,46 @@ async fn find_subject(
                 quoted: Some(body),
             })
         }
+        "chat_message" => {
+            // Only someone in the chat can report it, with their own decrypted copy: Slop can't
+            // read chats, but franking proves the sender sent exactly this.
+            let user = user.ok_or(ApiError::Unauthorized)?;
+            let evidence = chat.ok_or_else(|| {
+                ApiError::invalid("chat", "a chat report carries the reported message")
+            })?;
+            let (sender, chat_kind, name) =
+                crate::chat::check_evidence(&state.db, user.id, evidence).await?;
+            let text = serde_json::from_str::<serde_json::Value>(&evidence.plaintext)
+                .ok()
+                .and_then(|v| v["text"].as_str().map(String::from))
+                .unwrap_or_else(|| evidence.plaintext.clone());
+            let attachments = serde_json::from_str::<serde_json::Value>(&evidence.plaintext)
+                .ok()
+                .and_then(|v| v["attachments"].as_array().map(|a| a.len()))
+                .unwrap_or(0);
+            let mut quoted: String = text.chars().take(3800).collect();
+            if attachments > 0 {
+                quoted.push_str(&format!(
+                    "\n[{attachments} attachment(s): the reporter can send them on request]"
+                ));
+            }
+            Ok(Subject {
+                id: evidence.conversation_id,
+                user_id: Some(sender),
+                label: format!(
+                    "Message from {name} in a {} chat",
+                    match chat_kind.as_str() {
+                        "direct" => "direct",
+                        "team" => "team",
+                        _ => "group",
+                    }
+                ),
+                quoted: Some(quoted),
+            })
+        }
         _ => Err(ApiError::invalid(
             "kind",
-            "app, review, app_review, profile or message",
+            "app, review, app_review, profile, message or chat_message",
         )),
     }
 }
@@ -563,7 +640,15 @@ async fn report(
             ));
         }
     }
-    let subject = find_subject(&state, user.as_ref(), &headers, &body.kind, &body.subject).await?;
+    let subject = find_subject(
+        &state,
+        user.as_ref(),
+        &headers,
+        &body.kind,
+        &body.subject,
+        body.chat.as_ref(),
+    )
+    .await?;
     if user.as_ref().is_some_and(|u| Some(u.id) == subject.user_id) {
         return Err(ApiError::invalid("subject", "you can't report your own"));
     }

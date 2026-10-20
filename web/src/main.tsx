@@ -15,6 +15,8 @@ import { Profile } from "./pages/Profile";
 import { Releases } from "./pages/Releases";
 import { Manage } from "./pages/Manage";
 import { Download } from "./pages/Download";
+import { ChatPage } from "./pages/Chat";
+import { FriendsPage } from "./pages/Friends";
 import { Browse, CategoryPage, Community, MadeWithPeople, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
 import { JobPage, MyJobs } from "./pages/Jobs";
@@ -55,6 +57,9 @@ const router = createBrowserRouter([
       { path: "/legal", element: <LegalIndex /> },
       { path: "/notifications", element: <Notifications /> },
       { path: "/u/:id", element: <Profile /> },
+      { path: "/chat", element: <ChatPage /> },
+      { path: "/chat/:id", element: <ChatPage /> },
+      { path: "/friends", element: <FriendsPage /> },
       { path: "/teams", element: <Teams /> },
       { path: "/teams/:slug", element: <Team /> },
       { path: "/legal/:kind", element: <LegalPage /> },

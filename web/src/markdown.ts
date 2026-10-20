@@ -64,3 +64,19 @@ docs.renderer.rules.link_open = (tokens, idx, options, env, self) => {
 export function renderDocument(source: string): string {
   return docs.render(source);
 }
+
+// Chat messages: Markdown-lite (emphasis, code, quotes, lists and links), raw HTML off, no
+// headings, tables or images. Links are marked so the chat shows a warning before opening them.
+const chat = new MarkdownIt({ html: false, linkify: true, typographer: false, breaks: true });
+chat.disable(["heading", "lheading", "table", "hr", "image"]);
+const chatLinkOpen = chat.renderer.rules.link_open ?? ((tokens, idx, options, _env, self) => self.renderToken(tokens, idx, options));
+chat.renderer.rules.link_open = (tokens, idx, options, env, self) => {
+  tokens[idx].attrSet("rel", "noopener noreferrer nofollow");
+  tokens[idx].attrSet("target", "_blank");
+  tokens[idx].attrSet("data-external", "");
+  return chatLinkOpen(tokens, idx, options, env, self);
+};
+
+export function renderChat(source: string): string {
+  return chat.render(source);
+}

@@ -15,7 +15,8 @@ const TABS = [
     label: "Store",
     icon: "🛒",
     end: true,
-    match: (p: string) => !["/publish", "/account", "/library", "/admin", "/people", "/jobs"].some((prefix) => p.startsWith(prefix)),
+    match: (p: string) =>
+      !["/publish", "/account", "/library", "/admin", "/people", "/jobs", "/chat", "/friends"].some((prefix) => p.startsWith(prefix)),
   },
   {
     to: "/people",
@@ -25,6 +26,13 @@ const TABS = [
     match: (p: string) => p.startsWith("/people") || p.startsWith("/jobs"),
   },
   { to: "/library", label: "Library", icon: "📚", end: false, match: (p: string) => p.startsWith("/library") },
+  {
+    to: "/chat",
+    label: "Chat",
+    icon: "💬",
+    end: false,
+    match: (p: string) => p.startsWith("/chat") || p.startsWith("/friends"),
+  },
   { to: "/publish", label: "Publish", icon: "⬆️", end: false, match: (p: string) => p.startsWith("/publish") },
 ];
 

@@ -42,6 +42,37 @@ pub struct ApiResponse {
     pub body: Value,
 }
 
+#[derive(Debug, Clone)]
+pub enum RawBody {
+    None,
+    Json(Value),
+    Bytes(Vec<u8>),
+}
+
+#[derive(Debug, Clone)]
+pub struct RawResponse {
+    pub status: u16,
+    pub bytes: Vec<u8>,
+}
+
+impl RawResponse {
+    pub fn json(&self) -> Value {
+        serde_json::from_slice(&self.bytes).unwrap_or(Value::Null)
+    }
+
+    pub fn ok(&self) -> bool {
+        (200..300).contains(&self.status)
+    }
+
+    /// The API's error, for a non-2xx response.
+    pub fn error(&self) -> Error {
+        api_error(&ApiResponse {
+            status: self.status,
+            body: self.json(),
+        })
+    }
+}
+
 #[derive(Deserialize)]
 struct TokenResponse {
     access_token: String,
@@ -134,6 +165,68 @@ impl ApiClient {
             return self.send(method, path, body, token.as_deref()).await;
         }
         Ok(res)
+    }
+
+    /// Calls the API as the signed-in user with extra headers and a JSON or raw body, returning
+    /// the raw response (chat: the device header, encrypted attachments).
+    pub async fn request_raw(
+        &self,
+        method: Method,
+        path: &str,
+        body: RawBody,
+        headers: &[(&'static str, String)],
+    ) -> Result<RawResponse> {
+        let token = self.access_token().await?;
+        let res = self
+            .send_raw(
+                method.clone(),
+                path,
+                body.clone(),
+                headers,
+                token.as_deref(),
+            )
+            .await?;
+        if res.status == 401 && token.is_some() {
+            *self.inner.access.lock().unwrap() = None;
+            let token = self.refresh(token.as_deref()).await?;
+            return self
+                .send_raw(method, path, body, headers, token.as_deref())
+                .await;
+        }
+        Ok(res)
+    }
+
+    async fn send_raw(
+        &self,
+        method: Method,
+        path: &str,
+        body: RawBody,
+        headers: &[(&'static str, String)],
+        token: Option<&str>,
+    ) -> Result<RawResponse> {
+        // Attachments can be big and connections slow.
+        let mut req = self
+            .inner
+            .http
+            .request(method, self.url(path)?)
+            .timeout(Duration::from_secs(300));
+        for (name, value) in headers {
+            req = req.header(*name, value);
+        }
+        if let Some(token) = token {
+            req = req.bearer_auth(token);
+        }
+        req = match body {
+            RawBody::None => req,
+            RawBody::Json(v) => req.json(&v),
+            RawBody::Bytes(b) => req
+                .header("content-type", "application/octet-stream")
+                .body(b),
+        };
+        let res = req.send().await?;
+        let status = res.status().as_u16();
+        let bytes = res.bytes().await?.to_vec();
+        Ok(RawResponse { status, bytes })
     }
 
     /// Calls the API without credentials.
