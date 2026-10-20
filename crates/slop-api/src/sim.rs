@@ -1739,7 +1739,7 @@ pub async fn report(
     // Experiments on the real recommender: what a 👎 or 👍 does.
     let fans: Vec<Uuid> = sqlx::query_scalar(
         "select s.user_id from sim_users s join users u on u.id = s.user_id
-         where s.personas like 'roguelike fan:1%' and u.country_code = 'US' limit 40",
+         where s.personas like 'roguelike fan:1%' and u.country_code = 'US' limit 200",
     )
     .fetch_all(db)
     .await?;
@@ -1762,7 +1762,8 @@ pub async fn report(
             .take(3)
             .map(|c| c.id)
             .collect();
-        if disliked.len() < 3 {
+        // Only players whose feed has roguelikes to begin with say anything.
+        if disliked.is_empty() || share(&picks, &is_rogue) == 0.0 {
             continue;
         }
         for id in disliked {

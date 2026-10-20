@@ -33,7 +33,11 @@ cd "$REPO"
 
 fail() { log "FAILED at $1; staying on ${current:0:12}"; touch "$ROOT/builds/failed-$target"; exit 1; }
 
-DATABASE_URL="$TEST_DATABASE_URL" cargo test -q 2>&1 | tail -n 3 || fail "tests"
+# The full output is kept in test.log; the journal gets which tests failed and why.
+if ! DATABASE_URL="$TEST_DATABASE_URL" cargo test -q >"$ROOT/test.log" 2>&1; then
+  grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$ROOT/test.log" | tail -n 30
+  fail "tests"
+fi
 cargo build -q --release -p slop-api || fail "build"
 (cd web && npm ci --silent --no-audit --no-fund && npm test --silent && npm run build --silent) || fail "web build"
 
