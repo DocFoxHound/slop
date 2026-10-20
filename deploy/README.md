@@ -10,6 +10,7 @@ itself from GitHub.
 | `slop-pg.service` | Postgres in podman (`~/.config/containers/systemd/slop-pg.container`); data in the `slop-pg-data` volume. Dev and the deployment share the server; the deployment uses its own `slop_prod` database and role |
 | `slop-api.service` | The API, the website (`SLOP_WEB_DIR`) and the release fetcher, on `127.0.0.1:8090` |
 | `slop-sim.service`, `slop-sim-pulse.service` | The simulation sandbox (`docs/SIMULATION.md`): the same build on the `slop_sim` database at `sim.188-68-41-241.sslip.io` (`127.0.0.1:8092`), and its simulated live players. Settings in `~/.config/slop/slop-sim.env`. Restarted with each deploy |
+| `slop-scan-update.timer` → `slop-scan-update.service` | Every six hours, fresh ClamAV signatures and YARA-Forge rules for the release scanner (below), in the `slop-scan-db` volume |
 | `slop-deploy.timer` → `slop-deploy.service` | Every two minutes, `update.sh`: if `main` has a new commit, run the tests, build, switch over, restart, and roll back if it isn't healthy. A failing commit is skipped (marked in `~/slop-deploy/builds/failed-<sha>`) until the next push |
 
 Caddy (`/etc/caddy/Caddyfile.d/slop.caddyfile`) serves it with a Let's Encrypt certificate. The
@@ -147,6 +148,28 @@ SLOP_VAPID_SUBJECT=https://your-domain   # or mailto:; push services contact it 
 ```
 Changing the key means everyone switches phone notifications on again.
 
+## Release scanner
+
+`SLOP_SCANNER=local` scans every release file before review (DESIGN §10, SECURITY §5.2). The API
+runs `SLOP_SCAN_COMMAND` (here `~/slop-deploy/bin/slop-scan`), which starts the `slop-scanner`
+container (`deploy/scanner`: ClamAV, YARA with YARA-Forge's core rules, capa) for one file:
+no network, read-only, no capabilities, 4 GB of memory. Nothing in the file is ever run.
+
+```sh
+podman build -t slop-scanner deploy/scanner
+podman volume create slop-scan-db
+podman run --rm --user 0 -v slop-scan-db:/db --entrypoint sh slop-scanner -c 'chown -R 900 /db'
+podman run --rm -v slop-scan-db:/db --entrypoint slop-scan-update slop-scanner   # first signatures
+install -m 755 deploy/scanner/slop-scan ~/slop-deploy/bin/slop-scan
+systemctl --user enable --now slop-scan-update.timer
+# in slop.env: SLOP_SCANNER=local and SLOP_SCAN_COMMAND=/home/brian/slop-deploy/bin/slop-scan
+```
+
+Rebuild the image when `deploy/scanner` changes. Windows builds also need Microsoft Defender's
+check, which arrives from Slop Build or Slop Check on GitHub's Windows runners
+(`/v1/slop-build/checks`); with the scanner on, a Windows file can't be approved without a clean
+one unless a reviewer clears it.
+
 ## Setting it up again
 
 ```sh
@@ -154,6 +177,7 @@ cp deploy/systemd/* ~/.config/systemd/user/ && systemctl --user daemon-reload  #
 install -m 755 deploy/update.sh ~/slop-deploy/bin/update.sh
 cp deploy/slop.caddyfile /etc/caddy/Caddyfile.d/ && caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl --user enable --now slop-api.service slop-deploy.timer
+# The release scanner: see "Release scanner" above
 # Optional: the simulation sandbox (docs/SIMULATION.md)
 podman exec slop-pg psql -U slop -c 'create database slop_sim'
 systemctl --user enable --now slop-sim.service slop-sim-pulse.service

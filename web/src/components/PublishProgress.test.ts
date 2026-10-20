@@ -19,6 +19,9 @@ const file = (over: Partial<Release["files"][number]> = {}): Release["files"][nu
   provenance_problem: "no build attestation found",
   scan_result: "skipped",
   scan_detail: "not scanned: scanning is off on this server",
+  scan_report: null,
+  defender: null,
+  cleared_reason: null,
   ...over,
 });
 
@@ -32,6 +35,7 @@ const release = (over: Partial<Release> = {}): Release => ({
   source: "maker",
   auto_approved: false,
   files: [file()],
+  source_checks: null,
   ...over,
 });
 

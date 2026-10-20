@@ -240,6 +240,15 @@ jobs:
 | `output-dir` | `custom` only: the folder the build produces; it's packed as-is |
 | `exec` | `custom` only: the program to start, relative to `output-dir`; `{ext}` becomes `.exe` on Windows |
 | `sign` | `true` by default; set `false` for private repositories without GitHub Enterprise |
+| `signpath-organization-id` | Optional: sign the Windows program for free with SignPath Foundation (see [Signing](#signing)). Needs the `SIGNPATH_API_TOKEN` secret |
+| `signpath-project-slug` | Your SignPath project (default: the app's store address) |
+| `signpath-signing-policy-slug` | Your SignPath signing policy (default: `release-signing`) |
+
+Every Slop Build also checks your Windows build with **Microsoft Defender** (today's definitions,
+on GitHub's Windows runner), looks for secrets committed to your source with
+[gitleaks](https://github.com/gitleaks/gitleaks), and lists dependencies with known
+vulnerabilities with [OSV-Scanner](https://github.com/google/osv-scanner). Only you and Slop's
+reviewers see the source checks; they never stop a release.
 
 Godot, web/HTML5, Electron/Tauri and Python projects use `custom` for now, for example:
 
@@ -279,6 +288,8 @@ Builds made by Slop Build are labelled **Built by Slop Build from source**.
    fill in the version (e.g. `1.0.0`), the full commit SHA, and for each platform the file's URL
    on your release page, its type, and for zips the program to start (and optional arguments).
    Repositories that aren't on GitHub always use the form.
+5. **Windows builds:** add [Slop Check](#slop-check) to your repository so Microsoft Defender
+   checks them. Slop Build does this for you.
 
 ### 4. What happens next
 
@@ -290,7 +301,11 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
    nothing else. If a file can't be downloaded, the release fails with the reason.
 4. **Maker signature:** the attestation is checked: it must name the file's hash and come from
    your repository at the release's commit.
-5. **Scan:** *(coming: automatic malware and policy scans.)*
+5. **Scan:** Slop scans every file with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
+   archives first. Nothing is ever run. Windows builds also need a clean check from
+   **Microsoft Defender** (Slop Build or [Slop Check](#slop-check)). If something is found, the
+   release waits for a person: scanners make mistakes, and a reviewer can clear a false positive
+   (the reason is shown to you). A scan says what was found, not that a program is safe.
 6. **Review:** a person at Slop reviews your app's first release. Approval signs it; a rejection
    comes with a reason.
 7. **In the store:** Slop staff put the app in the store.
@@ -327,6 +342,121 @@ Changes that would have players download something different are checked before 
 Switching to another approved release follows the same rule as updates: it goes through straight
 away when automatic approval applies (the release already passed every check), otherwise a person
 looks. Everything else, like the store page, platforms and settings, changes straight away.
+
+## Keeping Windows from blocking your app
+
+Players shouldn't see "Windows protected your PC" or have Defender delete your game. Here's what
+Slop does, and the one optional step that helps most.
+
+**What Slop does for you:**
+
+- **No SmartScreen prompt.** Windows' "unrecognized app" prompt appears for files a browser
+  downloaded (they're marked as coming from the internet). Slop's app downloads, checks and
+  unpacks your files itself, like Steam, so that mark isn't added.
+- **Defender checks your build before players get it.** Slop Build (or Slop Check) scans your
+  Windows files with Microsoft Defender and today's definitions. If Defender flags them, the
+  release waits for a person instead of reaching players and being quarantined there.
+- **Slop's own scans** (ClamAV, YARA, capa) on every file, and a person on the first release.
+
+**What helps most: sign your Windows program.** Defender and Windows' Smart App Control trust
+signed programs far more than unsigned ones. Open-source projects can sign for free, see
+[Signing](#signing).
+
+**If Defender flags your program by mistake** (common for new, unsigned programs, especially
+ones made with Python, AutoHotkey, or packers like UPX):
+
+1. Submit the file at [Microsoft's submission page](https://www.microsoft.com/en-us/wdsi/filesubmission),
+   choosing **Software developer** and **Incorrectly detected as malware**. Microsoft usually
+   answers within a few days and updates its definitions for everyone. Only you can do this:
+   Microsoft has no way for a store to submit for you.
+2. Build again (or re-run Slop Check) once they've answered. You can also ask Slop's reviewer to
+   clear it as a false positive in the meantime.
+3. Don't pack your program with UPX or similar tools; that's the most common reason for false
+   detections.
+
+### Signing
+
+[SignPath Foundation](https://signpath.org) signs open-source programs for free. Your program is
+signed with SignPath Foundation's certificate, and SignPath checks each build came from your
+repository on GitHub's runners, so nobody can sign anything else in your name.
+
+1. **Apply** at [signpath.org/apply](https://signpath.org/apply). Your project needs an
+   OSI-approved licence, no proprietary parts, and to be actively maintained and released.
+   SignPath Foundation reviews applications by hand; it can take a few weeks.
+2. **Once accepted,** in SignPath:
+   - link your GitHub repository as a **trusted build system** for the project;
+   - create a **CI user**, and add its API token to your repository's secrets as
+     `SIGNPATH_API_TOKEN` (GitHub → Settings → Secrets and variables → Actions);
+   - set the project's **artifact configuration** to sign your own program (Slop Build sends
+     the build folder as a zip):
+
+     ```xml
+     <?xml version="1.0" encoding="utf-8"?>
+     <artifact-configuration xmlns="http://signpath.io/artifact-configuration/v1">
+       <zip-file>
+         <pe-file path="my-game.exe">
+           <authenticode-sign/>
+         </pe-file>
+       </zip-file>
+     </artifact-configuration>
+     ```
+
+     Add a `<pe-file>` for each of your own `.exe` and `.dll` files. Don't sign other people's
+     files (SignPath Foundation's rules); those keep their own signatures.
+3. **In your Slop Build file,** uncomment the SignPath lines (the file Slop gives you has them):
+
+   ```yaml
+   jobs:
+     slop:
+       uses: DocFoxHound/slop-build/.github/workflows/build.yml@v1
+       with:
+         app: my-game
+         slop-url: https://slop.example
+         project-type: rust
+         signpath-organization-id: 00000000-0000-0000-0000-000000000000
+       secrets:
+         SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}
+   ```
+
+If your SignPath policy asks for a person to approve each signature, approve it in SignPath while
+the build waits (up to an hour). Your Releases page shows **SIGNED by …** once it works.
+
+Building yourself instead? Use SignPath's
+[GitHub Action](https://github.com/signpath/github-action-submit-signing-request) in your own
+workflow, or any code-signing certificate you have.
+
+### Slop Check
+
+For apps not built with Slop Build. When you publish a GitHub release, Slop Check downloads its
+Windows files on GitHub's Windows runner, scans them with Microsoft Defender, notes whether they're
+signed, and tells Slop. Add this file to your repository:
+
+```yaml
+# .github/workflows/slop-check.yml
+name: Slop Check
+on:
+  release:
+    types: [published]
+  workflow_dispatch:
+    inputs:
+      tag:
+        description: The release tag to check
+jobs:
+  check:
+    uses: DocFoxHound/slop-build/.github/workflows/check.yml@v1
+    permissions:
+      contents: read
+      id-token: write
+    with:
+      tag: ${{ inputs.tag }}
+      app: my-game                     # your store address
+      slop-url: https://slop.example   # the Slop site
+```
+
+Slop only accepts the check from your app's own repository. If you published before adding it,
+run it by hand from the repository's **Actions** tab (**Run workflow**, with the release's tag).
+Repositories that aren't on GitHub can't run it yet: a reviewer checks those Windows builds by
+hand, so expect a longer wait.
 
 ## Slop Pulse (player counts)
 

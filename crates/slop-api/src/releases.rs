@@ -321,11 +321,17 @@ struct ReleaseFileInfo {
     /// passed, note, on_hold, rejected, blocked, or skipped (scanning off).
     scan_result: Option<String>,
     scan_detail: Option<String>,
+    /// The scanner's engines, findings and notable capabilities.
+    scan_report: Option<serde_json::Value>,
+    /// Microsoft Defender's check (Windows builds).
+    defender: Option<serde_json::Value>,
+    /// A reviewer cleared a finding as a false positive, and why.
+    cleared_reason: Option<String>,
 }
 
 #[derive(Serialize)]
 pub(crate) struct ReleaseInfo {
-    id: Uuid,
+    pub(crate) id: Uuid,
     version: String,
     commit_sha: String,
     status: String,
@@ -339,6 +345,8 @@ pub(crate) struct ReleaseInfo {
     /// True when Slop approved it automatically as an update (updates.rs).
     auto_approved: bool,
     files: Vec<ReleaseFileInfo>,
+    /// Slop Build's source checks: possible secrets and vulnerable dependencies.
+    source_checks: Option<serde_json::Value>,
 }
 
 async fn owned_app(state: &AppState, slug: &str, user: &CurrentUser) -> ApiResult<(Uuid, String)> {
@@ -478,13 +486,19 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     .await?;
     let files = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, provenance, provenance_problem,
-                scan_result, scan_detail
+                scan_result, scan_detail, scan_report, defender, cleared_reason
          from release_files where release_id = $1 order by platform",
     )
     .bind(id)
     .fetch_all(&state.db)
     .await?;
+    let source_checks: Option<serde_json::Value> =
+        sqlx::query_scalar("select source_checks from releases where id = $1")
+            .bind(id)
+            .fetch_one(&state.db)
+            .await?;
     Ok(ReleaseInfo {
+        source_checks,
         id: row.0,
         version: row.1,
         commit_sha: row.2,
@@ -516,7 +530,19 @@ async fn list_releases(
     .await?;
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
-        out.push(load_release(&state, id).await?);
+        let mut release = load_release(&state, id).await?;
+        // Players see what was scanned and Defender's result; the findings, the reviewer's
+        // reasons and the source checks (which point at possible secrets) stay with the maker.
+        if !is_mine {
+            release.source_checks = None;
+            for f in &mut release.files {
+                f.cleared_reason = None;
+                if let Some(report) = f.scan_report.as_mut().and_then(|r| r.as_object_mut()) {
+                    report.retain(|k, _| k == "engines");
+                }
+            }
+        }
+        out.push(release);
     }
     Ok(Json(out))
 }
@@ -827,43 +853,69 @@ async fn fetch_release(
     repo_url: &str,
 ) -> anyhow::Result<bool> {
     let commit_verified = check_commit(state, repo_url, commit).await?;
-    let files: Vec<(String, String)> = sqlx::query_as(
-        "select platform, url from release_files where release_id = $1 order by platform",
+    let files: Vec<(String, String, String)> = sqlx::query_as(
+        "select platform, url, file_name from release_files where release_id = $1 order by platform",
     )
     .bind(id)
     .fetch_all(&state.db)
     .await?;
-    for (platform, url) in files {
+    let scanner = state.config.releases.scanner;
+    for (platform, url, file_name) in files {
         let source = download_link(state, &url)
             .await
             .with_context(|| format!("{platform} build"))?;
-        let (size, sha256) = hash_download(
+        // With a scanner, the file is kept on disk until it's scanned, then deleted.
+        let local = scanner
+            .is_on()
+            .then(|| std::env::temp_dir().join(format!("slop-release-{}", Uuid::now_v7())));
+        let downloaded = download(
             &state.fetch_http,
             &source,
             state.config.releases.max_file_bytes,
+            local.as_deref(),
         )
         .await
-        .with_context(|| format!("{platform} build"))?;
+        .with_context(|| format!("{platform} build"));
+        let (size, sha256) = match downloaded {
+            Ok(d) => d,
+            Err(e) => {
+                if let Some(p) = &local {
+                    let _ = tokio::fs::remove_file(p).await;
+                }
+                return Err(e);
+            }
+        };
         let signature = find_attestation(state, repo_url, commit, &sha256).await;
         let (attestation, provenance, problem) = match signature {
             Ok((bundle, provenance)) => (Some(bundle), Some(sqlx::types::Json(provenance)), None),
             Err(problem) => (None, None, Some(problem)),
         };
-        let verdict = state
-            .config
-            .releases
-            .scanner
-            .scan(&crate::scan::Target {
-                url: &url,
-                sha256: &sha256,
-                repo_url,
-                commit,
-            })
-            .await;
+        let verdict = match &local {
+            Some(path) => {
+                let v = scanner
+                    .scan(&crate::scan::Target {
+                        path,
+                        file_name: &file_name,
+                        sha256: &sha256,
+                    })
+                    .await;
+                let _ = tokio::fs::remove_file(path).await;
+                v
+            }
+            None => {
+                scanner
+                    .scan(&crate::scan::Target {
+                        path: std::path::Path::new(""),
+                        file_name: &file_name,
+                        sha256: &sha256,
+                    })
+                    .await
+            }
+        };
         sqlx::query(
             "update release_files
              set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7,
-                 scan_result = $8, scan_detail = $9
+                 scan_result = $8, scan_detail = $9, scan_report = $10
              where release_id = $1 and platform = $2",
         )
         .bind(id)
@@ -875,6 +927,18 @@ async fn fetch_release(
         .bind(problem)
         .bind(verdict.result.as_str())
         .bind(verdict.detail)
+        .bind(verdict.report.map(sqlx::types::Json))
+        .execute(&state.db)
+        .await?;
+        // A Defender check of exactly this file, from Slop Build or Slop Check.
+        sqlx::query(
+            "update release_files f set defender = c.report
+             from releases r, defender_checks c
+             where f.release_id = $1 and f.platform = $2 and f.platform = 'windows'
+               and r.id = f.release_id and c.app_id = r.app_id and c.sha256 = f.sha256",
+        )
+        .bind(id)
+        .bind(&platform)
         .execute(&state.db)
         .await?;
     }
@@ -1008,6 +1072,21 @@ pub async fn hash_download(
     url: &str,
     max: u64,
 ) -> anyhow::Result<(u64, String)> {
+    download(http, url, max, None).await
+}
+
+/// Downloads and hashes a file, writing it to `keep` too when given (for scanning).
+pub async fn download(
+    http: &reqwest::Client,
+    url: &str,
+    max: u64,
+    keep: Option<&std::path::Path>,
+) -> anyhow::Result<(u64, String)> {
+    use tokio::io::AsyncWriteExt;
+    let mut out = match keep {
+        Some(p) => Some(tokio::fs::File::create(p).await.context("temporary file")?),
+        None => None,
+    };
     let res = http.get(url).send().await.context("download failed")?;
     if !res.status().is_success() {
         bail!("download failed: HTTP {}", res.status().as_u16());
@@ -1024,6 +1103,12 @@ pub async fn hash_download(
             return Err(anyhow!("file is larger than the {max}-byte limit"));
         }
         hasher.update(&chunk);
+        if let Some(f) = out.as_mut() {
+            f.write_all(&chunk).await.context("temporary file")?;
+        }
+    }
+    if let Some(f) = out.as_mut() {
+        f.flush().await?;
     }
     if size == 0 {
         bail!("file is empty");

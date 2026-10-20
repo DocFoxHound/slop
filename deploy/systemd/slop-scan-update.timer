@@ -1,0 +1,11 @@
+[Unit]
+Description=Update the release scanner's signatures every six hours
+
+[Timer]
+OnBootSec=10min
+OnUnitActiveSec=6h
+RandomizedDelaySec=20min
+Persistent=true
+
+[Install]
+WantedBy=timers.target

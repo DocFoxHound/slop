@@ -2,6 +2,7 @@ import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react
 import { Link, useParams } from "react-router";
 
 import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
+import { engines } from "../components/Checks";
 import { Gallery } from "../components/Gallery";
 import { RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
@@ -42,6 +43,8 @@ function AppView({ app }: { app: AppDetail }) {
   const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
   const latest = releases.data?.find((r) => r.status === "approved");
   const provenance = latest && latest.files.length > 0 && latest.files.every((f) => f.provenance) ? latest.files[0].provenance : null;
+  const scannedWith = latest ? engines(latest.files.find((f) => f.scan_report)?.scan_report) : "";
+  const windowsFile = latest?.files.find((f) => f.platform === "windows" && f.defender);
   const packages = latest?.files.filter((f) => f.platform === "linux-deb" || f.platform === "linux-rpm") ?? [];
   const upcoming = app.stage !== "released";
   const deadline = deadlineText(app);
@@ -261,6 +264,17 @@ function AppView({ app }: { app: AppDetail }) {
                     workflowName(provenance.signer_workflow)
                   )}{" "}
                   at <code>{provenance.commit.slice(0, 7)}</code>
+                </span>
+              </div>
+            )}
+            {(scannedWith || windowsFile) && (
+              <div className="trust-row">
+                <span className="ic">⌕</span>
+                <span>
+                  <b>Scanned</b>
+                  {scannedWith && ` with ${scannedWith}`}
+                  {windowsFile?.defender && windowsFile.defender.detections.length === 0 && " · Microsoft Defender found nothing"}
+                  {windowsFile?.defender?.signed_by && ` · Windows program signed by ${windowsFile.defender.signed_by}`}
                 </span>
               </div>
             )}

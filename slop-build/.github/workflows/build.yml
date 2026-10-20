@@ -3,11 +3,16 @@
 # Makers call this reusable workflow from a ~15-line file in their repo (see examples/). It runs
 # on the maker's own GitHub Actions minutes and:
 #   1. builds the app for each platform on GitHub-hosted runners,
-#   2. packs each build (Windows: a .zip; Linux: a .tar.gz plus .deb and .rpm packages) and
+#   2. Windows: signs the program with the maker's free SignPath Foundation certificate, if they
+#      have one (optional), then checks the build with Microsoft Defender, today's definitions,
+#      so Slop knows before publishing whether players' Windows would stop it,
+#   3. packs each build (Windows: a .zip; Linux: a .tar.gz plus .deb and .rpm packages) and
 #      signs every file with a GitHub artifact attestation (Sigstore), which records that this
 #      recipe built it from the maker's repo at this commit,
-#   3. attaches the files to a release on the maker's repo (Slop stores no builds),
-#   4. tells Slop, using the run's GitHub OIDC token instead of any secret.
+#   4. checks the source for leaked secrets (gitleaks) and dependencies with known
+#      vulnerabilities (OSV-Scanner),
+#   5. attaches the files to a release on the maker's repo (Slop stores no builds),
+#   6. tells Slop, using the run's GitHub OIDC token instead of any secret.
 #
 # This recipe is trusted by every app built with it. Changes need two-person review, releases are
 # tagged, and makers pin a tag (SECURITY §5.1). It never handles Slop secrets.
@@ -66,6 +71,28 @@ on:
         required: false
         type: string
         default: ""
+      signpath-organization-id:
+        description: >-
+          Optional: your SignPath organization ID, to sign the Windows program with a free
+          SignPath Foundation certificate for open-source projects (signpath.org). Signed programs
+          are far less likely to be stopped by Windows. Needs the SIGNPATH_API_TOKEN secret.
+        required: false
+        type: string
+        default: ""
+      signpath-project-slug:
+        description: Your SignPath project's slug (defaults to the app's Slop address).
+        required: false
+        type: string
+        default: ""
+      signpath-signing-policy-slug:
+        description: Your SignPath signing policy's slug.
+        required: false
+        type: string
+        default: release-signing
+    secrets:
+      SIGNPATH_API_TOKEN:
+        description: Your SignPath CI user's API token (only with signpath-organization-id).
+        required: false
 
 permissions: {}
 
@@ -195,6 +222,38 @@ jobs:
           [ -f "slop-dist/app/$exec" ] || { echo "::error::the build has no $exec"; exit 1; }
           echo "SLOP_EXEC=$exec" >> "$GITHUB_ENV"
 
+      # Optional: sign the Windows program with the maker's SignPath Foundation certificate (free
+      # for open-source projects). SignPath checks the build came from this repository on GitHub's
+      # runners, signs the files the project's artifact configuration names, and hands the folder back.
+      - name: Upload for signing (SignPath)
+        id: unsigned
+        if: matrix.platform == 'windows' && inputs.signpath-organization-id != ''
+        uses: actions/upload-artifact@v4
+        with:
+          name: slop-unsigned-windows
+          path: slop-dist/app
+          retention-days: 1
+
+      - name: Sign (SignPath)
+        if: matrix.platform == 'windows' && inputs.signpath-organization-id != ''
+        uses: signpath/github-action-submit-signing-request@c92b958760219087e01f8d67a1669ed57afe2627 # v2
+        with:
+          api-token: ${{ secrets.SIGNPATH_API_TOKEN }}
+          organization-id: ${{ inputs.signpath-organization-id }}
+          project-slug: ${{ inputs.signpath-project-slug != '' && inputs.signpath-project-slug || inputs.app }}
+          signing-policy-slug: ${{ inputs.signpath-signing-policy-slug }}
+          github-artifact-id: ${{ steps.unsigned.outputs.artifact-id }}
+          wait-for-completion: true
+          # Room to approve the request in SignPath if your signing policy asks for that.
+          wait-for-completion-timeout-in-seconds: 3600
+          output-artifact-directory: slop-dist/signed
+
+      - name: Use the signed files
+        if: matrix.platform == 'windows' && inputs.signpath-organization-id != ''
+        run: |
+          [ -f "slop-dist/signed/$SLOP_EXEC" ] || { echo "::error::SignPath's signed files don't include $SLOP_EXEC"; exit 1; }
+          rm -rf slop-dist/app && mv slop-dist/signed slop-dist/app
+
       - name: Package
         env:
           APP: ${{ inputs.app }}
@@ -237,6 +296,57 @@ jobs:
               json.dump(files, fh)
           print(f"packed {name}")
           PY
+
+      # Microsoft Defender, on GitHub's Windows runner with today's definitions: what players'
+      # Windows would say about this build, found before it's published. Cloud lookups are on, as
+      # on players' PCs, but samples are never uploaded. A detection doesn't stop the build: Slop
+      # holds the release for a person to look at (it may be a false positive).
+      - name: Check with Microsoft Defender
+        if: matrix.platform == 'windows'
+        shell: pwsh
+        run: |
+          $ErrorActionPreference = 'Stop'
+          Update-MpSignature
+          Set-MpPreference -MAPSReporting Advanced -SubmitSamplesConsent NeverSend
+          $mp = Join-Path $env:ProgramFiles 'Windows Defender\MpCmdRun.exe'
+          $files = Get-ChildItem slop-dist/out -Filter *.zip | Select-Object -First 1
+          $app = (Resolve-Path slop-dist/app).Path
+          $out = & $mp -Scan -ScanType 3 -File $app -DisableRemediation 2>&1 | Out-String
+          $code = $LASTEXITCODE
+          if ($code -ne 0 -and $code -ne 2) { throw "Defender couldn't scan (exit $code): $out" }
+          $detections = @()
+          $threat = $null
+          foreach ($line in $out -split "`r?`n") {
+            if ($line -match '^\s*Threat\s*:\s*(.+)$') { $threat = $Matches[1].Trim() }
+            elseif ($line -match '^\s*file\s*:\s*(.+)$' -and $threat) {
+              $detections += @{ file = $Matches[1].Trim().Replace("$app\", '').Replace('\', '/'); threat = $threat }
+            }
+          }
+          $status = Get-MpComputerStatus
+          $sig = Get-AuthenticodeSignature (Join-Path $app $env:SLOP_EXEC)
+          $signer = $null
+          if ($sig.Status -eq 'Valid') { $signer = ($sig.SignerCertificate.Subject -split ',')[0] -replace '^CN=', '' }
+          $report = [ordered]@{
+            sha256 = (Get-FileHash $files.FullName -Algorithm SHA256).Hash.ToLower()
+            engine = $status.AMEngineVersion
+            signatures = $status.AntivirusSignatureVersion
+            signatures_updated = $status.AntivirusSignatureLastUpdated.ToString('o')
+            detections = @($detections)
+            signed_by = $signer
+          }
+          $report | ConvertTo-Json -Depth 4 | Set-Content slop-dist/defender.json
+          if ($detections.Count -gt 0) {
+            foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($d.file)::$($d.threat). Slop holds the release for a person to look at. If it's a false positive, submit the file at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer); signing with SignPath helps most." }
+          } else {
+            echo "Microsoft Defender $($status.AMEngineVersion), definitions $($status.AntivirusSignatureVersion): nothing found."
+          }
+          if (-not $signer) { echo "::notice title=Unsigned Windows program::$env:SLOP_EXEC isn't signed. Windows trusts signed programs more; open-source projects can sign for free with SignPath Foundation (see Slop's publishing guide)." }
+
+      - name: Add Defender's check to the files
+        if: matrix.platform == 'windows'
+        run: |
+          jq --slurpfile d slop-dist/defender.json '(.[] | select(.platform == "windows")) += {defender: $d[0]}' slop-dist/files.json > f
+          mv f slop-dist/files.json
 
       - name: Linux packages (.deb, .rpm)
         if: matrix.platform == 'linux'
@@ -315,9 +425,63 @@ jobs:
           path: slop-dist/${{ matrix.platform }}.json
           retention-days: 1
 
+  source-checks:
+    name: Check the source
+    needs: prepare
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+          persist-credentials: false
+          fetch-depth: 1
+
+      # Leaked keys and tokens (gitleaks), and dependencies with known vulnerabilities (OSV).
+      # Findings go to Slop for the maker and the reviewer; secrets' values are never sent.
+      - name: Secrets and dependencies
+        run: |
+          mkdir -p slop-checks
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/slop-checks:/out" ghcr.io/gitleaks/gitleaks:v8.30.1 \
+            dir /src --no-banner --redact --exit-code 0 --report-format json --report-path /out/gitleaks.json || true
+          docker run --rm -v "$PWD:/src:ro" -v "$PWD/slop-checks:/out" ghcr.io/google/osv-scanner:v2.7.0 \
+            scan source -r /src --format json --output /out/osv.json || true
+          python3 - <<'PY' > slop-checks/source.json
+          import json, os
+          def load(p):
+              try:
+                  return json.load(open(p))
+              except Exception:
+                  return None
+          leaks = load("slop-checks/gitleaks.json") or []
+          secrets = [{"file": l.get("File", "").removeprefix("/src/"), "line": l.get("StartLine"), "rule": l.get("RuleID")} for l in leaks][:100]
+          osv = load("slop-checks/osv.json") or {}
+          vulns = []
+          for r in osv.get("results", []):
+              for p in r.get("packages", []):
+                  pkg = p.get("package", {})
+                  for v in p.get("vulnerabilities", []):
+                      vulns.append({"package": pkg.get("name"), "version": pkg.get("version"), "ecosystem": pkg.get("ecosystem"),
+                                    "id": v.get("id"), "summary": (v.get("summary") or "")[:200]})
+          print(json.dumps({"secrets": secrets, "vulnerabilities": vulns[:200],
+                            "tools": {"gitleaks": "8.30.1", "osv-scanner": "2.7.0"},
+                            "checked": os.path.exists("slop-checks/gitleaks.json") and os.path.exists("slop-checks/osv.json")}))
+          PY
+          python3 -c "import json; d=json.load(open('slop-checks/source.json')); print(len(d['secrets']), 'possible secrets,', len(d['vulnerabilities']), 'known vulnerabilities')"
+          jq -r '.secrets[] | "\(.file):\(.line) (\(.rule))"' slop-checks/source.json | while IFS= read -r f; do
+            echo "::warning title=Possible secret in your repository::$f"
+          done
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: slop-source-checks
+          path: slop-checks/source.json
+          retention-days: 1
+
   notify:
     name: Tell Slop
-    needs: [prepare, build]
+    needs: [prepare, build, source-checks]
     runs-on: ubuntu-latest
     permissions:
       id-token: write
@@ -327,6 +491,11 @@ jobs:
           pattern: slop-file-*
           merge-multiple: true
           path: slop-files
+
+      - uses: actions/download-artifact@v4
+        with:
+          name: slop-source-checks
+          path: slop-checks
 
       - name: Submit the release to Slop
         env:
@@ -344,8 +513,9 @@ jobs:
           python3 - <<'PY' > body.json
           import glob, json, os
           files = [f for p in sorted(glob.glob("slop-files/*.json")) for f in json.load(open(p))]
+          checks = json.load(open("slop-checks/source.json"))
           print(json.dumps({"app": os.environ["APP"], "version": os.environ["VERSION"], "tag": os.environ["TAG"],
-                            "commit": os.environ["GITHUB_SHA"], "files": files}))
+                            "commit": os.environ["GITHUB_SHA"], "files": files, "source_checks": checks}))
           PY
           status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$base/v1/slop-build/releases" \
             -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)

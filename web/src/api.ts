@@ -1162,6 +1162,36 @@ export interface ReleaseFile {
   provenance_problem: string | null;
   scan_result: "passed" | "note" | "on_hold" | "rejected" | "blocked" | "skipped" | null;
   scan_detail: string | null;
+  /** Slop's scanner's report: engines, findings, notable capabilities. */
+  scan_report: ScanReport | null;
+  /** Microsoft Defender's check (Windows builds), from Slop Build or Slop Check. */
+  defender: DefenderCheck | null;
+  /** A reviewer cleared a finding as a false positive, and why. */
+  cleared_reason: string | null;
+}
+
+export interface ScanReport {
+  result: string;
+  detail: string;
+  engines: Record<string, string>;
+  findings: Array<{ engine: string; file: string; name: string }>;
+  capabilities: Array<{ file: string; capability: string; namespace: string }>;
+}
+
+export interface DefenderCheck {
+  sha256: string;
+  engine: string;
+  signatures: string;
+  signatures_updated: string | null;
+  detections: Array<{ file: string; threat: string }>;
+  signed_by: string | null;
+}
+
+export interface SourceChecks {
+  secrets: Array<{ file: string; line: number | null; rule: string }>;
+  vulnerabilities: Array<{ package: string; version: string; ecosystem: string; id: string; summary: string }>;
+  tools: Record<string, string>;
+  checked: boolean;
 }
 
 export interface Release {
@@ -1177,6 +1207,8 @@ export interface Release {
   /** Approved by Slop as an update, without waiting for a person. */
   auto_approved: boolean;
   files: ReleaseFile[];
+  /** Slop Build's source checks. */
+  source_checks: SourceChecks | null;
 }
 
 /** One of the repository's GitHub releases, for "Pick a release". */
@@ -1384,6 +1416,9 @@ export const api = {
       file_path: string;
       workflow: string;
       create_url: string | null;
+      check_file_path: string;
+      check_workflow: string;
+      check_create_url: string | null;
     }>("GET", `/v1/apps/${encodeURIComponent(slug)}/slop-build`),
   manage: (slug: string) => request<ManageOverview>("GET", `/v1/apps/${encodeURIComponent(slug)}/manage`),
   /** "Check now" for a frozen app's repository; the freeze if it's still frozen. */
@@ -1402,6 +1437,9 @@ export const api = {
     audit: () => request<AuditEntry[]>("GET", "/v1/admin/audit"),
     approve: (id: string) => request<void>("POST", `/v1/admin/releases/${id}/approve`),
     reject: (id: string, reason: string) => request<void>("POST", `/v1/admin/releases/${id}/reject`, { reason }),
+    /** Clears a scan finding or Defender result judged a false positive (logged). */
+    clearScan: (id: string, platform: string, reason: string) =>
+      request<void>("POST", `/v1/admin/releases/${id}/files/${encodeURIComponent(platform)}/clear`, { reason }),
     approveChange: (id: string) => request<void>("POST", `/v1/admin/changes/${id}/approve`),
     rejectChange: (id: string, reason: string) => request<void>("POST", `/v1/admin/changes/${id}/reject`, { reason }),
     approveMedia: (id: string) => request<void>("POST", `/v1/admin/media/${id}/approve`),

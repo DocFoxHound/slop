@@ -425,7 +425,10 @@ impl Config {
                 .context("GITHUB_API_BASE")?,
             allow_http_downloads: var_or("SLOP_ALLOW_HTTP_DOWNLOADS", "false") == "true",
             require_maker_signature: var_or("SLOP_REQUIRE_MAKER_SIGNATURE", "true") != "false",
-            scanner: crate::scan::Scanner::from_setting(&var_or("SLOP_SCANNER", "off"))?,
+            scanner: crate::scan::Scanner::from_setting(
+                &var_or("SLOP_SCANNER", "off"),
+                &var_or("SLOP_SCAN_COMMAND", "slop-scan"),
+            )?,
             slop_build_workflow: env::var("SLOP_BUILD_WORKFLOW")
                 .ok()
                 .map(|s| {

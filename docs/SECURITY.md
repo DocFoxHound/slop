@@ -100,6 +100,8 @@ The checks are listed in DESIGN §10. The engineering rules:
 - Scanning runs in a **separate cloud account and network**. Analysis workers and sandbox VMs are **ephemeral** (destroyed after each job), have **no credentials**, and only reach the internet through a monitoring proxy (so callbacks can be seen).
 - Use **microVM/sandbox isolation** (e.g. Firecracker or gVisor) for static analysis workers, and full VMs for running builds. Keep the hypervisor and images patched.
 - The scanner's output is a **verdict signed by the scan service key**. Distribution only accepts signed verdicts, so a compromised core service can't fake one, and a compromised scanner can't publish (§5.3).
+- **Built so far (2026-10-20):** a container per file (`deploy/scanner`), started by the API with `--network=none`, `--read-only`, `--cap-drop=ALL`, `no-new-privileges`, memory and process limits, and the file mounted read-only. Static analysis only (ClamAV, YARA, capa); nothing is executed. Its verdict isn't signed yet, and it runs on the same host as the API: separating it is still to do. Signatures update every six hours.
+- **Defender checks from makers' CI** are accepted only with a GitHub OIDC token whose repository is the app's repository and whose `job_workflow_ref` is Slop's `check.yml` or the Slop Build recipe, and only for files whose SHA-256 matches. A maker can't send a clean result for a file that wasn't scanned, short of running a modified runner image, which the human review of first releases and Slop's own scan still catch.
 - **Known limits**, stated openly: sandbox evasion (code that waits, or detects VMs) and logic bombs can get past. That's why §5.3–5.6 exist.
 
 ### 5.3 Signing: the maker first, then Slop (decided)

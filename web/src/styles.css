@@ -335,6 +335,10 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .badge.warn { background: rgba(251, 191, 36, 0.14); color: var(--warn); }
 .reason-form { display: flex; gap: 6px; flex-wrap: wrap; align-items: center; }
 .reason-form input { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; min-width: 240px; }
+.findings { margin: 4px 0; padding-left: 18px; color: var(--bad, inherit); }
+.findings li { margin: 2px 0; }
+.source-checks { display: grid; gap: 4px; margin-top: 8px; }
+.source-checks ul { margin: 4px 0; padding-left: 18px; }
 .admin .row-actions { margin-top: 8px; }
 .audit { width: 100%; border-collapse: collapse; font-size: 13px; margin-top: 16px; }
 .audit th, .audit td { text-align: left; padding: 8px 10px; border-bottom: 1px solid var(--line); vertical-align: top; }

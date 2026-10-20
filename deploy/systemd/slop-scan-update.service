@@ -1,0 +1,8 @@
+[Unit]
+Description=Update the release scanner's ClamAV signatures and YARA rules
+
+[Service]
+Type=oneshot
+ExecStart=/usr/bin/podman run --rm -v slop-scan-db:/db --entrypoint slop-scan-update localhost/slop-scanner
+TimeoutStartSec=30min
+Nice=10
