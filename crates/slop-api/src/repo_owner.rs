@@ -15,6 +15,10 @@
 //!   `slop-verify.txt` file at its root) on the default branch, then reads it. That proves the
 //!   user can push to the repository, which is the most any host without an owner check allows.
 //!
+//! A **private** repository outside GitHub is checked the same way through the host's API, with
+//! the read-only token the maker gives for it (repo_tokens.rs): GitLab.com and Bitbucket owners
+//! by their linked accounts, anything else by the code, read through the API.
+//!
 //! One app per repository, whatever the host. Accounts are matched by the provider's numeric ID
 //! (GitHub, GitLab) or UUID (Bitbucket), which survive renames.
 
@@ -117,6 +121,17 @@ pub async fn check(
     repo_url: &str,
     except: Option<Uuid>,
 ) -> ApiResult<()> {
+    check_with(state, user, repo_url, except, None).await
+}
+
+/// `check`, reading a private repository with the maker's token.
+pub async fn check_with(
+    state: &AppState,
+    user: Uuid,
+    repo_url: &str,
+    except: Option<Uuid>,
+    token: Option<&crate::repo_tokens::Given>,
+) -> ApiResult<()> {
     if let Some(title) = taken(state, repo_url, except).await? {
         return Err(ApiError::Conflict(format!(
             "that repository is already on Slop as {title}. To build on it, fork it and register a branch"
@@ -125,7 +140,7 @@ pub async fn check(
     if !state.config.releases.require_repo_owner {
         return Ok(());
     }
-    let a = assess(state, user, repo_url).await?;
+    let a = assess_with(state, user, repo_url, token).await?;
     if a.ok {
         Ok(())
     } else {
@@ -161,11 +176,21 @@ fn repo_path(url: &Url) -> String {
 }
 
 pub async fn assess(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Assessment> {
+    assess_with(state, user, repo_url, None).await
+}
+
+pub async fn assess_with(
+    state: &AppState,
+    user: Uuid,
+    repo_url: &str,
+    token: Option<&crate::repo_tokens::Given>,
+) -> ApiResult<Assessment> {
     let url = Url::parse(repo_url).map_err(|_| ApiError::invalid("repo_url", "not an address"))?;
     let host = host_of(&url);
     if slop_provenance::github_repo_path(repo_url).is_some() {
         return github(state, user, repo_url).await;
     }
+    let auth = token.map(|t| t.header());
     let gitlab_host = state
         .config
         .gitlab
@@ -173,11 +198,11 @@ pub async fn assess(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<A
         .map(|g| host_of(&g.authorize_url))
         .unwrap_or_else(|| "gitlab.com".into());
     if host == gitlab_host {
-        if let Some(a) = gitlab(state, user, &url).await? {
+        if let Some(a) = gitlab(state, user, &url, auth.as_deref()).await? {
             return Ok(a);
         }
     } else if host == "bitbucket.org"
-        && let Some(a) = bitbucket(state, user, &url).await?
+        && let Some(a) = bitbucket(state, user, &url, auth.as_deref()).await?
     {
         return Ok(a);
     }
@@ -274,7 +299,12 @@ async fn github(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Asses
 
 /// GitLab.com: a personal project's owner, or an Owner of the group. `None` when GitLab can't
 /// say (then a code proves it).
-async fn gitlab(state: &AppState, user: Uuid, url: &Url) -> ApiResult<Option<Assessment>> {
+async fn gitlab(
+    state: &AppState,
+    user: Uuid,
+    url: &Url,
+    auth: Option<&str>,
+) -> ApiResult<Option<Assessment>> {
     let api = state
         .config
         .gitlab
@@ -283,11 +313,13 @@ async fn gitlab(state: &AppState, user: Uuid, url: &Url) -> ApiResult<Option<Ass
         .unwrap_or_else(|| "https://gitlab.com/api/v4/".parse().expect("valid"));
     let path = repo_path(url);
     let encoded: String = url::form_urlencoded::byte_serialize(path.as_bytes()).collect();
-    let project = get_json(state, &api, &format!("projects/{encoded}")).await?;
+    let project = get_json(state, &api, &format!("projects/{encoded}"), auth).await?;
     let Some(project) = project else {
-        return Ok(Some(Assessment::no(
-            "GitLab says there's no public project at that address",
-        )));
+        return Ok(Some(Assessment::no(if auth.is_some() {
+            "GitLab can't find that project with this token"
+        } else {
+            "GitLab says there's no public project at that address. If it's private, add a read-only token for it"
+        })));
     };
     let mine = accounts(state, user, "gitlab").await?;
     let namespace = project["namespace"]["full_path"]
@@ -321,7 +353,13 @@ async fn gitlab(state: &AppState, user: Uuid, url: &Url) -> ApiResult<Option<Ass
     // A group's project: an Owner of it (access level 50), when GitLab shows its members.
     let id = project["id"].as_i64().unwrap_or(0);
     for (account, _) in &mine {
-        let member = get_json(state, &api, &format!("projects/{id}/members/all/{account}")).await?;
+        let member = get_json(
+            state,
+            &api,
+            &format!("projects/{id}/members/all/{account}"),
+            auth,
+        )
+        .await?;
         if member.is_some_and(|m| m["access_level"].as_i64() == Some(50)) {
             return Ok(Some(Assessment::yes("account")));
         }
@@ -330,7 +368,12 @@ async fn gitlab(state: &AppState, user: Uuid, url: &Url) -> ApiResult<Option<Ass
 }
 
 /// Bitbucket Cloud: a personal repository's owner. `None` for a workspace's (a code proves it).
-async fn bitbucket(state: &AppState, user: Uuid, url: &Url) -> ApiResult<Option<Assessment>> {
+async fn bitbucket(
+    state: &AppState,
+    user: Uuid,
+    url: &Url,
+    auth: Option<&str>,
+) -> ApiResult<Option<Assessment>> {
     let api = state
         .config
         .bitbucket
@@ -338,11 +381,13 @@ async fn bitbucket(state: &AppState, user: Uuid, url: &Url) -> ApiResult<Option<
         .map(|b| b.api_base.clone())
         .unwrap_or_else(|| "https://api.bitbucket.org/2.0/".parse().expect("valid"));
     let path = repo_path(url);
-    let repo = get_json(state, &api, &format!("repositories/{path}")).await?;
+    let repo = get_json(state, &api, &format!("repositories/{path}"), auth).await?;
     let Some(repo) = repo else {
-        return Ok(Some(Assessment::no(
-            "Bitbucket says there's no public repository at that address",
-        )));
+        return Ok(Some(Assessment::no(if auth.is_some() {
+            "Bitbucket can't find that repository with this token"
+        } else {
+            "Bitbucket says there's no public repository at that address. If it's private, add a read-only token for it"
+        })));
     };
     if repo["owner"]["type"] != "user" {
         return Ok(None);
@@ -371,11 +416,14 @@ async fn get_json(
     state: &AppState,
     base: &Url,
     path: &str,
+    auth: Option<&str>,
 ) -> ApiResult<Option<serde_json::Value>> {
     let url = base.join(path).map_err(|e| ApiError::Internal(e.into()))?;
-    let res = state
-        .http
-        .get(url)
+    let mut request = state.http.get(url);
+    if let Some(auth) = auth {
+        request = request.header("authorization", auth);
+    }
+    let res = request
         .header("accept", "application/json")
         .header("user-agent", "slop-api")
         .timeout(Duration::from_secs(20))
@@ -435,6 +483,9 @@ async fn code_assessment(state: &AppState, user: Uuid, repo_url: &str) -> ApiRes
 #[serde(deny_unknown_fields)]
 struct RepoBody {
     repo_url: String,
+    /// A private repository outside GitHub: its read-only token (repo_tokens.rs).
+    #[serde(default)]
+    repo_token: Option<crate::repo_tokens::Given>,
 }
 
 /// How to prove you own a repository, and whether you have: the Publish form asks before
@@ -453,7 +504,12 @@ async fn ownership(
     if !state.config.releases.require_repo_owner {
         return Ok(Json(Assessment::yes("account")));
     }
-    Ok(Json(assess(&state, user.id, &repo_url).await?))
+    if let Some(t) = &b.repo_token {
+        crate::repo_tokens::verify_given(&state, &repo_url, t).await?;
+    }
+    Ok(Json(
+        assess_with(&state, user.id, &repo_url, b.repo_token.as_ref()).await?,
+    ))
 }
 
 /// Reads the repository for the user's code.
@@ -471,7 +527,14 @@ async fn check_code(
             .fetch_optional(&state.db)
             .await?;
     let code = code.ok_or_else(|| ApiError::Conflict("ask for a code first".into()))?;
-    let found = match read_proof(&state, &repo_url).await {
+    let read = match &b.repo_token {
+        Some(t) => {
+            crate::repo_tokens::verify_given(&state, &repo_url, t).await?;
+            crate::repo_tokens::read_proof(&state, &repo_url, t).await
+        }
+        None => read_proof(&state, &repo_url).await,
+    };
+    let found = match read {
         Ok(text) => text.is_some_and(|t| t.contains(&code)),
         Err(e) => {
             tracing::info!(error = %e, "repository proof");
@@ -527,6 +590,27 @@ async fn run(mut cmd: tokio::process::Command) -> anyhow::Result<std::process::O
         .await
         .map_err(|_| anyhow::anyhow!("the repository took too long to answer"))?
         .map_err(Into::into)
+}
+
+/// Refuses hosts on private networks (Slop mustn't be used to reach its own neighbours).
+pub async fn public_host(state: &AppState, url: &Url) -> anyhow::Result<()> {
+    if state.config.releases.allow_http_downloads {
+        return Ok(());
+    }
+    anyhow::ensure!(url.scheme() == "https", "only https addresses");
+    let host = url.host_str().unwrap_or("");
+    let port = url.port_or_known_default().unwrap_or(443);
+    for addr in tokio::net::lookup_host((host, port)).await? {
+        anyhow::ensure!(
+            !private_ip(addr.ip()),
+            "that address is on a private network"
+        );
+    }
+    Ok(())
+}
+
+pub(crate) fn is_proof_name(name: &str) -> bool {
+    is_proof_file(name)
 }
 
 /// The README and slop-verify.txt at the top of the repository's default branch, fetched with

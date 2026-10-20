@@ -872,3 +872,5 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .featured-edit input { width: 100%; margin-top: 4px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 4px 10px; }
 .update-bar { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px; margin-bottom: 12px; }
 .build-switch { margin-top: 6px; display: grid; gap: 6px; }
+.token-fields { display: grid; gap: 8px; }
+.token-fields label { display: grid; gap: 4px; font-size: 13px; }

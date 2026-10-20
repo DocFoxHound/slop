@@ -92,6 +92,41 @@ async fn fake_github() -> String {
         // Google and GitLab sign-in (auth/oauth.rs): the code is the token, and names the account.
         .route("/google/token", post(|body: String| async move { axum::Json(json!({ "access_token": form_code(&body) })) }))
         .route("/gitlab/token", post(|body: String| async move { axum::Json(json!({ "access_token": form_code(&body) })) }))
+        // A private repository on a Gitea host (repo_tokens.rs): only the token "token good" reads
+        // it; its release file redirects (with the token) to short-lived file storage elsewhere.
+        .route(
+            "/api/v1/repos/ann/secret-game",
+            get(|headers: axum::http::HeaderMap| async move { gitea_auth(&headers, axum::Json(json!({ "private": true }))) }),
+        )
+        .route(
+            "/api/v1/repos/ann/secret-game/contents",
+            get(|headers: axum::http::HeaderMap| async move {
+                gitea_auth(&headers, axum::Json(json!([{ "name": "README.md", "type": "file" }, { "name": "src", "type": "dir" }])))
+            }),
+        )
+        .route(
+            "/api/v1/repos/ann/secret-game/raw/README.md",
+            get(|headers: axum::http::HeaderMap| async move {
+                gitea_auth(&headers, format!("# Secret game\n\n{}\n", PROOF.lock().unwrap()))
+            }),
+        )
+        .route(
+            "/ann/secret-game/releases/download/v1/game.zip",
+            get(|headers: axum::http::HeaderMap| async move {
+                let port = headers["host"].to_str().unwrap().rsplit(':').next().unwrap().to_string();
+                gitea_auth(
+                    &headers,
+                    axum::response::Redirect::to(&format!("http://localhost:{port}/storage/game.zip?expires=soon")),
+                )
+            }),
+        )
+        .route(
+            "/storage/game.zip",
+            get(|headers: axum::http::HeaderMap| async move {
+                assert!(headers.get("authorization").is_none(), "the token never leaves the repository's host");
+                BUILD_BYTES
+            }),
+        )
         // Microsoft and Discord take the app's secret in the form.
         .route(
             "/microsoft/token",
@@ -410,6 +445,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             github_app: None,
             // Tests users have no GitHub accounts; repo_owner tests switch it on.
             require_repo_owner: false,
+            repo_token_key: Some([9; 32]),
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
@@ -9487,6 +9523,17 @@ fn form_code(body: &str) -> String {
         .unwrap_or_default()
 }
 
+/// What the fake Gitea repository's README says (the ownership code, once the maker adds it).
+static PROOF: std::sync::Mutex<String> = std::sync::Mutex::new(String::new());
+
+fn gitea_auth(headers: &axum::http::HeaderMap, ok: impl IntoResponse) -> axum::response::Response {
+    if headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("token good") {
+        ok.into_response()
+    } else {
+        StatusCode::UNAUTHORIZED.into_response()
+    }
+}
+
 fn bearer(headers: &axum::http::HeaderMap) -> String {
     headers
         .get("authorization")
@@ -10421,4 +10468,145 @@ async fn microsoft_and_discord_sign_in(db: PgPool) {
             .await
             .unwrap();
     assert_eq!(login, "dee");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn private_repositories_outside_github_use_a_read_only_token(db: PgPool) {
+    let app = test_app_with(db, |c| c.releases.require_repo_owner = true).await;
+    let (_, ann) = app.user("Ann", "US").await;
+    let (friend_id, friend) = app.user("Finn", "US").await;
+    let repo = format!("{}ann/secret-game", app.fake_base);
+
+    // A wrong token is refused; the right one lets Slop read the README for the code.
+    let ownership = |token: &str| {
+        req(Method::POST, "/v1/repos/ownership")
+            .cookie(&ann)
+            .json(json!({ "repo_url": repo, "repo_token": { "kind": "gitea", "token": token } }))
+    };
+    let res = app.send(ownership("bad")).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let a = body_json(app.send(ownership("good")).await).await;
+    assert_eq!(a["method"], "code");
+    assert_eq!(a["ok"], false);
+    *PROOF.lock().unwrap() = a["code"].as_str().unwrap().to_string();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/repos/ownership/check")
+                .cookie(&ann)
+                .json(
+                    json!({ "repo_url": repo, "repo_token": { "kind": "gitea", "token": "good" } }),
+                ),
+        )
+        .await;
+    let checked = body_json(res).await;
+    assert_eq!(checked["ok"], true, "{checked}");
+
+    // Publishing it as Private Slop keeps the token, encrypted, and never shows it.
+    let mut body = new_app("secret-game");
+    body["repo_url"] = json!(repo);
+    body["visibility"] = json!("private");
+    body["platforms"] = json!(["windows"]);
+    body["repo_token"] = json!({ "kind": "gitea", "token": "good" });
+    let res = app
+        .send(req(Method::POST, "/v1/apps").cookie(&ann).json(body))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let sealed: Vec<u8> = sqlx::query_scalar("select sealed from repo_tokens")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(!sealed.windows(4).any(|w| w == b"good"), "stored encrypted");
+    let status = body_json(
+        app.send(req(Method::GET, "/v1/apps/secret-game/repo-token").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(status["saved"], true);
+    assert_eq!(status["kind"], "gitea");
+    assert!(status.get("token").is_none() && !status.to_string().contains("good"));
+    let res = app
+        .send(req(Method::GET, "/v1/apps/secret-game/repo-token").cookie(&friend))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // A release is fetched with the token (which isn't sent on to the file storage).
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/secret-game/releases")
+                .cookie(&ann)
+                .json(json!({
+                    "version": "1.0.0",
+                    "commit_sha": "a".repeat(40),
+                    "files": [{
+                        "platform": "windows",
+                        "kind": "archive",
+                        "url": format!("{repo}/releases/download/v1/game.zip"),
+                        "exec": "game.exe"
+                    }]
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release_id = body_json(res).await["id"].as_str().unwrap().to_string();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    let status: String = sqlx::query_scalar("select status::text from releases")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "awaiting_review");
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        release_id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+
+    // Someone it's shared with gets the host's short-lived link, never the token.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/secret-game/shares")
+                .cookie(&ann)
+                .json(json!({ "user": friend_id.to_string() })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let link = body_json(
+        app.send(
+            req(
+                Method::GET,
+                format!("/v1/apps/secret-game/releases/{release_id}/download/windows"),
+            )
+            .cookie(&friend),
+        )
+        .await,
+    )
+    .await;
+    assert!(
+        link["url"]
+            .as_str()
+            .unwrap()
+            .starts_with("http://localhost:"),
+        "{link}"
+    );
+
+    // Forgetting the token: players only get the file's own (private) address back.
+    let res = app
+        .send(req(Method::DELETE, "/v1/apps/secret-game/repo-token").cookie(&ann))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let link = body_json(
+        app.send(
+            req(
+                Method::GET,
+                format!("/v1/apps/secret-game/releases/{release_id}/download/windows"),
+            )
+            .cookie(&friend),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(link["url"], format!("{repo}/releases/download/v1/game.zip"));
 }

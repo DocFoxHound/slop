@@ -14,11 +14,13 @@ import {
   type Category,
   type ContentLabel,
   type NewApp,
+  type RepoTokenInput,
   PROVIDER_LABEL,
   type Release,
   type RepoOwnership as Ownership,
 } from "../api";
 import { LicensePicker } from "../components/LicensePicker";
+import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
 import { ErrorState, Loading } from "../components/ui";
@@ -226,6 +228,10 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const terms = useTermsGate();
 
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
+  // Private Slop from a private repository outside GitHub: a read-only token (repo_tokens.rs).
+  const [token, setToken] = useState<RepoTokenInput>({ kind: "gitea", token: "" });
+  const needsToken = !existing && form.visibility === "private" && /^https?:\/\/[^/]+\/.+/.test(form.repo_url.trim()) && !isGithub(form.repo_url);
+  useEffect(() => setToken((t) => (t.token ? t : { ...t, kind: guessKind(form.repo_url) })), [form.repo_url]);
   const toggleTag = (tag: string) =>
     set("tags", form.tags.includes(tag) ? form.tags.filter((t) => t !== tag) : [...form.tags, tag]);
 
@@ -246,7 +252,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             tags: form.tags,
             platforms: form.platforms,
           })
-        : await terms.guard(() => api.createApp(form));
+        : await terms.guard(() => api.createApp(needsToken && token.token.trim() ? { ...form, repo_token: token } : form));
       navigate(`/app/${saved.slug}`);
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
@@ -341,7 +347,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
                 <b>Private Slop</b>{" "}
                 <span className="muted small">
                   — only you and people you share it with. Never in the store; no donations or voting. The repository can be
-                  private if Slop's GitHub App can read it.
+                  private: on GitHub, install Slop's GitHub App on it; elsewhere, give Slop a read-only token.
                 </span>
               </span>
             </label>
@@ -390,7 +396,16 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             "Yours: owned by an account you've linked (GitHub, GitLab, Bitbucket), an organization you own, or proved with a code in its README on any other host. Collaborators can't publish someone else's repository."
           ),
         )}
-        {(!existing || form.repo_url !== existing.repo_url) && !repoLocked && <RepoOwnership repoUrl={form.repo_url} />}
+        {needsToken && (
+          <fieldset className="tag-picker">
+            <legend>Private repository on another host</legend>
+            <p className="muted small">If the repository is private, Slop needs a read-only token to see it. Public repositories don't.</p>
+            <TokenFields value={token} onChange={setToken} />
+          </fieldset>
+        )}
+        {(!existing || form.repo_url !== existing.repo_url) && !repoLocked && (
+          <RepoOwnership repoUrl={form.repo_url} token={needsToken && token.token.trim() ? token : undefined} />
+        )}
         <div className="row-2">
           <LicensePicker
             repoUrl={form.repo_url}
@@ -554,7 +569,7 @@ export function PlatformPicker({
 }
 
 /** Whether the repository is yours, and how to prove it if not yet (crates/slop-api/src/repo_owner.rs). */
-function RepoOwnership({ repoUrl }: { repoUrl: string }) {
+function RepoOwnership({ repoUrl, token }: { repoUrl: string; token?: RepoTokenInput }) {
   const [result, setResult] = useState<Ownership>();
   const [checking, setChecking] = useState(false);
   const [error, setError] = useState<string>();
@@ -564,15 +579,15 @@ function RepoOwnership({ repoUrl }: { repoUrl: string }) {
     setError(undefined);
     if (!/^https?:\/\/[^/]+\/.+/.test(url)) return;
     const timer = window.setTimeout(() => {
-      api.repoOwnership(url).then(setResult, (err: unknown) => setError(err instanceof ApiError ? err.message : String(err)));
+      api.repoOwnership(url, token).then(setResult, (err: unknown) => setError(err instanceof ApiError ? err.message : String(err)));
     }, 600);
     return () => window.clearTimeout(timer);
-  }, [url]);
+  }, [url, token?.kind, token?.token]);
   const check = async () => {
     setChecking(true);
     setError(undefined);
     try {
-      setResult(await api.checkRepoCode(url));
+      setResult(await api.checkRepoCode(url, token));
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {

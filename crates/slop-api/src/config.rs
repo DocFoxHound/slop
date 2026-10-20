@@ -191,6 +191,9 @@ pub struct ReleaseConfig {
     /// Only a repository's GitHub owner may link it (repo_owner.rs). Off only in tests and the
     /// simulation sandbox, whose players have no GitHub accounts (`SLOP_REQUIRE_REPO_OWNER`).
     pub require_repo_owner: bool,
+    /// Encrypts makers' read-only tokens for private repositories outside GitHub
+    /// (repo_tokens.rs): base64 of 32 random bytes in `SLOP_REPO_TOKEN_KEY`. Unset: no tokens.
+    pub repo_token_key: Option<[u8; 32]>,
 }
 
 /// Slop's GitHub App: makers install it on a repository so GitHub sends release webhooks and
@@ -460,6 +463,19 @@ impl Config {
             github_token: env::var("GITHUB_TOKEN").ok().filter(|s| !s.is_empty()),
             github_app: GithubAppConfig::from_env()?,
             require_repo_owner: var_or("SLOP_REQUIRE_REPO_OWNER", "true") != "false",
+            repo_token_key: match env::var("SLOP_REPO_TOKEN_KEY") {
+                Ok(v) if !v.is_empty() => {
+                    use base64::Engine;
+                    let bytes = base64::engine::general_purpose::STANDARD
+                        .decode(v.trim())
+                        .context("SLOP_REPO_TOKEN_KEY must be base64")?;
+                    Some(
+                        <[u8; 32]>::try_from(bytes.as_slice())
+                            .map_err(|_| anyhow::anyhow!("SLOP_REPO_TOKEN_KEY must be 32 bytes"))?,
+                    )
+                }
+                _ => None,
+            },
         };
 
         Ok(Self {

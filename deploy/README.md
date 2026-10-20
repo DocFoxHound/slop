@@ -173,6 +173,14 @@ check, which arrives from Slop Build or Slop Check on GitHub's Windows runners
 (`/v1/slop-build/checks`); with the scanner on, a Windows file can't be approved without a clean
 one unless a reviewer clears it.
 
+## Private repositories outside GitHub
+
+Makers' read-only tokens for private GitLab, Bitbucket and Gitea/Forgejo repositories
+(`repo_tokens.rs`) are encrypted with `SLOP_REPO_TOKEN_KEY` in `slop.env` (32 random bytes,
+base64: `openssl rand -base64 32`). Keep it with the other keys: losing or changing it makes
+every saved token unreadable, and makers have to save theirs again. Unset, makers can't save
+tokens. The sandbox has its own key.
+
 ## Setting it up again
 
 ```sh
