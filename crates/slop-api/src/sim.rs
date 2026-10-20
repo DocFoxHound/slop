@@ -1091,7 +1091,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
          select least(a.user_id, b.user_id), greatest(a.user_id, b.user_id),
                 $1 - make_interval(days => abs(hashtext(a.user_id::text || b.user_id::text)) % 300)
          from sim_users a join sim_users b on a.user_id < b.user_id
-         where abs(hashtext(a.user_id::text || ':' || b.user_id::text)) % 40 = 0
+         where abs(hashtext(a.user_id::text || ':' || b.user_id::text)) % 250 = 0
          on conflict do nothing",
     )
     .bind(now)
@@ -1102,7 +1102,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         "insert into friend_requests (from_id, to_id, created_at)
          select a.user_id, b.user_id, $1 - make_interval(hours => abs(hashtext(b.user_id::text)) % 200)
          from sim_users a join sim_users b on a.user_id <> b.user_id
-         where abs(hashtext(a.user_id::text || '>' || b.user_id::text)) % 150 = 0
+         where abs(hashtext(a.user_id::text || '>' || b.user_id::text)) % 1500 = 0
            and not exists (select 1 from friends f where f.user_a = least(a.user_id, b.user_id) and f.user_b = greatest(a.user_id, b.user_id))
          on conflict do nothing",
     )
