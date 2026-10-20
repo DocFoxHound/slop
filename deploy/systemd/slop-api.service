@@ -9,7 +9,10 @@ ExecStart=%h/slop-deploy/current/slop-api serve
 Restart=on-failure
 RestartSec=5
 NoNewPrivileges=yes
-PrivateTmp=yes
+# Not PrivateTmp: in a user service it adds a user namespace, and the release scanner's rootless
+# podman can't start from inside one. Downloads being scanned go to a private folder instead.
+Environment=TMPDIR=%h/slop-deploy/tmp
+ExecStartPre=/usr/bin/mkdir -p -m 700 %h/slop-deploy/tmp
 
 [Install]
 WantedBy=default.target
