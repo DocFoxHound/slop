@@ -1662,6 +1662,119 @@ async fn submit_and_fetch(app: &TestApp, cookie: &str, version: &str) -> String 
     release["id"].as_str().unwrap().to_string()
 }
 
+/// A file over GitHub's 2 GiB limit, released in numbered parts: Slop fetches and hashes each,
+/// and the manifest lists them for the desktop app to download and join.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn release_files_in_parts(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let base = format!("{}octo/game/releases/download/v1", app.fake_base);
+    let body = |parts: Vec<String>| {
+        let mut b = release_body(&app, "1.0.0", "game-windows.zip");
+        b["files"][0]["parts"] = json!(parts);
+        b
+    };
+    for bad in [
+        vec![format!("{base}/game-windows.zip.001")],
+        vec![
+            format!("{base}/game-windows.zip.001"),
+            format!("{base}/game-windows.zip.003"),
+        ],
+        vec![
+            format!("{base}/game-windows.zip.001"),
+            format!("{base}/other.zip.002"),
+        ],
+    ] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/game/releases")
+                    .cookie(&maker)
+                    .json(body(bad)),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(body(vec![
+                    format!("{base}/game-windows.zip.001"),
+                    format!("{base}/game-windows.zip.002"),
+                ])),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+
+    // The fake host serves the same bytes for each part, so the joined file is two copies.
+    let joined = [BUILD_BYTES, BUILD_BYTES].concat();
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["status"], "awaiting_review", "{mine}");
+    assert_eq!(mine[0]["files"][0]["size_bytes"], joined.len());
+    assert_eq!(
+        mine[0]["files"][0]["sha256"],
+        hex::encode(<sha2::Sha256 as sha2::Digest>::digest(&joined))
+    );
+
+    admin::approve(&app.db, Some(&app.signing_key), lax(), id, "rev")
+        .await
+        .unwrap();
+    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    let signed: slop_manifest::Signed = serde_json::from_value(
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/game/manifest").header("x-country", "US"))
+                .await,
+        )
+        .await,
+    )
+    .unwrap();
+    let manifest: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    let file = &manifest.files[0];
+    assert_eq!(file.size, joined.len() as u64);
+    assert_eq!(file.parts.len(), 2);
+    let part_sha = hex::encode(<sha2::Sha256 as sha2::Digest>::digest(BUILD_BYTES));
+    for (i, part) in file.parts.iter().enumerate() {
+        assert_eq!(part.size, BUILD_BYTES.len() as u64);
+        assert_eq!(part.sha256, part_sha);
+        assert!(part.url.ends_with(&format!(".{:03}", i + 1)));
+    }
+
+    // A link for each part; one past the end isn't there.
+    let link = |part: usize| {
+        app.send(
+            req(
+                Method::GET,
+                format!("/v1/apps/game/releases/{id}/download/windows?part={part}"),
+            )
+            .header("x-country", "US"),
+        )
+    };
+    let res = link(2).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        body_json(res).await["url"]
+            .as_str()
+            .unwrap()
+            .ends_with("game-windows.zip.002")
+    );
+    assert_eq!(link(3).await.status(), StatusCode::NOT_FOUND);
+}
+
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn release_review_and_signed_manifest(db: PgPool) {
     let app = test_app(db).await;

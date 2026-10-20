@@ -86,10 +86,20 @@ struct FileRow {
     attestation: Option<String>,
     provenance_problem: Option<String>,
     maker_signature: Option<sqlx::types::Json<slop_manifest::MakerSignature>>,
+    /// In parts (releases.rs `download_parts`): each with its URL, size, hash and attestation.
+    parts: Option<sqlx::types::Json<Vec<PartRow>>>,
     scan_result: Option<String>,
     scan_detail: Option<String>,
     defender: Option<sqlx::types::Json<crate::scan::DefenderCheck>>,
     cleared_reason: Option<String>,
+}
+
+#[derive(serde::Deserialize)]
+struct PartRow {
+    url: String,
+    size: Option<u64>,
+    sha256: Option<String>,
+    attestation: Option<String>,
 }
 
 /// What approval requires, from the server's configuration.
@@ -141,7 +151,7 @@ pub async fn approve(
 
     let rows: Vec<FileRow> = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem,
-                (maker_signature - 'fingerprint' - 'key_name') as maker_signature,
+                (maker_signature - 'fingerprint' - 'key_name') as maker_signature, parts,
                 scan_result, scan_detail, defender, cleared_reason
          from release_files where release_id = $1 order by platform",
     )
@@ -189,7 +199,26 @@ pub async fn approve(
                 ),
             }
         }
-        if rules.require_maker_signature && f.attestation.is_none() && f.maker_signature.is_none() {
+        let parts: Vec<slop_manifest::FilePart> = f
+            .parts
+            .map(|p| p.0)
+            .unwrap_or_default()
+            .into_iter()
+            .map(|p| {
+                Ok(slop_manifest::FilePart {
+                    url: p.url,
+                    size: p.size.context("a part wasn't fetched")?,
+                    sha256: p.sha256.context("a part wasn't hashed")?,
+                    attestation: p.attestation,
+                })
+            })
+            .collect::<anyhow::Result<_>>()?;
+        let parts_signed = !parts.is_empty() && parts.iter().all(|p| p.attestation.is_some());
+        if rules.require_maker_signature
+            && f.attestation.is_none()
+            && f.maker_signature.is_none()
+            && !parts_signed
+        {
             bail!(
                 "the {} build has no verified maker signature: {}",
                 f.platform,
@@ -210,6 +239,7 @@ pub async fn approve(
                 None
             },
             attestation: f.attestation,
+            parts,
         });
     }
     ensure!(!files.is_empty(), "release has no files");

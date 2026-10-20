@@ -10,7 +10,7 @@ use std::time::Duration as StdDuration;
 use anyhow::{Context, anyhow, bail};
 use axum::{
     Json, Router,
-    extract::{Path, State},
+    extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
     routing::get,
 };
@@ -65,7 +65,14 @@ pub(crate) struct NewFile {
     pub exec: Option<String>,
     #[serde(default)]
     pub args: Vec<String>,
+    /// A file over GitHub's 2 GiB limit, as parts in order (`<file>.001`, `<file>.002`…). `url`
+    /// then names the joined file, which isn't uploaded itself.
+    #[serde(default)]
+    pub parts: Vec<String>,
 }
+
+/// Most parts one file may be split into (each up to the per-file limit).
+pub const MAX_PARTS: usize = 64;
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
@@ -82,6 +89,8 @@ struct CheckedFile {
     file_name: String,
     exec: Option<String>,
     args: Vec<String>,
+    /// (url, file name) of each part, in order.
+    parts: Vec<(String, String)>,
 }
 
 fn validate_version(v: &str) -> ApiResult<()> {
@@ -271,6 +280,29 @@ fn validate_files(
                 ),
             ));
         }
+        let mut parts = Vec::new();
+        if !f.parts.is_empty() {
+            if kind != FileKind::Archive || !(2..=MAX_PARTS).contains(&f.parts.len()) {
+                return Err(ApiError::invalid(
+                    "files",
+                    format!("only archives come in parts, from 2 to {MAX_PARTS} of them"),
+                ));
+            }
+            for (i, part) in f.parts.iter().enumerate() {
+                let (part_url, part_name) = validate_file_url(repo_url, part, allow_http)?;
+                if part_name != format!("{file_name}.{:03}", i + 1) {
+                    return Err(ApiError::invalid(
+                        "files",
+                        format!(
+                            "part {} of {file_name} must be named {file_name}.{:03}",
+                            i + 1,
+                            i + 1
+                        ),
+                    ));
+                }
+                parts.push((part_url, part_name));
+            }
+        }
         checked.push(CheckedFile {
             platform,
             kind,
@@ -278,6 +310,7 @@ fn validate_files(
             file_name,
             exec,
             args: f.args,
+            parts,
         });
     }
     let missing: Vec<&str> = required
@@ -450,8 +483,8 @@ pub(crate) async fn create_release(
         })?;
     for f in &files {
         sqlx::query(
-            "insert into release_files (release_id, platform, kind, url, file_name, exec, args)
-             values ($1, $2, $3, $4, $5, $6, $7)",
+            "insert into release_files (release_id, platform, kind, url, file_name, exec, args, parts)
+             values ($1, $2, $3, $4, $5, $6, $7, $8)",
         )
         .bind(id)
         .bind(f.platform.as_str())
@@ -460,6 +493,14 @@ pub(crate) async fn create_release(
         .bind(&f.file_name)
         .bind(&f.exec)
         .bind(&f.args)
+        .bind((!f.parts.is_empty()).then(|| {
+            serde_json::Value::Array(
+                f.parts
+                    .iter()
+                    .map(|(url, name)| serde_json::json!({ "url": url, "file_name": name }))
+                    .collect(),
+            )
+        }))
         .execute(&mut *tx)
         .await?;
     }
@@ -758,24 +799,33 @@ struct DownloadLink {
 
 /// A download link for one file of an approved release, for the desktop app when the file's own
 /// URL isn't public. The app still checks the file against the signed manifest.
+#[derive(Deserialize)]
+struct LinkQuery {
+    /// For a file in parts: which one, from 1.
+    part: Option<usize>,
+}
+
 async fn file_download_link(
     State(state): State<AppState>,
     MaybeUser(user): MaybeUser,
     headers: HeaderMap,
     Path((slug, release_id, platform)): Path<(String, Uuid, String)>,
+    Query(q): Query<LinkQuery>,
 ) -> ApiResult<Json<DownloadLink>> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
-    let url: Option<String> = sqlx::query_scalar(
-        "select f.url from release_files f join releases r on r.id = f.release_id
+    let url: Option<Option<String>> = sqlx::query_scalar(
+        "select case when $4::int is null then f.url else f.parts -> ($4::int - 1) ->> 'url' end
+         from release_files f join releases r on r.id = f.release_id
          where r.id = $1 and r.app_id = $2 and r.status = 'approved' and f.platform = $3",
     )
     .bind(release_id)
     .bind(app_id)
     .bind(&platform)
+    .bind(q.part.map(|p| p.clamp(1, MAX_PARTS) as i32))
     .fetch_optional(&state.db)
     .await?;
-    let url = url.ok_or(ApiError::NotFound)?;
+    let url = url.flatten().ok_or(ApiError::NotFound)?;
     // A private repository outside GitHub: the host's short-lived link, asked for with the
     // maker's token (repo_tokens.rs).
     if let Some(auth) = crate::repo_tokens::auth_for(&state, app_id, &url)
@@ -951,35 +1001,52 @@ async fn fetch_release(
         .bind(id)
         .fetch_one(&state.db)
         .await?;
-    let files: Vec<(String, String, String)> = sqlx::query_as(
-        "select platform, url, file_name from release_files where release_id = $1 order by platform",
+    let files: Vec<(String, String, String, Option<serde_json::Value>)> = sqlx::query_as(
+        "select platform, url, file_name, parts from release_files where release_id = $1 order by platform",
     )
     .bind(id)
     .fetch_all(&state.db)
     .await?;
     let scanner = state.config.releases.scanner;
-    for (platform, url, file_name) in files {
+    for (platform, url, file_name, parts) in files {
+        let part_urls: Vec<String> = parts
+            .as_ref()
+            .and_then(|p| p.as_array())
+            .into_iter()
+            .flatten()
+            .filter_map(|p| p["url"].as_str().map(String::from))
+            .collect();
         // A private repository outside GitHub: read with the maker's token (repo_tokens.rs).
         let auth = crate::repo_tokens::auth_for(state, app_id, &url).await?;
-        let source = if auth.is_some() {
-            url.clone()
-        } else {
-            download_link(state, &url)
-                .await
-                .with_context(|| format!("{platform} build"))?
-        };
         // With a scanner, the file is kept on disk until it's scanned, then deleted.
         let local = scanner
             .is_on()
             .then(|| std::env::temp_dir().join(format!("slop-release-{}", Uuid::now_v7())));
-        let downloaded = download_full(
-            &state.fetch_http,
-            &source,
-            auth.as_deref(),
-            state.config.releases.max_file_bytes,
-            local.as_deref(),
-        )
-        .await
+        let mut part_digests = Vec::new();
+        let downloaded = if part_urls.is_empty() {
+            let source = if auth.is_some() {
+                url.clone()
+            } else {
+                download_link(state, &url)
+                    .await
+                    .with_context(|| format!("{platform} build"))?
+            };
+            download_full(
+                &state.fetch_http,
+                &source,
+                auth.as_deref(),
+                state.config.releases.max_file_bytes,
+                local.as_deref(),
+            )
+            .await
+        } else {
+            download_parts(state, &part_urls, auth.as_deref(), local.as_deref())
+                .await
+                .map(|(joined, each)| {
+                    part_digests = each;
+                    joined
+                })
+        }
         .with_context(|| format!("{platform} build"));
         let file = match downloaded {
             Ok(d) => d,
@@ -991,14 +1058,50 @@ async fn fetch_release(
             }
         };
         let (size, sha256) = (file.size, file.sha256.clone());
-        let signature = find_attestation(state, repo_url, commit, &sha256).await;
-        let (attestation, provenance, mut problem) = match signature {
-            Ok((bundle, provenance)) => (Some(bundle), Some(sqlx::types::Json(provenance)), None),
-            Err(problem) => (None, None, Some(problem)),
+        // In parts: each part carries its own attestation (Slop Build attests every file it
+        // uploads); the joined file has none of its own.
+        let mut parts_out = None;
+        let (attestation, provenance, mut problem) = if part_urls.is_empty() {
+            match find_attestation(state, repo_url, commit, &sha256).await {
+                Ok((bundle, provenance)) => {
+                    (Some(bundle), Some(sqlx::types::Json(provenance)), None)
+                }
+                Err(problem) => (None, None, Some(problem)),
+            }
+        } else {
+            let mut out = Vec::new();
+            let mut first = None;
+            let mut missing = None;
+            for (i, ((part_url, (part_size, part_sha)), name)) in part_urls
+                .iter()
+                .zip(&part_digests)
+                .zip((1..).map(|n| format!("{file_name}.{n:03}")))
+                .enumerate()
+            {
+                let att = match find_attestation(state, repo_url, commit, part_sha).await {
+                    Ok((bundle, provenance)) => {
+                        first.get_or_insert(provenance);
+                        Some(bundle)
+                    }
+                    Err(p) => {
+                        missing.get_or_insert(format!("part {}: {p}", i + 1));
+                        None
+                    }
+                };
+                out.push(serde_json::json!({
+                    "url": part_url, "file_name": name, "size": part_size, "sha256": part_sha, "attestation": att,
+                }));
+            }
+            parts_out = Some(serde_json::Value::Array(out));
+            match missing {
+                None => (None, first.map(sqlx::types::Json), None),
+                Some(p) => (None, None, Some(p)),
+            }
         };
+        let signed_in_parts = !part_urls.is_empty() && problem.is_none();
         // No attestation: maybe the maker signed it by hand with their registered key.
         let mut maker_sig = None;
-        if attestation.is_none() {
+        if attestation.is_none() && !signed_in_parts {
             match maker_signature(state, app_id, &url, auth.as_deref(), &file).await? {
                 Ok(sig) => {
                     maker_sig = Some(sig);
@@ -1038,7 +1141,8 @@ async fn fetch_release(
         sqlx::query(
             "update release_files
              set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7,
-                 scan_result = $8, scan_detail = $9, scan_report = $10, maker_signature = $11
+                 scan_result = $8, scan_detail = $9, scan_report = $10, maker_signature = $11,
+                 parts = coalesce($12, parts)
              where release_id = $1 and platform = $2",
         )
         .bind(id)
@@ -1052,6 +1156,7 @@ async fn fetch_release(
         .bind(verdict.detail)
         .bind(verdict.report.map(sqlx::types::Json))
         .bind(maker_sig)
+        .bind(parts_out)
         .execute(&state.db)
         .await?;
         // A Defender check of exactly this file, from Slop Build or Slop Check.
@@ -1280,6 +1385,79 @@ pub async fn download_full(
         sha256: hex::encode(hasher.finalize()),
         sha512: hasher512.finalize().into(),
     })
+}
+
+/// A file released in parts: each downloaded in order, hashed on its own and as the joined file
+/// (and appended to `keep` for scanning). Each part is held to the per-file limit, the whole to
+/// `MAX_PARTS` of them. Returns the joined file's digests and each part's (size, SHA-256).
+async fn download_parts(
+    state: &AppState,
+    urls: &[String],
+    auth: Option<&str>,
+    keep: Option<&std::path::Path>,
+) -> anyhow::Result<(Downloaded, Vec<(u64, String)>)> {
+    use sha2::Sha512;
+    use tokio::io::AsyncWriteExt;
+    let max = state.config.releases.max_file_bytes;
+    let mut out = match keep {
+        Some(p) => Some(tokio::fs::File::create(p).await.context("temporary file")?),
+        None => None,
+    };
+    let (mut whole256, mut whole512) = (Sha256::new(), Sha512::new());
+    let mut total = 0u64;
+    let mut each = Vec::new();
+    for (i, url) in urls.iter().enumerate() {
+        let source = if auth.is_some() {
+            url.clone()
+        } else {
+            download_link(state, url).await?
+        };
+        let mut request = state.fetch_http.get(&source);
+        if let Some(auth) = auth {
+            request = request.header(reqwest::header::AUTHORIZATION, auth);
+        }
+        let mut res = request
+            .send()
+            .await
+            .with_context(|| format!("part {}", i + 1))?;
+        if !res.status().is_success() {
+            bail!(
+                "part {}: download failed: HTTP {}",
+                i + 1,
+                res.status().as_u16()
+            );
+        }
+        let mut part256 = Sha256::new();
+        let mut size = 0u64;
+        while let Some(chunk) = res.chunk().await.context("download interrupted")? {
+            size += chunk.len() as u64;
+            if size > max {
+                bail!("part {} is larger than the {max}-byte limit", i + 1);
+            }
+            part256.update(&chunk);
+            whole256.update(&chunk);
+            whole512.update(&chunk);
+            if let Some(f) = out.as_mut() {
+                f.write_all(&chunk).await.context("temporary file")?;
+            }
+        }
+        if size == 0 {
+            bail!("part {} is empty", i + 1);
+        }
+        total += size;
+        each.push((size, hex::encode(part256.finalize())));
+    }
+    if let Some(f) = out.as_mut() {
+        f.flush().await?;
+    }
+    Ok((
+        Downloaded {
+            size: total,
+            sha256: hex::encode(whole256.finalize()),
+            sha512: whole512.finalize().into(),
+        },
+        each,
+    ))
 }
 
 /// The maker's own signature on a file without an attestation (SECURITY §5.3): `<file>.sig` on

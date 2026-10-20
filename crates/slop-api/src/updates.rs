@@ -219,6 +219,7 @@ pub(crate) fn files_from_template(
                     )
                 })?;
             Ok(NewFile {
+                parts: vec![],
                 platform: t.platform.clone(),
                 kind: t.kind.clone(),
                 url: url_for(name),

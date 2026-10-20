@@ -25,7 +25,9 @@ Slop then fetches and hashes the files, verifies the attestations, and the relea
 |---|---|
 | `rust` | `cargo build --release --locked`; ships the first binary target |
 | `go` | `go build -trimpath`; ships a binary named after the repository |
-| `godot` | Installs Godot and export templates (`godot-version`), imports, exports the `Windows Desktop` / `Linux` presets |
+| `dotnet` | `dotnet publish -c Release --self-contained` of the program's `.csproj` (`dotnet-project` if there are several) |
+| `godot` | Installs Godot and export templates (`godot-version`), imports, exports the `Windows Desktop` / `Linux` presets; `godot-dotnet: true` uses Godot .NET for C# projects |
+| `unity` | GameCI's `unity-builder` on Linux runners (StandaloneWindows64 / StandaloneLinux64); needs the maker's `UNITY_LICENSE` or `UNITY_SERIAL`, `UNITY_EMAIL` and `UNITY_PASSWORD` secrets |
 | `python` | PyInstaller `--onedir` of `python-entry`, after `requirements.txt` |
 | `electron` | `npm ci`, electron-builder `--dir`; ships the unpacked folder |
 | `tauri` | `npm ci` (if any), `tauri build --no-bundle`; ships the program |
@@ -34,7 +36,12 @@ Slop then fetches and hashes the files, verifies the attestations, and the relea
 
 An optional `slop.toml` (`[launch]` and `[launch.<platform>]`, with `exec` and `args`) sets the
 program and arguments. `publish: false` builds and checks without a release, which is how the
-types are tried on GitHub's runners (all eight built on Windows and Linux, 2026-10-20).
+types are tried on GitHub's runners (all built on Windows and Linux, 2026-10-20; Unity up to
+licence activation, as there's no test licence).
+
+GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split into
+`<name>.001`, `<name>.002`… (up to 64), each attested; the desktop app checks and joins them.
+`.deb`/`.rpm` packages over the limit stop the build.
 
 ## Inputs
 
@@ -42,13 +49,15 @@ types are tried on GitHub's runners (all eight built on Windows and Linux, 2026-
 |---|---|
 | `app` | The app's store address on Slop (required) |
 | `slop-url` | The Slop site (required) |
-| `project-type` | `rust`, `go` or `custom` (required) |
+| `project-type` | `rust`, `go`, `dotnet`, `godot`, `unity`, `python`, `electron`, `tauri`, `web` or `custom` (required) |
 | `platforms` | `windows,linux` by default |
 | `linux-packages` | `deb,rpm` by default; Slop keeps the ones the store page lists |
 | `build-command`, `output-dir`, `exec` | `custom` only |
 | `sign` | `true` by default; `false` for private repositories without GitHub Enterprise |
 | `project-path` | Where the project is (default `.`) |
 | `godot-version`, `godot-preset-windows`, `godot-preset-linux` | `godot` |
+| `godot-dotnet` | `godot`: the project uses C# |
+| `dotnet-version`, `dotnet-project` | `dotnet` and C# Godot (`8.0.x` by default) |
 | `python-version`, `python-entry`, `python-windowed` | `python` |
 | `node-version` | `electron`, `tauri`, `web` |
 | `publish` | `false`: build and check only, no release, nothing sent to Slop |

@@ -280,6 +280,36 @@ impl Library {
                 )));
             }
         }
+        // In parts: every part must carry the maker's attestation for its own hash.
+        if !file.parts.is_empty() && file.attestation.is_none() && file.maker_signature.is_none() {
+            let expected = || slop_provenance::Expected {
+                repo_url: &manifest.repo_url,
+                commit: &manifest.commit,
+                slop_build_workflow: None,
+            };
+            let mut first = None;
+            for (i, part) in file.parts.iter().enumerate() {
+                match &part.attestation {
+                    Some(bundle) => {
+                        let p = self
+                            .provenance
+                            .verify_sha256(bundle, &part.sha256, expected())
+                            .map_err(|e| {
+                                Error::Verify(format!("maker signature on part {}: {e}", i + 1))
+                            })?;
+                        first.get_or_insert(p);
+                    }
+                    None if self.require_maker_signature => {
+                        return Err(Error::Verify(format!(
+                            "part {} has no maker signature, so it can't be installed",
+                            i + 1
+                        )));
+                    }
+                    None => {}
+                }
+            }
+            return Ok(first);
+        }
         match &file.attestation {
             Some(bundle) => {
                 let expected = slop_provenance::Expected {
@@ -320,8 +350,8 @@ impl Library {
             manifest.release_id,
             platform.as_str()
         );
-        let sha512 = self
-            .download_verified(
+        let sha512 = if file.parts.is_empty() {
+            self.download_verified(
                 &file.url,
                 links.map(|api| (api, link_path.as_str())),
                 file.size,
@@ -329,7 +359,11 @@ impl Library {
                 &download,
                 progress,
             )
-            .await?;
+            .await?
+        } else {
+            self.download_parts_verified(file, links, &link_path, &download, progress)
+                .await?
+        };
         // Built and signed by hand: the maker's key (vouched for by Slop's signature on the
         // manifest) must have signed exactly this file.
         if file.attestation.is_none()
@@ -406,6 +440,75 @@ impl Library {
 
     /// Downloads to `dest`, refusing anything bigger than `size` and anything whose SHA-256
     /// doesn't match. The maker's file must be exactly the one Slop scanned and signed.
+    /// A file released in parts: each downloaded in order and checked against its own hash, then
+    /// the joined file against the whole's. Returns the joined file's SHA-512.
+    async fn download_parts_verified(
+        &self,
+        file: &slop_manifest::ManifestFile,
+        links: Option<&ApiClient>,
+        link_path: &str,
+        dest: &Path,
+        progress: &impl Fn(u64, u64),
+    ) -> Result<[u8; 64]> {
+        let total: u64 = file.parts.iter().map(|p| p.size).sum();
+        if total != file.size {
+            return Err(Error::Verify("the parts don't add up to the file".into()));
+        }
+        let mut out = fs::File::create(dest)?;
+        let (mut whole256, mut whole512) = (Sha256::new(), sha2::Sha512::new());
+        let mut got_total: u64 = 0;
+        for (i, part) in file.parts.iter().enumerate() {
+            let mut res = self.http.get(self.download_url(&part.url)?).send().await?;
+            if matches!(res.status().as_u16(), 401 | 403 | 404)
+                && let Some(api) = links
+            {
+                #[derive(serde::Deserialize)]
+                struct Link {
+                    url: String,
+                }
+                let link: Link = api.get_json(&format!("{link_path}?part={}", i + 1)).await?;
+                res = self.http.get(self.download_url(&link.url)?).send().await?;
+            }
+            if !res.status().is_success() {
+                return Err(Error::Install(format!(
+                    "part {} of the maker's release file is unavailable (HTTP {})",
+                    i + 1,
+                    res.status().as_u16()
+                )));
+            }
+            let mut part256 = Sha256::new();
+            let mut got: u64 = 0;
+            while let Some(chunk) = res.chunk().await? {
+                got += chunk.len() as u64;
+                if got > part.size {
+                    return Err(Error::Verify(format!(
+                        "part {} changed after Slop checked it (it's bigger)",
+                        i + 1
+                    )));
+                }
+                part256.update(&chunk);
+                whole256.update(&chunk);
+                whole512.update(&chunk);
+                out.write_all(&chunk)?;
+                got_total += chunk.len() as u64;
+                progress(got_total, total);
+            }
+            if got != part.size || hex::encode(part256.finalize()) != part.sha256 {
+                return Err(Error::Verify(format!(
+                    "part {} changed after Slop checked it; not installing",
+                    i + 1
+                )));
+            }
+        }
+        out.sync_all()?;
+        if hex::encode(whole256.finalize()) != file.sha256 {
+            return Err(Error::Verify(
+                "the joined file isn't the one Slop checked; not installing".into(),
+            ));
+        }
+        Ok(whole512.finalize().into())
+    }
+
     async fn download_verified(
         &self,
         url: &str,

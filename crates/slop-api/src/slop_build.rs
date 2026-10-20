@@ -138,6 +138,9 @@ struct CiFile {
     /// Arguments to start it with (from the maker's slop.toml).
     #[serde(default)]
     args: Vec<String>,
+    /// Over GitHub's 2 GiB limit: the parts' file names, in order (`<file_name>.001`…).
+    #[serde(default)]
+    parts: Vec<String>,
     /// Windows builds: Microsoft Defender's check of the file, on GitHub's Windows runner.
     #[serde(default)]
     defender: Option<crate::scan::DefenderCheck>,
@@ -238,6 +241,17 @@ async fn submit_from_ci(
             } else {
                 "archive".into()
             },
+            parts: f
+                .parts
+                .iter()
+                .map(|p| {
+                    format!(
+                        "{base}/releases/download/{}/{}",
+                        path_segment(&req.tag),
+                        path_segment(p)
+                    )
+                })
+                .collect(),
             platform: f.platform,
             exec: f.exec,
             args: f.args,
@@ -461,6 +475,22 @@ fn workflow_yaml(
              build-command: \"npm run build\"\n      \
              output-dir: \"dist\"\n"
         }
+        "godot-dotnet" => {
+            "\n      # Your Godot version; a C# project uses Godot's .NET build. Exports use the presets\n      \
+             # named \"Windows Desktop\" and \"Linux\" in export_presets.cfg (commit that file).\n      \
+             godot-version: \"4.3\"\n      \
+             godot-dotnet: true\n"
+        }
+        "dotnet" => {
+            "\n      # Published self-contained, so players don't need .NET. If the repository has more\n      \
+             # than one program project, name the one to ship:\n      \
+             # dotnet-project: \"src/MyGame/MyGame.csproj\"\n"
+        }
+        "unity" => {
+            "\n      # Built with GameCI. Add your Unity licence to this repository's secrets (Settings →\n      \
+             # Secrets and variables → Actions): UNITY_LICENSE (your .ulf file's contents),\n      \
+             # UNITY_EMAIL and UNITY_PASSWORD. See {site}/publish/guide#unity\n"
+        }
         "python" => {
             "\n      # The script that starts your app (built with PyInstaller). Uncomment windowed for\n      \
              # apps with their own window, such as pygame games.\n      \
@@ -468,6 +498,24 @@ fn workflow_yaml(
              # python-windowed: true\n"
         }
         _ => "\n",
+    };
+    let custom = custom.replace("{site}", site);
+    // godot-dotnet is godot with C#: the recipe's type is still godot.
+    let recipe_type = if project_type == "godot-dotnet" {
+        "godot"
+    } else {
+        project_type
+    };
+    // Unity needs the maker's licence secrets passed on (SignPath's stay optional).
+    let secrets = if project_type == "unity" {
+        "    secrets:\n      \
+           UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}\n      \
+           UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}\n      \
+           UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}\n      \
+           # SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}\n"
+    } else {
+        "    # secrets:\n    \
+         #   SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}\n"
     };
     format!(
         "# Slop Build: builds, signs and attaches your app to a release, then sends it to Slop.\n\
@@ -490,13 +538,12 @@ fn workflow_yaml(
              with:\n      \
                app: {slug}\n      \
                slop-url: {site}\n      \
-               project-type: {project_type}{custom}      \
+               project-type: {recipe_type}{custom}      \
                # Recommended for Windows: sign with a free SignPath Foundation certificate for\n      \
                # open-source projects (apply at signpath.org; see {site}/publish/guide#signing),\n      \
                # then fill in your organization ID and add the SIGNPATH_API_TOKEN secret.\n      \
-               # signpath-organization-id: \"your-organization-id\"\n    \
-             # secrets:\n    \
-             #   SIGNPATH_API_TOKEN: ${{{{ secrets.SIGNPATH_API_TOKEN }}}}\n"
+               # signpath-organization-id: \"your-organization-id\"\n\
+         {secrets}"
     )
 }
 
@@ -505,7 +552,14 @@ fn workflow_yaml(
 /// should check, what it looks like.
 fn detect(names: &[String], electron: bool) -> (&'static str, Option<&'static str>) {
     let has = |n: &str| names.iter().any(|x| x == n);
-    if has("Cargo.toml") && !has("src-tauri") {
+    let dotnet = names
+        .iter()
+        .any(|n| n.ends_with(".csproj") || n.ends_with(".sln"));
+    if has("Assets") && has("ProjectSettings") {
+        ("unity", None)
+    } else if has("project.godot") && dotnet {
+        ("godot-dotnet", None)
+    } else if has("Cargo.toml") && !has("src-tauri") {
         ("rust", None)
     } else if has("go.mod") {
         ("go", None)
@@ -517,6 +571,8 @@ fn detect(names: &[String], electron: bool) -> (&'static str, Option<&'static st
         ("electron", None)
     } else if has("package.json") {
         ("web", Some("web"))
+    } else if dotnet {
+        ("dotnet", None)
     } else if has("pyproject.toml") || has("requirements.txt") || has("main.py") {
         ("python", Some("python"))
     } else if has("index.html") {
@@ -692,7 +748,16 @@ mod tests {
     #[ignore]
     fn print_sample_workflows() {
         for kind in [
-            "rust", "custom", "godot", "web", "python", "electron", "tauri",
+            "rust",
+            "custom",
+            "godot",
+            "godot-dotnet",
+            "dotnet",
+            "unity",
+            "web",
+            "python",
+            "electron",
+            "tauri",
         ] {
             println!("=== {kind}");
             println!(
@@ -729,6 +794,12 @@ mod tests {
             d(&["main.py", "requirements.txt"]),
             ("python", Some("python"))
         );
+        assert_eq!(
+            d(&["Assets", "ProjectSettings", "Packages"]),
+            ("unity", None)
+        );
+        assert_eq!(d(&["project.godot", "Game.csproj"]), ("godot-dotnet", None));
+        assert_eq!(d(&["Game.sln", "src"]), ("dotnet", None));
         assert_eq!(d(&["README.md"]), ("custom", None));
     }
 
@@ -748,6 +819,14 @@ mod tests {
         assert!(y("web").contains("output-dir: \"dist\""));
         assert!(y("python").contains("python-entry: \"main.py\""));
         assert!(y("tauri").contains("project-type: tauri\n"));
+        let g = y("godot-dotnet");
+        assert!(g.contains("project-type: godot\n") && g.contains("godot-dotnet: true"));
+        let u = y("unity");
+        assert!(
+            u.contains("UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}")
+                && u.contains("https://s/publish/guide#unity")
+        );
+        assert!(y("dotnet").contains("project-type: dotnet\n"));
     }
 
     #[test]
