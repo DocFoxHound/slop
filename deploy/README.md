@@ -109,6 +109,16 @@ simulates payments instead.
    ```
 4. Before live keys: DAC7 and HMRC platform-reporting registration (LEGAL-GUIDANCE §16 checklist).
 
+## Email (notifications)
+
+Until SMTP is set, notifications only show under the 🔔 in Slop. To email them too (each user
+chooses which kinds on their account page), add to `~/.config/slop/slop-api.env` and restart:
+```
+SLOP_SMTP_URL=smtps://user:password@smtp.example.com:465
+SLOP_EMAIL_FROM=Slop <notifications@your-domain>
+```
+Use a provider with a data processing agreement (PRIV-5), and set SPF/DKIM for the From domain.
+
 ## Setting it up again
 
 ```sh

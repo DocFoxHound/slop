@@ -255,6 +255,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             github_raw_base: format!("{github_base}raw/").parse().unwrap(),
         },
         payments: Default::default(),
+        email: None,
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
         simulation: false,
@@ -5032,6 +5033,28 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
         quoted, "Which engine?",
         "the report keeps the text as it was"
     );
+    // Each side hears about the other's steps and messages; messages merge while unread.
+    let inbox = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications").cookie(&creative_cookie))
+            .await,
+    )
+    .await;
+    let titles: Vec<&str> = inbox["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|n| n["title"].as_str().unwrap())
+        .collect();
+    assert!(
+        titles
+            .iter()
+            .any(|t| t.contains("would like to talk about a job")),
+        "{titles:?}"
+    );
+    assert!(
+        titles.iter().any(|t| t.starts_with("New messages from")),
+        "{titles:?}"
+    );
     let job = body_json(
         app.send(post(url("conversation/close"), &creative_cookie, json!({})))
             .await,
@@ -6409,4 +6432,167 @@ async fn agreements_wait_for_the_version_in_effect(db: PgPool) {
             .iter()
             .any(|n| n["kind"] == "privacy" && n["action"] == "read")
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Interested and notifications (DESIGN §5, §6)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn interested_players_hear_when_an_app_moves_on(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: "smtp://localhost:2525".into(),
+            from: "Slop <n@slop.test>".into(),
+        })
+    })
+    .await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (fan_id, fan) = app.user("Fay Fan", "US").await;
+    let (quiet_id, quiet) = app.user("Quinn Quiet", "US").await;
+    for (id, email) in [(fan_id, "fay@example.com"), (quiet_id, "quinn@example.com")] {
+        sqlx::query("update users set email = $2 where id = $1")
+            .bind(id)
+            .bind(email)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    listed_with(&app, maker_id, "soon", "coming_soon", "").await;
+    listed_with(&app, maker_id, "later", "coming_soon", "").await;
+    listed_with(&app, maker_id, "done", "released", "").await;
+
+    let mark = |cookie: &str, slug: &str| {
+        req(Method::PUT, format!("/v1/me/interested/{slug}")).cookie(cookie)
+    };
+    assert_eq!(
+        app.send(mark(&fan, "soon")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(mark(&quiet, "soon")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(mark(&fan, "soon")).await.status(),
+        StatusCode::NO_CONTENT,
+        "idempotent"
+    );
+    assert_eq!(
+        app.send(mark(&maker, "soon")).await.status(),
+        StatusCode::CONFLICT,
+        "not your own"
+    );
+    assert_eq!(
+        app.send(mark(&fan, "done")).await.status(),
+        StatusCode::CONFLICT,
+        "released: library instead"
+    );
+
+    // Counts are public; "Most anticipated" sorts by them.
+    let slugs = list_slugs(
+        &app,
+        req(Method::GET, "/v1/apps?sort=anticipated&stage=coming_soon"),
+    )
+    .await;
+    assert_eq!(slugs, ["soon", "later"]);
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/soon").cookie(&fan))
+            .await,
+    )
+    .await;
+    assert_eq!(page["interested"], 2);
+    assert_eq!(page["is_interested"], true);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/interested").cookie(&fan))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["slug"], "soon");
+    // Signed out, "for you" upcoming is the most anticipated.
+    let upcoming = body_json(app.send(req(Method::GET, "/v1/upcoming/for-you")).await).await;
+    assert_eq!(upcoming[0]["slug"], "soon");
+    assert_eq!(upcoming[0]["reason"], "2 interested");
+
+    // Quinn doesn't want these by email.
+    let prefs = body_json(
+        app.send(
+            req(Method::PUT, "/v1/me/email-prefs")
+                .cookie(&quiet)
+                .json(json!({ "interested": false })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(prefs["categories"][1]["category"], "interested");
+    assert_eq!(prefs["categories"][1]["email"], false);
+    assert_eq!(
+        app.send(
+            req(Method::PUT, "/v1/me/email-prefs")
+                .cookie(&quiet)
+                .json(json!({ "spam": true }))
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+
+    // Moving to Beta tells everyone Interested.
+    let soon: Uuid = sqlx::query_scalar("select id from apps where slug = 'soon'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         values ($1, $2, '0.1.0', repeat('a', 40), 'approved', $3, now(), true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(soon)
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    admin::set_stage(&app.db, "soon", slop_api::catalog::AppStage::Beta, "test")
+        .await
+        .unwrap();
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&fan)).await).await;
+    assert_eq!(me["unread_notifications"], 1);
+    let inbox = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications").cookie(&fan))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        inbox["items"][0]["title"],
+        "soon is in beta: you can try it now"
+    );
+    assert_eq!(inbox["items"][0]["link"], "/app/soon");
+
+    // Emails go only to those who want them.
+    let queued = slop_api::notify::queue_emails(&app.db, &app.config)
+        .await
+        .unwrap();
+    assert_eq!(queued, 1);
+    let to: Vec<String> = sqlx::query_scalar("select to_address from email_outbox")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(to, ["fay@example.com"]);
+    let body: String = sqlx::query_scalar("select body from email_outbox")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(body.contains("http://localhost:8080/app/soon"), "{body}");
+    assert!(body.contains("/account#notifications"));
+
+    // Reading clears the count.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/notifications/read")
+                .cookie(&fan)
+                .json(json!({})),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&fan)).await).await;
+    assert_eq!(me["unread_notifications"], 0);
 }

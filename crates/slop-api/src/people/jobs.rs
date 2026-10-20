@@ -1059,6 +1059,109 @@ pub(crate) async fn event(
         .bind(job)
         .execute(&mut *conn)
         .await?;
+    notify_step(conn, job, actor, kind).await
+}
+
+/// What a step means to each side, for their notification: (to the client, to the creative).
+/// `{client}`, `{creative}` and `{title}` are filled in. None: not worth a notification.
+fn step_text(kind: &str) -> Option<(&'static str, &'static str)> {
+    Some(match kind {
+        "requested" => ("", "{client} asked you for work: {title}"),
+        "inquiry" => ("", "{client} would like to talk about a job: {title}"),
+        "offered" => ("{creative} sent you an offer: {title}", ""),
+        "declined" => (
+            "{creative} declined: {title}",
+            "{client} declined your offer: {title}",
+        ),
+        "accepted" => ("", "{client} accepted your offer: {title}"),
+        "paid" => ("Payment received for {title}", "{client} paid for {title}"),
+        "conversation_requested" => ("", "{client} asked for a conversation about {title}"),
+        "conversation_opened" => ("{creative} opened the conversation about {title}", ""),
+        "sent_for_sign_off" => ("{creative} sent {title} for your sign-off", ""),
+        "signed_off" => ("", "{client} signed off on {title}"),
+        "delivered" | "delivered_preview" => ("{creative} delivered {title}", ""),
+        "accepted_delivery" => ("", "{client} accepted the delivery of {title}"),
+        "final_files" => ("{creative} sent the final files for {title}", ""),
+        "completed" | "completed_automatically" => ("{title} is complete", "{title} is complete"),
+        "change_requested" => ("", "{client} asked for a change to {title}"),
+        "change_offered" => ("{creative} offered a Change to Agreement for {title}", ""),
+        "change_accepted" => ("", "{client} accepted the Change to Agreement for {title}"),
+        "change_declined" => ("", "{client} declined the Change to Agreement for {title}"),
+        "cancelled" => ("{title} was cancelled", "{title} was cancelled"),
+        "withdrawn" => ("", "{client} withdrew from {title}"),
+        "refunded" => ("{creative} refunded you for {title}", ""),
+        "problem_opened" => (
+            "A problem was opened on {title}",
+            "A problem was opened on {title}",
+        ),
+        "problem_answered" | "problem_proposal" => (
+            "New in the problem on {title}",
+            "New in the problem on {title}",
+        ),
+        "mediator_suggestion" => (
+            "A mediator suggested an outcome for {title}",
+            "A mediator suggested an outcome for {title}",
+        ),
+        "disputed" => ("{creative} disputed your review", ""),
+        k if k.starts_with("problem_proposal_") || k.starts_with("problem_") => (
+            "The problem on {title} changed",
+            "The problem on {title} changed",
+        ),
+        k if k.starts_with("review_dispute_") => (
+            "A mediator decided the dispute about your review",
+            "A mediator decided your review dispute",
+        ),
+        _ => return None,
+    })
+}
+
+/// Tells the side(s) that didn't take a step about it. Slop's own steps (payments arriving,
+/// automatic completion) go to both.
+async fn notify_step(
+    conn: &mut sqlx::PgConnection,
+    job: Uuid,
+    actor: Option<Uuid>,
+    kind: &str,
+) -> sqlx::Result<()> {
+    let Some((to_client, to_creative)) = step_text(kind) else {
+        return Ok(());
+    };
+    let (client, creative, title, client_name, creative_name): (
+        Uuid,
+        Uuid,
+        String,
+        String,
+        String,
+    ) = sqlx::query_as(
+        "select j.client_id, j.creative_id, coalesce(j.offer->>'title', 'the job for ' || a.title),
+                    u.display_name, c.name
+             from jobs j join apps a on a.id = j.app_id join users u on u.id = j.client_id
+             join creatives c on c.user_id = j.creative_id where j.id = $1",
+    )
+    .bind(job)
+    .fetch_one(&mut *conn)
+    .await?;
+    for (user, text) in [(client, to_client), (creative, to_creative)] {
+        if text.is_empty() || actor == Some(user) {
+            continue;
+        }
+        let title = text
+            .replace("{client}", &client_name)
+            .replace("{creative}", &creative_name)
+            .replace("{title}", &format!("“{title}”"));
+        crate::notify::send(
+            conn,
+            crate::notify::Notice {
+                user_id: user,
+                category: "jobs",
+                title,
+                body: String::new(),
+                link: format!("/jobs/{job}"),
+                collapse_key: None,
+            },
+        )
+        .await?;
+    }
     Ok(())
 }
 
@@ -2605,6 +2708,30 @@ async fn post_message(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    // The other side hears about new messages once until they look (merged while unread).
+    let (other, title, author): (Uuid, String, String) = sqlx::query_as(
+        "select case when j.client_id = $2 then j.creative_id else j.client_id end,
+                coalesce(j.offer->>'title', 'the job for ' || a.title),
+                case when j.creative_id = $2 then c.name else u.display_name end
+         from jobs j join apps a on a.id = j.app_id join creatives c on c.user_id = j.creative_id
+         join users u on u.id = j.client_id where j.id = $1",
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_one(&mut *tx)
+    .await?;
+    crate::notify::send(
+        &mut tx,
+        crate::notify::Notice {
+            user_id: other,
+            category: "jobs",
+            title: format!("New messages from {author} about “{title}”"),
+            body: String::new(),
+            link: format!("/jobs/{id}"),
+            collapse_key: Some(format!("messages:{id}")),
+        },
+    )
+    .await?;
     tx.commit().await?;
     reload(&state, id, &user).await
 }

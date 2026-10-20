@@ -417,12 +417,13 @@ pub async fn set_stage(
     .bind(stage)
     .execute(&mut *tx)
     .await?;
+    let told = crate::interested::stage_moved(&mut tx, id, stage).await?;
     audit(
         &mut tx,
         reviewer,
         "app.stage",
         slug,
-        json!({ "from": from, "to": stage }),
+        json!({ "from": from, "to": stage, "interested_told": told }),
     )
     .await?;
     tx.commit().await?;

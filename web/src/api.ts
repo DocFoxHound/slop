@@ -36,9 +36,31 @@ export interface AppSummary {
   not_slop_percent: number | null;
   /** Credits a completed, fully paid People job: the "Made with people" badge. */
   made_with_people: boolean;
+  /** People who marked it Interested: the demand signal for upcoming apps. */
+  interested: number;
   is_dead: boolean;
   stage_deadline: string | null;
   updated_at: string;
+}
+
+/** A notification in the bell (crates/slop-api/src/notify.rs). */
+export interface Notification {
+  id: string;
+  category: "jobs" | "interested" | "moderation";
+  title: string;
+  body: string;
+  link: string;
+  /** Merged unread notifications ("new messages"). */
+  count: number;
+  created_at: string;
+  read: boolean;
+}
+
+export interface EmailPrefs {
+  /** Whether this server sends email at all. */
+  email_on: boolean;
+  has_email: boolean;
+  categories: Array<{ category: Notification["category"]; label: string; email: boolean }>;
 }
 
 /** A screenshot or video on an app's page (crates/slop-api/src/media.rs). */
@@ -136,6 +158,8 @@ export interface AppDetail extends AppSummary {
   /** Creatives credited through People jobs. */
   credits: Credit[];
   is_mine: boolean;
+  /** The viewer marked it Interested. */
+  is_interested: boolean;
 }
 
 export interface AppPage {
@@ -158,6 +182,8 @@ export interface Me {
   suspended: boolean;
   /** Moderation decisions about the user they haven't opened yet. */
   new_decisions: number;
+  /** Unread notifications, for the bell. */
+  unread_notifications: number;
 }
 
 /** Slop's legal documents (crates/slop-api/src/legal.rs). */
@@ -945,7 +971,7 @@ export interface AppQuery {
   category?: string;
   stage?: AppStage;
   kind?: AppKind;
-  sort?: "recent" | "title" | "relevance" | "trending";
+  sort?: "recent" | "title" | "relevance" | "trending" | "anticipated";
   made_with_people?: boolean;
   limit?: number;
   offset?: number;
@@ -1204,6 +1230,20 @@ export const api = {
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/players`,
     ),
+  interested: {
+    mine: () => request<Array<AppSummary & { interested_at: string }>>("GET", "/v1/me/interested"),
+    add: (slug: string) => request<void>("PUT", `/v1/me/interested/${encodeURIComponent(slug)}`),
+    remove: (slug: string) => request<void>("DELETE", `/v1/me/interested/${encodeURIComponent(slug)}`),
+    /** Upcoming apps for this viewer, each with why; the most anticipated when not personal. */
+    forYou: () => request<Array<AppSummary & { reason: string }>>("GET", "/v1/upcoming/for-you"),
+  },
+  notifications: {
+    list: () => request<{ unread: number; items: Notification[] }>("GET", "/v1/me/notifications"),
+    read: (ids: string[] = []) => request<void>("POST", "/v1/me/notifications/read", { ids }),
+    prefs: () => request<EmailPrefs>("GET", "/v1/me/email-prefs"),
+    setPrefs: (changes: Partial<Record<Notification["category"], boolean>>) =>
+      request<EmailPrefs>("PUT", "/v1/me/email-prefs", changes),
+  },
   legal: {
     index: () => request<LegalIndexEntry[]>("GET", "/v1/legal"),
     document: (kind: string, version?: string) =>

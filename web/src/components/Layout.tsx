@@ -80,6 +80,7 @@ export function Layout() {
         </div>
         <div className="grow" data-tauri-drag-region />
         <SearchBox />
+        <Bell />
         <MeMenu />
         <WindowControls />
       </nav>
@@ -173,6 +174,34 @@ function MeMenu() {
       <span className="who">
         <b>{me.display_name}</b>
       </span>
+    </Link>
+  );
+}
+
+/** Unread notifications, refreshed as the user moves around (and every minute). */
+function Bell() {
+  const { me, refresh } = useSession();
+  const location = useLocation();
+  useEffect(() => {
+    if (!me) return;
+    const timer = window.setInterval(() => void refresh(), 60_000);
+    return () => window.clearInterval(timer);
+  }, [me?.id, refresh]);
+  if (!me) return null;
+  const n = me.unread_notifications;
+  return (
+    <Link
+      to="/notifications"
+      className={`bell ${location.pathname === "/notifications" ? "on" : ""}`}
+      aria-label={n > 0 ? `Notifications, ${n} unread` : "Notifications"}
+      title="Notifications"
+    >
+      <span aria-hidden="true">🔔</span>
+      {n > 0 && (
+        <span className="bell-count" aria-hidden="true">
+          {n > 99 ? "99+" : n}
+        </span>
+      )}
     </Link>
   );
 }

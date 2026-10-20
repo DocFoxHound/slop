@@ -653,6 +653,21 @@ pub(crate) async fn record(
     .bind(d.decided_by)
     .execute(&mut *tx)
     .await?;
+    crate::notify::send(
+        tx,
+        crate::notify::Notice {
+            user_id: d.user_id,
+            category: "moderation",
+            title: format!("{}: {}", action_label(d.action), d.subject_label),
+            body: format!(
+                "Under the Content Policy rule \"{}\". See why, and how to appeal.",
+                rule_title(d.rule)
+            ),
+            link: "/account#decisions".into(),
+            collapse_key: None,
+        },
+    )
+    .await?;
     admin::audit(
         tx,
         d.decided_by,
@@ -1218,10 +1233,11 @@ async fn act(
     )
     .await
     .map_err(refused)?;
-    sqlx::query(
+    let closed: Vec<Answered> = sqlx::query_as(
         "update reports set status = 'actioned', outcome = $3, decided_by = $4, decided_at = now(), decision_id = $5,
                 external_reference = coalesce(nullif($6, ''), external_reference)
-         where status = 'open' and (id = $1 or (subject_kind = $7 and subject_id = $2))",
+         where status = 'open' and (id = $1 or (subject_kind = $7 and subject_id = $2))
+         returning reference, subject_label, reporter_id, reporter_email",
     )
     .bind(id)
     .bind(subject_id)
@@ -1230,10 +1246,60 @@ async fn act(
     .bind(decision)
     .bind(&external)
     .bind(&kind)
-    .execute(&mut *tx)
+    .fetch_all(&mut *tx)
     .await?;
+    tell_reporters(&mut tx, &state.config, &closed, &outcome).await?;
     tx.commit().await?;
     Ok(Json(json!({ "decision": decision })))
+}
+
+/// A report that was just answered.
+#[derive(sqlx::FromRow)]
+struct Answered {
+    reference: String,
+    subject_label: String,
+    reporter_id: Option<Uuid>,
+    reporter_email: Option<String>,
+}
+
+/// Tells each reporter what was decided (DSA Art. 16(5)): in Slop, or by email when they
+/// reported signed out.
+async fn tell_reporters(
+    tx: &mut sqlx::PgConnection,
+    config: &crate::config::Config,
+    answered: &[Answered],
+    outcome: &str,
+) -> sqlx::Result<()> {
+    for a in answered {
+        let title = format!("Your report {} was answered", a.reference);
+        if let Some(user_id) = a.reporter_id {
+            crate::notify::send(
+                tx,
+                crate::notify::Notice {
+                    user_id,
+                    category: "moderation",
+                    title,
+                    body: format!("{}: {outcome}", a.subject_label),
+                    link: "/account#reports".into(),
+                    collapse_key: None,
+                },
+            )
+            .await?;
+        } else if let Some(email) = &a.reporter_email {
+            crate::notify::email(
+                tx,
+                config,
+                email,
+                &title,
+                &format!(
+                    "You reported {} to Slop.\n\nWhat we decided: {outcome}",
+                    a.subject_label
+                ),
+            )
+            .await?;
+        }
+    }
+    Ok(())
 }
 
 #[derive(Deserialize)]
@@ -1259,21 +1325,22 @@ async fn dismiss(
         false,
     )?;
     let mut tx = state.db.begin().await?;
-    let n = sqlx::query(
+    let closed: Vec<Answered> = sqlx::query_as(
         "update reports set status = 'dismissed', outcome = $2, decided_by = $3, decided_at = now(),
                 external_reference = nullif($4, '')
-         where id = $1 and status = 'open'",
+         where id = $1 and status = 'open'
+         returning reference, subject_label, reporter_id, reporter_email",
     )
     .bind(id)
     .bind(&outcome)
     .bind(&admin.actor)
     .bind(&external)
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    if n == 0 {
+    .fetch_all(&mut *tx)
+    .await?;
+    if closed.is_empty() {
         return Err(ApiError::Conflict("that report isn't open".into()));
     }
+    tell_reporters(&mut tx, &state.config, &closed, &outcome).await?;
     admin::audit(
         &mut tx,
         &admin.actor,
@@ -1303,15 +1370,34 @@ async fn decide_appeal(
     admin.may_decide()?;
     let reason = text("reason", &b.reason, 2000, true)?;
     let mut tx = state.db.begin().await?;
-    let row: Option<(String, String, Uuid, Uuid, String)> = sqlx::query_as(
-        "select action, subject_kind, subject_id, user_id, rule from moderation_decisions
+    let row: Option<(String, String, Uuid, Uuid, String, String)> = sqlx::query_as(
+        "select action, subject_kind, subject_id, user_id, rule, subject_label from moderation_decisions
          where id = $1 and appeal_status = 'pending' for update",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (action, kind, subject_id, user_id, rule) =
+    let (action, kind, subject_id, user_id, rule, label) =
         row.ok_or_else(|| ApiError::Conflict("that appeal isn't pending".into()))?;
+    crate::notify::send(
+        &mut tx,
+        crate::notify::Notice {
+            user_id,
+            category: "moderation",
+            title: format!(
+                "Your appeal about {label}: {}",
+                if b.reverse {
+                    "the decision is reversed"
+                } else {
+                    "the decision stands"
+                }
+            ),
+            body: reason.clone(),
+            link: "/account#decisions".into(),
+            collapse_key: None,
+        },
+    )
+    .await?;
     if b.reverse {
         apply(&mut tx, &action, &kind, subject_id, user_id, &rule, true)
             .await

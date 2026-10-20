@@ -1,3 +1,4 @@
+import { useState } from "react";
 import { Link } from "react-router";
 
 import { api } from "../api";
@@ -7,23 +8,51 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { isDesktop } from "../platform";
 import { useSession } from "../session";
 
-/** Upcoming apps that are still alive, soonest deadline first. Dead projects are never promoted. */
-async function upcoming(limit: number) {
-  const [soon, beta] = await Promise.all([
-    api.apps({ stage: "coming_soon", limit }),
-    api.apps({ stage: "beta", limit }),
-  ]);
-  return [...soon.apps, ...beta.apps]
-    .filter((a) => !a.is_dead)
-    .sort((a, b) => (a.stage_deadline ?? "").localeCompare(b.stage_deadline ?? ""))
-    .slice(0, limit);
+/**
+ * Coming soon & in beta (DESIGN §5): "For you" matches the tags in your library and Interested
+ * list; "Most anticipated" ranks by Interested count. Dead projects are never promoted.
+ */
+function UpcomingShelf() {
+  const { me } = useSession();
+  const [view, setView] = useState<"for_you" | "anticipated">("for_you");
+  const shelf = useLoad(
+    () =>
+      view === "for_you" && me
+        ? api.interested.forYou().then((apps) => apps.slice(0, 8))
+        : api
+            .apps({ sort: "anticipated", limit: 16 })
+            .then((p) => p.apps.filter((a) => a.stage !== "released" && !a.is_dead).slice(0, 8)),
+    [view, me?.id],
+  );
+  return (
+    <>
+      {me && (
+        <div className="seg small-seg" role="tablist" aria-label="Upcoming apps">
+          {(
+            [
+              ["for_you", "For you"],
+              ["anticipated", "Most anticipated"],
+            ] as const
+          ).map(([key, label]) => (
+            <button key={key} role="tab" aria-selected={view === key} className={view === key ? "on" : ""} onClick={() => setView(key)}>
+              {label}
+            </button>
+          ))}
+        </div>
+      )}
+      {shelf.error ? (
+        <ErrorState error={shelf.error} onRetry={shelf.reload} />
+      ) : (
+        <Shelf apps={shelf.data} empty="Nothing upcoming right now." />
+      )}
+    </>
+  );
 }
 
 export function Store() {
   useDocumentTitle(undefined);
   const { me } = useSession();
   const fresh = useLoad(() => api.apps({ stage: "released", sort: "recent", limit: 8 }), []);
-  const soon = useLoad(() => upcoming(4), []);
   const categories = useLoad(() => api.categories(), []);
   const server = useLoad(() => api.server(), []);
   const trending = useLoad(
@@ -87,11 +116,7 @@ export function Store() {
               See all →
             </Link>
           </SectionHeader>
-          {soon.error ? (
-            <ErrorState error={soon.error} onRetry={soon.reload} />
-          ) : (
-            <Shelf apps={soon.data} empty="Nothing upcoming right now." />
-          )}
+          <UpcomingShelf />
 
           <SectionHeader title="Browse by category">
             <Link to="/browse" className="sub">

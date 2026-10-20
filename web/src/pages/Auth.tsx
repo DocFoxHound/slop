@@ -9,7 +9,13 @@ import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
-import { AccountAgreements, AccountData, AccountDecisions, AccountReports } from "../components/AccountSections";
+import {
+  AccountAgreements,
+  AccountData,
+  AccountDecisions,
+  AccountNotifications,
+  AccountReports,
+} from "../components/AccountSections";
 
 const SIGNIN_ERRORS: Record<string, string> = {
   cancelled: "Sign-in was cancelled.",
@@ -351,6 +357,7 @@ export function Account() {
         </label>
       </div>
 
+      <AccountNotifications />
       <AccountDecisions />
       <AccountReports />
       <AccountAgreements />

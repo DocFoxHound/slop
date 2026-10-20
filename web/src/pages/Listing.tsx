@@ -38,6 +38,7 @@ function AppGrid({ base, sorts = ["recent", "trending", "title"] }: { base: AppQ
   const sortLabels: Record<string, string> = {
     relevance: "Best match",
     trending: "Most played this week",
+    anticipated: "Most anticipated",
     recent: "Recently updated",
     title: "A–Z",
   };
@@ -156,7 +157,7 @@ export function Upcoming() {
               </button>
             ))}
           </div>
-          <AppGrid base={{ stage }} />
+          <AppGrid base={{ stage }} sorts={["anticipated", "recent", "title"]} />
         </div>
       </div>
     </div>

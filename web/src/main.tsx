@@ -9,6 +9,7 @@ import { Guide } from "./pages/Guide";
 import { Account, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
 import { LegalIndex, LegalPage } from "./pages/Legal";
 import { Library } from "./pages/Library";
+import { Notifications } from "./pages/Notifications";
 import { Releases } from "./pages/Releases";
 import { Manage } from "./pages/Manage";
 import { Download } from "./pages/Download";
@@ -47,6 +48,7 @@ const router = createBrowserRouter([
       { path: "/signup", element: <SignUp /> },
       { path: "/account", element: <Account /> },
       { path: "/legal", element: <LegalIndex /> },
+      { path: "/notifications", element: <Notifications /> },
       { path: "/legal/:kind", element: <LegalPage /> },
       { path: "/people", element: <People /> },
       { path: "/people/me", element: <PeopleEdit /> },

@@ -429,6 +429,7 @@ async fn signup(
         adult_confirmed: false,
         suspended: false,
         new_decisions: 0,
+        unread_notifications: 0,
     };
     Ok((
         StatusCode::CREATED,
@@ -475,6 +476,9 @@ struct Me {
     /// Moderation decisions about the user they haven't opened yet.
     #[sqlx(skip)]
     new_decisions: i64,
+    /// Unread notifications (notify.rs), for the bell.
+    #[sqlx(skip)]
+    unread_notifications: i64,
 }
 
 async fn me(
@@ -495,6 +499,7 @@ async fn me(
             .await?;
     me.personalize = crate::foryou::personalized(&state.db, user.id, policy).await?;
     me.new_decisions = crate::moderation::unseen(&state.db, user.id).await?;
+    me.unread_notifications = crate::notify::unread(&state.db, user.id).await?;
     Ok(Json(me))
 }
 

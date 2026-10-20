@@ -23,6 +23,8 @@ pub struct Config {
     pub desktop: DesktopConfig,
     pub media: MediaConfig,
     pub payments: PaymentsConfig,
+    /// Product emails (notify.rs). Unset: notifications stay in Slop, nothing is emailed.
+    pub email: Option<EmailConfig>,
     /// The built website (`web/dist`) to serve from the same origin. Unset: API only.
     pub web_dir: Option<std::path::PathBuf>,
     /// Header holding the client's IP, set by the load balancer (e.g. `x-forwarded-for`,
@@ -55,6 +57,23 @@ impl fmt::Debug for DesktopConfig {
             )
             .field("repo", &self.repo)
             .finish()
+    }
+}
+
+/// Sending product emails over SMTP (notify.rs).
+#[derive(Clone)]
+pub struct EmailConfig {
+    /// `smtps://user:password@host:465` or `smtp://user:password@host:587` (STARTTLS).
+    pub smtp_url: String,
+    /// The From address, e.g. `Slop <notifications@slop.example>`.
+    pub from: String,
+}
+
+impl std::fmt::Debug for EmailConfig {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.debug_struct("EmailConfig")
+            .field("from", &self.from)
+            .finish_non_exhaustive()
     }
 }
 
@@ -369,6 +388,12 @@ impl Config {
                 },
                 simulated: var_or("SLOP_PAYMENTS", "off") == "simulated"
                     || var_or("SLOP_SIMULATION", "false") == "true",
+            },
+            email: match (env::var("SLOP_SMTP_URL"), env::var("SLOP_EMAIL_FROM")) {
+                (Ok(smtp_url), Ok(from)) if !smtp_url.is_empty() && !from.is_empty() => {
+                    Some(EmailConfig { smtp_url, from })
+                }
+                _ => None,
             },
             web_dir: env::var("SLOP_WEB_DIR")
                 .ok()
