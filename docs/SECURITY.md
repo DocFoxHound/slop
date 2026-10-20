@@ -152,6 +152,7 @@ Once an update passes scanning, it's available to everyone at once. What replace
 - Every live release is **re-scanned when scanner signatures update** (at least weekly) and immediately on credible reports (DESIGN §16).
   - **Built 2026-10-20 (`rescan.rs`):** the release players get for each app is downloaded again, checked against its approved hash and scanned with the current signatures (refreshed every six hours) at least weekly, five files every 15 minutes; a malware or "doesn't match its source" report re-scans it at once. A new finding, or a file that changed on the maker's page, puts it in the admin queue and alerts the admins (ops.rs); a reviewer withdraws it or keeps it with a logged reason, and a kept finding isn't raised again. Nothing is taken down automatically.
 - Dependency advisories that hit a live release notify the publisher, with a deadline to fix based on severity.
+  - **Built 2026-10-20 (`dep_watch.rs`):** the packages in each release's lockfiles (from the source check, `source_scan.rs`) are checked against OSV once a day, for the release players get and for releases waiting for review. Only package names and versions go to OSV. New advisories on a live release notify the maker, with the fixed version where OSV has one; ones Slop Build's check already showed at build time aren't repeated. A malicious package (OSV's `MAL-` entries) raises an abuse signal for the admins. Not built yet: a deadline by severity (OSV's severity data is uneven across ecosystems), and lockfiles Slop doesn't read yet (pnpm, Gradle, Godot and Unity package lists).
 
 ## 6. Runtime protection on the player's device
 
@@ -316,7 +317,7 @@ Slop **doesn't store makers' source code or builds**, public or private (decided
   - existing builds can't be re-scanned, so they're **frozen** (no updates);
   - after a **14-day grace period**, they're removed from sharing (Private Slop) or delisted (public apps);
   - installed copies keep working unless they're revoked for a security reason (§5.5).
-- **What Slop keeps:** hashes, scan reports and signed manifests. That's enough to prove what was scanned and when (`LEGAL.md` §13), without keeping the software.
+- **What Slop keeps:** hashes, scan reports and signed manifests. That's enough to prove what was scanned and when (`LEGAL.md` §13), without keeping the software. From the source check (`source_scan.rs`) it keeps the package names and versions in the lockfiles, which licence the licence files are, and the file paths and line numbers of any notes, never the code itself.
 
 **Built 2026-10-20** (`crates/slop-api/src/frozen.rs`): a daily check of every app's repository through GitHub's API (or, on other hosts, Git's anonymous discovery request for public repositories), plus "Check now" for the owner. A public app whose repository turns private counts as lost access. Frozen apps take no releases or approvals; public ones are delisted after 14 days and listed again when access returns; Private Slop stops being shared after 14 days.
 

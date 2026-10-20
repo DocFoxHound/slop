@@ -373,9 +373,17 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
    also has a **Look up on VirusTotal** link for its hash, an optional second opinion: it's not
    required, and uploading a file there shares it with VirusTotal's subscribers, so don't for a
    private app.
-6. **Review:** a person at Slop reviews your app's first release. Approval signs it; a rejection
+6. **Source check:** Slop reads your repository at the release's commit once (GitHub
+   repositories) and notes three things for you and the reviewer: whether your licence file
+   matches the store page's licence; anything that looks like selling in the app (payment
+   libraries, in-app purchase APIs, checkout links, loot boxes, premium currencies), which Slop
+   doesn't allow; and the packages in your lockfiles. Notes don't stop a release by themselves, but
+   an update with a new one waits for a person. After that, Slop checks those packages against
+   [OSV](https://osv.dev) every day and tells you when a new security advisory affects your live
+   release.
+7. **Review:** a person at Slop reviews your app's first release. Approval signs it; a rejection
    comes with a reason.
-7. **In the store:** Slop staff put the app in the store.
+8. **In the store:** Slop staff put the app in the store.
 
 **Updates.** With **Approve updates automatically** on (the default), every later release that
 passes every check is approved and signed by Slop straight away, with no wait for a person.

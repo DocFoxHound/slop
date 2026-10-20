@@ -36,6 +36,42 @@ struct TestApp {
     signing_key: slop_manifest::ed25519_dalek::SigningKey,
 }
 
+/// A repository's files: MIT-licensed, two npm packages, a checkout link. octo/game has only the
+/// licence.
+const SCANNED_SOURCE: &[(&str, &str)] = &[
+    (
+        "LICENSE",
+        "MIT License\n\nPermission is hereby granted, free of charge, to any person obtaining a copy of this software. The above copyright notice and this permission notice shall be included in all copies.",
+    ),
+    (
+        "package-lock.json",
+        r#"{"lockfileVersion":3,"packages":{"":{},"node_modules/lodash":{"version":"4.17.20"},"node_modules/evil-pkg":{"version":"1.0.0"}}}"#,
+    ),
+    (
+        "src/shop.js",
+        "export const buy = () => location.assign('https://checkout.stripe.com/c/pay');",
+    ),
+];
+
+/// A repository archive as GitHub makes them.
+fn source_archive(files: &[(&str, &str)]) -> Vec<u8> {
+    let mut out = Vec::new();
+    {
+        let gz = flate2::write::GzEncoder::new(&mut out, flate2::Compression::fast());
+        let mut tar = tar::Builder::new(gz);
+        for &(path, text) in files {
+            let mut h = tar::Header::new_gnu();
+            h.set_size(text.len() as u64);
+            h.set_mode(0o644);
+            h.set_cksum();
+            tar.append_data(&mut h, format!("octo-scanned-abc/{path}"), text.as_bytes())
+                .unwrap();
+        }
+        tar.into_inner().unwrap().finish().unwrap();
+    }
+    out
+}
+
 /// The bytes the fake release page serves for every build.
 const BUILD_BYTES: &[u8] = b"pretend this is a zip of a game";
 
@@ -91,6 +127,35 @@ async fn fake_github() -> String {
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
+        // The source archive Slop's source check reads (source_scan.rs), and OSV (dep_watch.rs).
+        .route("/repos/octo/scanned/tarball/{sha}", get(|| async { source_archive(SCANNED_SOURCE) }))
+        .route("/repos/octo/game/tarball/{sha}", get(|| async { source_archive(&SCANNED_SOURCE[..1]) }))
+        .route(
+            "/v1/querybatch",
+            post(|axum::Json(body): axum::Json<Value>| async move {
+                let results: Vec<Value> = body["queries"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|q| match q["package"]["name"].as_str() {
+                        Some("lodash") => json!({ "vulns": [{ "id": "GHSA-lodash" }] }),
+                        Some("evil-pkg") => json!({ "vulns": [{ "id": "MAL-2026-1" }] }),
+                        _ => json!({}),
+                    })
+                    .collect();
+                axum::Json(json!({ "results": results }))
+            }),
+        )
+        .route(
+            "/v1/vulns/{id}",
+            get(|axum::extract::Path(id): axum::extract::Path<String>| async move {
+                axum::Json(json!({
+                    "id": id,
+                    "summary": format!("{id} summary"),
+                    "affected": [{ "package": { "name": "lodash" }, "ranges": [{ "events": [{ "introduced": "0" }, { "fixed": "4.17.21" }] }] }]
+                }))
+            }),
+        )
         // Repository checks (frozen.rs): a public repository, a private one, and Git's discovery
         // request for a repository on another host.
         .route("/repos/octo/open-tool", get(|| async { axum::Json(json!({ "private": false })) }))
@@ -453,6 +518,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             // Tests users have no GitHub accounts; repo_owner tests switch it on.
             require_repo_owner: false,
             repo_token_key: Some([9; 32]),
+            osv_api_base: github_base.parse().unwrap(),
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
@@ -1660,6 +1726,173 @@ async fn submit_and_fetch(app: &TestApp, cookie: &str, version: &str) -> String 
     assert_eq!(release["status"], "fetching");
     assert!(releases::fetch_next(&app.state).await.unwrap());
     release["id"].as_str().unwrap().to_string()
+}
+
+/// Slop's source check reads the repository at the release commit, and the daily dependency
+/// watch tells the maker about advisories published since (but not ones the build showed).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn source_checks_and_the_dependency_watch(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let app_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms)
+         values ($1, 'scanned', 'Scanned', 'A game', 'game', 'beta', $2, $3, 'MIT', '{windows}')",
+    )
+    .bind(app_id)
+    .bind(maker_id)
+    .bind(format!("{}octo/scanned", app.fake_base))
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let release_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified, signed_manifest, source_checks)
+         values ($1, $2, '1.0.0', repeat('c', 40), 'approved', $3, now(), true, '{}', $4)",
+    )
+    .bind(release_id)
+    .bind(app_id)
+    .bind(maker_id)
+    .bind(json!({ "secrets": [], "vulnerabilities": [{ "id": "GHSA-lodash", "package": "lodash" }] }))
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        slop_api::source_scan::run_once(&app.state).await.unwrap(),
+        1
+    );
+    assert_eq!(
+        slop_api::source_scan::run_once(&app.state).await.unwrap(),
+        0,
+        "checked once"
+    );
+    let scan: Value = sqlx::query_scalar("select repo_scan from releases where id = $1")
+        .bind(release_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(scan["status"], "checked", "{scan}");
+    assert_eq!(scan["licence"]["files"][0]["spdx"], "MIT");
+    assert_eq!(scan["licence"]["problems"], json!([]));
+    assert_eq!(scan["packages"], 2);
+    assert_eq!(scan["monetization"][0]["rule"], "checkout_link");
+    assert_eq!(scan["monetization"][0]["examples"][0], "src/shop.js:1");
+
+    assert_eq!(slop_api::dep_watch::run_once(&app.state).await.unwrap(), 1);
+    assert_eq!(
+        slop_api::dep_watch::run_once(&app.state).await.unwrap(),
+        0,
+        "once a day"
+    );
+    let notices: Vec<(String, String)> = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 and title like 'New security advisories%'",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notices.len(), 1);
+    assert!(
+        notices[0].1.contains("evil-pkg 1.0.0 (MAL-2026-1"),
+        "{}",
+        notices[0].1
+    );
+    assert!(
+        !notices[0].1.contains("lodash"),
+        "the build already showed that one"
+    );
+    let signal: String = sqlx::query_scalar("select kind from abuse_signals where subject_id = $1")
+        .bind(app_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(signal, "malicious_dependency");
+
+    // The maker sees both on the Releases page.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/scanned/releases").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["repo_scan"]["status"], "checked");
+    let advisories = mine[0]["advisories"].as_array().unwrap();
+    assert_eq!(advisories.len(), 2);
+    assert_eq!(advisories[0]["vuln_id"], "MAL-2026-1", "malicious first");
+    let lodash = advisories
+        .iter()
+        .find(|a| a["package"] == "lodash")
+        .unwrap();
+    assert_eq!(lodash["fixed"], "4.17.21");
+    assert_eq!(lodash["known_at_build"], true);
+
+    // An update whose source check finds something the approved release didn't have waits for
+    // a person instead of being approved automatically.
+    let update = Uuid::now_v7();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, repo_scan)
+         values ($1, $2, '1.1.0', repeat('d', 40), 'awaiting_review', $3, $4)",
+    )
+    .bind(update)
+    .bind(app_id)
+    .bind(maker_id)
+    .bind(&scan)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        slop_api::source_scan::new_concerns(&app.db, update)
+            .await
+            .unwrap(),
+        None,
+        "same as before"
+    );
+    let mut with_loot = scan.clone();
+    with_loot["monetization"].as_array_mut().unwrap().push(
+        json!({ "rule": "loot_box", "label": "Loot boxes or gacha", "count": 1, "examples": [] }),
+    );
+    sqlx::query("update releases set repo_scan = $2 where id = $1")
+        .bind(update)
+        .bind(&with_loot)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let why = slop_api::source_scan::new_concerns(&app.db, update)
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(why.contains("loot boxes"), "{why}");
+    sqlx::query("update releases set repo_scan = '{\"status\": \"failed\"}' where id = $1")
+        .bind(update)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert!(
+        slop_api::source_scan::new_concerns(&app.db, update)
+            .await
+            .unwrap()
+            .is_some()
+    );
+
+    // Repositories Slop can't read are recorded as not checked.
+    sqlx::query("update apps set repo_url = 'https://gitlab.com/octo/scanned' where id = $1")
+        .bind(app_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update releases set repo_scanned_at = null where id = $1")
+        .bind(release_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::source_scan::run_once(&app.state).await.unwrap();
+    let status: String =
+        sqlx::query_scalar("select repo_scan ->> 'status' from releases where id = $1")
+            .bind(release_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "not_checked");
 }
 
 /// A file over GitHub's 2 GiB limit, released in numbered parts: Slop fetches and hashes each,

@@ -101,6 +101,11 @@ pub async fn try_auto_approve(state: &AppState, release_id: Uuid) -> anyhow::Res
         .fetch_one(&state.db)
         .await?;
     let why_not = match auto_approval(&state.db, app_id).await? {
+        Ok(())
+            if let Some(why) = crate::source_scan::new_concerns(&state.db, release_id).await? =>
+        {
+            format!("Waiting for a person: {why}")
+        }
         Ok(()) => {
             let cfg = &state.config;
             match admin::approve(

@@ -214,6 +214,8 @@ pub struct ReleaseConfig {
     /// Encrypts makers' read-only tokens for private repositories outside GitHub
     /// (repo_tokens.rs): base64 of 32 random bytes in `SLOP_REPO_TOKEN_KEY`. Unset: no tokens.
     pub repo_token_key: Option<[u8; 32]>,
+    /// OSV's API, for the dependency watch (dep_watch.rs).
+    pub osv_api_base: Url,
 }
 
 /// Slop's GitHub App: makers install it on a repository so GitHub sends release webhooks and
@@ -496,6 +498,9 @@ impl Config {
                 }
                 _ => None,
             },
+            osv_api_base: var_or("OSV_API_BASE", "https://api.osv.dev/")
+                .parse()
+                .context("OSV_API_BASE")?,
         };
 
         Ok(Self {
