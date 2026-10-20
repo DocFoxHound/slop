@@ -105,7 +105,7 @@ simulates payments instead.
    `https://<site>/v1/stripe/webhook`, events `checkout.session.completed`,
    `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.created`,
    `account.updated`, and for server donations `invoice.paid` and `customer.subscription.deleted`.
-3. Add to `~/.config/slop/slop-api.env` and restart:
+3. Add to `~/.config/slop/slop.env` and restart:
    ```
    STRIPE_SECRET_KEY=sk_test_…   # sk_live_… only after the lawyer's review (LEGAL §4)
    STRIPE_WEBHOOK_SECRET=whsec_…
@@ -117,7 +117,7 @@ simulates payments instead.
 ## Email (notifications)
 
 Until SMTP is set, notifications only show under the 🔔 in Slop. To email them too (each user
-chooses which kinds on their account page), add to `~/.config/slop/slop-api.env` and restart:
+chooses which kinds on their account page), add to `~/.config/slop/slop.env` and restart:
 ```
 SLOP_SMTP_URL=smtps://user:password@smtp.example.com:465
 SLOP_EMAIL_FROM=Slop <notifications@your-domain>
@@ -143,7 +143,7 @@ codes (repo_owner.rs).
 Phones and browsers get notifications through web push once the server has a VAPID key:
 ```
 slop-api keys generate-vapid          # prints SLOP_VAPID_PRIVATE_KEY=…
-SLOP_VAPID_PRIVATE_KEY=…              # in ~/.config/slop/slop-api.env (and the sandbox's env)
+SLOP_VAPID_PRIVATE_KEY=…              # in ~/.config/slop/slop.env (and the sandbox's env)
 SLOP_VAPID_SUBJECT=https://your-domain   # or mailto:; push services contact it about abuse
 ```
 Changing the key means everyone switches phone notifications on again.
