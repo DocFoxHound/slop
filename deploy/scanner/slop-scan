@@ -6,7 +6,9 @@
 set -eu
 path=$1
 name=${2:-$(basename "$path")}
-case "$name" in */*|..*|"") name=file ;; esac
+# Only the extension matters to the scanner; keep characters podman's -v syntax can't misread.
+name=$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_')
+case "$name" in .*|"") name=file$name ;; esac
 exec podman run --rm --user 0 --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
   --pids-limit=256 --memory=4g --tmpfs /tmp:rw,size=6g \
   -v slop-scan-db:/db:ro -v "$path":"/scan/$name":ro,z \
