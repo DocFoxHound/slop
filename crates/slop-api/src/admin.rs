@@ -240,6 +240,14 @@ pub async fn approve(
         json!({ "app": release.slug, "version": release.version, "key_id": signed.key_id }),
     )
     .await?;
+    crate::releases::tell_maker(
+        &mut tx,
+        release_id,
+        crate::releases::ReleaseEvent::Approved {
+            automatically: reviewer == crate::updates::AUTO_REVIEWER,
+        },
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -317,6 +325,12 @@ pub async fn reject(
         json!({ "reason": reason }),
     )
     .await?;
+    crate::releases::tell_maker(
+        &mut tx,
+        release_id,
+        crate::releases::ReleaseEvent::Rejected { reason },
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -355,6 +369,12 @@ pub async fn revoke(
         "release.revoke",
         &release_id.to_string(),
         json!({ "reason": reason }),
+    )
+    .await?;
+    crate::releases::tell_maker(
+        &mut tx,
+        release_id,
+        crate::releases::ReleaseEvent::Withdrawn { reason },
     )
     .await?;
     tx.commit().await?;

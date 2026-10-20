@@ -245,6 +245,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     };
     let mut router = Router::new()
         .route("/healthz", get(health))
+        .route("/.well-known/security.txt", get(security_txt))
         .nest("/v1", v1.fallback(not_found));
     // Optionally serve the built website (web/dist) from the same origin, so one process runs the
     // whole site. Otherwise everything outside /v1 is a JSON 404.
@@ -268,6 +269,15 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             "default-src 'none'; frame-ancestors 'none'",
         ))
         .layer(header_layer(header::CACHE_CONTROL, "no-store"))
+        // Nothing on Slop needs the camera, microphone, location, USB or payment APIs.
+        .layer(header_layer(
+            HeaderName::from_static("permissions-policy"),
+            "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), interest-cohort=()",
+        ))
+        .layer(header_layer(
+            HeaderName::from_static("cross-origin-opener-policy"),
+            "same-origin",
+        ))
         .layer(TraceLayer::new_for_http());
     if state.config.secure_cookies() {
         router = router.layer(header_layer(
@@ -280,6 +290,29 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
 
 fn header_layer(name: HeaderName, value: &'static str) -> SetResponseHeaderLayer<HeaderValue> {
     SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value))
+}
+
+/// How to report a security problem (RFC 9116), once `SLOP_SECURITY_CONTACT` names a contact.
+async fn security_txt(
+    axum::extract::State(state): axum::extract::State<AppState>,
+) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Some(contact) = state.config.security_contact.as_deref() else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    let expires = (time::OffsetDateTime::now_utc() + time::Duration::days(180))
+        .replace_nanosecond(0)
+        .unwrap_or_else(|_| time::OffsetDateTime::now_utc())
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap_or_default();
+    let site = state.config.public_url.as_str().trim_end_matches('/');
+    (
+        [(header::CONTENT_TYPE, "text/plain; charset=utf-8")],
+        format!(
+            "Contact: {contact}\nExpires: {expires}\nPreferred-Languages: en\nCanonical: {site}/.well-known/security.txt\n"
+        ),
+    )
+        .into_response()
 }
 
 async fn health(axum::extract::State(state): axum::extract::State<AppState>) -> StatusCode {
