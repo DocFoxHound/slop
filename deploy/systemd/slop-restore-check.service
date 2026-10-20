@@ -1,0 +1,9 @@
+[Unit]
+Description=Check that Slop's newest backup restores
+After=slop-pg.service slop-backup.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/slop-deploy/bin/slop-restore-check
+TimeoutStartSec=1h
+Nice=15

@@ -459,6 +459,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         web_dir: None,
         client_ip_header: Some("x-test-client-ip".into()),
         simulation: false,
+        ops: Default::default(),
     };
     let mut config = config;
     adjust(&mut config);
@@ -10609,4 +10610,86 @@ async fn private_repositories_outside_github_use_a_read_only_token(db: PgPool) {
     )
     .await;
     assert_eq!(link["url"], format!("{repo}/releases/download/v1/game.zip"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn admins_are_alerted_once_and_alerts_clear(db: PgPool) {
+    let backups = std::env::temp_dir().join(format!("slop-ops-test-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&backups).unwrap();
+    let dir = backups.clone();
+    let app = test_app_with(db, move |c| c.ops.backup_dir = Some(dir)).await;
+    let (admin_id, admin) = make_admin(&app, "Admin").await;
+    let (_, player) = app.user("Player", "US").await;
+    let ops_notices = || async {
+        sqlx::query_scalar::<_, i64>(
+            "select coalesce(sum(count), 0)::int8 from notifications where user_id = $1 and category = 'ops'",
+        )
+        .bind(admin_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+
+    // No backups yet: told once, not again five minutes later.
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let first = ops_notices().await;
+    assert!(first >= 2, "missing backup and restore check");
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    assert_eq!(ops_notices().await, first);
+
+    // An event from the audit log: a withdrawn release.
+    sqlx::query(
+        "insert into audit_log (actor, action, subject) values ('Rev', 'release.revoke', 'game 1.0')",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    assert_eq!(ops_notices().await, first + 1);
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/admin/ops").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert!(
+        listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["key"] == "backup-missing")
+    );
+    let res = app
+        .send(req(Method::GET, "/v1/admin/ops").cookie(&player))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Backups appear: those alerts clear.
+    let now = time::OffsetDateTime::now_utc()
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    std::fs::write(backups.join("last-success"), &now).unwrap();
+    std::fs::write(backups.join("last-restore-check"), &now).unwrap();
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/admin/ops").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert!(
+        !listed
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["key"].as_str().unwrap().starts_with("backup")),
+        "{listed}"
+    );
+    let player_ops: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where category = 'ops' and user_id <> $1",
+    )
+    .bind(admin_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(player_ops, 0, "only admins get alerts");
+    std::fs::remove_dir_all(&backups).unwrap();
 }

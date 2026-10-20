@@ -44,6 +44,17 @@ pub struct Config {
     /// The simulation sandbox (sim.rs): offers "view as a simulated user". `serve` refuses it
     /// unless the database's name ends in `_sim`.
     pub simulation: bool,
+    /// What the admins' alerts watch (ops.rs).
+    pub ops: OpsConfig,
+}
+
+/// Folders the admins' alerts read (ops.rs). Unset: those checks are off.
+#[derive(Clone, Debug, Default)]
+pub struct OpsConfig {
+    /// Where slop-backup writes (its `last-success` and `last-restore-check`).
+    pub backup_dir: Option<std::path::PathBuf>,
+    /// The deploy folder (`builds/failed-<sha>` marks commits whose tests failed).
+    pub deploy_dir: Option<std::path::PathBuf>,
 }
 
 /// Updates for the Slop desktop app itself (desktop_updates.rs).
@@ -576,6 +587,16 @@ impl Config {
                 .filter(|s| !s.is_empty())
                 .map(|s| s.to_ascii_lowercase()),
             simulation: var_or("SLOP_SIMULATION", "false") == "true",
+            ops: OpsConfig {
+                backup_dir: env::var("SLOP_OPS_BACKUP_DIR")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(Into::into),
+                deploy_dir: env::var("SLOP_OPS_DEPLOY_DIR")
+                    .ok()
+                    .filter(|v| !v.is_empty())
+                    .map(Into::into),
+            },
         })
     }
 
