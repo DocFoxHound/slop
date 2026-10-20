@@ -140,6 +140,7 @@ function QueueTab() {
 
   return (
     <>
+      <OpsAlerts />
       <ServerChecks checks={q.checks} />
       {error && (
         <p className="form-error" role="alert">
@@ -591,6 +592,24 @@ function FileRow({
         )}
       </dd>
     </>
+  );
+}
+
+/** Alerts from ops.rs; each admin also gets them under the 🔔 and by push. */
+function OpsAlerts() {
+  const alerts = useLoad(() => api.admin.ops(), []);
+  if (!alerts.data?.length) return null;
+  return (
+    <div className="notice" role="status">
+      <b>Needs attention</b>
+      <ul className="small">
+        {alerts.data.map((a) => (
+          <li key={a.key}>
+            <b>{a.title}</b> <span className="muted">since {formatDate(a.first_seen)}</span>. {a.detail}
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }
 

@@ -174,81 +174,80 @@ pub async fn read_proof(
     let enc = |s: &str| percent_encoding::utf8_percent_encode(s, PATH_PART).to_string();
     let base = origin(&repo);
     // (file names at the top, URL of a file by name)
-    let (names, file_url): (Vec<String>, FileUrl) =
-        match given.kind {
-            Kind::Gitlab => {
-                let project = format!("{base}/api/v4/projects/{}", enc(&path));
-                let info = json(get(project.clone()).await?);
-                let branch = info["default_branch"]
-                    .as_str()
-                    .unwrap_or("main")
-                    .to_string();
-                let tree = json(
-                    get(format!(
-                        "{project}/repository/tree?per_page=100&ref={}",
+    let (names, file_url): (Vec<String>, FileUrl) = match given.kind {
+        Kind::Gitlab => {
+            let project = format!("{base}/api/v4/projects/{}", enc(&path));
+            let info = json(get(project.clone()).await?);
+            let branch = info["default_branch"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string();
+            let tree = json(
+                get(format!(
+                    "{project}/repository/tree?per_page=100&ref={}",
+                    enc(&branch)
+                ))
+                .await?,
+            );
+            let names = tree
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|e| e["type"] == "blob")
+                .filter_map(|e| e["name"].as_str().map(String::from))
+                .collect();
+            (
+                names,
+                Box::new(move |n: &str| {
+                    format!(
+                        "{project}/repository/files/{}/raw?ref={}",
+                        enc(n),
                         enc(&branch)
-                    ))
-                    .await?,
-                );
-                let names = tree
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|e| e["type"] == "blob")
-                    .filter_map(|e| e["name"].as_str().map(String::from))
-                    .collect();
-                (
-                    names,
-                    Box::new(move |n: &str| {
-                        format!(
-                            "{project}/repository/files/{}/raw?ref={}",
-                            enc(n),
-                            enc(&branch)
-                        )
-                    }),
-                )
-            }
-            Kind::Bitbucket => {
-                let api = if repo.host_str() == Some("bitbucket.org") {
-                    "https://api.bitbucket.org".to_string()
-                } else {
-                    format!("{base}/bitbucket-api")
-                };
-                let root = format!("{api}/2.0/repositories/{path}");
-                let info = json(get(root.clone()).await?);
-                let branch = info["mainbranch"]["name"]
-                    .as_str()
-                    .unwrap_or("main")
-                    .to_string();
-                let list = json(get(format!("{root}/src/{}/?pagelen=100", enc(&branch))).await?);
-                let names = list["values"]
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|e| e["type"] == "commit_file")
-                    .filter_map(|e| e["path"].as_str().map(String::from))
-                    .collect();
-                (
-                    names,
-                    Box::new(move |n: &str| format!("{root}/src/{}/{}", enc(&branch), enc(n))),
-                )
-            }
-            Kind::Gitea => {
-                let root = format!("{base}/api/v1/repos/{path}");
-                let list = json(get(format!("{root}/contents")).await?);
-                let names = list
-                    .as_array()
-                    .into_iter()
-                    .flatten()
-                    .filter(|e| e["type"] == "file")
-                    .filter_map(|e| e["name"].as_str().map(String::from))
-                    .collect();
-                (
-                    names,
-                    Box::new(move |n: &str| format!("{root}/raw/{}", enc(n))),
-                )
-            }
-        };
+                    )
+                }),
+            )
+        }
+        Kind::Bitbucket => {
+            let api = if repo.host_str() == Some("bitbucket.org") {
+                "https://api.bitbucket.org".to_string()
+            } else {
+                format!("{base}/bitbucket-api")
+            };
+            let root = format!("{api}/2.0/repositories/{path}");
+            let info = json(get(root.clone()).await?);
+            let branch = info["mainbranch"]["name"]
+                .as_str()
+                .unwrap_or("main")
+                .to_string();
+            let list = json(get(format!("{root}/src/{}/?pagelen=100", enc(&branch))).await?);
+            let names = list["values"]
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|e| e["type"] == "commit_file")
+                .filter_map(|e| e["path"].as_str().map(String::from))
+                .collect();
+            (
+                names,
+                Box::new(move |n: &str| format!("{root}/src/{}/{}", enc(&branch), enc(n))),
+            )
+        }
+        Kind::Gitea => {
+            let root = format!("{base}/api/v1/repos/{path}");
+            let list = json(get(format!("{root}/contents")).await?);
+            let names = list
+                .as_array()
+                .into_iter()
+                .flatten()
+                .filter(|e| e["type"] == "file")
+                .filter_map(|e| e["name"].as_str().map(String::from))
+                .collect();
+            (
+                names,
+                Box::new(move |n: &str| format!("{root}/raw/{}", enc(n))),
+            )
+        }
+    };
     let mut text = String::new();
     let mut any = false;
     for name in names.iter().filter(|n| crate::repo_owner::is_proof_name(n)) {

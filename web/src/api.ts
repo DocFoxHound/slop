@@ -1503,6 +1503,8 @@ export const api = {
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
   admin: {
     queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
+    /** What needs an admin right now (ops.rs): stale backups, failed deploys, overdue reports… */
+    ops: () => request<Array<{ key: string; title: string; detail: string; link: string; first_seen: string }>>("GET", "/v1/admin/ops"),
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
       request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),

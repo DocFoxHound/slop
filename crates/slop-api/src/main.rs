@@ -450,6 +450,7 @@ async fn serve() -> anyhow::Result<()> {
     tokio::spawn(slop_api::cleanup::run(state.clone()));
     tokio::spawn(slop_api::pulse::run_sampler(state.clone()));
     tokio::spawn(slop_api::notify::run_email(state.clone()));
+    tokio::spawn(slop_api::ops::run(state.clone()));
     tokio::spawn(slop_api::push::run(state.clone()));
     tokio::spawn(slop_api::donations::run(state.clone()));
     tokio::spawn(slop_api::teams::run(state.clone()));

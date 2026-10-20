@@ -1,0 +1,9 @@
+[Unit]
+Description=Back up Slop's database, settings and keys
+After=slop-pg.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/slop-deploy/bin/slop-backup
+TimeoutStartSec=1h
+Nice=10

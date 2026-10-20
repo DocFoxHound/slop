@@ -10,6 +10,8 @@ itself from GitHub.
 | `slop-pg.service` | Postgres in podman (`~/.config/containers/systemd/slop-pg.container`); data in the `slop-pg-data` volume. Dev and the deployment share the server; the deployment uses its own `slop_prod` database and role |
 | `slop-api.service` | The API, the website (`SLOP_WEB_DIR`) and the release fetcher, on `127.0.0.1:8090` |
 | `slop-sim.service`, `slop-sim-pulse.service` | The simulation sandbox (`docs/SIMULATION.md`): the same build on the `slop_sim` database at `sim.188-68-41-241.sslip.io` (`127.0.0.1:8092`), and its simulated live players. Settings in `~/.config/slop/slop-sim.env`. Restarted with each deploy |
+| `slop-backup.timer` → `slop-backup.service` | Every night at 03:30 UTC, `slop-backup`: the `slop_prod` database, roles and `~/.config/slop` into `~/slop-backups` (below) |
+| `slop-restore-check.timer` → `slop-restore-check.service` | Every Sunday, restores the newest backup into a scratch database and compares it with the live one |
 | `slop-scan-update.timer` → `slop-scan-update.service` | Every six hours, fresh ClamAV signatures and YARA-Forge rules for the release scanner (below), in the `slop-scan-db` volume |
 | `slop-deploy.timer` → `slop-deploy.service` | Every two minutes, `update.sh`: if `main` has a new commit, run the tests, build, switch over, restart, and roll back if it isn't healthy. A failing commit is skipped (marked in `~/slop-deploy/builds/failed-<sha>`) until the next push |
 
@@ -172,6 +174,40 @@ Rebuild the image when `deploy/scanner` changes. Windows builds also need Micros
 check, which arrives from Slop Build or Slop Check on GitHub's Windows runners
 (`/v1/slop-build/checks`); with the scanner on, a Windows file can't be approved without a clean
 one unless a reviewer clears it.
+
+## Backups
+
+`deploy/backup/slop-backup.sh` (installed as `~/slop-deploy/bin/slop-backup`) dumps `slop_prod`
+with `pg_dump --format=custom`, checks the dump lists, and copies the roles and `~/.config/slop`
+(the env files, so the signing keys) beside it. 14 daily and 8 weekly copies stay in
+`~/slop-backups` (mode 700). `slop-restore-check` restores the newest into `slop_restore_check`
+every Sunday, compares row counts with the live database, and drops it.
+
+To restore for real:
+
+```sh
+podman exec slop-pg createdb -U slop slop_restored
+podman exec -i slop-pg pg_restore -U slop --no-owner --role=slop_prod -d slop_restored < ~/slop-backups/daily/slop_prod-<time>.dump
+# check it, stop slop-api, rename the databases, start slop-api
+```
+
+**These copies are on the same disk.** They cover mistakes, not losing the machine. Set
+`SLOP_BACKUP_OFFSITE` in the backup service's environment to a command that copies its
+arguments somewhere else, encrypted (for example `rclone copy --` to an rclone crypt remote on
+Backblaze B2 or Cloudflare R2, whose free tiers fit).
+
+## Alerts
+
+The API checks every five minutes (`ops.rs`) and tells every admin under the 🔔, by phone push,
+and by email once SMTP is set: a missing or stale backup or restore check
+(`SLOP_OPS_BACKUP_DIR=/home/brian/slop-backups`), a commit whose tests failed
+(`SLOP_OPS_DEPLOY_DIR=/home/brian/slop-deploy`), a nearly full disk, the scanner failing,
+urgent and serious reports as they arrive and any report past its deadline, releases waiting
+over a day, revocations, admin changes, and payments not matching Stripe. The admin queue lists
+what's still open.
+
+If the whole server is down, nothing on it can say so: point a free outside uptime check
+(UptimeRobot, Healthchecks.io, Better Stack) at `https://<site>/healthz`.
 
 ## Private repositories outside GitHub
 
