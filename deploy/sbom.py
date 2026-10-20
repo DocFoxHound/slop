@@ -1,0 +1,95 @@
+#!/usr/bin/env python3
+"""Writes a CycloneDX 1.5 software bill of materials for one Slop build (SECURITY §13).
+
+Usage: sbom.py <repo> <commit> > sbom.json
+
+It lists every Rust crate in Cargo.lock (the API, the desktop app and the libraries they share)
+and every package the website ships from web/package-lock.json (development-only packages left
+out), with their versions, package URLs and checksums. Standard library only, so it runs in the
+deploy script without installing anything.
+"""
+
+import json
+import os
+import sys
+import tomllib
+import uuid
+from datetime import datetime, timezone
+
+
+def rust(repo):
+    with open(os.path.join(repo, "Cargo.lock"), "rb") as f:
+        lock = tomllib.load(f)
+    for p in lock.get("package", []):
+        c = {
+            "type": "library",
+            "name": p["name"],
+            "version": p["version"],
+            "purl": f"pkg:cargo/{p['name']}@{p['version']}",
+            "bom-ref": f"cargo:{p['name']}@{p['version']}",
+        }
+        if p.get("checksum"):
+            c["hashes"] = [{"alg": "SHA-256", "content": p["checksum"]}]
+        if "source" not in p:
+            # One of Slop's own crates.
+            c["type"] = "application"
+            del c["purl"]
+        yield c
+
+
+def web(repo):
+    path = os.path.join(repo, "web", "package-lock.json")
+    if not os.path.exists(path):
+        return
+    with open(path) as f:
+        lock = json.load(f)
+    for key, p in lock.get("packages", {}).items():
+        if not key or p.get("dev") or "version" not in p:
+            continue
+        name = p.get("name") or key.split("node_modules/")[-1]
+        purl_name = name.replace("@", "%40", 1) if name.startswith("@") else name
+        c = {
+            "type": "library",
+            "name": name,
+            "version": p["version"],
+            "purl": f"pkg:npm/{purl_name}@{p['version']}",
+            "bom-ref": f"npm:{name}@{p['version']}",
+        }
+        integrity = p.get("integrity", "")
+        if integrity.startswith("sha512-"):
+            import base64
+            c["hashes"] = [{"alg": "SHA-512", "content": base64.b64decode(integrity[7:]).hex()}]
+        yield c
+
+
+def main():
+    repo, commit = sys.argv[1], sys.argv[2]
+    components = list(rust(repo)) + list(web(repo))
+    seen = set()
+    unique = []
+    for c in components:
+        if c["bom-ref"] not in seen:
+            seen.add(c["bom-ref"])
+            unique.append(c)
+    bom = {
+        "bomFormat": "CycloneDX",
+        "specVersion": "1.5",
+        "serialNumber": f"urn:uuid:{uuid.uuid4()}",
+        "version": 1,
+        "metadata": {
+            "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "component": {
+                "type": "application",
+                "name": "slop",
+                "version": commit,
+                "bom-ref": "slop",
+            },
+        },
+        "components": unique,
+    }
+    json.dump(bom, sys.stdout, indent=1)
+    sys.stdout.write("\n")
+
+
+if __name__ == "__main__":
+    main()

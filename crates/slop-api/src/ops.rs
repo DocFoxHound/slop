@@ -4,7 +4,8 @@
 //!
 //! What it watches:
 //! - backups (`SLOP_OPS_BACKUP_DIR`): the nightly backup and the weekly restore check;
-//! - deploys (`SLOP_OPS_DEPLOY_DIR`): a commit whose tests failed;
+//! - deploys (`SLOP_OPS_DEPLOY_DIR`): a commit whose tests failed, and known-vulnerable
+//!   dependencies in the running build (OSV, checked on every deploy);
 //! - free disk space;
 //! - the scanner failing on a release;
 //! - urgent or serious reports as they arrive, and any report past its deadline;
@@ -127,6 +128,51 @@ fn deploy_alerts(dir: &Path) -> Vec<Alert> {
         .collect()
 }
 
+/// Known-vulnerable dependencies in the running build (update.sh writes `audit.json`).
+pub fn audit_alerts(dir: &Path) -> Vec<Alert> {
+    let Ok(text) = std::fs::read_to_string(dir.join("audit.json")) else {
+        return Vec::new();
+    };
+    let Ok(audit) = serde_json::from_str::<serde_json::Value>(&text) else {
+        return Vec::new();
+    };
+    let vulns = audit["vulnerabilities"]
+        .as_array()
+        .cloned()
+        .unwrap_or_default();
+    if vulns.is_empty() {
+        return Vec::new();
+    }
+    let mut names: Vec<String> = vulns
+        .iter()
+        .filter_map(|v| {
+            Some(format!(
+                "{} {} ({})",
+                v["package"].as_str()?,
+                v["version"].as_str()?,
+                v["id"].as_str()?
+            ))
+        })
+        .collect();
+    names.sort();
+    names.dedup();
+    let shown = names.iter().take(5).cloned().collect::<Vec<_>>().join(", ");
+    vec![alert(
+        "dependencies-vulnerable",
+        format!(
+            "{} known-vulnerable dependenc{}",
+            names.len(),
+            if names.len() == 1 { "y" } else { "ies" }
+        ),
+        format!(
+            "{shown}{}. Update them (cargo update, npm update) and deploy. Full list: ~/slop-deploy/audit.json.",
+            if names.len() > 5 { " and more" } else { "" }
+        ),
+        "/admin",
+        false,
+    )]
+}
+
 /// Free space where backups and downloads being scanned are written.
 fn disk_alerts(paths: &[&Path]) -> Vec<Alert> {
     let mut out = Vec::new();
@@ -210,6 +256,7 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
     }
     if let Some(dir) = &ops.deploy_dir {
         out.extend(deploy_alerts(dir));
+        out.extend(audit_alerts(dir));
     }
     let tmp = std::env::temp_dir();
     let mut disks: Vec<&Path> = vec![tmp.as_path()];
@@ -463,6 +510,24 @@ async fn current(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn known_vulnerable_dependencies_alert() {
+        let dir = std::env::temp_dir().join(format!("slop-audit-{}", Uuid::now_v7()));
+        std::fs::create_dir_all(&dir).unwrap();
+        assert!(audit_alerts(&dir).is_empty(), "no audit yet");
+        std::fs::write(dir.join("audit.json"), r#"{"vulnerabilities": []}"#).unwrap();
+        assert!(audit_alerts(&dir).is_empty());
+        std::fs::write(
+            dir.join("audit.json"),
+            r#"{"vulnerabilities": [{"package": "zip", "version": "4.6.1", "id": "RUSTSEC-1"}, {"package": "zip", "version": "4.6.1", "id": "RUSTSEC-1"}]}"#,
+        )
+        .unwrap();
+        let a = audit_alerts(&dir);
+        assert_eq!(a[0].title, "1 known-vulnerable dependency");
+        assert!(a[0].detail.starts_with("zip 4.6.1 (RUSTSEC-1)"));
+        std::fs::remove_dir_all(&dir).unwrap();
+    }
 
     #[test]
     fn backups_alert_when_stale_or_missing() {

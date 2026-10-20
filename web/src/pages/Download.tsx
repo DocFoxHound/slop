@@ -79,6 +79,10 @@ export function Download() {
         No Mac or phone version yet. You can still browse the store and read every app's source on the{" "}
         <Link to="/">website</Link>.
       </p>
+      <p className="muted small">
+        What's inside: the <a href="/sbom.json">software bill of materials</a> (CycloneDX) lists every library in this build of
+        Slop, with its version.
+      </p>
     </div>
   );
 }
