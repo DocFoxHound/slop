@@ -8,6 +8,7 @@ pub mod catalog;
 pub mod cleanup;
 pub mod config;
 pub mod desktop_updates;
+pub mod donations;
 pub mod error;
 pub mod foryou;
 pub mod github_app;
@@ -26,6 +27,7 @@ pub mod releases;
 pub mod review;
 pub mod scan;
 pub mod sim;
+pub mod sim_donations;
 pub mod sim_moderation;
 pub mod sim_people;
 pub mod slop_build;
@@ -131,6 +133,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(moderation::routes())
         .merge(account::routes())
         .merge(notify::routes())
+        .merge(donations::routes())
         .merge(interested::routes())
         // Everything except the desktop build upload and webhooks: small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))

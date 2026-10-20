@@ -1,0 +1,2036 @@
+//! Donations and monthly server donations (DESIGN §12; PAYMENTS §4–6, §8; LEGAL §3;
+//! LEGAL-GUIDANCE PAY-1 to PAY-17).
+//!
+//! - **Straight to the maker.** Every donation is a direct charge on the maker's own Stripe
+//!   account with `application_fee_amount` = Slop's 5% of the donation (PAY-1). Slop never
+//!   holds the money; refunds are the maker's, through Stripe, as the maker (PAY-3).
+//! - **The donor pays the card fees**, as one all-in total shown first (PAY-10): the addition
+//!   comes from one published rate per currency, the same for every payment method (PAY-11).
+//!   Where a country's `donor_covers_fees` is off, the donor's amount is the total and
+//!   processing comes out of what the maker receives (PAY-12).
+//! - **Nothing in return.** Donors are never shown publicly; their name and a message reach the
+//!   maker only if they choose (PAY-6). Nothing that apps can call says who donated (PAY-5, see
+//!   the test at the bottom), and no page looks different to a donor.
+//! - **Server donations** repeat monthly (Stripe Billing on the maker's account) for apps that
+//!   declare servers. The donor confirms the exact terms, which are saved (PAY-14); cancelling
+//!   is two clicks and immediate, with a confirmation email (PAY-15); reminders go before the
+//!   first renewal and yearly (PAY-16); shutting the servers down cancels them all (PAY-17).
+//!
+//! Without Stripe keys, donations are simulated where People payments are (sandbox, development).
+
+use axum::{
+    Json, Router,
+    extract::{Path, Query, State},
+    http::{HeaderMap, StatusCode},
+    routing::{get, post},
+};
+use serde::{Deserialize, Serialize};
+use serde_json::{Value, json};
+use sqlx::{PgConnection, PgPool};
+use time::{Duration, OffsetDateTime};
+use uuid::Uuid;
+
+use crate::{
+    AppState, admin,
+    auth::session::{CurrentUser, MaybeUser},
+    catalog,
+    config::StripeConfig,
+    error::{ApiError, ApiResult},
+    notify::{self, Notice},
+    people::stripe::{self, Mode, call, fee},
+    policy::ViewerPolicy,
+};
+
+pub const MIN_MINOR: i64 = 100;
+pub const MAX_MINOR: i64 = 50_000;
+/// Donations one account may start in an hour (card testing, PAYMENTS §9).
+const STARTS_PER_HOUR: i64 = 10;
+const MONTH: Duration = Duration::days(30);
+
+pub fn routes() -> Router<AppState> {
+    Router::new()
+        .route("/apps/{slug}/donate", get(info).post(start))
+        .route("/apps/{slug}/donate/quote", get(quote_route))
+        .route("/apps/{slug}/donations", get(summary))
+        .route(
+            "/apps/{slug}/donations/settings",
+            get(settings).put(save_settings),
+        )
+        .route("/apps/{slug}/servers/shut-down", post(servers_shut_down))
+        .route("/me/donation-account", get(my_account).post(onboard))
+        .route("/me/donation-account/refresh", post(refresh_account))
+        .route("/me/donations", get(my_donations))
+        .route("/me/donations/{id}/check", post(check))
+        .route("/me/server-donations/{id}/cancel", post(cancel))
+        .route("/donations/{id}/refund", post(refund))
+        .route("/me/fee-statements", get(fee_statements))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Amounts
+
+#[derive(Clone, Copy, Debug, sqlx::FromRow)]
+pub struct Rate {
+    pub percent_bp: i32,
+    pub fixed_minor: i32,
+}
+
+/// What a donation of `donation` (for the maker, before Slop's fee) costs the donor and gives
+/// the maker. With `covers`, the total is chosen so that total − processing(total) = donation.
+#[derive(Clone, Debug, PartialEq, Serialize)]
+pub struct Quote {
+    pub donation: i64,
+    /// What the donor pays: the first and largest number shown (PAY-10).
+    pub total: i64,
+    pub slop_fee: i64,
+    /// The processing addition (covers), or the estimate that comes out of the maker's share.
+    pub processing: i64,
+    pub maker_receives: i64,
+    pub donor_covers_fees: bool,
+}
+
+/// Division rounding up, for positive amounts.
+fn ceil_div(a: i64, b: i64) -> i64 {
+    (a + b - 1) / b
+}
+
+pub fn quote(donation: i64, rate: Rate, covers: bool) -> Quote {
+    let bp = i64::from(rate.percent_bp);
+    let fixed = i64::from(rate.fixed_minor);
+    let slop_fee = fee(donation);
+    if covers {
+        // Smallest total whose processing estimate leaves at least the donation.
+        let total = ceil_div((donation + fixed) * 10_000, 10_000 - bp);
+        Quote {
+            donation,
+            total,
+            slop_fee,
+            processing: total - donation,
+            maker_receives: donation - slop_fee,
+            donor_covers_fees: true,
+        }
+    } else {
+        let processing = ceil_div(donation * bp, 10_000) + fixed;
+        Quote {
+            donation,
+            total: donation,
+            slop_fee,
+            processing,
+            maker_receives: donation - slop_fee - processing,
+            donor_covers_fees: false,
+        }
+    }
+}
+
+/// Four amounts around the maker's suggestion.
+pub fn presets(suggested: i64) -> Vec<i64> {
+    let round = |v: i64| ((v + 25) / 50 * 50).clamp(MIN_MINOR, MAX_MINOR);
+    let mut out = vec![
+        round(suggested / 2),
+        round(suggested),
+        round(suggested * 2),
+        round(suggested * 5),
+    ];
+    out.dedup();
+    out
+}
+
+pub fn money(minor: i64, currency: &str) -> String {
+    let symbol = match currency {
+        "eur" => "€",
+        "gbp" => "£",
+        _ => "$",
+    };
+    format!("{symbol}{}.{:02}", minor / 100, minor % 100)
+}
+
+async fn rate(conn: &mut PgConnection, currency: &str) -> sqlx::Result<Rate> {
+    sqlx::query_as("select percent_bp, fixed_minor from processing_rates where currency = $1")
+        .bind(currency)
+        .fetch_one(conn)
+        .await
+}
+
+async fn covers(db: &PgPool, user: Option<&CurrentUser>) -> sqlx::Result<bool> {
+    Ok(match user {
+        Some(u) => sqlx::query_scalar(
+            "select donor_covers_fees from country_policies where country_code = $1",
+        )
+        .bind(&u.country_code)
+        .fetch_optional(db)
+        .await?
+        .unwrap_or(true),
+        None => true,
+    })
+}
+
+/// What the donor confirms for a server donation, saved with it (PAY-14).
+pub fn consent_text(
+    q: &Quote,
+    currency: &str,
+    title: &str,
+    maker: &str,
+    today: time::Date,
+) -> String {
+    format!(
+        "I'm starting a monthly server donation to {title} by {maker}: {total} every month until I cancel \
+         ({maker} receives {receives}). The first payment is today, {today}, then the same day each month. \
+         I can cancel at any time in two clicks from my library or account page, and no further payments are \
+         taken. Donating never changes my access to the app or its servers.",
+        total = money(q.total, currency),
+        receives = money(q.maker_receives, currency),
+    )
+}
+
+// ---------------------------------------------------------------------------------------------
+// The donate box
+
+struct Target {
+    app_id: Uuid,
+    slug: String,
+    title: String,
+    maker_id: Uuid,
+    maker_name: String,
+    on: bool,
+    suggested: i64,
+    currency: String,
+    runs_servers: bool,
+    servers_statement: Option<String>,
+    servers_shut_down: bool,
+    account: Option<(String, String)>,
+}
+
+async fn target(
+    state: &AppState,
+    user: Option<&CurrentUser>,
+    headers: &HeaderMap,
+    slug: &str,
+) -> ApiResult<Target> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, user, headers).await?;
+    let (app_id, _) = catalog::visible_app(state, slug, user, policy).await?;
+    #[allow(clippy::type_complexity)]
+    let row: (String, String, Uuid, String, bool, i32, String, bool, Option<String>, bool, Option<String>, Option<String>) =
+        sqlx::query_as(
+            "select a.slug, a.title, a.maker_id, u.display_name, a.donations_on, a.donation_suggested_minor,
+                    a.donation_currency, a.runs_servers, a.servers_statement, a.servers_shut_down_at is not null,
+                    d.stripe_account_id, d.stripe_status
+             from apps a join users u on u.id = a.maker_id left join donation_accounts d on d.user_id = a.maker_id
+             where a.id = $1",
+        )
+        .bind(app_id)
+        .fetch_one(&state.db)
+        .await?;
+    Ok(Target {
+        app_id,
+        slug: row.0,
+        title: row.1,
+        maker_id: row.2,
+        maker_name: row.3,
+        on: row.4,
+        suggested: i64::from(row.5),
+        currency: row.6,
+        runs_servers: row.7,
+        servers_statement: row.8,
+        servers_shut_down: row.9,
+        account: row.10.zip(row.11),
+    })
+}
+
+#[derive(Serialize)]
+struct Info {
+    /// Donations are open for this app.
+    on: bool,
+    /// Why not, in words, when they aren't.
+    off_reason: Option<&'static str>,
+    currency: String,
+    presets: Vec<Quote>,
+    min_minor: i64,
+    max_minor: i64,
+    donor_covers_fees: bool,
+    /// Server donations, when the app declares servers.
+    servers: Option<Servers>,
+    maker: String,
+    /// What stops this viewer donating (sign in, their own app, …).
+    cant: Option<&'static str>,
+    simulated: bool,
+}
+
+#[derive(Serialize)]
+struct Servers {
+    statement: String,
+    /// The terms the donor confirms, for the suggested amount (the quote has them per amount).
+    example_consent: String,
+}
+
+async fn info(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Info>> {
+    let t = target(&state, user.as_ref(), &headers, &slug).await?;
+    let mode = stripe::mode(&state);
+    let off_reason = if matches!(mode, Mode::Off) {
+        Some("Donations aren't switched on on this server yet.")
+    } else if !t.on {
+        Some("The maker hasn't turned on donations.")
+    } else if t.account.as_ref().is_none_or(|(_, s)| s != "active") {
+        Some("The maker's Stripe account isn't ready to receive donations yet.")
+    } else {
+        None
+    };
+    let covers = covers(&state.db, user.as_ref()).await?;
+    let mut conn = state.db.acquire().await?;
+    let r = rate(&mut conn, &t.currency).await?;
+    let cant = match &user {
+        None => Some("Sign in to donate."),
+        Some(u) if u.id == t.maker_id => Some("It's your own app."),
+        Some(_) => None,
+    };
+    let suggested_quote = quote(t.suggested, r, covers);
+    Ok(Json(Info {
+        on: off_reason.is_none(),
+        off_reason,
+        presets: presets(t.suggested)
+            .into_iter()
+            .map(|d| quote(d, r, covers))
+            .collect(),
+        min_minor: MIN_MINOR,
+        max_minor: MAX_MINOR,
+        donor_covers_fees: covers,
+        servers: (t.runs_servers && !t.servers_shut_down).then(|| Servers {
+            statement: t.servers_statement.clone().unwrap_or_default(),
+            example_consent: consent_text(
+                &suggested_quote,
+                &t.currency,
+                &t.title,
+                &t.maker_name,
+                OffsetDateTime::now_utc().date(),
+            ),
+        }),
+        maker: t.maker_name,
+        currency: t.currency,
+        cant,
+        simulated: matches!(mode, Mode::Simulated),
+    }))
+}
+
+#[derive(Deserialize)]
+struct QuoteQuery {
+    amount_minor: i64,
+}
+
+#[derive(Serialize)]
+struct QuoteWithTerms {
+    #[serde(flatten)]
+    quote: Quote,
+    currency: String,
+    /// The server-donation terms for this amount, when the app has servers.
+    consent: Option<String>,
+}
+
+async fn quote_route(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Query(q): Query<QuoteQuery>,
+) -> ApiResult<Json<QuoteWithTerms>> {
+    if !(MIN_MINOR..=MAX_MINOR).contains(&q.amount_minor) {
+        return Err(ApiError::invalid("amount_minor", "from 1 to 500"));
+    }
+    let t = target(&state, user.as_ref(), &headers, &slug).await?;
+    let covers = covers(&state.db, user.as_ref()).await?;
+    let mut conn = state.db.acquire().await?;
+    let qt = quote(q.amount_minor, rate(&mut conn, &t.currency).await?, covers);
+    Ok(Json(QuoteWithTerms {
+        consent: (t.runs_servers && !t.servers_shut_down).then(|| {
+            consent_text(
+                &qt,
+                &t.currency,
+                &t.title,
+                &t.maker_name,
+                OffsetDateTime::now_utc().date(),
+            )
+        }),
+        quote: qt,
+        currency: t.currency,
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct StartBody {
+    amount_minor: i64,
+    #[serde(default)]
+    monthly: bool,
+    /// PAY-6: share the donor's name (and message) with the maker. Off unless ticked.
+    #[serde(default)]
+    share_name: bool,
+    message: Option<String>,
+    /// The server-donation terms, confirmed with an unticked box (PAY-13, PAY-14).
+    #[serde(default)]
+    consent: bool,
+    #[serde(default)]
+    confirm_adult: bool,
+}
+
+#[derive(Serialize)]
+struct Started {
+    /// Stripe Checkout; none when the payment was simulated (it's done).
+    url: Option<String>,
+    id: Uuid,
+    done: bool,
+}
+
+async fn require_adult(state: &AppState, user: &CurrentUser, confirm: bool) -> ApiResult<()> {
+    let confirmed: bool =
+        sqlx::query_scalar("select adult_confirmed_at is not null from users where id = $1")
+            .bind(user.id)
+            .fetch_one(&state.db)
+            .await?;
+    if confirmed {
+        return Ok(());
+    }
+    if !confirm {
+        return Err(ApiError::invalid(
+            "confirm_adult",
+            "donating is for adults: confirm you're 18 or older",
+        ));
+    }
+    sqlx::query("update users set adult_confirmed_at = now() where id = $1")
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
+    Ok(())
+}
+
+async fn start(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+    Json(b): Json<StartBody>,
+) -> ApiResult<Json<Started>> {
+    let t = target(&state, Some(&user), &headers, &slug).await?;
+    if user.id == t.maker_id {
+        return Err(ApiError::Conflict(
+            "you can't donate to your own app".into(),
+        ));
+    }
+    let mode = stripe::mode(&state);
+    let account = match (&mode, &t.account) {
+        (Mode::Off, _) => {
+            return Err(ApiError::Unavailable(
+                "donations aren't switched on on this server",
+            ));
+        }
+        (_, Some((acct, status))) if t.on && status == "active" => acct.clone(),
+        _ => return Err(ApiError::Conflict("this app isn't taking donations".into())),
+    };
+    if !(MIN_MINOR..=MAX_MINOR).contains(&b.amount_minor) {
+        return Err(ApiError::invalid("amount_minor", "from 1 to 500"));
+    }
+    require_adult(&state, &user, b.confirm_adult).await?;
+    let allowed: bool =
+        sqlx::query_scalar("select payments_allowed from country_policies where country_code = $1")
+            .bind(&user.country_code)
+            .fetch_optional(&state.db)
+            .await?
+            .unwrap_or(false);
+    if !allowed {
+        return Err(ApiError::Conflict(
+            "donations aren't available in your country yet".into(),
+        ));
+    }
+    let recent: i64 = sqlx::query_scalar(
+        "select (select count(*) from donations where donor_id = $1 and kind = 'one_off' and created_at > now() - interval '1 hour')
+              + (select count(*) from server_donations where donor_id = $1 and created_at > now() - interval '1 hour')",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+    if recent >= STARTS_PER_HOUR {
+        return Err(ApiError::Conflict(
+            "that's a lot of donations in an hour; try again later".into(),
+        ));
+    }
+    let message = b
+        .message
+        .as_deref()
+        .map(str::trim)
+        .filter(|m| !m.is_empty() && b.share_name)
+        .map(String::from);
+    if message.as_ref().is_some_and(|m| m.chars().count() > 500) {
+        return Err(ApiError::invalid("message", "500 characters at most"));
+    }
+    let covers = covers(&state.db, Some(&user)).await?;
+    let mut tx = state.db.begin().await?;
+    let q = quote(b.amount_minor, rate(&mut tx, &t.currency).await?, covers);
+    let id = Uuid::now_v7();
+
+    if b.monthly {
+        if !t.runs_servers || t.servers_shut_down {
+            return Err(ApiError::Conflict(
+                "this app doesn't take server donations".into(),
+            ));
+        }
+        if !b.consent {
+            return Err(ApiError::invalid(
+                "consent",
+                "confirm the monthly terms: it repeats every month until you cancel",
+            ));
+        }
+        let consent = consent_text(
+            &q,
+            &t.currency,
+            &t.title,
+            &t.maker_name,
+            OffsetDateTime::now_utc().date(),
+        );
+        sqlx::query(
+            "insert into server_donations (id, app_id, donor_id, stripe_account_id, currency, donation_minor,
+                                           slop_fee_minor, total_minor, consent_text, simulated)
+             values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)",
+        )
+        .bind(id)
+        .bind(t.app_id)
+        .bind(user.id)
+        .bind(&account)
+        .bind(&t.currency)
+        .bind(q.donation as i32)
+        .bind(q.slop_fee as i32)
+        .bind(q.total as i32)
+        .bind(&consent)
+        .bind(matches!(mode, Mode::Simulated))
+        .execute(&mut *tx)
+        .await
+        .map_err(|err| {
+            if crate::error::is_unique_violation(&err) {
+                ApiError::Conflict(
+                    "you already have a server donation for this app; change it from your account page".into(),
+                )
+            } else {
+                err.into()
+            }
+        })?;
+    } else {
+        sqlx::query(
+            "insert into donations (id, kind, app_id, donor_id, stripe_account_id, currency, donation_minor,
+                                    slop_fee_minor, processing_minor, total_minor, donor_covers_fees, share_name,
+                                    message, simulated)
+             values ($1, 'one_off', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+        )
+        .bind(id)
+        .bind(t.app_id)
+        .bind(user.id)
+        .bind(&account)
+        .bind(&t.currency)
+        .bind(q.donation as i32)
+        .bind(q.slop_fee as i32)
+        .bind(q.processing as i32)
+        .bind(q.total as i32)
+        .bind(covers)
+        .bind(b.share_name)
+        .bind(&message)
+        .bind(matches!(mode, Mode::Simulated))
+        .execute(&mut *tx)
+        .await?;
+    }
+
+    match mode {
+        Mode::Simulated => {
+            let now = OffsetDateTime::now_utc();
+            if b.monthly {
+                activate(&mut tx, id, None, now).await?;
+                monthly_paid(
+                    &mut tx,
+                    id,
+                    &format!("sim_inv_{}", Uuid::new_v4().simple()),
+                    now,
+                )
+                .await?;
+            } else {
+                donation_paid(
+                    &mut tx,
+                    id,
+                    &format!("sim_ch_{}", Uuid::new_v4().simple()),
+                    now,
+                )
+                .await?;
+            }
+            tx.commit().await?;
+            Ok(Json(Started {
+                url: None,
+                id,
+                done: true,
+            }))
+        }
+        Mode::Stripe(stripe) => {
+            tx.commit().await?;
+            let url = checkout(&state, stripe, &t, &account, id, &q, b.monthly, user.id).await?;
+            Ok(Json(Started {
+                url: Some(url),
+                id,
+                done: false,
+            }))
+        }
+        Mode::Off => unreachable!("checked above"),
+    }
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn checkout(
+    state: &AppState,
+    stripe: &StripeConfig,
+    t: &Target,
+    account: &str,
+    id: Uuid,
+    q: &Quote,
+    monthly: bool,
+    donor: Uuid,
+) -> anyhow::Result<String> {
+    let base = &state.config.public_url;
+    let success = format!("{base}app/{}?donated={id}", t.slug);
+    let cancel = format!("{base}app/{}", t.slug);
+    // PAY-7: Stripe sees "donation", never "purchase" or "order".
+    let mut form: Vec<(&str, String)> = vec![
+        ("line_items[0][quantity]", "1".into()),
+        ("line_items[0][price_data][currency]", t.currency.clone()),
+        (
+            "line_items[0][price_data][unit_amount]",
+            q.total.to_string(),
+        ),
+        ("success_url", success),
+        ("cancel_url", cancel),
+        ("client_reference_id", id.to_string()),
+        ("metadata[donor]", donor.to_string()),
+    ];
+    if monthly {
+        // The fee is 5% of the donation, as a share of the total charged each month.
+        let percent = (q.slop_fee as f64 * 100.0 / q.total as f64 * 100.0).round() / 100.0;
+        form.extend([
+            ("mode", "subscription".into()),
+            (
+                "line_items[0][price_data][recurring][interval]",
+                "month".into(),
+            ),
+            (
+                "line_items[0][price_data][product_data][name]",
+                format!("Monthly server donation to {}", t.title),
+            ),
+            (
+                "subscription_data[application_fee_percent]",
+                format!("{percent:.2}"),
+            ),
+            (
+                "subscription_data[description]",
+                format!("Monthly server donation to {}", t.title),
+            ),
+            (
+                "subscription_data[metadata][server_donation_id]",
+                id.to_string(),
+            ),
+            ("metadata[server_donation_id]", id.to_string()),
+        ]);
+    } else {
+        form.extend([
+            ("mode", "payment".into()),
+            (
+                "line_items[0][price_data][product_data][name]",
+                format!("Donation to {}", t.title),
+            ),
+            (
+                "payment_intent_data[application_fee_amount]",
+                q.slop_fee.to_string(),
+            ),
+            (
+                "payment_intent_data[description]",
+                format!("Donation to {}", t.title),
+            ),
+            ("payment_intent_data[metadata][donation_id]", id.to_string()),
+            ("metadata[donation_id]", id.to_string()),
+        ]);
+    }
+    let session = call(
+        state,
+        stripe,
+        reqwest::Method::POST,
+        "v1/checkout/sessions",
+        Some(account),
+        &form,
+    )
+    .await?;
+    let sid = session["id"]
+        .as_str()
+        .ok_or_else(|| anyhow::anyhow!("Stripe gave no session"))?;
+    let table = if monthly {
+        "server_donations"
+    } else {
+        "donations"
+    };
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "update {table} set checkout_session_id = $2 where id = $1"
+    )))
+    .bind(id)
+    .bind(sid)
+    .execute(&state.db)
+    .await?;
+    session["url"]
+        .as_str()
+        .map(String::from)
+        .ok_or_else(|| anyhow::anyhow!("Stripe gave no checkout link"))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Recording payments (from Stripe's API, or simulated)
+
+/// Marks a one-off donation paid and records the payment. Idempotent.
+async fn donation_paid(
+    tx: &mut PgConnection,
+    id: Uuid,
+    object_id: &str,
+    at: OffsetDateTime,
+) -> sqlx::Result<()> {
+    #[allow(clippy::type_complexity)] // one row of the query below
+    let row: Option<(Uuid, Uuid, String, String, i32, i32, bool, bool, String, String)> = sqlx::query_as(
+        "update donations d set status = 'paid', paid_at = $3, stripe_object_id = $2
+         from apps a where a.id = d.app_id and d.id = $1 and d.status = 'pending'
+         returning d.donor_id, a.maker_id, d.stripe_account_id, d.currency, d.total_minor, d.slop_fee_minor,
+                   d.simulated, d.share_name, a.title, a.slug",
+    )
+    .bind(id)
+    .bind(object_id)
+    .bind(at)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((donor, maker, account, currency, total, fee_minor, simulated, shared, title, slug)) =
+        row
+    else {
+        return Ok(());
+    };
+    record_payment(
+        tx, id, donor, &account, object_id, total, fee_minor, &currency, simulated, at,
+    )
+    .await?;
+    thank(tx, id, donor, maker, &title, &slug, shared).await
+}
+
+#[allow(clippy::too_many_arguments)]
+async fn record_payment(
+    tx: &mut PgConnection,
+    donation: Uuid,
+    payer: Uuid,
+    account: &str,
+    object_id: &str,
+    total: i32,
+    fee_minor: i32,
+    currency: &str,
+    simulated: bool,
+    at: OffsetDateTime,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "insert into payments (id, kind, donation_id, stripe_account_id, stripe_object_id, payer_id, amount_minor,
+                               slop_fee_minor, currency, simulated, created_at)
+         values ($1, 'donation', $2, $3, $4, $5, $6, $7, $8, $9, $10) on conflict (stripe_object_id) do nothing",
+    )
+    .bind(Uuid::now_v7())
+    .bind(donation)
+    .bind(account)
+    .bind(object_id)
+    .bind(payer)
+    .bind(total)
+    .bind(fee_minor)
+    .bind(currency)
+    .bind(simulated)
+    .bind(at)
+    .execute(&mut *tx)
+    .await?;
+    Ok(())
+}
+
+/// The donor's thank-you and receipt link; the maker hears about new donations (merged while
+/// unread), by name only when the donor shared it.
+async fn thank(
+    tx: &mut PgConnection,
+    donation: Uuid,
+    donor: Uuid,
+    maker: Uuid,
+    title: &str,
+    slug: &str,
+    shared: bool,
+) -> sqlx::Result<()> {
+    let (amount, currency, name): (i32, String, String) = sqlx::query_as(
+        "select d.donation_minor, d.currency, u.display_name from donations d join users u on u.id = d.donor_id
+         where d.id = $1",
+    )
+    .bind(donation)
+    .fetch_one(&mut *tx)
+    .await?;
+    notify::send(
+        tx,
+        Notice {
+            user_id: donor,
+            category: "donations",
+            title: format!("Thank you for donating to {title}"),
+            body: format!(
+                "{} goes to the maker. Your receipt is on your account page.",
+                money(i64::from(amount), &currency)
+            ),
+            link: "/account#donations".into(),
+            collapse_key: None,
+        },
+    )
+    .await?;
+    notify::send(
+        tx,
+        Notice {
+            user_id: maker,
+            category: "donations",
+            title: if shared {
+                format!("{name} donated to {title}")
+            } else {
+                format!("New donations to {title}")
+            },
+            body: String::new(),
+            link: format!("/publish/{slug}/manage#donations"),
+            collapse_key: (!shared).then(|| format!("donations:{slug}")),
+        },
+    )
+    .await
+}
+
+/// A server donation's subscription is running.
+async fn activate(
+    tx: &mut PgConnection,
+    id: Uuid,
+    subscription: Option<&str>,
+    at: OffsetDateTime,
+) -> sqlx::Result<()> {
+    sqlx::query(
+        "update server_donations set status = 'active', started_at = coalesce(started_at, $3),
+                stripe_subscription_id = coalesce(stripe_subscription_id, $2),
+                next_charge_at = coalesce(next_charge_at, $3 + $4)
+         where id = $1 and status = 'pending'",
+    )
+    .bind(id)
+    .bind(subscription)
+    .bind(at)
+    .bind(MONTH)
+    .execute(tx)
+    .await?;
+    Ok(())
+}
+
+/// One month of a server donation was paid: its own donation row. Idempotent on the invoice.
+async fn monthly_paid(
+    tx: &mut PgConnection,
+    server_donation: Uuid,
+    object_id: &str,
+    at: OffsetDateTime,
+) -> sqlx::Result<()> {
+    #[allow(clippy::type_complexity)] // one row of the query below
+    let row: Option<(Uuid, Uuid, Uuid, String, String, i32, i32, i32, bool, String, String)> = sqlx::query_as(
+        "select s.app_id, s.donor_id, a.maker_id, s.stripe_account_id, s.currency, s.donation_minor,
+                s.slop_fee_minor, s.total_minor, s.simulated, a.title, a.slug
+         from server_donations s join apps a on a.id = s.app_id where s.id = $1",
+    )
+    .bind(server_donation)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((
+        app,
+        donor,
+        maker,
+        account,
+        currency,
+        donation,
+        fee_minor,
+        total,
+        simulated,
+        title,
+        slug,
+    )) = row
+    else {
+        return Ok(());
+    };
+    let id = Uuid::now_v7();
+    let inserted = sqlx::query(
+        "insert into donations (id, kind, app_id, donor_id, server_donation_id, stripe_account_id, currency,
+                                donation_minor, slop_fee_minor, processing_minor, total_minor, donor_covers_fees,
+                                status, stripe_object_id, simulated, created_at, paid_at)
+         values ($1, 'monthly', $2, $3, $4, $5, $6, $7, $8, $9 - $7, $9, $9 > $7, 'paid', $10, $11, $12, $12)
+         on conflict (stripe_object_id) do nothing",
+    )
+    .bind(id)
+    .bind(app)
+    .bind(donor)
+    .bind(server_donation)
+    .bind(&account)
+    .bind(&currency)
+    .bind(donation)
+    .bind(fee_minor)
+    .bind(total)
+    .bind(object_id)
+    .bind(simulated)
+    .bind(at)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    if inserted == 0 {
+        return Ok(());
+    }
+    record_payment(
+        tx, id, donor, &account, object_id, total, fee_minor, &currency, simulated, at,
+    )
+    .await?;
+    thank(tx, id, donor, maker, &title, &slug, false).await
+}
+
+/// Reads a finished Checkout session for a donation or server donation (webhook or the
+/// donor's "check" after coming back).
+pub async fn sync_checkout(
+    state: &AppState,
+    stripe: &StripeConfig,
+    acct: &str,
+    session_id: &str,
+) -> anyhow::Result<()> {
+    let s = call(
+        state,
+        stripe,
+        reqwest::Method::GET,
+        &format!("v1/checkout/sessions/{session_id}"),
+        Some(acct),
+        &[("expand[]", "payment_intent".into())],
+    )
+    .await?;
+    let now = OffsetDateTime::now_utc();
+    let mut tx = state.db.begin().await?;
+    if let Some(id) = s["metadata"]["donation_id"]
+        .as_str()
+        .and_then(|v| v.parse::<Uuid>().ok())
+    {
+        if s["payment_status"] == "paid" {
+            let charge = s["payment_intent"]["latest_charge"]
+                .as_str()
+                .unwrap_or(session_id);
+            donation_paid(&mut tx, id, charge, now).await?;
+        } else if s["status"] == "expired" {
+            sqlx::query(
+                "update donations set status = 'expired' where id = $1 and status = 'pending'",
+            )
+            .bind(id)
+            .execute(&mut *tx)
+            .await?;
+        }
+    } else if let Some(id) = s["metadata"]["server_donation_id"]
+        .as_str()
+        .and_then(|v| v.parse::<Uuid>().ok())
+        && s["status"] == "complete"
+    {
+        activate(&mut tx, id, s["subscription"].as_str(), now).await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A monthly payment (`invoice.paid`) on a server donation's subscription.
+pub async fn sync_invoice(
+    state: &AppState,
+    stripe: &StripeConfig,
+    acct: &str,
+    invoice_id: &str,
+) -> anyhow::Result<()> {
+    let inv = call(
+        state,
+        stripe,
+        reqwest::Method::GET,
+        &format!("v1/invoices/{invoice_id}"),
+        Some(acct),
+        &[],
+    )
+    .await?;
+    if inv["status"] != "paid" {
+        return Ok(());
+    }
+    // The subscription and its metadata (older and newer Stripe API shapes).
+    let subscription = inv["subscription"]
+        .as_str()
+        .or_else(|| inv["parent"]["subscription_details"]["subscription"].as_str());
+    let meta = if inv["subscription_details"]["metadata"].is_object() {
+        &inv["subscription_details"]["metadata"]
+    } else {
+        &inv["parent"]["subscription_details"]["metadata"]
+    };
+    let by_meta = meta["server_donation_id"]
+        .as_str()
+        .and_then(|v| v.parse::<Uuid>().ok());
+    let id: Option<Uuid> = match by_meta {
+        Some(id) => Some(id),
+        None => {
+            sqlx::query_scalar("select id from server_donations where stripe_subscription_id = $1")
+                .bind(subscription)
+                .fetch_optional(&state.db)
+                .await?
+        }
+    };
+    let Some(id) = id else {
+        return Ok(());
+    };
+    let paid_at = inv["status_transitions"]["paid_at"]
+        .as_i64()
+        .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())
+        .unwrap_or_else(OffsetDateTime::now_utc);
+    let mut tx = state.db.begin().await?;
+    activate(&mut tx, id, subscription, paid_at).await?;
+    monthly_paid(&mut tx, id, invoice_id, paid_at).await?;
+    sqlx::query("update server_donations set next_charge_at = greatest(next_charge_at, $2 + $3) where id = $1")
+        .bind(id)
+        .bind(paid_at)
+        .bind(MONTH)
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A subscription ended on Stripe's side (cancelled there, or payments failed).
+pub async fn subscription_ended(
+    state: &AppState,
+    stripe: &StripeConfig,
+    acct: &str,
+    sub_id: &str,
+) -> anyhow::Result<()> {
+    let sub = call(
+        state,
+        stripe,
+        reqwest::Method::GET,
+        &format!("v1/subscriptions/{sub_id}"),
+        Some(acct),
+        &[],
+    )
+    .await?;
+    if sub["status"] != "canceled" {
+        return Ok(());
+    }
+    sqlx::query(
+        "update server_donations set status = 'cancelled', cancelled_at = now(), cancelled_by = 'stripe'
+         where stripe_subscription_id = $1 and status <> 'cancelled'",
+    )
+    .bind(sub_id)
+    .execute(&state.db)
+    .await?;
+    Ok(())
+}
+
+/// A refund on a donation's charge (the maker's, from Slop's button or their Stripe dashboard).
+pub async fn refund_recorded(db: &PgPool, charge: &str, refunded_total: i64) -> anyhow::Result<()> {
+    let mut tx = db.begin().await?;
+    let row: Option<(Uuid, i32, String, String)> = sqlx::query_as(
+        "select id, total_minor, currency, stripe_account_id from donations where stripe_object_id = $1 for update",
+    )
+    .bind(charge)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((id, total, currency, account)) = row else {
+        return Ok(());
+    };
+    sqlx::query(
+        "update donations set refunded_minor = $2,
+                status = case when $2 >= total_minor then 'refunded' else 'partially_refunded' end
+         where id = $1",
+    )
+    .bind(id)
+    .bind(refunded_total as i32)
+    .execute(&mut *tx)
+    .await?;
+    let original: Option<Uuid> = sqlx::query_scalar(
+        "select id from payments where stripe_object_id = $1 and kind = 'donation'",
+    )
+    .bind(charge)
+    .fetch_optional(&mut *tx)
+    .await?;
+    sqlx::query(
+        "insert into payments (id, kind, refund_of, donation_id, stripe_account_id, stripe_object_id, amount_minor, currency)
+         values ($1, 'refund', $2, $3, $4, $5, $6, $7) on conflict (stripe_object_id) do nothing",
+    )
+    .bind(Uuid::now_v7())
+    .bind(original)
+    .bind(id)
+    .bind(account)
+    .bind(format!("{charge}:refunded:{refunded_total}"))
+    .bind(-(refunded_total.min(i64::from(total)) as i32))
+    .bind(currency)
+    .execute(&mut *tx)
+    .await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+// ---------------------------------------------------------------------------------------------
+// The donor's side
+
+#[derive(Serialize, sqlx::FromRow)]
+struct DonationRow {
+    id: Uuid,
+    kind: String,
+    app_title: String,
+    app_slug: String,
+    currency: String,
+    donation_minor: i32,
+    total_minor: i32,
+    status: String,
+    refunded_minor: i32,
+    share_name: bool,
+    simulated: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    paid_at: Option<OffsetDateTime>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct ServerDonationRow {
+    id: Uuid,
+    app_title: String,
+    app_slug: String,
+    currency: String,
+    donation_minor: i32,
+    total_minor: i32,
+    status: String,
+    consent_text: String,
+    simulated: bool,
+    #[serde(with = "time::serde::rfc3339::option")]
+    started_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    next_charge_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    cancelled_at: Option<OffsetDateTime>,
+    cancelled_by: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Mine {
+    donations: Vec<DonationRow>,
+    server_donations: Vec<ServerDonationRow>,
+}
+
+async fn my_donations(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Mine>> {
+    Ok(Json(Mine {
+        donations: sqlx::query_as(
+            "select d.id, d.kind, a.title as app_title, a.slug as app_slug, d.currency, d.donation_minor, d.total_minor,
+                    d.status, d.refunded_minor, d.share_name, d.simulated, d.created_at, d.paid_at
+             from donations d join apps a on a.id = d.app_id
+             where d.donor_id = $1 and d.status <> 'expired' order by d.created_at desc limit 200",
+        )
+        .bind(user.id)
+        .fetch_all(&state.db)
+        .await?,
+        server_donations: sqlx::query_as(
+            "select s.id, a.title as app_title, a.slug as app_slug, s.currency, s.donation_minor, s.total_minor, s.status,
+                    s.consent_text, s.simulated, s.started_at, s.next_charge_at, s.cancelled_at, s.cancelled_by
+             from server_donations s join apps a on a.id = s.app_id
+             where s.donor_id = $1 and (s.status <> 'pending' or s.created_at > now() - interval '1 day')
+             order by s.created_at desc",
+        )
+        .bind(user.id)
+        .fetch_all(&state.db)
+        .await?,
+    }))
+}
+
+/// After coming back from Stripe: reads the session now rather than waiting for the webhook.
+async fn check(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let row: Option<(String, Option<String>)> = sqlx::query_as(
+        "select stripe_account_id, checkout_session_id from donations where id = $1 and donor_id = $2
+         union all
+         select stripe_account_id, checkout_session_id from server_donations where id = $1 and donor_id = $2",
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (acct, session) = row.ok_or(ApiError::NotFound)?;
+    if let (Mode::Stripe(stripe), Some(session)) = (stripe::mode(&state), session) {
+        sync_checkout(&state, stripe, &acct, &session).await?;
+    }
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Cancels a server donation: immediately, no reason asked (PAY-15).
+async fn cancel(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let row: Option<(String, Option<String>, bool)> = sqlx::query_as(
+        "select stripe_account_id, stripe_subscription_id, simulated from server_donations
+         where id = $1 and donor_id = $2 and status in ('pending', 'active')",
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (acct, sub, simulated) = row.ok_or(ApiError::NotFound)?;
+    if let (Mode::Stripe(stripe), Some(sub), false) = (stripe::mode(&state), &sub, simulated) {
+        call(
+            &state,
+            stripe,
+            reqwest::Method::DELETE,
+            &format!("v1/subscriptions/{sub}"),
+            Some(&acct),
+            &[],
+        )
+        .await?;
+    }
+    let mut tx = state.db.begin().await?;
+    end_server_donations(&mut tx, &state.config, Some(id), None, "donor").await?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Marks server donations cancelled (one, or every one for an app) and confirms it to each donor,
+/// by email whatever their email choices (PAY-15, PAY-17).
+async fn end_server_donations(
+    tx: &mut PgConnection,
+    config: &crate::config::Config,
+    id: Option<Uuid>,
+    app: Option<Uuid>,
+    by: &str,
+) -> sqlx::Result<usize> {
+    let ended: Vec<(Uuid, String, String, i32)> = sqlx::query_as(
+        "update server_donations s set status = 'cancelled', cancelled_at = now(), cancelled_by = $3
+         from apps a where a.id = s.app_id and s.status in ('pending', 'active')
+           and (s.id = $1 or s.app_id = $2)
+         returning s.donor_id, a.title, s.currency, s.total_minor",
+    )
+    .bind(id)
+    .bind(app)
+    .bind(by)
+    .fetch_all(&mut *tx)
+    .await?;
+    for (donor, title, currency, total) in &ended {
+        let (title_text, body) = if by == "servers_shut_down" {
+            (
+                format!("Your server donation to {title} has ended"),
+                format!(
+                    "The maker shut down {title}'s servers, so your monthly server donation of {} has been cancelled. No further payments will be taken.",
+                    money(i64::from(*total), currency)
+                ),
+            )
+        } else {
+            (
+                format!("Your server donation to {title} is cancelled"),
+                format!(
+                    "You cancelled your monthly server donation of {} to {title}. No further payments will be taken.",
+                    money(i64::from(*total), currency)
+                ),
+            )
+        };
+        notify::send(
+            tx,
+            Notice {
+                user_id: *donor,
+                category: "donations",
+                title: title_text.clone(),
+                body: body.clone(),
+                link: "/account#donations".into(),
+                collapse_key: None,
+            },
+        )
+        .await?;
+        notify::email_user(tx, config, *donor, &title_text, &body).await?;
+    }
+    Ok(ended.len())
+}
+
+// ---------------------------------------------------------------------------------------------
+// The maker's side
+
+async fn my_app(state: &AppState, user: &CurrentUser, slug: &str) -> ApiResult<(Uuid, String)> {
+    let row: Option<(Uuid, Uuid, String)> =
+        sqlx::query_as("select id, maker_id, title from apps where slug = $1")
+            .bind(slug)
+            .fetch_optional(&state.db)
+            .await?;
+    match row {
+        Some((id, maker, title)) if maker == user.id => Ok((id, title)),
+        _ => Err(ApiError::NotFound),
+    }
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct Settings {
+    donations_on: bool,
+    donation_suggested_minor: i32,
+    donation_currency: String,
+    runs_servers: bool,
+    servers_statement: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    servers_shut_down_at: Option<OffsetDateTime>,
+    /// The maker's Stripe account: none, pending, active or restricted.
+    account_status: String,
+    active_server_donations: i64,
+    /// Whether this server takes payments: stripe, simulated or off.
+    #[sqlx(skip)]
+    payments: &'static str,
+}
+
+async fn load_settings(state: &AppState, app_id: Uuid) -> ApiResult<Settings> {
+    let mut s: Settings = sqlx::query_as(
+        "select a.donations_on, a.donation_suggested_minor, a.donation_currency, a.runs_servers, a.servers_statement,
+                a.servers_shut_down_at, coalesce(d.stripe_status, 'none') as account_status,
+                (select count(*) from server_donations s where s.app_id = a.id and s.status = 'active') as active_server_donations
+         from apps a left join donation_accounts d on d.user_id = a.maker_id where a.id = $1",
+    )
+    .bind(app_id)
+    .fetch_one(&state.db)
+    .await?;
+    s.payments = stripe::mode(state).name();
+    Ok(s)
+}
+
+async fn settings(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Settings>> {
+    let (app_id, _) = my_app(&state, &user, &slug).await?;
+    Ok(Json(load_settings(&state, app_id).await?))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct SettingsBody {
+    donations_on: bool,
+    donation_suggested_minor: i32,
+    donation_currency: String,
+    runs_servers: bool,
+    servers_statement: Option<String>,
+}
+
+async fn save_settings(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+    Json(b): Json<SettingsBody>,
+) -> ApiResult<Json<Settings>> {
+    let (app_id, _) = my_app(&state, &user, &slug).await?;
+    let current = load_settings(&state, app_id).await?;
+    if b.donations_on && current.account_status != "active" {
+        return Err(ApiError::Conflict(
+            "connect your Stripe account first".into(),
+        ));
+    }
+    if !(MIN_MINOR as i32..=MAX_MINOR as i32).contains(&b.donation_suggested_minor) {
+        return Err(ApiError::invalid(
+            "donation_suggested_minor",
+            "from 1 to 500",
+        ));
+    }
+    if !["usd", "eur", "gbp"].contains(&b.donation_currency.as_str()) {
+        return Err(ApiError::invalid("donation_currency", "usd, eur or gbp"));
+    }
+    let statement = b
+        .servers_statement
+        .as_deref()
+        .map(str::trim)
+        .unwrap_or("")
+        .to_string();
+    if b.runs_servers && !(10..=300).contains(&statement.chars().count()) {
+        return Err(ApiError::invalid(
+            "servers_statement",
+            "say what the servers are, and what donations help pay for (10 to 300 characters)",
+        ));
+    }
+    if !b.runs_servers && current.active_server_donations > 0 {
+        return Err(ApiError::Conflict(format!(
+            "{} people give monthly for the servers: use \"The servers are shut down\" to end their donations first",
+            current.active_server_donations
+        )));
+    }
+    sqlx::query(
+        "update apps set donations_on = $2, donation_suggested_minor = $3, donation_currency = $4, runs_servers = $5,
+                servers_statement = nullif($6, ''),
+                servers_shut_down_at = case when $5 then null else servers_shut_down_at end
+         where id = $1",
+    )
+    .bind(app_id)
+    .bind(b.donations_on)
+    .bind(b.donation_suggested_minor)
+    .bind(&b.donation_currency)
+    .bind(b.runs_servers)
+    .bind(&statement)
+    .execute(&state.db)
+    .await?;
+    Ok(Json(load_settings(&state, app_id).await?))
+}
+
+/// PAY-17: the servers are gone, so every server donation to the app is cancelled and its donor told.
+async fn servers_shut_down(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Value>> {
+    let (app_id, _) = my_app(&state, &user, &slug).await?;
+    let subs: Vec<(String, Option<String>, bool)> = sqlx::query_as(
+        "select stripe_account_id, stripe_subscription_id, simulated from server_donations
+         where app_id = $1 and status in ('pending', 'active')",
+    )
+    .bind(app_id)
+    .fetch_all(&state.db)
+    .await?;
+    if let Mode::Stripe(stripe) = stripe::mode(&state) {
+        for (acct, sub, simulated) in &subs {
+            if let (Some(sub), false) = (sub, simulated) {
+                call(
+                    &state,
+                    stripe,
+                    reqwest::Method::DELETE,
+                    &format!("v1/subscriptions/{sub}"),
+                    Some(acct),
+                    &[],
+                )
+                .await?;
+            }
+        }
+    }
+    let mut tx = state.db.begin().await?;
+    sqlx::query("update apps set runs_servers = false, servers_shut_down_at = now() where id = $1")
+        .bind(app_id)
+        .execute(&mut *tx)
+        .await?;
+    let ended = end_server_donations(
+        &mut tx,
+        &state.config,
+        None,
+        Some(app_id),
+        "servers_shut_down",
+    )
+    .await?;
+    admin::audit(
+        &mut tx,
+        &user.display_name,
+        "donations.servers_shut_down",
+        &slug,
+        json!({ "cancelled": ended }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Json(json!({ "cancelled": ended })))
+}
+
+#[derive(Serialize)]
+struct Summary {
+    currency_totals: Vec<Total>,
+    /// Months with at least 10 donations; quieter months are left out so no donor stands out.
+    months: Vec<Month>,
+    /// Shown only from 10 up, for the same reason.
+    active_server_donations: Option<i64>,
+    /// Donors who chose to share their name, with their message.
+    shared: Vec<Shared>,
+    /// Recent donations for refunding a mistake: amount and date only.
+    recent: Vec<Recent>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct Total {
+    currency: String,
+    donations: i64,
+    donated_minor: i64,
+    slop_fee_minor: i64,
+    refunded_minor: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct Month {
+    month: String,
+    currency: String,
+    donations: i64,
+    donated_minor: i64,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct Shared {
+    name: String,
+    message: Option<String>,
+    currency: String,
+    donation_minor: i32,
+    #[serde(with = "time::serde::rfc3339")]
+    paid_at: OffsetDateTime,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct Recent {
+    id: Uuid,
+    kind: String,
+    currency: String,
+    total_minor: i32,
+    status: String,
+    refundable: bool,
+    #[serde(with = "time::serde::rfc3339")]
+    paid_at: OffsetDateTime,
+}
+
+/// Minimum group before a breakdown is shown (METRICS §3).
+const MIN_GROUP: i64 = 10;
+
+async fn summary(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<Summary>> {
+    let (app_id, _) = my_app(&state, &user, &slug).await?;
+    let active: i64 = sqlx::query_scalar(
+        "select count(*) from server_donations where app_id = $1 and status = 'active'",
+    )
+    .bind(app_id)
+    .fetch_one(&state.db)
+    .await?;
+    Ok(Json(Summary {
+        currency_totals: sqlx::query_as(
+            "select currency, count(*) as donations, sum(donation_minor)::int8 as donated_minor,
+                    sum(slop_fee_minor)::int8 as slop_fee_minor, sum(refunded_minor)::int8 as refunded_minor
+             from donations where app_id = $1 and status <> 'pending' and status <> 'expired' group by currency",
+        )
+        .bind(app_id)
+        .fetch_all(&state.db)
+        .await?,
+        months: sqlx::query_as(
+            "select to_char(date_trunc('month', paid_at), 'YYYY-MM') as month, currency, count(*) as donations,
+                    sum(donation_minor)::int8 as donated_minor
+             from donations where app_id = $1 and paid_at is not null
+             group by 1, 2 having count(*) >= $2 order by 1 desc limit 24",
+        )
+        .bind(app_id)
+        .bind(MIN_GROUP)
+        .fetch_all(&state.db)
+        .await?,
+        active_server_donations: (active >= MIN_GROUP).then_some(active),
+        shared: sqlx::query_as(
+            "select u.display_name as name, d.message, d.currency, d.donation_minor, d.paid_at
+             from donations d join users u on u.id = d.donor_id
+             where d.app_id = $1 and d.share_name and d.paid_at is not null order by d.paid_at desc limit 100",
+        )
+        .bind(app_id)
+        .fetch_all(&state.db)
+        .await?,
+        recent: sqlx::query_as(
+            "select id, kind, currency, total_minor, status, (kind = 'one_off' and status = 'paid') as refundable, paid_at
+             from donations where app_id = $1 and paid_at > now() - interval '90 days' order by paid_at desc limit 100",
+        )
+        .bind(app_id)
+        .fetch_all(&state.db)
+        .await?,
+    }))
+}
+
+/// The maker refunds a donation (a mistyped amount): through Stripe, on their own account, as
+/// them (PAY-3).
+async fn refund(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let row: Option<(String, Option<String>, i32, bool)> = sqlx::query_as(
+        "select d.stripe_account_id, d.stripe_object_id, d.total_minor, d.simulated from donations d
+         join apps a on a.id = d.app_id
+         where d.id = $1 and a.maker_id = $2 and d.kind = 'one_off' and d.status = 'paid'",
+    )
+    .bind(id)
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (acct, charge, total, simulated) = row.ok_or(ApiError::NotFound)?;
+    let charge = charge.ok_or(ApiError::NotFound)?;
+    if !simulated && let Mode::Stripe(stripe) = stripe::mode(&state) {
+        call(
+            &state,
+            stripe,
+            reqwest::Method::POST,
+            "v1/refunds",
+            Some(&acct),
+            &[("charge", charge.clone())],
+        )
+        .await?;
+    }
+    refund_recorded(&state.db, &charge, i64::from(total)).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Serialize)]
+struct Account {
+    status: String,
+    payments: &'static str,
+}
+
+async fn my_account(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Account>> {
+    let status: Option<String> =
+        sqlx::query_scalar("select stripe_status from donation_accounts where user_id = $1")
+            .bind(user.id)
+            .fetch_optional(&state.db)
+            .await?;
+    Ok(Json(Account {
+        status: status.unwrap_or_else(|| "none".into()),
+        payments: stripe::mode(&state).name(),
+    }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OnboardBody {
+    tax_notice_ack: bool,
+    #[serde(default)]
+    confirm_adult: bool,
+    /// Where to come back to after Stripe (a path in Slop).
+    return_to: Option<String>,
+}
+
+#[derive(Serialize)]
+struct Onboarding {
+    url: Option<String>,
+    status: String,
+}
+
+/// "Enable donations": the tax notice (PAY-9), then Stripe's sign-up on the maker's own account.
+async fn onboard(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(b): Json<OnboardBody>,
+) -> ApiResult<Json<Onboarding>> {
+    if !b.tax_notice_ack {
+        return Err(ApiError::invalid(
+            "tax_notice_ack",
+            "confirm you've read: donations may be taxable income for you, and Slop doesn't give tax advice",
+        ));
+    }
+    if !user_is_adult(&state, &user, b.confirm_adult).await? {
+        return Err(ApiError::invalid(
+            "confirm_adult",
+            "receiving donations is for adults: confirm you're 18 or older",
+        ));
+    }
+    let return_to = b
+        .return_to
+        .filter(|p| p.starts_with('/') && !p.starts_with("//") && p.len() <= 200)
+        .unwrap_or_else(|| "/publish".into());
+    let existing: Option<String> = sqlx::query_scalar(
+        "select coalesce((select stripe_account_id from donation_accounts where user_id = $1),
+                         (select stripe_account_id from creatives where user_id = $1))",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+    let save = |acct: String, status: &'static str| {
+        let db = state.db.clone();
+        let user_id = user.id;
+        async move {
+            sqlx::query(
+                "insert into donation_accounts (user_id, stripe_account_id, stripe_status, tax_notice_ack_at)
+                 values ($1, $2, $3, now())
+                 on conflict (user_id) do update set tax_notice_ack_at = now(), updated_at = now()",
+            )
+            .bind(user_id)
+            .bind(acct)
+            .bind(status)
+            .execute(&db)
+            .await
+        }
+    };
+    match stripe::mode(&state) {
+        Mode::Off => Err(ApiError::Unavailable(
+            "payments aren't switched on yet on this server",
+        )),
+        Mode::Simulated => {
+            save(
+                existing.unwrap_or_else(|| format!("acct_sim_{}", Uuid::new_v4().simple())),
+                "active",
+            )
+            .await?;
+            sqlx::query("update donation_accounts set stripe_status = 'active' where user_id = $1")
+                .bind(user.id)
+                .execute(&state.db)
+                .await?;
+            Ok(Json(Onboarding {
+                url: None,
+                status: "active".into(),
+            }))
+        }
+        Mode::Stripe(stripe) => {
+            let acct = match existing {
+                Some(a) => a,
+                None => {
+                    let created = call(
+                        &state,
+                        stripe,
+                        reqwest::Method::POST,
+                        "v1/accounts",
+                        None,
+                        &[
+                            ("controller[stripe_dashboard][type]", "full".into()),
+                            ("controller[fees][payer]", "account".into()),
+                            ("controller[losses][payments]", "stripe".into()),
+                            ("controller[requirement_collection]", "stripe".into()),
+                            ("metadata[slop_user]", user.id.to_string()),
+                        ],
+                    )
+                    .await?;
+                    created["id"]
+                        .as_str()
+                        .ok_or_else(|| anyhow::anyhow!("Stripe gave no account ID"))?
+                        .to_string()
+                }
+            };
+            save(acct.clone(), "pending").await?;
+            let status = stripe::sync_account(&state, stripe, &acct).await?;
+            if status == "active" {
+                return Ok(Json(Onboarding { url: None, status }));
+            }
+            let base = &state.config.public_url;
+            let link = call(
+                &state,
+                stripe,
+                reqwest::Method::POST,
+                "v1/account_links",
+                None,
+                &[
+                    ("account", acct),
+                    ("type", "account_onboarding".into()),
+                    (
+                        "refresh_url",
+                        format!("{base}{}", return_to.trim_start_matches('/')),
+                    ),
+                    (
+                        "return_url",
+                        format!("{base}{}", return_to.trim_start_matches('/')),
+                    ),
+                ],
+            )
+            .await?;
+            Ok(Json(Onboarding {
+                url: link["url"].as_str().map(String::from),
+                status,
+            }))
+        }
+    }
+}
+
+async fn user_is_adult(state: &AppState, user: &CurrentUser, confirm: bool) -> ApiResult<bool> {
+    match require_adult(state, user, confirm).await {
+        Ok(()) => Ok(true),
+        Err(ApiError::Invalid { .. }) => Ok(false),
+        Err(e) => Err(e),
+    }
+}
+
+async fn refresh_account(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> ApiResult<Json<Onboarding>> {
+    let row: Option<(String, String)> = sqlx::query_as(
+        "select stripe_account_id, stripe_status from donation_accounts where user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_optional(&state.db)
+    .await?;
+    let (acct, status) = row.ok_or(ApiError::NotFound)?;
+    let status = match stripe::mode(&state) {
+        Mode::Stripe(stripe) => stripe::sync_account(&state, stripe, &acct).await?,
+        _ => status,
+    };
+    Ok(Json(Onboarding { url: None, status }))
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct Statement {
+    month: String,
+    currency: String,
+    /// donation or people_job
+    kind: String,
+    payments: i64,
+    received_minor: i64,
+    slop_fee_minor: i64,
+    simulated: bool,
+}
+
+/// Monthly fee statements (PAYMENTS §8, TAX-4): what Slop's fee came to on the user's donations
+/// and People jobs. The fee includes any VAT due; the VAT lines come with Slop's registrations.
+async fn fee_statements(
+    State(state): State<AppState>,
+    user: CurrentUser,
+) -> ApiResult<Json<Vec<Statement>>> {
+    Ok(Json(
+        sqlx::query_as(
+            "select to_char(date_trunc('month', p.created_at), 'YYYY-MM') as month, p.currency, p.kind,
+                    count(*) as payments, sum(p.amount_minor)::int8 as received_minor,
+                    sum(p.slop_fee_minor)::int8 as slop_fee_minor, bool_or(p.simulated) as simulated
+             from payments p
+             where p.kind in ('donation', 'people_job') and p.stripe_account_id in (
+                 select stripe_account_id from donation_accounts where user_id = $1
+                 union select stripe_account_id from creatives where user_id = $1 and stripe_account_id is not null)
+             group by 1, 2, 3 order by 1 desc, 3",
+        )
+        .bind(user.id)
+        .fetch_all(&state.db)
+        .await?,
+    ))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Hourly and daily
+
+/// Hourly: reminders before the first renewal and yearly (PAY-16), and simulated renewals.
+pub async fn hourly(state: &AppState) -> anyhow::Result<()> {
+    let mut tx = state.db.begin().await?;
+    let due: Vec<(Uuid, Uuid, String, String, i32, OffsetDateTime, bool)> = sqlx::query_as(
+        "select s.id, s.donor_id, a.title, s.currency, s.total_minor, s.next_charge_at, s.first_reminder_at is null
+         from server_donations s join apps a on a.id = s.app_id
+         where s.status = 'active' and s.next_charge_at < now() + interval '7 days'
+           and (s.first_reminder_at is null
+                or (s.started_at < now() - interval '358 days'
+                    and coalesce(s.last_yearly_reminder_at, s.started_at) < now() - interval '358 days'))",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (id, donor, title, currency, total, next, first) in &due {
+        let subject = format!("Your server donation to {title} renews on {}", next.date());
+        let body = format!(
+            "Your monthly server donation of {} to {title} is taken again on {}. Nothing to do if you want it to continue. \
+             To stop it, cancel from your account page: it takes two clicks and no further payments are taken.",
+            money(i64::from(*total), currency),
+            next.date()
+        );
+        notify::send(
+            &mut tx,
+            Notice {
+                user_id: *donor,
+                category: "donations",
+                title: subject.clone(),
+                body: body.clone(),
+                link: "/account#donations".into(),
+                collapse_key: None,
+            },
+        )
+        .await?;
+        notify::email_user(&mut tx, &state.config, *donor, &subject, &body).await?;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "update server_donations set {} = now() where id = $1",
+            if *first {
+                "first_reminder_at"
+            } else {
+                "last_yearly_reminder_at"
+            }
+        )))
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    // Simulated subscriptions renew here; real ones by Stripe's invoices.
+    let renew: Vec<(Uuid, OffsetDateTime)> = sqlx::query_as(
+        "select id, next_charge_at from server_donations where simulated and status = 'active' and next_charge_at <= now()",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for (id, at) in renew {
+        monthly_paid(
+            &mut tx,
+            id,
+            &format!("sim_inv_{}", Uuid::new_v4().simple()),
+            at,
+        )
+        .await?;
+        sqlx::query(
+            "update server_donations set next_charge_at = next_charge_at + $2 where id = $1",
+        )
+        .bind(id)
+        .bind(MONTH)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Per Stripe account: (Slop's fees Stripe says it collected, the fees in Slop's records).
+pub fn mismatches(stripe: &[(String, i64)], ours: &[(String, i64)]) -> Vec<(String, i64, i64)> {
+    use std::collections::BTreeMap;
+    let mut by: BTreeMap<&str, (i64, i64)> = BTreeMap::new();
+    for (acct, fee) in stripe {
+        by.entry(acct).or_default().0 += fee;
+    }
+    for (acct, fee) in ours {
+        by.entry(acct).or_default().1 += fee;
+    }
+    by.into_iter()
+        .filter(|(_, (a, b))| a != b)
+        .map(|(acct, (a, b))| (acct.to_string(), a, b))
+        .collect()
+}
+
+/// Daily (PAY-2): Slop's Stripe balance holds only its own fees, and every fee matches a payment
+/// Slop recorded. Compares the last full day's application fees per account with the records.
+pub async fn reconcile(state: &AppState) -> anyhow::Result<usize> {
+    let Mode::Stripe(stripe) = stripe::mode(state) else {
+        return Ok(0);
+    };
+    let today = OffsetDateTime::now_utc().replace_time(time::Time::MIDNIGHT);
+    let (from, to) = (today - Duration::days(1), today);
+    let mut fees = Vec::new();
+    let mut after: Option<String> = None;
+    loop {
+        let mut form = vec![
+            ("created[gte]", from.unix_timestamp().to_string()),
+            ("created[lt]", to.unix_timestamp().to_string()),
+            ("limit", "100".to_string()),
+        ];
+        if let Some(a) = &after {
+            form.push(("starting_after", a.clone()));
+        }
+        let page = call(
+            state,
+            stripe,
+            reqwest::Method::GET,
+            "v1/application_fees",
+            None,
+            &form,
+        )
+        .await?;
+        for f in page["data"].as_array().into_iter().flatten() {
+            let acct = f["account"].as_str().unwrap_or_default().to_string();
+            let net = f["amount"].as_i64().unwrap_or_default()
+                - f["amount_refunded"].as_i64().unwrap_or_default();
+            fees.push((acct, net));
+            after = f["id"].as_str().map(String::from);
+        }
+        if page["has_more"] != true {
+            break;
+        }
+    }
+    let ours: Vec<(String, i64)> = sqlx::query_as(
+        "select stripe_account_id, slop_fee_minor::int8 from payments
+         where not simulated and kind in ('people_job', 'donation') and created_at >= $1 and created_at < $2
+           and stripe_account_id is not null",
+    )
+    .bind(from)
+    .bind(to)
+    .fetch_all(&state.db)
+    .await?;
+    let bad = mismatches(&fees, &ours);
+    if !bad.is_empty() {
+        tracing::error!(
+            ?bad,
+            "Stripe application fees don't match Slop's payment records"
+        );
+        let mut tx = state.db.begin().await?;
+        admin::audit(
+            &mut tx,
+            "reconciliation",
+            "payments.mismatch",
+            &from.date().to_string(),
+            json!({ "accounts": bad }),
+        )
+        .await?;
+        tx.commit().await?;
+    }
+    Ok(bad.len())
+}
+
+/// Runs the hourly jobs and the daily reconciliation.
+pub async fn run(state: AppState) {
+    let mut last_day = None;
+    loop {
+        if let Err(err) = hourly(&state).await {
+            tracing::error!(error = ?err, "donation reminders and renewals failed");
+        }
+        let day = OffsetDateTime::now_utc().date();
+        if last_day != Some(day) {
+            match reconcile(&state).await {
+                Ok(_) => last_day = Some(day),
+                Err(err) => tracing::error!(error = ?err, "payment reconciliation failed"),
+            }
+        }
+        tokio::time::sleep(std::time::Duration::from_secs(3600)).await;
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    const USD: Rate = Rate {
+        percent_bp: 290,
+        fixed_minor: 30,
+    };
+
+    #[test]
+    fn the_donor_covers_processing_and_the_maker_gets_the_donation_less_five_percent() {
+        let q = quote(300, USD, true);
+        assert_eq!(q.slop_fee, 15);
+        assert_eq!(q.maker_receives, 285);
+        // 340 − (2.9% of 340 = 9.86 → 10) − 30 = 300: the total covers the published rate.
+        assert_eq!(q.total, 340);
+        assert_eq!(q.processing, 40);
+        assert!(q.total - ceil_div(q.total * 290, 10_000) - 30 >= 300);
+        for d in [100, 250, 500, 1234, 50_000] {
+            let q = quote(d, USD, true);
+            assert!(
+                q.total - ceil_div(q.total * 290, 10_000) - 30 >= d - 1,
+                "{d}: {q:?}"
+            );
+            assert!(q.total >= d && q.total > q.donation);
+        }
+    }
+
+    #[test]
+    fn without_covering_the_amount_is_the_total() {
+        let q = quote(300, USD, false);
+        assert_eq!(q.total, 300);
+        assert_eq!(q.maker_receives, 300 - 15 - 39);
+    }
+
+    #[test]
+    fn presets_sit_around_the_suggestion() {
+        assert_eq!(presets(500), vec![250, 500, 1000, 2500]);
+        assert_eq!(presets(100), vec![100, 200, 500]);
+        assert_eq!(presets(50_000), vec![25_000, 50_000]);
+    }
+
+    #[test]
+    fn reconciliation_compares_per_account() {
+        let stripe = vec![
+            ("acct_a".to_string(), 15),
+            ("acct_a".to_string(), 25),
+            ("acct_b".to_string(), 5),
+        ];
+        let ours = vec![("acct_a".to_string(), 40), ("acct_c".to_string(), 7)];
+        assert_eq!(
+            mismatches(&stripe, &ours),
+            vec![("acct_b".to_string(), 5, 0), ("acct_c".to_string(), 0, 7)]
+        );
+    }
+
+    /// PAY-5: nothing apps can call or receive (launch and Pulse tokens, update checks, release
+    /// manifests, the desktop client) knows about donations.
+    #[test]
+    fn apps_cannot_learn_who_donated() {
+        for (name, source) in [
+            ("pulse.rs", include_str!("pulse.rs")),
+            ("updates.rs", include_str!("updates.rs")),
+            ("desktop_updates.rs", include_str!("desktop_updates.rs")),
+            ("releases.rs", include_str!("releases.rs")),
+            (
+                "slop-manifest",
+                include_str!("../../slop-manifest/src/lib.rs"),
+            ),
+        ] {
+            let lower = source.to_lowercase();
+            for word in ["donat", "supporter", "donor"] {
+                assert!(!lower.contains(word), "{name} mentions \"{word}\"");
+            }
+        }
+    }
+}

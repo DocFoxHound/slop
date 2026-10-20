@@ -101,7 +101,7 @@ simulates payments instead.
 2. **Developers → Webhooks → Add endpoint** on **connected accounts**:
    `https://<site>/v1/stripe/webhook`, events `checkout.session.completed`,
    `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.created`,
-   `account.updated`.
+   `account.updated`, and for server donations `invoice.paid` and `customer.subscription.deleted`.
 3. Add to `~/.config/slop/slop-api.env` and restart:
    ```
    STRIPE_SECRET_KEY=sk_test_…   # sk_live_… only after the lawyer's review (LEGAL §4)

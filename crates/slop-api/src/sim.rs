@@ -349,6 +349,7 @@ pub struct Generated {
     pub moderation: crate::sim_moderation::ModerationGenerated,
     /// Interested marks on upcoming apps.
     pub interests: u64,
+    pub donations: crate::sim_donations::DonationsGenerated,
 }
 
 /// Wipes the sandbox's catalog and users, then makes a new simulated store.
@@ -649,6 +650,9 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     )
     .execute(&mut *tx)
     .await?;
+    sqlx::query("update apps set donations_on = false, runs_servers = false")
+        .execute(&mut *tx)
+        .await?;
     for table in [
         "notifications",
         "interests",
@@ -657,6 +661,9 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         "creative_reviews",
         "job_events",
         "payments",
+        "donations",
+        "server_donations",
+        "donation_accounts",
         "job_payments",
         "jobs",
         "stripe_events",
@@ -983,6 +990,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .await?
     .rows_affected();
     let moderation = crate::sim_moderation::write(db, &mut rng, now).await?;
+    let donations = crate::sim_donations::write(db, &mut rng, now).await?;
 
     Ok(Generated {
         apps: apps.len(),
@@ -996,6 +1004,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         people,
         moderation,
         interests,
+        donations,
     })
 }
 
@@ -1153,6 +1162,8 @@ pub struct Report {
     pub people: crate::sim_people::PeopleReport,
     /// Reports, decisions and appeals (sim_moderation.rs).
     pub moderation: crate::sim_moderation::ModerationReport,
+    /// Donations through the real amounts (sim_donations.rs).
+    pub donations: crate::sim_donations::DonationsReport,
 }
 
 struct Truth {
@@ -1568,6 +1579,7 @@ pub async fn report(
     .await? as usize;
     r.people = crate::sim_people::report(db).await?;
     r.moderation = crate::sim_moderation::report(db).await?;
+    r.donations = crate::sim_donations::report(db).await?;
     Ok(r)
 }
 

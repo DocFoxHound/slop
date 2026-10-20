@@ -10,6 +10,7 @@ import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
+import { DonationsPanel } from "../components/DonationsManage";
 import { UpdatesPanel } from "./Releases";
 
 /** The value of the "follow the newest" choice in the release list. */
@@ -78,6 +79,7 @@ export function Manage() {
 
       <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
       <UpdatesPanel key={settingsNonce} slug={slug} />
+      <DonationsPanel slug={slug} />
       <RepoMove slug={slug} overview={m} onChanged={changed} />
       <Requests slug={slug} changes={m.changes} onChanged={changed} />
     </div>

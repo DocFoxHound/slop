@@ -73,7 +73,7 @@ pub fn webhook_routes() -> Router<AppState> {
 // ---------------------------------------------------------------------------------------------
 // Stripe's API (form-encoded requests, JSON answers)
 
-async fn call(
+pub(crate) async fn call(
     state: &AppState,
     stripe: &StripeConfig,
     method: reqwest::Method,
@@ -106,7 +106,7 @@ async fn call(
     Ok(body)
 }
 
-fn account_status(account: &Value) -> &'static str {
+pub(crate) fn account_status(account: &Value) -> &'static str {
     if account["charges_enabled"].as_bool() == Some(true)
         && account["details_submitted"].as_bool() == Some(true)
     {
@@ -245,7 +245,7 @@ pub async fn refresh_account(
     Ok(Json(Onboarding { url: None, status }))
 }
 
-async fn sync_account(
+pub(crate) async fn sync_account(
     state: &AppState,
     stripe: &StripeConfig,
     acct: &str,
@@ -260,13 +260,16 @@ async fn sync_account(
     )
     .await?;
     let status = account_status(&account);
-    sqlx::query(
-        "update creatives set stripe_status = $2, updated_at = now() where stripe_account_id = $1",
-    )
-    .bind(acct)
-    .bind(status)
-    .execute(&state.db)
-    .await?;
+    // One Stripe account can take People payments and donations.
+    for table in ["creatives", "donation_accounts"] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "update {table} set stripe_status = $2, updated_at = now() where stripe_account_id = $1"
+        )))
+        .bind(acct)
+        .bind(status)
+        .execute(&state.db)
+        .await?;
+    }
     Ok(status.to_string())
 }
 
@@ -502,7 +505,19 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
         .to_string();
     match (event.kind.as_str(), event.account.as_deref()) {
         ("checkout.session.completed" | "checkout.session.async_payment_succeeded", Some(acct)) => {
-            sync_session(state, stripe, acct, &object_id).await?;
+            // Which kind of payment it is decides who reads it; the state comes from Stripe's API.
+            let meta = &event.data.object["metadata"];
+            if meta["donation_id"].is_string() || meta["server_donation_id"].is_string() {
+                crate::donations::sync_checkout(state, stripe, acct, &object_id).await?;
+            } else {
+                sync_session(state, stripe, acct, &object_id).await?;
+            }
+        }
+        ("invoice.paid", Some(acct)) => {
+            crate::donations::sync_invoice(state, stripe, acct, &object_id).await?;
+        }
+        ("customer.subscription.deleted", Some(acct)) => {
+            crate::donations::subscription_ended(state, stripe, acct, &object_id).await?;
         }
         ("charge.refunded", Some(acct)) => {
             let charge = call(
@@ -516,6 +531,7 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
             .await?;
             let refunded = charge["amount_refunded"].as_i64().unwrap_or_default();
             jobs::refund_recorded(&state.db, &object_id, refunded).await?;
+            crate::donations::refund_recorded(&state.db, &object_id, refunded).await?;
         }
         ("charge.dispute.created", Some(_)) => {
             let charge = event.data.object["charge"].as_str().unwrap_or_default();

@@ -185,6 +185,7 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 - **Donate button:** presets around the publisher's suggested amount, from $1 to $500. **The donor pays the card fees**, and the total is shown before paying. **Donors are never listed publicly,** and get nothing but a thank-you.
 - **Donations unlock nothing,** and apps can't tell who donated. That's what keeps a donation from being a purchase.
 - **Server donation:** a monthly recurring donation, only for apps that declare they run servers. It never controls access to those servers. Cancel any time.
+- **Built 2026-10-20** (`PAYMENTS.md` §10): the Donate box on app pages, server donations, the maker's settings, totals and refunds on the Manage page, and donation history, cancelling and fee statements on the account page.
 - **Where the money goes:** **one** Stripe account per app, picked by the publisher. If several people made it, the publisher splits the money with them outside Slop. Community branches have their own Donate button.
 - **Slop's fee:** a flat **5%** of each donation, charged to the maker.
 - **No in-app purchases** (decided). Apps can't sell anything: no items, supporter packs, subscriptions, loot boxes or premium currencies. The monetization scan rejects them.

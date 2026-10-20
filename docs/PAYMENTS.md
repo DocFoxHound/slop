@@ -144,7 +144,19 @@ payments(id, kind,                  -- donation | server_donation | people_job |
 
 The mockup's Donate button (with the donor-pays-fees breakdown) is pure UI.
 
-**Built (2026-10-19):** People payments (`crates/slop-api/src/people/`): Stripe Connect onboarding, Checkout for each job payment as a direct charge with the 5% application fee, signed webhooks, and the `payments` record (§8). Donations aren't built yet.
+**Built (2026-10-19):** People payments (`crates/slop-api/src/people/`): Stripe Connect onboarding, Checkout for each job payment as a direct charge with the 5% application fee, signed webhooks, and the `payments` record (§8).
+
+**Built (2026-10-20):** donations (`crates/slop-api/src/donations.rs`):
+- **Enable donations** on the app's Manage page: the tax notice (PAY-9, recorded), then Stripe's sign-up for the maker's own account (the People account is reused if they have one).
+- **The Donate box:** presets around the maker's suggestion, each showing the donor's total first (PAY-10), plus any amount from $1 to $500. Processing comes from `processing_rates` (one published rate per currency: 2.9% + 30¢ / 25 c / 20 p), or out of the maker's share where `country_policies.donor_covers_fees` is off (PAY-12). An unticked box shares the donor's name and a message with the maker only. 18+, signed in, 10 starts an hour at most.
+- **Server donations:** Stripe Billing on the maker's account with `application_fee_percent` set so the fee is 5% of the donation; the exact terms are saved (`server_donations.consent_text`); cancel in two clicks from the account page with a confirmation email; reminders 7 days before the first renewal and yearly; "The servers are shut down" cancels them all and emails the donors. These emails go out whatever the donor's email choices.
+- **Records:** `donations` (one row per payment, monthly ones too) and `payments` rows (kind `donation`) mirroring Stripe; refunds from the maker's button call Stripe on the maker's account (PAY-3).
+- **The maker's view:** totals, months with at least 10 donations, server-donor counts from 10 up, names and messages only from donors who shared them, and a refund button for mistakes. **Fee statements** by month on the account page (donations and People jobs).
+- **Daily reconciliation** (PAY-2): yesterday's Stripe application fees per account against Slop's records; mismatches are logged and written to the audit log.
+- **PAY-5 test:** the app-facing code (Pulse, updates, release manifests, the desktop update feed) never mentions donations, and an app's page is identical before and after someone donates.
+- Webhooks also handle `invoice.paid` and `customer.subscription.deleted`.
+
+Not yet: VAT lines on fee statements (they need Slop's registrations, §11), CAPTCHA after failed attempts (§9), and the step-up check and 72-hour delay for switching a Stripe account (§9).
 
 ## 11. Open questions
 1. **iOS:** whether, and how, donations work in an iOS app (`DESIGN.md` §17).
