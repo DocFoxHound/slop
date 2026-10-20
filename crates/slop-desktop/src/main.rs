@@ -390,7 +390,20 @@ async fn startup(app: AppHandle) {
     .await;
     match check {
         Ok(Ok(res)) if res.status == 401 => open_login(&app),
-        Ok(Ok(_)) => show_main(&app),
+        Ok(Ok(_)) => {
+            show_main(&app);
+            // Chat set up on this device: start syncing now, so messages and unread counts
+            // arrive without opening the chat page first.
+            let desktop = app.state::<Desktop>();
+            let has_chat = std::fs::read_dir(&desktop.chat_dir)
+                .map(|mut d| {
+                    d.any(|e| e.is_ok_and(|e| e.file_name().to_string_lossy().ends_with(".bin")))
+                })
+                .unwrap_or(false);
+            if has_chat && let Err(e) = chat_for(&app, &desktop).await {
+                tracing::warn!(error = %e.message, "couldn't start chat");
+            }
+        }
         Ok(Err(e)) => {
             tracing::warn!(error = %e, "offline at launch; opening the store with the saved sign-in");
             show_main(&app);
@@ -676,15 +689,23 @@ async fn chat_loop(app: AppHandle, chat: std::sync::Weak<Chat>) {
         let Some(c) = chat.upgrade() else {
             return;
         };
+        let started = std::time::Instant::now();
         match c.sync(25).await {
             Ok(changes) => {
                 backoff = 2;
-                if changes.list || changes.devices || !changes.conversations.is_empty() {
+                let changed = changes.list || changes.devices || !changes.conversations.is_empty();
+                if changed {
                     let _ = app.emit("chat-changed", changes);
                 }
                 drop(c);
-                // Not set up or approved yet: look again now and then.
-                tokio::time::sleep(Duration::from_millis(300)).await;
+                // A sync that came straight back with nothing (chat not set up or approved on
+                // this device yet) waits a little before asking again.
+                let pause = if !changed && started.elapsed() < Duration::from_secs(1) {
+                    Duration::from_secs(5)
+                } else {
+                    Duration::from_millis(300)
+                };
+                tokio::time::sleep(pause).await;
             }
             Err(e) => {
                 drop(c);

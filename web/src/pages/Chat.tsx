@@ -703,7 +703,10 @@ function Conversation({
       },
       (e) => setError(errorText(e)),
     );
-    void chat({ action: "mark_read", conversation: conv.id }).then(onListChanged, () => undefined);
+    void chat({ action: "mark_read", conversation: conv.id }).then(() => {
+      onListChanged();
+      window.dispatchEvent(new Event("slop-chat-read"));
+    }, () => undefined);
   }, [conv.id, onListChanged]);
   useEffect(load, [load]);
   useEffect(() => {

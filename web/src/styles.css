@@ -817,3 +817,4 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
   .chat-layout:has(.conversation) .chat-list { display: none; }
   .chat-layout:not(:has(.conversation)) .chat-main { display: none; }
 }
+.tab-badge { margin-left: 6px; font-size: 10px; vertical-align: middle; }
