@@ -123,6 +123,20 @@ SLOP_EMAIL_FROM=Slop <notifications@your-domain>
 ```
 Use a provider with a data processing agreement (PRIV-5), and set SPF/DKIM for the From domain.
 
+## More sign-ins (Google, GitLab, Bitbucket)
+
+Each turns on once its app keys are in `~/.config/slop/slop.env`:
+
+| Provider | Create the app | Callback URL | Scopes |
+|---|---|---|---|
+| Google | Google Cloud Console → APIs & Services → Credentials → OAuth client (Web) | `https://<site>/v1/auth/google/callback` | openid, email, profile |
+| GitLab | gitlab.com → Preferences → Applications | `https://<site>/v1/auth/gitlab/callback` | read_user |
+| Bitbucket | Workspace settings → OAuth consumers | `https://<site>/v1/auth/bitbucket/callback` | Account: Read, Email |
+
+Then `GOOGLE_CLIENT_ID`/`GOOGLE_CLIENT_SECRET` (and likewise `GITLAB_…`, `BITBUCKET_…`) and restart
+the API. The API also needs `git` installed: it reads repositories on other hosts for ownership
+codes (repo_owner.rs).
+
 ## Phone notifications (web push)
 
 Phones and browsers get notifications through web push once the server has a VAPID key:

@@ -153,6 +153,44 @@ export interface DonationAccount {
   change: { kind: "switch" | "disconnect"; requested_at: string; effective_at: string; new_account_ready: boolean | null } | null;
 }
 
+export type SignInProvider = "github" | "google" | "gitlab" | "bitbucket";
+
+export const PROVIDER_LABEL: Record<SignInProvider, string> = {
+  github: "GitHub",
+  google: "Google",
+  gitlab: "GitLab",
+  bitbucket: "Bitbucket",
+};
+
+export interface LinkedIdentity {
+  provider: SignInProvider;
+  provider_subject: string;
+  login: string | null;
+  created_at: string;
+  last_sign_in_at: string;
+}
+
+export interface CombinePreview {
+  provider: SignInProvider;
+  name: string;
+  apps: number;
+  library: number;
+  votes: number;
+  friends: number;
+  teams: number;
+  jobs: number;
+  chats: number;
+  blocked: string | null;
+}
+
+export interface RepoOwnership {
+  ok: boolean;
+  method: "account" | "code";
+  message: string;
+  link: SignInProvider | null;
+  code: string | null;
+}
+
 /** Someone in a friends list, request list or block list (crates/slop-api/src/friends.rs). */
 export interface FriendPerson {
   id: string;
@@ -1401,7 +1439,20 @@ export const api = {
   approveDesktop: (id: string) =>
     request<{ redirect_url: string }>("POST", `/v1/auth/desktop/requests/${encodeURIComponent(id)}/approve`),
 
-  providers: () => request<{ github: boolean }>("GET", "/v1/auth/providers"),
+  providers: () => request<Record<SignInProvider, boolean>>("GET", "/v1/auth/providers"),
+  /** The sign-ins linked to the account (crates/slop-api/src/auth/mod.rs). */
+  identities: () => request<LinkedIdentity[]>("GET", "/v1/me/identities"),
+  unlink: (provider: string, subject: string) =>
+    request<void>("DELETE", `/v1/me/identities/${encodeURIComponent(provider)}/${encodeURIComponent(subject)}`),
+  /** Combining with the account of a sign-in being linked (auth/merge.rs). */
+  combine: {
+    preview: () => request<CombinePreview>("GET", "/v1/auth/combine"),
+    confirm: () => request<void>("POST", "/v1/auth/combine"),
+    cancel: () => request<void>("DELETE", "/v1/auth/combine"),
+  },
+  /** How to prove you own a repository, and whether you have (repo_owner.rs). */
+  repoOwnership: (repo_url: string) => request<RepoOwnership>("POST", "/v1/repos/ownership", { repo_url }),
+  checkRepoCode: (repo_url: string) => request<RepoOwnership>("POST", "/v1/repos/ownership/check", { repo_url }),
   /** The newest desktop app build for a platform (for the download button). */
   desktopLatest: (platform: "windows" | "mac" | "linux-deb" | "linux-rpm") =>
     request<{ version: string; url: string }>("GET", `/v1/desktop/latest/${platform}`),
@@ -1462,6 +1513,11 @@ export const api = {
   simLogin: (id: string) => request<void>("POST", `/v1/sim/login/${encodeURIComponent(id)}`),
   /** Full-page navigation target that starts GitHub sign-in. */
   githubSignInUrl: (returnTo: string) => `${API_BASE}/v1/auth/github/start${query({ return_to: returnTo })}`,
+  signInUrl: (provider: SignInProvider, returnTo: string) =>
+    `${API_BASE}/v1/auth/${provider}/start${query({ return_to: returnTo })}`,
+  /** Linking another sign-in: signs in again first if needed, then to the provider. */
+  linkUrl: (provider: SignInProvider, returnTo = "/account#sign-ins") =>
+    `${API_BASE}/v1/auth/${provider}/link${query({ return_to: returnTo })}`,
   signupInfo: () => request<SignupInfo>("GET", "/v1/auth/signup"),
   signup: (body: { display_name: string; country_code: string; age_confirmed: boolean; accept_terms: boolean }) =>
     request<{ user: Me; return_to: string }>("POST", "/v1/auth/signup", body),

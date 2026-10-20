@@ -11,6 +11,10 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | 16+ confirmation time | `users.age_16_confirmed_at` | Proof of the 16+ rule. No date of birth is stored | Legal obligation | Life of account |
 | Provider account ID | `identities.provider_subject` | Sign-in; after an account is closed, refusing that sign-in | Contract; legitimate interest (closed and banned accounts don't return) | Life of account; kept after closing, only to refuse the sign-in |
 | Last sign-in time | `identities.last_sign_in_at` | Security, devices page | Legitimate interest | Life of account |
+| Name at a sign-in provider (GitHub login, GitLab/Bitbucket username, verified Google email) | `identities.login`, `pending_signups.login` | Showing which accounts are linked; checking repository ownership on Git hosts | Contract | Life of the link |
+| A combined account's pointer | `users.merged_into` | Sending the old account's sign-ins and records to the account it went into | Contract | Life of account |
+| Pending combinations (both accounts, the sign-in) | `pending_merges` | Confirming before two accounts are combined | Contract | 15 minutes |
+| Repository ownership codes (account, repository, code, when proved) | `repo_claims` | Proving a repository is yours on hosts that can't say who owns it | Contract | Kept with the account; a proof counts for 30 days |
 | Pending sign-up (name, email) | `pending_signups` | Finishing sign-up | Contract | 30 minutes, then deleted |
 | Session (hashed token, user agent, times) | `sessions` | Keeping the user signed in; devices page | Contract | Until it ends (expiry, idle timeout or sign-out), then deleted after 7 days by the hourly cleanup |
 | Desktop device name | `desktop_auth_requests.device_name`, `sessions.user_agent` | Approval page and devices page | Contract | 10 minutes for requests; sessions as above |

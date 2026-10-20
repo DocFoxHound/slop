@@ -28,7 +28,7 @@ use uuid::Uuid;
 use crate::{
     AppState, admin,
     auth::session::CurrentUser,
-    catalog::validate_repo_url,
+    catalog::validate_repo_url_in,
     error::{ApiError, ApiResult},
     releases::SERVING,
     updates::{self, AUTO_REVIEWER},
@@ -326,7 +326,7 @@ async fn request_change(
         }
         ChangeRequest::Repo { repo_url, note } => {
             let note = clean_note(note)?;
-            let repo_url = validate_repo_url(&repo_url)?;
+            let repo_url = validate_repo_url_in(&state, &repo_url)?;
             if same_repo(&repo_url, &current_repo) {
                 return Err(ApiError::Conflict(
                     "that's already the app's repository".into(),

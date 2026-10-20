@@ -880,9 +880,19 @@ pub(crate) fn validate_text(
 
 /// Public `https` repo URLs only (DESIGN §8: GitHub, GitLab, Bitbucket or self-hosted).
 pub(crate) fn validate_repo_url(value: &str) -> ApiResult<String> {
+    validate_repo_url_with(value, false)
+}
+
+/// As `validate_repo_url`; servers set up for local testing (plain-http downloads) also take
+/// http, for test Git servers on the same machine.
+pub(crate) fn validate_repo_url_in(state: &AppState, value: &str) -> ApiResult<String> {
+    validate_repo_url_with(value, state.config.releases.allow_http_downloads)
+}
+
+fn validate_repo_url_with(value: &str, allow_http: bool) -> ApiResult<String> {
     let invalid = || ApiError::invalid("repo_url", "use the https:// address of the repository");
     let url = Url::parse(value.trim()).map_err(|_| invalid())?;
-    if url.scheme() != "https"
+    if !(url.scheme() == "https" || (allow_http && url.scheme() == "http"))
         || url.host_str().is_none()
         || !url.username().is_empty()
         || url.password().is_some()
@@ -992,7 +1002,7 @@ async fn create_app(
     let title = validate_text("title", &req.title, 80, false)?;
     let summary = validate_text("summary", &req.summary, 200, false)?;
     let description = validate_text("description_md", &req.description_md, 20_000, true)?;
-    let repo_url = validate_repo_url(&req.repo_url)?;
+    let repo_url = validate_repo_url_in(&state, &req.repo_url)?;
     let license = validate_license(&req.license_spdx)?;
     let min_age = validate_min_age(req.min_age)?;
     let platforms = validate_platforms(&req.platforms)?;
@@ -1080,7 +1090,7 @@ async fn update_app(
         )?);
     }
     if let Some(repo_url) = &changes.repo_url {
-        let repo_url = validate_repo_url(repo_url)?;
+        let repo_url = validate_repo_url_in(&state, repo_url)?;
         if !crate::manage::same_repo(&repo_url, &current_repo) {
             crate::repo_owner::check(&state, user.id, &repo_url, Some(app_id)).await?;
         }

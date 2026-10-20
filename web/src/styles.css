@@ -834,3 +834,8 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .overlay-content { flex: 1; min-height: 0; overflow-y: auto; }
 .overlay-content .page { padding-top: 16px; }
 .overlay-head .grow { flex: 1; }
+.provider-list { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
+.ownership { margin: -6px 0 14px; }
+.ownership.ok { color: var(--good); }
+.ownership p { margin-bottom: 8px; }
+.ownership-code { user-select: all; font-size: 13px; }

@@ -189,7 +189,7 @@ async fn register(
     let title = catalog::validate_text("title", &b.title, 80, false)?;
     let summary = catalog::validate_text("summary", &b.summary, 200, false)?;
     let note = catalog::validate_text("note", &b.note, 500, false)?;
-    let repo_url = catalog::validate_repo_url(&b.repo_url)?;
+    let repo_url = catalog::validate_repo_url_in(&state, &b.repo_url)?;
     let license = catalog::validate_license(&b.license_spdx)?;
     let platforms = catalog::validate_platforms(&b.platforms)?;
     if !KINDS.iter().any(|(k, _)| *k == b.kind) {

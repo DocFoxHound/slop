@@ -48,6 +48,7 @@ Slop's whole promise is "AI-made software you can trust." That makes it a **soft
 - Use the **authorization code flow with PKCE**, with `state` and `nonce` checked, and exact redirect URIs.
 - **Desktop and phone apps** sign in through the **system browser** (not an embedded webview), returning through a loopback address or app link (RFC 8252). The app never sees the provider password.
 - **Account linking:** a new provider is linked only from a signed-in session. **Never link or merge accounts automatically just because the email matches.** Some providers don't verify email, which would let an attacker take over an account.
+  - **Built 2026-10-20** (`auth/mod.rs`, `auth/oauth.rs`, `auth/merge.rs`): linking needs a sign-in from the last 10 minutes (else the browser signs in again first and comes back), and the OAuth flow is bound to the account and session that started it; finishing it in another session fails. If the linked sign-in has its own Slop account, the two are combined only after a confirmation in the same session; suspended, closed and staff accounts never are. Unlinking needs a recent sign-in and never removes the last sign-in.
 
 ### 4.2 Sessions
 - Short-lived access tokens (≈15 min) and **rotating refresh tokens**. Reusing an old refresh token revokes the whole token family (a sign of theft).
