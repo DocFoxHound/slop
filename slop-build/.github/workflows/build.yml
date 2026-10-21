@@ -450,6 +450,9 @@ jobs:
           ext=""; [ "$PLATFORM" = "windows" ] && ext=".exe"
           out="$PWD/slop-dist/app"
           mkdir -p "$out"
+          # Valve's Steam Runtime 3 (sniper) SDK, pinned to the version and image Slop tested
+          # (examples/slop-pong's tests pass in it). Moving it is a change to this recipe.
+          SNIPER_SDK=registry.gitlab.steamos.cloud/steamrt/sniper/sdk:3.0.20260928.262393@sha256:9ae8083ee9ae6298361a62f289e62f0a2b0779d23fc8c276304157f0c06010c5
           # Runs a compile command here, or for Linux with linux-runtime inside the Steam Runtime
           # SDK, with the repository at the same path, as this user, and extra mounts from $@.
           compile() {
@@ -460,7 +463,7 @@ jobs:
             mkdir -p "$RUNNER_TEMP/slop-runtime-home"
             docker run --rm --user "$(id -u):$(id -g)" -e HOME=/slop-home \
               -v "$RUNNER_TEMP/slop-runtime-home:/slop-home" -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
-              -w "$PWD" "$@" registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest \
+              -w "$PWD" "$@" "$SNIPER_SDK" \
               bash -euo pipefail -c "$cmd"
           }
           # A program inside a folder, for types whose output has one (Electron, PyInstaller).

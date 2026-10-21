@@ -127,6 +127,10 @@ pub struct Licence {
     /// Games): code that came from elsewhere, under its own terms.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub notices: Vec<Hit>,
+    /// Closed-source libraries the code builds against (NVIDIA's Cg runtime): an open-source app
+    /// can't depend on them.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub closed: Vec<Hit>,
     pub problems: Vec<String>,
     /// A short key per problem (`no_file`, `mismatch`, `header:GPL-3.0`…), so an update's check
     /// can be compared with the last approved release's.
@@ -643,6 +647,19 @@ static NOTICE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::
     ]
 });
 
+/// Closed-source libraries, found where code includes or links them (not shader source: Unity's
+/// `CGPROGRAM` blocks are compiled by Unity, without NVIDIA's runtime).
+static CLOSED_RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
+    vec![Rule {
+        rule: "nvidia_cg",
+        label: "NVIDIA's Cg Toolkit, a closed-source shader library NVIDIA stopped updating in 2012",
+        re: Regex::new(
+            r#"#\s*include\s*[<"]Cg/cg(GL|D3D\d+)?\.h[>"]|(^|[\s"'])-lCg(GL)?\b|\bfind_package\s*\(\s*Cg\b|\blibCg(GL)?\.so\b|\b[Cc]g(GL)?\.dll\b|link\s*\(\s*name\s*=\s*"Cg(GL)?""#,
+        )
+        .unwrap(),
+    }]
+});
+
 /// Pay-to-win designs: notes for a person (DESIGN §8, Content Policy "pay-to-win").
 static DESIGN_RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     let r = |rule, label, re: &str| Rule {
@@ -1083,6 +1100,7 @@ pub fn scan_archive(
     let mut notices: Vec<(&'static str, &'static str, &'static [&'static str], String)> =
         Vec::new();
     let mut notice_tally = Tally::default();
+    let mut closed = Tally::default();
     let mut design = Tally::default();
     let (mut pulse_uses, mut pulse_beats) = (false, false);
     let mut code_loading = Tally::default();
@@ -1122,12 +1140,22 @@ pub fn scan_archive(
             || (name == "plugin.cfg" && (path.starts_with("addons/") || path.contains("/addons/")));
         let unity_manifest = path.ends_with("Packages/manifest.json");
         let source = SOURCE_EXTS.contains(&ext.as_str()) || ext == "cfg" && name == "project.godot";
+        // Build scripts, for libraries the program links.
+        let build_file = matches!(
+            name.as_str(),
+            "CMakeLists.txt"
+                | "Makefile"
+                | "makefile"
+                | "GNUmakefile"
+                | "meson.build"
+                | "SConstruct"
+        ) || matches!(ext.as_str(), "cmake" | "mk" | "pro" | "vcxproj");
         // Third-party notices shipped inside the project (Asset Store packages, vendored code).
         let lower = name.to_ascii_lowercase();
         let notice_file = !licence_file
             && matches!(ext.as_str(), "txt" | "md" | "")
             && (lower.contains("license") || lower.contains("licence") || lower.contains("eula"));
-        if !(licence_file || lockfile || unity_manifest || source || notice_file) {
+        if !(licence_file || lockfile || unity_manifest || source || notice_file || build_file) {
             continue;
         }
         let size = entry.header().size().unwrap_or(0);
@@ -1155,6 +1183,17 @@ pub fn scan_archive(
             if !found.is_empty() {
                 report.lockfiles.push(path.clone());
                 packages.extend(found);
+            }
+        }
+        if source || build_file {
+            // Once per file, at its first mention.
+            for rule in CLOSED_RULES.iter() {
+                if let Some(i) = text
+                    .lines()
+                    .position(|l| l.len() <= 2000 && rule.re.is_match(l))
+                {
+                    closed.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
+                }
             }
         }
         if notice_file || source {
@@ -1259,6 +1298,7 @@ pub fn scan_archive(
         }
     }
     report.licence.notices = notice_tally.into_hits();
+    report.licence.closed = closed.into_hits();
     report.save_folder = if uses_save_dir {
         "slop"
     } else if !report.saves.is_empty() {
@@ -1320,6 +1360,19 @@ fn licence_problems(
                 h.label,
                 h.examples.join(", "),
                 l.declared
+            ),
+        ));
+    }
+    for c in &l.closed {
+        problems.push((
+            format!("closed:{}", c.rule),
+            format!(
+                "{} file{} build{} against {} (e.g. {}). An open-source app can't depend on a closed-source library: use GLSL or HLSL shaders instead.",
+                c.count,
+                if c.count == 1 { "" } else { "s" },
+                if c.count == 1 { "s" } else { "" },
+                c.label,
+                c.examples.join(", "),
             ),
         ));
     }
@@ -1864,6 +1917,47 @@ mod tests {
         let (report, _) = scan_archive(&data[..], "GPL-3.0-or-later", true).unwrap();
         assert!(report.licence.notices.is_empty());
         assert_eq!(report.pulse, "none");
+    }
+
+    #[test]
+    fn closed_source_cg_is_a_licence_problem_but_unity_shaders_are_not() {
+        let licence = (
+            "LICENSE",
+            "MIT License\n\nPermission is hereby granted, free of charge",
+        );
+        let data = archive(&[
+            licence,
+            (
+                "src/render.cpp",
+                "#include <GL/gl.h>\n#include <Cg/cgGL.h>\nint main() {}",
+            ),
+            (
+                "CMakeLists.txt",
+                "find_package(Cg REQUIRED)\ntarget_link_libraries(game -lCgGL)",
+            ),
+            (
+                "Assets/Water.shader",
+                "CGPROGRAM\n#pragma vertex vert\nENDCG",
+            ),
+        ]);
+        let (report, _) = scan_archive(&data[..], "MIT", true).unwrap();
+        let closed: Vec<_> = report
+            .licence
+            .closed
+            .iter()
+            .map(|h| (h.rule.as_str(), h.count))
+            .collect();
+        assert_eq!(closed, [("nvidia_cg", 2)]);
+        assert!(
+            report
+                .licence
+                .kinds
+                .contains(&"closed:nvidia_cg".to_string())
+        );
+
+        let data = archive(&[licence, ("Assets/Water.shader", "CGPROGRAM\nENDCG")]);
+        let (report, _) = scan_archive(&data[..], "MIT", true).unwrap();
+        assert!(report.licence.closed.is_empty());
     }
 
     #[test]

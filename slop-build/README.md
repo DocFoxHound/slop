@@ -61,7 +61,7 @@ GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split
 | `dotnet-version`, `dotnet-project` | `dotnet` and C# Godot (`8.0.x` by default) |
 | `python-version`, `python-entry`, `python-windowed` | `python` |
 | `node-version` | `electron`, `tauri`, `web` |
-| `linux-runtime` | `steam-sniper`: `rust`, `go` and `custom` compile Linux inside Valve's Steam Runtime 3 (sniper) SDK container, so the program needs only glibc 2.31 (tried with podman, 2026-10-21). Godot and Unity ship their engine's own prebuilt player (Godot 4.4 needs glibc 2.28), so they don't need it: the Pong example's 16 tests pass inside sniper |
+| `linux-runtime` | `steam-sniper`: `rust`, `go` and `custom` compile Linux inside Valve's Steam Runtime 3 (sniper) SDK container, so the program needs only glibc 2.31 (tried with podman, 2026-10-21). The image is pinned to version 3.0.20260928.262393 by digest, so a change at Valve can't alter builds; moving it is a recipe change. Godot and Unity ship their engine's own prebuilt player (Godot 4.4 needs glibc 2.28), so they don't need it: the Pong example's 16 tests pass inside sniper |
 | `publish` | `false`: build and check only, no release, nothing sent to Slop |
 | `signpath-organization-id` | Optional: sign the Windows program with SignPath (needs the `SIGNPATH_API_TOKEN` secret) |
 | `signpath-project-slug` | SignPath project; defaults to `app` |
