@@ -62,6 +62,10 @@ export interface AppUpdate {
   }>;
   /** Approved mods for the app, to add in the Slop app. */
   mods?: Array<{ slug: string; title: string; author: string; note: string | null }>;
+  /** Sandbox mode: the maker's declaration, whether it's suggested, and player reports. */
+  sandbox_ready?: boolean;
+  sandbox_suggested?: boolean;
+  sandbox_trouble?: boolean;
 }
 
 export interface AppSummary {
@@ -524,6 +528,14 @@ export interface AppDetail extends AppSummary {
   /** What it connects to online (servers Slop can't check); empty: it doesn't. */
   online: OnlineKind[];
   online_hosts: string[];
+  /** The maker says it keeps local saves only in SLOP_SAVE_DIR and works in sandbox mode. */
+  sandbox_ready: boolean;
+  /** Sandbox mode is suggested: it goes online (servers Slop can't check). */
+  sandbox_suggested: boolean;
+  /** Enough players reported it doesn't work in sandbox mode. */
+  sandbox_trouble: boolean;
+  /** The viewer reported that it doesn't work in sandbox mode. */
+  sandbox_reported: boolean;
   is_interested: boolean;
   /** For a community branch: what it branches from. */
   branch: {
@@ -1557,6 +1569,8 @@ export interface RepoScan {
   code_loading?: SourceHit[];
   /** Networking code: it goes online. */
   network?: SourceHit[];
+  /** Saves written to fixed places in the user's folders instead of SLOP_SAVE_DIR. */
+  saves?: SourceHit[];
   /** It goes online, but the store page didn't say so when this release was checked. */
   online_undeclared?: boolean;
 }
@@ -1664,6 +1678,8 @@ export interface NewApp {
   online?: OnlineKind[];
   /** The maker's servers by name (play.example.com, play.example.com:7777). */
   online_hosts?: string[];
+  /** Works in sandbox mode: local saves only in SLOP_SAVE_DIR. */
+  sandbox_ready?: boolean;
 }
 
 export type RepoTokenKind = "gitlab" | "bitbucket" | "gitea";
@@ -2129,6 +2145,9 @@ export const api = {
     request<void>("PUT", `/v1/me/library/${encodeURIComponent(slug)}`),
   removeFromLibrary: (slug: string) =>
     request<void>("DELETE", `/v1/me/library/${encodeURIComponent(slug)}`),
+  /** Report (or take back) that the app doesn't work in sandbox mode. */
+  sandboxReport: (slug: string, on: boolean) =>
+    request<void>(on ? "PUT" : "DELETE", `/v1/apps/${encodeURIComponent(slug)}/sandbox-report`),
   desktopRequest: (id: string) =>
     request<{ device_name: string; expires_at: string }>(
       "GET",

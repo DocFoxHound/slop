@@ -8,6 +8,11 @@
 //! apps/<slug>/installer/…     a maker's installer, kept for the user to run
 //! mods/<slug>/install.json    a mod: its signed manifest, which names the game it's for
 //! mods/<slug>/files/…         the mod's contents, handed to its game at launch (SLOP_MODS)
+//! saves/<slug>/               the app's save folder (SLOP_SAVE_DIR), kept when it's uninstalled
+//! save-copies/<slug>/<time>/  copies of it taken before sandboxed sessions
+//! quarantine/<slug>/…         programs found in the save folder and moved out of it
+//! cache/<slug>/               the app's cache, never copied
+//! settings/sandbox.json       which apps run in sandbox mode
 //! staging/                    downloads and unpacking in progress
 //! revocations.json            the last signed revocation list
 //! ```
@@ -32,7 +37,11 @@ use slop_manifest::{
 };
 use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 
-use crate::{Error, Result, api::ApiClient};
+use crate::{
+    Error, Result,
+    api::ApiClient,
+    sandbox::{AppSandbox, SandboxSettings},
+};
 
 /// What `install.json` holds.
 #[derive(Clone, Debug, Serialize, Deserialize)]
@@ -78,6 +87,16 @@ pub struct InstalledMod {
     pub revoked: Option<String>,
 }
 
+/// A checked app, ready to start.
+pub struct Launch {
+    pub command: Command,
+    pub sandboxed: bool,
+    /// Programs and libraries found in the save folder and moved out (relative paths).
+    pub quarantined: Vec<String>,
+    /// The saves were too big to copy before this sandboxed session.
+    pub copy_skipped: bool,
+}
+
 pub struct Library {
     root: PathBuf,
     trusted: Vec<VerifyingKey>,
@@ -119,7 +138,16 @@ impl Library {
             .build()?;
         let root = root.into();
         fs::create_dir_all(root.join("apps"))?;
-        fs::create_dir_all(root.join("mods"))?;
+        for dir in [
+            "mods",
+            "saves",
+            "save-copies",
+            "quarantine",
+            "cache",
+            "settings",
+        ] {
+            fs::create_dir_all(root.join(dir))?;
+        }
         fs::create_dir_all(root.join("staging"))?;
         let provenance = slop_provenance::ProvenanceVerifier::public_good()
             .map_err(|e| Error::Verify(e.to_string()))?;
@@ -784,7 +812,7 @@ impl Library {
         Ok(url)
     }
 
-    /// Uninstalls an app, and the mods added to it.
+    /// Uninstalls an app and the mods added to it. Its saves stay (`delete_saves` removes them).
     pub fn uninstall(&self, slug: &str) -> Result<()> {
         let dir = self.app_dir(slug)?;
         if !dir.exists() {
@@ -815,13 +843,24 @@ impl Library {
             .collect()
     }
 
-    /// Builds the command that starts an installed app, after checking the manifest signature,
-    /// the revocation list and the program's hash.
+    /// Builds the command that starts an installed app in normal mode, after checking the
+    /// manifest signature, the revocation list and the program's hash.
     pub fn launch_command(
         &self,
         slug: &str,
         revocations: Option<&RevocationList>,
     ) -> Result<Command> {
+        Ok(self.prepare_launch(slug, revocations, None)?.command)
+    }
+
+    /// Checks an installed app, sweeps its save folder, and builds the command that starts it:
+    /// in sandbox mode when `sandbox` is given (a copy of the saves is taken first).
+    pub fn prepare_launch(
+        &self,
+        slug: &str,
+        revocations: Option<&RevocationList>,
+        sandbox: Option<AppSandbox>,
+    ) -> Result<Launch> {
         let (record, manifest) = self.record(slug)?;
         if let Some(revoked) = revocations.and_then(|r| r.is_revoked(&manifest.release_id)) {
             return Err(Error::Revoked(revoked.reason.clone()));
@@ -848,16 +887,150 @@ impl Library {
                 "the app's files changed since it was installed; reinstall it".into(),
             ));
         }
-        let mut cmd = Command::new(exec);
-        cmd.args(&launch.args).current_dir(files);
-        // The game's mods (DESIGN §9): a list of folders, separated like PATH.
+
+        // The save folder: swept every time, copied before a sandboxed session.
+        let saves = self.save_dir(slug)?;
+        let quarantined = crate::saves::sweep(&saves, &self.root.join("quarantine").join(slug))?;
+        let mut copy_skipped = false;
+        if sandbox.is_some() {
+            copy_skipped =
+                crate::saves::take_copy(&saves, &self.root.join("save-copies").join(slug))?
+                    .is_none()
+                    && crate::saves::size(&saves)? > 0;
+        }
+        let cache = self.root.join("cache").join(slug);
+        fs::create_dir_all(&cache)?;
         let mods = self.mod_folders(&manifest.app_id, revocations);
+
+        let mut cmd = match sandbox {
+            Some(opts) => crate::sandbox::command(
+                &crate::sandbox::Sandbox {
+                    files: &files,
+                    mods: &mods,
+                    saves: &saves,
+                    cache: &cache,
+                    network: !opts.block_network,
+                },
+                &exec,
+                &launch.args,
+            )
+            .map_err(|e| Error::Install(e.to_string()))?,
+            None => {
+                let mut cmd = Command::new(&exec);
+                cmd.args(&launch.args).current_dir(&files);
+                cmd
+            }
+        };
+        // Where the app keeps saves, the same in both modes (DESIGN §6). The usual per-user
+        // folders point there too, so engines that follow them (Godot, and Unity and most
+        // others on Linux) need no change.
+        cmd.env("SLOP_SAVE_DIR", &saves);
+        #[cfg(target_os = "linux")]
+        cmd.env("XDG_DATA_HOME", saves.join(".share"))
+            .env("XDG_CONFIG_HOME", saves.join(".config"))
+            .env("XDG_STATE_HOME", saves.join(".state"))
+            .env("XDG_CACHE_HOME", &cache);
+        #[cfg(windows)]
+        cmd.env("APPDATA", saves.join("AppData").join("Roaming"))
+            .env("LOCALAPPDATA", saves.join("AppData").join("Local"));
+        // The game's mods (DESIGN §9): a list of folders, separated like PATH.
         if !mods.is_empty()
-            && let Ok(list) = std::env::join_paths(mods)
+            && let Ok(list) = std::env::join_paths(&mods)
         {
             cmd.env("SLOP_MODS", list);
         }
-        Ok(cmd)
+        Ok(Launch {
+            command: cmd,
+            sandboxed: sandbox.is_some(),
+            quarantined,
+            copy_skipped,
+        })
+    }
+
+    // -----------------------------------------------------------------------------------------
+    // Saves and sandbox settings
+
+    /// An app's save folder, created if needed.
+    pub fn save_dir(&self, slug: &str) -> Result<PathBuf> {
+        if !valid_slug(slug) {
+            return Err(Error::Install(format!("not an app: {slug:?}")));
+        }
+        let dir = self.root.join("saves").join(slug);
+        fs::create_dir_all(&dir)?;
+        Ok(dir)
+    }
+
+    /// Copies of an app's saves, newest first.
+    pub fn save_copies(&self, slug: &str) -> Result<Vec<crate::saves::SaveCopy>> {
+        self.save_dir(slug)?;
+        Ok(crate::saves::copies(
+            &self.root.join("save-copies").join(slug),
+        ))
+    }
+
+    /// Puts a copy of an app's saves back (the current ones are copied first).
+    pub fn restore_saves(&self, slug: &str, id: &str) -> Result<()> {
+        let saves = self.save_dir(slug)?;
+        crate::saves::restore(
+            &saves,
+            &self.root.join("save-copies").join(slug),
+            id,
+            &self.root.join("staging"),
+        )
+        .map_err(|e| Error::Install(format!("couldn't restore the saves: {e}")))
+    }
+
+    /// Replaces `to`'s saves with a copy of `from`'s (switching to a community build). `to`'s
+    /// current saves, if any, are copied first.
+    pub fn copy_saves(&self, from: &str, to: &str) -> Result<()> {
+        let source = self.save_dir(from)?;
+        let target = self.save_dir(to)?;
+        crate::saves::take_copy(&target, &self.root.join("save-copies").join(to))?;
+        let incoming = self
+            .root
+            .join("staging")
+            .join(format!("saves-{}", crate::random_token()));
+        crate::saves::copy_tree(&source, &incoming)?;
+        crate::saves::replace_dir(&target, &incoming, &self.root.join("staging"))?;
+        Ok(())
+    }
+
+    /// Deletes an app's saves and their copies.
+    pub fn delete_saves(&self, slug: &str) -> Result<()> {
+        self.app_dir(slug)?;
+        for dir in ["saves", "save-copies", "quarantine", "cache"] {
+            let path = self.root.join(dir).join(slug);
+            if path.exists() {
+                self.remove_dir(&path)?;
+            }
+        }
+        Ok(())
+    }
+
+    fn sandbox_path(&self) -> PathBuf {
+        self.root.join("settings").join("sandbox.json")
+    }
+
+    pub fn sandbox_settings(&self) -> SandboxSettings {
+        fs::read(self.sandbox_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default()
+    }
+
+    /// Changes and saves the player's sandbox settings.
+    pub fn set_sandbox(
+        &self,
+        change: impl FnOnce(&mut SandboxSettings),
+    ) -> Result<SandboxSettings> {
+        let mut settings = self.sandbox_settings();
+        change(&mut settings);
+        settings.apps.retain(|slug, _| valid_slug(slug));
+        fs::write(
+            self.sandbox_path(),
+            serde_json::to_vec_pretty(&settings).expect("serialises"),
+        )?;
+        Ok(settings)
     }
 
     /// The verified installer of an app that ships one, for the user to run.

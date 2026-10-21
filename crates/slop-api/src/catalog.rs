@@ -7,7 +7,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::get,
+    routing::{get, put},
 };
 use serde::{Deserialize, Serialize};
 use sqlx::{Postgres, QueryBuilder};
@@ -29,6 +29,10 @@ pub fn routes() -> Router<AppState> {
         .route("/apps", get(list_apps).post(create_app))
         .route("/apps/{slug}", get(get_app).patch(update_app))
         .route("/apps/{slug}/similar", get(similar_apps))
+        .route(
+            "/apps/{slug}/sandbox-report",
+            put(report_sandbox).delete(unreport_sandbox),
+        )
         .route("/me/apps", get(my_apps))
         .route("/repos/license", get(detect_license))
 }
@@ -567,6 +571,11 @@ struct AppDetail {
     online: Vec<String>,
     /// The maker's servers, by name (`play.example.com`, `api.example.com:7777`).
     online_hosts: Vec<String>,
+    /// Sandbox mode: the maker's declaration, whether it's suggested, and player reports.
+    #[serde(flatten)]
+    sandbox: SandboxInfo,
+    /// The viewer reported that it doesn't work in sandbox mode.
+    sandbox_reported: bool,
 }
 
 #[derive(Serialize)]
@@ -701,6 +710,17 @@ async fn load_detail(
         private: extra.private,
         online: extra.online,
         online_hosts: extra.online_hosts,
+        sandbox: sandbox_info(&state.db, extra.id).await?,
+        sandbox_reported: match user {
+            Some(u) => sqlx::query_scalar(
+                "select exists (select 1 from sandbox_reports where app_id = $1 and user_id = $2)",
+            )
+            .bind(extra.id)
+            .bind(u.id)
+            .fetch_one(&state.db)
+            .await?,
+            None => false,
+        },
         official_team: crate::teams::official_team_of(&state.db, extra.id)
             .await?
             .map(|(slug, name)| OfficialTeam { slug, name }),
@@ -719,6 +739,76 @@ async fn load_detail(
             None => false,
         },
     })
+}
+
+// ---------------------------------------------------------------------------------------------
+// Sandbox mode (DESIGN §10): what players are told about running an app with no access to the
+// rest of their computer.
+
+/// Reports from this many players mark an app as having trouble in sandbox mode.
+pub(crate) const SANDBOX_TROUBLE_REPORTS: i64 = 3;
+
+#[derive(Serialize, sqlx::FromRow, Debug, Default)]
+pub(crate) struct SandboxInfo {
+    /// The maker says it keeps local saves only in SLOP_SAVE_DIR and works in sandbox mode.
+    pub sandbox_ready: bool,
+    /// Sandbox mode is suggested: it plays online (servers Slop can't check), or its newest
+    /// release has networking code its store page doesn't declare.
+    pub sandbox_suggested: bool,
+    /// Enough players reported it doesn't work in sandbox mode.
+    pub sandbox_trouble: bool,
+}
+
+pub(crate) async fn sandbox_info(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<SandboxInfo> {
+    sqlx::query_as(
+        "select a.sandbox_ready,
+                cardinality(a.online) > 0 or coalesce((
+                    select (r.source_checks ->> 'online_undeclared')::boolean from releases r
+                    where r.app_id = a.id and r.status = 'approved' and r.signed_manifest is not null
+                    order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
+                    limit 1), false) as sandbox_suggested,
+                (select count(*) from sandbox_reports s where s.app_id = a.id) >= $2 as sandbox_trouble
+         from apps a where a.id = $1",
+    )
+    .bind(app_id)
+    .bind(SANDBOX_TROUBLE_REPORTS)
+    .fetch_one(db)
+    .await
+}
+
+/// A player reports that the app doesn't work in sandbox mode. Taking it back is a DELETE.
+async fn report_sandbox(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> ApiResult<StatusCode> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
+    let (app_id, _) = visible_app(&state, &slug, Some(&user), policy).await?;
+    sqlx::query(
+        "insert into sandbox_reports (app_id, user_id) values ($1, $2) on conflict do nothing",
+    )
+    .bind(app_id)
+    .bind(user.id)
+    .execute(&state.db)
+    .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn unreport_sandbox(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    headers: HeaderMap,
+    Path(slug): Path<String>,
+) -> ApiResult<StatusCode> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
+    let (app_id, _) = visible_app(&state, &slug, Some(&user), policy).await?;
+    sqlx::query("delete from sandbox_reports where app_id = $1 and user_id = $2")
+        .bind(app_id)
+        .bind(user.id)
+        .execute(&state.db)
+        .await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 async fn get_app(
@@ -864,6 +954,9 @@ struct NewApp {
     online: Vec<String>,
     #[serde(default)]
     online_hosts: Vec<String>,
+    /// Works in sandbox mode: local saves only in SLOP_SAVE_DIR.
+    #[serde(default)]
+    sandbox_ready: bool,
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -882,6 +975,7 @@ struct AppChanges {
     platforms: Option<Vec<String>>,
     online: Option<Vec<String>>,
     online_hosts: Option<Vec<String>>,
+    sandbox_ready: Option<bool>,
 }
 
 /// Content labels makers can set (DESIGN §5); the database checks the same list.
@@ -1163,8 +1257,8 @@ async fn create_app(
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
-                           platforms, visibility, content_labels, online, online_hosts)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
+                           platforms, visibility, content_labels, online, online_hosts, sandbox_ready)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -1182,6 +1276,7 @@ async fn create_app(
     .bind(&content_labels)
     .bind(&online)
     .bind(&online_hosts)
+    .bind(req.sandbox_ready)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -1285,6 +1380,9 @@ async fn update_app(
     if let Some(hosts) = &changes.online_hosts {
         qb.push(", online_hosts = ")
             .push_bind(validate_online_hosts(hosts)?);
+    }
+    if let Some(ready) = changes.sandbox_ready {
+        qb.push(", sandbox_ready = ").push_bind(ready);
     }
     if let Some(labels) = &changes.content_labels {
         qb.push(", content_labels = ")

@@ -152,6 +152,7 @@ export function progressSteps(
       (source?.licence?.problems.length ?? 0) +
       (source?.monetization?.length ?? 0) +
       (source?.code_loading?.length ?? 0) +
+      (source?.saves?.length ?? 0) +
       (source?.online_undeclared ? 1 : 0);
     if (latest.status === "fetching") {
       steps.push({

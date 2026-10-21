@@ -262,6 +262,7 @@ export function RepoScanList({
   const money = scan.monetization ?? [];
   const code = scan.code_loading ?? [];
   const network = scan.network ?? [];
+  const saves = scan.saves ?? [];
   const found = advisories ?? [];
   const malicious = found.filter((a) => a.malicious);
   const since = found.filter((a) => !a.malicious && !a.known_at_build);
@@ -362,6 +363,30 @@ export function RepoScanList({
           </span>
           <ul>
             {network.map((h) => (
+              <li key={h.rule}>
+                {h.label} ({h.count}):{" "}
+                <span className="muted">{h.examples.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {saves.length > 0 && (
+        <div>
+          <span className="badge neutral">SAVES OUTSIDE SLOP'S SAVE FOLDER?</span>{" "}
+          <span className="muted">
+            {audience === "maker" ? (
+              <>
+                Your code writes to fixed places in the player's folders. When the Slop app starts your app it sets
+                SLOP_SAVE_DIR: keep local saves, settings and logs there, so they follow players into sandbox mode. See{" "}
+                <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>.
+              </>
+            ) : (
+              "It writes to the player's folders rather than SLOP_SAVE_DIR, so its saves won't follow players into sandbox mode. A note for the maker, not a reason to reject."
+            )}
+          </span>
+          <ul>
+            {saves.map((h) => (
               <li key={h.rule}>
                 {h.label} ({h.count}):{" "}
                 <span className="muted">{h.examples.join(", ")}</span>

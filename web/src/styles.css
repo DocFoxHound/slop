@@ -878,3 +878,9 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .game-mods li + li { margin-top: 4px; }
 .token-fields { display: grid; gap: 8px; }
 .token-fields label { display: grid; gap: 4px; font-size: 13px; }
+
+/* Sandbox mode (components/Sandbox.tsx) */
+.sandbox-switch { margin-top: 8px; display: grid; gap: 4px; }
+.sandbox-switch .badge { margin-left: 6px; }
+.sandbox-prompt { margin-top: 8px; }
+.sandbox-note { margin-top: 8px; }

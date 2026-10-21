@@ -86,7 +86,8 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
   - Play/Launch.
   - A branch switcher (official vs community).
   - Queued updates, with their scan progress.
-  - Uninstall (keeps the app in the library) and Remove.
+  - Uninstall (keeps the app in the library, and its saves unless the player ticks "Delete my saves too") and Remove.
+  - **Sandbox mode** (built 2026-10-21, `SECURITY.md` §6.2): a switch per app, suggested the first time a player starts an app that goes online, and "Run every app in sandbox mode". Saves live in Slop's save folder for the app (`SLOP_SAVE_DIR`), the same in both modes, so switching is seamless; Slop copies them before each sandboxed session, and **Saves** lets the player go back to a copy. If an app closes with an error right after starting sandboxed, the player can run it normally once, turn the sandbox off for it, or tell Slop. Linux now; Windows (AppContainer) next.
 
 **Built 2026-10-20:** the desktop app checks installed apps for updates at start and every 30 minutes (`GET /v1/library/updates`). "Update apps automatically" (on by default) installs approved updates one at a time, never while the app is running, and never for apps with their own installer. Each row shows an update that's ready, or a newer version still being checked ("downloading and scanning" or "waiting for a person"). The build switcher lists the official app and its community builds for this platform; switching installs the new one, then uninstalls the old.
 

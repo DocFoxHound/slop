@@ -27,7 +27,7 @@ slop-manifest = { version = "0.1.0", path = "../slop-manifest" }
 slop-provenance = { version = "0.1.0", path = "../slop-provenance" }
 tar = "0.4"
 thiserror = "2.0.21"
-time = { version = "0.3.55", features = ["formatting", "parsing"] }
+time = { version = "0.3.55", features = ["formatting", "parsing", "macros"] }
 tokio = { version = "1.53.3", features = ["rt", "net", "io-util", "fs", "sync", "time", "macros", "process"] }
 tracing = "0.1.44"
 url = "2.5.8"

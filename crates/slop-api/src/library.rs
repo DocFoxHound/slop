@@ -77,6 +77,9 @@ struct AppUpdate {
     builds: Vec<Build>,
     /// Mods for this app in the store, to add in the Slop app.
     mods: Vec<Mod>,
+    /// Sandbox mode: the maker's declaration, whether it's suggested, and player reports.
+    #[serde(flatten)]
+    sandbox: catalog::SandboxInfo,
 }
 
 const MAX_UPDATE_CHECK: usize = 100;
@@ -159,6 +162,7 @@ async fn updates(
             pending,
             builds: if builds.len() > 1 { builds } else { Vec::new() },
             mods,
+            sandbox: catalog::sandbox_info(&state.db, app_id).await?,
         });
     }
     Ok(Json(out))

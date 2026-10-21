@@ -74,6 +74,7 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Who a Private Slop app is shared with | `app_shares` | Access control for Private Slop (SECURITY §12) | Contract | Until the owner stops sharing, or either account closes |
 | Teams (name, about, organization, verification results) and membership, invitations, picks, game nights, team shares | `teams`, `team_members`, `team_invites`, `team_picks`, `team_events`, `app_team_shares` | Player and official teams (DESIGN §14) | Contract | Until the member leaves, the team ends, or the account closes |
 | Interested list | `interests` | The user's Interested apps: library, stage notifications, "For you"; only counts are public | Contract; legitimate interest (recommendations) | Until removed or the account closes |
+| "Doesn't work in sandbox mode" reports | `sandbox_reports` | Warning other players when enough report it; only the count is shown | Legitimate interest (player safety and information) | Until taken back, the app is deleted, or the account closes |
 | Notifications (title, link, read time) | `notifications` | Telling the user about their jobs, Interested apps and moderation decisions | Contract | 180 days after being read, a year at most |
 | Email choices | `users.email_prefs` | Which notification emails the user wants | Contract | Life of account |
 | Outgoing emails (address, subject, text) | `email_outbox` | Delivering product emails, including report outcomes to signed-out reporters | Contract; legal obligation (DSA Art. 16(5)) | 30 days after sending |

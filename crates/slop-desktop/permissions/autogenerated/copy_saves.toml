@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-copy-saves"
+description = "Enables the copy_saves command without any pre-configured scope."
+commands.allow = ["copy_saves"]
+
+[[permission]]
+identifier = "deny-copy-saves"
+description = "Denies the copy_saves command without any pre-configured scope."
+commands.deny = ["copy_saves"]

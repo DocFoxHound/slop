@@ -78,6 +78,11 @@ const EXPORT: &[(&str, &str)] = &[
          from interests i join apps a on a.id = i.app_id where i.user_id = $1",
     ),
     (
+        "sandbox_reports",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'reported_at', r.created_at)), '[]')
+         from sandbox_reports r join apps a on a.id = r.app_id where r.user_id = $1",
+    ),
+    (
         "notifications",
         "select coalesce(jsonb_agg(to_jsonb(n) - 'user_id' order by n.created_at), '[]')
          from notifications n where n.user_id = $1",

@@ -77,6 +77,11 @@ pub struct Report {
     pub code_loading: Vec<Hit>,
     /// Networking code: the app goes online.
     pub network: Vec<Hit>,
+    /// Saves, settings or logs written to fixed places in the user's folders instead of
+    /// SLOP_SAVE_DIR, so they won't follow the player into sandbox mode. A note only; left out
+    /// when the code reads SLOP_SAVE_DIR.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub saves: Vec<Hit>,
     /// It goes online, but its store page doesn't say so (set when the release is checked).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub online_undeclared: bool,
@@ -466,6 +471,63 @@ static NET_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new
     ]
 });
 
+/// Saves written to fixed places in the user's folders rather than SLOP_SAVE_DIR (sandbox mode,
+/// DESIGN §10). Godot's `user://` isn't listed: the Slop app points it at the save folder.
+/// (rule, label, file extensions, pattern)
+static SAVE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new(|| {
+    let r = |rule, label, exts, re: &str| {
+        (
+            Rule {
+                rule,
+                label,
+                re: Regex::new(re).unwrap(),
+            },
+            exts,
+        )
+    };
+    vec![
+        r(
+            "dotnet_folders",
+            "Documents or app-data folders (.NET)",
+            &["cs", "fs", "vb"][..],
+            r"\bEnvironment\.SpecialFolder\.(MyDocuments|Personal|ApplicationData|LocalApplicationData|UserProfile)\b",
+        ),
+        r(
+            "unity_data_path",
+            "Unity's persistentDataPath",
+            &["cs", "js"][..],
+            r"\bApplication\.persistentDataPath\b",
+        ),
+        r(
+            "home_env",
+            "The home or app-data folder, from the environment",
+            &[
+                "gd", "cs", "rs", "c", "cc", "cpp", "h", "hpp", "lua", "java", "kt", "py", "go",
+                "js", "mjs", "cjs", "ts", "rb", "php", "dart",
+            ][..],
+            r#"\b(getenv|env::var(_os)?|environ(\.get)?|System\.getenv|GetEnvironmentVariable|os\.Getenv|get_environment|ENV\.fetch|ENV)\s*[(\[]\s*['"](HOME|APPDATA|USERPROFILE|LOCALAPPDATA|XDG_DATA_HOME|XDG_CONFIG_HOME)['"]|\bprocess\.env\.(HOME|APPDATA|USERPROFILE|LOCALAPPDATA)\b"#,
+        ),
+        r(
+            "home_python",
+            "The home folder (Python)",
+            &["py"][..],
+            r#"\bos\.path\.expanduser\s*\(\s*['"]~|\bPath\.home\s*\(\s*\)"#,
+        ),
+        r(
+            "rust_dirs",
+            "The home, data or config folder (Rust)",
+            &["rs"][..],
+            r"\b(dirs|dirs_next)::(home_dir|data_dir|data_local_dir|config_dir|config_local_dir|document_dir)\b|\b(ProjectDirs|UserDirs|BaseDirs)::(from|new)\b",
+        ),
+        r(
+            "electron_paths",
+            "Electron's userData, documents or home folder",
+            &["js", "mjs", "cjs", "ts"][..],
+            r#"\bapp\.getPath\s*\(\s*['"](userData|documents|home|appData)['"]"#,
+        ),
+    ]
+});
+
 /// Self-updaters: they replace the app with whatever their server sends, bypassing Slop.
 const UPDATER_PACKAGES: &[(&str, &str)] = &[
     ("npm", "electron-updater"),
@@ -764,6 +826,9 @@ pub fn scan_archive(
     let mut headers = Tally::default();
     let mut code_loading = Tally::default();
     let mut network = Tally::default();
+    let mut saves = Tally::default();
+    // Code that reads SLOP_SAVE_DIR knows about Slop's save folder: no save notes then.
+    let mut uses_save_dir = false;
     let mut text_total: u64 = 0;
     for entry in tar.entries().context("reading the repository archive")? {
         let mut entry = entry.context("reading the repository archive")?;
@@ -822,6 +887,7 @@ pub fn scan_archive(
         if unity_manifest || source {
             // The Slop Pulse snippet only talks to Slop.
             let pulse = text.contains("SLOP_PULSE");
+            uses_save_dir |= text.contains("SLOP_SAVE_DIR");
             for (i, line) in text.lines().enumerate() {
                 if line.len() > 2000 {
                     continue;
@@ -839,6 +905,11 @@ pub fn scan_archive(
                 for (rule, exts) in NET_RULES.iter() {
                     if !pulse && exts.contains(&ext.as_str()) && rule.re.is_match(line) {
                         network.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
+                    }
+                }
+                for (rule, exts) in SAVE_RULES.iter() {
+                    if exts.contains(&ext.as_str()) && rule.re.is_match(line) {
+                        saves.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
                     }
                 }
                 if i < 30
@@ -874,6 +945,9 @@ pub fn scan_archive(
     report.monetization = monetization.into_hits();
     report.code_loading = code_loading.into_hits();
     report.network = network.into_hits();
+    if !uses_save_dir {
+        report.saves = saves.into_hits();
+    }
     report.licence.headers = headers.into_hits();
     report.licence.declared = declared.to_string();
     (report.licence.kinds, report.licence.problems) =
@@ -1296,6 +1370,71 @@ pub async fn run(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn saves_outside_slops_save_folder_become_notes() {
+        let mit = (
+            "LICENSE",
+            "MIT License\n\nPermission is hereby granted, free of charge",
+        );
+        let data = archive(&[
+            mit,
+            (
+                "Scripts/Save.cs",
+                "var dir = Environment.GetFolderPath(Environment.SpecialFolder.MyDocuments);\nvar p = Application.persistentDataPath;",
+            ),
+            (
+                "save.gd",
+                "var f = FileAccess.open(\"user://save.json\", FileAccess.WRITE)",
+            ),
+            (
+                "src/save.rs",
+                "let home = std::env::var(\"HOME\")?;\nlet d = dirs::data_dir();",
+            ),
+            ("main.js", "const p = app.getPath('userData');"),
+            ("game.py", "p = Path.home() / '.mygame'"),
+        ]);
+        let (report, _) = scan_archive(&data[..], "MIT", true).unwrap();
+        let rules: Vec<_> = report.saves.iter().map(|h| h.rule.as_str()).collect();
+        assert_eq!(
+            rules,
+            [
+                "dotnet_folders",
+                "electron_paths",
+                "home_env",
+                "home_python",
+                "rust_dirs",
+                "unity_data_path"
+            ],
+            "Godot's user:// isn't a note"
+        );
+        let value = serde_json::to_value(&report).unwrap();
+        // (The short licence text here isn't recognised; that's a licence note.)
+        assert!(
+            concerns(&value)
+                .unwrap()
+                .iter()
+                .all(|k| k.starts_with("licence:")),
+            "save notes don't hold updates"
+        );
+
+        // Code that reads SLOP_SAVE_DIR knows about Slop's save folder.
+        let data = archive(&[
+            mit,
+            (
+                "Scripts/Save.cs",
+                "var dir = Environment.GetEnvironmentVariable(\"SLOP_SAVE_DIR\") ?? Application.persistentDataPath;",
+            ),
+        ]);
+        let (report, _) = scan_archive(&data[..], "MIT", true).unwrap();
+        assert!(report.saves.is_empty());
+        assert!(
+            serde_json::to_value(&report)
+                .unwrap()
+                .get("saves")
+                .is_none()
+        );
+    }
 
     #[test]
     fn code_from_outside_slop_becomes_notes() {

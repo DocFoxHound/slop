@@ -518,6 +518,57 @@ description which version of the game it's for.
 - Store pages of apps that go online tell players that Slop can't check the servers, and
   suggest running the app in **sandbox mode** *(coming to the Slop app)*.
 
+## Saves and sandbox mode
+
+Players can run any app in **sandbox mode** in the Slop app: the app can use only its own
+files, mods and **save folder**, plus the screen, sound, graphics card and controllers. Slop
+suggests it for apps that go online. So players can switch between sandbox and normal mode
+without losing anything, **local saves must live in Slop's save folder**.
+
+When the Slop app starts your app, it sets **`SLOP_SAVE_DIR`**: a folder that belongs to your
+app, the same in both modes, outside the installed files (updates never touch it), and kept when
+the player uninstalls.
+
+1. **If your app keeps anything on the player's computer** (saves, settings, logs,
+   screenshots), and `SLOP_SAVE_DIR` is set, keep it there and nowhere else. When it isn't set,
+   your app is running outside Slop: use your usual place.
+2. **Saves on your own server are fine,** and often better. This rule only covers what's
+   written on the player's computer.
+3. **Saves are data, never code.** Plain formats only (JSON, MessagePack, your own format), read
+   carefully, as in rules 3 and 5 under [Rules for the code](#rules-for-the-code). Never put
+   programs, libraries, scripts or packs in the save folder. Slop moves programs and libraries
+   out of it before every start, and takes execute permission off its files.
+4. Don't write anywhere else: not the home folder, Documents, the desktop, or `%APPDATA%` by
+   name. In sandbox mode those don't exist, and the app will fail or lose its saves.
+5. Keep caches out of the save folder. On Linux, `XDG_CACHE_HOME` points to a separate cache
+   folder; elsewhere, a `cache` subfolder you're happy to lose is fine.
+
+**Engines that need no change:** the Slop app points the usual per-user folders inside the save
+folder, so Godot's `user://` works as it is on Linux and Windows, and so do most engines on Linux
+(they follow `XDG_DATA_HOME` and `XDG_CONFIG_HOME`). **Unity on Windows, .NET's
+`Environment.SpecialFolder`, Electron's `app.getPath` and anything that asks Windows for a
+known folder don't follow it:** read `SLOP_SAVE_DIR` instead.
+
+```csharp
+// Unity / .NET
+var dir = Environment.GetEnvironmentVariable("SLOP_SAVE_DIR");
+var saves = string.IsNullOrEmpty(dir) ? Application.persistentDataPath : dir;
+```
+
+```js
+// Electron: before the app is ready
+if (process.env.SLOP_SAVE_DIR) app.setPath("userData", process.env.SLOP_SAVE_DIR);
+```
+
+```python
+saves = os.environ.get("SLOP_SAVE_DIR") or platformdirs.user_data_dir("my-game")
+```
+
+Also in sandbox mode: no session bus (no system tray, notifications or keyring), no other
+programs, and the network unless the player blocked it (offered only when your store page says
+the app doesn't go online). If your app follows the rules above, tick **Works in sandbox mode**
+on its store page. Slop's source check notes code that writes to fixed per-user folders.
+
 ## Keeping Windows from blocking your app
 
 Players shouldn't see "Windows protected your PC" or have Defender delete your game. Here's what
@@ -869,24 +920,27 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    [Online play and mods](#online-play-and-mods), and copy that section into the project's
    agent instructions (`AGENTS.md` or similar). Replace anything that runs downloaded code,
    updates the app itself, or uses an unsafe data format.
-4. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
+4. If the app keeps anything on the player's computer (saves, settings, logs): keep it in
+   `SLOP_SAVE_DIR` when that's set, as in [Saves and sandbox mode](#saves-and-sandbox-mode), as
+   plain data, and nowhere else. Then the owner can tick "Works in sandbox mode".
+5. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
    language and call it once at startup. Send nothing but the token.
-5. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
+6. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
    program path, which the owner enters on Slop), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
    owner will use, `slop-url` set to the Slop site, and `project-type` set to `rust`, `go` or
    `custom` (with `build-command`, `output-dir` and `exec`). For private repositories without
    GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option C. For
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
-6. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
+7. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
    same store address, the repository URL, licence, type, stage, age rating, tags, and **Online**
    if the project connects to anything (see step 3).
-7. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
+8. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
-8. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the
+9. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the
    first release is approved and the app is in the store. Later releases are picked up and
    approved automatically if they pass every check.
-9. Optional but recommended, ideally before step 7: add `.slop/media.json` with a 920×430
+10. Optional but recommended, ideally before step 8: add `.slop/media.json` with a 920×430
    thumbnail and some screenshots (see **Pictures and videos**), push it, and have the owner press **Check my
    repository now** under **Edit store page**. An agent can capture screenshots from the
    running app if the owner wants. Leave the gallery order to the owner; they set it on the

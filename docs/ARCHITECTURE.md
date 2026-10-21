@@ -191,7 +191,7 @@ yet (public repos only; detection uses the public API), and builds also run on `
    - installs shared components only from their official sources, with fixed hashes;
    - runs a maker's installer only after asking the user, and with the OS's normal admin prompt.
    - adds a **mod** (DESIGN §9) only to the game its signed manifest names, and only once that game is installed. A mod is unpacked into its own folder (`mods/<slug>/files`); nothing in it is started. Uninstalling the game removes its mods.
-7. **Launch:** the client starts the executable from the launch config, passing a one-time **Pulse launch token**, and in `SLOP_MODS` the folders of the game's mods (separated like `PATH`), leaving out any mod Slop has pulled. Linux can optionally use a standard Slop runtime container.
+7. **Launch:** the client sweeps the app's save folder, then starts the executable from the launch config, passing a one-time **Pulse launch token**, its save folder in `SLOP_SAVE_DIR`, and in `SLOP_MODS` the folders of the game's mods (separated like `PATH`), leaving out any mod Slop has pulled. In **sandbox mode** (`SECURITY.md` §6.2) it starts inside bubblewrap on Linux (AppContainer on Windows, next).
 8. **Updates:** a new release goes through the same steps. **No staged rollout:** once scanned, it's available to everyone. Updates are full downloads.
 
 ### 6.4 Where builds are stored: on the maker's release page (decided)
