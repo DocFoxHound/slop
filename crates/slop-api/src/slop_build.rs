@@ -518,10 +518,12 @@ fn workflow_yaml(
            UNITY_LICENSE: ${{ secrets.UNITY_LICENSE }}\n      \
            UNITY_EMAIL: ${{ secrets.UNITY_EMAIL }}\n      \
            UNITY_PASSWORD: ${{ secrets.UNITY_PASSWORD }}\n      \
-           # SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}\n"
+           # SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}\n      \
+           # BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}\n"
     } else {
         "    # secrets:\n    \
-         #   SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}\n"
+         #   SIGNPATH_API_TOKEN: ${{ secrets.SIGNPATH_API_TOKEN }}\n    \
+         #   BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}\n"
     };
     format!(
         "# Slop Build: builds, signs and attaches your app to a release, then sends it to Slop.\n\
@@ -548,7 +550,9 @@ fn workflow_yaml(
                # Recommended for Windows: sign with a free SignPath Foundation certificate for\n      \
                # open-source projects (apply at signpath.org; see {site}/publish/guide#signing),\n      \
                # then fill in your organization ID and add the SIGNPATH_API_TOKEN secret.\n      \
-               # signpath-organization-id: \"your-organization-id\"\n\
+               # signpath-organization-id: \"your-organization-id\"\n      \
+               # Also publish to your itch.io page (user/game): add the BUTLER_API_KEY secret.\n      \
+               # itch-target: \"you/your-game\"\n\
          {secrets}"
     )
 }
@@ -822,6 +826,14 @@ mod tests {
             )
         };
         assert!(y("godot").contains("godot-version: \"4.3\""));
+        // The optional extras are there, commented out, for every type.
+        for t in ["rust", "unity"] {
+            assert!(y(t).contains("# itch-target: \"you/your-game\""), "{t}");
+            assert!(
+                y(t).contains("BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}"),
+                "{t}"
+            );
+        }
         assert!(y("web").contains("output-dir: \"dist\""));
         assert!(y("python").contains("python-entry: \"main.py\""));
         assert!(y("tauri").contains("project-type: tauri\n"));
