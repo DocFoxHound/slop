@@ -118,6 +118,8 @@ export interface DonateInfo {
   maker: string;
   cant: string | null;
   simulated: boolean;
+  /** A community build or mod: one-off donations give the original's maker a share first. */
+  shared: { slug: string; title: string; maker: string; percent: number } | null;
 }
 
 export interface MyDonation {
@@ -2617,6 +2619,11 @@ export const api = {
         consent: boolean;
         confirm_adult: boolean;
         challenge?: { id: string; nonce: string };
+        /** The original's share of a donation to this branch, and what the branch gets next. */
+        share_for?: string;
+        rest_minor?: number;
+        /** A donation to a branch: the paid share to the original it follows. */
+        share_donation?: string;
       },
     ) =>
       request<{ url: string | null; id: string; done: boolean }>(

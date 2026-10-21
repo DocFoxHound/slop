@@ -68,8 +68,13 @@
 - Donations are **final**. The maker can refund a donation from their Slop dashboard (e.g. a mistyped amount).
 - Wording follows the word list in `LEGAL.md` §12.
 
-### 5.3 Community branches
-A community build has **its own** Donate button for the branch author's own Stripe account. It's a separate donation and is never split automatically.
+### 5.3 Community builds and mods
+A community build or mod has its own Donate button for the author's own Stripe account, and **one-off donations are shared with the original's maker** (decided 2026-10-21), so improving someone's project pays better than copying it:
+- The original's maker gets **30% of the two payments together**, as **its own direct donation** to their Stripe account, paid **first**; then the rest goes to the branch's author as a second donation. Two payments, never one split payment: Slop still never holds or divides money.
+- The server won't start the branch's payment until a matching share has been paid by the same donor in the last two hours, and each share is used once (`donations.share_for`, `share_donation_id`, migration 0047). Shared donations start at $2.34 to the branch, so the share meets the $1 minimum.
+- If the original doesn't take donations, or the donor is the original's maker, it all goes to the branch's author.
+- Monthly server donations aren't shared: they pay for the branch's own servers.
+- Each payment has its own fees (Slop's 5% and processing) and its own receipt.
 
 ### 5.4 Splits between collaborators
 **One Stripe account per app** (decided 2026-10-17). If several people made the app, the publisher splits the money with them outside Slop (`LEGAL.md` §3.6).

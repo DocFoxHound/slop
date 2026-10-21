@@ -7290,6 +7290,138 @@ async fn donations_on(app: &TestApp, maker: &str, slug: &str, servers: bool) {
     assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
 }
 
+/// A donation to a mod or community build is shared: 30% to the original's maker first, as its
+/// own donation, then the rest to the branch's author. Slop never splits one payment.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn donations_to_mods_are_shared_with_the_original(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 1000;
+    })
+    .await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (modder_id, modder) = app.user("Bo Modder", "US").await;
+    let (_, donor) = app.user("Dee Donor", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "arena",
+        "released",
+        "repo_url = 'https://github.com/mia/arena'",
+    )
+    .await;
+    donations_on(&app, &maker, "arena", false).await;
+    let res = app
+        .send(req(Method::POST, "/v1/apps/arena/branches").cookie(&modder).json(json!({
+            "slug": "arena-dragons", "title": "Dragons", "summary": "Adds dragons.",
+            "repo_url": "https://github.com/bo/arena-dragons", "license_spdx": "MIT", "kind": "addon", "note": "Three dragons."
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let mod_id: Uuid = sqlx::query_scalar("select id from apps where slug = 'arena-dragons'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         values ($1, $2, '1.0.0', repeat('b', 40), 'approved', $3, now(), true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(mod_id)
+    .bind(modder_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    admin::list_app(&app.db, "arena-dragons", "test")
+        .await
+        .unwrap();
+    donations_on(&app, &modder, "arena-dragons", false).await;
+
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena-dragons/donate").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(info["shared"]["slug"], "arena");
+    assert_eq!(info["shared"]["percent"], 30);
+    let start = |slug: &str, body: Value| {
+        let mut body = body;
+        body["confirm_adult"] = json!(true);
+        req(Method::POST, format!("/v1/apps/{slug}/donate"))
+            .cookie(&donor)
+            .json(body)
+    };
+
+    // The branch's payment needs the original's share paid first.
+    let res = app
+        .send(start("arena-dragons", json!({ "amount_minor": 700 })))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "share_donation");
+    assert_eq!(slop_api::donations::share_for(700), 300);
+    let res = app
+        .send(start(
+            "arena",
+            json!({ "amount_minor": 300, "share_for": "arena-dragons", "rest_minor": 700 }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let share = body_json(res).await;
+    assert_eq!(share["done"], true);
+    let share_id = share["id"].as_str().unwrap().to_string();
+    let res = app
+        .send(start(
+            "arena-dragons",
+            json!({ "amount_minor": 800, "share_donation": share_id }),
+        ))
+        .await;
+    assert_eq!(
+        body_json(res).await["error"]["field"],
+        "amount_minor",
+        "the share must be 30%"
+    );
+    let res = app
+        .send(start(
+            "arena-dragons",
+            json!({ "amount_minor": 700, "share_donation": share_id }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .send(start(
+            "arena-dragons",
+            json!({ "amount_minor": 700, "share_donation": share_id }),
+        ))
+        .await;
+    assert_eq!(
+        body_json(res).await["error"]["field"],
+        "share_donation",
+        "each share once"
+    );
+
+    let paid: Vec<(String, i32)> = sqlx::query_as(
+        "select a.slug, d.donation_minor from donations d join apps a on a.id = d.app_id
+         where d.status = 'paid' order by d.created_at",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        paid,
+        [
+            ("arena".to_string(), 300),
+            ("arena-dragons".to_string(), 700)
+        ]
+    );
+
+    // The original's maker donating to the mod: nothing to share with themselves.
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena-dragons/donate").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(info["shared"].is_null());
+}
+
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn donations_go_to_the_maker_and_give_nothing_back(db: PgPool) {
     let app = test_app_with(db, |c| {
