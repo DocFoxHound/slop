@@ -43,6 +43,9 @@
     "allow-set-sandbox",
     "allow-save-copies",
     "allow-restore-saves",
-    "allow-copy-saves"
+    "allow-copy-saves",
+    "allow-save-size",
+    "allow-play-choices",
+    "allow-set-play-choice"
   ]
 }

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-size"
+description = "Enables the save_size command without any pre-configured scope."
+commands.allow = ["save_size"]
+
+[[permission]]
+identifier = "deny-save-size"
+description = "Denies the save_size command without any pre-configured scope."
+commands.deny = ["save_size"]

@@ -8015,7 +8015,8 @@ async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
         maker,
         "castle",
         "released",
-        "platforms = '{windows}', repo_url = 'https://github.com/mia/castle'",
+        "platforms = '{windows}', repo_url = 'https://github.com/mia/castle', min_age = 12,
+         content_labels = '{violence}', online = '{player_servers}'",
     )
     .await;
     let branch =
@@ -8038,6 +8039,47 @@ async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
         .send(branch("castle-linux", "https://github.com/bo/castle"))
         .await;
     assert_eq!(res.status(), StatusCode::CREATED);
+    // It's asked what a new app is asked; left out, the original's answers carry over, and it
+    // can't be rated below the original.
+    let own = body_json(
+        app.send(req(Method::GET, "/v1/apps/castle-linux").cookie(&author))
+            .await,
+    )
+    .await;
+    assert_eq!(own["min_age"], 12);
+    assert_eq!(own["content_labels"], json!(["violence"]));
+    assert_eq!(own["online"], json!(["player_servers"]));
+    assert_eq!(own["sandbox_ready"], false);
+    for (field, value) in [("min_age", json!(7)), ("content_labels", json!(["horror"]))] {
+        let res = app
+            .send(
+                req(Method::PATCH, "/v1/apps/castle-linux")
+                    .cookie(&author)
+                    .json(json!({ field: value })),
+            )
+            .await;
+        assert_eq!(
+            body_json(res).await["error"]["field"],
+            field,
+            "not below the original"
+        );
+    }
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/castle-linux")
+                .cookie(&author)
+                .json(json!({ "min_age": 16, "content_labels": ["violence", "horror"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "adding is fine");
+    let res = app
+        .send(req(Method::POST, "/v1/apps/castle/branches").cookie(&author).json(json!({
+            "slug": "castle-kids", "title": "Castle for kids", "summary": "Gentler.",
+            "repo_url": "https://github.com/bo/castle-kids", "license_spdx": "MIT", "kind": "mod",
+            "note": "No monsters.", "platforms": ["windows"], "min_age": 3, "content_labels": []
+        })))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "min_age");
     assert_eq!(
         app.send(branch("castle-linux", "https://github.com/bo/castle2"))
             .await
@@ -8218,6 +8260,69 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
         })
     );
     assert!(manifest.files[0].launch.is_none());
+    assert_eq!(manifest.build_of, None);
+
+    // A community build's manifest names its original instead, so the Slop app can offer it
+    // on the original's Play button.
+    let res = app
+        .send(req(Method::POST, "/v1/apps/castle/branches").cookie(&author).json(json!({
+            "slug": "castle-hd", "title": "Castle HD", "summary": "Sharper.",
+            "repo_url": "https://github.com/bo/castle-hd", "license_spdx": "MIT", "kind": "mod",
+            "note": "Bigger textures.", "platforms": ["windows"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/castle-hd/releases")
+                .cookie(&author)
+                .json(
+                    json!({ "version": "1.0.0", "commit_sha": "c".repeat(40), "files": [{
+                    "platform": "windows", "kind": "archive", "exec": "castle.exe",
+                    "url": "https://github.com/bo/castle-hd/releases/download/v1.0.0/castle-hd.zip"
+                }] }),
+                ),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let hd_release: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    sqlx::query(
+        "update release_files set size_bytes = 10, sha256 = repeat('a', 64), scan_result = 'passed'
+         where release_id = $1",
+    )
+    .bind(hd_release)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update releases set status = 'awaiting_review' where id = $1")
+        .bind(hd_release)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    admin::approve(&app.db, Some(&app.signing_key), lax(), hd_release, "rev")
+        .await
+        .unwrap();
+    let signed: slop_manifest::Signed = serde_json::from_value(
+        sqlx::query_scalar("select signed_manifest from releases where id = $1")
+            .bind(hd_release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap(),
+    )
+    .unwrap();
+    let hd: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    assert_eq!(hd.mod_for, None);
+    assert_eq!(hd.build_of.map(|o| o.app_slug).as_deref(), Some("castle"));
+
     // The library's update check lists it under the installed game.
     let updates = body_json(
         app.send(req(Method::GET, "/v1/library/updates?apps=castle"))
@@ -8291,6 +8396,24 @@ async fn sandbox_mode_declarations_suggestions_and_reports(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(page("quiet", None).await["sandbox_ready"], true);
+    assert_eq!(page("quiet", None).await["sandbox_mismatch"], false);
+
+    // Its newest release's check decides: saves outside SLOP_SAVE_DIR undo the declaration for
+    // players, and undeclared networking suggests sandbox mode.
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, signed_manifest, repo_scan)
+         select $1, a.id, '1.0.0', repeat('a', 40), 'approved', a.maker_id, now(), '{}'::jsonb,
+                '{\"status\": \"checked\", \"save_folder\": \"elsewhere\", \"online_undeclared\": true}'::jsonb
+         from apps a where a.slug = 'quiet'",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let quiet = page("quiet", None).await;
+    assert_eq!(quiet["sandbox_ready"], true, "still what the maker said");
+    assert_eq!(quiet["sandbox_mismatch"], true);
+    assert_eq!(quiet["sandbox_suggested"], true);
 
     // Players' reports: three mark it, each player once, and they can take it back.
     let report = |method: Method, slug: &str, cookie: Option<&str>| {

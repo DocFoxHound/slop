@@ -345,6 +345,7 @@ fn manifest_for(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signe
         }],
         approved_at: "2026-10-18T00:00:00Z".into(),
         mod_for: None,
+        build_of: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -458,8 +459,111 @@ fn mod_manifest(base: &str, bytes: &[u8], release_id: &str) -> Signed {
             app_slug: "game".into(),
             app_title: "Game".into(),
         }),
+        build_of: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
+}
+
+/// A community build of "game": its own app, signed as a build of the original.
+fn community_manifest(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signed {
+    let manifest = ReleaseManifest {
+        schema: MANIFEST_SCHEMA,
+        app_id: "plus-id".into(),
+        app_slug: "game-plus".into(),
+        app_title: "Game Plus".into(),
+        maker: "Bo".into(),
+        repo_url: "https://github.com/bo/game".into(),
+        release_id: release_id.into(),
+        version: "1.1.0".into(),
+        commit: "c".repeat(40),
+        files: vec![ManifestFile {
+            platform: Platform::Linux,
+            kind: FileKind::Archive,
+            url: format!("{base}files/{file}"),
+            file_name: file.into(),
+            size: bytes.len() as u64,
+            sha256: hex::encode(Sha256::digest(bytes)),
+            launch: Some(Launch {
+                exec: "bin/game".into(),
+                args: vec![],
+            }),
+            attestation: None,
+            maker_signature: None,
+            parts: vec![],
+        }],
+        approved_at: "2026-10-18T00:00:00Z".into(),
+        mod_for: None,
+        build_of: Some(slop_manifest::ModFor {
+            app_id: "id".into(),
+            app_slug: "game".into(),
+            app_title: "Game".into(),
+        }),
+    };
+    slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
+}
+
+/// A community build installs beside its original, and the player can pick it for the
+/// original's Play button (DESIGN §9). Each keeps its own save folder.
+#[tokio::test]
+async fn community_builds_can_be_picked_to_play_instead_of_the_original() {
+    let (base, fake) = fake_api().await;
+    let game = zip_of(&[("bin/game", b"#!/bin/sh\n", 0o755)]);
+    let plus = zip_of(&[("bin/game", b"#!/bin/sh\necho plus\n", 0o755)]);
+    fake.files.lock().unwrap().extend([
+        ("game.zip".into(), game.clone()),
+        ("plus.zip".into(), plus.clone()),
+    ]);
+    let dir = tempdir();
+    let lib = library(&dir);
+    lib.install(
+        &manifest_for(&base, "game.zip", &game, "r1"),
+        Platform::Linux,
+        None,
+        |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert!(
+        lib.set_play_choice("game", Some("game-plus")).is_err(),
+        "only once it's installed"
+    );
+    let installed = lib
+        .install(
+            &community_manifest(&base, "plus.zip", &plus, "p1"),
+            Platform::Linux,
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+    assert_eq!(installed.build_of.as_deref(), Some("game"));
+    let slugs: Vec<_> = lib.installed().into_iter().map(|a| a.slug).collect();
+    assert_eq!(slugs, ["game", "game-plus"], "both stay installed");
+    assert_eq!(lib.installed()[0].build_of, None);
+
+    lib.set_play_choice("game", Some("game-plus")).unwrap();
+    assert_eq!(
+        lib.play_choices().get("game").map(String::as_str),
+        Some("game-plus")
+    );
+    assert!(
+        lib.set_play_choice("game-plus", Some("game")).is_err(),
+        "the original isn't a build of its build"
+    );
+
+    // Separate save folders; saves can be copied across.
+    std::fs::write(lib.save_dir("game").unwrap().join("slot1.json"), b"{}").unwrap();
+    assert_eq!(lib.save_size("game-plus").unwrap(), 0);
+    lib.copy_saves("game", "game-plus").unwrap();
+    assert_eq!(lib.save_size("game-plus").unwrap(), 2);
+
+    // Back to the original, or the pick goes when the build does.
+    lib.set_play_choice("game", None).unwrap();
+    assert!(lib.play_choices().is_empty());
+    lib.set_play_choice("game", Some("game-plus")).unwrap();
+    lib.uninstall("game-plus").unwrap();
+    assert!(lib.play_choices().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
 }
 
 #[cfg(unix)]
@@ -1015,6 +1119,7 @@ fn parts_manifest(base: &str, whole: &[u8], parts: &[(&str, &[u8])]) -> Signed {
         }],
         approved_at: "2026-10-18T00:00:00Z".into(),
         mod_for: None,
+        build_of: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }

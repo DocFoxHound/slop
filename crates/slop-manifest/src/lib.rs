@@ -199,9 +199,13 @@ pub struct ReleaseManifest {
     /// Absent on everything else, so older apps still read those manifests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mod_for: Option<ModFor>,
+    /// A community build: the original app it's a build of, so the Slop app can offer it on the
+    /// original's Play button. Absent on everything else.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build_of: Option<ModFor>,
 }
 
-/// The game a mod is for (DESIGN §9).
+/// The original app a mod or community build is for (DESIGN §9).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct ModFor {
@@ -397,6 +401,7 @@ mod tests {
             }],
             approved_at: "2026-10-18T00:00:00Z".into(),
             mod_for: None,
+            build_of: None,
         }
     }
 
@@ -404,6 +409,7 @@ mod tests {
     fn mod_for_is_left_out_unless_set() {
         let plain = serde_json::to_string(&manifest()).unwrap();
         assert!(!plain.contains("mod_for"));
+        assert!(!plain.contains("build_of"));
         let mut m = manifest();
         m.mod_for = Some(ModFor {
             app_id: "g".into(),

@@ -262,7 +262,6 @@ export function RepoScanList({
   const money = scan.monetization ?? [];
   const code = scan.code_loading ?? [];
   const network = scan.network ?? [];
-  const saves = scan.saves ?? [];
   const found = advisories ?? [];
   const malicious = found.filter((a) => a.malicious);
   const since = found.filter((a) => !a.malicious && !a.known_at_build);
@@ -371,30 +370,7 @@ export function RepoScanList({
           </ul>
         </div>
       )}
-      {saves.length > 0 && (
-        <div>
-          <span className="badge neutral">SAVES OUTSIDE SLOP'S SAVE FOLDER?</span>{" "}
-          <span className="muted">
-            {audience === "maker" ? (
-              <>
-                Your code writes to fixed places in the player's folders. When the Slop app starts your app it sets
-                SLOP_SAVE_DIR: keep local saves, settings and logs there, so they follow players into sandbox mode. See{" "}
-                <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>.
-              </>
-            ) : (
-              "It writes to the player's folders rather than SLOP_SAVE_DIR, so its saves won't follow players into sandbox mode. A note for the maker, not a reason to reject."
-            )}
-          </span>
-          <ul>
-            {saves.map((h) => (
-              <li key={h.rule}>
-                {h.label} ({h.count}):{" "}
-                <span className="muted">{h.examples.join(", ")}</span>
-              </li>
-            ))}
-          </ul>
-        </div>
-      )}
+      <SaveFolderCheck scan={scan} audience={audience} />
       {malicious.length > 0 && (
         <div>
           <span className="badge bad">
@@ -500,5 +476,71 @@ export function FileChecks({
         </div>
       )}
     </>
+  );
+}
+
+/** Where the release keeps local saves: every checked release says (DESIGN §6). */
+function SaveFolderCheck({ scan, audience }: { scan: RepoScan; audience: "maker" | "reviewer" }) {
+  const saves = scan.saves ?? [];
+  const guide = <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>;
+  if (scan.save_folder === "slop") {
+    return (
+      <div>
+        <span className="badge official">SAVES IN SLOP'S SAVE FOLDER</span>{" "}
+        <span className="muted">the code reads SLOP_SAVE_DIR</span>
+      </div>
+    );
+  }
+  if (scan.save_folder === "engine") {
+    return (
+      <div>
+        <span className="badge official">SAVES IN SLOP'S SAVE FOLDER</span>{" "}
+        <span className="muted">through Godot's user://, which the Slop app points there</span>
+      </div>
+    );
+  }
+  if (saves.length === 0) {
+    // "none", or a check from before Slop looked.
+    return scan.save_folder === "none" ? (
+      <div>
+        <span className="badge neutral">NO LOCAL SAVES FOUND</span>{" "}
+        <span className="muted">
+          {audience === "maker" ? (
+            <>No SLOP_SAVE_DIR and no writes to the player's folders. If it saves on the player's computer, use SLOP_SAVE_DIR: see {guide}.</>
+          ) : (
+            "Neither SLOP_SAVE_DIR nor writes to fixed per-user folders: it likely saves nothing locally, or on a server."
+          )}
+        </span>
+      </div>
+    ) : null;
+  }
+  return (
+    <div>
+      {scan.sandbox_mismatch ? (
+        <span className="badge warn">SAYS IT WORKS IN SANDBOX MODE, BUT SAVES ELSEWHERE</span>
+      ) : (
+        <span className="badge warn">SAVES OUTSIDE SLOP'S SAVE FOLDER</span>
+      )}{" "}
+      <span className="muted">
+        {audience === "maker" ? (
+          <>
+            Your code writes to fixed places in the player's folders. Slop asks apps to keep local saves, settings and logs in
+            SLOP_SAVE_DIR, which the Slop app sets when it starts yours, so they follow players into sandbox mode.
+            {scan.sandbox_mismatch && " Until it does, players aren't told your app works in sandbox mode."} See {guide}.
+          </>
+        ) : scan.sandbox_mismatch ? (
+          "The store page says it works in sandbox mode, but it writes to the player's folders. Players aren't told it works in sandbox mode; ask the maker to use SLOP_SAVE_DIR or untick it."
+        ) : (
+          "It writes to the player's folders rather than SLOP_SAVE_DIR, so its saves won't follow players into sandbox mode. Ask the maker to move them; not a reason to reject."
+        )}
+      </span>
+      <ul>
+        {saves.map((h) => (
+          <li key={h.rule}>
+            {h.label} ({h.count}): <span className="muted">{h.examples.join(", ")}</span>
+          </li>
+        ))}
+      </ul>
+    </div>
   );
 }

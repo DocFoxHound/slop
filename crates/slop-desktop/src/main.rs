@@ -566,6 +566,28 @@ fn copy_saves(desktop: State<'_, Desktop>, from: String, to: String) -> CommandR
     Ok(desktop.library.copy_saves(&from, &to)?)
 }
 
+/// Bytes in an app's save folder.
+#[tauri::command]
+fn save_size(desktop: State<'_, Desktop>, slug: String) -> CommandResult<u64> {
+    Ok(desktop.library.save_size(&slug)?)
+}
+
+/// What each original's Play button starts, when the player picked a community build.
+#[tauri::command]
+fn play_choices(desktop: State<'_, Desktop>) -> std::collections::BTreeMap<String, String> {
+    desktop.library.play_choices()
+}
+
+/// Picks the build `app`'s Play button starts; `None` for the original.
+#[tauri::command]
+fn set_play_choice(
+    desktop: State<'_, Desktop>,
+    app: String,
+    build: Option<String>,
+) -> CommandResult<()> {
+    Ok(desktop.library.set_play_choice(&app, build.as_deref())?)
+}
+
 #[derive(Serialize)]
 struct Launched {
     sandboxed: bool,
@@ -1305,6 +1327,9 @@ fn main() {
             save_copies,
             restore_saves,
             copy_saves,
+            save_size,
+            play_choices,
+            set_play_choice,
             launch_app,
             run_installer,
             chat,

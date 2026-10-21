@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-play-choices"
+description = "Enables the play_choices command without any pre-configured scope."
+commands.allow = ["play_choices"]
+
+[[permission]]
+identifier = "deny-play-choices"
+description = "Denies the play_choices command without any pre-configured scope."
+commands.deny = ["play_choices"]

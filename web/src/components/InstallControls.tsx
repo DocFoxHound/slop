@@ -9,6 +9,7 @@ import { Link, useLocation } from "react-router";
 
 import { api } from "../api";
 import { useLoad } from "../hooks";
+import { LIBRARY_CHANGED } from "./AppUpdates";
 import { desktop, isDesktop, type InstalledApp, type Launched } from "../platform";
 import {
   decided,
@@ -91,29 +92,46 @@ function DesktopControls({ slug, title, sandbox }: { slug: string; title: string
   const sandboxStatus = useSandboxStatus();
   const [askSandbox, setAskSandbox] = useState(false);
   const [launched, setLaunched] = useState<Launched>();
-  const [failed, clearFailed] = useSandboxFailed(slug);
   const [confirmUninstall, setConfirmUninstall] = useState(false);
   const [deleteSaves, setDeleteSaves] = useState(false);
   const [installed, setInstalled] = useState<InstalledApp | null>();
+  // Installed community builds of this app, and the one its Play button starts (DESIGN §9).
+  const [builds, setBuilds] = useState<InstalledApp[]>([]);
+  const [choice, setChoice] = useState<string>();
+  const [offerSaves, setOfferSaves] = useState<{ from: InstalledApp; to: InstalledApp }>();
   const [busy, setBusy] = useState<"install" | "launch" | "uninstall" | null>(null);
   const [progress, setProgress] = useState<{ got: number; total: number }>();
   const [error, setError] = useState<string>();
   const [confirmInstaller, setConfirmInstaller] = useState(false);
 
   const reload = useCallback(async () => {
-    const apps = await desktop.installed();
+    const [apps, choices] = await Promise.all([desktop.installed(), desktop.playChoices()]);
     setInstalled(apps.find((a) => a.slug === slug) ?? null);
+    setBuilds(apps.filter((a) => a.build_of === slug));
+    setChoice(choices[slug]);
   }, [slug]);
+
+  // What Play starts: the picked community build while it's installed, else this app.
+  const target = (choice && builds.find((b) => b.slug === choice)) || installed || undefined;
+  const targetSlug = target?.slug ?? slug;
+  const targetTitle = target?.title ?? title;
+  const [failed, clearFailed] = useSandboxFailed(targetSlug);
 
   useEffect(() => {
     void reload();
+    // Another part of the page installed or removed something (a community build, say).
+    const changed = () => void reload();
+    window.addEventListener(LIBRARY_CHANGED, changed);
     let unlisten: (() => void) | undefined;
     void desktop
       .onProgress((p) => {
         if (p.slug === slug) setProgress({ got: p.got, total: p.total });
       })
       .then((u) => (unlisten = u));
-    return () => unlisten?.();
+    return () => {
+      window.removeEventListener(LIBRARY_CHANGED, changed);
+      unlisten?.();
+    };
   }, [reload, slug]);
 
   const run = async (kind: "install" | "launch" | "uninstall", action: () => Promise<unknown>) => {
@@ -122,6 +140,7 @@ function DesktopControls({ slug, title, sandbox }: { slug: string; title: string
     try {
       await action();
       await reload();
+      if (kind !== "launch") window.dispatchEvent(new Event(LIBRARY_CHANGED));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -132,12 +151,30 @@ function DesktopControls({ slug, title, sandbox }: { slug: string; title: string
 
   const launch = (normalOnce = false) => {
     clearFailed();
-    void run("launch", async () => setLaunched(await desktop.launch(slug, normalOnce)));
+    void run("launch", async () => setLaunched(await desktop.launch(targetSlug, normalOnce)));
   };
   const play = () => {
     const status = sandboxStatus.data;
-    if (status?.available && sandbox?.suggested && !decided(status, slug)) setAskSandbox(true);
+    if (status?.available && sandbox?.suggested && !decided(status, targetSlug)) setAskSandbox(true);
     else launch();
+  };
+  const pick = async (next: string) => {
+    setError(undefined);
+    setOfferSaves(undefined);
+    const from = target;
+    const to = next === slug ? installed : builds.find((b) => b.slug === next);
+    try {
+      await desktop.setPlayChoice(slug, next === slug ? null : next);
+      setChoice(next === slug ? undefined : next);
+      setLaunched(undefined);
+      // Each build has its own save folder: offer to bring saves along into an empty one.
+      if (from && to && from.slug !== to.slug) {
+        const [had, has] = await Promise.all([desktop.saveSize(from.slug), desktop.saveSize(to.slug)]);
+        if (had > 0 && has === 0) setOfferSaves({ from, to });
+      }
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    }
   };
 
   if (installed === undefined || build.loading) return <div className="install-controls muted">Checking…</div>;
@@ -177,16 +214,63 @@ function DesktopControls({ slug, title, sandbox }: { slug: string; title: string
               </button>
             )
           ) : (
-            <button className="btn big slime" disabled={busy !== null} onClick={play}>
-              {busy === "launch" ? "Starting…" : "▶ Play"}
-            </button>
+            <div className="play-split">
+              <button className="btn big slime" disabled={busy !== null} onClick={play}>
+                {busy === "launch" ? "Starting…" : "▶ Play"}
+              </button>
+              {builds.length > 0 && (
+                <select
+                  className="play-pick"
+                  aria-label={`Which version of ${title} Play starts`}
+                  value={targetSlug}
+                  disabled={busy !== null}
+                  onChange={(e) => void pick(e.target.value)}
+                >
+                  <option value={slug}>{title} (original)</option>
+                  {builds.map((b) => (
+                    <option key={b.slug} value={b.slug}>
+                      {b.title} (community, by {b.maker})
+                    </option>
+                  ))}
+                </select>
+              )}
+            </div>
+          )}
+          {targetSlug !== slug && (
+            <p className="muted small">
+              Plays <b>{targetTitle}</b>, a community build by {target?.maker}. It has its own saves.
+            </p>
+          )}
+          {offerSaves && (
+            <div className="notice small">
+              <p>
+                {offerSaves.to.title} has no saves yet. Copy your saves from {offerSaves.from.title}? A fork may store saves
+                differently; yours for {offerSaves.from.title} stay as they are.
+              </p>
+              <div className="actions">
+                <button className="btn small ghost" onClick={() => setOfferSaves(undefined)}>
+                  No thanks
+                </button>
+                <button
+                  className="btn small slime"
+                  onClick={() =>
+                    void desktop.copySaves(offerSaves.from.slug, offerSaves.to.slug).then(
+                      () => setOfferSaves(undefined),
+                      (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+                    )
+                  }
+                >
+                  Copy my saves
+                </button>
+              </div>
+            </div>
           )}
           {askSandbox && (
             <SandboxPrompt
-              title={title}
+              title={targetTitle}
               onChoose={(on) => {
                 setAskSandbox(false);
-                void desktop.setSandbox(slug, on).then(() => {
+                void desktop.setSandbox(targetSlug, on).then(() => {
                   sandboxStatus.reload();
                   launch();
                 });
@@ -194,17 +278,17 @@ function DesktopControls({ slug, title, sandbox }: { slug: string; title: string
             />
           )}
           {installed.kind !== "installer" && sandboxStatus.data && (
-            <SandboxSwitch slug={slug} status={sandboxStatus.data} hint={sandbox} onChanged={sandboxStatus.reload} />
+            <SandboxSwitch slug={targetSlug} status={sandboxStatus.data} hint={sandbox} onChanged={sandboxStatus.reload} />
           )}
-          {launched && <LaunchNotices launched={launched} title={title} />}
+          {launched && <LaunchNotices launched={launched} title={targetTitle} />}
           {failed && (
             <SandboxFailedNotice
-              slug={slug}
-              title={title}
+              slug={targetSlug}
+              title={targetTitle}
               onRunNormally={() => launch(true)}
               onTurnOff={() => {
                 clearFailed();
-                void desktop.setSandbox(slug, false).then(sandboxStatus.reload);
+                void desktop.setSandbox(targetSlug, false).then(sandboxStatus.reload);
               }}
               onClose={clearFailed}
             />

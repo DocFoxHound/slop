@@ -23,6 +23,7 @@
 //! slip anything past verification.
 
 use std::{
+    collections::BTreeMap,
     fs,
     io::{self, Read, Write},
     path::{Path, PathBuf},
@@ -68,6 +69,9 @@ pub struct InstalledApp {
     pub installed_at: String,
     /// Verified maker attestation, if the build had one.
     pub provenance: Option<slop_provenance::Provenance>,
+    /// A community build: the original app's address (signed in its manifest), so it can be
+    /// picked on the original's Play button.
+    pub build_of: Option<String>,
 }
 
 /// An installed mod (DESIGN §9), as the UI sees it.
@@ -317,6 +321,7 @@ impl Library {
                     kind,
                     installed_at: record.installed_at,
                     provenance: record.provenance,
+                    build_of: manifest.build_of.map(|o| o.app_slug),
                 })
             })
             .collect();
@@ -373,6 +378,7 @@ impl Library {
             kind: file.kind,
             installed_at: record.installed_at,
             provenance: record.provenance,
+            build_of: manifest.build_of.map(|o| o.app_slug),
         })
     }
 
@@ -1004,6 +1010,66 @@ impl Library {
                 self.remove_dir(&path)?;
             }
         }
+        Ok(())
+    }
+
+    /// Bytes in an app's save folder, so the UI can offer to copy saves into an empty one.
+    pub fn save_size(&self, slug: &str) -> Result<u64> {
+        Ok(crate::saves::size(&self.save_dir(slug)?)?)
+    }
+
+    fn play_choices_path(&self) -> PathBuf {
+        self.root.join("settings").join("play.json")
+    }
+
+    /// Which installed community build the player picked to start from each original's Play
+    /// button (original → build). Picks whose build is gone or no longer the original's are
+    /// left out.
+    pub fn play_choices(&self) -> BTreeMap<String, String> {
+        let saved: BTreeMap<String, String> = fs::read(self.play_choices_path())
+            .ok()
+            .and_then(|b| serde_json::from_slice(&b).ok())
+            .unwrap_or_default();
+        let installed = self.installed();
+        saved
+            .into_iter()
+            .filter(|(app, build)| {
+                installed
+                    .iter()
+                    .any(|a| &a.slug == build && a.build_of.as_ref() == Some(app))
+            })
+            .collect()
+    }
+
+    /// Picks what the original `app`'s Play button starts: an installed community build of it,
+    /// or the original itself (`None`, or `app`).
+    pub fn set_play_choice(&self, app: &str, build: Option<&str>) -> Result<()> {
+        if !valid_slug(app) {
+            return Err(Error::Install(format!("not an app: {app:?}")));
+        }
+        let mut choices = self.play_choices();
+        match build.filter(|b| *b != app) {
+            Some(build) => {
+                let ok = self
+                    .installed()
+                    .iter()
+                    .any(|a| a.slug == build && a.build_of.as_deref() == Some(app));
+                if !ok {
+                    return Err(Error::Install(format!(
+                        "{build} isn't an installed build of {app}"
+                    )));
+                }
+                choices.insert(app.to_string(), build.to_string());
+            }
+            None => {
+                choices.remove(app);
+            }
+        }
+        fs::create_dir_all(self.root.join("settings"))?;
+        fs::write(
+            self.play_choices_path(),
+            serde_json::to_vec_pretty(&choices).expect("serialises"),
+        )?;
         Ok(())
     }
 

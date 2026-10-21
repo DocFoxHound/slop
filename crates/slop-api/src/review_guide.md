@@ -104,6 +104,13 @@ Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked`
   services). `online_undeclared: true` means the store page didn't say the app goes online when
   the release was checked. Players are shown a notice for apps that do, so ask the maker to tick
   what it connects to under Online; reject it as a misleading page if it looks hidden on purpose.
+- `save_folder`: where local saves go. `slop` (it reads `SLOP_SAVE_DIR`) and `engine` (Godot's
+  `user://`, which the Slop app points into the save folder) are what Slop asks for; `none` means
+  no local saves were found; `elsewhere` means it writes to fixed per-user folders, listed under
+  `saves`. Saves elsewhere are a note for the maker, not a rejection: say so in your notes.
+  `sandbox_mismatch: true` means the store page says it works in sandbox mode but the code saves
+  elsewhere; players aren't told it works until that's fixed. Ask the maker to use
+  `SLOP_SAVE_DIR` or untick "Works in sandbox mode".
 - A **mod** (an app whose platforms are `any`, a branch of kind `addon`) is files another app
   loads. Its release is one `.zip` with no program to start. Review it like an app, and also
   check it only adds to the app it's for: a mod that carries a program, runs code from a server
