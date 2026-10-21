@@ -609,6 +609,12 @@ const PAYMENT_PACKAGES: &[(&str, &str)] = &[
     ("NuGet", "Braintree"),
     ("NuGet", "PayPalCheckoutSdk"),
     ("Go", "github.com/stripe/stripe-go*"),
+    ("Maven", "com.android.billingclient:*"),
+    ("Maven", "com.revenuecat.purchases:*"),
+    ("Maven", "com.stripe:*"),
+    ("Unity", "com.unity.purchasing"),
+    ("Godot", "GodotGooglePlayBilling*"),
+    ("Godot", "InAppStore"),
 ];
 
 fn is_payment_package(p: &Package) -> bool {
@@ -788,6 +794,83 @@ pub fn parse_lockfile(name: &str, text: &str) -> Vec<Package> {
                 }
             }
         }
+        "pnpm-lock.yaml" => {
+            // `packages:` then one key per package, indented two spaces: `/name@1.2.3:` (v6),
+            // `name@1.2.3:` or `'@scope/name@1.2.3(peer)':` (v9), `/name/1.2.3:` (v5).
+            let mut in_packages = false;
+            for line in text.lines() {
+                if !line.starts_with(' ') && !line.is_empty() {
+                    in_packages = line.trim_end() == "packages:";
+                    continue;
+                }
+                let Some(key) = line.strip_prefix("  ").filter(|k| !k.starts_with(' ')) else {
+                    continue;
+                };
+                if !in_packages || !key.trim_end().ends_with(':') {
+                    continue;
+                }
+                let key = key
+                    .trim_end()
+                    .trim_end_matches(':')
+                    .trim_matches(['\'', '"']);
+                let key = key.strip_prefix('/').unwrap_or(key);
+                let key = key.split('(').next().unwrap_or(key);
+                let split = key
+                    .rfind('@')
+                    .filter(|&i| i > 0)
+                    .or_else(|| key.rfind('/').filter(|&i| i > 0));
+                if let Some(i) = split {
+                    let version = key[i + 1..].split('_').next().unwrap_or("");
+                    if !version.is_empty() {
+                        out.push(pkg("npm", &key[..i], version));
+                    }
+                }
+            }
+        }
+        "gradle.lockfile" => {
+            // `group:artifact:version=classpaths`; test-only dependencies don't ship.
+            for line in text.lines() {
+                let Some((coords, paths)) = line.trim().split_once('=') else {
+                    continue;
+                };
+                if line.starts_with('#') || coords == "empty" {
+                    continue;
+                }
+                if paths.split(',').all(|p| p.trim().starts_with("test")) {
+                    continue;
+                }
+                let mut parts = coords.split(':');
+                if let (Some(g), Some(a), Some(v)) = (parts.next(), parts.next(), parts.next()) {
+                    out.push(pkg("Maven", &format!("{g}:{a}"), v));
+                }
+            }
+        }
+        "packages-lock.json" => {
+            // Unity's resolved packages; built-in and embedded ones aren't third-party.
+            let Ok(doc) = serde_json::from_str::<Value>(text) else {
+                return out;
+            };
+            for (n, p) in doc["dependencies"].as_object().into_iter().flatten() {
+                if matches!(p["source"].as_str(), Some("builtin" | "embedded" | "local")) {
+                    continue;
+                }
+                if let Some(v) = p["version"].as_str() {
+                    out.push(pkg("Unity", n, v));
+                }
+            }
+        }
+        "plugin.cfg" => {
+            // A Godot add-on (addons/<name>/plugin.cfg): its name and version.
+            let field = |key: &str| {
+                text.lines().find_map(|l| {
+                    let (k, v) = l.split_once('=')?;
+                    (k.trim() == key).then(|| v.trim().trim_matches('"').to_string())
+                })
+            };
+            if let (Some(n), Some(v)) = (field("name"), field("version")) {
+                out.push(pkg("Godot", &n, &v));
+            }
+        }
         _ if name.starts_with("requirements") && name.ends_with(".txt") => {
             for line in text.lines() {
                 let line = line.split('#').next().unwrap_or("").trim();
@@ -815,6 +898,9 @@ fn is_lockfile(name: &str) -> bool {
             | "poetry.lock"
             | "Pipfile.lock"
             | "packages.lock.json"
+            | "pnpm-lock.yaml"
+            | "gradle.lockfile"
+            | "packages-lock.json"
     ) || (name.starts_with("requirements") && name.ends_with(".txt"))
 }
 
@@ -918,7 +1004,8 @@ pub fn scan_archive(
             code_files.add(&ext, lang, path.clone());
         }
         let licence_file = is_licence_file(&path);
-        let lockfile = is_lockfile(&name);
+        let lockfile = is_lockfile(&name)
+            || (name == "plugin.cfg" && (path.starts_with("addons/") || path.contains("/addons/")));
         let unity_manifest = path.ends_with("Packages/manifest.json");
         let source = SOURCE_EXTS.contains(&ext.as_str()) || ext == "cfg" && name == "project.godot";
         if !(licence_file || lockfile || unity_manifest || source) {
@@ -1797,6 +1884,63 @@ mod tests {
             ["MIT", "Apache-2.0", "GPL-2.0-only"]
         );
         assert_eq!(family("GPL-3.0-or-later"), family("GPL-3.0"));
+    }
+
+    #[test]
+    fn more_package_lists_give_packages() {
+        let names = |file: &str, text: &str| -> Vec<String> {
+            parse_lockfile(file, text)
+                .into_iter()
+                .map(|p| format!("{} {}@{}", p.ecosystem, p.name, p.version))
+                .collect()
+        };
+        let pnpm = "lockfileVersion: '9.0'\nimporters:\n  .:\n    dependencies:\n      lodash:\n        version: 4.17.21\npackages:\n  lodash@4.17.21:\n    resolution: {integrity: x}\n  '@stripe/stripe-js@4.1.0':\n    resolution: {integrity: y}\n  react-dom@19.0.0(react@19.0.0):\n    resolution: {integrity: z}\nsnapshots:\n  other@1.0.0: {}\n";
+        assert_eq!(
+            names("pnpm-lock.yaml", pnpm),
+            [
+                "npm lodash@4.17.21",
+                "npm @stripe/stripe-js@4.1.0",
+                "npm react-dom@19.0.0"
+            ]
+        );
+        assert_eq!(
+            names(
+                "pnpm-lock.yaml",
+                "lockfileVersion: 5.4\npackages:\n  /left-pad/1.3.0:\n    dev: false\n"
+            ),
+            ["npm left-pad@1.3.0"]
+        );
+        let gradle = "# comment\ncom.android.billingclient:billing:7.0.0=releaseRuntimeClasspath\njunit:junit:4.13.2=testCompileClasspath,testRuntimeClasspath\nempty=\n";
+        assert_eq!(
+            names("gradle.lockfile", gradle),
+            ["Maven com.android.billingclient:billing@7.0.0"]
+        );
+        let unity = r#"{"dependencies": {"com.unity.purchasing": {"version": "4.12.2", "source": "registry"}, "com.unity.modules.ui": {"version": "1.0.0", "source": "builtin"}}}"#;
+        assert_eq!(
+            names("packages-lock.json", unity),
+            ["Unity com.unity.purchasing@4.12.2"]
+        );
+        let godot = "[plugin]\n\nname=\"GodotGooglePlayBilling\"\ndescription=\"x\"\nversion=\"2.1.0\"\nscript=\"plugin.gd\"\n";
+        assert_eq!(
+            names("plugin.cfg", godot),
+            ["Godot GodotGooglePlayBilling@2.1.0"]
+        );
+        // The payment check sees them.
+        assert!(
+            parse_lockfile("packages-lock.json", unity)
+                .iter()
+                .any(is_payment_package)
+        );
+        assert!(
+            parse_lockfile("plugin.cfg", godot)
+                .iter()
+                .any(is_payment_package)
+        );
+        assert!(
+            parse_lockfile("gradle.lockfile", gradle)
+                .iter()
+                .any(is_payment_package)
+        );
     }
 
     #[test]
