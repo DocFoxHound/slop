@@ -92,6 +92,16 @@ pub struct Report {
     /// the release is checked). Players aren't told it works in sandbox mode while it's so.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub sandbox_mismatch: bool,
+    /// Code in the repository, by language, plus built code (`.dll`, `.so`, `.pck`…). Shown for
+    /// mods: a mod with code gets a full read (DESIGN §9).
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub code_files: Vec<Hit>,
+    /// A mod with code (set when the release is checked).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mod_code: bool,
+    /// A mod with networking code: flagged, and sandbox mode is suggested for its game.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub mod_online: bool,
     /// It goes online, but its store page doesn't say so (set when the release is checked).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub online_undeclared: bool,
@@ -193,6 +203,28 @@ const SOURCE_EXTS: &[&str] = &[
     "rs", "go", "cs", "gd", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "lua", "c", "cc", "cpp",
     "h", "hpp", "java", "kt", "swift", "html", "htm", "vue", "svelte", "dart", "rb", "php",
 ];
+
+/// Languages for `code_files`, by extension.
+fn language(ext: &str) -> Option<&'static str> {
+    Some(match ext {
+        "gd" => "GDScript",
+        "cs" => "C#",
+        "lua" => "Lua",
+        "py" => "Python",
+        "js" | "mjs" | "cjs" | "jsx" => "JavaScript",
+        "ts" | "tsx" => "TypeScript",
+        "rs" => "Rust",
+        "go" => "Go",
+        "c" | "cc" | "cpp" | "h" | "hpp" => "C or C++",
+        "java" | "kt" => "Java or Kotlin",
+        "swift" => "Swift",
+        "dart" => "Dart",
+        "rb" => "Ruby",
+        "php" => "PHP",
+        "dll" | "so" | "dylib" | "exe" | "pck" | "jar" => "Built code (.dll, .so, .pck…)",
+        _ => return None,
+    })
+}
 
 /// An SPDX ID reduced to its family, so GPL-3.0-only, GPL-3.0-or-later and GPL-3.0+ compare equal.
 fn family(id: &str) -> String {
@@ -816,6 +848,25 @@ impl Tally {
     }
 }
 
+/// Joins hits with the same label (`js` and `mjs` are both JavaScript).
+fn merge_by_label(hits: Vec<Hit>) -> Vec<Hit> {
+    let mut out: Vec<Hit> = Vec::new();
+    for h in hits {
+        match out.iter_mut().find(|o| o.label == h.label) {
+            Some(o) => {
+                o.count += h.count;
+                for e in h.examples {
+                    if o.examples.len() < EXAMPLES {
+                        o.examples.push(e);
+                    }
+                }
+            }
+            None => out.push(h),
+        }
+    }
+    out
+}
+
 /// Reads a repository archive (`.tar.gz`, one top folder, as GitHub, GitLab and Gitea make them).
 pub fn scan_archive(
     archive: impl Read,
@@ -837,6 +888,7 @@ pub fn scan_archive(
     let mut code_loading = Tally::default();
     let mut network = Tally::default();
     let mut saves = Tally::default();
+    let mut code_files = Tally::default();
     // Code that reads SLOP_SAVE_DIR knows about Slop's save folder: no save notes then.
     let mut uses_save_dir = false;
     // Godot's user:// lands in the save folder by itself.
@@ -862,6 +914,9 @@ pub fn scan_archive(
             .rsplit_once('.')
             .map(|(_, e)| e.to_ascii_lowercase())
             .unwrap_or_default();
+        if let Some(lang) = language(&ext) {
+            code_files.add(&ext, lang, path.clone());
+        }
         let licence_file = is_licence_file(&path);
         let lockfile = is_lockfile(&name);
         let unity_manifest = path.ends_with("Packages/manifest.json");
@@ -962,6 +1017,7 @@ pub fn scan_archive(
     if !uses_save_dir {
         report.saves = saves.into_hits();
     }
+    report.code_files = merge_by_label(code_files.into_hits());
     report.save_folder = if uses_save_dir {
         "slop"
     } else if !report.saves.is_empty() {
@@ -1261,10 +1317,10 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
 /// Checks one release's source now and stores the result. Called when a release's files are
 /// fetched, before automatic approval, and by the background round for the rest.
 pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
-    type Row = (Uuid, String, String, String, bool, bool, bool);
-    let (app_id, repo_url, commit, declared, public, online, sandbox_ready): Row = sqlx::query_as(
+    type Row = (Uuid, String, String, String, bool, bool, bool, bool);
+    let (app_id, repo_url, commit, declared, public, online, sandbox_ready, is_mod): Row = sqlx::query_as(
         "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public',
-                cardinality(a.online) > 0, a.sandbox_ready
+                cardinality(a.online) > 0, a.sandbox_ready, a.branch_kind is not distinct from 'addon'
          from releases r join apps a on a.id = r.app_id where r.id = $1",
     )
     .bind(id)
@@ -1276,6 +1332,19 @@ pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
         // Players are told about apps that go online; one that doesn't say so needs a look.
         if !online && report["network"].as_array().is_some_and(|n| !n.is_empty()) {
             report["online_undeclared"] = json!(true);
+        }
+        // A mod may carry code (DESIGN §9): flagged for a full read, and one that goes online,
+        // declared or not, is flagged and suggests sandbox mode for its game.
+        if is_mod && report["status"] == "checked" {
+            if report["code_files"]
+                .as_array()
+                .is_some_and(|c| !c.is_empty())
+            {
+                report["mod_code"] = json!(true);
+            }
+            if report["network"].as_array().is_some_and(|n| !n.is_empty()) {
+                report["mod_online"] = json!(true);
+            }
         }
         // "Works in sandbox mode" means local saves only in SLOP_SAVE_DIR.
         if sandbox_ready && report["save_folder"] == "elsewhere" {
@@ -1332,6 +1401,11 @@ fn concerns(scan: &Value) -> Option<BTreeSet<String>> {
     }
     if scan["sandbox_mismatch"] == json!(true) {
         out.insert("saves:sandbox_mismatch".into());
+    }
+    for flag in ["mod_code", "mod_online"] {
+        if scan[flag] == json!(true) {
+            out.insert(format!("mod:{flag}"));
+        }
     }
     for (section, key) in [("monetization", "monetization"), ("code_loading", "code")] {
         for hit in scan[section].as_array().into_iter().flatten() {
@@ -1439,6 +1513,21 @@ mod tests {
             "Godot's user:// isn't a note"
         );
         assert_eq!(report.save_folder, "elsewhere");
+        let langs: Vec<_> = report
+            .code_files
+            .iter()
+            .map(|h| (h.label.as_str(), h.count))
+            .collect();
+        assert_eq!(
+            langs,
+            [
+                ("C#", 1),
+                ("GDScript", 1),
+                ("JavaScript", 1),
+                ("Python", 1),
+                ("Rust", 1)
+            ]
+        );
         let value = serde_json::to_value(&report).unwrap();
         // (The short licence text here isn't recognised; that's a licence note.)
         assert!(

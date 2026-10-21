@@ -371,6 +371,26 @@ export function RepoScanList({
         </div>
       )}
       <SaveFolderCheck scan={scan} audience={audience} />
+      {(scan.mod_code || scan.mod_online) && (
+        <div>
+          {scan.mod_code && <span className="badge warn">MOD WITH CODE</span>}{" "}
+          {scan.mod_online && <span className="badge warn">MOD GOES ONLINE</span>}{" "}
+          <span className="muted">
+            {audience === "maker"
+              ? `Mods may carry code. It gets a full read before approval${scan.mod_online ? ", and because it goes online, players see that and are told to use sandbox mode" : ""}. Say in your description what the code does${scan.mod_online ? " and what it connects to" : ""}.`
+              : `Read all of the mod's code: it runs inside the game. It may only add to its game, never run code from a server, update itself or load other mods.${scan.mod_online ? " It goes online: check what it connects to and that the description says so. Approving is fine; players see GOES ONLINE and get the sandbox suggestion." : ""}`}
+          </span>
+          {(scan.code_files ?? []).length > 0 && (
+            <ul>
+              {(scan.code_files ?? []).map((h) => (
+                <li key={h.rule}>
+                  {h.label} ({h.count}): <span className="muted">{h.examples.join(", ")}</span>
+                </li>
+              ))}
+            </ul>
+          )}
+        </div>
+      )}
       {malicious.length > 0 && (
         <div>
           <span className="badge bad">

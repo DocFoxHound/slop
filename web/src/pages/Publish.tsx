@@ -13,6 +13,7 @@ import {
   type AppSummary,
   type Category,
   type ContentLabel,
+  type ModsFolder,
   type NewApp,
   type OnlineKind,
   type RepoTokenInput,
@@ -172,6 +173,7 @@ const EMPTY: NewApp = {
   online: [],
   online_hosts: [],
   sandbox_ready: false,
+  mods_folder: null,
 };
 
 function slugify(title: string): string {
@@ -221,6 +223,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           online: existing.online,
           online_hosts: existing.online_hosts,
           sandbox_ready: existing.sandbox_ready,
+          mods_folder: existing.mods_folder,
         }
       : EMPTY,
   );
@@ -235,6 +238,8 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const terms = useTermsGate();
 
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
+  // A mod's own page has no mods folder.
+  const isMod = existing?.branch?.kind === "addon";
   const [hostsText, setHostsText] = useState((existing?.online_hosts ?? []).join("\n"));
   const hosts = () => parseHosts(form.online ?? [], hostsText);
   // Private Slop from a private repository outside GitHub: a read-only token (repo_tokens.rs).
@@ -263,6 +268,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             online: form.online,
             online_hosts: hosts(),
             sandbox_ready: form.sandbox_ready,
+            ...(isMod ? {} : { mods_folder: form.mods_folder ?? null }),
           })
         : await terms.guard(() => {
             const app = { ...form, online_hosts: hosts() };
@@ -449,6 +455,13 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           error={error?.field === "online" || error?.field === "online_hosts" ? error : undefined}
         />
         <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
+        {!isMod && (
+          <ModsFolderPicker
+            value={form.mods_folder ?? null}
+            onChange={(v) => set("mods_folder", v)}
+            error={error?.field === "mods_folder" ? error.message : undefined}
+          />
+        )}
 
         <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
 
@@ -641,6 +654,71 @@ export function SandboxReadyCheck({ checked, onChange }: { checked: boolean; onC
         <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>.
       </span>
     </label>
+  );
+}
+
+/** Where the game reads mods from (DESIGN §9). Slop keeps only mods approved on Slop there. */
+export function ModsFolderPicker({
+  value,
+  onChange,
+  error,
+}: {
+  value: ModsFolder | null;
+  onChange: (v: ModsFolder | null) => void;
+  error?: string;
+}) {
+  const base = value?.base ?? "none";
+  const pick = (b: "none" | "game" | "saves") =>
+    onChange(b === "none" ? null : { base: b, path: value?.path ?? "mods", layout: value?.layout ?? "folder" });
+  return (
+    <fieldset>
+      <legend>Mods</legend>
+      <p className="muted small">
+        If your game loads mods, say where it looks for them, and players' mods from Slop go there: Slop keeps only mods
+        approved on Slop in that folder, read-only in sandbox mode. Or read <code>SLOP_MODS</code> instead. See{" "}
+        <Link to="/publish/guide#loading-mods-in-your-game">Loading mods in your game</Link>.
+      </p>
+      {(
+        [
+          ["none", "It reads SLOP_MODS, or has no mods"],
+          ["game", "A folder in the game's files (like mods/ next to the game)"],
+          ["saves", "A folder in its save folder"],
+        ] as const
+      ).map(([b, label]) => (
+        <label className="check" key={b}>
+          <input type="radio" name="mods-base" checked={base === b} onChange={() => pick(b)} /> {label}
+        </label>
+      ))}
+      {value && (
+        <>
+          <label>
+            Folder
+            <input
+              value={value.path}
+              maxLength={200}
+              placeholder="mods"
+              onChange={(e) => onChange({ ...value, path: e.target.value })}
+            />
+            <span className="hint">
+              Relative to {value.base === "game" ? "the game's files" : "the save folder"}, with / between parts: mods,
+              Content/Paks/~mods.
+            </span>
+          </label>
+          <label>
+            Layout
+            <select value={value.layout} onChange={(e) => onChange({ ...value, layout: e.target.value as ModsFolder["layout"] })}>
+              <option value="folder">Each mod in its own folder</option>
+              <option value="flat">All mods' files straight in the folder (for games that read .pak or .zip files there)</option>
+            </select>
+          </label>
+        </>
+      )}
+      {error && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </fieldset>
   );
 }
 

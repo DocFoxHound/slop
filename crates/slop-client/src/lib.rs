@@ -7,6 +7,8 @@
 pub mod api;
 pub mod chat;
 pub mod library;
+pub mod link;
+pub mod mods_folder;
 pub mod sandbox;
 pub mod saves;
 pub mod signin;

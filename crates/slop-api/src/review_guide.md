@@ -94,7 +94,9 @@ Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked`
   time, running code from text (`eval`, `exec`, `loadstring`), Godot resource packs or Unity
   asset bundles, self-updaters, and data formats that can rebuild any object (`BinaryFormatter`,
   `pickle`, `bytes_to_var_with_objects`…). Open the examples and decide:
-  - loading the app's own files from its install folder is fine;
+  - loading the app's own files from its install folder is fine, and so is loading mods (code
+    included) from `SLOP_MODS` or the mods folder named on its store page (`mods_folder`), which
+    hold only mods approved on Slop;
   - running code, scripts or mods a server or download supplies, or updating itself outside
     Slop, is a rejection;
   - an unsafe format reading anything from a server, another player or a shared file (saves,
@@ -113,8 +115,13 @@ Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked`
   `SLOP_SAVE_DIR` or untick "Works in sandbox mode".
 - A **mod** (an app whose platforms are `any`, a branch of kind `addon`) is files another app
   loads. Its release is one `.zip` with no program to start. Review it like an app, and also
-  check it only adds to the app it's for: a mod that carries a program, runs code from a server
-  or changes how the app is installed is a rejection.
+  check it only adds to the app it's for: a mod that carries a program to start, runs code from
+  a server, updates itself, loads other mods or changes how the app is installed is a rejection.
+  Mods **may contain code** (scripts, `.pck` packs, .NET assemblies) that the game loads:
+  `mod_code: true` (with `code_files` by language) means read all of it, as you would an app's.
+  `mod_online: true` means it has networking code: find what it connects to and check the
+  description says so. That's a flag, not a rejection: players see "goes online" and sandbox
+  mode is suggested for the game.
 - `advisories`: known vulnerabilities in its packages (from OSV). `malicious: true` means the
   package is malware: reject, or for a live release, ask your admin to withdraw it.
 

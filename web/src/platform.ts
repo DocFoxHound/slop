@@ -98,6 +98,17 @@ export interface Launched {
   /** Programs found in the save folder and moved out before the start. */
   quarantined: string[];
   copy_skipped: boolean;
+  /** Things in the game's own mods folder that aren't mods from Slop, moved out (DESIGN §9). */
+  unapproved_mods: string[];
+}
+
+/** A running game asking for mods, for the player to confirm (Slop Link, DESIGN §9). */
+export interface ModRequest {
+  id: string;
+  game: string;
+  /** Who wants them, in the game's words: untrusted text. */
+  from: string | null;
+  mods: Array<{ slug: string; version: string | null }>;
 }
 
 export interface UpdateInfo {
@@ -280,6 +291,17 @@ export const desktop = {
     const { listen } = await import("@tauri-apps/api/event");
     return listen<{ slug: string }>("sandbox-failed", (e) => handler(e.payload));
   },
+  /** A running game asked for mods (Slop Link). */
+  onModRequest: async (handler: (r: ModRequest) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<ModRequest>("mod-request", (e) => handler(e.payload));
+  },
+  /** Mods were added to `game` from a request. */
+  onModsChanged: async (handler: (game: string) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<string>("mods-changed", (e) => handler(e.payload));
+  },
+  answerModRequest: (id: string, accept: boolean) => call<void>("answer_mod_request", { id, accept }),
   /** Mods: files for an installed game to load, handed to it at launch in SLOP_MODS. */
   installedMods: (game: string) => call<InstalledMod[]>("installed_mods", { game }),
   installMod: (slug: string) => call<InstalledMod>("install_mod", { slug }),

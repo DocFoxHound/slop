@@ -318,6 +318,16 @@ fn zip_of(entries: &[(&str, &[u8], u32)]) -> Vec<u8> {
 const GAME: &[u8] = b"#!/bin/sh\necho \"launched with $1\" > out.txt\n";
 
 fn manifest_for(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signed {
+    manifest_with(base, file, bytes, release_id, None)
+}
+
+fn manifest_with(
+    base: &str,
+    file: &str,
+    bytes: &[u8],
+    release_id: &str,
+    mods_folder: Option<slop_manifest::ModsFolder>,
+) -> Signed {
     let manifest = ReleaseManifest {
         schema: MANIFEST_SCHEMA,
         app_id: "id".into(),
@@ -346,6 +356,7 @@ fn manifest_for(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signe
         approved_at: "2026-10-18T00:00:00Z".into(),
         mod_for: None,
         build_of: None,
+        mods_folder,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -460,6 +471,7 @@ fn mod_manifest(base: &str, bytes: &[u8], release_id: &str) -> Signed {
             app_title: "Game".into(),
         }),
         build_of: None,
+        mods_folder: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -498,6 +510,7 @@ fn community_manifest(base: &str, file: &str, bytes: &[u8], release_id: &str) ->
             app_slug: "game".into(),
             app_title: "Game".into(),
         }),
+        mods_folder: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -649,6 +662,80 @@ async fn mods_are_added_to_their_game_and_handed_to_it_at_launch() {
     lib.uninstall("game").unwrap();
     assert!(!dir.join("mods/big-mod").exists());
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A game's own mods folder (DESIGN §9): before each start Slop puts the approved mods there
+/// and moves anything else out, telling the player. A mods folder in the saves isn't swept for
+/// code: mods may carry it.
+#[cfg(unix)]
+#[tokio::test]
+async fn the_games_own_mods_folder_holds_only_approved_mods() {
+    let (base, fake) = fake_api().await;
+    let game = zip_of(&[("bin/game", b"#!/bin/sh\n", 0o755)]);
+    let a_mod = zip_of(&[("Plugin.dll", b"MZ\x90\x00 managed code", 0o644)]);
+    fake.files.lock().unwrap().extend([
+        ("game.zip".into(), game.clone()),
+        ("mod.zip".into(), a_mod.clone()),
+    ]);
+    for (folder_base, folder) in [
+        (slop_manifest::ModsBase::Game, "apps/game/files/mods"),
+        (slop_manifest::ModsBase::Saves, "saves/game/BepInEx/plugins"),
+    ] {
+        let dir = tempdir();
+        let lib = library(&dir);
+        let path = if folder_base == slop_manifest::ModsBase::Game {
+            "mods"
+        } else {
+            "BepInEx/plugins"
+        };
+        lib.install(
+            &manifest_with(
+                &base,
+                "game.zip",
+                &game,
+                "r1",
+                Some(slop_manifest::ModsFolder {
+                    base: folder_base,
+                    path: path.into(),
+                    layout: slop_manifest::ModsLayout::Flat,
+                }),
+            ),
+            Platform::Linux,
+            None,
+            |_, _| {},
+        )
+        .await
+        .unwrap();
+        lib.install_mod(&mod_manifest(&base, &a_mod, "m1"), None, |_, _| {})
+            .await
+            .unwrap();
+        let target = dir.join(folder);
+        std::fs::create_dir_all(&target).unwrap();
+        std::fs::write(target.join("MyCheat.dll"), b"MZ hand-made").unwrap();
+
+        let launch = lib.prepare_launch("game", None, None).unwrap();
+        assert_eq!(launch.unapproved_mods, ["MyCheat.dll"], "{folder}");
+        assert!(
+            launch.quarantined.is_empty(),
+            "approved mod code isn't swept"
+        );
+        assert_eq!(
+            std::fs::read(target.join("Plugin.dll")).unwrap(),
+            b"MZ\x90\x00 managed code"
+        );
+        assert!(!target.join("MyCheat.dll").exists());
+        assert!(
+            dir.join("quarantine/game/unapproved-mods/MyCheat.dll")
+                .exists()
+        );
+
+        // Removing the mod empties the folder at the next start, quietly.
+        lib.uninstall_mod("big-mod").unwrap();
+        let launch = lib.prepare_launch("game", None, None).unwrap();
+        assert!(launch.unapproved_mods.is_empty());
+        assert!(!target.join("Plugin.dll").exists());
+        std::fs::remove_dir_all(dir).unwrap();
+    }
 }
 
 /// Sandbox mode (DESIGN §6): the same save folder in both modes; in the box the app writes
@@ -1120,6 +1207,7 @@ fn parts_manifest(base: &str, whole: &[u8], parts: &[(&str, &[u8])]) -> Signed {
         approved_at: "2026-10-18T00:00:00Z".into(),
         mod_for: None,
         build_of: None,
+        mods_folder: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }

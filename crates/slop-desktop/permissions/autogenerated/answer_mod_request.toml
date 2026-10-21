@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-answer-mod-request"
+description = "Enables the answer_mod_request command without any pre-configured scope."
+commands.allow = ["answer_mod_request"]
+
+[[permission]]
+identifier = "deny-answer-mod-request"
+description = "Denies the answer_mod_request command without any pre-configured scope."
+commands.deny = ["answer_mod_request"]

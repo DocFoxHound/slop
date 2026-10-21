@@ -50,25 +50,35 @@ fn is_native_code(path: &Path) -> bool {
 }
 
 /// Sweeps a save folder before a launch. Returns the paths (relative to the folder) of the
-/// programs and libraries moved into `quarantine`.
-pub fn sweep(dir: &Path, quarantine: &Path) -> io::Result<Vec<String>> {
+/// programs and libraries moved into `quarantine`. `skip` is a mods folder inside it, which
+/// Slop fills with approved mods (code included) and checks itself (mods_folder.rs).
+pub fn sweep(dir: &Path, quarantine: &Path, skip: Option<&Path>) -> io::Result<Vec<String>> {
     let mut moved = Vec::new();
     if dir.exists() {
-        sweep_in(dir, dir, quarantine, &mut moved)?;
+        sweep_in(dir, dir, quarantine, skip, &mut moved)?;
     }
     Ok(moved)
 }
 
-fn sweep_in(root: &Path, dir: &Path, quarantine: &Path, moved: &mut Vec<String>) -> io::Result<()> {
+fn sweep_in(
+    root: &Path,
+    dir: &Path,
+    quarantine: &Path,
+    skip: Option<&Path>,
+    moved: &mut Vec<String>,
+) -> io::Result<()> {
     for entry in fs::read_dir(dir)? {
         let entry = entry?;
         let path = entry.path();
         let kind = entry.file_type()?;
+        if skip == Some(path.as_path()) && kind.is_dir() {
+            continue;
+        }
         if kind.is_symlink() {
             // A link could point Slop or the app outside the folder.
             fs::remove_file(&path)?;
         } else if kind.is_dir() {
-            sweep_in(root, &path, quarantine, moved)?;
+            sweep_in(root, &path, quarantine, skip, moved)?;
         } else if kind.is_file() {
             let rel = path.strip_prefix(root).unwrap_or(&path).to_path_buf();
             if is_native_code(&path) {
@@ -249,7 +259,7 @@ mod tests {
         fs::write(saves.join("evil.dll"), b"MZ\x90\x00").unwrap();
         std::os::unix::fs::symlink("/etc/passwd", saves.join("link")).unwrap();
 
-        let mut moved = sweep(&saves, &root.join("quarantine")).unwrap();
+        let mut moved = sweep(&saves, &root.join("quarantine"), None).unwrap();
         moved.sort();
         assert_eq!(moved, ["evil.dll", "slot1/evil.so"]);
         assert!(root.join("quarantine/slot1/evil.so").exists());

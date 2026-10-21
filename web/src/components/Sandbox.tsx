@@ -4,6 +4,7 @@
 // it isn't a guarantee, so it's never called "safe".
 
 import { useEffect, useState } from "react";
+import { Link } from "react-router";
 
 import { api } from "../api";
 import { useLoad } from "../hooks";
@@ -15,6 +16,8 @@ export interface SandboxHint {
   suggested: boolean;
   /** Its store page says it doesn't go online, so blocking the internet is offered. */
   offline: boolean;
+  /** Its mods that go online: once one is added, sandbox mode is suggested too (DESIGN §9). */
+  onlineMods?: string[];
 }
 
 export function useSandboxStatus() {
@@ -98,9 +101,21 @@ export function SandboxSwitch({
 }
 
 /** What Slop did before starting the app. */
-export function LaunchNotices({ launched, title }: { launched: Launched; title: string }) {
+export function LaunchNotices({ launched, slug, title }: { launched: Launched; slug: string; title: string }) {
+  const unapproved = launched.unapproved_mods ?? [];
   return (
     <>
+      {unapproved.length > 0 && (
+        <div className="notice small" role="status">
+          Slop moved {unapproved.length === 1 ? "something" : `${unapproved.length} things`} that{" "}
+          {unapproved.length === 1 ? "isn't a mod" : "aren't mods"} from Slop out of {title}'s mods folder (
+          {unapproved.slice(0, 3).join(", ")}
+          {unapproved.length > 3 && ", …"}). They're kept in Slop's quarantine folder. Only mods published on Slop can be
+          used, offline or online: a mod has to be published and approved, and follow the{" "}
+          <Link to="/publish/guide#online-play-and-mods">guidelines</Link>, so everyone you play with gets the same checked
+          files. Made it yourself? <Link to={`/app/${slug}/branch?kind=addon`}>Publish it for {title}</Link>.
+        </div>
+      )}
       {launched.quarantined.length > 0 && (
         <div className="notice small" role="status">
           Before starting {title}, Slop moved {launched.quarantined.length === 1 ? "a program" : `${launched.quarantined.length} programs`}{" "}

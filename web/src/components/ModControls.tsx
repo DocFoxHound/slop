@@ -92,7 +92,7 @@ export function GameMods({
   onChanged,
 }: {
   game: string;
-  available: Array<{ slug: string; title: string; author: string; note: string | null }>;
+  available: Array<{ slug: string; title: string; author: string; note: string | null; code?: boolean; online?: boolean }>;
   onChanged?: () => void;
 }) {
   const [added, setAdded] = useState<InstalledMod[]>();
@@ -105,9 +105,13 @@ export function GameMods({
   if (!added) return null;
   // Added mods first (including any no longer listed), then the rest.
   const rows = [
-    ...added.map((m) => ({ slug: m.slug, title: m.title, author: m.maker, note: null, mod: m })),
+    ...added.map((m) => {
+      const listed = available.find((a) => a.slug === m.slug);
+      return { slug: m.slug, title: m.title, author: m.maker, note: null, code: listed?.code, online: listed?.online, mod: m };
+    }),
     ...available.filter((a) => !added.some((m) => m.slug === a.slug)).map((a) => ({ ...a, mod: undefined })),
   ];
+  const onlineAdded = rows.filter((r) => r.mod && r.online);
   if (rows.length === 0) return null;
 
   const toggle = async (slug: string, add: boolean) => {
@@ -138,6 +142,8 @@ export function GameMods({
                 onChange={(e) => void toggle(r.slug, e.target.checked)}
               />{" "}
               <Link to={`/app/${r.slug}`}>{r.title}</Link> <span className="muted small">by {r.author}</span>
+              {r.code && <span className="badge neutral">CONTAINS CODE</span>}
+              {r.online && <span className="badge warn">GOES ONLINE</span>}
             </label>
             {busy === r.slug && <span className="muted small"> {r.mod ? "Removing…" : "Adding…"}</span>}
             {r.mod?.revoked && (
@@ -151,6 +157,12 @@ export function GameMods({
         ))}
       </ul>
       <p className="muted small">Ticked mods are handed to the game when it starts. Each was checked and reviewed by Slop.</p>
+      {onlineAdded.length > 0 && (
+        <p className="small">
+          {onlineAdded.map((r) => r.title).join(", ")} {onlineAdded.length === 1 ? "goes" : "go"} online, on servers Slop
+          can't check, so sandbox mode is suggested for this game.
+        </p>
+      )}
       {error && (
         <p className="form-error" role="alert">
           {error}

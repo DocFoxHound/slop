@@ -99,6 +99,8 @@ pub struct Launch {
     pub quarantined: Vec<String>,
     /// The saves were too big to copy before this sandboxed session.
     pub copy_skipped: bool,
+    /// Things in the game's mods folder that aren't mods from Slop, moved out (DESIGN §9).
+    pub unapproved_mods: Vec<String>,
 }
 
 pub struct Library {
@@ -192,7 +194,7 @@ impl Library {
         Ok(self.root.join("mods").join(slug))
     }
 
-    fn verify_manifest(&self, signed: &Signed) -> Result<ReleaseManifest> {
+    pub fn verify_manifest(&self, signed: &Signed) -> Result<ReleaseManifest> {
         let manifest: ReleaseManifest =
             slop_manifest::verify(signed, Purpose::ReleaseManifest, &self.trusted)
                 .map_err(|e| Error::Verify(format!("release manifest: {e}")))?;
@@ -835,7 +837,11 @@ impl Library {
     }
 
     /// The folders of the mods to hand to a game at launch: its mods, minus any pulled.
-    fn mod_folders(&self, game_id: &str, revocations: Option<&RevocationList>) -> Vec<PathBuf> {
+    fn approved_mods(
+        &self,
+        game_id: &str,
+        revocations: Option<&RevocationList>,
+    ) -> Vec<(String, PathBuf)> {
         self.all_mods()
             .into_iter()
             .filter(|(_, id)| id == game_id)
@@ -844,9 +850,53 @@ impl Library {
                     tracing::warn!(r#mod = %m.slug, reason = %r.reason, "not loading a pulled mod");
                     return None;
                 }
-                Some(self.mod_dir(&m.slug).ok()?.join("files"))
+                let dir = self.mod_dir(&m.slug).ok()?.join("files");
+                Some((m.slug, dir))
             })
             .collect()
+    }
+
+    /// The game's own mods folder, when its maker named one (DESIGN §9).
+    fn declared_mods_folder(
+        &self,
+        slug: &str,
+        manifest: &ReleaseManifest,
+    ) -> Result<Option<(PathBuf, slop_manifest::ModsLayout)>> {
+        let Some(f) = manifest.mods_folder.as_ref().filter(|f| f.is_valid()) else {
+            return Ok(None);
+        };
+        let base = match f.base {
+            slop_manifest::ModsBase::Game => self.app_dir(slug)?.join("files"),
+            slop_manifest::ModsBase::Saves => self.save_dir(slug)?,
+        };
+        Ok(Some((base.join(&f.path), f.layout)))
+    }
+
+    /// Puts the game's approved mods in its declared mods folder, moving anything else out.
+    /// Returns the mods' folders (as in `SLOP_MODS`) and what was moved out. Called before each
+    /// start, and when the player adds mods while the game runs.
+    pub fn sync_mods(
+        &self,
+        slug: &str,
+        revocations: Option<&RevocationList>,
+    ) -> Result<(Vec<PathBuf>, crate::mods_folder::Synced)> {
+        let (_, manifest) = self.record(slug)?;
+        let mods = self.approved_mods(&manifest.app_id, revocations);
+        let synced = match self.declared_mods_folder(slug, &manifest)? {
+            Some((target, layout)) => crate::mods_folder::sync(
+                &target,
+                layout,
+                &mods,
+                &self.root.join("mod-sync").join(format!("{slug}.json")),
+                &self
+                    .root
+                    .join("quarantine")
+                    .join(slug)
+                    .join("unapproved-mods"),
+            )?,
+            None => Default::default(),
+        };
+        Ok((mods.into_iter().map(|(_, dir)| dir).collect(), synced))
     }
 
     /// Builds the command that starts an installed app in normal mode, after checking the
@@ -894,9 +944,19 @@ impl Library {
             ));
         }
 
-        // The save folder: swept every time, copied before a sandboxed session.
+        // The save folder: swept every time (bar a mods folder in it), copied before a
+        // sandboxed session.
         let saves = self.save_dir(slug)?;
-        let quarantined = crate::saves::sweep(&saves, &self.root.join("quarantine").join(slug))?;
+        let mods_folder = self.declared_mods_folder(slug, &manifest)?;
+        let in_saves = mods_folder
+            .as_ref()
+            .map(|(dir, _)| dir.clone())
+            .filter(|dir| dir.starts_with(&saves));
+        let quarantined = crate::saves::sweep(
+            &saves,
+            &self.root.join("quarantine").join(slug),
+            in_saves.as_deref(),
+        )?;
         let mut copy_skipped = false;
         if sandbox.is_some() {
             copy_skipped =
@@ -906,7 +966,8 @@ impl Library {
         }
         let cache = self.root.join("cache").join(slug);
         fs::create_dir_all(&cache)?;
-        let mods = self.mod_folders(&manifest.app_id, revocations);
+        let (mods, synced) = self.sync_mods(slug, revocations)?;
+        let read_only: Vec<PathBuf> = in_saves.into_iter().collect();
 
         let mut cmd = match sandbox {
             Some(opts) => crate::sandbox::command(
@@ -915,6 +976,7 @@ impl Library {
                     mods: &mods,
                     saves: &saves,
                     cache: &cache,
+                    read_only: &read_only,
                     network: !opts.block_network,
                 },
                 &exec,
@@ -950,6 +1012,7 @@ impl Library {
             sandboxed: sandbox.is_some(),
             quarantined,
             copy_skipped,
+            unapproved_mods: synced.unapproved,
         })
     }
 
