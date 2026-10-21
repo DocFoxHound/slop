@@ -21,6 +21,11 @@ fn main() {
             "chat",
             "overlay_hide",
             "overlay_setting",
+            "auto_update_setting",
+            "running_apps",
+            "installed_mods",
+            "install_mod",
+            "uninstall_mod",
         ]),
     ))
     .expect("failed to run tauri-build");

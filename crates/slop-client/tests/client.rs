@@ -344,6 +344,7 @@ fn manifest_for(base: &str, file: &str, bytes: &[u8], release_id: &str) -> Signe
             parts: vec![],
         }],
         approved_at: "2026-10-18T00:00:00Z".into(),
+        mod_for: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -424,6 +425,125 @@ async fn install_verify_launch_and_revoke() {
 
     lib.uninstall("game").unwrap();
     assert!(lib.installed().is_empty());
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// A mod's manifest: one `.zip` for every platform, nothing to start, and the game it's for.
+fn mod_manifest(base: &str, bytes: &[u8], release_id: &str) -> Signed {
+    let manifest = ReleaseManifest {
+        schema: MANIFEST_SCHEMA,
+        app_id: "mod-id".into(),
+        app_slug: "big-mod".into(),
+        app_title: "Big Mod".into(),
+        maker: "Ann".into(),
+        repo_url: "https://github.com/ann/big-mod".into(),
+        release_id: release_id.into(),
+        version: "0.1.0".into(),
+        commit: "b".repeat(40),
+        files: vec![ManifestFile {
+            platform: Platform::Any,
+            kind: FileKind::Archive,
+            url: format!("{base}files/mod.zip"),
+            file_name: "mod.zip".into(),
+            size: bytes.len() as u64,
+            sha256: hex::encode(Sha256::digest(bytes)),
+            launch: None,
+            attestation: None,
+            maker_signature: None,
+            parts: vec![],
+        }],
+        approved_at: "2026-10-18T00:00:00Z".into(),
+        mod_for: Some(slop_manifest::ModFor {
+            app_id: "id".into(),
+            app_slug: "game".into(),
+            app_title: "Game".into(),
+        }),
+    };
+    slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
+}
+
+#[cfg(unix)]
+#[tokio::test]
+async fn mods_are_added_to_their_game_and_handed_to_it_at_launch() {
+    let (base, fake) = fake_api().await;
+    let game = zip_of(&[(
+        "bin/game",
+        b"#!/bin/sh\nprintf '%s' \"$SLOP_MODS\" > mods.txt\n",
+        0o755,
+    )]);
+    let a_mod = zip_of(&[
+        ("textures/sky.png", b"png", 0o644),
+        ("run.sh", b"#!/bin/sh\n", 0o755),
+    ]);
+    fake.files.lock().unwrap().extend([
+        ("game.zip".into(), game.clone()),
+        ("mod.zip".into(), a_mod.clone()),
+    ]);
+    let dir = tempdir();
+    let lib = library(&dir);
+    let (api, _) = api_for(&base).await;
+    let signed_mod = mod_manifest(&base, &a_mod, "m1");
+
+    // Only into an installed game, and never as an app of its own.
+    assert!(matches!(
+        lib.install_mod(&signed_mod, None, |_, _| {}).await,
+        Err(Error::Install(m)) if m.contains("install Game first")
+    ));
+    lib.install(
+        &manifest_for(&base, "game.zip", &game, "r1"),
+        Platform::Linux,
+        None,
+        |_, _| {},
+    )
+    .await
+    .unwrap();
+    assert!(
+        lib.install(&signed_mod, Platform::Any, None, |_, _| {})
+            .await
+            .is_err()
+    );
+    let added = lib.install_mod(&signed_mod, None, |_, _| {}).await.unwrap();
+    assert_eq!(
+        (added.slug.as_str(), added.game_slug.as_str()),
+        ("big-mod", "game")
+    );
+    assert_eq!(lib.installed_mods("game"), vec![added]);
+    assert_eq!(
+        lib.installed().len(),
+        1,
+        "a mod isn't an app in the library"
+    );
+
+    // The game is told where its mods are.
+    let run = |lib: &Library, revocations: Option<&slop_manifest::RevocationList>| {
+        assert!(
+            lib.launch_command("game", revocations)
+                .unwrap()
+                .status()
+                .unwrap()
+                .success()
+        );
+        std::fs::read_to_string(dir.join("apps/game/files/mods.txt")).unwrap()
+    };
+    let revocations = lib.revocations_for_launch(&api).await;
+    assert_eq!(
+        run(&lib, revocations.as_ref()),
+        dir.join("mods/big-mod/files").to_str().unwrap()
+    );
+    assert!(dir.join("mods/big-mod/files/textures/sky.png").exists());
+
+    // A pulled mod isn't handed over, but the game still starts.
+    fake.revoked.lock().unwrap().push("m1".into());
+    let revocations = lib.revocations_for_launch(&api).await;
+    assert_eq!(run(&lib, revocations.as_ref()), "");
+    assert_eq!(
+        lib.installed_mods("game")[0].revoked.as_deref(),
+        Some("Malware")
+    );
+
+    // Uninstalling the game takes its mods with it.
+    lib.uninstall("game").unwrap();
+    assert!(!dir.join("mods/big-mod").exists());
     std::fs::remove_dir_all(dir).unwrap();
 }
 
@@ -790,6 +910,7 @@ fn parts_manifest(base: &str, whole: &[u8], parts: &[(&str, &[u8])]) -> Signed {
                 .collect(),
         }],
         approved_at: "2026-10-18T00:00:00Z".into(),
+        mod_for: None,
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }

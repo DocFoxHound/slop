@@ -195,6 +195,19 @@ pub struct ReleaseManifest {
     pub files: Vec<ManifestFile>,
     /// RFC 3339.
     pub approved_at: String,
+    /// A mod: the game it's for. Signed with the rest, so a mod can only be added to that game.
+    /// Absent on everything else, so older apps still read those manifests.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mod_for: Option<ModFor>,
+}
+
+/// The game a mod is for (DESIGN §9).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModFor {
+    pub app_id: String,
+    pub app_slug: String,
+    pub app_title: String,
 }
 
 impl ReleaseManifest {
@@ -383,7 +396,23 @@ mod tests {
                 parts: vec![],
             }],
             approved_at: "2026-10-18T00:00:00Z".into(),
+            mod_for: None,
         }
+    }
+
+    #[test]
+    fn mod_for_is_left_out_unless_set() {
+        let plain = serde_json::to_string(&manifest()).unwrap();
+        assert!(!plain.contains("mod_for"));
+        let mut m = manifest();
+        m.mod_for = Some(ModFor {
+            app_id: "g".into(),
+            app_slug: "the-game".into(),
+            app_title: "The Game".into(),
+        });
+        let back: ReleaseManifest =
+            serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
+        assert_eq!(back, m);
     }
 
     #[test]

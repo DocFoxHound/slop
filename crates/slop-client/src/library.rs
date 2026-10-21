@@ -6,6 +6,8 @@
 //! apps/<slug>/install.json    the signed manifest and what was installed
 //! apps/<slug>/files/…         an archive's contents
 //! apps/<slug>/installer/…     a maker's installer, kept for the user to run
+//! mods/<slug>/install.json    a mod: its signed manifest, which names the game it's for
+//! mods/<slug>/files/…         the mod's contents, handed to its game at launch (SLOP_MODS)
 //! staging/                    downloads and unpacking in progress
 //! revocations.json            the last signed revocation list
 //! ```
@@ -59,6 +61,23 @@ pub struct InstalledApp {
     pub provenance: Option<slop_provenance::Provenance>,
 }
 
+/// An installed mod (DESIGN §9), as the UI sees it.
+#[derive(Clone, Debug, Serialize, PartialEq, Eq)]
+pub struct InstalledMod {
+    pub slug: String,
+    pub title: String,
+    pub maker: String,
+    pub version: String,
+    pub release_id: String,
+    /// The game it's for.
+    pub game_slug: String,
+    pub game_title: String,
+    pub installed_at: String,
+    /// Why it was pulled, if the saved revocation list names it. A pulled mod isn't handed to
+    /// its game.
+    pub revoked: Option<String>,
+}
+
 pub struct Library {
     root: PathBuf,
     trusted: Vec<VerifyingKey>,
@@ -100,6 +119,7 @@ impl Library {
             .build()?;
         let root = root.into();
         fs::create_dir_all(root.join("apps"))?;
+        fs::create_dir_all(root.join("mods"))?;
         fs::create_dir_all(root.join("staging"))?;
         let provenance = slop_provenance::ProvenanceVerifier::public_good()
             .map_err(|e| Error::Verify(e.to_string()))?;
@@ -133,6 +153,13 @@ impl Library {
         Ok(self.root.join("apps").join(slug))
     }
 
+    fn mod_dir(&self, slug: &str) -> Result<PathBuf> {
+        if !valid_slug(slug) {
+            return Err(Error::Install(format!("not a mod: {slug:?}")));
+        }
+        Ok(self.root.join("mods").join(slug))
+    }
+
     fn verify_manifest(&self, signed: &Signed) -> Result<ReleaseManifest> {
         let manifest: ReleaseManifest =
             slop_manifest::verify(signed, Purpose::ReleaseManifest, &self.trusted)
@@ -151,12 +178,95 @@ impl Library {
         let record: InstallRecord = serde_json::from_slice(&bytes)
             .map_err(|_| Error::Verify("install record is damaged".into()))?;
         let manifest = self.verify_manifest(&record.manifest)?;
-        if manifest.app_slug != slug {
+        if manifest.app_slug != slug || manifest.mod_for.is_some() {
             return Err(Error::Verify(
                 "install record belongs to another app".into(),
             ));
         }
         Ok((record, manifest))
+    }
+
+    /// Reads and re-verifies a mod's install record. Returns the game it's for too.
+    pub fn mod_record(
+        &self,
+        slug: &str,
+    ) -> Result<(InstallRecord, ReleaseManifest, slop_manifest::ModFor)> {
+        let path = self.mod_dir(slug)?.join("install.json");
+        let bytes = fs::read(&path).map_err(|_| Error::Install(format!("{slug} isn't added")))?;
+        let record: InstallRecord = serde_json::from_slice(&bytes)
+            .map_err(|_| Error::Verify("install record is damaged".into()))?;
+        let manifest = self.verify_manifest(&record.manifest)?;
+        let game = manifest.mod_for.clone();
+        match game {
+            Some(game) if manifest.app_slug == slug && record.platform == Platform::Any => {
+                Ok((record, manifest, game))
+            }
+            _ => Err(Error::Verify(
+                "install record belongs to something else".into(),
+            )),
+        }
+    }
+
+    /// The installed game with this ID (its address can change), if any.
+    fn installed_game(&self, app_id: &str) -> Option<(String, ReleaseManifest)> {
+        fs::read_dir(self.root.join("apps"))
+            .ok()?
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .find_map(|slug| {
+                let (_, manifest) = self.record(&slug).ok()?;
+                (manifest.app_id == app_id).then_some((slug, manifest))
+            })
+    }
+
+    /// Every mod added, verified, with the game each is for: (mod, game's app ID).
+    fn all_mods(&self) -> Vec<(InstalledMod, String)> {
+        let Ok(entries) = fs::read_dir(self.root.join("mods")) else {
+            return vec![];
+        };
+        let revocations = self.cached_revocations();
+        let mut mods: Vec<(InstalledMod, String)> = entries
+            .flatten()
+            .filter_map(|e| e.file_name().into_string().ok())
+            .filter_map(|slug| {
+                let (record, manifest, game) = self.mod_record(&slug).ok()?;
+                let revoked = revocations
+                    .as_ref()
+                    .and_then(|r| r.is_revoked(&manifest.release_id))
+                    .map(|r| r.reason.clone());
+                Some((
+                    InstalledMod {
+                        slug,
+                        title: manifest.app_title,
+                        maker: manifest.maker,
+                        version: manifest.version,
+                        release_id: manifest.release_id,
+                        game_slug: game.app_slug,
+                        game_title: game.app_title,
+                        installed_at: record.installed_at,
+                        revoked,
+                    },
+                    game.app_id,
+                ))
+            })
+            .collect();
+        mods.sort_by_key(|(m, _)| m.title.to_lowercase());
+        mods
+    }
+
+    /// The mods added to an installed game.
+    pub fn installed_mods(&self, game_slug: &str) -> Vec<InstalledMod> {
+        let Ok((_, game)) = self.record(game_slug) else {
+            return vec![];
+        };
+        self.all_mods()
+            .into_iter()
+            .filter(|(_, id)| *id == game.app_id)
+            .map(|(mut m, _)| {
+                m.game_slug = game_slug.to_string();
+                m
+            })
+            .collect()
     }
 
     /// Everything installed and still verifiable.
@@ -212,39 +322,18 @@ impl Library {
                 "Android builds install on Android phones".into(),
             ));
         }
-        let provenance = self.check_maker_signature(&manifest, &file)?;
+        if manifest.mod_for.is_some() || platform == Platform::Any {
+            return Err(Error::Install(
+                "this is a mod: add it to its game from the game's page in your library".into(),
+            ));
+        }
+        let previous = self.record(&manifest.app_slug).ok().map(|(_, m)| m);
+        let provenance = self.check_maker_signature(previous.as_ref(), &manifest, &file)?;
         let final_dir = self.app_dir(&manifest.app_slug)?;
-
-        // A fresh staging folder for this attempt.
-        let staging = self.root.join("staging").join(crate::random_token());
-        fs::create_dir_all(&staging)?;
-        let result = self
-            .install_into(
-                &staging, signed, &manifest, &file, platform, provenance, links, &progress,
-            )
-            .await;
-        if let Err(err) = result {
-            let _ = fs::remove_dir_all(&staging);
-            return Err(err);
-        }
-
-        // Swap the new install into place; the old one is removed afterwards.
-        let old = self
-            .root
-            .join("staging")
-            .join(format!("old-{}", crate::random_token()));
-        if final_dir.exists() {
-            fs::rename(&final_dir, &old)?;
-        }
-        if let Err(err) = fs::rename(staging.join("app"), &final_dir) {
-            if old.exists() {
-                let _ = fs::rename(&old, &final_dir);
-            }
-            let _ = fs::remove_dir_all(&staging);
-            return Err(err.into());
-        }
-        let _ = fs::remove_dir_all(&old);
-        let _ = fs::remove_dir_all(&staging);
+        self.stage_and_swap(
+            &final_dir, signed, &manifest, &file, platform, provenance, links, &progress,
+        )
+        .await?;
 
         let (record, _) = self.record(&manifest.app_slug)?;
         Ok(InstalledApp {
@@ -259,15 +348,127 @@ impl Library {
         })
     }
 
-    /// Checks the maker's signature on a build, before anything is downloaded.
+    /// Downloads, verifies and adds a mod to its game, which must be installed. Mods are a
+    /// `.zip` of files for the game to load; nothing in one is started by Slop.
+    pub async fn install_mod(
+        &self,
+        signed: &Signed,
+        links: Option<&ApiClient>,
+        progress: impl Fn(u64, u64),
+    ) -> Result<InstalledMod> {
+        let manifest = self.verify_manifest(signed)?;
+        let game = manifest
+            .mod_for
+            .clone()
+            .ok_or_else(|| Error::Install(format!("{} isn't a mod", manifest.app_title)))?;
+        let (game_slug, _) = self.installed_game(&game.app_id).ok_or_else(|| {
+            Error::Install(format!(
+                "install {} first, then add its mods",
+                game.app_title
+            ))
+        })?;
+        let file = manifest
+            .file_for(Platform::Any)
+            .filter(|f| f.kind == FileKind::Archive)
+            .ok_or_else(|| Error::Install(format!("{} has no files yet", manifest.app_title)))?
+            .clone();
+        let previous = self.mod_record(&manifest.app_slug).ok().map(|(_, m, _)| m);
+        let provenance = self.check_maker_signature(previous.as_ref(), &manifest, &file)?;
+        let final_dir = self.mod_dir(&manifest.app_slug)?;
+        self.stage_and_swap(
+            &final_dir,
+            signed,
+            &manifest,
+            &file,
+            Platform::Any,
+            provenance,
+            links,
+            &progress,
+        )
+        .await?;
+        let mut added = self
+            .installed_mods(&game_slug)
+            .into_iter()
+            .find(|m| m.slug == manifest.app_slug)
+            .ok_or_else(|| Error::Install("the mod didn't install".into()))?;
+        added.game_slug = game_slug;
+        Ok(added)
+    }
+
+    pub fn uninstall_mod(&self, slug: &str) -> Result<()> {
+        let dir = self.mod_dir(slug)?;
+        if !dir.exists() {
+            return Err(Error::Install(format!("{slug} isn't added")));
+        }
+        self.remove_dir(&dir)
+    }
+
+    /// Moves a folder aside, then deletes it, so a half-deleted one never looks installed.
+    fn remove_dir(&self, dir: &Path) -> Result<()> {
+        let trash = self
+            .root
+            .join("staging")
+            .join(format!("old-{}", crate::random_token()));
+        fs::rename(dir, &trash)?;
+        fs::remove_dir_all(&trash)?;
+        Ok(())
+    }
+
+    /// Downloads and unpacks into a fresh staging folder, then swaps it into `final_dir`; the
+    /// old install is removed afterwards.
+    #[allow(clippy::too_many_arguments)] // private helper; each argument is distinct
+    async fn stage_and_swap(
+        &self,
+        final_dir: &Path,
+        signed: &Signed,
+        manifest: &ReleaseManifest,
+        file: &slop_manifest::ManifestFile,
+        platform: Platform,
+        provenance: Option<slop_provenance::Provenance>,
+        links: Option<&ApiClient>,
+        progress: &impl Fn(u64, u64),
+    ) -> Result<()> {
+        let staging = self.root.join("staging").join(crate::random_token());
+        fs::create_dir_all(&staging)?;
+        let result = self
+            .install_into(
+                &staging, signed, manifest, file, platform, provenance, links, progress,
+            )
+            .await;
+        if let Err(err) = result {
+            let _ = fs::remove_dir_all(&staging);
+            return Err(err);
+        }
+        let old = self
+            .root
+            .join("staging")
+            .join(format!("old-{}", crate::random_token()));
+        if final_dir.exists() {
+            fs::rename(final_dir, &old)?;
+        }
+        if let Err(err) = fs::rename(staging.join("app"), final_dir) {
+            if old.exists() {
+                let _ = fs::rename(&old, final_dir);
+            }
+            let _ = fs::remove_dir_all(&staging);
+            return Err(err.into());
+        }
+        let _ = fs::remove_dir_all(&old);
+        let _ = fs::remove_dir_all(&staging);
+        Ok(())
+    }
+
+    /// Checks the maker's signature on a build, before anything is downloaded. `previous`: the
+    /// installed release of the same app or mod, if any.
     fn check_maker_signature(
         &self,
+        previous: Option<&ReleaseManifest>,
         manifest: &ReleaseManifest,
         file: &slop_manifest::ManifestFile,
     ) -> Result<Option<slop_provenance::Provenance>> {
         // An update must come from the same repository as what's installed: not even Slop can
         // quietly repoint an installed app at someone else's code.
-        if let Ok((_, installed)) = self.record(&manifest.app_slug) {
+        if let Some(installed) = previous {
             let norm = |s: &str| {
                 s.trim_end_matches('/')
                     .trim_end_matches(".git")
@@ -381,46 +582,60 @@ impl Library {
 
         let app = staging.join("app");
         fs::create_dir_all(&app)?;
-        let exec_sha256 = match file.kind {
-            FileKind::Archive => {
-                let launch = file
-                    .launch
-                    .as_ref()
-                    .filter(|l| is_safe_relative_path(&l.exec))
-                    .ok_or_else(|| {
-                        Error::Verify("the manifest has no valid program to start".into())
-                    })?;
-                let files = app.join("files");
-                let archive_path = download.clone();
-                let files_clone = files.clone();
-                let tarball = is_tar_gz(&file.file_name);
-                tokio::task::spawn_blocking(move || {
-                    if tarball {
-                        extract_tar_gz(&archive_path, &files_clone)
+        let exec_sha256 = 'exec: {
+            match file.kind {
+                FileKind::Archive => {
+                    // A mod has nothing to start: its files are for the game to load.
+                    let launch = if platform == Platform::Any {
+                        None
                     } else {
-                        extract_zip(&archive_path, &files_clone)
+                        Some(
+                            file.launch
+                                .as_ref()
+                                .filter(|l| is_safe_relative_path(&l.exec))
+                                .ok_or_else(|| {
+                                    Error::Verify(
+                                        "the manifest has no valid program to start".into(),
+                                    )
+                                })?,
+                        )
+                    };
+                    let files = app.join("files");
+                    let archive_path = download.clone();
+                    let files_clone = files.clone();
+                    let tarball = is_tar_gz(&file.file_name);
+                    tokio::task::spawn_blocking(move || {
+                        if tarball {
+                            extract_tar_gz(&archive_path, &files_clone)
+                        } else {
+                            extract_zip(&archive_path, &files_clone)
+                        }
+                    })
+                    .await
+                    .map_err(|e| Error::Install(e.to_string()))??;
+                    let Some(launch) = launch else {
+                        // Nothing to hash: no mod file is ever started.
+                        break 'exec None;
+                    };
+                    let exec = files.join(&launch.exec);
+                    if !fs::symlink_metadata(&exec).is_ok_and(|m| m.is_file()) {
+                        return Err(Error::Install(format!(
+                            "the build doesn't contain {}",
+                            launch.exec
+                        )));
                     }
-                })
-                .await
-                .map_err(|e| Error::Install(e.to_string()))??;
-                let exec = files.join(&launch.exec);
-                if !fs::symlink_metadata(&exec).is_ok_and(|m| m.is_file()) {
-                    return Err(Error::Install(format!(
-                        "the build doesn't contain {}",
-                        launch.exec
-                    )));
+                    make_executable(&exec)?;
+                    Some(sha256_file(&exec)?)
                 }
-                make_executable(&exec)?;
-                Some(sha256_file(&exec)?)
+                FileKind::Installer => {
+                    let dir = app.join("installer");
+                    fs::create_dir_all(&dir)?;
+                    let name = safe_file_name(&file.file_name);
+                    fs::rename(&download, dir.join(name))?;
+                    Some(file.sha256.clone())
+                }
+                FileKind::Apk => unreachable!("rejected above"),
             }
-            FileKind::Installer => {
-                let dir = app.join("installer");
-                fs::create_dir_all(&dir)?;
-                let name = safe_file_name(&file.file_name);
-                fs::rename(&download, dir.join(name))?;
-                Some(file.sha256.clone())
-            }
-            FileKind::Apk => unreachable!("rejected above"),
         };
 
         let record = InstallRecord {
@@ -569,19 +784,35 @@ impl Library {
         Ok(url)
     }
 
+    /// Uninstalls an app, and the mods added to it.
     pub fn uninstall(&self, slug: &str) -> Result<()> {
         let dir = self.app_dir(slug)?;
         if !dir.exists() {
             return Err(Error::Install(format!("{slug} isn't installed")));
         }
-        // Move aside first so a half-deleted folder never looks installed.
-        let trash = self
-            .root
-            .join("staging")
-            .join(format!("old-{}", crate::random_token()));
-        fs::rename(&dir, &trash)?;
-        fs::remove_dir_all(&trash)?;
+        let mods = self.installed_mods(slug);
+        self.remove_dir(&dir)?;
+        for m in mods {
+            if let Ok(dir) = self.mod_dir(&m.slug) {
+                let _ = self.remove_dir(&dir);
+            }
+        }
         Ok(())
+    }
+
+    /// The folders of the mods to hand to a game at launch: its mods, minus any pulled.
+    fn mod_folders(&self, game_id: &str, revocations: Option<&RevocationList>) -> Vec<PathBuf> {
+        self.all_mods()
+            .into_iter()
+            .filter(|(_, id)| id == game_id)
+            .filter_map(|(m, _)| {
+                if let Some(r) = revocations.and_then(|r| r.is_revoked(&m.release_id)) {
+                    tracing::warn!(r#mod = %m.slug, reason = %r.reason, "not loading a pulled mod");
+                    return None;
+                }
+                Some(self.mod_dir(&m.slug).ok()?.join("files"))
+            })
+            .collect()
     }
 
     /// Builds the command that starts an installed app, after checking the manifest signature,
@@ -619,6 +850,13 @@ impl Library {
         }
         let mut cmd = Command::new(exec);
         cmd.args(&launch.args).current_dir(files);
+        // The game's mods (DESIGN §9): a list of folders, separated like PATH.
+        let mods = self.mod_folders(&manifest.app_id, revocations);
+        if !mods.is_empty()
+            && let Ok(list) = std::env::join_paths(mods)
+        {
+            cmd.env("SLOP_MODS", list);
+        }
         Ok(cmd)
     }
 

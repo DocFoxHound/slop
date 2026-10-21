@@ -63,6 +63,20 @@ export interface InstalledApp {
   installed_at: string;
 }
 
+/** A mod added to an installed game (DESIGN §9). */
+export interface InstalledMod {
+  slug: string;
+  title: string;
+  maker: string;
+  version: string;
+  release_id: string;
+  game_slug: string;
+  game_title: string;
+  installed_at: string;
+  /** Why Slop pulled it; a pulled mod isn't handed to its game. */
+  revoked: string | null;
+}
+
 export interface UpdateInfo {
   version: string;
   current_version: string;
@@ -226,6 +240,10 @@ export const desktop = {
   install: (slug: string) => call<InstalledApp>("install_app", { slug }),
   uninstall: (slug: string) => call<void>("uninstall_app", { slug }),
   launch: (slug: string) => call<void>("launch_app", { slug }),
+  /** Mods: files for an installed game to load, handed to it at launch in SLOP_MODS. */
+  installedMods: (game: string) => call<InstalledMod[]>("installed_mods", { game }),
+  installMod: (slug: string) => call<InstalledMod>("install_mod", { slug }),
+  uninstallMod: (slug: string) => call<void>("uninstall_mod", { slug }),
   runInstaller: (slug: string) => call<void>("run_installer", { slug }),
   /** Chat, encrypted in the app (see ChatAction). */
   chat: <T>(action: ChatAction) => call<T>("chat", { action }),

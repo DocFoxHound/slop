@@ -446,14 +446,36 @@ similar) and follow it whenever you write networking, save files or mod support.
 Community servers can't hand players mods either. A server can name the Slop mods it needs, and
 the game gets them from Slop *(coming)*.
 
+### Loading mods in your game
+
+Players add mods to your game in the Slop app. When it starts your game, the Slop app sets
+**`SLOP_MODS`**: the folders of the mods the player added, separated like `PATH` (`;` on
+Windows, `:` elsewhere). Each folder holds one mod's files, unpacked, exactly as Slop checked
+them. If the variable isn't set, no mods were added.
+
+- Read mods from those folders only. Don't copy them anywhere they'd be loaded again without
+  Slop, and don't fetch mods yourself.
+- Treat a mod's files like a level or save: data you read safely (rules 3 and 5 below). If your
+  game runs mod scripts, run them in your own limited scripting layer, never as native code.
+- Tell modders in your README which files and layout your game reads.
+
+```gdscript
+# Godot
+var mods := OS.get_environment("SLOP_MODS")
+var sep := ";" if OS.get_name() == "Windows" else ":"
+for dir in mods.split(sep, false):
+    load_mod_from(dir)   # your own code: read data files, never load .pck or scripts as code
+```
+
 ### Publishing a mod
 
 Anyone can publish a mod for any app on Slop: on the app's page, under **Community**, choose
 **Publish a mod**. A mod lives in your own repository, and each release is **one `.zip` of the
 mod's files for every platform**, with no program to start (platform `any` when submitting by
 hand). Slop checks and reviews it like an app, and lists it in the Community area of the app's
-page. *(Coming: the Slop app adds approved mods to the installed game and tells the game where
-they are.)*
+page. Players add it to the installed game in the Slop app, which hands it to the game when it
+starts (see [Loading mods in your game](#loading-mods-in-your-game)). Say in your mod's
+description which version of the game it's for.
 
 ### Rules for the code
 
