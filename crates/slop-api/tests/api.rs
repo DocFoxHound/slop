@@ -13242,3 +13242,131 @@ async fn legal_requests_are_logged_answered_and_counted(db: PgPool) {
         StatusCode::NOT_FOUND
     );
 }
+
+/// Global Privacy Control (PRIV-10): honoured as an opt-out of activity-based recommendations,
+/// across devices, unless the person turns them on themselves.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn global_privacy_control_turns_personal_recommendations_off(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, user) = app.user("Pat Player", "US").await;
+    let me = |gpc: bool| {
+        let mut r = req(Method::GET, "/v1/me")
+            .cookie(&user)
+            .header("x-country", "US");
+        if gpc {
+            r = r.header("sec-gpc", "1");
+        }
+        let app = &app;
+        async move { body_json(app.send(r).await).await }
+    };
+    assert_eq!(me(false).await["personalize"], true);
+    let with = me(true).await;
+    assert_eq!(
+        (&with["personalize"], &with["gpc"]),
+        (&json!(false), &json!(true))
+    );
+    assert_eq!(
+        me(false).await["personalize"],
+        false,
+        "remembered, on every device"
+    );
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/me")
+                .cookie(&user)
+                .json(json!({ "personalize": true })),
+        )
+        .await;
+    assert!(res.status().is_success());
+    assert_eq!(me(true).await["personalize"], true, "their own choice wins");
+}
+
+/// Records go once their keeping period is over (retention.rs, LEGAL-GUIDANCE §15), and not before.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn records_are_purged_after_their_keeping_period(db: PgPool) {
+    let app = test_app(db).await;
+    let (old_user, _) = app.user("Gone Long Ago", "US").await;
+    let (user, _) = app.user("Still Here", "US").await;
+    let run = |sql: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sql).execute(&db).await.unwrap();
+        }
+    };
+    sqlx::query("update users set closed_at = now() - interval '7 years' where id = $1")
+        .bind(old_user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let report = |reference: &str, age: &str, preserve: &str| {
+        format!(
+            "insert into reports (id, reference, subject_kind, subject_id, subject_label, reason, details, priority, due_at, created_at, preserve_until)
+             values (gen_random_uuid(), '{reference}', 'app', gen_random_uuid(), 'x', 'spam', 'x', 2, now(), now() - interval '{age}', {preserve})"
+        )
+    };
+    for sql in [
+        report("R-OLD", "7 years", "null"),
+        report("R-NEW", "5 years", "null"),
+        report("R-PRESERVED", "7 years", "now() + interval '1 month'"),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    for (age, reference) in [("7 years", "D-OLD"), ("1 year", "D-NEW")] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "insert into moderation_decisions (id, reference, user_id, subject_kind, subject_id, subject_label, action, rule, facts, decided_by, created_at)
+             values (gen_random_uuid(), '{reference}', $1, 'app', gen_random_uuid(), 'x', 'warn', 'spam', 'x', 'test', now() - interval '{age}')"
+        )))
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    run("insert into legal_requests (id, reference, received_at, country, authority, kind, asked, created_by, status, answered_at)
+         values (gen_random_uuid(), 'LR-OLD', now() - interval '7 years', 'US', 'x', 'subpoena', 'x', 'test', 'answered', now() - interval '7 years'),
+                (gen_random_uuid(), 'LR-NEW', now() - interval '7 years', 'US', 'x', 'subpoena', 'x', 'test', 'answered', now() - interval '5 years')").await;
+
+    let purged = slop_api::retention::purge(&app.db).await.unwrap();
+    assert_eq!(
+        purged,
+        slop_api::retention::Purged {
+            reports: 1,
+            decisions: 1,
+            legal_requests: 1,
+            acceptances: 3
+        }
+    );
+    let left = |sql: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(sql)
+                .fetch_all(&db)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(
+        left("select reference from reports order by 1").await,
+        ["R-NEW", "R-PRESERVED"]
+    );
+    assert_eq!(
+        left("select reference from moderation_decisions").await,
+        ["D-NEW"]
+    );
+    assert_eq!(
+        left("select reference from legal_requests").await,
+        ["LR-NEW"]
+    );
+    let mine: i64 = sqlx::query_scalar("select count(*) from legal_acceptances where user_id = $1")
+        .bind(user)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(mine, 3, "open accounts keep theirs");
+    assert_eq!(
+        slop_api::retention::purge(&app.db).await.unwrap(),
+        Default::default()
+    );
+}

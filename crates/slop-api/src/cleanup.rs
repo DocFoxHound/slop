@@ -69,6 +69,13 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "pulse cleanup failed"),
         }
+        match crate::retention::purge(&state.db).await {
+            Ok(p) if p != crate::retention::Purged::default() => {
+                tracing::info!(?p, "records past their time")
+            }
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "retention purge failed"),
+        }
         match crate::media::hash_old_thumbnails(&state, 20).await {
             Ok(n) if n > 0 => tracing::info!(hashed = n, "old thumbnails"),
             Ok(_) => {}

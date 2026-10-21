@@ -249,6 +249,21 @@ logs "the API owns its tables" at start, and the triggers are the only guard.
 
 The simulation sandbox (`slop_sim`) wipes its own ledgers, so it keeps the owner's URL.
 
+## Log retention
+
+Slop's database keeps no IP addresses, Caddy has no access log, and the API doesn't log them.
+The system journal holds the services' own logs; keep it to 90 days at most (LEGAL-GUIDANCE §15)
+in `/etc/systemd/journald.conf`:
+
+```ini
+[Journal]
+MaxRetentionSec=90day
+```
+
+then `sudo systemctl restart systemd-journald`. Records with legal keeping periods (reports,
+decisions, law-enforcement requests, agreement acceptances) are purged by the API itself
+(`retention.rs`).
+
 ## Setting it up again
 
 ```sh

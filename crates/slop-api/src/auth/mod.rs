@@ -620,6 +620,7 @@ async fn signup(
         has_passkey: false,
         passkey_due_at: None,
         passkey_grace_until: None,
+        gpc: false,
     };
     Ok((
         StatusCode::CREATED,
@@ -679,6 +680,9 @@ struct Me {
     passkey_due_at: Option<OffsetDateTime>,
     #[serde(with = "time::serde::rfc3339::option")]
     passkey_grace_until: Option<OffsetDateTime>,
+    /// This browser sent a Global Privacy Control signal; the account page says it's honoured.
+    #[sqlx(skip)]
+    gpc: bool,
 }
 
 async fn me(
@@ -696,6 +700,14 @@ async fn me(
     .bind(user.id)
     .fetch_one(&state.db)
     .await?;
+    // Global Privacy Control: the browser asks not to sell or share their data (PRIV-10).
+    if headers.get("sec-gpc").is_some_and(|v| v.as_bytes() == b"1") {
+        sqlx::query("update users set gpc_at = now() where id = $1 and gpc_at is null")
+            .bind(user.id)
+            .execute(&state.db)
+            .await?;
+        me.gpc = true;
+    }
     let policy =
         crate::policy::ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers)
             .await?;
