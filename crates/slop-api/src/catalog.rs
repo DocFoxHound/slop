@@ -233,6 +233,9 @@ enum Sort {
     FreshSlop,
     /// Most written reviews showing.
     Reviewed,
+    /// Released in the last 60 days and in few libraries so far, in an order that changes every
+    /// day, so each new app gets seen ("New and barely seen", DESIGN §5).
+    BarelySeen,
 }
 
 #[derive(Deserialize)]
@@ -255,6 +258,8 @@ struct ListQuery {
     upcoming: Option<bool>,
     /// At least this weighted % Not Slop (apps without enough votes don't match).
     min_not_slop: Option<i32>,
+    /// Has every one of these accessibility features (comma-separated, label.rs `FEATURES`).
+    accessibility: Option<String>,
     sort: Option<Sort>,
     limit: Option<i64>,
     offset: Option<i64>,
@@ -267,6 +272,9 @@ struct AppPage {
 }
 
 const MAX_PAGE: i64 = 50;
+
+/// "Barely seen": in fewer libraries than this.
+const BARELY_SEEN_LIBRARIES: i64 = 25;
 
 /// Most players at once over the last 7 days (Slop Pulse). `a` is `apps`.
 pub(crate) const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p
@@ -351,6 +359,13 @@ async fn list_apps(
         .push_bind(f64::from(min.clamp(0, 100)))
         .push(" from votes v where v.app_id = a.id)");
     }
+    if let Some(list) = query.accessibility.as_deref().filter(|l| !l.is_empty()) {
+        let wanted: Vec<String> = list.split(',').map(|f| f.trim().to_string()).collect();
+        qb.push(" and a.accessibility @> ")
+            .push_bind(crate::label::validate_accessibility(&wanted).map_err(|_| {
+                ApiError::invalid("accessibility", "unknown accessibility feature")
+            })?);
+    }
     if query.made_with_people {
         qb.push(" and exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null)");
     }
@@ -411,6 +426,14 @@ async fn list_apps(
                 " order by (select count(*) from app_reviews r where r.app_id = a.id and r.hidden_at is null) desc,
                            a.updated_at desc, a.slug",
             );
+        }
+        (Sort::BarelySeen, _) => {
+            qb.push(
+                " and a.stage = 'released' and a.stage_entered_at > now() - interval '60 days'
+                  and (select count(*) from library_entries l where l.app_id = a.id) < ",
+            )
+            .push_bind(BARELY_SEEN_LIBRARIES)
+            .push(" order by md5(a.id::text || current_date::text), a.slug");
         }
         (Sort::Trending, _) => {
             qb.push(" order by ")
@@ -579,6 +602,8 @@ struct AppDetail {
     sandbox_reported: bool,
     /// The folder it reads mods from, when its maker named one (DESIGN §9).
     mods_folder: Option<serde_json::Value>,
+    /// Accessibility features the maker says it has (label.rs `FEATURES`).
+    accessibility: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -603,6 +628,7 @@ struct AppExtra {
     online: Vec<String>,
     online_hosts: Vec<String>,
     mods_folder: Option<serde_json::Value>,
+    accessibility: Vec<String>,
 }
 
 /// Finds an app the viewer may see: one in the store for them, or their own. Returns its ID and
@@ -666,7 +692,7 @@ async fn load_detail(
     let rules = state.config.catalog;
     let mut qb = QueryBuilder::new(
         "select a.id, a.maker_id, a.description_md, a.repo_url, a.license_spdx, a.platforms, u.display_name as maker_name,
-                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, a.mods_folder, (",
+                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, a.mods_folder, a.accessibility, (",
     );
     push_store_visible(&mut qb, rules, policy);
     qb.push(") or ");
@@ -715,6 +741,7 @@ async fn load_detail(
         online: extra.online,
         online_hosts: extra.online_hosts,
         mods_folder: extra.mods_folder,
+        accessibility: extra.accessibility,
         sandbox: sandbox_info(&state.db, extra.id).await?,
         sandbox_reported: match user {
             Some(u) => sqlx::query_scalar(
@@ -975,6 +1002,9 @@ struct NewApp {
     /// The folder it reads mods from (DESIGN §9); none: it reads SLOP_MODS, or has no mods.
     #[serde(default)]
     mods_folder: Option<slop_manifest::ModsFolder>,
+    /// Accessibility features it has (label.rs `FEATURES`).
+    #[serde(default)]
+    accessibility: Vec<String>,
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -997,6 +1027,7 @@ struct AppChanges {
     /// `null` clears it.
     #[serde(default, deserialize_with = "present")]
     mods_folder: Option<Option<slop_manifest::ModsFolder>>,
+    accessibility: Option<Vec<String>>,
 }
 
 /// A field that was sent, even as `null`: `Some(None)`.
@@ -1302,8 +1333,9 @@ async fn create_app(
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
-                           platforms, visibility, content_labels, online, online_hosts, sandbox_ready, mods_folder)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
+                           platforms, visibility, content_labels, online, online_hosts, sandbox_ready, mods_folder,
+                           accessibility)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -1323,6 +1355,7 @@ async fn create_app(
     .bind(&online_hosts)
     .bind(req.sandbox_ready)
     .bind(&mods_folder)
+    .bind(crate::label::validate_accessibility(&req.accessibility)?)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -1469,6 +1502,10 @@ async fn update_app(
     }
     if let Some(ready) = changes.sandbox_ready {
         qb.push(", sandbox_ready = ").push_bind(ready);
+    }
+    if let Some(features) = &changes.accessibility {
+        qb.push(", accessibility = ")
+            .push_bind(crate::label::validate_accessibility(features)?);
     }
     if let Some(folder) = &changes.mods_folder {
         qb.push(", mods_folder = ")

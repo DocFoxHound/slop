@@ -1,7 +1,7 @@
 ---
 title: Content Policy
-version: 2026-10-21
-summary: Adds "Code from outside Slop": apps only run code from releases and mods Slop checked.
+version: 2026-10-21b
+summary: Adds "No paid placement": nobody can pay to be ranked, featured or recommended; and a maker's reply under a review can be removed on its own.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
@@ -10,11 +10,14 @@ This policy says what isn't allowed on Slop, in apps, store pages, reviews, prof
 ## How moderation works
 - **Anyone can report** something with the Report button. You get a reference number.
 - **People review reports.** Urgent reports (child abuse, threats to someone's life or safety, intimate images shared without consent) are handled first, within 24 hours. Other serious reports (malware, scams, illegal content, builds that don't match their source, apps that run code from outside Slop) are also reviewed within 24 hours. Intimate images are removed within 48 hours of a valid request at the latest.
-- **What we can do:** take an app out of the store, hide a review or profile, warn someone, or suspend an account. We never hide a review because it's negative.
+- **What we can do:** take an app out of the store, hide a review or profile, remove a maker's reply under a review, warn someone, or suspend an account. We never hide a review because it's negative.
 - **You're told why.** Each decision comes with a statement of reasons: what we did, the facts, the rule or law, whether automated tools were used, and how to appeal.
 - **Appeals.** Within six months, from your account page. A person reviews the appeal and either keeps or reverses the decision.
 - **Repeat breaches** lead to suspension. Three upheld copyright decisions end an account (our repeat-infringer policy).
 - We report child sexual abuse material to the authorities, and threats to life to the police.
+
+## No paid placement
+Nobody can pay Slop, or anyone else, to rank higher, be featured, be recommended or appear on a shelf. The store's lists come from players' votes and play, staff picks made for players, and fair turns for new apps ("New and barely seen"), as described on "How ratings work". Donations, People jobs and hiring creatives never change where an app appears. Offering anything for votes, reviews or placement breaks the rules for everyone involved.
 
 ## The rules
 

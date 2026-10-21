@@ -68,6 +68,11 @@ export function Store() {
   );
   const notSlop = useLoad(() => api.apps({ sort: "not_slop_now", limit: 8 }).then((p) => p.apps), []);
   const freshSlop = useLoad(() => api.apps({ sort: "fresh_slop", limit: 4 }).then((p) => p.apps), []);
+  const barelySeen = useLoad(() => api.apps({ sort: "barely_seen", limit: 4 }).then((p) => p.apps), []);
+  const glowUps = useLoad(
+    () => api.glowUps().then((list) => list.map((a) => ({ ...a, reason: `${a.before}% → ${a.after}% Not Slop` }))),
+    [],
+  );
 
   return (
     <div className="page">
@@ -149,6 +154,20 @@ export function Store() {
             <ErrorState error={notSlop.error} onRetry={notSlop.reload} />
           ) : (
             <Shelf apps={notSlop.data} empty="Not enough recent votes yet." />
+          )}
+
+          {barelySeen.data && barelySeen.data.length > 0 && (
+            <>
+              <SectionHeader title="New and barely seen" sub="Released lately, in few libraries yet. A different pick every day." />
+              <Shelf apps={barelySeen.data} empty="" />
+            </>
+          )}
+
+          {glowUps.data && glowUps.data.length > 0 && (
+            <>
+              <SectionHeader title="Glow-ups" sub="Updates turned these from Slop toward Not Slop in the last 60 days" />
+              <Shelf apps={glowUps.data} empty="" />
+            </>
           )}
 
           <SectionHeader title="Community branches worth installing" sub="Mods, fixes, translations and ports from forks">

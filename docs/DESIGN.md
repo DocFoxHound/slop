@@ -53,6 +53,8 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 
 ## 5. Store & discovery
 
+**Built 2026-10-21 (`label.rs`):** every store page has **"What this app does"**: online and to where, saves, sandbox mode, outside code, purchases, mods, its own installer, shared runtimes, scans and licence, each marked "checked" (Slop's checks of the newest release) or "the maker says", with notes repeated in the install box. **Accessibility:** makers declare features (remappable controls, colourblind modes, subtitles, text size, one-handed, difficulty, no flashing, screen reader, controller); players who launched the app confirm or dispute each; the store filters by them. New shelves: **New and barely seen** (released in the last 60 days, in fewer than 25 libraries, a new order daily) and **Glow-ups** (% Not Slop up 15 points or more since 60 days ago, with before and after). **No paid placement** is in the Content Policy.
+
 **Front page, top to bottom:**
 1. Featured carousel
 2. **Popular this month**: most added to libraries this calendar month, with live player counts for games

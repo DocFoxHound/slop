@@ -911,3 +911,10 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .review-reply { margin: 8px 0 8px 16px; padding-left: 10px; border-left: 3px solid var(--line); }
 .offer-list { list-style: none; padding: 0; display: grid; gap: 12px; }
 .offer-list li { border-left: 3px solid var(--line); padding-left: 10px; }
+.label-items { list-style: none; padding: 0; margin: 8px 0; display: grid; gap: 8px; }
+.label-items li { display: flex; gap: 8px; align-items: flex-start; }
+.label-mark { width: 1.4em; text-align: center; font-weight: bold; }
+.tone-good .label-mark { color: var(--good); }
+.tone-note .label-mark { color: var(--warn); }
+.tone-info .label-mark { color: var(--info); }
+.label-notes ul { margin: 4px 0 4px 18px; padding: 0; }

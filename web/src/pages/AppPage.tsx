@@ -7,6 +7,7 @@ import { engines } from "../components/Checks";
 import { Gallery } from "../components/Gallery";
 import { RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
+import { AppLabel, LabelNotes } from "../components/AppLabel";
 import { Reviews } from "../components/Reviews";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, STAGE_LABEL } from "../format";
@@ -237,6 +238,7 @@ function AppView({ app }: { app: AppDetail }) {
           ) : (
             <p className="muted">The maker hasn't written a description yet.</p>
           )}
+          <AppLabel slug={app.slug} />
           {!app.private && <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />}
           {!app.private && <Reviews slug={app.slug} />}
         </div>
@@ -255,6 +257,7 @@ function AppView({ app }: { app: AppDetail }) {
               <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
             )}
             {app.stage !== "coming_soon" && !app.platforms.includes("any") && <SandboxNote app={app} />}
+            {app.stage !== "coming_soon" && <LabelNotes slug={app.slug} />}
             {!app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />}
             {packages.length > 0 && (
               <p className="muted small packages">

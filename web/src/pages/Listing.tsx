@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { api, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
+import { ACCESSIBILITY, api, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
 import { detectOs, OS_LABEL } from "../platform";
 import { Sidebar } from "../components/Layout";
 import { ErrorState, Loading, Shelf } from "../components/ui";
@@ -39,10 +39,11 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
   const platform = platformParam === "windows" || platformParam === "linux" ? platformParam : undefined;
   const minParam = Number(params.get("not_slop"));
   const min_not_slop = minParam > 0 && minParam <= 100 ? minParam : undefined;
+  const accessibility = params.get("accessibility") ?? undefined;
   const mine = myPlatform();
   const [extra, setExtra] = useState<{ key: string; apps: AppSummary[]; next: number | null }>();
 
-  const filters: AppQuery = { ...base, stage: stage || base.stage, upcoming, platform, min_not_slop, sort };
+  const filters: AppQuery = { ...base, stage: stage || base.stage, upcoming, platform, min_not_slop, accessibility, sort };
   const key = JSON.stringify(filters);
   const first = useLoad(() => api.apps({ ...filters, limit: PAGE }), [key]);
   const pages = extra?.key === key ? extra : undefined;
@@ -120,6 +121,17 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
             <option value="70">70% or more</option>
             <option value="80">80% or more</option>
             <option value="95">95% or more</option>
+          </select>
+        </label>
+        <label>
+          Accessibility{" "}
+          <select value={accessibility ?? ""} onChange={(e) => set("accessibility", e.target.value)}>
+            <option value="">Any</option>
+            {ACCESSIBILITY.map(([key, name]) => (
+              <option key={key} value={key}>
+                {name}
+              </option>
+            ))}
           </select>
         </label>
       </div>

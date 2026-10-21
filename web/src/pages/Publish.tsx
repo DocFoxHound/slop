@@ -9,6 +9,7 @@ import {
   ApiError,
   type AppDetail,
   type AppKind,
+  ACCESSIBILITY,
   type AppPlatform,
   type AppStage,
   type AppSummary,
@@ -177,6 +178,7 @@ const EMPTY: NewApp = {
   online_hosts: [],
   sandbox_ready: false,
   mods_folder: null,
+  accessibility: [],
 };
 
 function slugify(title: string): string {
@@ -227,6 +229,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           online_hosts: existing.online_hosts,
           sandbox_ready: existing.sandbox_ready,
           mods_folder: existing.mods_folder,
+          accessibility: existing.accessibility,
         }
       : EMPTY,
   );
@@ -271,6 +274,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             online: form.online,
             online_hosts: hosts(),
             sandbox_ready: form.sandbox_ready,
+            accessibility: form.accessibility,
             ...(isMod ? {} : { mods_folder: form.mods_folder ?? null }),
           })
         : await terms.guard(() => {
@@ -458,6 +462,27 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           error={error?.field === "online" || error?.field === "online_hosts" ? error : undefined}
         />
         <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
+        <fieldset>
+          <legend>Accessibility</legend>
+          <p className="hint">Only what it really has: players who play it confirm or dispute each one on its store page.</p>
+          {ACCESSIBILITY.map(([key, name]) => (
+            <label className="check" key={key}>
+              <input
+                type="checkbox"
+                checked={(form.accessibility ?? []).includes(key)}
+                onChange={(e) =>
+                  set(
+                    "accessibility",
+                    e.target.checked
+                      ? [...(form.accessibility ?? []), key]
+                      : (form.accessibility ?? []).filter((k) => k !== key),
+                  )
+                }
+              />{" "}
+              {name}
+            </label>
+          ))}
+        </fieldset>
         {!isMod && (
           <ModsFolderPicker
             value={form.mods_folder ?? null}
