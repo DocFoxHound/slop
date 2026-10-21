@@ -633,6 +633,8 @@ struct Launched {
     copy_skipped: bool,
     /// Things in the game's mods folder that aren't mods from Slop, moved out.
     unapproved_mods: Vec<String>,
+    /// What save sync did before the start, when it's on (slop-client save_sync.rs).
+    save_sync: Option<slop_client::save_sync::Outcome>,
 }
 
 /// A game's request for mods, still waiting for the player (also sent as `mod-request`).
@@ -827,6 +829,8 @@ async fn launch_app(
     }
     // Slop Link: where the game asks for mods while it runs; closed when it exits.
     let link_dir = desktop.link.open(&slug).map_err(Error::from)?;
+    // Saves another computer made, before the app starts (never over this one's changes).
+    let save_sync = sync_saves(&app, &desktop, &slug, SyncStep::Pull, false).await;
     let launch = desktop
         .library
         .prepare_launch(&slug, revocations.as_ref(), sandbox, Some(&link_dir))
@@ -836,6 +840,7 @@ async fn launch_app(
         quarantined: launch.quarantined,
         copy_skipped: launch.copy_skipped,
         unapproved_mods: launch.unapproved_mods,
+        save_sync,
     };
     let mut command = launch.command;
     let link = desktop.link.clone();
@@ -897,6 +902,20 @@ async fn launch_app(
             .unwrap()
             .remove(&pid);
         // Closed with an error right after starting in the box: probably doesn't work there.
+        // Send changed saves to the player's other computers.
+        let sync_app = app.clone();
+        let sync_slug = slug.clone();
+        tauri::async_runtime::spawn(async move {
+            let desktop = sync_app.state::<Desktop>();
+            if let Some(outcome) =
+                sync_saves(&sync_app, &desktop, &sync_slug, SyncStep::Push, false).await
+            {
+                let _ = sync_app.emit(
+                    "saves-synced",
+                    serde_json::json!({ "slug": sync_slug, "result": outcome }),
+                );
+            }
+        });
         let failed = status.as_ref().is_ok_and(|s| !s.success());
         if sandboxed && started.elapsed() < Duration::from_secs(15) && failed {
             let _ = app.emit("sandbox-failed", SandboxFailed { slug: slug.clone() });
@@ -917,6 +936,111 @@ async fn launch_app(
         }
     });
     Ok(launched)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Save sync: saves follow the player between their computers, end-to-end encrypted with a key
+// from their chat backup key (slop-client save_sync.rs).
+
+#[derive(Clone, Copy)]
+enum SyncStep {
+    Pull,
+    Push,
+}
+
+/// One sync step for an app, when this computer is signed in, has the key and sync is on.
+/// Errors are logged, never shown as a failed launch: the saves on this computer stay as they are.
+async fn sync_saves(
+    app: &AppHandle,
+    desktop: &Desktop,
+    slug: &str,
+    step: SyncStep,
+    force: bool,
+) -> Option<slop_client::save_sync::Outcome> {
+    static LOCK: tokio::sync::Mutex<()> = tokio::sync::Mutex::const_new(());
+    if !desktop.api.has_session() {
+        return None;
+    }
+    let (saves, copies, scratch, state_path) = desktop.library.save_sync_paths(slug).ok()?;
+    let _one_at_a_time = LOCK.lock().await;
+    let mut state = slop_client::save_sync::State::load(&state_path);
+    if state.off {
+        return None;
+    }
+    let key = chat_for(app, desktop).await.ok()?.save_sync_key().await?;
+    let result = match step {
+        SyncStep::Pull => {
+            slop_client::save_sync::pull(
+                &desktop.api,
+                &key,
+                slug,
+                &saves,
+                &copies,
+                &scratch,
+                &mut state,
+                force,
+            )
+            .await
+        }
+        SyncStep::Push => {
+            slop_client::save_sync::push(&desktop.api, &key, slug, &saves, &mut state, force).await
+        }
+    };
+    let _ = state.save(&state_path);
+    match result {
+        Ok(outcome) => Some(outcome),
+        Err(e) => {
+            tracing::warn!(error = %e, slug, "save sync");
+            None
+        }
+    }
+}
+
+#[derive(Serialize)]
+struct SaveSyncStatus {
+    /// Signed in, with the key on this computer (chat set up here, backups on).
+    available: bool,
+    on: bool,
+}
+
+#[tauri::command]
+async fn save_sync_status(
+    app: AppHandle,
+    desktop: State<'_, Desktop>,
+) -> CommandResult<SaveSyncStatus> {
+    let (_, _, _, state_path) = desktop.library.save_sync_paths("x")?;
+    let on = !slop_client::save_sync::State::load(&state_path).off;
+    let available = desktop.api.has_session()
+        && match chat_for(&app, &desktop).await {
+            Ok(chat) => chat.save_sync_key().await.is_some(),
+            Err(_) => false,
+        };
+    Ok(SaveSyncStatus { available, on })
+}
+
+#[tauri::command]
+fn set_save_sync(desktop: State<'_, Desktop>, on: bool) -> CommandResult<()> {
+    let (_, _, _, state_path) = desktop.library.save_sync_paths("x")?;
+    let mut state = slop_client::save_sync::State::load(&state_path);
+    state.off = !on;
+    state.save(&state_path).map_err(Error::from)?;
+    Ok(())
+}
+
+/// Both computers changed an app's saves: keep this computer's (`here`) or the other's.
+#[tauri::command]
+async fn resolve_save_conflict(
+    app: AppHandle,
+    desktop: State<'_, Desktop>,
+    slug: String,
+    keep: String,
+) -> CommandResult<Option<slop_client::save_sync::Outcome>> {
+    let step = if keep == "here" {
+        SyncStep::Push
+    } else {
+        SyncStep::Pull
+    };
+    Ok(sync_saves(&app, &desktop, &slug, step, true).await)
 }
 
 /// Opens a maker's installer with the system, after the user confirmed in the UI.
@@ -1555,6 +1679,9 @@ fn main() {
             answer_mod_request,
             launch_app,
             run_installer,
+            save_sync_status,
+            set_save_sync,
+            resolve_save_conflict,
             chat,
             overlay_hide,
             overlay_setting,

@@ -211,6 +211,7 @@ export function Library() {
 function UpdateBar({ waiting, onUpdated }: { waiting: number; onUpdated: () => void }) {
   const auto = useLoad(() => desktop.autoUpdateSetting(), []);
   const sandbox = useSandboxStatus();
+  const saveSync = useLoad(() => desktop.saveSyncStatus(), []);
   const [busy, setBusy] = useState(false);
   return (
     <div className="update-bar panel panel-pad">
@@ -231,6 +232,26 @@ function UpdateBar({ waiting, onUpdated }: { waiting: number; onUpdated: () => v
             onChange={(e) => void desktop.setSandbox(null, e.target.checked).then(sandbox.reload)}
           />{" "}
           Run every app in sandbox mode <span className="muted small">(unless you turned it off for one)</span>
+        </label>
+      )}
+      {saveSync.data && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={saveSync.data.available && saveSync.data.on}
+            disabled={!saveSync.data.available}
+            onChange={(e) => void desktop.setSaveSync(e.target.checked).then(saveSync.reload)}
+          />{" "}
+          Sync saves between my computers{" "}
+          <span className="muted small">
+            {saveSync.data.available ? (
+              "(end-to-end encrypted: Slop can't read them; up to 20 MB per app)"
+            ) : (
+              <>
+                (uses your chat's encryption: <Link to="/chat">set up chat</Link> on this computer first)
+              </>
+            )}
+          </span>
         </label>
       )}
       {waiting > 0 && (

@@ -240,6 +240,10 @@ The client installs software, so it's a prime target:
 
 A maker's or creative's token (`slopmk_…`, `maker_agents.rs`) is a session of kind `agent`: hashed, listed with their devices, signed out like one, at most 30 days. It may only call an allowlist of maker and People routes, within its scope (look or publish), its apps, and People access; everything else answers 403, and the admin area 404. Making one needs a recent sign-in; one made within 12 hours of a passkey confirmation counts as passkey-proven for its lifetime, so it can publish. Releases it submits get the same scans and review. It can never pay, accept agreements, offers or changes, change payouts, tokens or the account. The admin agent (`slopadm_…`, agent.rs) is separate.
 
+### 8.4.2 Save sync (built 2026-10-21)
+
+Saves are packed and encrypted on the player's device with XChaCha20-Poly1305 under a key derived from their chat backup key (shared only between their approved devices; restored with their recovery code), with the app's address bound in. Slop stores the ciphertext and a device name, keeps the newest two per app, and refuses an upload that doesn't build on the newest (no silent overwrites). Unpacking accepts plain files only, inside the save folder. Closing an account deletes them.
+
 ### 8.5 Chat: end-to-end encryption (decided)
 Slop **can't** read chat messages (`LEGAL.md` §4.6).
 - **Protocol:** **MLS** (Messaging Layer Security, RFC 9420), which handles one-to-one and group chats (player teams) with many devices.

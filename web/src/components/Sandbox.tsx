@@ -9,7 +9,7 @@ import { Link } from "react-router";
 
 import { api } from "../api";
 import { useLoad } from "../hooks";
-import { desktop, type Launched, type SandboxStatus } from "../platform";
+import { desktop, isDesktop, type Launched, type SandboxStatus, type SaveSyncOutcome } from "../platform";
 
 /** What the store knows about an app, for sandbox suggestions. */
 export interface SandboxHint {
@@ -106,6 +106,7 @@ export function LaunchNotices({ launched, slug, title }: { launched: Launched; s
   const unapproved = launched.unapproved_mods ?? [];
   return (
     <>
+      <SaveSyncNotice slug={slug} title={title} result={launched.save_sync ?? null} />
       {unapproved.length > 0 && (
         <div className="notice small" role="status">
           Slop moved {unapproved.length === 1 ? "something" : `${unapproved.length} things`} that{" "}
@@ -188,4 +189,65 @@ export function SandboxFailedNotice({
       </div>
     </div>
   );
+}
+
+/** What save sync did, when there's something to say or choose. */
+export function SaveSyncNotice({ slug, title, result }: { slug: string; title: string; result: SaveSyncOutcome | null }) {
+  const [done, setDone] = useState<string>();
+  if (!result || done === "hidden") return null;
+  if (result.outcome === "fetched") {
+    return (
+      <div className="notice small" role="status">
+        Got {title}'s saves from your other computer. This computer's previous saves are kept under Saves.
+      </div>
+    );
+  }
+  if (result.outcome === "too_big") {
+    return (
+      <div className="notice small" role="status">
+        {title}'s saves are over 20 MB, so they stay on this computer only.
+      </div>
+    );
+  }
+  if (result.outcome !== "both_changed") return null;
+  const keep = (which: "here" | "other") =>
+    void desktop.resolveSaveConflict(slug, which).then(() => setDone(which === "here" ? "kept here" : "took other"));
+  return (
+    <div className="notice" role="alert">
+      {done ? (
+        <p>{done === "kept here" ? "This computer's saves are synced now." : "You have the other computer's saves now; this computer's are kept under Saves."}</p>
+      ) : (
+        <>
+          <p>
+            {title}'s saves changed on this computer and on another one since they last synced. Which do you want to keep?
+            Nothing has been overwritten.
+          </p>
+          <div className="row-actions">
+            <button type="button" className="btn small" onClick={() => keep("here")}>
+              This computer's
+            </button>
+            <button type="button" className="btn small" onClick={() => keep("other")}>
+              The other computer's
+            </button>
+            <button type="button" className="btn small ghost" onClick={() => setDone("hidden")}>
+              Decide later
+            </button>
+          </div>
+        </>
+      )}
+    </div>
+  );
+}
+
+/** Save sync results after an app closes (in the Slop app). */
+export function SaveSyncEvents() {
+  const [last, setLast] = useState<{ slug: string; result: SaveSyncOutcome }>();
+  useEffect(() => {
+    if (!isDesktop) return;
+    let unlisten: (() => void) | undefined;
+    void desktop.onSavesSynced((e) => setLast(e)).then((u) => (unlisten = u));
+    return () => unlisten?.();
+  }, []);
+  if (!last || !["both_changed", "too_big"].includes(last.result.outcome)) return null;
+  return <SaveSyncNotice slug={last.slug} title={last.slug} result={last.result} />;
 }

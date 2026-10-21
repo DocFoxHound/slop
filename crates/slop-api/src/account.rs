@@ -407,6 +407,17 @@ pub async fn close_account(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    // Synced saves go; pledges not yet charged are withdrawn, so a closed account is never charged.
+    sqlx::query("delete from save_blobs where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query(
+        "update bounty_pledges set status = 'withdrawn' where user_id = $1 and status in ('saving', 'active')",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
     // One random ID for all of them, so each app still counts this person's vote once.
     let anonymous = Uuid::new_v4();
     for table in ["votes", "vote_events"] {

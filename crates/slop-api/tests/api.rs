@@ -14998,3 +14998,113 @@ async fn bug_reports_and_feedback_per_release(db: PgPool) {
         .unwrap();
     assert_eq!(log, None);
 }
+
+/// Save sync (save_sync.rs): encrypted saves stored per player and app, newest two kept; an
+/// upload on top of an old generation is refused; 20 MB at most; only the player's own.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn saves_sync_without_silent_overwrites(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (_, pat) = app.user("Pat Player", "US").await;
+    let (_, sam) = app.user("Sam Player", "US").await;
+    let put = |cookie: &str, base: i32, body: Vec<u8>| {
+        Request::builder()
+            .method(Method::PUT)
+            .uri("/v1/me/saves/tower")
+            .header(header::HOST, "localhost:8080")
+            .header(header::COOKIE, cookie)
+            .header("x-slop-base", base.to_string())
+            .header("x-slop-device", "d-home")
+            .header(header::CONTENT_TYPE, "application/octet-stream")
+            .body(Body::from(body))
+            .unwrap()
+    };
+    let send = |r: Request<Body>| {
+        let router = app.router.clone();
+        async move { router.oneshot(r).await.unwrap() }
+    };
+    let res = send(put(&pat, 0, b"sealed-1".to_vec())).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["generation"], 1);
+    // Another computer still on generation 0: refused, nothing lost.
+    assert_eq!(
+        send(put(&pat, 0, b"sealed-x".to_vec())).await.status(),
+        StatusCode::CONFLICT
+    );
+    for (base, body) in [(1, "sealed-2"), (2, "sealed-3")] {
+        assert_eq!(
+            send(put(&pat, base, body.as_bytes().to_vec()))
+                .await
+                .status(),
+            StatusCode::OK
+        );
+    }
+    let kept: Vec<i32> =
+        sqlx::query_scalar("select generation from save_blobs order by generation")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(kept, [2, 3], "the newest and the one before");
+
+    let res = app
+        .send(req(Method::GET, "/v1/me/saves/tower").cookie(&pat))
+        .await;
+    assert_eq!(res.headers()["x-slop-generation"], "3");
+    assert_eq!(res.headers()["x-slop-device"], "d-home");
+    let bytes = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    assert_eq!(&bytes[..], b"sealed-3");
+    let res = app
+        .send(req(Method::GET, "/v1/me/saves/tower?generation=2").cookie(&pat))
+        .await;
+    assert_eq!(
+        &axum::body::to_bytes(res.into_body(), 1 << 20)
+            .await
+            .unwrap()[..],
+        b"sealed-2"
+    );
+    // Someone else's saves aren't theirs.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/saves/tower").cookie(&sam))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/me/saves").cookie(&pat))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            list["saves"][0]["generation"].as_i64(),
+            list["used"].as_i64()
+        ),
+        (Some(3), Some(8))
+    );
+
+    // Over 20 MB: refused.
+    let big = send(put(&pat, 3, vec![0u8; 21 * 1024 * 1024])).await;
+    assert!(
+        big.status() == StatusCode::PAYLOAD_TOO_LARGE
+            || big.status() == StatusCode::UNPROCESSABLE_ENTITY,
+        "{}",
+        big.status()
+    );
+
+    // Stopping sync deletes them from Slop.
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/saves/tower").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/saves/tower").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
