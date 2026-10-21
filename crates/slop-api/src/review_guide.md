@@ -106,6 +106,18 @@ Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked`
   services). `online_undeclared: true` means the store page didn't say the app goes online when
   the release was checked. Players are shown a notice for apps that do, so ask the maker to tick
   what it connects to under Online; reject it as a misleading page if it looks hidden on purpose.
+- `design`: patterns that usually go with paying to win (premium currencies, energy refills and
+  skipped timers, VIP tiers, battle passes, bought boosts). Nothing on Slop can be sold, so check
+  each is earned in play and can't be bought or traded for anything outside the game. A note,
+  not a rejection, unless it really is pay-to-win.
+- `licence.notices`: licence texts or vendor notices inside files the store page's licence
+  doesn't cover: GPL, Apache or MPL code (fine if the store page names that licence too, e.g.
+  `MIT AND GPL-3.0-or-later`), Unity Asset Store content (can't be published in an open-source
+  repository: ask the maker to remove it) or Epic Games' copyright (engine source can't be
+  published; files made from Unreal's templates are fine).
+- `pulse`: `none`, `start_only` (no heartbeats: players drop off the count after 10 minutes) or
+  `heartbeat`. `pulse_missing: true` means a community build of a game that counts players has
+  no Pulse code; it can't be listed before its first Pulse handshake anyway.
 - `save_folder`: where local saves go. `slop` (it reads `SLOP_SAVE_DIR`) and `engine` (Godot's
   `user://`, which the Slop app points into the save folder) are what Slop asks for; `none` means
   no local saves were found; `elsewhere` means it writes to fixed per-user folders, listed under

@@ -102,6 +102,16 @@ pub struct Report {
     /// A mod with networking code: flagged, and sandbox mode is suggested for its game.
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub mod_online: bool,
+    /// Pay-to-win designs a person should look at (premium currencies, energy skips, VIP tiers,
+    /// battle passes, bought boosts). Notes only: nothing on Slop can be sold anyway.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub design: Vec<Hit>,
+    /// Slop Pulse in the code: `none`, `start_only` (never sends heartbeats) or `heartbeat`.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub pulse: &'static str,
+    /// A community build of a game that counts players, without Pulse (set when checked).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub pulse_missing: bool,
     /// It goes online, but its store page doesn't say so (set when the release is checked).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub online_undeclared: bool,
@@ -113,6 +123,10 @@ pub struct Licence {
     pub files: Vec<LicenceFile>,
     /// SPDX-License-Identifier headers naming something other than the declared licence.
     pub headers: Vec<Hit>,
+    /// Licence texts and vendor notices inside files (GPL, Apache, MPL, Unity Asset Store, Epic
+    /// Games): code that came from elsewhere, under its own terms.
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    pub notices: Vec<Hit>,
     pub problems: Vec<String>,
     /// A short key per problem (`no_file`, `mismatch`, `header:GPL-3.0`…), so an update's check
     /// can be compared with the last approved release's.
@@ -570,6 +584,101 @@ static SAVE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::ne
     ]
 });
 
+/// Licence texts and vendor notices in files: (rule, label, pattern, declared licence families
+/// that make it fine; empty: never fine to publish).
+static NOTICE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new(|| {
+    let r = |rule, label, re: &str, ok| {
+        (
+            Rule {
+                rule,
+                label,
+                re: Regex::new(re).unwrap(),
+            },
+            ok,
+        )
+    };
+    vec![
+        r(
+            "agpl",
+            "the GNU Affero GPL",
+            r"GNU Affero General Public License",
+            &["AGPL"][..],
+        ),
+        r(
+            "lgpl",
+            "the GNU Lesser GPL",
+            r"GNU (Lesser|Library) General Public License",
+            &["LGPL", "GPL", "AGPL"][..],
+        ),
+        r(
+            "gpl",
+            "the GNU GPL",
+            r"(this program|you can redistribute it).{0,80}GNU General Public License|GNU General Public License as published by",
+            &["GPL", "AGPL"][..],
+        ),
+        r(
+            "apache",
+            "the Apache License 2.0",
+            r"Licensed under the Apache License, Version 2\.0",
+            &["Apache"][..],
+        ),
+        r(
+            "mpl",
+            "the Mozilla Public License 2.0",
+            r"Mozilla Public License,? v(ersion)? ?2\.0",
+            &["MPL"][..],
+        ),
+        r(
+            "unity_asset_store",
+            "the Unity Asset Store EULA (Asset Store content can't be published in an open-source repository)",
+            r"(?i)asset store (terms of service|eula)|unity-asset-store-eula|standard unity asset store",
+            &[][..],
+        ),
+        r(
+            "epic_games",
+            "Epic Games' copyright (Unreal Engine code can't be published under an open licence; files you made from Unreal's templates are fine)",
+            r"Copyright Epic Games, Inc\. All Rights Reserved",
+            &[][..],
+        ),
+    ]
+});
+
+/// Pay-to-win designs: notes for a person (DESIGN §8, Content Policy "pay-to-win").
+static DESIGN_RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
+    let r = |rule, label, re: &str| Rule {
+        rule,
+        label,
+        re: Regex::new(re).unwrap(),
+    };
+    vec![
+        r(
+            "premium_currency",
+            "A premium currency",
+            r"(?i)\b(premium|hard)[_ ]?(currency|gems?|coins?)\b",
+        ),
+        r(
+            "energy_skip",
+            "Energy refills or skipping timers",
+            r"(?i)\b(energy|stamina)[_ ]?(refill|recharge)\b|\bskip[_ ]?(timer|wait|cooldown)\b",
+        ),
+        r(
+            "vip_tiers",
+            "VIP tiers",
+            r"(?i)\bvip[_ ]?(level|tier|rank|status)\b",
+        ),
+        r(
+            "battle_pass",
+            "A battle or season pass",
+            r"(?i)\b(battle|season|premium)[_ ]?pass\b",
+        ),
+        r(
+            "bought_boosts",
+            "Boosts or stats for currency",
+            r"(?i)\b(buy|purchase)[_ ]?(boost|power[_ ]?up|xp[_ ]?boost|stats?|upgrades?)\b",
+        ),
+    ]
+});
+
 /// Self-updaters: they replace the app with whatever their server sends, bypassing Slop.
 const UPDATER_PACKAGES: &[(&str, &str)] = &[
     ("npm", "electron-updater"),
@@ -971,6 +1080,11 @@ pub fn scan_archive(
     let mut packages = BTreeSet::new();
     let mut monetization = Tally::default();
     let mut headers = Tally::default();
+    let mut notices: Vec<(&'static str, &'static str, &'static [&'static str], String)> =
+        Vec::new();
+    let mut notice_tally = Tally::default();
+    let mut design = Tally::default();
+    let (mut pulse_uses, mut pulse_beats) = (false, false);
     let mut code_loading = Tally::default();
     let mut network = Tally::default();
     let mut saves = Tally::default();
@@ -1008,7 +1122,12 @@ pub fn scan_archive(
             || (name == "plugin.cfg" && (path.starts_with("addons/") || path.contains("/addons/")));
         let unity_manifest = path.ends_with("Packages/manifest.json");
         let source = SOURCE_EXTS.contains(&ext.as_str()) || ext == "cfg" && name == "project.godot";
-        if !(licence_file || lockfile || unity_manifest || source) {
+        // Third-party notices shipped inside the project (Asset Store packages, vendored code).
+        let lower = name.to_ascii_lowercase();
+        let notice_file = !licence_file
+            && matches!(ext.as_str(), "txt" | "md" | "")
+            && (lower.contains("license") || lower.contains("licence") || lower.contains("eula"));
+        if !(licence_file || lockfile || unity_manifest || source || notice_file) {
             continue;
         }
         let size = entry.header().size().unwrap_or(0);
@@ -1038,9 +1157,20 @@ pub fn scan_archive(
                 packages.extend(found);
             }
         }
+        if notice_file || source {
+            for (rule, ok) in NOTICE_RULES.iter() {
+                if let Some(i) = text.lines().take(60).position(|l| rule.re.is_match(l)) {
+                    notices.push((rule.rule, rule.label, ok, format!("{path}:{}", i + 1)));
+                }
+            }
+        }
         if unity_manifest || source {
             // The Slop Pulse snippet only talks to Slop.
             let pulse = text.contains("SLOP_PULSE");
+            if text.contains("SLOP_PULSE_TOKEN") {
+                pulse_uses = true;
+                pulse_beats |= text.contains("heartbeat");
+            }
             uses_save_dir |= text.contains("SLOP_SAVE_DIR");
             engine_saves |=
                 matches!(ext.as_str(), "gd" | "cs" | "godot" | "cfg") && text.contains("user://");
@@ -1066,6 +1196,13 @@ pub fn scan_archive(
                 for (rule, exts) in SAVE_RULES.iter() {
                     if exts.contains(&ext.as_str()) && rule.re.is_match(line) {
                         saves.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
+                    }
+                }
+                if source {
+                    for rule in DESIGN_RULES.iter() {
+                        if rule.re.is_match(line) {
+                            design.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
+                        }
                     }
                 }
                 if i < 30
@@ -1105,6 +1242,23 @@ pub fn scan_archive(
         report.saves = saves.into_hits();
     }
     report.code_files = merge_by_label(code_files.into_hits());
+    report.design = design.into_hits();
+    report.pulse = match (pulse_uses, pulse_beats) {
+        (false, _) => "none",
+        (true, false) => "start_only",
+        (true, true) => "heartbeat",
+    };
+    // Licence notices the store page's licence doesn't cover.
+    for (rule, label, ok, at) in notices {
+        let covered = !ok.is_empty()
+            && declared_families
+                .iter()
+                .any(|f| ok.iter().any(|o| f.starts_with(&o.to_ascii_lowercase())));
+        if !covered {
+            notice_tally.add(rule, label, at);
+        }
+    }
+    report.licence.notices = notice_tally.into_hits();
     report.save_folder = if uses_save_dir {
         "slop"
     } else if !report.saves.is_empty() {
@@ -1165,6 +1319,20 @@ fn licence_problems(
                 if h.count == 1 { "s" } else { "" },
                 h.label,
                 h.examples.join(", "),
+                l.declared
+            ),
+        ));
+    }
+    for n in &l.notices {
+        problems.push((
+            format!("notice:{}", n.rule),
+            format!(
+                "{} file{} carr{} {} (e.g. {}), which the store page's {} doesn't cover. Code from elsewhere keeps its own terms: name its licence on the store page too, or take it out.",
+                n.count,
+                if n.count == 1 { "" } else { "s" },
+                if n.count == 1 { "ies" } else { "y" },
+                n.label,
+                n.examples.join(", "),
                 l.declared
             ),
         ));
@@ -1488,6 +1656,13 @@ pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
                 report["mod_online"] = json!(true);
             }
         }
+        // A community build of a game that counts players must count them too (DESIGN §9).
+        if report["status"] == "checked"
+            && report["pulse"] == "none"
+            && crate::branches::needs_pulse(&mut *state.db.acquire().await?, app_id).await?
+        {
+            report["pulse_missing"] = json!(true);
+        }
         // "Works in sandbox mode" means local saves only in SLOP_SAVE_DIR.
         if sandbox_ready && report["save_folder"] == "elsewhere" {
             report["sandbox_mismatch"] = json!(true);
@@ -1638,6 +1813,57 @@ mod tests {
             format!("https://git.example/api/v1/repos/me/game/archive/{c}.tar.gz")
         );
         assert!(archive_url(Kind::Gitea, &url("https://git.example/onlyone"), &c).is_none());
+    }
+
+    #[test]
+    fn code_from_elsewhere_designs_and_pulse_become_notes() {
+        let mit = (
+            "LICENSE",
+            "MIT License\n\nPermission is hereby granted, free of charge",
+        );
+        let gpl_header = "// This program is free software: you can redistribute it and/or modify\n// it under the terms of the GNU General Public License as published by\n// the Free Software Foundation.\nfn x() {}";
+        let data = archive(&[
+            mit,
+            ("src/vendor/parser.rs", gpl_header),
+            (
+                "Source/Game.cpp",
+                "// Copyright Epic Games, Inc. All Rights Reserved.\nint main() {}",
+            ),
+            (
+                "Assets/Plugins/Fancy/License.txt",
+                "This asset is governed by the Asset Store Terms of Service and EULA.",
+            ),
+            (
+                "Assets/Shop.cs",
+                "int premiumCurrency = 0; // hard_currency\nvoid SkipTimer() {}\nvar vip_level = 2;",
+            ),
+            (
+                "Assets/Pulse.cs",
+                "var token = Environment.GetEnvironmentVariable(\"SLOP_PULSE_TOKEN\"); Post(\"start\");",
+            ),
+        ]);
+        let (report, _) = scan_archive(&data[..], "MIT", true).unwrap();
+        let notices: Vec<_> = report
+            .licence
+            .notices
+            .iter()
+            .map(|h| h.rule.as_str())
+            .collect();
+        assert_eq!(notices, ["epic_games", "gpl", "unity_asset_store"]);
+        assert!(report.licence.kinds.contains(&"notice:gpl".to_string()));
+        let design: Vec<_> = report.design.iter().map(|h| h.rule.as_str()).collect();
+        assert_eq!(design, ["energy_skip", "premium_currency", "vip_tiers"]);
+        assert_eq!(report.pulse, "start_only");
+
+        // The same GPL code in a GPL project is fine.
+        let gpl = (
+            "LICENSE",
+            "GNU GENERAL PUBLIC LICENSE\nVersion 3, 29 June 2007",
+        );
+        let data = archive(&[gpl, ("src/parser.rs", gpl_header)]);
+        let (report, _) = scan_archive(&data[..], "GPL-3.0-or-later", true).unwrap();
+        assert!(report.licence.notices.is_empty());
+        assert_eq!(report.pulse, "none");
     }
 
     #[test]

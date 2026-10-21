@@ -1613,6 +1613,12 @@ export interface RepoScan {
   mod_code?: boolean;
   /** A mod with networking code: flagged, and sandbox mode is suggested for its game. */
   mod_online?: boolean;
+  /** Pay-to-win designs a person should look at. */
+  design?: SourceHit[];
+  /** Slop Pulse in the code. */
+  pulse?: "none" | "start_only" | "heartbeat";
+  /** A community build of a game that counts players, without Pulse. */
+  pulse_missing?: boolean;
   /** It goes online, but the store page didn't say so when this release was checked. */
   online_undeclared?: boolean;
 }
