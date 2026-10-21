@@ -18,14 +18,16 @@ import {
   type NewRelease,
   type Platform,
   type Release,
+  type ReleaseRating,
   type UpdateSettings,
 } from "../api";
 import { PublishProgress } from "../components/PublishProgress";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
-import { formatDate } from "../format";
+import { CONTENT_LABEL, formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
+import { AgeSelect, ContentLabelPicker } from "./Publish";
 
 const STATUS: Record<
   Release["status"],
@@ -204,6 +206,7 @@ export function Releases() {
         <ReleasePicker
           slug={slug}
           platforms={app.data.platforms}
+          rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
           onSubmitted={onSubmitted}
         />
       ) : (
@@ -211,6 +214,7 @@ export function Releases() {
           repoUrl={app.data.repo_url}
           slug={slug}
           platforms={app.data.platforms}
+          rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
           onSubmitted={onSubmitted}
         />
       )}
@@ -230,6 +234,7 @@ export function Releases() {
             repoUrl={app.data.repo_url}
             slug={slug}
             platforms={app.data.platforms}
+            rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
             onSubmitted={onSubmitted}
           />
         </details>
@@ -248,6 +253,13 @@ export function Releases() {
             <div className="title-row spread">
               <div className="title-row">
                 <b>{r.version}</b>
+                {r.rating && (
+                  <span className="muted small">
+                    {r.rating.min_age === 0 ? "Everyone" : `${r.rating.min_age}+`}
+                    {r.rating.content_labels.length > 0 &&
+                      ` · ${r.rating.content_labels.map((l) => CONTENT_LABEL[l]).join(", ")}`}
+                  </span>
+                )}
                 <span className={`badge ${STATUS[r.status].badge}`}>
                   {r.auto_approved && r.status === "approved"
                     ? "APPROVED AUTOMATICALLY"
@@ -524,13 +536,16 @@ function ReleaseForm({
   repoUrl,
   slug,
   platforms,
+  rating: storeRating,
   onSubmitted,
 }: {
   repoUrl: string;
   slug: string;
   platforms: AppPlatform[];
+  rating: ReleaseRating;
   onSubmitted: () => void;
 }) {
+  const [rating, setRating] = useState(storeRating);
   const blank = () =>
     platforms.map((platform): FileRow => ({
       platform,
@@ -565,6 +580,7 @@ function ReleaseForm({
           : {}),
         args: r.args.trim() ? r.args.trim().split(/\s+/) : [],
       })),
+      rating,
     };
     try {
       await gate.guard(() => api.submitRelease(slug, release));
@@ -680,6 +696,7 @@ function ReleaseForm({
           )}
         </fieldset>
       ))}
+      <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
       {error && (error.field === "files" || !error.field) && (
         <p className="form-error" role="alert">
           {error.message}
@@ -732,12 +749,15 @@ export function pickRows(
 function ReleasePicker({
   slug,
   platforms,
+  rating: storeRating,
   onSubmitted,
 }: {
   slug: string;
   platforms: AppPlatform[];
+  rating: ReleaseRating;
   onSubmitted: () => void;
 }) {
+  const [rating, setRating] = useState(storeRating);
   const list = useLoad(() => api.githubReleases(slug), [slug]);
   const picker = useTermsGate();
   const [tag, setTag] = useState("");
@@ -791,6 +811,7 @@ function ReleasePicker({
             ? { exec: r.exec.trim() }
             : {}),
         })),
+        rating,
       ));
       setDone(chosen.version);
       list.reload();
@@ -951,6 +972,7 @@ function ReleasePicker({
               {error.message}
             </p>
           )}
+          <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
           <div className="actions">
             <button
               className="btn slime"
@@ -1063,5 +1085,38 @@ export function UpdatesPanel({ slug }: { slug: string }) {
       )}
       {error && <p className="form-error">{error}</p>}
     </section>
+  );
+}
+
+/** This release's rating (AGE-7): the store page's to start with. */
+function RatingFields({
+  value,
+  storeRating,
+  onChange,
+}: {
+  value: ReleaseRating;
+  storeRating: ReleaseRating;
+  onChange: (r: ReleaseRating) => void;
+}) {
+  const lowered =
+    value.min_age < storeRating.min_age || storeRating.content_labels.some((l) => !value.content_labels.includes(l));
+  return (
+    <details className="release-rating">
+      <summary className="small">
+        Rating for this release: <b>{value.min_age === 0 ? "Everyone" : `${value.min_age}+`}</b>
+        {value.content_labels.length > 0 && ` · ${value.content_labels.map((l) => CONTENT_LABEL[l]).join(", ")}`}{" "}
+        <span className="muted">(change it if this version's content is different)</span>
+      </summary>
+      <label>
+        Age rating
+        <AgeSelect value={value.min_age} onChange={(a) => onChange({ ...value, min_age: a })} />
+      </label>
+      <ContentLabelPicker value={value.content_labels} onChange={(l) => onChange({ ...value, content_labels: l })} />
+      <p className="muted small">
+        {lowered
+          ? "Lower than the store page now: a person reviews this release before it goes out, even if your updates are approved automatically."
+          : "When this release is approved, the store page shows its rating."}
+      </p>
+    </details>
   );
 }

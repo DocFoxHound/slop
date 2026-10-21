@@ -292,6 +292,14 @@ pub async fn approve(
     .bind(reviewer)
     .execute(&mut *tx)
     .await?;
+    // The store page shows the rating of the release players get (AGE-7).
+    sqlx::query(
+        "update apps a set min_age = r.min_age, content_labels = r.content_labels, updated_at = now()
+         from releases r where r.id = $1 and a.id = r.app_id and r.min_age is not null",
+    )
+    .bind(release_id)
+    .execute(&mut *tx)
+    .await?;
     audit(
         &mut tx,
         reviewer,

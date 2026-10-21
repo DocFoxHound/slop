@@ -266,6 +266,7 @@ async fn submit_from_ci(
         &req.commit.to_ascii_lowercase(),
         files,
         "slop_build",
+        None,
     )
     .await?;
     if let Some(checks) = &req.source_checks {
