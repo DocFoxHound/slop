@@ -524,7 +524,7 @@ impl Config {
                 .context("OSV_API_BASE")?,
             source_hosts: parse_source_hosts(&var_or(
                 "SLOP_SOURCE_HOSTS",
-                "gitlab.com=gitlab,codeberg.org=gitea",
+                "gitlab.com=gitlab,codeberg.org=gitea,bitbucket.org=bitbucket",
             ))?,
         };
 
@@ -704,8 +704,10 @@ fn parse_source_hosts(s: &str) -> anyhow::Result<Vec<(String, crate::repo_tokens
                 .split_once('=')
                 .with_context(|| format!("SLOP_SOURCE_HOSTS: {entry:?} isn't host=kind"))?;
             match Kind::parse(kind.trim()) {
-                Some(k @ (Kind::Gitlab | Kind::Gitea)) => Ok((host.trim().to_ascii_lowercase(), k)),
-                _ => anyhow::bail!("SLOP_SOURCE_HOSTS: {kind:?} must be gitlab or gitea"),
+                Some(k) => Ok((host.trim().to_ascii_lowercase(), k)),
+                None => {
+                    anyhow::bail!("SLOP_SOURCE_HOSTS: {kind:?} must be gitlab, gitea or bitbucket")
+                }
             }
         })
         .collect()

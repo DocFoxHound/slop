@@ -13556,3 +13556,55 @@ async fn ratings_are_kept_per_release(db: PgPool) {
         json!({ "min_age": 7, "content_labels": [] })
     );
 }
+
+/// A self-hosted Forgejo (or Gitea) server nobody configured: Slop asks it what it is, then
+/// reads the release's source from it (source_scan.rs `detect`).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn self_hosted_forges_are_recognised_and_read(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let forge = Router::new()
+        .route(
+            "/api/v1/version",
+            get(|| async { axum::Json(json!({ "version": "11.0.0+gitea-1.22.0" })) }),
+        )
+        .route(
+            "/api/v1/repos/forge/game/archive/{file}",
+            get(|| async { source_archive(SCANNED_SOURCE) }),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, forge).await.unwrap() });
+    let app_id = Uuid::now_v7();
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms)
+         values ($1, 'forged', 'Forged', 'A game', 'game', 'beta', $2, $3, 'MIT', '{windows}')",
+    )
+    .bind(app_id)
+    .bind(maker)
+    .bind(format!("http://{addr}/forge/game"))
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let release = Uuid::now_v7();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by)
+         values ($1, $2, '1.0.0', repeat('c', 40), 'awaiting_review', $3)",
+    )
+    .bind(release)
+    .bind(app_id)
+    .bind(maker)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    slop_api::source_scan::check_release(&app.state, release)
+        .await
+        .unwrap();
+    let scan: Value = sqlx::query_scalar("select repo_scan from releases where id = $1")
+        .bind(release)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(scan["status"], "checked", "{scan}");
+    assert_eq!(scan["licence"]["declared"], "MIT");
+}
