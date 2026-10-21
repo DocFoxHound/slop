@@ -176,6 +176,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
     let config = Config {
         bind: addr,
         database_url: String::new(),
+        migrate_database_url: None,
         public_url: format!("http://{addr}").parse()?,
         github: Some(GithubConfig {
             client_id: "e2e".into(),

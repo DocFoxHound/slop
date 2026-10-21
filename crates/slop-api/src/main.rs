@@ -406,7 +406,39 @@ async fn connect() -> anyhow::Result<(Config, PgPool)> {
         .connect(&config.database_url)
         .await
         .context("connecting to Postgres")?;
-    MIGRATOR.run(&db).await.context("running migrations")?;
+    match &config.migrate_database_url {
+        // Migrations as the tables' owner; the API keeps its own role, with the ledgers
+        // insert-only (migration 0050).
+        Some(owner_url) => {
+            let owner = PgPoolOptions::new()
+                .max_connections(1)
+                .connect(owner_url)
+                .await
+                .context("connecting to Postgres as the owner (SLOP_MIGRATE_DATABASE_URL)")?;
+            MIGRATOR.run(&owner).await.context("running migrations")?;
+            let role: String = sqlx::query_scalar("select current_user::text")
+                .fetch_one(&db)
+                .await?;
+            sqlx::query("select slop_grant_app_role($1)")
+                .bind(&role)
+                .execute(&owner)
+                .await
+                .context("granting the API's role")?;
+            owner.close().await;
+        }
+        None => MIGRATOR.run(&db).await.context("running migrations")?,
+    }
+    let owns: i64 = sqlx::query_scalar(
+        "select count(*) from pg_tables where schemaname = 'public' and tableowner = current_user",
+    )
+    .fetch_one(&db)
+    .await?;
+    if owns > 0 {
+        tracing::warn!(
+            "the API owns its tables, so payments and votes are guarded by triggers only: \
+             see deploy/README.md, \"Database roles\""
+        );
+    }
     slop_api::legal::sync(&db)
         .await
         .context("publishing legal documents")?;

@@ -271,7 +271,7 @@ Slop **can't** read chat messages (`LEGAL.md` §4.6).
 
 ## 9. Payment security
 
-**Built 2026-10-20 (migration 0040):** `payments` and `vote_events` refuse every update and delete at the database (a trigger, like `audit_log`'s), so corrections are new rows. The only exceptions: closing an account replaces its ID on `vote_events` and nothing else, and the simulation sandbox may wipe its data in a database named `*_sim`. A separate database role that can only insert is still to do.
+**Built 2026-10-20 (migration 0040):** `payments` and `vote_events` refuse every update and delete at the database (a trigger, like `audit_log`'s), so corrections are new rows. The only exceptions: closing an account replaces its ID on `vote_events` and nothing else, and the simulation sandbox may wipe its data in a database named `*_sim`. **Built 2026-10-21 (migration 0050):** the API can run as its own role (`slop_app`, `deploy/db-roles.sh`) that doesn't own the tables: it can only add rows to `payments`, `vote_events` and `audit_log` (plus the account-closing ID swap), and can't disable their triggers. Migrations run as the owner (`SLOP_MIGRATE_DATABASE_URL`); the API re-applies the role's grants after each migration and warns at start while it still owns its tables.
 More detail in `PAYMENTS.md`.
 - **Slop never holds money** (`LEGAL.md` §3.1). Payments are direct charges on makers' and creatives' own Stripe accounts, so there are no Slop balances to steal.
 - **PCI DSS:** card data is entered only into Stripe's hosted fields or page, which keeps Slop on the smallest self-assessment (SAQ A). The pages that host checkout still need a strict CSP and monitoring for script changes (PCI DSS v4 requirements 6.4.3 and 11.6.1).

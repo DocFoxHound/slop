@@ -234,6 +234,21 @@ The source check reads repositories on GitHub and on the hosts in `SLOP_SOURCE_H
 (default `gitlab.com=gitlab,codeberg.org=gitea`). Add a self-hosted GitLab or Gitea/Forgejo
 server as `host=gitlab` or `host=gitea` to read its public repositories too.
 
+## Database roles
+
+The API can run as a database role that doesn't own the tables (migration 0050, SECURITY §9). It
+reads and writes as usual, but only adds rows to payments, vote history and the staff audit log,
+and can't switch off their append-only triggers; only the owner can. Until it's set up, the API
+logs "the API owns its tables" at start, and the triggers are the only guard.
+
+1. `deploy/db-roles.sh postgres://<owner>:<password>@<host>:<port>/<database>` (the current
+   `DATABASE_URL`). It creates the role `slop_app` with a new password and prints two lines.
+2. Put them in `~/.config/slop/slop.env`: `SLOP_MIGRATE_DATABASE_URL` (the owner, used only for
+   migrations at start) and the new `DATABASE_URL`.
+3. `systemctl --user restart slop-api`. Check the warning is gone: `journalctl --user -u slop-api -n 20`.
+
+The simulation sandbox (`slop_sim`) wipes its own ledgers, so it keeps the owner's URL.
+
 ## Setting it up again
 
 ```sh
