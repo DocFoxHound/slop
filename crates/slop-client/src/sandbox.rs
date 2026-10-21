@@ -27,6 +27,9 @@ pub struct Sandbox<'a> {
     pub saves: &'a Path,
     /// Its cache folder (writable, never copied or kept with saves).
     pub cache: &'a Path,
+    /// Folders inside the save folder kept read-only: a mods folder the game reads, which only
+    /// Slop fills (DESIGN §9).
+    pub read_only: &'a [PathBuf],
     /// Whether it may use the network.
     pub network: bool,
 }
@@ -267,6 +270,9 @@ pub fn arguments(s: &Sandbox, host: &Host) -> Vec<OsString> {
         args.extend(bind("--ro-bind", m));
     }
     args.extend(bind("--bind", s.saves));
+    for r in s.read_only {
+        args.extend(bind("--ro-bind", r));
+    }
     args.extend(bind("--bind", s.cache));
     for name in UNSET {
         args.extend([os("--unsetenv"), os(name)]);
@@ -294,11 +300,13 @@ mod tests {
 
     fn args(network: bool) -> Vec<String> {
         let mods = [PathBuf::from("/home/ann/.slop/mods/m/files")];
+        let read_only = [PathBuf::from("/home/ann/.slop/saves/game/mods")];
         let s = Sandbox {
             files: Path::new("/home/ann/.slop/apps/game/files"),
             mods: &mods,
             saves: Path::new("/home/ann/.slop/saves/game"),
             cache: Path::new("/home/ann/.slop/cache/game"),
+            read_only: &read_only,
             network,
         };
         arguments(&s, &host())
@@ -321,6 +329,11 @@ mod tests {
         assert!(pos(&a, &["--ro-bind", "/home/ann/.slop/apps/game/files"]) > home);
         assert!(pos(&a, &["--ro-bind", "/home/ann/.slop/mods/m/files"]) > home);
         assert!(pos(&a, &["--bind", "/home/ann/.slop/saves/game"]) > home);
+        assert!(
+            pos(&a, &["--ro-bind", "/home/ann/.slop/saves/game/mods"])
+                > pos(&a, &["--bind", "/home/ann/.slop/saves/game"]),
+            "a mods folder in the saves stays read-only"
+        );
         let writable: Vec<&String> = a
             .windows(2)
             .filter(|w| w[0] == "--bind")

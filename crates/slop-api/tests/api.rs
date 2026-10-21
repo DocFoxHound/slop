@@ -8262,6 +8262,33 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
     assert!(manifest.files[0].launch.is_none());
     assert_eq!(manifest.build_of, None);
 
+    // A mod with code that goes online is flagged, and suggests sandbox mode (DESIGN §9).
+    sqlx::query(
+        "update releases set repo_scan = '{\"status\": \"checked\", \"mod_code\": true, \"mod_online\": true}'
+         where id = $1",
+    )
+    .bind(release_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/castle")).await).await;
+    let listed = &page["community"][0];
+    assert_eq!(
+        (&listed["slug"], &listed["mod_code"], &listed["mod_online"]),
+        (&json!("castle-dragons"), &json!(true), &json!(true))
+    );
+    let dragons = body_json(app.send(req(Method::GET, "/v1/apps/castle-dragons")).await).await;
+    assert_eq!(dragons["sandbox_suggested"], true);
+
+    // The game's own mods folder is signed into its builds' manifests; community builds take
+    // the original's.
+    sqlx::query(
+        "update apps set mods_folder = '{\"base\": \"game\", \"path\": \"mods\", \"layout\": \"folder\"}'
+         where slug = 'castle'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
     // A community build's manifest names its original instead, so the Slop app can offer it
     // on the original's Play button.
     let res = app
@@ -8322,6 +8349,33 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
     .unwrap();
     assert_eq!(hd.mod_for, None);
     assert_eq!(hd.build_of.map(|o| o.app_slug).as_deref(), Some("castle"));
+    assert_eq!(
+        hd.mods_folder,
+        Some(slop_manifest::ModsFolder {
+            base: slop_manifest::ModsBase::Game,
+            path: "mods".into(),
+            layout: slop_manifest::ModsLayout::Folder,
+        })
+    );
+    let patch = |body: Value| {
+        req(Method::PATCH, "/v1/apps/castle-hd")
+            .cookie(&author)
+            .json(body)
+    };
+    let res = app
+        .send(patch(
+            json!({ "mods_folder": { "base": "game", "path": "../escape", "layout": "flat" } }),
+        ))
+        .await;
+    assert_eq!(body_json(res).await["error"]["field"], "mods_folder");
+    let res = app.send(patch(json!({ "mods_folder": null }))).await;
+    assert_eq!(body_json(res).await["mods_folder"], Value::Null, "cleared");
+    let res = app
+        .send(patch(
+            json!({ "mods_folder": { "base": "saves", "path": "Mods", "layout": "flat" } }),
+        ))
+        .await;
+    assert_eq!(body_json(res).await["mods_folder"]["base"], "saves");
 
     // The library's update check lists it under the installed game.
     let updates = body_json(
@@ -8331,6 +8385,8 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
     .await;
     assert_eq!(updates[0]["mods"][0]["slug"], "castle-dragons", "{updates}");
     assert_eq!(updates[0]["mods"][0]["author"], "Bo Modder");
+    assert_eq!(updates[0]["mods"][0]["code"], true);
+    assert_eq!(updates[0]["mods"][0]["online"], true);
     assert_eq!(updates[0]["builds"], json!([]));
     assert_eq!(
         list_slugs(&app, req(Method::GET, "/v1/apps")).await,

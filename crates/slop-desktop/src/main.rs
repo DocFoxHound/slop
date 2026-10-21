@@ -18,6 +18,7 @@ use slop_client::{
     api::{ApiClient, ApiResponse, KeyringTokenStore},
     chat::{Chat, KeyringSecrets, OutgoingFile},
     library::{InstalledApp, InstalledMod, Library},
+    link::{Link, ModRequest, ModResult, Outcome},
     signin,
     slop_manifest::{self, Platform, Signed},
 };
@@ -56,6 +57,8 @@ struct Desktop {
     /// Chat for the signed-in user, opened on first use (DESIGN §19).
     chat: tokio::sync::Mutex<Option<Arc<Chat>>>,
     chat_dir: std::path::PathBuf,
+    /// Slop Link: running games ask for mods here (DESIGN §9).
+    link: Link,
 }
 
 /// Errors as the UI sees them: a short code and a sentence to show.
@@ -595,6 +598,126 @@ struct Launched {
     quarantined: Vec<String>,
     /// The saves were too big to copy before this sandboxed session.
     copy_skipped: bool,
+    /// Things in the game's mods folder that aren't mods from Slop, moved out.
+    unapproved_mods: Vec<String>,
+}
+
+/// A game's request for mods, still waiting for the player (also sent as `mod-request`).
+#[tauri::command]
+fn mod_request(desktop: State<'_, Desktop>, id: String) -> Option<ModRequest> {
+    desktop.link.waiting(&id)
+}
+
+/// The player's answer to a game's request for mods. On yes, each mod is fetched, checked
+/// against Slop's signature, and added if it's an approved mod for that game; the game is told
+/// how each went and where its mods are now.
+#[tauri::command]
+async fn answer_mod_request(
+    app: AppHandle,
+    desktop: State<'_, Desktop>,
+    id: String,
+    accept: bool,
+) -> CommandResult<()> {
+    let Some(request) = desktop.link.waiting(&id) else {
+        return Err(CommandError {
+            code: "not_found",
+            message: "the game stopped waiting for an answer".into(),
+        });
+    };
+    if !accept {
+        desktop.link.finish(&id, Outcome::Declined);
+        return Ok(());
+    }
+    let mut results = Vec::new();
+    for wanted in &request.mods {
+        let result = add_requested_mod(&app, &desktop, &request.game, wanted).await;
+        results.push(result.unwrap_or_else(|e| {
+            tracing::warn!(r#mod = %wanted.slug, error = %e.message, "couldn't add a requested mod");
+            ModResult {
+                slug: wanted.slug.clone(),
+                result: "unavailable",
+                version: None,
+            }
+        }));
+    }
+    let revocations = desktop.library.revocations_for_launch(&desktop.api).await;
+    let outcome = match desktop
+        .library
+        .sync_mods(&request.game, revocations.as_ref())
+    {
+        Ok((folders, _)) => Outcome::Done {
+            mods: results,
+            folders: folders
+                .iter()
+                .map(|f| f.to_string_lossy().into_owned())
+                .collect(),
+        },
+        Err(e) => Outcome::Failed {
+            message: e.to_string(),
+        },
+    };
+    desktop.link.finish(&id, outcome);
+    let _ = app.emit("mods-changed", &request.game);
+    Ok(())
+}
+
+async fn add_requested_mod(
+    app: &AppHandle,
+    desktop: &Desktop,
+    game: &str,
+    wanted: &slop_client::link::Wanted,
+) -> CommandResult<ModResult> {
+    let signed: Signed = desktop
+        .api
+        .get_json(&format!("/v1/apps/{}/manifest", urlencode(&wanted.slug)))
+        .await?;
+    let manifest = desktop.library.verify_manifest(&signed)?;
+    // Only an approved mod for this very game.
+    if manifest.app_slug != wanted.slug
+        || manifest.mod_for.as_ref().map(|g| g.app_slug.as_str()) != Some(game)
+    {
+        return Ok(ModResult {
+            slug: wanted.slug.clone(),
+            result: "unavailable",
+            version: None,
+        });
+    }
+    let already = desktop
+        .library
+        .installed_mods(game)
+        .into_iter()
+        .any(|m| m.slug == wanted.slug && m.release_id == manifest.release_id);
+    if !already {
+        let slug = wanted.slug.clone();
+        desktop
+            .library
+            .install_mod(&signed, Some(&desktop.api), |got, total| {
+                let _ = app.emit(
+                    "install-progress",
+                    Progress {
+                        slug: slug.clone(),
+                        got,
+                        total,
+                    },
+                );
+            })
+            .await?;
+    }
+    let differs = wanted
+        .version
+        .as_ref()
+        .is_some_and(|v| *v != manifest.version);
+    Ok(ModResult {
+        slug: wanted.slug.clone(),
+        result: if differs {
+            "version_differs"
+        } else if already {
+            "already_added"
+        } else {
+            "added"
+        },
+        version: Some(manifest.version),
+    })
 }
 
 #[derive(Clone, Serialize)]
@@ -669,8 +792,13 @@ async fn launch_app(
         sandboxed: launch.sandboxed,
         quarantined: launch.quarantined,
         copy_skipped: launch.copy_skipped,
+        unapproved_mods: launch.unapproved_mods,
     };
     let mut command = launch.command;
+    // Slop Link: where the game asks for mods while it runs; closed when it exits.
+    let link_url = desktop.link.open(&slug);
+    command.env("SLOP_LINK", &link_url);
+    let link = desktop.link.clone();
     // Slop Pulse: a signed-in launch gets a one-time token for the game to ping with
     // (DESIGN §11). Best effort: the game starts either way.
     if desktop.api.has_session() {
@@ -695,9 +823,12 @@ async fn launch_app(
             }
         }
     }
-    let mut child = command.spawn().map_err(|e| CommandError {
-        code: "launch",
-        message: format!("couldn't start the app: {e}"),
+    let mut child = command.spawn().map_err(|e| {
+        link.close(&link_url);
+        CommandError {
+            code: "launch",
+            message: format!("couldn't start the app: {e}"),
+        }
     })?;
     // Known while it runs, for the in-game overlay (overlay.rs); reaped when it exits.
     let pid = child.id();
@@ -708,6 +839,7 @@ async fn launch_app(
     let started = std::time::Instant::now();
     std::thread::spawn(move || {
         let status = child.wait();
+        link.close(&link_url);
         app.state::<overlay::Running>()
             .0
             .lock()
@@ -1263,9 +1395,23 @@ fn main() {
             let library = Library::new(root, trusted_keys())?
                 .allow_http_downloads(allow_http)
                 .require_maker_signature(!allow_http && !allow_unsigned());
+            // A game asking for mods: the player answers in the main window.
+            let handle = app.handle().clone();
+            let link = Link::start(move |request: &ModRequest| {
+                let _ = handle.emit("mod-request", request);
+                bring_back(&handle);
+                use tauri_plugin_notification::NotificationExt;
+                let _ = handle
+                    .notification()
+                    .builder()
+                    .title("A game wants to add mods")
+                    .body("Open Slop to see them and say yes or no.")
+                    .show();
+            })?;
             app.manage(Desktop {
                 api,
                 library,
+                link,
                 platform: Platform::current(),
                 pending_sign_in: tokio::sync::Mutex::new(None),
                 update: tokio::sync::Mutex::new(None),
@@ -1330,6 +1476,8 @@ fn main() {
             save_size,
             play_choices,
             set_play_choice,
+            mod_request,
+            answer_mod_request,
             launch_app,
             run_installer,
             chat,

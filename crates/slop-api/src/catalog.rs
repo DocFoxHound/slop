@@ -576,6 +576,8 @@ struct AppDetail {
     sandbox: SandboxInfo,
     /// The viewer reported that it doesn't work in sandbox mode.
     sandbox_reported: bool,
+    /// The folder it reads mods from, when its maker named one (DESIGN §9).
+    mods_folder: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -599,6 +601,7 @@ struct AppExtra {
     private: bool,
     online: Vec<String>,
     online_hosts: Vec<String>,
+    mods_folder: Option<serde_json::Value>,
 }
 
 /// Finds an app the viewer may see: one in the store for them, or their own. Returns its ID and
@@ -662,7 +665,7 @@ async fn load_detail(
     let rules = state.config.catalog;
     let mut qb = QueryBuilder::new(
         "select a.id, a.maker_id, a.description_md, a.repo_url, a.license_spdx, a.platforms, u.display_name as maker_name,
-                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, (",
+                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, a.mods_folder, (",
     );
     push_store_visible(&mut qb, rules, policy);
     qb.push(") or ");
@@ -710,6 +713,7 @@ async fn load_detail(
         private: extra.private,
         online: extra.online,
         online_hosts: extra.online_hosts,
+        mods_folder: extra.mods_folder,
         sandbox: sandbox_info(&state.db, extra.id).await?,
         sandbox_reported: match user {
             Some(u) => sqlx::query_scalar(
@@ -755,8 +759,9 @@ pub(crate) struct SandboxInfo {
     /// ...but the source check of its newest release found saves elsewhere, so players aren't
     /// told it works in sandbox mode.
     pub sandbox_mismatch: bool,
-    /// Sandbox mode is suggested: it plays online (servers Slop can't check), or its newest
-    /// release has networking code its store page doesn't declare.
+    /// Sandbox mode is suggested: it plays online (servers Slop can't check), its newest
+    /// release has networking code its store page doesn't declare, or it's a mod that goes
+    /// online.
     pub sandbox_suggested: bool,
     /// Enough players reported it doesn't work in sandbox mode.
     pub sandbox_trouble: bool,
@@ -774,6 +779,7 @@ pub(crate) async fn sandbox_info(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Resul
                     as sandbox_mismatch,
                 cardinality(a.online) > 0
                     or coalesce((select (repo_scan ->> 'online_undeclared')::boolean from newest), false)
+                    or coalesce((select (repo_scan ->> 'mod_online')::boolean from newest), false)
                     as sandbox_suggested,
                 (select count(*) from sandbox_reports s where s.app_id = a.id) >= $2 as sandbox_trouble
          from apps a where a.id = $1",
@@ -965,6 +971,9 @@ struct NewApp {
     /// Works in sandbox mode: local saves only in SLOP_SAVE_DIR.
     #[serde(default)]
     sandbox_ready: bool,
+    /// The folder it reads mods from (DESIGN §9); none: it reads SLOP_MODS, or has no mods.
+    #[serde(default)]
+    mods_folder: Option<slop_manifest::ModsFolder>,
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -984,6 +993,31 @@ struct AppChanges {
     online: Option<Vec<String>>,
     online_hosts: Option<Vec<String>>,
     sandbox_ready: Option<bool>,
+    /// `null` clears it.
+    #[serde(default, deserialize_with = "present")]
+    mods_folder: Option<Option<slop_manifest::ModsFolder>>,
+}
+
+/// A field that was sent, even as `null`: `Some(None)`.
+fn present<'de, D, T>(d: D) -> Result<Option<Option<T>>, D::Error>
+where
+    D: serde::Deserializer<'de>,
+    T: Deserialize<'de>,
+{
+    Option::<T>::deserialize(d).map(Some)
+}
+
+fn validate_mods_folder(
+    f: Option<slop_manifest::ModsFolder>,
+) -> ApiResult<Option<serde_json::Value>> {
+    match f {
+        None => Ok(None),
+        Some(f) if f.is_valid() => Ok(Some(serde_json::to_value(f).expect("serialises"))),
+        Some(_) => Err(ApiError::invalid(
+            "mods_folder",
+            "a folder inside the game's files or its save folder, like mods or Content/Paks/~mods",
+        )),
+    }
 }
 
 /// Content labels makers can set (DESIGN §5); the database checks the same list.
@@ -1247,6 +1281,7 @@ async fn create_app(
     let platforms = validate_platforms(&req.platforms)?;
     let online = validate_online(&req.online)?;
     let online_hosts = validate_online_hosts(&req.online_hosts)?;
+    let mods_folder = validate_mods_folder(req.mods_folder.clone())?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
     if let Some(t) = &req.repo_token {
@@ -1265,8 +1300,8 @@ async fn create_app(
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
-                           platforms, visibility, content_labels, online, online_hosts, sandbox_ready)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17)",
+                           platforms, visibility, content_labels, online, online_hosts, sandbox_ready, mods_folder)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -1285,6 +1320,7 @@ async fn create_app(
     .bind(&online)
     .bind(&online_hosts)
     .bind(req.sandbox_ready)
+    .bind(&mods_folder)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -1402,6 +1438,10 @@ async fn update_app(
     }
     if let Some(ready) = changes.sandbox_ready {
         qb.push(", sandbox_ready = ").push_bind(ready);
+    }
+    if let Some(folder) = &changes.mods_folder {
+        qb.push(", mods_folder = ")
+            .push_bind(validate_mods_folder(folder.clone())?);
     }
     if let Some(labels) = &changes.content_labels {
         qb.push(", content_labels = ")

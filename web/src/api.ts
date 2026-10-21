@@ -61,7 +61,15 @@ export interface AppUpdate {
     platforms: string[];
   }>;
   /** Approved mods for the app, to add in the Slop app. */
-  mods?: Array<{ slug: string; title: string; author: string; note: string | null }>;
+  mods?: Array<{
+    slug: string;
+    title: string;
+    author: string;
+    note: string | null;
+    /** Its newest approved release has code; goes online (sandbox mode suggested for the game). */
+    code: boolean;
+    online: boolean;
+  }>;
   /** Sandbox mode: the maker's declaration, whether it's suggested, and player reports. */
   sandbox_ready?: boolean;
   sandbox_mismatch?: boolean;
@@ -539,6 +547,8 @@ export interface AppDetail extends AppSummary {
   sandbox_trouble: boolean;
   /** The viewer reported that it doesn't work in sandbox mode. */
   sandbox_reported: boolean;
+  /** The folder it reads mods from, when its maker named one (DESIGN §9). */
+  mods_folder: ModsFolder | null;
   is_interested: boolean;
   /** For a community branch: what it branches from. */
   branch: {
@@ -557,6 +567,9 @@ export interface AppDetail extends AppSummary {
       branch_note: string | null;
       platforms: string[];
       adds: string[];
+      /** A mod with code, or one that goes online (DESIGN §9). */
+      mod_code: boolean;
+      mod_online: boolean;
     }
   >;
 }
@@ -1582,6 +1595,12 @@ export interface RepoScan {
   save_folder?: "slop" | "engine" | "elsewhere" | "none";
   /** The store page says it works in sandbox mode, but the code saves elsewhere. */
   sandbox_mismatch?: boolean;
+  /** Code in the repository, by language (shown for mods). */
+  code_files?: SourceHit[];
+  /** A mod with code: it gets a full read. */
+  mod_code?: boolean;
+  /** A mod with networking code: flagged, and sandbox mode is suggested for its game. */
+  mod_online?: boolean;
   /** It goes online, but the store page didn't say so when this release was checked. */
   online_undeclared?: boolean;
 }
@@ -1691,6 +1710,18 @@ export interface NewApp {
   online_hosts?: string[];
   /** Works in sandbox mode: local saves only in SLOP_SAVE_DIR. */
   sandbox_ready?: boolean;
+  /** The folder it reads mods from; null: it reads SLOP_MODS, or has no mods. */
+  mods_folder?: ModsFolder | null;
+}
+
+/** Where a game reads mods from: Slop keeps only approved mods there (DESIGN §9). */
+export interface ModsFolder {
+  /** Its installed files, or its save folder. */
+  base: "game" | "saves";
+  /** Relative, with `/`: `mods`, `Content/Paks/~mods`. */
+  path: string;
+  /** Each mod in its own folder, or every mod's files straight in the folder. */
+  layout: "folder" | "flat";
 }
 
 export type RepoTokenKind = "gitlab" | "bitbucket" | "gitea";

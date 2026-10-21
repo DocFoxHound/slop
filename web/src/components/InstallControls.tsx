@@ -87,7 +87,7 @@ function WebControls({ slug, inLibrary }: { slug: string; inLibrary?: boolean })
   );
 }
 
-function DesktopControls({ slug, title, sandbox }: { slug: string; title: string; sandbox?: SandboxHint }) {
+function DesktopControls({ slug, title, sandbox: given }: { slug: string; title: string; sandbox?: SandboxHint }) {
   const build = useLoad(() => api.hasBuild(slug), [slug]);
   const sandboxStatus = useSandboxStatus();
   const [askSandbox, setAskSandbox] = useState(false);
@@ -116,6 +116,21 @@ function DesktopControls({ slug, title, sandbox }: { slug: string; title: string
   const targetSlug = target?.slug ?? slug;
   const targetTitle = target?.title ?? title;
   const [failed, clearFailed] = useSandboxFailed(targetSlug);
+  // A mod that goes online makes sandbox mode suggested for the game it's added to.
+  const added = useLoad(() => desktop.installedMods(targetSlug), [targetSlug]);
+  const reloadMods = added.reload;
+  useEffect(() => {
+    let unlisten: (() => void) | undefined;
+    let gone = false;
+    void desktop.onModsChanged(() => reloadMods()).then((u) => (gone ? u() : (unlisten = u)));
+    return () => {
+      gone = true;
+      unlisten?.();
+    };
+  }, [reloadMods]);
+  const onlineMod = (added.data ?? []).find((m) => given?.onlineMods?.includes(m.slug));
+  const sandbox: SandboxHint | undefined =
+    given && onlineMod ? { ...given, suggested: true, offline: false } : given;
 
   useEffect(() => {
     void reload();
@@ -280,7 +295,7 @@ function DesktopControls({ slug, title, sandbox }: { slug: string; title: string
           {installed.kind !== "installer" && sandboxStatus.data && (
             <SandboxSwitch slug={targetSlug} status={sandboxStatus.data} hint={sandbox} onChanged={sandboxStatus.reload} />
           )}
-          {launched && <LaunchNotices launched={launched} title={targetTitle} />}
+          {launched && <LaunchNotices launched={launched} slug={target?.build_of ?? slug} title={targetTitle} />}
           {failed && (
             <SandboxFailedNotice
               slug={targetSlug}

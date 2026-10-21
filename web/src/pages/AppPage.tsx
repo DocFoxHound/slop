@@ -418,6 +418,8 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
                 <b>{b.title}</b>
               </Link>{" "}
               <span className="badge neutral">MOD</span>
+              {b.mod_code && <span className="badge neutral">CONTAINS CODE</span>}
+              {b.mod_online && <span className="badge warn">GOES ONLINE</span>}
               <div className="muted small">
                 by {b.author}
                 {b.branch_note && <> · {b.branch_note}</>}

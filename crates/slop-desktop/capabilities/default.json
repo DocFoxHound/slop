@@ -46,6 +46,8 @@
     "allow-copy-saves",
     "allow-save-size",
     "allow-play-choices",
-    "allow-set-play-choice"
+    "allow-set-play-choice",
+    "allow-mod-request",
+    "allow-answer-mod-request"
   ]
 }

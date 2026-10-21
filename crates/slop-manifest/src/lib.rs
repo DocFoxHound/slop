@@ -203,6 +203,54 @@ pub struct ReleaseManifest {
     /// original's Play button. Absent on everything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_of: Option<ModFor>,
+    /// The folder the app reads mods from, when its maker named one: the Slop app keeps only
+    /// approved mods there (DESIGN §9). Absent: the app reads `SLOP_MODS`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub mods_folder: Option<ModsFolder>,
+}
+
+/// Where an app reads mods from, and how they're laid out there.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct ModsFolder {
+    pub base: ModsBase,
+    /// Relative to the base, with `/` between parts: `mods`, `Content/Paks/~mods`.
+    pub path: String,
+    pub layout: ModsLayout,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModsBase {
+    /// The app's installed files.
+    Game,
+    /// Its save folder (`SLOP_SAVE_DIR`).
+    Saves,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum ModsLayout {
+    /// Each mod in a folder of its own, named after its Slop address.
+    Folder,
+    /// Every mod's files straight in the folder (for games that read `.pak` or `.zip` files
+    /// there).
+    Flat,
+}
+
+impl ModsFolder {
+    /// A plain relative path: 1–200 characters, no `..`, no leading `/`, no backslashes.
+    pub fn is_valid(&self) -> bool {
+        !self.path.is_empty()
+            && self.path.len() <= 200
+            && !self.path.starts_with('/')
+            && !self.path.contains('\\')
+            && !self.path.contains(':')
+            && self
+                .path
+                .split('/')
+                .all(|p| !p.is_empty() && p != "." && p != ".." && !p.chars().any(char::is_control))
+    }
 }
 
 /// The original app a mod or community build is for (DESIGN §9).
@@ -402,6 +450,7 @@ mod tests {
             approved_at: "2026-10-18T00:00:00Z".into(),
             mod_for: None,
             build_of: None,
+            mods_folder: None,
         }
     }
 
@@ -419,6 +468,27 @@ mod tests {
         let back: ReleaseManifest =
             serde_json::from_str(&serde_json::to_string(&m).unwrap()).unwrap();
         assert_eq!(back, m);
+    }
+
+    #[test]
+    fn mods_folders_are_plain_relative_paths() {
+        let f = |path: &str| ModsFolder {
+            base: ModsBase::Game,
+            path: path.into(),
+            layout: ModsLayout::Folder,
+        };
+        assert!(f("mods").is_valid());
+        assert!(f("Content/Paks/~mods").is_valid());
+        for bad in [
+            "", "/mods", "../mods", "a/../b", "a//b", "C:/mods", "a\\b", "./mods",
+        ] {
+            assert!(!f(bad).is_valid(), "{bad}");
+        }
+        let json = serde_json::to_value(f("mods")).unwrap();
+        assert_eq!(
+            json,
+            serde_json::json!({"base": "game", "path": "mods", "layout": "folder"})
+        );
     }
 
     #[test]

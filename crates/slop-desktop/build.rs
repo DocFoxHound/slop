@@ -34,6 +34,8 @@ fn main() {
             "save_size",
             "play_choices",
             "set_play_choice",
+            "mod_request",
+            "answer_mod_request",
         ]),
     ))
     .expect("failed to run tauri-build");

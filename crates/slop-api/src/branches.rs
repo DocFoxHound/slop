@@ -113,6 +113,9 @@ pub struct CommunityBuild {
     branch_kind: String,
     branch_note: Option<String>,
     platforms: Vec<String>,
+    /// A mod whose newest approved release has code, or goes online (DESIGN §9).
+    mod_code: bool,
+    mod_online: bool,
     /// Platforms it has that the original doesn't: the gaps it fills (never for mods).
     #[sqlx(skip)]
     adds: Vec<String>,
@@ -129,7 +132,11 @@ pub async fn community(
     catalog::push_summary_columns_with(
         &mut qb,
         &state.config,
-        ", (select u.display_name from users u where u.id = a.maker_id) as author, a.branch_kind, a.branch_note, a.platforms",
+        ", (select u.display_name from users u where u.id = a.maker_id) as author, a.branch_kind, a.branch_note, a.platforms,
+           coalesce((select (r.repo_scan ->> 'mod_code')::boolean from releases r
+                     where r.app_id = a.id and r.status = 'approved' order by r.reviewed_at desc limit 1), false) as mod_code,
+           a.branch_kind = 'addon' and (cardinality(a.online) > 0 or coalesce((select (r.repo_scan ->> 'mod_online')::boolean from releases r
+                     where r.app_id = a.id and r.status = 'approved' order by r.reviewed_at desc limit 1), false)) as mod_online",
     );
     qb.push(" where a.parent_app_id = ")
         .push_bind(app_id)
@@ -323,14 +330,14 @@ async fn register(
     crate::repo_owner::check(&state, user.id, &repo_url, None).await?;
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
-    // The branch takes the original's kind and tags; it's Released from the start, and can be
+    // The branch takes the original's kind, tags and mods folder (a fork reads mods the same way); it's Released from the start, and can be
     // listed once it has an approved release, checked and reviewed like any other.
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx,
                            min_age, platforms, parent_app_id, branch_kind, branch_note,
-                           content_labels, online, online_hosts, sandbox_ready)
+                           content_labels, online, online_hosts, sandbox_ready, mods_folder)
          select $1, $2, $3, $4, coalesce(nullif($12, ''), $5), p.kind, 'released', $6, $7, $8, $13, $9, p.id, $10,
-                nullif($5, ''), $14, $15, $16, $17
+                nullif($5, ''), $14, $15, $16, $17, case when $10 = 'addon' then null else p.mods_folder end
          from apps p where p.id = $11",
     )
     .bind(id)

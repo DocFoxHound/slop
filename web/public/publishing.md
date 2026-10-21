@@ -443,32 +443,106 @@ similar) and follow it whenever you write networking, save files or mod support.
 |---|---|
 | Game data your code reads: positions, chat, match state, scores | Yes |
 | Content your code reads: maps, levels, skins, pictures, sounds, settings | Yes, read safely (below) |
-| Mods: anything that adds or changes code, scripts or rules | Only mods approved on Slop |
+| Mods: anything that adds or changes code, scripts or rules | Only mods approved on Slop, which the player gets from Slop |
 | Programs, libraries (`.dll`, `.so`), scripts, Godot `.pck` packs, Unity asset bundles with code | Never |
 | A new version of the game itself | Never: updates come through Slop |
 
-Community servers can't hand players mods either. A server can name the Slop mods it needs, and
-the game gets them from Slop *(coming)*.
+Community servers can't hand players mods either. A server can **name** the Slop mods it
+needs, and the game asks the Slop app for them (see [Getting a server's mods](#getting-a-servers-mods)).
 
 ### Loading mods in your game
 
-Players add mods to your game in the Slop app. When it starts your game, the Slop app sets
-**`SLOP_MODS`**: the folders of the mods the player added, separated like `PATH` (`;` on
-Windows, `:` elsewhere). Each folder holds one mod's files, unpacked, exactly as Slop checked
-them. If the variable isn't set, no mods were added.
+Players add mods to your game in the Slop app, from your game's page in their library, or when
+your game asks for them. Mods **may contain code** your game loads: scripts, Godot `.pck` packs,
+.NET assemblies, Unreal `.pak` files. Every mod on Slop is published, scanned and reviewed like
+an app, so this is the one place your game may load code that didn't come in its own release.
+Your game gets mods one of two ways; pick one under **Mods** on Edit store page.
 
-- Read mods from those folders only. Don't copy them anywhere they'd be loaded again without
-  Slop, and don't fetch mods yourself.
-- Treat a mod's files like a level or save: data you read safely (rules 3 and 5 below). If your
-  game runs mod scripts, run them in your own limited scripting layer, never as native code.
-- Tell modders in your README which files and layout your game reads.
+**1. Your game's own mods folder (use what your engine or mod loader expects).** Name the
+folder your game already reads mods from, in its files (`mods`, `Content/Paks/~mods`) or in its
+save folder, and how mods are laid out there: each in its own folder (named after the mod's
+Slop address), or all mods' files straight in the folder (for games that read `.pak` or `.zip`
+files there). Before every start, and when mods are added while the game runs, the Slop app
+makes that folder hold **exactly the mods the player added from Slop**:
+
+- their files are copied in, and files that changed are put back;
+- anything else in the folder (a mod someone dropped in by hand) is moved to Slop's quarantine
+  folder, and the player is told that mods must be published on Slop;
+- in **sandbox mode** the folder is read-only, so the game can't put anything there itself.
+
+Your game loads whatever is in the folder, its usual way. Don't download into it or anywhere
+else.
+
+**2. `SLOP_MODS`.** When it starts your game, the Slop app sets `SLOP_MODS`: the folders of the
+mods the player added, separated like `PATH` (`;` on Windows, `:` elsewhere), each holding one
+mod's files exactly as Slop checked them. If it isn't set, no mods were added.
 
 ```gdscript
 # Godot
 var mods := OS.get_environment("SLOP_MODS")
 var sep := ";" if OS.get_name() == "Windows" else ":"
 for dir in mods.split(sep, false):
-    load_mod_from(dir)   # your own code: read data files, never load .pck or scripts as code
+    for file in DirAccess.get_files_at(dir):
+        if file.ends_with(".pck"):
+            ProjectSettings.load_resource_pack(dir.path_join(file))
+```
+
+Either way:
+
+- Load mods only from there. Never load mods, packs or scripts a server or another player sent,
+  or anything downloaded outside Slop.
+- **Your game loads its mods itself.** Injectors that patch the game from outside (BepInEx,
+  MelonLoader, Doorstop) aren't allowed.
+- Read mod data as carefully as anything else (rules 3 to 5 below).
+- Tell modders in your README which files and layout your game reads.
+
+**Engines.** Godot has no mod system of its own: load `.pck` packs from the mods folder with
+`ProjectSettings.load_resource_pack`, or use a mod loader that reads `mods/` next to the game
+(name it as a folder in the game's files). Unity: load assemblies or asset bundles from the
+mods folder. Unreal: name `Content/Paks/~mods` (or your game's paks folder), all files straight
+in the folder.
+
+### Getting a server's mods
+
+When a server or lobby needs mods, your game asks the Slop app for them by Slop address (and
+version, if you like). The Slop app shows the player the list, with what each mod is, whether it
+contains code and whether it goes online, and the player says yes or no. On yes, it downloads
+each from Slop, checks it against Slop's signature, adds it to your game, and tells your game.
+Only approved mods for your game can be added; the player sees any that aren't.
+
+When it starts your game, the Slop app sets **`SLOP_LINK`** (`http://127.0.0.1:<port>/<token>/`,
+only for this run of your game):
+
+1. `POST {SLOP_LINK}mods/request` with `{"mods": [{"slug": "dragons", "version": "1.2.0"}],
+   "for": "Castle Rock server"}`. The answer is `{"id": "…"}`. `for` is shown to the player.
+2. Every second or two, `GET {SLOP_LINK}mods/request/<id>` until `status` isn't `waiting`:
+   - `done`: `mods` says for each `added`, `already_added`, `version_differs` (another version
+     was added) or `unavailable`, and `folders` lists all its mod folders now, as in
+     `SLOP_MODS`. With your own mods folder, they're already in it.
+   - `declined`: the player said no.
+
+Then load the new mods (or ask the player to restart). Servers should list mods by Slop address
+and version so every player has the same files.
+
+```gdscript
+# Godot: ask for a server's mods, then wait for the player
+var link := OS.get_environment("SLOP_LINK")   # empty when not started from Slop
+func request_mods(names: Array, server: String) -> void:
+    var http := HTTPRequest.new()
+    add_child(http)
+    var mods := names.map(func(n): return {"slug": n})
+    http.request(link + "mods/request", ["Content-Type: application/json"],
+        HTTPClient.METHOD_POST, JSON.stringify({"mods": mods, "for": server}))
+    var res = await http.request_completed
+    var id: String = JSON.parse_string(res[3].get_string_from_utf8())["id"]
+    while true:
+        await get_tree().create_timer(1.5).timeout
+        http.request(link + "mods/request/" + id)
+        res = await http.request_completed
+        var answer = JSON.parse_string(res[3].get_string_from_utf8())
+        if answer["status"] != "waiting":
+            mods_answered(answer)   # your code: load the new mods, or say they were declined
+            return
 ```
 
 ### Publishing a mod
@@ -480,6 +554,12 @@ hand). Slop checks and reviews it like an app, and lists it in the Community are
 page. Players add it to the installed game in the Slop app, which hands it to the game when it
 starts (see [Loading mods in your game](#loading-mods-in-your-game)). Say in your mod's
 description which version of the game it's for.
+
+A mod **may contain code**. Then the source check marks it **mod with code** and a reviewer
+reads all of it. A mod with networking code is marked **goes online**: that can still be
+approved, but players see it, and sandbox mode is suggested for the game it's added to. Say in
+your description what the code does and what it connects to. A mod may only add to its game:
+no program to start, no code from a server, no updating itself, no loading other mods.
 
 ### Publishing a community build
 
@@ -498,7 +578,8 @@ across when they pick your build.
 
 ### Rules for the code
 
-1. **Never run code from the network or from downloaded files.** No `eval`, `exec`,
+1. **Never run code from the network or from downloaded files.** (Mods from Slop are the
+   exception: see [Loading mods in your game](#loading-mods-in-your-game).) No `eval`, `exec`,
    `loadstring`, `new Function`, `Assembly.Load` on downloaded bytes, Java class loaders,
    `dlopen`/`LoadLibrary` on downloaded files, Godot `load_resource_pack` or setting
    `GDScript.source_code`, or Unity `AssetBundle` loads from a server.

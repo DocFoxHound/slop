@@ -121,7 +121,11 @@ export function Library() {
                   inLibrary={Boolean(row.app)}
                   sandbox={
                     row.update
-                      ? { suggested: Boolean(row.update.sandbox_suggested), offline: !row.update.sandbox_suggested }
+                      ? {
+                          suggested: Boolean(row.update.sandbox_suggested),
+                          offline: !row.update.sandbox_suggested,
+                          onlineMods: (row.update.mods ?? []).filter((m) => m.online).map((m) => m.slug),
+                        }
                       : undefined
                   }
                 />

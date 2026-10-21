@@ -893,3 +893,5 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .play-split .play-pick { width: 100%; }
 .library-row.nested { margin-left: 32px; }
 @media (max-width: 560px) { .library-row.nested { margin-left: 12px; } }
+.mod-request-list { margin: 12px 0; display: grid; gap: 10px; }
+.mod-request-list .badge { margin-left: 6px; }

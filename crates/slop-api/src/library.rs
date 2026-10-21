@@ -64,6 +64,10 @@ struct Mod {
     title: String,
     author: String,
     note: Option<String>,
+    /// Its newest approved release has code, or networking code (then sandbox mode is
+    /// suggested for the game it's added to).
+    code: bool,
+    online: bool,
 }
 
 #[derive(Serialize)]
@@ -147,8 +151,14 @@ async fn updates(
         qb.push(")) and a.branch_kind is distinct from 'addon' order by a.parent_app_id is not null, a.title limit 20");
         let builds: Vec<Build> = qb.build_query_as().fetch_all(&state.db).await?;
         let mut qb = QueryBuilder::new(
-            "select a.slug, a.title, u.display_name as author, a.branch_note as note
+            "select a.slug, a.title, u.display_name as author, a.branch_note as note,
+                    coalesce((n.repo_scan ->> 'mod_code')::boolean, false) as code,
+                    cardinality(a.online) > 0 or coalesce((n.repo_scan ->> 'mod_online')::boolean, false) as online
              from apps a join users u on u.id = a.maker_id
+                  left join lateral (
+                      select r.repo_scan from releases r
+                      where r.app_id = a.id and r.status = 'approved' and r.signed_manifest is not null
+                      order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc limit 1) n on true
              where a.branch_kind = 'addon' and a.parent_app_id = ",
         );
         qb.push_bind(app_id).push(" and (");
