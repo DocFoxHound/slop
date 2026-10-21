@@ -2057,8 +2057,16 @@ export const api = {
       `/v1/apps/${encodeURIComponent(slug)}/changes/${encodeURIComponent(id)}/cancel`,
     ),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
+  /** The yearly transparency report (counts only). */
+  transparency: (year: number) => request<TransparencyReport>("GET", `/v1/transparency/${year}`),
   admin: {
     queue: () => request<AdminQueue>("GET", "/v1/admin/queue"),
+    /** The law-enforcement request log (legal_requests.rs); staff with sensitive rights. */
+    legalRequests: () => request<LegalRequest[]>("GET", "/v1/admin/legal-requests"),
+    logLegalRequest: (r: NewLegalRequest) =>
+      request<{ id: string; reference: string; deadline: string | null }>("POST", "/v1/admin/legal-requests", r),
+    answerLegalRequest: (id: string, a: { status: string; response: string; user_notice: string }) =>
+      request<{ reference: string }>("POST", `/v1/admin/legal-requests/${encodeURIComponent(id)}/answer`, a),
     /** What needs an admin right now (ops.rs): stale backups, failed deploys, overdue reports… */
     ops: () =>
       request<
@@ -2861,3 +2869,60 @@ export const api = {
   revokeSession: (id: string) =>
     request<void>("DELETE", `/v1/me/sessions/${encodeURIComponent(id)}`),
 };
+
+/** A request from police, a court or an authority (crates/slop-api/src/legal_requests.rs). */
+export interface LegalRequest {
+  id: string;
+  reference: string;
+  received_at: string;
+  country: string;
+  authority: string;
+  kind: LegalRequestKind;
+  legal_basis: string;
+  asked: string;
+  subject_user_id: string | null;
+  subject_name: string | null;
+  deadline: string | null;
+  status: "open" | "answered" | "partly_answered" | "refused" | "withdrawn";
+  response: string | null;
+  user_notice: "pending" | "notified" | "barred" | "not_needed";
+  created_by: string;
+  answered_by: string | null;
+  answered_at: string | null;
+}
+
+export type LegalRequestKind =
+  | "subpoena"
+  | "court_order"
+  | "warrant"
+  | "eu_production_order"
+  | "preservation"
+  | "emergency"
+  | "uk_daa"
+  | "removal_order"
+  | "other";
+
+export interface NewLegalRequest {
+  received_at: string;
+  country: string;
+  authority: string;
+  kind: LegalRequestKind;
+  legal_basis: string;
+  asked: string;
+  subject_user_id?: string | null;
+  deadline?: string | null;
+}
+
+export interface TransparencyReport {
+  year: number;
+  /** False while the year is still going. */
+  complete: boolean;
+  legal_requests: Record<"by_country" | "by_kind" | "by_outcome", Array<{ key: string; count: number }>>;
+  reports: {
+    by_reason: Array<{ key: string; count: number }>;
+    by_outcome: Array<{ key: string; count: number }>;
+    median_hours_to_decide: number | null;
+  };
+  decisions: { by_action: Array<{ key: string; count: number }>; automated: number };
+  appeals: { by_outcome: Array<{ key: string; count: number }> };
+}

@@ -41,6 +41,10 @@ export function LegalIndex() {
           </li>
         ))}
       </ul>
+      <p className="small">
+        <Link to="/transparency">Transparency report</Link>: what authorities asked Slop for, and how Slop handled reports,
+        each year.
+      </p>
     </div>
   );
 }

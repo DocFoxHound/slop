@@ -36,8 +36,9 @@ import { formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { NotFound } from "./Listing";
+import { LegalRequestsTab } from "../components/LegalRequests";
 
-type Tab = "queue" | "apps" | "audit" | "ai" | "staff";
+type Tab = "queue" | "apps" | "audit" | "ai" | "staff" | "legal";
 
 export function Admin() {
   useDocumentTitle("Admin");
@@ -59,6 +60,7 @@ export function Admin() {
             ["audit", "Audit log"],
             ["ai", "AI reviewers"],
             ["staff", "Staff"],
+            ["legal", "Legal requests"],
           ] as const
         ).map(([key, label]) => (
           <button
@@ -77,6 +79,7 @@ export function Admin() {
       {tab === "audit" && <AuditTab />}
       {tab === "ai" && <TokensTab />}
       {tab === "staff" && <StaffTab />}
+      {tab === "legal" && <LegalRequestsTab />}
     </div>
   );
 }
