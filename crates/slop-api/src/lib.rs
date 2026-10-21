@@ -8,6 +8,7 @@ pub mod admin_web;
 pub mod agent;
 pub mod auth;
 pub mod bad_links;
+pub mod bounties;
 pub mod branches;
 pub mod catalog;
 pub mod challenge;
@@ -96,6 +97,8 @@ pub struct AppState {
     pub fetch_http: reqwest::Client,
     /// Wakes the release fetcher when a release is submitted.
     pub fetch_wakeup: Arc<tokio::sync::Notify>,
+    /// Wakes the bounty charger when a delivery is confirmed (bounties.rs).
+    pub bounty_wakeup: Arc<tokio::sync::Notify>,
     /// Wakes the GitHub release watcher when a maker changes its settings.
     pub watch_wakeup: Arc<tokio::sync::Notify>,
     /// Checks makers' GitHub artifact attestations.
@@ -130,6 +133,7 @@ impl AppState {
             http,
             fetch_http,
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
+            bounty_wakeup: Arc::new(tokio::sync::Notify::new()),
             watch_wakeup: Arc::new(tokio::sync::Notify::new()),
             provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),
             rate_limiter,
@@ -169,6 +173,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(fixes::routes())
         .merge(offers::routes())
         .merge(label::routes())
+        .merge(bounties::routes())
         .merge(review::routes())
         .merge(pulse::routes())
         .merge(legal_requests::routes())

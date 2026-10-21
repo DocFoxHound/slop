@@ -14361,3 +14361,435 @@ async fn labels_accessibility_and_fair_shelves(db: PgPool) {
         (Some(33), Some(83))
     );
 }
+
+/// An approved, served release for an app, without the fetch and review steps.
+async fn approved_release(app: &TestApp, slug: &str, by: Uuid) {
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, signed_manifest, reviewed_at)
+         select $1, id, '1.0.0', repeat('a', 40), 'approved', $2, '{}'::jsonb, now() from apps where slug = $3",
+    )
+    .bind(Uuid::now_v7())
+    .bind(by)
+    .bind(slug)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+/// Fix bounties (bounties.rs), simulated payments: pledging, a community build delivering, the
+/// app's maker confirming, every pledge charged with Slop's 5%; the backers deciding the maker's
+/// own delivery; withdrawing; staff hiding one; expiry.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bounties_pay_whoever_delivers(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    approved_release(&app, "tower", maker_id).await;
+    let (forker_id, forker) = app.user("Forker", "US").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url, license_spdx,
+                           parent_app_id, branch_kind, branch_note)
+         select $1, 'tower-fix', 'Tower (fixed)', 'Fixed', 'game', 'released', 'listed', $2, 'https://github.com/f/t',
+                'MIT', id, 'fix', 'Fixes saves' from apps where slug = 'tower'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(forker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    approved_release(&app, "tower-fix", forker_id).await;
+    let (_, ann) = app.user("Ann Backer", "US").await;
+    let (_, bob) = app.user("Bob Backer", "US").await;
+
+    let open = |cookie: &str, title: &str| {
+        req(Method::POST, "/v1/apps/tower/bounties")
+            .cookie(cookie)
+            .json(json!({ "title": title, "body": "Saves vanish when the game crashes.", "currency": "usd" }))
+    };
+    let res = app.send(open(&ann, "Fix lost saves")).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let pledge = |cookie: &str, id: &str, amount: i64| {
+        req(Method::POST, format!("/v1/bounties/{id}/pledge"))
+            .cookie(cookie)
+            .json(json!({ "amount_minor": amount }))
+    };
+    assert_eq!(
+        app.send(pledge(&ann, &id, 50)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        body_json(app.send(pledge(&ann, &id, 1000)).await).await["status"],
+        "active"
+    );
+    assert_eq!(
+        app.send(pledge(&ann, &id, 1000)).await.status(),
+        StatusCode::CONFLICT,
+        "one each"
+    );
+    app.send(pledge(&bob, &id, 3000)).await;
+    let list = body_json(app.send(req(Method::GET, "/v1/bounties")).await).await;
+    assert_eq!(
+        (
+            list[0]["backers"].as_i64(),
+            list[0]["pledged_minor"].as_i64()
+        ),
+        (Some(2), Some(4000))
+    );
+
+    // A community build delivers; the app's maker confirms; each pledge is charged.
+    let claim = |cookie: &str, id: &str, slug: &str| {
+        req(Method::POST, format!("/v1/bounties/{id}/claims"))
+            .cookie(cookie)
+            .json(json!({ "app_slug": slug, "note": "1.0.0 writes saves safely." }))
+    };
+    assert_eq!(
+        app.send(claim(&ann, &id, "tower-fix")).await.status(),
+        StatusCode::NOT_FOUND,
+        "not theirs"
+    );
+    assert_eq!(
+        app.send(claim(&forker, &id, "tower-fix")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(claim(&forker, &id, "tower-fix")).await.status(),
+        StatusCode::CONFLICT
+    );
+    let detail = body_json(
+        app.send(req(Method::GET, format!("/v1/bounties/{id}")).cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(detail["is_app_maker"], true);
+    let claim_id = detail["claims"][0]["id"].as_str().unwrap().to_string();
+    let answer = |cookie: &str, decision: &str| {
+        req(
+            Method::POST,
+            format!("/v1/bounties/{id}/claims/{claim_id}/answer"),
+        )
+        .cookie(cookie)
+        .json(json!({ "decision": decision }))
+    };
+    assert_eq!(
+        app.send(answer(&ann, "accepted")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(answer(&maker, "accepted")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(slop_api::bounties::charge_due(&app.state).await.unwrap(), 2);
+    let detail = body_json(
+        app.send(req(Method::GET, format!("/v1/bounties/{id}")))
+            .await,
+    )
+    .await;
+    assert_eq!(detail["status"], "paid");
+    let paid: Vec<(i32, i32, String)> = sqlx::query_as(
+        "select amount_minor, slop_fee_minor, stripe_account_id from payments where kind = 'bounty' order by amount_minor",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(paid.len(), 2);
+    assert_eq!(
+        (paid[0].0, paid[0].1, paid[1].0, paid[1].1),
+        (1000, 50, 3000, 150)
+    );
+    assert!(paid[0].2.starts_with("acct_sim_"));
+    // A paid bounty takes no more pledges or claims.
+    assert_eq!(
+        app.send(pledge(&bob, &id, 500)).await.status(),
+        StatusCode::CONFLICT
+    );
+
+    // The maker delivers their own fix: the backers decide, by amount pledged.
+    let res = app.send(open(&ann, "Add a colourblind mode")).await;
+    let id2 = body_json(res).await["id"].as_str().unwrap().to_string();
+    app.send(pledge(&ann, &id2, 1000)).await;
+    app.send(pledge(&bob, &id2, 3000)).await;
+    assert_eq!(
+        app.send(claim(&maker, &id2, "tower")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let detail = body_json(
+        app.send(req(Method::GET, format!("/v1/bounties/{id2}")).cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(detail["can_vote"], true);
+    let claim2 = detail["claims"][0]["id"].as_str().unwrap().to_string();
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/bounties/{id2}/claims/{claim2}/answer"),
+            )
+            .cookie(&maker)
+            .json(json!({ "decision": "accepted" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "not their own");
+    let vote = |cookie: &str, accept: bool| {
+        req(
+            Method::POST,
+            format!("/v1/bounties/{id2}/claims/{claim2}/vote"),
+        )
+        .cookie(cookie)
+        .json(json!({ "accept": accept }))
+    };
+    assert_eq!(
+        app.send(vote(&ann, true)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let status = |id: String| {
+        let app = &app;
+        async move {
+            body_json(
+                app.send(req(Method::GET, format!("/v1/bounties/{id}")))
+                    .await,
+            )
+            .await["status"]
+                .clone()
+        }
+    };
+    assert_eq!(
+        status(id2.clone()).await,
+        "claimed",
+        "1,000 of 4,000 isn't more than half"
+    );
+    assert_eq!(
+        app.send(vote(&bob, true)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(status(id2.clone()).await, "paying");
+
+    // Withdrawing a pledge, and staff hiding a bounty.
+    let res = app.send(open(&bob, "Spam spam spam")).await;
+    let id3 = body_json(res).await["id"].as_str().unwrap().to_string();
+    app.send(pledge(&ann, &id3, 500)).await;
+    assert_eq!(
+        app.send(req(Method::DELETE, format!("/v1/bounties/{id3}/pledge")).cookie(&ann))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&ann)
+                .json(json!({ "kind": "bounty", "subject": id3, "reason": "spam", "details": "Not a real request.", "good_faith": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["reports"][0]["link"], format!("/bounties/{id3}"));
+    let report_id = queue["reports"][0]["id"].as_str().unwrap();
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/reports/{report_id}/act")).cookie(&admin).json(json!({
+                "action": "hide_bounty", "rule": "spam", "facts": "Not a bounty.", "outcome": "Hidden."
+            })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    assert_eq!(
+        app.send(req(Method::GET, format!("/v1/bounties/{id3}")))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Expiry: nobody delivered in time; the cards are released.
+    let res = app.send(open(&bob, "Port to Linux")).await;
+    let id4 = body_json(res).await["id"].as_str().unwrap().to_string();
+    app.send(pledge(&ann, &id4, 700)).await;
+    sqlx::query("update bounties set expires_at = now() - interval '1 day' where id = $1")
+        .bind(Uuid::parse_str(&id4).unwrap())
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::bounties::charge_due(&app.state).await.unwrap();
+    assert_eq!(status(id4.clone()).await, "expired");
+    let released: String =
+        sqlx::query_scalar("select status from bounty_pledges where bounty_id = $1")
+            .bind(Uuid::parse_str(&id4).unwrap())
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(released, "released");
+}
+
+/// With Stripe: a pledge saves the card on Slop's account (Checkout in setup mode); a confirmed
+/// delivery clones it to the builder's own Stripe account and charges it there, off-session,
+/// with Slop's 5% as the application fee.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bounty_pledges_are_charged_on_the_builders_stripe_account(db: PgPool) {
+    use std::sync::{Arc, Mutex};
+    // (which call, the Stripe account it was on, the form sent)
+    type Seen = Arc<Mutex<Vec<(String, Option<String>, String)>>>;
+    let seen: Seen = Arc::default();
+    let record = |path: &'static str, reply: Value| {
+        let seen = seen.clone();
+        move |headers: axum::http::HeaderMap, body: String| {
+            let seen = seen.clone();
+            let reply = reply.clone();
+            async move {
+                assert_eq!(headers["authorization"], "Bearer sk_test_slop");
+                let account = headers
+                    .get("stripe-account")
+                    .map(|v| v.to_str().unwrap().to_string());
+                seen.lock().unwrap().push((path.to_string(), account, body));
+                axum::Json(reply)
+            }
+        }
+    };
+    let fake = Router::new()
+        .route("/v1/customers", post(record("customers", json!({ "id": "cus_1" }))))
+        .route(
+            "/v1/checkout/sessions",
+            post(record("sessions", json!({ "id": "cs_b1", "url": "https://checkout.stripe.example/cs_b1" }))),
+        )
+        .route(
+            "/v1/checkout/sessions/{id}",
+            get(|| async { axum::Json(json!({ "id": "cs_b1", "status": "complete", "setup_intent": { "payment_method": "pm_1" } })) }),
+        )
+        .route("/v1/payment_methods", post(record("clone", json!({ "id": "pm_clone" }))))
+        .route(
+            "/v1/payment_intents",
+            post(record("charge", json!({ "id": "pi_1", "status": "succeeded" }))),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let base = format!("http://{}/", listener.local_addr().unwrap());
+    tokio::spawn(async move { axum::serve(listener, fake).await.unwrap() });
+    let app = test_app_with(db, |c| {
+        c.payments.stripe = Some(slop_api::config::StripeConfig {
+            secret_key: "sk_test_slop".into(),
+            webhook_secret: "whsec_slop".into(),
+            api_base: base.parse().unwrap(),
+        })
+    })
+    .await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (fixer_id, fixer) = app.user("Vera Fixer", "US").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url, license_spdx,
+                           parent_app_id, branch_kind, branch_note)
+         select $1, 'tower-fix', 'Tower (fixed)', 'Fixed', 'game', 'released', 'listed', $2, 'https://github.com/f/t',
+                'MIT', id, 'fix', 'Fixes saves' from apps where slug = 'tower'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(fixer_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    approved_release(&app, "tower-fix", fixer_id).await;
+    let (_, ann) = app.user("Ann Backer", "US").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/tower/bounties")
+                .cookie(&ann)
+                .json(json!({ "title": "Fix saves", "body": "They vanish.", "currency": "eur" })),
+        )
+        .await;
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let started = body_json(
+        app.send(
+            req(Method::POST, format!("/v1/bounties/{id}/pledge"))
+                .cookie(&ann)
+                .json(json!({ "amount_minor": 2000 })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(started["url"], "https://checkout.stripe.example/cs_b1");
+    assert_eq!(started["status"], "saving");
+    // Back from Checkout: the card is saved.
+    app.send(req(Method::POST, format!("/v1/bounties/{id}/pledge/check")).cookie(&ann))
+        .await;
+    let mine = body_json(
+        app.send(req(Method::GET, format!("/v1/bounties/{id}")).cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["my_pledge"]["status"], "active");
+
+    // Delivering needs a Stripe account to be paid to.
+    let claim = || {
+        req(Method::POST, format!("/v1/bounties/{id}/claims"))
+            .cookie(&fixer)
+            .json(json!({ "app_slug": "tower-fix", "note": "Fixed in 1.0.0." }))
+    };
+    assert_eq!(app.send(claim()).await.status(), StatusCode::CONFLICT);
+    sqlx::query(
+        "insert into donation_accounts (user_id, stripe_account_id, stripe_status, tax_notice_ack_at)
+         values ($1, 'acct_vera', 'active', now())",
+    )
+    .bind(fixer_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(app.send(claim()).await.status(), StatusCode::NO_CONTENT);
+    let detail = body_json(
+        app.send(req(Method::GET, format!("/v1/bounties/{id}")).cookie(&maker))
+            .await,
+    )
+    .await;
+    let claim_id = detail["claims"][0]["id"].as_str().unwrap();
+    app.send(
+        req(
+            Method::POST,
+            format!("/v1/bounties/{id}/claims/{claim_id}/answer"),
+        )
+        .cookie(&maker)
+        .json(json!({ "decision": "accepted" })),
+    )
+    .await;
+    assert_eq!(slop_api::bounties::charge_due(&app.state).await.unwrap(), 1);
+
+    let seen = seen.lock().unwrap().clone();
+    let find = |p: &str| seen.iter().find(|(path, ..)| path == p).unwrap().clone();
+    let (_, account, body) = find("sessions");
+    assert_eq!(account, None, "the card is saved on Slop's own account");
+    assert!(
+        body.contains("mode=setup")
+            && body.contains("customer=cus_1")
+            && body.contains("currency=eur"),
+        "{body}"
+    );
+    let (_, account, body) = find("clone");
+    assert_eq!(account.as_deref(), Some("acct_vera"));
+    assert!(body.contains("payment_method=pm_1"), "{body}");
+    let (_, account, body) = find("charge");
+    assert_eq!(
+        account.as_deref(),
+        Some("acct_vera"),
+        "a direct charge on the builder's account"
+    );
+    for part in [
+        "amount=2000",
+        "currency=eur",
+        "payment_method=pm_clone",
+        "off_session=true",
+        "application_fee_amount=100",
+    ] {
+        assert!(body.contains(part), "{part} in {body}");
+    }
+    let (object, amount, slop_fee, simulated): (String, i32, i32, bool) = sqlx::query_as(
+        "select stripe_object_id, amount_minor, slop_fee_minor, simulated from payments where kind = 'bounty'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (object.as_str(), amount, slop_fee, simulated),
+        ("pi_1", 2000, 100, false)
+    );
+}

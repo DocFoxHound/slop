@@ -79,6 +79,16 @@ A community build or mod has its own Donate button for the author's own Stripe a
 ### 5.4 Splits between collaborators
 **One Stripe account per app** (decided 2026-10-17). If several people made the app, the publisher splits the money with them outside Slop (`LEGAL.md` §3.6).
 
+### 5.4 Fix bounties (built 2026-10-21, `bounties.rs`)
+
+Players pledge toward a fix or feature on an app; whoever delivers it in an approved release (the app's maker, or a community build's maker) is paid.
+
+- **A pledge saves a card, nothing more.** Stripe Checkout in **setup mode on Slop's platform account** saves the backer's card to their Stripe customer. Slop stores Stripe's IDs only. 1.00 to 500.00 per backer per bounty, one currency per bounty; withdrawable until a delivery is confirmed.
+- **Confirmation:** the app's maker accepts or declines a delivery. When the maker delivered it themselves, or doesn't answer in 14 days, the backers vote; more than half of the pledged amount decides.
+- **Payment is a direct charge on the builder's own Stripe account** (their donation account): the saved card is cloned to that account and charged off-session, with Slop's 5% as `application_fee_amount`, recorded in `payments` (kind `bounty`). **Slop never holds the money.** A refused card marks that pledge failed and tells the backer; the others still pay.
+- **Expiry:** 180 days without a confirmed delivery ends the bounty and releases the saved cards (detached at Stripe). Staff hiding a bounty (`hide_bounty`) releases them too.
+- **Needs before going live:** Stripe's rules for saving a card for later merchant-initiated charges (the pledge text is the customer's agreement, and it's shown before Checkout), the lawyer's review of that text and of refunds and disputes (the builder handles them, as with donations), and a webhook for **platform** events (`checkout.session.completed`) besides the connected-account one. Pledges also sync when the backer returns from Checkout, so the webhook is a backup.
+
 ## 6. Server donations (recurring)
 
 - **Available only for apps that declare servers.** The publisher ticks "This app runs servers" and writes a short statement ("Pays for 3 game servers and the leaderboard database").

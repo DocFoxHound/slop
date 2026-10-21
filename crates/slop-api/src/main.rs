@@ -479,6 +479,7 @@ async fn serve() -> anyhow::Result<()> {
     let bind = config.bind;
     let state = AppState::new(db, config)?;
     tokio::spawn(releases::run_fetcher(state.clone()));
+    tokio::spawn(slop_api::bounties::run_charger(state.clone()));
     tokio::spawn(slop_api::updates::run_watcher(state.clone()));
     tokio::spawn(slop_api::cleanup::run(state.clone()));
     tokio::spawn(slop_api::pulse::run_sampler(state.clone()));

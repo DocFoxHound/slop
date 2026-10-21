@@ -16,6 +16,7 @@ const pages: Array<[string, "player" | "maker" | null]> = [
   ["/transparency", null],
   ["/verify", null],
   ["/source", null],
+  ["/bounties", null],
 ];
 
 for (const [path, who] of pages) {

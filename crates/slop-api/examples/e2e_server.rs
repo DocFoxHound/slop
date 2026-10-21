@@ -223,7 +223,11 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         media: slop_api::config::MediaConfig {
             github_raw_base: format!("{fake}raw/").parse()?,
         },
-        payments: Default::default(),
+        // Simulated, as on the simulation sandbox: the browser tests pledge to bounties.
+        payments: slop_api::config::PaymentsConfig {
+            simulated: true,
+            ..Default::default()
+        },
         email: None,
         push: None,
         doh_url: format!("{fake}dns-query").parse()?,
@@ -276,6 +280,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
 
     let state = AppState::new(db.clone(), config.clone())?;
     tokio::spawn(slop_api::releases::run_fetcher(state.clone()));
+    tokio::spawn(slop_api::bounties::run_charger(state.clone()));
     let app = router(state)?;
     // As the real server does (main.rs).
     let listener = axum::serve::ListenerExt::tap_io(listener, |tcp| {

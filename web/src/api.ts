@@ -667,7 +667,8 @@ export type ReportKind =
   | "message"
   | "app_review"
   | "team"
-  | "chat_message";
+  | "chat_message"
+  | "bounty";
 
 export interface ReportReason {
   code: string;
@@ -1876,6 +1877,42 @@ export const ACCESSIBILITY: Array<[string, string]> = [
   ["controller", "Full controller support"],
 ];
 
+/** A fix bounty (crates/slop-api/src/bounties.rs). */
+export interface Bounty {
+  id: string;
+  app_slug: string;
+  app_title: string;
+  title: string;
+  body: string;
+  currency: string;
+  status: "open" | "claimed" | "paying" | "paid" | "expired" | "hidden";
+  backers: number;
+  pledged_minor: number;
+  created_at: string;
+  expires_at: string;
+}
+
+export interface BountyDetail extends Bounty {
+  claims: Array<{
+    id: string;
+    builder: string;
+    app_slug: string;
+    app_title: string;
+    version: string;
+    note: string;
+    status: "pending" | "accepted" | "declined" | "withdrawn";
+    decided_by: "maker" | "backers" | null;
+    created_at: string;
+    accept_minor: number;
+    reject_minor: number;
+  }>;
+  my_pledge: { amount_minor: number; status: string; failure: string | null } | null;
+  is_app_maker: boolean;
+  can_vote: boolean;
+  my_vote: boolean | null;
+  payments: "stripe" | "simulated" | "off";
+}
+
 /** "What this app does" (label.rs). */
 export interface AppLabel {
   items: Array<{ key: string; title: string; detail?: string; checked: boolean; tone: "good" | "info" | "note" }>;
@@ -2048,6 +2085,31 @@ export const api = {
       : request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/accessibility/${encodeURIComponent(feature)}`, {
           works,
         }),
+  bounties: {
+    forApp: (slug: string) => request<Bounty[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/bounties`),
+    all: () => request<Bounty[]>("GET", "/v1/bounties"),
+    get: (id: string) => request<BountyDetail>("GET", `/v1/bounties/${encodeURIComponent(id)}`),
+    open: (slug: string, body: { title: string; body: string; currency: string }) =>
+      request<Bounty>("POST", `/v1/apps/${encodeURIComponent(slug)}/bounties`, body),
+    pledge: (id: string, amount_minor: number) =>
+      request<{ url: string | null; status: string }>("POST", `/v1/bounties/${encodeURIComponent(id)}/pledge`, {
+        amount_minor,
+      }),
+    checkPledge: (id: string) => request<void>("POST", `/v1/bounties/${encodeURIComponent(id)}/pledge/check`),
+    withdraw: (id: string) => request<void>("DELETE", `/v1/bounties/${encodeURIComponent(id)}/pledge`),
+    claim: (id: string, app_slug: string, note: string) =>
+      request<void>("POST", `/v1/bounties/${encodeURIComponent(id)}/claims`, { app_slug, note }),
+    answer: (id: string, claim: string, decision: "accepted" | "declined") =>
+      request<void>("POST", `/v1/bounties/${encodeURIComponent(id)}/claims/${encodeURIComponent(claim)}/answer`, {
+        decision,
+      }),
+    vote: (id: string, claim: string, accept: boolean) =>
+      request<void>("POST", `/v1/bounties/${encodeURIComponent(id)}/claims/${encodeURIComponent(claim)}/vote`, {
+        accept,
+      }),
+    withdrawClaim: (id: string, claim: string) =>
+      request<void>("POST", `/v1/bounties/${encodeURIComponent(id)}/claims/${encodeURIComponent(claim)}/withdraw`),
+  },
   glowUps: () => request<Array<AppSummary & { before: number; after: number }>>("GET", "/v1/shelves/glow-ups"),
   app: (slug: string) =>
     request<AppDetail>("GET", `/v1/apps/${encodeURIComponent(slug)}`),

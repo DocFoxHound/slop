@@ -28,6 +28,7 @@ import { Sim } from "./pages/Sim";
 import { Transparency } from "./pages/Transparency";
 import { Source } from "./pages/Source";
 import { Verify } from "./pages/Verify";
+import { BountiesPage, BountyPage } from "./pages/Bounties";
 import { Store } from "./pages/Store";
 import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
@@ -73,6 +74,8 @@ const router = createBrowserRouter([
       { path: "/transparency", element: <Transparency /> },
       { path: "/source", element: <Source /> },
       { path: "/verify", element: <Verify /> },
+      { path: "/bounties", element: <BountiesPage /> },
+      { path: "/bounties/:id", element: <BountyPage /> },
       { path: "/people", element: <People /> },
       { path: "/people/me", element: <PeopleEdit /> },
       { path: "/people/jobs", element: <MyJobs /> },
