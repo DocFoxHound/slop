@@ -1,6 +1,10 @@
 // The Donate box on an app's page (DESIGN §12, PAYMENTS §5–6). The donor sees what they pay
 // first and largest (PAY-10), what the maker receives, Slop's fee and the processing addition.
 // Donations give nothing back, and the app is the same for everyone.
+//
+// On a community build or mod, a one-off donation is shared: the original's maker gets 30% as its
+// own donation, paid first, then the branch's author gets the rest. Two payments, because Slop
+// never splits one; after Stripe the donor comes back here (?shared=…&rest=…) for the second.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -18,6 +22,13 @@ export function amount(minor: number, currency: string): string {
   return `${symbol}${(minor / 100).toFixed(2)}`;
 }
 
+/** The original's share for a donation of `branch` to a branch: 30% of the two together. */
+export function shareFor(branch: number, percent: number): number {
+  return Math.ceil((branch * percent) / (100 - percent));
+}
+
+type StartBody = Parameters<typeof api.donations.start>[1];
+
 export function DonateBox({ slug, title }: { slug: string; title: string }) {
   const { me, refresh } = useSession();
   const [params, setParams] = useSearchParams();
@@ -26,7 +37,7 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
   const [chosen, setChosen] = useState<number>();
   const [custom, setCustom] = useState("");
   const [customQuote, setCustomQuote] = useState<DonationQuote & { consent: string | null }>();
-  const [share, setShare] = useState(false);
+  const [shareName, setShareName] = useState(false);
   const [message, setMessage] = useState("");
   const [consent, setConsent] = useState(false);
   const [adult, setAdult] = useState(false);
@@ -34,6 +45,23 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
   const [busy, setBusy] = useState(false);
   const [checking, setChecking] = useState(false);
   const [thanks, setThanks] = useState(false);
+  // The original's share is paid: its donation ID and what the branch gets next.
+  const [sharePaid, setSharePaid] = useState<{ id: string; rest: number }>();
+  const [shareQuote, setShareQuote] = useState<DonationQuote>();
+
+  // Back from Stripe after paying the original's share: on to the second payment.
+  const sharedId = params.get("shared");
+  const rest = Number(params.get("rest"));
+  useEffect(() => {
+    if (!sharedId || !rest) return;
+    void api.donations
+      .check(sharedId)
+      .catch(() => undefined)
+      .then(() => {
+        setSharePaid({ id: sharedId, rest });
+        setParams({}, { replace: true });
+      });
+  }, [sharedId, rest, setParams]);
 
   // Back from Stripe: read the payment now rather than wait for the webhook.
   const donated = params.get("donated");
@@ -62,6 +90,16 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
   useEffect(() => setConsent(false), [selected, monthly]);
 
   const d = info.data;
+  const shared = d?.shared && !monthly ? d.shared : null;
+  const share = shared && selected !== null ? shareFor(selected, shared.percent) : null;
+  useEffect(() => {
+    setShareQuote(undefined);
+    if (!shared || share === null) return;
+    const timer = window.setTimeout(() => {
+      api.donations.quote(shared.slug, share).then(setShareQuote, () => setShareQuote(undefined));
+    }, 250);
+    return () => window.clearTimeout(timer);
+  }, [shared?.slug, share]); // eslint-disable-line react-hooks/exhaustive-deps
   if (!d) return null;
   if (thanks) {
     return (
@@ -76,39 +114,45 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
   const q = customQuote;
   const consentText = monthly ? (q?.consent ?? null) : null;
 
-  const submit = async (e: FormEvent) => {
-    e.preventDefault();
-    if (!q) return;
+  const startWithCheck = async (to: string, body: StartBody) => {
+    try {
+      return await api.donations.start(to, body);
+    } catch (err) {
+      // After a few unfinished checkouts Slop asks the browser for a quick proof of work
+      // (card testing, PAYMENTS §9). It takes a second or two.
+      if (!(err instanceof ApiError) || err.code !== "challenge_required") throw err;
+      setChecking(true);
+      const c = await api.donations.challenge();
+      const nonce = await solve(c.prefix, c.difficulty);
+      setChecking(false);
+      return api.donations.start(to, { ...body, challenge: { id: c.id, nonce } });
+    }
+  };
+
+  /** The branch's own payment, after the original's share. */
+  const payBranch = async (paid: { id: string; rest: number }) => {
+    const res = await startWithCheck(slug, {
+      amount_minor: paid.rest,
+      monthly: false,
+      share_name: shareName,
+      message: shareName && message.trim() ? message.trim() : undefined,
+      consent: false,
+      confirm_adult: adult,
+      share_donation: paid.id,
+    });
+    if (res.url) {
+      await openExternal(res.url);
+    } else {
+      setThanks(true);
+      void refresh();
+    }
+  };
+
+  const run = async (work: () => Promise<void>) => {
     setBusy(true);
     setError(undefined);
-    const body = {
-      amount_minor: q.donation,
-      monthly,
-      share_name: share,
-      message: share && message.trim() ? message.trim() : undefined,
-      consent,
-      confirm_adult: adult,
-    };
     try {
-      let res;
-      try {
-        res = await api.donations.start(slug, body);
-      } catch (err) {
-        // After a few unfinished checkouts Slop asks the browser for a quick proof of work
-        // (card testing, PAYMENTS §9). It takes a second or two.
-        if (!(err instanceof ApiError) || err.code !== "challenge_required") throw err;
-        setChecking(true);
-        const c = await api.donations.challenge();
-        const nonce = await solve(c.prefix, c.difficulty);
-        setChecking(false);
-        res = await api.donations.start(slug, { ...body, challenge: { id: c.id, nonce } });
-      }
-      if (res.url) {
-        await openExternal(res.url);
-      } else {
-        setThanks(true);
-        void refresh();
-      }
+      await work();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -116,6 +160,65 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
       setChecking(false);
     }
   };
+
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    if (!q) return;
+    const body: StartBody = {
+      amount_minor: q.donation,
+      monthly,
+      share_name: shareName,
+      message: shareName && message.trim() ? message.trim() : undefined,
+      consent,
+      confirm_adult: adult,
+    };
+    void run(async () => {
+      if (shared && share !== null) {
+        // First the original's share, as its own donation to its maker.
+        const res = await startWithCheck(shared.slug, {
+          ...body,
+          amount_minor: share,
+          share_for: slug,
+          rest_minor: q.donation,
+        });
+        if (res.url) {
+          await openExternal(res.url);
+          return;
+        }
+        const paid = { id: res.id, rest: q.donation };
+        setSharePaid(paid);
+        await payBranch(paid);
+        return;
+      }
+      const res = await startWithCheck(slug, body);
+      if (res.url) {
+        await openExternal(res.url);
+      } else {
+        setThanks(true);
+        void refresh();
+      }
+    });
+  };
+
+  if (sharePaid) {
+    return (
+      <div className="panel panel-pad donate-box">
+        <h3>♥ Step 2 of 2</h3>
+        <p>
+          Thank you: your share for {d.shared?.title ?? "the original"} is paid. Now your donation of{" "}
+          <b>{amount(sharePaid.rest, d.currency)}</b> to {d.maker}.
+        </p>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <button className="btn slime" disabled={busy} onClick={() => void run(() => payBranch(sharePaid))}>
+          {checking ? "Checking your browser…" : busy ? "Opening…" : `Donate ${amount(sharePaid.rest, d.currency)} to ${d.maker}`}
+        </button>
+      </div>
+    );
+  }
 
   return (
     <form className="panel panel-pad donate-box form" onSubmit={(e) => void submit(e)} aria-label={`Donate to ${title}`}>
@@ -156,6 +259,19 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
         Or your own amount for {d.maker} ({amount(d.min_minor, d.currency)} to {amount(d.max_minor, d.currency)})
         <input inputMode="decimal" value={custom} onChange={(e) => setCustom(e.target.value)} placeholder="e.g. 7.50" />
       </label>
+      {shared && share !== null && share < d.min_minor && (
+        <p className="form-error small">
+          Shared donations start at {amount(Math.ceil((d.min_minor * (100 - shared.percent)) / shared.percent), d.currency)}, so{" "}
+          {shared.maker}'s share is at least {amount(d.min_minor, d.currency)}.
+        </p>
+      )}
+      {shared && q && share !== null && share >= d.min_minor && (
+        <p className="notice small" aria-live="polite">
+          Shared with the original: <b>{amount(shareQuote?.total ?? share, d.currency)}</b> goes first to {shared.maker}{" "}
+          for <Link to={`/app/${shared.slug}`}>{shared.title}</Link> ({shared.percent}% of your donations), then the amount
+          below to {d.maker}. That's two payments, each straight to its maker.
+        </p>
+      )}
       {q && (
         <p className="donate-total" aria-live="polite">
           You pay <b>{amount(q.total, d.currency)}</b>
@@ -169,10 +285,10 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
       {!monthly && (
         <>
           <label className="check">
-            <input type="checkbox" checked={share} onChange={(e) => setShare(e.target.checked)} />
+            <input type="checkbox" checked={shareName} onChange={(e) => setShareName(e.target.checked)} />
             <span>Tell {d.maker} my name (only them; donors are never shown publicly)</span>
           </label>
-          {share && (
+          {shareName && (
             <label>
               A message for them <span className="muted">(optional)</span>
               <textarea value={message} maxLength={500} rows={2} onChange={(e) => setMessage(e.target.value)} />
@@ -204,9 +320,23 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
       ) : (
         <button
           className="btn slime"
-          disabled={busy || !q || (monthly && !consent) || (Boolean(me) && !me!.adult_confirmed && !adult)}
+          disabled={
+            busy ||
+            !q ||
+            (monthly && !consent) ||
+            (Boolean(me) && !me!.adult_confirmed && !adult) ||
+            (shared !== null && (share === null || share < d.min_minor || !shareQuote))
+          }
         >
-          {checking ? "Checking your browser…" : busy ? "Opening…" : q ? `Donate ${amount(q.total, d.currency)}${monthly ? " a month" : ""}` : "Choose an amount"}
+          {checking
+            ? "Checking your browser…"
+            : busy
+              ? "Opening…"
+              : !q
+                ? "Choose an amount"
+                : shared
+                  ? `Donate ${amount(q.total + (shareQuote?.total ?? 0), d.currency)} in two payments`
+                  : `Donate ${amount(q.total, d.currency)}${monthly ? " a month" : ""}`}
         </button>
       )}
       <p className="faint small">

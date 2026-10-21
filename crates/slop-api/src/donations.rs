@@ -16,6 +16,13 @@
 //!   is two clicks and immediate, with a confirmation email (PAY-15); reminders go before the
 //!   first renewal and yearly (PAY-16); shutting the servers down cancels them all (PAY-17).
 //!
+//! - **Shared with the original.** A one-off donation to a community build or mod is shared with
+//!   the original app's maker: 30% goes to them as its own direct donation, paid first, then the
+//!   rest to the branch's author. Two payments, never a split one (PAYMENTS §5.3); the branch's
+//!   payment can't start until a matching share is paid. When the original doesn't take
+//!   donations, or the donor made it, it all goes to the author. Server donations aren't shared:
+//!   they pay for the branch's own servers.
+//!
 //! Without Stripe keys, donations are simulated where People payments are (sandbox, development).
 
 use axum::{
@@ -46,6 +53,16 @@ pub const MAX_MINOR: i64 = 50_000;
 /// Donations one account may start in an hour (card testing, PAYMENTS §9).
 const STARTS_PER_HOUR: i64 = 10;
 const MONTH: Duration = Duration::days(30);
+/// The original maker's share of a donation to a community build or mod, in percent.
+pub const ORIGINAL_SHARE: i64 = 30;
+/// How long a paid share can be followed by the branch's donation.
+const SHARE_WINDOW: &str = "2 hours";
+
+/// The original's share for a donation of `branch_minor` to the branch, so that the share is
+/// 30% of the two together.
+pub fn share_for(branch_minor: i64) -> i64 {
+    ceil_div(branch_minor * ORIGINAL_SHARE, 100 - ORIGINAL_SHARE)
+}
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -127,6 +144,11 @@ pub fn quote(donation: i64, rate: Rate, covers: bool) -> Quote {
 }
 
 /// Four amounts around the maker's suggestion.
+/// The share paid to the original is at least 30% of it and the branch's donation together.
+pub fn share_for_minor_ok(share: i64, branch_minor: i64) -> bool {
+    share * (100 - ORIGINAL_SHARE) >= branch_minor * ORIGINAL_SHARE
+}
+
 pub fn presets(suggested: i64) -> Vec<i64> {
     let round = |v: i64| ((v + 25) / 50 * 50).clamp(MIN_MINOR, MAX_MINOR);
     let mut out = vec![
@@ -202,6 +224,38 @@ struct Target {
     servers_statement: Option<String>,
     servers_shut_down: bool,
     account: Option<(String, String)>,
+    /// For a community build or mod: the original app.
+    parent: Option<Uuid>,
+}
+
+impl Target {
+    /// It can take a donation now: donations on and the maker's Stripe account active.
+    fn taking(&self, mode: &Mode) -> bool {
+        !matches!(mode, Mode::Off)
+            && self.on
+            && self.account.as_ref().is_some_and(|(_, s)| s == "active")
+    }
+}
+
+/// The original's donate details, when a donation to this branch is shared with it: its
+/// donations are on and the donor isn't its maker.
+async fn shared_with(
+    state: &AppState,
+    t: &Target,
+    user: Option<&CurrentUser>,
+) -> ApiResult<Option<Target>> {
+    let Some(parent) = t.parent else {
+        return Ok(None);
+    };
+    let slug: String = sqlx::query_scalar("select slug from apps where id = $1")
+        .bind(parent)
+        .fetch_one(&state.db)
+        .await?;
+    let Ok(p) = target_by_slug(state, &slug).await else {
+        return Ok(None);
+    };
+    let donor_made_it = user.is_some_and(|u| u.id == p.maker_id);
+    Ok((p.taking(&stripe::mode(state)) && !donor_made_it).then_some(p))
 }
 
 async fn target(
@@ -212,12 +266,27 @@ async fn target(
 ) -> ApiResult<Target> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user, headers).await?;
     let (app_id, _) = catalog::visible_app(state, slug, user, policy).await?;
+    load_target(state, app_id).await
+}
+
+/// A public app's donate details by its address, without the viewer's store rules: for the
+/// original of a branch the viewer is looking at.
+async fn target_by_slug(state: &AppState, slug: &str) -> ApiResult<Target> {
+    let id: Uuid = sqlx::query_scalar("select id from apps where slug = $1")
+        .bind(slug)
+        .fetch_optional(&state.db)
+        .await?
+        .ok_or(ApiError::NotFound)?;
+    load_target(state, id).await
+}
+
+async fn load_target(state: &AppState, app_id: Uuid) -> ApiResult<Target> {
     #[allow(clippy::type_complexity)]
-    let row: (String, String, Uuid, String, bool, i32, String, bool, Option<String>, bool, Option<String>, Option<String>) =
+    let row: (String, String, Uuid, String, bool, i32, String, bool, Option<String>, bool, Option<String>, Option<String>, Option<Uuid>) =
         sqlx::query_as(
             "select a.slug, a.title, a.maker_id, u.display_name, a.donations_on, a.donation_suggested_minor,
                     a.donation_currency, a.runs_servers, a.servers_statement, a.servers_shut_down_at is not null,
-                    d.stripe_account_id, d.stripe_status
+                    d.stripe_account_id, d.stripe_status, a.parent_app_id
              from apps a join users u on u.id = a.maker_id left join donation_accounts d on d.user_id = a.maker_id
              where a.id = $1 and a.visibility = 'public'",
         )
@@ -238,6 +307,7 @@ async fn target(
         servers_statement: row.8,
         servers_shut_down: row.9,
         account: row.10.zip(row.11),
+        parent: row.12,
     })
 }
 
@@ -258,6 +328,16 @@ struct Info {
     /// What stops this viewer donating (sign in, their own app, …).
     cant: Option<&'static str>,
     simulated: bool,
+    /// For a community build or mod: the original's share of one-off donations.
+    shared: Option<SharedInfo>,
+}
+
+#[derive(Serialize)]
+struct SharedInfo {
+    slug: String,
+    title: String,
+    maker: String,
+    percent: i64,
 }
 
 #[derive(Serialize)]
@@ -293,7 +373,16 @@ async fn info(
         Some(_) => None,
     };
     let suggested_quote = quote(t.suggested, r, covers);
+    let shared = shared_with(&state, &t, user.as_ref())
+        .await?
+        .map(|p| SharedInfo {
+            slug: p.slug,
+            title: p.title,
+            maker: p.maker_name,
+            percent: ORIGINAL_SHARE,
+        });
     Ok(Json(Info {
+        shared,
         on: off_reason.is_none(),
         off_reason,
         presets: presets(t.suggested)
@@ -380,6 +469,12 @@ struct StartBody {
     confirm_adult: bool,
     /// Needed after a few unfinished checkouts (challenge.rs).
     challenge: Option<crate::challenge::Answer>,
+    /// This is the original's share of a donation to that branch (its address); `rest_minor` is
+    /// what the donor will give the branch next.
+    share_for: Option<String>,
+    rest_minor: Option<i64>,
+    /// A donation to a branch: the paid share to the original it follows.
+    share_donation: Option<Uuid>,
 }
 
 /// Unfinished checkouts in a day after which starting another needs a proof-of-work check.
@@ -443,6 +538,80 @@ async fn start(
         return Err(ApiError::invalid("amount_minor", "from 1 to 500"));
     }
     require_adult(&state, &user, b.confirm_adult).await?;
+    // The original's share, paid first, for a donation to one of its branches.
+    let share_for: Option<(Uuid, String, i64)> = match (&b.share_for, b.monthly) {
+        (Some(_), true) => {
+            return Err(ApiError::invalid(
+                "share_for",
+                "server donations aren't shared",
+            ));
+        }
+        (Some(branch_slug), false) => {
+            let branch: Option<(Uuid, Option<Uuid>)> =
+                sqlx::query_as("select id, parent_app_id from apps where slug = $1")
+                    .bind(branch_slug)
+                    .fetch_optional(&state.db)
+                    .await?;
+            let Some((branch_id, Some(parent))) = branch else {
+                return Err(ApiError::invalid(
+                    "share_for",
+                    "that isn't a community build or mod",
+                ));
+            };
+            if parent != t.app_id {
+                return Err(ApiError::invalid(
+                    "share_for",
+                    "that isn't one of this app's branches",
+                ));
+            }
+            let rest = b
+                .rest_minor
+                .filter(|r| (MIN_MINOR..=MAX_MINOR).contains(r))
+                .ok_or_else(|| {
+                    ApiError::invalid("rest_minor", "what you'll give the branch, from 1 to 500")
+                })?;
+            Some((branch_id, branch_slug.clone(), rest))
+        }
+        (None, _) => None,
+    };
+    // A donation to a branch follows a paid share to the original, unless there's none to pay.
+    let share_donation = if !b.monthly && shared_with(&state, &t, Some(&user)).await?.is_some() {
+        let id = b.share_donation.ok_or_else(|| {
+            ApiError::invalid(
+                "share_donation",
+                format!("{ORIGINAL_SHARE}% of a donation to a community build or mod goes to the original's maker first"),
+            )
+        })?;
+        let share: Option<i32> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "select s.donation_minor from donations s
+             where s.id = $1 and s.donor_id = $2 and s.share_for = $3 and s.status = 'paid'
+               and s.created_at > now() - interval '{SHARE_WINDOW}'
+               and not exists (select 1 from donations x where x.share_donation_id = s.id)"
+        )))
+        .bind(id)
+        .bind(user.id)
+        .bind(t.app_id)
+        .fetch_optional(&state.db)
+        .await?;
+        let Some(share) = share else {
+            return Err(ApiError::invalid(
+                "share_donation",
+                "the share for the original isn't paid yet (or was already used)",
+            ));
+        };
+        if share_for_minor_ok(i64::from(share), b.amount_minor) {
+            Some(id)
+        } else {
+            return Err(ApiError::invalid(
+                "amount_minor",
+                format!(
+                    "the original's share must be at least {ORIGINAL_SHARE}% of the two together"
+                ),
+            ));
+        }
+    } else {
+        None
+    };
     let allowed: bool =
         sqlx::query_scalar("select payments_allowed from country_policies where country_code = $1")
             .bind(&user.country_code)
@@ -541,8 +710,8 @@ async fn start(
         sqlx::query(
             "insert into donations (id, kind, app_id, donor_id, stripe_account_id, currency, donation_minor,
                                     slop_fee_minor, processing_minor, total_minor, donor_covers_fees, share_name,
-                                    message, simulated)
-             values ($1, 'one_off', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13)",
+                                    message, simulated, share_for, share_donation_id)
+             values ($1, 'one_off', $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15)",
         )
         .bind(id)
         .bind(t.app_id)
@@ -557,8 +726,17 @@ async fn start(
         .bind(b.share_name)
         .bind(&message)
         .bind(matches!(mode, Mode::Simulated))
+        .bind(share_for.as_ref().map(|s| s.0))
+        .bind(share_donation)
         .execute(&mut *tx)
-        .await?;
+        .await
+        .map_err(|err| {
+            if crate::error::is_unique_violation(&err) {
+                ApiError::invalid("share_donation", "that share was already used")
+            } else {
+                err.into()
+            }
+        })?;
     }
 
     match mode {
@@ -591,7 +769,14 @@ async fn start(
         }
         Mode::Stripe(stripe) => {
             tx.commit().await?;
-            let url = checkout(&state, stripe, &t, &account, id, &q, b.monthly, user.id).await?;
+            // After the original's share, back to the branch's page for the second payment.
+            let back = share_for
+                .as_ref()
+                .map(|(_, slug, rest)| format!("app/{slug}?shared={id}&rest={rest}"));
+            let url = checkout(
+                &state, stripe, &t, &account, id, &q, b.monthly, user.id, back,
+            )
+            .await?;
             Ok(Json(Started {
                 url: Some(url),
                 id,
@@ -612,9 +797,13 @@ async fn checkout(
     q: &Quote,
     monthly: bool,
     donor: Uuid,
+    back: Option<String>,
 ) -> anyhow::Result<String> {
     let base = &state.config.public_url;
-    let success = format!("{base}app/{}?donated={id}", t.slug);
+    let success = match back {
+        Some(path) => format!("{base}{path}"),
+        None => format!("{base}app/{}?donated={id}", t.slug),
+    };
     let cancel = format!("{base}app/{}", t.slug);
     // PAY-7: Stripe sees "donation", never "purchase" or "order".
     let mut form: Vec<(&str, String)> = vec![
