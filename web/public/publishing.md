@@ -41,7 +41,9 @@ optional.
 
 1. **Open source.** A public Git repository (GitHub, GitLab, Bitbucket or self-hosted) with an
    [OSI-approved licence](https://opensource.org/licenses) in a `LICENSE` file. Slop detects the
-   licence from your repository when you create your store page.
+   licence from your repository when you create your store page. The app can't depend on
+   closed-source libraries (the source check notes NVIDIA's old Cg shader library, for example);
+   the operating system's own libraries and graphics drivers are fine.
 2. **Builds on your own release page, for the platforms you choose.** Slop stores no builds. On
    your store page you tick what your app runs on, **Windows**, **Linux** or both, and every
    release must then include exactly these files, attached to a release in your repository:
@@ -256,7 +258,7 @@ jobs:
 | `godot-preset-windows`, `godot-preset-linux` | `godot`: the export presets to use (default `Windows Desktop` and `Linux`) |
 | `python-version`, `python-entry`, `python-windowed` | `python`: Python version (default 3.12), the script that starts the app (default `main.py`), and `true` for apps with their own window, such as pygame games |
 | `node-version` | `electron`, `tauri`, `web`: Node.js version (default 22) |
-| `linux-runtime` | `steam-sniper` builds the Linux program inside Valve's Steam Runtime 3 (sniper), so it runs on older Linux systems too (anything with glibc 2.31, e.g. Ubuntu 20.04 or Debian 11). For `rust`, `go` and `custom`; Rust is installed in the container, following your `rust-toolchain.toml` |
+| `linux-runtime` | `steam-sniper` builds the Linux program inside Valve's Steam Runtime 3 (sniper), so it runs on older Linux systems too (anything with glibc 2.31, e.g. Ubuntu 20.04 or Debian 11). For `rust`, `go` and `custom`; Rust is installed in the container, following your `rust-toolchain.toml`. The container is a fixed version Slop tested, so builds don't change unexpectedly |
 | `publish` | `false` builds and checks only: no release, nothing sent to Slop, the files kept as the run's artifacts for a day. For trying it out |
 | `sign` | `true` by default; set `false` for private repositories without GitHub Enterprise |
 | `signpath-organization-id` | Optional: sign the Windows program for free with SignPath Foundation (see [Signing](#signing)). Needs the `SIGNPATH_API_TOKEN` secret |
