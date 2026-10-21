@@ -474,11 +474,14 @@ pub async fn tag_names(db: &PgPool) -> sqlx::Result<HashMap<String, String>> {
 /// Whether a user's recommendations are personal: their setting, else on except in the
 /// under-18 view (PRIV-6).
 pub async fn personalized(db: &PgPool, user_id: Uuid, policy: ViewerPolicy) -> sqlx::Result<bool> {
-    let setting: Option<bool> = sqlx::query_scalar("select personalize from users where id = $1")
-        .bind(user_id)
-        .fetch_one(db)
-        .await?;
-    Ok(setting.unwrap_or(policy != ViewerPolicy::UNDER_18_VIEW))
+    let (setting, gpc): (Option<bool>, bool) =
+        sqlx::query_as("select personalize, gpc_at is not null from users where id = $1")
+            .bind(user_id)
+            .fetch_one(db)
+            .await?;
+    // Their own choice wins; otherwise off in the under-18 view or after a Global Privacy
+    // Control signal (migration 0055).
+    Ok(setting.unwrap_or(!gpc && policy != ViewerPolicy::UNDER_18_VIEW))
 }
 
 /// A seed that changes daily per user, so discovery rotates.

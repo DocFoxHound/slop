@@ -605,6 +605,8 @@ export interface Me {
   has_passkey: boolean;
   passkey_due_at: string | null;
   passkey_grace_until: string | null;
+  /** This browser sent a Global Privacy Control signal. */
+  gpc: boolean;
 }
 
 /** Slop's legal documents (crates/slop-api/src/legal.rs). */

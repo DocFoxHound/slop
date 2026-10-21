@@ -499,6 +499,12 @@ export function Account() {
             </span>
           </span>
         </label>
+        {me.gpc && (
+          <p className="muted small">
+            Your browser sends Global Privacy Control, asking sites not to sell or share your data. Slop never does, and
+            because of it, recommendations based on your activity stay off unless you turn them on.
+          </p>
+        )}
       </div>
 
       <SignIns />
