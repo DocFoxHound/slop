@@ -362,9 +362,9 @@ The repo has to become public under an OSI-approved licence, followed by a fresh
   - A **bug bounty** after launch, with top rewards for anything that lets someone install unscanned code, bypass either signature, or redirect donations.
 - **Before launch:** an external penetration test of the client, API, signing/update chain and payment flows, plus a threat-model review whenever a major feature is added.
 
-## 14. What the mockup simulates
+## 14. The mockup and the simulation
 
-The mockup's scan results, security reports, sign-in, Pulse handshakes and reports are all faked in the browser, using invented data. None of these controls exist in the mockup.
+The original mockup (`mockup/`) fakes scan results, security reports, sign-in, Pulse handshakes and reports in the browser, with invented data; none of these controls exist in it. The real Slop runs them as each section here says (built parts are marked with their date). The simulation sandbox (`docs/SIMULATION.md`) uses invented data on its own `_sim` database, never the real one.
 
 ## 15. Decisions (2026-10-17) and open questions
 

@@ -145,9 +145,9 @@ payments(id, kind,                  -- donation | server_donation | people_job |
 | **Hijacked maker account** | Bank details are managed in the maker's **Stripe** dashboard, not in Slop, so taking over a Slop account doesn't redirect money. Disconnecting or switching the Stripe account requires step-up auth and a 72-hour delay, and an email is sent (`SECURITY.md` §9). |
 | **Self-dealing People jobs** | Client and creative can't share payment methods, devices or Stripe accounts. Checks for money going round in loops. |
 
-## 10. What the mockup simulates
+## 10. The mockup and what's built
 
-The mockup's Donate button (with the donor-pays-fees breakdown) is pure UI.
+The original mockup's (`mockup/`) Donate button (with the donor-pays-fees breakdown) is pure UI.
 
 **Built (2026-10-19):** People payments (`crates/slop-api/src/people/`): Stripe Connect onboarding, Checkout for each job payment as a direct charge with the 5% application fee, signed webhooks, and the `payments` record (§8).
 
