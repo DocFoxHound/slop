@@ -6,6 +6,7 @@ pub mod admin;
 pub mod admin_web;
 pub mod agent;
 pub mod auth;
+pub mod bad_links;
 pub mod branches;
 pub mod catalog;
 pub mod challenge;

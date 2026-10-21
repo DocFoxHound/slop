@@ -176,6 +176,7 @@ const ABUSE_LABEL: Record<string, string> = {
   lookalike_name: "LOOKALIKE NAME",
   rate_limited: "HITTING RATE LIMITS",
   malicious_dependency: "MALICIOUS DEPENDENCY",
+  bad_link: "LINK TO A KNOWN-BAD ADDRESS",
 };
 
 function QueueTab() {
