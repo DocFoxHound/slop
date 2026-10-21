@@ -556,6 +556,7 @@ fn store_page_fields() -> Value {
         "online_hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it connects to" },
         "sandbox_ready": { "type": "boolean", "description": "Works in sandbox mode: local saves only in SLOP_SAVE_DIR" },
         "mods_folder": { "type": ["object", "null"], "description": "Where it reads mods from: {base: game|saves, path, layout: folder|flat}; null if it reads SLOP_MODS or has no mods" },
+        "accessibility": { "type": "array", "items": { "type": "string" }, "description": "Accessibility features it really has (players confirm or dispute them): remap_controls, colorblind, subtitles, text_size, one_handed, difficulty, no_flashing, screen_reader, controller. Check the code before claiming one" },
     })
 }
 

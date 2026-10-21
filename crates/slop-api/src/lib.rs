@@ -26,6 +26,7 @@ pub mod friends;
 pub mod frozen;
 pub mod github_app;
 pub mod interested;
+pub mod label;
 pub mod legal;
 pub mod legal_requests;
 pub mod library;
@@ -167,6 +168,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(maker_agents::routes())
         .merge(fixes::routes())
         .merge(offers::routes())
+        .merge(label::routes())
         .merge(review::routes())
         .merge(pulse::routes())
         .merge(legal_requests::routes())

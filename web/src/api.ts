@@ -547,6 +547,8 @@ export interface AppDetail extends AppSummary {
   online_hosts: string[];
   /** The maker says it keeps local saves only in SLOP_SAVE_DIR and works in sandbox mode. */
   sandbox_ready: boolean;
+  /** Accessibility features the maker says it has (ACCESSIBILITY keys). */
+  accessibility: string[];
   /** ...but the check of its newest release found saves elsewhere: players aren't told it works. */
   sandbox_mismatch: boolean;
   /** Sandbox mode is suggested: it goes online (servers Slop can't check). */
@@ -1795,6 +1797,8 @@ export interface NewApp {
   sandbox_ready?: boolean;
   /** The folder it reads mods from; null: it reads SLOP_MODS, or has no mods. */
   mods_folder?: ModsFolder | null;
+  /** Accessibility features it has (ACCESSIBILITY keys). */
+  accessibility?: string[];
 }
 
 /** Where a game reads mods from: Slop keeps only approved mods there (DESIGN §9). */
@@ -1842,8 +1846,11 @@ export interface AppQuery {
     | "popular"
     | "reviewed"
     | "not_slop_now"
-    | "fresh_slop";
+    | "fresh_slop"
+    | "barely_seen";
   made_with_people?: boolean;
+  /** Has every one of these accessibility features (comma-separated). */
+  accessibility?: string;
   /** Runs on this platform, directly or through a community build. */
   platform?: "windows" | "linux";
   /** Only upcoming (Coming soon and Beta) or only released. */
@@ -1854,6 +1861,27 @@ export interface AppQuery {
   community?: boolean;
   limit?: number;
   offset?: number;
+}
+
+/** Accessibility features a maker can declare (crates/slop-api/src/label.rs FEATURES). */
+export const ACCESSIBILITY: Array<[string, string]> = [
+  ["remap_controls", "Remappable controls"],
+  ["colorblind", "Colourblind modes"],
+  ["subtitles", "Subtitles or captions"],
+  ["text_size", "Adjustable text size"],
+  ["one_handed", "Playable one-handed"],
+  ["difficulty", "Difficulty or assist options"],
+  ["no_flashing", "No flashing lights"],
+  ["screen_reader", "Works with a screen reader"],
+  ["controller", "Full controller support"],
+];
+
+/** "What this app does" (label.rs). */
+export interface AppLabel {
+  items: Array<{ key: string; title: string; detail?: string; checked: boolean; tone: "good" | "info" | "note" }>;
+  accessibility: Array<{ key: string; name: string; confirmed: number; disputed: number; mine: boolean | null }>;
+  can_report: boolean;
+  version: string | null;
 }
 
 /** docs/standard/file-verification.md */
@@ -2013,6 +2041,14 @@ async function requestText(method: string, path: string): Promise<string> {
 export const api = {
   categories: () => request<Category[]>("GET", "/v1/categories"),
   apps: (q: AppQuery = {}) => request<AppPage>("GET", `/v1/apps${query(q)}`),
+  label: (slug: string) => request<AppLabel>("GET", `/v1/apps/${encodeURIComponent(slug)}/label`),
+  reportAccessibility: (slug: string, feature: string, works: boolean | null) =>
+    works === null
+      ? request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/accessibility/${encodeURIComponent(feature)}`)
+      : request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/accessibility/${encodeURIComponent(feature)}`, {
+          works,
+        }),
+  glowUps: () => request<Array<AppSummary & { before: number; after: number }>>("GET", "/v1/shelves/glow-ups"),
   app: (slug: string) =>
     request<AppDetail>("GET", `/v1/apps/${encodeURIComponent(slug)}`),
   createApp: (app: NewApp) => request<AppDetail>("POST", "/v1/apps", app),

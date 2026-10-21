@@ -14189,3 +14189,175 @@ async fn makers_reply_to_reviews(db: PgPool) {
         StatusCode::CONFLICT
     );
 }
+
+/// Phase 11 (label.rs): the "what this app does" label, accessibility features players confirm,
+/// the accessibility filter, and the "New and barely seen" and "Glow-ups" shelves.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn labels_accessibility_and_fair_shelves(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (_, player) = app.user("Pat Player", "US").await;
+
+    // The maker declares features; players who played confirm or dispute them.
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/tower")
+                .cookie(&maker)
+                .json(json!({ "accessibility": ["subtitles", "remap_controls"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let bad = app
+        .send(
+            req(Method::PATCH, "/v1/apps/tower")
+                .cookie(&maker)
+                .json(json!({ "accessibility": ["telepathy"] })),
+        )
+        .await;
+    assert_eq!(bad.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let confirm = |cookie: &str, feature: &str, works: bool| {
+        req(
+            Method::PUT,
+            format!("/v1/apps/tower/accessibility/{feature}"),
+        )
+        .cookie(cookie)
+        .json(json!({ "works": works }))
+    };
+    assert_eq!(
+        app.send(confirm(&player, "subtitles", true)).await.status(),
+        StatusCode::CONFLICT,
+        "not played yet"
+    );
+    app.send(req(Method::POST, "/v1/apps/tower/launch").cookie(&player))
+        .await;
+    assert_eq!(
+        app.send(confirm(&player, "subtitles", true)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(confirm(&player, "colorblind", true))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND,
+        "not declared"
+    );
+    assert_eq!(
+        app.send(confirm(&maker, "subtitles", true)).await.status(),
+        StatusCode::CONFLICT,
+        "not the maker"
+    );
+
+    let label = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/label").cookie(&player))
+            .await,
+    )
+    .await;
+    assert_eq!(label["can_report"], true);
+    let subtitles = label["accessibility"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|f| f["key"] == "subtitles")
+        .unwrap()
+        .clone();
+    assert_eq!(
+        (subtitles["confirmed"].as_i64(), subtitles["mine"].as_bool()),
+        (Some(1), Some(true))
+    );
+    assert!(
+        label["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|i| i["key"] == "licence")
+    );
+    assert!(!label.to_string().to_lowercase().contains("safe"));
+
+    // The store filters by accessibility.
+    let found = |q: &str| {
+        let app = &app;
+        let q = q.to_string();
+        async move {
+            let page = body_json(
+                app.send(req(Method::GET, format!("/v1/apps?accessibility={q}")))
+                    .await,
+            )
+            .await;
+            page["apps"]
+                .as_array()
+                .map(|a| a.iter().any(|x| x["slug"] == "tower"))
+        }
+    };
+    assert_eq!(found("subtitles,remap_controls").await, Some(true));
+    assert_eq!(found("colorblind").await, Some(false));
+    let res = app
+        .send(req(Method::GET, "/v1/apps?accessibility=telepathy"))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // New and barely seen: released lately, in few libraries.
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps?sort=barely_seen"))
+            .await,
+    )
+    .await;
+    assert!(
+        page["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["slug"] == "tower")
+    );
+    sqlx::query(
+        "update apps set stage_entered_at = now() - interval '90 days' where slug = 'tower'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps?sort=barely_seen"))
+            .await,
+    )
+    .await;
+    assert!(
+        !page["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|x| x["slug"] == "tower")
+    );
+
+    // Glow-ups: 2 of 6 Not Slop 90 days ago, 5 of 6 now.
+    let tower: Uuid = sqlx::query_scalar("select id from apps where slug = 'tower'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    for i in 0..6 {
+        let (voter, _) = app.user(&format!("Voter {i}"), "US").await;
+        let (then, now) = (if i < 2 { 1i16 } else { -1 }, if i < 5 { 1i16 } else { -1 });
+        sqlx::query(
+            "insert into vote_events (id, user_id, app_id, vote, weight, created_at) values ($1, $2, $3, $4, 1, now() - interval '90 days')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(voter)
+        .bind(tower)
+        .bind(then)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query("insert into votes (user_id, app_id, vote, weight) values ($1, $2, $3, 1)")
+            .bind(voter)
+            .bind(tower)
+            .bind(now)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    let glow = body_json(app.send(req(Method::GET, "/v1/shelves/glow-ups")).await).await;
+    assert_eq!(glow[0]["slug"], "tower", "{glow}");
+    assert_eq!(
+        (glow[0]["before"].as_i64(), glow[0]["after"].as_i64()),
+        (Some(33), Some(83))
+    );
+}

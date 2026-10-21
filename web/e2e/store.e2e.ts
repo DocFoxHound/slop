@@ -9,6 +9,9 @@ test("the store lists games, search finds them, and a game has its page", async 
   await page.goto("/app/castle-rock");
   await expect(page.getByRole("heading", { name: "Castle Rock", level: 1 })).toBeVisible();
   await expect(page.getByText("Sam Seed").first()).toBeVisible();
+  // What it does, in plain words, before installing.
+  await expect(page.getByRole("heading", { name: "What this app does" })).toBeVisible();
+  await expect(page.locator("#what-it-does").getByText("Open source", { exact: true })).toBeVisible();
 });
 
 test("a game that plays online says so", async ({ page }) => {

@@ -137,7 +137,19 @@ export function HowRatings() {
         <li>
           <b>Fresh slop:</b> the most weighted 👎 votes in the last 30 days. It's for fun, so please be kind in reviews.
         </li>
+        <li>
+          <b>New and barely seen:</b> apps released in the last 60 days that are in few libraries yet, in an order that
+          changes every day, so every new app gets its turn.
+        </li>
+        <li>
+          <b>Glow-ups:</b> apps whose % Not Slop rose by 15 points or more since 60 days ago, showing before and after,
+          so updates that fix things get noticed.
+        </li>
       </ul>
+      <p>
+        <b>No paid placement.</b> Nobody can pay to rank higher, be featured or be recommended. Donations and hiring
+        creatives never change where an app appears (Content Policy, "No paid placement").
+      </p>
 
       <h2>Apps that hired creatives</h2>
       <p>
