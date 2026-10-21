@@ -1642,6 +1642,8 @@ export interface Release {
   source: "maker" | "slop_build" | "github_release";
   /** Approved by Slop as an update, without waiting for a person. */
   auto_approved: boolean;
+  /** Its rating (AGE-7). */
+  rating?: ReleaseRating | null;
   files: ReleaseFile[];
   /** Slop Build's source checks. */
   source_checks: SourceChecks | null;
@@ -1693,6 +1695,14 @@ export interface NewRelease {
     exec?: string;
     args?: string[];
   }>;
+  /** This release's rating (AGE-7); the store page's when left out. */
+  rating?: ReleaseRating;
+}
+
+/** A release's age rating and content labels. */
+export interface ReleaseRating {
+  min_age: number;
+  content_labels: ContentLabel[];
 }
 
 export interface LibraryEntry extends AppSummary {
@@ -1963,11 +1973,12 @@ export const api = {
     slug: string,
     tag: string,
     files: NewRelease["files"],
+    rating?: ReleaseRating,
   ) =>
     request<Release>(
       "POST",
       `/v1/apps/${encodeURIComponent(slug)}/releases/from-github`,
-      { tag, files },
+      { tag, files, rating },
     ),
   updateSettings: (slug: string) =>
     request<UpdateSettings>(

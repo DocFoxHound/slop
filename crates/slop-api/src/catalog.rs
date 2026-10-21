@@ -1399,6 +1399,35 @@ async fn update_app(
         qb.push(", license_spdx = ")
             .push_bind(validate_license(license)?);
     }
+    // Lowering the rating below what the last approved release says goes through a release,
+    // which a person reviews (AGE-7); raising it is immediate.
+    if changes.min_age.is_some() || changes.content_labels.is_some() {
+        let released: Option<(i16, Vec<String>)> = sqlx::query_as(
+            "select min_age, content_labels from releases
+             where app_id = $1 and status = 'approved' and min_age is not null
+             order by reviewed_at desc limit 1",
+        )
+        .bind(app_id)
+        .fetch_optional(&mut *tx)
+        .await?;
+        if let Some((age, labels)) = released {
+            let lower_age = changes.min_age.is_some_and(|a| a < age);
+            let dropped = changes
+                .content_labels
+                .as_ref()
+                .is_some_and(|new| labels.iter().any(|l| !new.contains(l)));
+            if lower_age || dropped {
+                return Err(ApiError::invalid(
+                    if lower_age {
+                        "min_age"
+                    } else {
+                        "content_labels"
+                    },
+                    "your latest release has this rating: to lower it, submit a release with the new rating, and a person reviews it",
+                ));
+            }
+        }
+    }
     // A branch is rated at least as the original, with its content labels (DESIGN §9).
     if (changes.min_age.is_some() || changes.content_labels.is_some())
         && let Some(floor) = crate::branches::rating_floor(&mut tx, app_id).await?

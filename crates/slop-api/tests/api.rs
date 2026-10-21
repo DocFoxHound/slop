@@ -13439,3 +13439,120 @@ async fn removal_orders_take_content_down_in_one_step(db: PgPool) {
     assert_eq!(title, "castle");
     assert!((5.9..6.2).contains(&months));
 }
+
+/// Ratings per release (AGE-7): each release carries its rating, the store page takes the
+/// approved one, raising is immediate, and lowering waits for a person.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ratings_are_kept_per_release(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let submit = |version: &str, rating: Option<Value>| {
+        let mut body = release_body(&app, version, "game-windows.zip");
+        if let Some(r) = rating {
+            body["rating"] = r;
+        }
+        req(Method::POST, "/v1/apps/game/releases")
+            .cookie(&maker)
+            .json(body)
+    };
+    let page = || async {
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/game").cookie(&maker))
+                .await,
+        )
+        .await
+    };
+
+    // The first release says 12+ with violence; approving it puts that on the store page.
+    let res = app
+        .send(submit(
+            "1.0.0",
+            Some(json!({ "min_age": 12, "content_labels": ["violence"] })),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let first = body_json(res).await;
+    assert_eq!(first["rating"]["min_age"], 12);
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first["id"].as_str().unwrap().parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let p = page().await;
+    assert_eq!(
+        (&p["min_age"], &p["content_labels"]),
+        (&json!(12), &json!(["violence"]))
+    );
+    assert_eq!(
+        app.send(submit(
+            "9.0.0",
+            Some(json!({ "min_age": 13, "content_labels": [] }))
+        ))
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a real rating"
+    );
+
+    // The store page can't quietly go lower; it can go higher.
+    let patch = |body: Value| {
+        req(Method::PATCH, "/v1/apps/game")
+            .cookie(&maker)
+            .json(body)
+    };
+    let res = app.send(patch(json!({ "min_age": 7 }))).await;
+    assert_eq!(body_json(res).await["error"]["field"], "min_age");
+    let res = app.send(patch(json!({ "content_labels": [] }))).await;
+    assert_eq!(body_json(res).await["error"]["field"], "content_labels");
+    assert_eq!(
+        app.send(patch(json!({ "min_age": 16 }))).await.status(),
+        StatusCode::OK
+    );
+
+    // An update that lowers it waits for a person, even where updates go out by themselves.
+    let res = app
+        .send(submit(
+            "1.1.0",
+            Some(json!({ "min_age": 7, "content_labels": [] })),
+        ))
+        .await;
+    let lower: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    slop_api::updates::try_auto_approve(&app.state, lower)
+        .await
+        .unwrap();
+    let (status, reason): (String, Option<String>) =
+        sqlx::query_as("select status::text, status_reason from releases where id = $1")
+            .bind(lower)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "awaiting_review");
+    assert!(reason.unwrap().contains("age rating"));
+
+    // A person approves it: the store page follows.
+    admin::approve(&app.db, Some(&app.signing_key), lax(), lower, "rev")
+        .await
+        .unwrap();
+    let p = page().await;
+    assert_eq!(
+        (&p["min_age"], &p["content_labels"]),
+        (&json!(7), &json!([]))
+    );
+
+    // Left out, a release takes the store page's rating.
+    let res = app.send(submit("1.2.0", None)).await;
+    assert_eq!(
+        body_json(res).await["rating"],
+        json!({ "min_age": 7, "content_labels": [] })
+    );
+}

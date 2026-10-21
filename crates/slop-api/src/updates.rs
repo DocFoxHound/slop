@@ -106,6 +106,10 @@ pub async fn try_auto_approve(state: &AppState, release_id: Uuid) -> anyhow::Res
         {
             format!("Waiting for a person: {why}")
         }
+        Ok(()) if crate::releases::rating_lowered(&state.db, release_id).await? => {
+            "Waiting for a person: its age rating or content labels go down from the last release"
+                .to_string()
+        }
         Ok(()) => {
             let cfg = &state.config;
             match admin::approve(
@@ -324,7 +328,6 @@ async fn github_releases(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Vec<PickableRelease>>> {
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
-    crate::passkeys::require(&state, &user).await?;
     let repo_path = github_path(&repo_url)?;
     let found: Vec<GhRelease> = gh_json(&state, &format!("repos/{repo_path}/releases?per_page=20"))
         .await
@@ -388,6 +391,9 @@ async fn github_releases(
 struct FromGithub {
     tag: String,
     files: Vec<NewFile>,
+    /// This release's rating (AGE-7); the store page's when left out.
+    #[serde(default)]
+    rating: Option<releases::Rating>,
 }
 
 /// Submits a GitHub release: the version comes from the tag and the commit from GitHub.
@@ -398,6 +404,7 @@ async fn submit_from_github(
     Json(req): Json<FromGithub>,
 ) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    crate::passkeys::require(&state, &user).await?;
     let repo_path = github_path(&repo_url)?;
     if req.tag.is_empty() || req.tag.len() > 100 || req.tag.chars().any(char::is_control) {
         return Err(ApiError::invalid("tag", "pick a release"));
@@ -414,6 +421,7 @@ async fn submit_from_github(
         &commit,
         req.files,
         "maker",
+        req.rating,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(release)))
@@ -770,6 +778,7 @@ async fn watch_app(
         &commit,
         files,
         "github_release",
+        None,
     )
     .await
     {

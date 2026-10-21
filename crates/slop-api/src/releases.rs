@@ -80,6 +80,33 @@ struct NewRelease {
     version: String,
     commit_sha: String,
     files: Vec<NewFile>,
+    /// This release's rating (AGE-7); the store page's when left out.
+    #[serde(default)]
+    rating: Option<Rating>,
+}
+
+/// A release's age rating and content labels (AGE-7).
+#[derive(Clone, Debug, Deserialize, Serialize)]
+#[serde(deny_unknown_fields)]
+pub(crate) struct Rating {
+    pub min_age: i16,
+    pub content_labels: Vec<String>,
+}
+
+/// Whether `release`'s rating is below the last approved release's: a lower age or a label
+/// dropped. Such an update waits for a person (updates.rs).
+pub(crate) async fn rating_lowered(db: &sqlx::PgPool, release: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "select coalesce((
+             select r.min_age < p.min_age or not (r.content_labels @> p.content_labels)
+             from releases r, releases p
+             where r.id = $1 and p.app_id = r.app_id and p.id <> r.id and p.status = 'approved'
+               and p.min_age is not null and r.min_age is not null
+             order by p.reviewed_at desc limit 1), false)",
+    )
+    .bind(release)
+    .fetch_one(db)
+    .await
 }
 
 struct CheckedFile {
@@ -389,6 +416,8 @@ pub(crate) struct ReleaseInfo {
     source: String,
     /// True when Slop approved it automatically as an update (updates.rs).
     auto_approved: bool,
+    /// Its rating (AGE-7).
+    rating: Option<Rating>,
     files: Vec<ReleaseFileInfo>,
     /// Slop Build's source checks: possible secrets and vulnerable dependencies.
     source_checks: Option<serde_json::Value>,
@@ -443,6 +472,7 @@ async fn submit_release(
         &req.commit_sha,
         req.files,
         "maker",
+        req.rating,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(release)))
@@ -461,9 +491,35 @@ pub(crate) async fn create_release(
     commit_sha: &str,
     files: Vec<NewFile>,
     source: &str,
+    rating: Option<Rating>,
 ) -> ApiResult<ReleaseInfo> {
     validate_version(version)?;
     validate_commit(commit_sha)?;
+    // The store page's rating unless the release says otherwise; never below a branch's
+    // original (branches.rs).
+    let rating = match rating {
+        Some(r) => Rating {
+            min_age: crate::catalog::validate_min_age(r.min_age)?,
+            content_labels: crate::catalog::validate_content_labels(&r.content_labels)?,
+        },
+        None => {
+            let (min_age, content_labels): (i16, Vec<String>) =
+                sqlx::query_as("select min_age, content_labels from apps where id = $1")
+                    .bind(app_id)
+                    .fetch_one(&state.db)
+                    .await?;
+            Rating {
+                min_age,
+                content_labels,
+            }
+        }
+    };
+    if let Some(floor) =
+        crate::branches::rating_floor(&mut *state.db.acquire().await?, app_id).await?
+    {
+        floor.check_age(rating.min_age)?;
+        floor.check_labels(&rating.content_labels)?;
+    }
     if let Some(reason) = crate::frozen::frozen_reason(&state.db, app_id).await? {
         return Err(ApiError::Conflict(format!(
             "this app is frozen, so it can't take new releases: {reason}. Restore Slop's access \
@@ -495,13 +551,15 @@ pub(crate) async fn create_release(
 
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
-    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by, source) values ($1, $2, $3, $4, $5, $6)")
+    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by, source, min_age, content_labels) values ($1, $2, $3, $4, $5, $6, $7, $8)")
         .bind(id)
         .bind(app_id)
         .bind(version)
         .bind(commit_sha)
         .bind(submitted_by)
         .bind(source)
+        .bind(rating.min_age)
+        .bind(&rating.content_labels)
         .execute(&mut *tx)
         .await
         .map_err(|err| {
@@ -615,19 +673,23 @@ pub async fn tell_maker(
 }
 
 pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<ReleaseInfo> {
-    let row: (
-        Uuid,
-        String,
-        String,
-        String,
-        Option<String>,
-        bool,
-        OffsetDateTime,
-        String,
-        bool,
-    ) = sqlx::query_as(
-        "select id, version, commit_sha, status::text, status_reason, commit_verified, created_at, source,
-                coalesce(reviewed_by = 'slop', false)
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        id: Uuid,
+        version: String,
+        commit_sha: String,
+        status: String,
+        status_reason: Option<String>,
+        commit_verified: bool,
+        created_at: OffsetDateTime,
+        source: String,
+        auto_approved: bool,
+        min_age: Option<i16>,
+        content_labels: Option<Vec<String>>,
+    }
+    let row: Row = sqlx::query_as(
+        "select id, version, commit_sha, status::text as status, status_reason, commit_verified, created_at, source,
+                coalesce(reviewed_by = 'slop', false) as auto_approved, min_age, content_labels
          from releases where id = $1",
     )
     .bind(id)
@@ -658,15 +720,19 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         source_checks,
         repo_scan,
         advisories,
-        id: row.0,
-        version: row.1,
-        commit_sha: row.2,
-        status: row.3,
-        status_reason: row.4,
-        commit_verified: row.5,
-        created_at: row.6,
-        source: row.7,
-        auto_approved: row.8,
+        id: row.id,
+        version: row.version,
+        commit_sha: row.commit_sha,
+        status: row.status,
+        status_reason: row.status_reason,
+        commit_verified: row.commit_verified,
+        created_at: row.created_at,
+        source: row.source,
+        auto_approved: row.auto_approved,
+        rating: row.min_age.map(|min_age| Rating {
+            min_age,
+            content_labels: row.content_labels.unwrap_or_default(),
+        }),
         files,
     })
 }
