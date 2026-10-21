@@ -324,6 +324,7 @@ async fn github_releases(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Vec<PickableRelease>>> {
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    crate::passkeys::require(&state, &user).await?;
     let repo_path = github_path(&repo_url)?;
     let found: Vec<GhRelease> = gh_json(&state, &format!("repos/{repo_path}/releases?per_page=20"))
         .await

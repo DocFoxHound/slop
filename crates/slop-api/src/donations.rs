@@ -1850,6 +1850,7 @@ async fn request_change(
     if !["switch", "disconnect"].contains(&b.kind.as_str()) {
         return Err(ApiError::invalid("kind", "switch or disconnect"));
     }
+    crate::passkeys::require(&state, &user).await?;
     let current: Option<String> =
         sqlx::query_scalar("select stripe_account_id from donation_accounts where user_id = $1")
             .bind(user.id)
@@ -2183,6 +2184,7 @@ async fn onboard(
             "receiving donations is for adults: confirm you're 18 or older",
         ));
     }
+    crate::passkeys::require(&state, &user).await?;
     let return_to = b
         .return_to
         .filter(|p| p.starts_with('/') && !p.starts_with("//") && p.len() <= 200)

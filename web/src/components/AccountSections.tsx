@@ -11,7 +11,7 @@ import { useLoad } from "../hooks";
 import { isDesktop, openExternal, saveFile } from "../platform";
 import { disablePush, enablePush, pushState, type PushState } from "../push";
 import { useSession } from "../session";
-import { AcceptDocument } from "./Terms";
+import { AcceptDocument, useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
 import { StepUpPrompt } from "./PasskeyStepUp";
 
@@ -531,6 +531,7 @@ function StepUp({ error }: { error: ApiError }) {
 /** Where donations are paid, and switching or disconnecting it: 72 hours' wait (SECURITY §9). */
 function ReceivingDonations() {
   const account = useLoad(() => api.donations.account(), []);
+  const gate = useTermsGate();
   const [confirm, setConfirm] = useState<"switch" | "disconnect">();
   const [error, setError] = useState<ApiError | string>();
   const [busy, setBusy] = useState(false);
@@ -540,7 +541,7 @@ function ReceivingDonations() {
     setBusy(true);
     setError(undefined);
     try {
-      const res = await action();
+      const res = await gate.guard(action);
       setConfirm(undefined);
       if (res && res.url) await openExternal(res.url);
       account.reload();
@@ -553,6 +554,7 @@ function ReceivingDonations() {
   const c = a.change;
   return (
     <section id="receiving">
+      {gate.prompt}
       <h2 className="section-title">Receiving donations</h2>
       <div className="panel panel-pad">
         <p>

@@ -18,6 +18,7 @@ import {
   type Skill,
 } from "../api";
 import { ACCENTS, AI_USE, accentStyle } from "../components/People";
+import { PasskeyNotice } from "../components/PasskeyNotice";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, money, toMinor } from "../format";
@@ -108,6 +109,7 @@ export function PeopleEdit() {
 
 function GetPaid({ profile, onChange }: { profile: MyProfile; onChange: (s: MyProfile["stripe_status"]) => void }) {
   const [params, setParams] = useSearchParams();
+  const gate = useTermsGate();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   // Back from Stripe's sign-up: ask Stripe how it went.
@@ -120,7 +122,7 @@ function GetPaid({ profile, onChange }: { profile: MyProfile; onChange: (s: MyPr
     setBusy(true);
     setError(undefined);
     try {
-      const r = await api.people.getPaid();
+      const r = await gate.guard(() => api.people.getPaid());
       if (r.url) {
         if (isDesktop) void openExternal(r.url);
         else window.location.assign(r.url);
@@ -134,7 +136,9 @@ function GetPaid({ profile, onChange }: { profile: MyProfile; onChange: (s: MyPr
   const s = profile.stripe_status;
   return (
     <section className="panel panel-pad">
+      {gate.prompt}
       <h2>Get paid</h2>
+      <PasskeyNotice />
       {s === "active" ? (
         <p>
           ✓ Payments go straight to your own Stripe account. Refunds and payouts are in your Stripe dashboard.

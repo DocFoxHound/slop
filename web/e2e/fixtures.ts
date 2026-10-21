@@ -7,7 +7,7 @@ export interface Server {
   url: string;
   fake: string;
   cookie_name: string;
-  cookies: Record<"maker" | "player" | "admin", string>;
+  cookies: Record<"maker" | "player" | "admin" | "overdue", string>;
 }
 
 export const server: Server = JSON.parse(readFileSync(STATE, "utf8"));

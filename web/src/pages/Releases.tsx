@@ -21,6 +21,7 @@ import {
   type UpdateSettings,
 } from "../api";
 import { PublishProgress } from "../components/PublishProgress";
+import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -543,6 +544,7 @@ function ReleaseForm({
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
   const [done, setDone] = useState(false);
+  const gate = useTermsGate();
 
   const update = (i: number, change: Partial<FileRow>) =>
     setRows((rs) => rs.map((r, j) => (j === i ? { ...r, ...change } : r)));
@@ -565,7 +567,7 @@ function ReleaseForm({
       })),
     };
     try {
-      await api.submitRelease(slug, release);
+      await gate.guard(() => api.submitRelease(slug, release));
       setDone(true);
       setVersion("");
       setCommit("");
@@ -584,6 +586,7 @@ function ReleaseForm({
 
   return (
     <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
+      {gate.prompt}
       <h2>New release</h2>
       {done && (
         <p className="notice" role="status">
@@ -736,6 +739,7 @@ function ReleasePicker({
   onSubmitted: () => void;
 }) {
   const list = useLoad(() => api.githubReleases(slug), [slug]);
+  const picker = useTermsGate();
   const [tag, setTag] = useState("");
   const [rows, setRows] = useState<PickRow[]>([]);
   const [error, setError] = useState<ApiError>();
@@ -776,7 +780,7 @@ function ReleasePicker({
     setBusy(true);
     setError(undefined);
     try {
-      await api.submitGithubRelease(
+      await picker.guard(() => api.submitGithubRelease(
         slug,
         chosen.tag,
         included.map((r) => ({
@@ -787,7 +791,7 @@ function ReleasePicker({
             ? { exec: r.exec.trim() }
             : {}),
         })),
-      );
+      ));
       setDone(chosen.version);
       list.reload();
       setTag("");
@@ -804,6 +808,7 @@ function ReleasePicker({
 
   return (
     <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
+      {picker.prompt}
       <h2>Submit a release</h2>
       <p className="muted small">
         Make a release on GitHub with your builds attached, then pick it here.

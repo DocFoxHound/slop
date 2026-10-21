@@ -289,6 +289,7 @@ async fn execute(state: &AppState, kind: &str, payload: &Value, actor: &str) -> 
         "report.act" => crate::moderation::act_on_report_stored(state, payload, actor).await,
         "account.suspend" => crate::agent::suspend_stored(state, payload, actor).await,
         "account.lift" => crate::agent::lift_stored(state, payload, actor).await,
+        "account.passkey_grace" => crate::agent::passkey_grace_stored(state, payload, actor).await,
         "staff.role" => {
             let p: RolePayload = serde_json::from_value(payload.clone()).map_err(bad)?;
             set_role(state, p.user_id, p.role, p.grant, actor).await?;

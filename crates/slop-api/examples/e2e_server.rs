@@ -254,6 +254,12 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
     let (_, player_cookie) = user(db, &config, "Pat Player", false).await?;
     let (_, admin_cookie) = user(db, &config, "Ada Admin", true).await?;
     let (other, _) = user(db, &config, "Sam Seed", false).await?;
+    // A publisher past their passkey deadline, with no passkey (passkeys.rs).
+    let (overdue, overdue_cookie) = user(db, &config, "Olly Overdue", false).await?;
+    sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
+        .bind(overdue)
+        .execute(db)
+        .await?;
     listed(db, other, "castle-rock", "Castle Rock", "").await?;
     listed(
         db,
@@ -281,7 +287,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             "url": format!("http://{addr}"),
             "fake": fake,
             "cookie_name": cookie_name,
-            "cookies": { "maker": maker_cookie, "player": player_cookie, "admin": admin_cookie },
+            "cookies": { "maker": maker_cookie, "player": player_cookie, "admin": admin_cookie, "overdue": overdue_cookie },
         })
     );
     let _ = maker;

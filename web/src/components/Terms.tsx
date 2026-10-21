@@ -1,7 +1,8 @@
 // Agreements that stand in front of an action (crates/slop-api/src/legal.rs): the Publisher
 // Agreement before a first app, the People Terms before a creative profile or a hire. When the
 // API answers "terms_required", the page shows the document, the user accepts it, and the action
-// runs again; nothing they typed is lost.
+// runs again; nothing they typed is lost. "passkey_required" works the same way
+// (PasskeyRequired.tsx).
 
 import { useCallback, useEffect, useRef, useState, type ReactNode } from "react";
 import { Link } from "react-router";
@@ -9,6 +10,7 @@ import { Link } from "react-router";
 import { api, ApiError, type LegalDocument, type LegalKind } from "../api";
 import { formatDate } from "../format";
 import { renderDocument } from "../markdown";
+import { PasskeyRequired } from "./PasskeyRequired";
 
 interface Pending {
   kind: LegalKind;
@@ -22,17 +24,41 @@ interface Pending {
  */
 export function useTermsGate(): { guard: <T>(fn: () => Promise<T>) => Promise<T>; prompt: ReactNode } {
   const [pending, setPending] = useState<Pending>();
+  const [passkey, setPasskey] = useState<{ add: boolean; resolve: () => void; reject: () => void }>();
   const guard = useCallback(async <T,>(fn: () => Promise<T>): Promise<T> => {
     for (;;) {
       try {
         return await fn();
       } catch (err) {
+        if (err instanceof ApiError && err.code === "passkey_required") {
+          const add = err.field === "add";
+          await new Promise<void>((resolve, reject) => setPasskey({ add, resolve, reject: () => reject(err) }));
+          continue;
+        }
         if (!(err instanceof ApiError) || err.code !== "terms_required" || !err.field) throw err;
         const kind = err.field as LegalKind;
         await new Promise<void>((resolve, reject) => setPending({ kind, resolve, reject: () => reject(err) }));
       }
     }
   }, []);
+  if (passkey) {
+    return {
+      guard,
+      prompt: (
+        <PasskeyRequired
+          add={passkey.add}
+          onDone={() => {
+            setPasskey(undefined);
+            passkey.resolve();
+          }}
+          onCancel={() => {
+            setPasskey(undefined);
+            passkey.reject();
+          }}
+        />
+      ),
+    };
+  }
   const prompt = pending ? (
     <AcceptDocument
       kind={pending.kind}

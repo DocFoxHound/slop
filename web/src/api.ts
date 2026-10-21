@@ -598,6 +598,11 @@ export interface Me {
   unread_notifications: number;
   /** Votes and reviews shown on the public profile (default on; off in the UK under-18 view). */
   profile_public: boolean;
+  /** Passkeys for publishers and creatives: whether they have one, from when publishing and
+   * payouts need one, and a grace staff gave. */
+  has_passkey: boolean;
+  passkey_due_at: string | null;
+  passkey_grace_until: string | null;
 }
 
 /** Slop's legal documents (crates/slop-api/src/legal.rs). */

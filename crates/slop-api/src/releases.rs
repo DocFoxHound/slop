@@ -433,6 +433,7 @@ async fn submit_release(
 ) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
     crate::limits::check(&state, user.id, crate::limits::Action::Release)?;
     let (app_id, repo_url) = owned_app(&state, &slug, &user).await?;
+    crate::passkeys::require(&state, &user).await?;
     let release = create_release(
         &state,
         app_id,
