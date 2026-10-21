@@ -61,6 +61,12 @@ docs.renderer.rules.link_open = (tokens, idx, options, env, self) => {
   return docsLinkOpen(tokens, idx, options, env, self);
 };
 
+// Code blocks and tables scroll sideways: keyboard users need to reach them (WCAG 2.1.1).
+const docsFence = docs.renderer.rules.fence!;
+docs.renderer.rules.fence = (tokens, idx, options, env, self) =>
+  docsFence(tokens, idx, options, env, self).replace(/^<pre/, '<pre tabindex="0"');
+docs.renderer.rules.table_open = () => '<table tabindex="0">\n';
+
 export function renderDocument(source: string): string {
   return docs.render(source);
 }

@@ -13,7 +13,8 @@
     "desktop:build": "cd ../crates/slop-desktop && tauri build",
     "desktop:build:windows": "cd ../crates/slop-desktop && tauri build --bundles nsis",
     "desktop:build:deb": "cd ../crates/slop-desktop && tauri build --bundles deb",
-    "desktop:build:rpm": "cd ../crates/slop-desktop && tauri build --bundles rpm"
+    "desktop:build:rpm": "cd ../crates/slop-desktop && tauri build --bundles rpm",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "@tauri-apps/api": "^2.12.4",
@@ -24,6 +25,8 @@
     "react-router": "^8.4.0"
   },
   "devDependencies": {
+    "@axe-core/playwright": "^4.14.0",
+    "@playwright/test": "^1.64.1",
     "@tauri-apps/cli": "^2.12.3",
     "@testing-library/dom": "^10.4.2",
     "@testing-library/react": "^16.3.3",

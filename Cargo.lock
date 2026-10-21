@@ -6342,6 +6342,7 @@ dependencies = [
  "uuid",
  "webauthn-authenticator-rs",
  "webauthn-rs",
+ "zip",
 ]
 
 [[package]]

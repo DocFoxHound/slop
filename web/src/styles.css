@@ -9,7 +9,7 @@
   --text: #e7ecf2;
   --text-2: #c4ced9;
   --muted: #8d99a8;
-  --faint: #6b7686;
+  --faint: #808b9b;
   --slime: #a3e635;
   --slime-ink: #1a2e05;
   --slime-soft: rgba(163, 230, 53, 0.12);
@@ -318,6 +318,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .doc blockquote { border-left: 3px solid var(--warn); background: rgba(251, 191, 36, 0.06); padding: 8px 14px; color: var(--text-2); border-radius: 0 8px 8px 0; }
 .doc pre { font-size: 12.5px; line-height: 1.5; }
 .doc li { margin: 4px 0; }
+/* Links in running text are underlined, not just coloured (WCAG 1.4.1). */
+.doc a, main p a:not(.btn):not(.chip), .hint a { text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---- publishing progress and admin --------------------------------------- */
 .progress { margin-bottom: 16px; }
