@@ -1450,9 +1450,10 @@ export interface SessionInfo {
 }
 
 export type Platform =
-  "windows" | "mac" | "linux" | "android" | "linux-deb" | "linux-rpm";
+  "windows" | "mac" | "linux" | "android" | "linux-deb" | "linux-rpm" | "any";
 /** What an app's store page says it runs on: the builds every release must include. */
-export type AppPlatform = "windows" | "linux" | "linux-deb" | "linux-rpm";
+/** "any": a mod, one .zip for every platform. */
+export type AppPlatform = "windows" | "linux" | "linux-deb" | "linux-rpm" | "any";
 export type FileKind = "archive" | "installer" | "apk";
 export type ReleaseStatus =
   | "fetching"

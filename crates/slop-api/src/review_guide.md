@@ -104,6 +104,10 @@ Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked`
   services). `online_undeclared: true` means the store page didn't say the app goes online when
   the release was checked. Players are shown a notice for apps that do, so ask the maker to tick
   what it connects to under Online; reject it as a misleading page if it looks hidden on purpose.
+- A **mod** (an app whose platforms are `any`, a branch of kind `addon`) is files another app
+  loads. Its release is one `.zip` with no program to start. Review it like an app, and also
+  check it only adds to the app it's for: a mod that carries a program, runs code from a server
+  or changes how the app is installed is a rejection.
 - `advisories`: known vulnerabilities in its packages (from OSV). `malicious: true` means the
   package is malware: reject, or for a live release, ask your admin to withdraw it.
 

@@ -129,7 +129,8 @@ async fn updates(
             .push_bind(app_id)
             .push(" or (");
         catalog::push_store_visible(&mut qb, state.config.catalog, policy);
-        qb.push(")) order by a.parent_app_id is not null, a.title limit 20");
+        // Mods aren't versions of the app to run.
+        qb.push(")) and a.branch_kind is distinct from 'addon' order by a.parent_app_id is not null, a.title limit 20");
         let builds: Vec<Build> = qb.build_query_as().fetch_all(&state.db).await?;
         out.push(AppUpdate {
             slug: slug.to_string(),

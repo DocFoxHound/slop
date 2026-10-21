@@ -67,6 +67,7 @@ const PLATFORMS: Array<{ value: Platform; label: string }> = [
   { value: "linux", label: "Linux" },
   { value: "linux-deb", label: "Linux .deb" },
   { value: "linux-rpm", label: "Linux .rpm" },
+  { value: "any", label: "Mod (every platform)" },
   { value: "mac", label: "macOS" },
   { value: "android", label: "Android" },
 ];
@@ -96,7 +97,15 @@ const BUILD: Record<
     extensions: [".rpm"],
     describe: "an .rpm package",
   },
+  any: {
+    kind: "archive",
+    extensions: [".zip"],
+    describe: "a .zip of the mod's files",
+  },
 };
+
+/** Archives name a program to start; a mod has none (the game loads it). */
+const startsProgram = (p: AppPlatform) => BUILD[p].kind === "archive" && p !== "any";
 
 export function fitsPlatform(platform: AppPlatform, fileName: string): boolean {
   const name = fileName.toLowerCase();
@@ -549,7 +558,7 @@ function ReleaseForm({
         platform: r.platform,
         kind: BUILD[r.platform].kind,
         url: r.url.trim(),
-        ...(BUILD[r.platform].kind === "archive"
+        ...(startsProgram(r.platform)
           ? { exec: r.exec.trim() }
           : {}),
         args: r.args.trim() ? r.args.trim().split(/\s+/) : [],
@@ -642,7 +651,7 @@ function ReleaseForm({
                 : "On the same site as your repository."}
             </span>
           </label>
-          {BUILD[row.platform].kind === "archive" && (
+          {startsProgram(row.platform) && (
             <div className="row-2">
               <label>
                 Program to start
@@ -774,7 +783,7 @@ function ReleasePicker({
           platform: r.platform,
           kind: BUILD[r.platform].kind,
           url: r.url,
-          ...(BUILD[r.platform].kind === "archive"
+          ...(startsProgram(r.platform)
             ? { exec: r.exec.trim() }
             : {}),
         })),
@@ -900,7 +909,7 @@ function ReleasePicker({
                   {BUILD[row.platform].describe}.
                 </p>
               )}
-              {row.include && BUILD[row.platform].kind === "archive" && (
+              {row.include && startsProgram(row.platform) && (
                 <label>
                   Program to start
                   <input

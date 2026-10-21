@@ -182,6 +182,7 @@ fn expected_file(platform: Platform) -> (FileKind, &'static [&'static str], &'st
         Platform::LinuxRpm => (FileKind::Installer, &[".rpm"], "an .rpm package"),
         Platform::Mac => (FileKind::Archive, &[".zip"], "a .zip of the app"),
         Platform::Android => (FileKind::Apk, &[".apk"], "an .apk"),
+        Platform::Any => (FileKind::Archive, &[".zip"], "a .zip of the mod's files"),
     }
 }
 
@@ -193,6 +194,7 @@ fn platform_label(platform: Platform) -> &'static str {
         Platform::LinuxRpm => "Linux .rpm",
         Platform::Mac => "macOS",
         Platform::Android => "Android",
+        Platform::Any => "mod",
     }
 }
 
@@ -244,6 +246,14 @@ fn validate_files(
             kind,
             f.exec.as_deref().map(str::trim).filter(|e| !e.is_empty()),
         ) {
+            // A mod has nothing to start: the game loads it.
+            (FileKind::Archive, None) if platform == Platform::Any => None,
+            (_, Some(_)) if platform == Platform::Any => {
+                return Err(ApiError::invalid(
+                    "files",
+                    "a mod has no program to start; leave the program path out",
+                ));
+            }
             (FileKind::Archive, Some(exec)) if is_safe_relative_path(exec) => {
                 Some(exec.to_string())
             }

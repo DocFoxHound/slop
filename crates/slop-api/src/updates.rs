@@ -338,6 +338,13 @@ async fn github_releases(
             .bind(app_id)
             .fetch_all(&state.db)
             .await?;
+    // A mod's .zip is for every platform.
+    let is_mod: bool = sqlx::query_scalar(
+        "select branch_kind is not distinct from 'addon' from apps where id = $1",
+    )
+    .bind(app_id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(
         found
             .into_iter()
@@ -350,7 +357,10 @@ async fn github_releases(
                         .assets
                         .into_iter()
                         .map(|a| {
-                            let guess = guess_file(&a.name);
+                            let guess = guess_file(&a.name).map(|g| match g {
+                                ("windows", kind) if is_mod => ("any", kind),
+                                g => g,
+                            });
                             PickableAsset {
                                 url: download_url(&repo_url, &r.tag_name, &a.name),
                                 platform: guess.map(|g| g.0),

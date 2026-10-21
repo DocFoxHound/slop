@@ -41,16 +41,20 @@ pub enum Platform {
     /// A Fedora/RHEL package of the same Linux build.
     #[serde(rename = "linux-rpm")]
     LinuxRpm,
+    /// A mod: one `.zip` for every platform, with nothing to start. The Slop app installs it for
+    /// the game it belongs to.
+    Any,
 }
 
 impl Platform {
-    pub const ALL: [Platform; 6] = [
+    pub const ALL: [Platform; 7] = [
         Self::Windows,
         Self::Mac,
         Self::Linux,
         Self::Android,
         Self::LinuxDeb,
         Self::LinuxRpm,
+        Self::Any,
     ];
 
     pub fn as_str(self) -> &'static str {
@@ -61,6 +65,7 @@ impl Platform {
             Self::Android => "android",
             Self::LinuxDeb => "linux-deb",
             Self::LinuxRpm => "linux-rpm",
+            Self::Any => "any",
         }
     }
 

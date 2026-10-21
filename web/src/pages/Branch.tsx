@@ -1,9 +1,10 @@
-// Registering a branch of an app (DESIGN §9): a mod, fix, translation or port built from your
-// own fork. It starts as a draft; you submit a release, Slop checks and reviews it like any other,
-// and it then shows on the original's page as a Community build.
+// Registering a branch of an app (DESIGN §9): a mod the game loads, or a modded version, fix,
+// translation or port built from your own fork. It starts as a draft; you submit a release, Slop
+// checks and reviews it like any other, and it then shows in the Community area of the original's
+// page. /app/:slug/branch?kind=addon starts on "Mod".
 
 import { useState, type FormEvent } from "react";
-import { Link, useNavigate, useParams } from "react-router";
+import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, type AppPlatform } from "../api";
 import { LicensePicker } from "../components/LicensePicker";
@@ -14,8 +15,9 @@ import { useSession } from "../session";
 import { PlatformPicker } from "./Publish";
 
 const KINDS = [
+  ["addon", "Mod", "Files the game or app loads: new levels, items, rules or scripts. Players add it to the original"],
+  ["mod", "Modded version", "A whole changed copy of the game or app, played instead of the original"],
   ["port", "Port", "Runs on a platform the original doesn't"],
-  ["mod", "Mod", "Changes or adds to the game or app"],
   ["fix", "Fix", "Fixes bugs the original still has"],
   ["translation", "Translation", "Another language"],
   ["other", "Other", ""],
@@ -25,6 +27,7 @@ export function RegisterBranch() {
   const { slug = "" } = useParams();
   const { me } = useSession();
   const navigate = useNavigate();
+  const [params] = useSearchParams();
   const parent = useLoad(() => api.app(slug), [slug]);
   useDocumentTitle(parent.data ? `Branch ${parent.data.title}` : "Register a branch");
   const terms = useTermsGate();
@@ -34,7 +37,7 @@ export function RegisterBranch() {
     summary: "",
     repo_url: "",
     license_spdx: "",
-    kind: "port",
+    kind: params.get("kind") === "addon" ? "addon" : "port",
     note: "",
     platforms: [] as AppPlatform[],
   });
@@ -73,19 +76,30 @@ export function RegisterBranch() {
       </span>
     ) : null;
   const missing = (["windows", "linux"] as const).filter((x) => !p.platforms.includes(x));
+  const isMod = form.kind === "addon";
   return (
     <div className="page narrow">
       {terms.prompt}
       <div className="crumbs">
         <Link to={`/app/${slug}`}>{p.title}</Link> › Register a branch
       </div>
-      <h1 className="page-title">Register a branch of {p.title}</h1>
+      <h1 className="page-title">{isMod ? `Publish a mod for ${p.title}` : `Register a branch of ${p.title}`}</h1>
+      {isMod ? (
+        <p className="muted">
+          A mod lives in <b>your own repository</b>. Each release is one <code>.zip</code> of the mod's files for every
+          platform, with nothing to start: the Slop app adds it to {p.title}, which loads it. It's checked and reviewed like
+          any app, then shows in the Community area of {p.title}'s page, made by you, not {p.maker.display_name}. Games on
+          Slop only load mods approved here; see{" "}
+          <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
+        </p>
+      ) : (
       <p className="muted">
         A branch is built from <b>your own fork</b> of {p.title}. It's checked and reviewed like any app, then shows on{" "}
         {p.title}'s page as a <b>Community</b> build, made by you, not {p.maker.display_name}. Players tick "I understand"
         before installing it.
         {missing.length > 0 && ` ${p.title} doesn't run on ${missing.join(" or ")} yet: a port fills that gap.`}
       </p>
+      )}
       <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
         <fieldset>
           <legend>What is it?</legend>
@@ -127,8 +141,13 @@ export function RegisterBranch() {
           {fieldError("note")}
         </label>
         <label>
-          Your fork
-          <input value={form.repo_url} required onChange={(e) => set("repo_url", e.target.value)} placeholder="https://github.com/you/your-fork" />
+          {isMod ? "Your mod's repository" : "Your fork"}
+          <input
+            value={form.repo_url}
+            required
+            onChange={(e) => set("repo_url", e.target.value)}
+            placeholder={isMod ? "https://github.com/you/your-mod" : "https://github.com/you/your-fork"}
+          />
           {fieldError("repo_url")}
         </label>
         <LicensePicker
@@ -137,18 +156,20 @@ export function RegisterBranch() {
           onChange={(l) => set("license_spdx", l)}
           error={error?.field === "license_spdx" ? error.message : undefined}
         />
-        <PlatformPicker
-          value={form.platforms}
-          onChange={(v) => set("platforms", v)}
-          error={error?.field === "platforms" ? error.message : undefined}
-        />
+        {!isMod && (
+          <PlatformPicker
+            value={form.platforms}
+            onChange={(v) => set("platforms", v)}
+            error={error?.field === "platforms" ? error.message : undefined}
+          />
+        )}
         {error && !error.field && (
           <p className="form-error" role="alert">
             {error.message}
           </p>
         )}
         <button className="btn slime" disabled={busy}>
-          {busy ? "Registering…" : "Register the branch"}
+          {busy ? "Registering…" : isMod ? "Publish the mod" : "Register the branch"}
         </button>
       </form>
     </div>

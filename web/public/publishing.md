@@ -439,13 +439,21 @@ similar) and follow it whenever you write networking, save files or mod support.
 |---|---|
 | Game data your code reads: positions, chat, match state, scores | Yes |
 | Content your code reads: maps, levels, skins, pictures, sounds, settings | Yes, read safely (below) |
-| Mods: anything that adds or changes code, scripts or rules | Only mods approved on Slop *(coming)* |
+| Mods: anything that adds or changes code, scripts or rules | Only mods approved on Slop |
 | Programs, libraries (`.dll`, `.so`), scripts, Godot `.pck` packs, Unity asset bundles with code | Never |
 | A new version of the game itself | Never: updates come through Slop |
 
 Community servers can't hand players mods either. A server can name the Slop mods it needs, and
-the game gets them from Slop *(coming: until mods are on Slop, games on Slop can't load mods
-from outside their release)*.
+the game gets them from Slop *(coming)*.
+
+### Publishing a mod
+
+Anyone can publish a mod for any app on Slop: on the app's page, under **Community**, choose
+**Publish a mod**. A mod lives in your own repository, and each release is **one `.zip` of the
+mod's files for every platform**, with no program to start (platform `any` when submitting by
+hand). Slop checks and reviews it like an app, and lists it in the Community area of the app's
+page. *(Coming: the Slop app adds approved mods to the installed game and tells the game where
+they are.)*
 
 ### Rules for the code
 
