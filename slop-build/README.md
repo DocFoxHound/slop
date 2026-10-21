@@ -35,7 +35,8 @@ Slop then fetches and hashes the files, verifies the attestations, and the relea
 | `custom` | Runs `build-command`, ships `output-dir`, starts `exec` (`{ext}` becomes `.exe` on Windows) |
 
 An optional `slop.toml` (`[launch]` and `[launch.<platform>]`, with `exec` and `args`) sets the
-program and arguments. `publish: false` builds and checks without a release, which is how the
+program and arguments, and a top-level `runtimes = [...]` names the shared runtimes the Windows
+build needs (Slop's `GET /v1/runtimes`). `publish: false` builds and checks without a release, which is how the
 types are tried on GitHub's runners (all built on Windows and Linux, 2026-10-20; Unity up to
 licence activation, as there's no test licence).
 
@@ -60,6 +61,7 @@ GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split
 | `dotnet-version`, `dotnet-project` | `dotnet` and C# Godot (`8.0.x` by default) |
 | `python-version`, `python-entry`, `python-windowed` | `python` |
 | `node-version` | `electron`, `tauri`, `web` |
+| `linux-runtime` | `steam-sniper`: `rust`, `go` and `custom` compile Linux inside Valve's Steam Runtime 3 (sniper) SDK container, so the program needs only glibc 2.31 (tried with podman, 2026-10-21) |
 | `publish` | `false`: build and check only, no release, nothing sent to Slop |
 | `signpath-organization-id` | Optional: sign the Windows program with SignPath (needs the `SIGNPATH_API_TOKEN` secret) |
 | `signpath-project-slug` | SignPath project; defaults to `app` |
