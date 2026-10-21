@@ -1542,6 +1542,8 @@ export interface RepoScan {
   lockfiles?: string[];
   packages?: number;
   monetization?: SourceHit[];
+  /** Loading code at run time, self-updaters, unsafe data formats. */
+  code_loading?: SourceHit[];
 }
 
 /** An advisory OSV lists for one of the release's packages (crates/slop-api/src/dep_watch.rs). */

@@ -150,7 +150,8 @@ export function progressSteps(
     const source = latest.repo_scan;
     const notes =
       (source?.licence?.problems.length ?? 0) +
-      (source?.monetization?.length ?? 0);
+      (source?.monetization?.length ?? 0) +
+      (source?.code_loading?.length ?? 0);
     if (latest.status === "fetching") {
       steps.push({
         title: "Source check",

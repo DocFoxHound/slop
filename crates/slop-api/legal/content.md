@@ -1,7 +1,7 @@
 ---
 title: Content Policy
-version: 2026-10-20
-summary: First version.
+version: 2026-10-21
+summary: Adds "Code from outside Slop": apps only run code from releases and mods Slop checked.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
@@ -9,7 +9,7 @@ This policy says what isn't allowed on Slop, in apps, store pages, reviews, prof
 
 ## How moderation works
 - **Anyone can report** something with the Report button. You get a reference number.
-- **People review reports.** Urgent reports (child abuse, threats to someone's life or safety, intimate images shared without consent) are handled first, within 24 hours. Other serious reports (malware, scams, illegal content, builds that don't match their source) are also reviewed within 24 hours. Intimate images are removed within 48 hours of a valid request at the latest.
+- **People review reports.** Urgent reports (child abuse, threats to someone's life or safety, intimate images shared without consent) are handled first, within 24 hours. Other serious reports (malware, scams, illegal content, builds that don't match their source, apps that run code from outside Slop) are also reviewed within 24 hours. Intimate images are removed within 48 hours of a valid request at the latest.
 - **What we can do:** take an app out of the store, hide a review or profile, warn someone, or suspend an account. We never hide a review because it's negative.
 - **You're told why.** Each decision comes with a statement of reasons: what we did, the facts, the rule or law, whether automated tools were used, and how to appeal.
 - **Appeals.** Within six months, from your account page. A person reviews the appeal and either keeps or reverses the decision.
@@ -23,6 +23,9 @@ No malware, hidden crypto-mining, data theft, or collecting data without telling
 
 ### Builds must match their source
 A build must be made from the source code it points to. Nothing hidden, added or swapped.
+
+### Code from outside Slop
+An app may only run code that came in a release or mod Slop checked. It mustn't download and run programs, libraries, scripts or mods from anywhere else, including its own servers or other players' servers, and mustn't update itself outside Slop. Mods must be published on Slop and approved there. Data the app reads with its own code (maps, levels, pictures, sounds, settings) may come from anywhere.
 
 ### Scams and fraud
 No scams, phishing, impersonation or fake offers.

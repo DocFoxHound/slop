@@ -89,6 +89,17 @@ Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked`
   purchase APIs, checkout links, loot boxes, premium currencies), each with example
   `path:line`s. Apps on Slop can't sell anything. Open the examples in the repository at the
   release's commit and decide: a real purchase is a rejection; a word in a comment isn't.
+- `code_loading`: patterns that suggest the app runs code from outside Slop (Content Policy,
+  "Code from outside Slop"): loading .NET assemblies, Java classes or native libraries at run
+  time, running code from text (`eval`, `exec`, `loadstring`), Godot resource packs or Unity
+  asset bundles, self-updaters, and data formats that can rebuild any object (`BinaryFormatter`,
+  `pickle`, `bytes_to_var_with_objects`…). Open the examples and decide:
+  - loading the app's own files from its install folder is fine;
+  - running code, scripts or mods a server or download supplies, or updating itself outside
+    Slop, is a rejection;
+  - an unsafe format reading anything from a server, another player or a shared file (saves,
+    levels) is a rejection until it's replaced; one that only reads the app's own bundled files
+    is fine.
 - `advisories`: known vulnerabilities in its packages (from OSV). `malicious: true` means the
   package is malware: reject, or for a live release, ask your admin to withdraw it.
 
