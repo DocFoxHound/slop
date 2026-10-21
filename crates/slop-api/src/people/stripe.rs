@@ -137,6 +137,7 @@ pub async fn onboard(
     user: CurrentUser,
 ) -> ApiResult<Json<Onboarding>> {
     let me = my_creative(&state, &user).await?;
+    crate::passkeys::require(&state, &user).await?;
     let existing: Option<String> =
         sqlx::query_scalar("select stripe_account_id from creatives where user_id = $1")
             .bind(me)

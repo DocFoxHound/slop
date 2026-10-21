@@ -12446,7 +12446,12 @@ async fn makers_hear_about_every_release_and_security_txt_is_served(db: PgPool) 
     .unwrap();
     assert_eq!(
         titles,
-        ["Game 1.0.0 was submitted", "Game 1.0.0 is approved"]
+        [
+            "Add a passkey to your account",
+            "Game 1.0.0 was submitted",
+            "Game 1.0.0 is approved"
+        ],
+        "a first release starts the passkey clock (passkeys.rs)"
     );
 
     let res = app
@@ -12794,4 +12799,144 @@ async fn the_apis_role_only_adds_to_the_ledgers(db: PgPool) {
             .await
             .unwrap();
     }
+}
+
+/// Publishers and creatives need a passkey (passkeys.rs `require`): 30 days from first
+/// publishing, reminders before, then publishing needs a passkey proved in the last 12 hours,
+/// unless staff gave a week's grace.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn publishers_need_a_passkey_after_their_grace_period(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, admin) = make_admin(&app, "Ada Owner").await;
+    let create = |slug: &str| {
+        req(Method::POST, "/v1/apps")
+            .cookie(&maker)
+            .json(new_app(slug))
+    };
+
+    // The first time starts the clock, with a notice.
+    let res = app.send(create("one")).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let due: OffsetDateTime = sqlx::query_scalar("select passkey_due_at from users where id = $1")
+        .bind(maker_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(
+        (due - OffsetDateTime::now_utc() - time::Duration::days(30)).abs()
+            < time::Duration::minutes(1)
+    );
+    let notices: Vec<String> =
+        sqlx::query_scalar("select title from notifications where user_id = $1")
+            .bind(maker_id)
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(notices, ["Add a passkey to your account"]);
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&maker)).await).await;
+    assert_eq!(me["has_passkey"], false);
+    assert!(me["passkey_due_at"].is_string());
+
+    // A week, then a day before: one reminder each.
+    let set_due = |sql: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sql).bind(maker_id).execute(&db).await.unwrap();
+        }
+    };
+    set_due("update users set passkey_due_at = now() + interval '6 days' where id = $1").await;
+    assert_eq!(slop_api::passkeys::remind(&app.db).await.unwrap(), 1);
+    assert_eq!(
+        slop_api::passkeys::remind(&app.db).await.unwrap(),
+        0,
+        "once"
+    );
+    set_due("update users set passkey_due_at = now() + interval '12 hours' where id = $1").await;
+    assert_eq!(slop_api::passkeys::remind(&app.db).await.unwrap(), 1);
+
+    // Past the deadline: add one first.
+    set_due("update users set passkey_due_at = now() - interval '1 hour' where id = $1").await;
+    let res = app.send(create("two")).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let err = body_json(res).await;
+    assert_eq!(err["error"]["code"], "passkey_required");
+    assert_eq!(err["error"]["field"], "add");
+
+    // With one, it must be used: signing in with it or confirming with it.
+    sqlx::query(
+        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app.send(create("two")).await;
+    assert_eq!(body_json(res).await["error"]["field"], "confirm");
+    sqlx::query("update sessions set passkey_at = now() - interval '13 hours' where user_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(create("two")).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN, "too long ago");
+    sqlx::query("update sessions set passkey_at = now() where user_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(app.send(create("two")).await.status(), StatusCode::CREATED);
+
+    // Lost it: staff give a week, once they've checked it's them.
+    sqlx::query("update sessions set passkey_at = null where user_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let grace = |reason: &str| {
+        req(
+            Method::POST,
+            format!("/v1/admin/users/{maker_id}/passkey-grace"),
+        )
+        .cookie(&admin)
+        .json(json!({ "reason": reason }))
+    };
+    assert_eq!(
+        app.send(grace("ok")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app
+        .send(grace(
+            "Video call; matched the GitHub account and recent releases.",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    assert_eq!(
+        app.send(create("three")).await.status(),
+        StatusCode::CREATED
+    );
+    let audited: i64 = sqlx::query_scalar(
+        "select count(*) from audit_log where action = 'account.passkey_grace' and subject = $1",
+    )
+    .bind(maker_id.to_string())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(audited, 1);
+    let (_, someone) = app.user("Sam", "US").await;
+    assert_eq!(
+        app.send(
+            req(
+                Method::POST,
+                format!("/v1/admin/users/{maker_id}/passkey-grace")
+            )
+            .cookie(&someone)
+            .json(json!({ "reason": "Let me in, I promise it's me." }))
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND,
+        "staff only"
+    );
 }

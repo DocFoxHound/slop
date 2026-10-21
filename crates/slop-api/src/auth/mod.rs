@@ -617,6 +617,9 @@ async fn signup(
         new_decisions: 0,
         unread_notifications: 0,
         profile_public: under18 == Some(false),
+        has_passkey: false,
+        passkey_due_at: None,
+        passkey_grace_until: None,
     };
     Ok((
         StatusCode::CREATED,
@@ -669,6 +672,13 @@ struct Me {
     /// Votes and reviews on the public profile (reviews.rs), with its default applied.
     #[sqlx(skip)]
     profile_public: bool,
+    /// Passkeys for publishers and creatives (passkeys.rs `require`): whether they have one,
+    /// from when publishing and payouts need one, and a grace staff gave.
+    has_passkey: bool,
+    #[serde(with = "time::serde::rfc3339::option")]
+    passkey_due_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    passkey_grace_until: Option<OffsetDateTime>,
 }
 
 async fn me(
@@ -678,7 +688,9 @@ async fn me(
 ) -> ApiResult<Json<Me>> {
     let mut me: Me = sqlx::query_as(
         "select id, display_name, email, country_code, is_admin, share_playtime,
-                adult_confirmed_at is not null as adult_confirmed, suspended_at is not null as suspended
+                adult_confirmed_at is not null as adult_confirmed, suspended_at is not null as suspended,
+                exists (select 1 from passkeys p where p.user_id = users.id) as has_passkey,
+                passkey_due_at, passkey_grace_until
          from users where id = $1",
     )
     .bind(user.id)

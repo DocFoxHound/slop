@@ -29,6 +29,7 @@ import { ErrorState, Loading } from "../components/ui";
 import { CONTENT_LABEL, ONLINE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
+import { PasskeyNotice } from "../components/PasskeyNotice";
 import { useTermsGate } from "../components/Terms";
 
 function SignInFirst({ what }: { what: string }) {
@@ -81,6 +82,7 @@ export function Publish() {
             + New app
           </Link>
         </div>
+      <PasskeyNotice />
       </div>
       <p className="muted">
         Each app goes through the same steps: a store page, a release, file checks, a review by a person, then the store.

@@ -9,6 +9,7 @@ import { useLoad } from "../hooks";
 import { openExternal } from "../platform";
 import { useSession } from "../session";
 import { amount } from "./Donate";
+import { useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
 
 export function DonationsPanel({ slug }: { slug: string }) {
@@ -39,11 +40,12 @@ function EnableDonations({ status, onDone, slug }: { status: string; onDone: () 
   const [adult, setAdult] = useState(false);
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
+  const gate = useTermsGate();
   const go = async () => {
     setBusy(true);
     setError(undefined);
     try {
-      const res = await api.donations.onboard({ tax_notice_ack: ack, confirm_adult: adult, return_to: `/publish/${slug}/manage#donations` });
+      const res = await gate.guard(() => api.donations.onboard({ tax_notice_ack: ack, confirm_adult: adult, return_to: `/publish/${slug}/manage#donations` }));
       if (res.url) await openExternal(res.url);
       else onDone();
     } catch (err) {
@@ -54,6 +56,7 @@ function EnableDonations({ status, onDone, slug }: { status: string; onDone: () 
   };
   return (
     <div className="form">
+      {gate.prompt}
       <p>
         Donations go straight to your own Stripe account. Slop takes a 5% platform fee; donors pay the card processing on
         top, so you receive the amount they chose less 5%. Donations never unlock anything, and your app can't tell who
