@@ -1,6 +1,6 @@
 // Display helpers shared by the pages.
 
-import type { AppStage, AppSummary, ContentLabel } from "./api";
+import type { AppStage, AppSummary, ContentLabel, OnlineKind } from "./api";
 
 export const STAGE_LABEL: Record<AppStage, string> = {
   coming_soon: "Coming soon",
@@ -62,6 +62,14 @@ export function toMinor(text: string): number | null {
   const [whole, frac = ""] = t.split(".");
   return Number(whole) * 100 + Number(frac.padEnd(2, "0"));
 }
+
+/** What an app connects to online, as players read it. */
+export const ONLINE_LABEL: Record<OnlineKind, string> = {
+  own_servers: "Connects to the maker's servers or database",
+  player_servers: "Players can host their own servers",
+  peer_to_peer: "Players connect directly to each other",
+  other_services: "Uses other online services (cloud databases, AI, APIs)",
+};
 
 /** Content labels (DESIGN §5), as players read them. */
 export const CONTENT_LABEL: Record<ContentLabel, string> = {

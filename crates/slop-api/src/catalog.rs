@@ -561,6 +561,11 @@ struct AppDetail {
     private: bool,
     /// The verified official team that publishes it (DESIGN §14): (slug, name).
     official_team: Option<OfficialTeam>,
+    /// What it connects to online (servers Slop can't check): own_servers, player_servers,
+    /// peer_to_peer, other_services. Empty: it doesn't play online.
+    online: Vec<String>,
+    /// The maker's servers, by name (`play.example.com`, `api.example.com:7777`).
+    online_hosts: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -582,6 +587,8 @@ struct AppExtra {
     last_commit_at: Option<OffsetDateTime>,
     store_visible: bool,
     private: bool,
+    online: Vec<String>,
+    online_hosts: Vec<String>,
 }
 
 /// Finds an app the viewer may see: one in the store for them, or their own. Returns its ID and
@@ -645,7 +652,7 @@ async fn load_detail(
     let rules = state.config.catalog;
     let mut qb = QueryBuilder::new(
         "select a.id, a.maker_id, a.description_md, a.repo_url, a.license_spdx, a.platforms, u.display_name as maker_name,
-                a.stage_entered_at, a.last_commit_at, (",
+                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, (",
     );
     push_store_visible(&mut qb, rules, policy);
     qb.push(") or ");
@@ -691,6 +698,8 @@ async fn load_detail(
         credits: crate::people::credits(&state.db, extra.id).await?,
         is_mine,
         private: extra.private,
+        online: extra.online,
+        online_hosts: extra.online_hosts,
         official_team: crate::teams::official_team_of(&state.db, extra.id)
             .await?
             .map(|(slug, name)| OfficialTeam { slug, name }),
@@ -850,6 +859,10 @@ struct NewApp {
     /// A private repository outside GitHub: a read-only token for it (repo_tokens.rs).
     #[serde(default)]
     repo_token: Option<crate::repo_tokens::Given>,
+    #[serde(default)]
+    online: Vec<String>,
+    #[serde(default)]
+    online_hosts: Vec<String>,
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -866,6 +879,8 @@ struct AppChanges {
     content_labels: Option<Vec<String>>,
     tags: Option<Vec<String>>,
     platforms: Option<Vec<String>>,
+    online: Option<Vec<String>>,
+    online_hosts: Option<Vec<String>>,
 }
 
 /// Content labels makers can set (DESIGN §5); the database checks the same list.
@@ -890,6 +905,63 @@ fn validate_content_labels(labels: &[String]) -> ApiResult<Vec<String>> {
         if !out.contains(l) {
             out.push(l.clone());
         }
+    }
+    Ok(out)
+}
+
+/// What an app can connect to online; the database checks the same list.
+pub const ONLINE: [&str; 4] = [
+    "own_servers",
+    "player_servers",
+    "peer_to_peer",
+    "other_services",
+];
+
+fn validate_online(kinds: &[String]) -> ApiResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for k in kinds {
+        if !ONLINE.contains(&k.as_str()) {
+            return Err(ApiError::invalid(
+                "online",
+                "use own_servers, player_servers, peer_to_peer or other_services",
+            ));
+        }
+        if !out.contains(k) {
+            out.push(k.clone());
+        }
+    }
+    Ok(out)
+}
+
+/// Server names: `host` or `host:port`, lowercase, with a dot (`play.example.com`).
+fn validate_online_hosts(hosts: &[String]) -> ApiResult<Vec<String>> {
+    let mut out: Vec<String> = Vec::new();
+    for h in hosts {
+        let h = h.trim().to_ascii_lowercase();
+        if h.is_empty() {
+            continue;
+        }
+        let (name, port) = h.split_once(':').unwrap_or((&h, ""));
+        let ok = name.len() <= 253
+            && name.contains('.')
+            && !name.starts_with(['.', '-'])
+            && !name.ends_with(['.', '-'])
+            && name
+                .chars()
+                .all(|c| c.is_ascii_alphanumeric() || c == '.' || c == '-')
+            && (port.is_empty() || port.parse::<u16>().is_ok_and(|p| p > 0));
+        if !ok {
+            return Err(ApiError::invalid(
+                "online_hosts",
+                format!("{h:?} isn't a server name like play.example.com or play.example.com:7777"),
+            ));
+        }
+        if !out.contains(&h) {
+            out.push(h);
+        }
+    }
+    if out.len() > 10 {
+        return Err(ApiError::invalid("online_hosts", "list up to 10 servers"));
     }
     Ok(out)
 }
@@ -1070,6 +1142,8 @@ async fn create_app(
     let min_age = validate_min_age(req.min_age)?;
     let content_labels = validate_content_labels(&req.content_labels)?;
     let platforms = validate_platforms(&req.platforms)?;
+    let online = validate_online(&req.online)?;
+    let online_hosts = validate_online_hosts(&req.online_hosts)?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
     if let Some(t) = &req.repo_token {
@@ -1088,8 +1162,8 @@ async fn create_app(
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
-                           platforms, visibility, content_labels)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14)",
+                           platforms, visibility, content_labels, online, online_hosts)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -1105,6 +1179,8 @@ async fn create_app(
     .bind(&platforms)
     .bind(visibility)
     .bind(&content_labels)
+    .bind(&online)
+    .bind(&online_hosts)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -1190,6 +1266,13 @@ async fn update_app(
         qb.push(", platforms = ")
             .push_bind(validate_platforms(platforms)?);
     }
+    if let Some(online) = &changes.online {
+        qb.push(", online = ").push_bind(validate_online(online)?);
+    }
+    if let Some(hosts) = &changes.online_hosts {
+        qb.push(", online_hosts = ")
+            .push_bind(validate_online_hosts(hosts)?);
+    }
     if let Some(labels) = &changes.content_labels {
         qb.push(", content_labels = ")
             .push_bind(validate_content_labels(labels)?);
@@ -1224,6 +1307,29 @@ mod tests {
         assert!(v(&["linux"]).is_err(), "Linux needs a package");
         assert!(v(&["windows", "linux-deb"]).is_err(), "packages need Linux");
         assert!(v(&["mac"]).is_err());
+    }
+
+    #[test]
+    fn online_hosts() {
+        let ok = validate_online_hosts(&[
+            " Play.Example.com ".into(),
+            "api.example.com:7777".into(),
+            "play.example.com".into(),
+            "".into(),
+        ])
+        .unwrap();
+        assert_eq!(ok, ["play.example.com", "api.example.com:7777"]);
+        for bad in [
+            "localhost",
+            "http://x.com",
+            "x.com/path",
+            "x.com:0",
+            "x.com:99999",
+            "-x.com",
+        ] {
+            assert!(validate_online_hosts(&[bad.into()]).is_err(), "{bad}");
+        }
+        assert!(validate_online(&["own_servers".into(), "bogus".into()]).is_err());
     }
 
     #[test]
