@@ -506,6 +506,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
     let config = Config {
         bind: "127.0.0.1:0".parse().unwrap(),
         database_url: String::new(),
+        migrate_database_url: None,
         public_url: "http://localhost:8080".parse().unwrap(),
         github: Some(GithubConfig {
             client_id: "client".into(),
@@ -12701,4 +12702,96 @@ async fn makers_sign_hand_built_files_with_a_registered_key(db: PgPool) {
     .unwrap();
     assert!(problem.contains("different key"), "{problem}");
     MAKER_SIG.lock().unwrap().clear();
+}
+
+/// The API's own database role (migration 0050): it reads and writes as usual, but only adds
+/// to the ledgers, and can't switch off their append-only triggers.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_apis_role_only_adds_to_the_ledgers(db: PgPool) {
+    let role = format!("slop_app_test_{:08x}", rand::random::<u32>());
+    sqlx::query(sqlx::AssertSqlSafe(format!("create role {role} nologin")))
+        .execute(&db)
+        .await
+        .unwrap();
+    sqlx::query("select slop_grant_app_role($1)")
+        .bind(&role)
+        .execute(&db)
+        .await
+        .unwrap();
+    let can = |table: &'static str, what: &'static str| {
+        let (db, role) = (db.clone(), role.clone());
+        async move {
+            sqlx::query_scalar::<_, bool>("select has_table_privilege($1, $2, $3)")
+                .bind(role)
+                .bind(table)
+                .bind(what)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    for ledger in ["payments", "vote_events", "audit_log"] {
+        assert!(
+            can(ledger, "INSERT").await && can(ledger, "SELECT").await,
+            "{ledger}"
+        );
+        for what in ["UPDATE", "DELETE", "TRUNCATE"] {
+            assert!(!can(ledger, what).await, "{ledger} {what}");
+        }
+    }
+    for table in ["apps", "users", "votes", "releases"] {
+        assert!(
+            can(table, "UPDATE").await && can(table, "DELETE").await,
+            "{table}"
+        );
+    }
+    let user_id: bool =
+        sqlx::query_scalar("select has_column_privilege($1, 'vote_events', 'user_id', 'UPDATE')")
+            .bind(&role)
+            .fetch_one(&db)
+            .await
+            .unwrap();
+    assert!(user_id, "closing an account replaces its ID");
+
+    // As that role: the triggers stay on, and the ledgers can't be changed.
+    let mut tx = db.begin().await.unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!("set local role {role}")))
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    for (sql, expect) in [
+        (
+            "alter table payments disable trigger payments_append_only",
+            "must be owner",
+        ),
+        (
+            "drop trigger vote_events_append_only on vote_events",
+            "must be owner",
+        ),
+        ("delete from payments", "permission denied"),
+        ("update audit_log set action = action", "permission denied"),
+    ] {
+        sqlx::query("savepoint try_it")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+        let err = sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&mut *tx)
+            .await
+            .unwrap_err();
+        assert!(err.to_string().contains(expect), "{sql}: {err}");
+        sqlx::query("rollback to savepoint try_it")
+            .execute(&mut *tx)
+            .await
+            .unwrap();
+    }
+    tx.rollback().await.unwrap();
+
+    // Roles belong to the whole server: tidy up.
+    for sql in [format!("drop owned by {role}"), format!("drop role {role}")] {
+        sqlx::query(sqlx::AssertSqlSafe(sql))
+            .execute(&db)
+            .await
+            .unwrap();
+    }
 }
