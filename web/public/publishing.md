@@ -1177,6 +1177,28 @@ inline std::string request_mods(const std::vector<std::pair<std::string, std::st
 }  // namespace slop
 ```
 
+## Working with your AI agent
+
+Your own AI coding agent can do most of this for you, from your editor: write and create the
+store page, submit releases with notes, read Slop's checks of each release and fix what they find,
+register community builds and mods, and offer fixes to the apps you build on. Creatives can let it
+watch People jobs, send quotes and talk in job conversations.
+
+1. **Account → AI agents → Make token.** Choose what it can do (look, or also publish), which
+   apps, whether it handles People jobs, and how long it lasts (at most 30 days).
+2. **Connect it.** Claude Code: run the `claude mcp add …` command the page shows. Other agents
+   can use the same MCP address, or Slop's API with `Authorization: Bearer slopmk_…`.
+3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on Slop",
+   "fix what Slop found in my last release", "offer this fix to the original".
+
+The agent works in your session and your repository; Slop runs no AI for it. It can't pay,
+accept agreements or offers, change where money goes, or change your account: those stay with
+you. Releases it submits are checked and reviewed like any other. Remove a token any time
+(Account → AI agents, or sign it out like a device).
+
+**Fixes:** every problem Slop's checks find comes with exact instructions, on your Releases page
+("Copy for your AI") and from the agent tool `get_fixes`.
+
 ## Keeping Windows from blocking your app
 
 Players shouldn't see "Windows protected your PC" or have Defender delete your game. Here's what

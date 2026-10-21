@@ -20,6 +20,7 @@ pub mod donations;
 pub mod error;
 pub mod featured;
 pub mod fields;
+pub mod fixes;
 pub mod foryou;
 pub mod friends;
 pub mod frozen;
@@ -29,11 +30,13 @@ pub mod legal;
 pub mod legal_requests;
 pub mod library;
 pub mod limits;
+pub mod maker_agents;
 pub mod maker_keys;
 pub mod manage;
 pub mod media;
 pub mod moderation;
 pub mod notify;
+pub mod offers;
 pub mod ops;
 pub mod passkeys;
 pub mod people;
@@ -161,6 +164,9 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
         .merge(agent::routes())
+        .merge(maker_agents::routes())
+        .merge(fixes::routes())
+        .merge(offers::routes())
         .merge(review::routes())
         .merge(pulse::routes())
         .merge(legal_requests::routes())

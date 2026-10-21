@@ -15,6 +15,7 @@ import {
   ApiError,
   type AppPlatform,
   type FileKind,
+  type Fix,
   type GithubRelease,
   type NewRelease,
   type Platform,
@@ -27,6 +28,7 @@ import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { CONTENT_LABEL, formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { renderMarkdown } from "../markdown";
 import { useSession } from "../session";
 import { AgeSelect, ContentLabelPicker } from "./Publish";
 
@@ -224,6 +226,8 @@ export function Releases() {
         />
       )}
 
+      <FixesPanel slug={slug} nonce={releases.data?.[0]?.status ?? ""} />
+
       <UpdatesPanel key={settingsNonce} slug={slug} />
 
       <SlopBuildSetup slug={slug} />
@@ -283,6 +287,9 @@ export function Releases() {
             </div>
             <p className="muted small">{STATUS[r.status].help}</p>
             {r.status_reason && <p className="notice">{r.status_reason}</p>}
+            {r.notes && (
+              <div className="release-notes doc" dangerouslySetInnerHTML={{ __html: renderMarkdown(r.notes) }} />
+            )}
             <dl className="kv">
               <dt>Commit</dt>
               <dd>
@@ -555,6 +562,7 @@ function ReleaseForm({
 }) {
   const [rating, setRating] = useState(storeRating);
   const [runtimes, setRuntimes] = useState(lastRuntimes);
+  const [notes, setNotes] = useState("");
   const blank = () =>
     platforms.map((platform): FileRow => ({
       platform,
@@ -591,12 +599,14 @@ function ReleaseForm({
       })),
       rating,
       runtimes: runtimes.length > 0 || lastRuntimes.length > 0 ? runtimes : undefined,
+      notes: notes.trim() || undefined,
     };
     try {
       await gate.guard(() => api.submitRelease(slug, release));
       setDone(true);
       setVersion("");
       setCommit("");
+      setNotes("");
       setRows(blank());
       onSubmitted();
     } catch (err) {
@@ -708,6 +718,7 @@ function ReleaseForm({
       ))}
       <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
       <RuntimeFields value={runtimes} onChange={setRuntimes} />
+      <NotesField value={notes} onChange={setNotes} />
       {error && (error.field === "files" || !error.field) && (
         <p className="form-error" role="alert">
           {error.message}
@@ -772,6 +783,7 @@ function ReleasePicker({
 }) {
   const [rating, setRating] = useState(storeRating);
   const [runtimes, setRuntimes] = useState(lastRuntimes);
+  const [notes, setNotes] = useState("");
   const list = useLoad(() => api.githubReleases(slug), [slug]);
   const picker = useTermsGate();
   const [tag, setTag] = useState("");
@@ -827,8 +839,10 @@ function ReleasePicker({
         })),
         rating,
         runtimes,
+        notes.trim() || undefined,
       ));
       setDone(chosen.version);
+      setNotes("");
       list.reload();
       setTag("");
       setRows([]);
@@ -989,6 +1003,7 @@ function ReleasePicker({
           )}
           <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
           <RuntimeFields value={runtimes} onChange={setRuntimes} />
+          <NotesField value={notes} onChange={setNotes} fromGithub />
           <div className="actions">
             <button
               className="btn slime"
@@ -1162,5 +1177,57 @@ function RuntimeFields({ value, onChange }: { value: string[]; onChange: (v: str
         </label>
       ))}
     </details>
+  );
+}
+
+/** What changed, for players (Markdown, up to 5,000 characters). */
+function NotesField({ value, onChange, fromGithub }: { value: string; onChange: (v: string) => void; fromGithub?: boolean }) {
+  return (
+    <label>
+      What's new, for players (optional)
+      <textarea
+        value={value}
+        maxLength={5000}
+        rows={4}
+        placeholder={fromGithub ? "Leave empty to use the GitHub release's text" : "What changed since the last version"}
+        onChange={(e) => onChange(e.target.value)}
+      />
+    </label>
+  );
+}
+
+/** Problems Slop's checks found in the newest release, each with a fix to hand to an AI agent. */
+function FixesPanel({ slug, nonce }: { slug: string; nonce: string }) {
+  const fixes = useLoad(() => api.fixes(slug), [slug, nonce]);
+  const list = fixes.data?.fixes ?? [];
+  if (list.length === 0) return null;
+  const prompt = (f: Fix) =>
+    `Slop's checks of my app found this. ${f.problem}\nFix it in the repository: ${f.instruction}` +
+    (f.guide_section ? `\n(Slop's publishing guide, section "${f.guide_section}", has the details.)` : "");
+  const all = list.map(prompt).join("\n\n") + `\n\n${fixes.data?.next ?? ""}`;
+  return (
+    <section className="panel panel-pad" aria-labelledby="fixes-title">
+      <h2 id="fixes-title">To fix in {fixes.data?.release?.version}</h2>
+      <p className="muted small">
+        Copy these to your AI coding agent, or connect it to Slop (Account → AI agents) and ask it to run get_fixes.
+      </p>
+      <ul className="fix-list">
+        {list.map((f, i) => (
+          <li key={`${f.kind}-${i}`}>
+            <span className={`badge ${f.severity === "must" ? "bad" : "warn"}`}>
+              {f.severity === "must" ? "MUST FIX" : "SHOULD FIX"}
+            </span>{" "}
+            {f.problem}
+            <p className="small">{f.instruction}</p>
+            <button className="btn small ghost" type="button" onClick={() => void navigator.clipboard.writeText(prompt(f))}>
+              Copy for your AI
+            </button>
+          </li>
+        ))}
+      </ul>
+      <button className="btn small" type="button" onClick={() => void navigator.clipboard.writeText(all)}>
+        Copy all for your AI
+      </button>
+    </section>
   );
 }

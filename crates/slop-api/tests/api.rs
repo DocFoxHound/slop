@@ -13789,3 +13789,284 @@ async fn anyone_can_verify_a_file_by_its_hash(db: PgPool) {
     let res = app.send(req(Method::GET, "/v1/verify/not-a-hash")).await;
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }
+
+/// Makers' AI agents (maker_agents.rs): a token does maker work and nothing else, within its
+/// scope and apps, over REST and MCP; releases get notes; fixes and offers work for it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_makers_agent_does_maker_work_only(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let new_token = |body: Value| {
+        req(Method::POST, "/v1/me/maker-tokens")
+            .cookie(&maker)
+            .json(body)
+    };
+    let res = app
+        .send(new_token(
+            json!({ "name": "Claude", "scope": "publish", "people": true }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let created = body_json(res).await;
+    let secret = created["secret"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("slopmk_"));
+    assert!(
+        created["claude_command"]
+            .as_str()
+            .unwrap()
+            .contains(&secret)
+    );
+    assert_eq!(created["people"], true);
+    let bearer = format!("Bearer {secret}");
+    let agent = |m: Method, path: &str| req(m, path).header("authorization", bearer.clone());
+
+    // Maker work, yes; anything else, no.
+    let res = app.send(agent(Method::GET, "/v1/me/apps")).await;
+    let status = res.status();
+    assert_eq!(status, StatusCode::OK, "{}", body_json(res).await);
+    for (m, path) in [
+        (Method::GET, "/v1/me/export"),
+        (Method::GET, "/v1/me/maker-tokens"),
+        (Method::POST, "/v1/me/close"),
+    ] {
+        assert_eq!(
+            app.send(agent(m, path)).await.status(),
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+    }
+
+    // The admin area doesn't exist for it.
+    assert_eq!(
+        app.send(agent(Method::GET, "/v1/admin/status"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // A release with notes, then too-long notes refused.
+    let mut body = release_body(&app, "1.0.0", "game-windows.zip");
+    body["notes"] = "First release: the whole game.".into();
+    let res = app
+        .send(agent(Method::POST, "/v1/apps/game/releases").json(body))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release = body_json(res).await;
+    assert_eq!(release["notes"], "First release: the whole game.");
+    let id = release["id"].as_str().unwrap();
+    let res = app
+        .send(
+            agent(Method::PATCH, &format!("/v1/apps/game/releases/{id}"))
+                .json(json!({ "notes": "x".repeat(5001) })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Fixes for the newest release.
+    let res = app.send(agent(Method::GET, "/v1/apps/game/fixes")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let fixes = body_json(res).await;
+    assert_eq!(fixes["release"]["version"], "1.0.0");
+    assert!(fixes["fixes"].is_array());
+
+    // MCP: the tools, and calls through them.
+    let rpc = |method: &str, params: Value| {
+        agent(Method::POST, "/v1/maker/mcp")
+            .json(json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params }))
+    };
+    let tools = body_json(app.send(rpc("tools/list", json!({}))).await).await;
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for want in [
+        "maker_guide",
+        "get_fixes",
+        "submit_release",
+        "register_community_build",
+        "send_quote",
+    ] {
+        assert!(names.contains(&want), "{want}");
+    }
+    let called = body_json(
+        app.send(rpc(
+            "tools/call",
+            json!({ "name": "list_releases", "arguments": { "slug": "game" } }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(called["result"]["isError"], false, "{called}");
+    assert!(
+        called["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("First release")
+    );
+    let guide = body_json(
+        app.send(rpc(
+            "tools/call",
+            json!({ "name": "publishing_guide", "arguments": { "section": "Saves and sandbox mode" } }),
+        ))
+        .await,
+    )
+    .await;
+    assert!(
+        guide["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("SLOP_SAVE_DIR")
+    );
+    // The website's own session can't drive the agent endpoint.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/maker/mcp")
+                .cookie(&maker)
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // A read-only token for some apps only, without People access.
+    let res = app
+        .send(new_token(
+            json!({ "name": "Watcher", "scope": "read", "apps": ["game"] }),
+        ))
+        .await;
+    let read = format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    );
+    let reader = |m: Method, path: &str| req(m, path).header("authorization", read.clone());
+    assert_eq!(
+        app.send(reader(Method::GET, "/v1/apps/game/releases"))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(reader(Method::PATCH, "/v1/apps/game").json(json!({ "title": "X" })))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(reader(Method::GET, "/v1/me/jobs")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let res = app
+        .send(new_token(
+            json!({ "name": "Bad", "scope": "publish", "apps": ["someone-elses"] }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Revoked: signed out at once.
+    let tokens = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(tokens.as_array().unwrap().len(), 2);
+    let id = tokens[1]["id"].as_str().unwrap();
+    assert_eq!(
+        app.send(req(Method::DELETE, format!("/v1/me/maker-tokens/{id}")).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(agent(Method::GET, "/v1/me/apps")).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+/// A community build offers its changes back to the original; the original's maker answers.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn community_builds_offer_fixes_to_the_original(db: PgPool) {
+    let app = test_app(db).await;
+    let (original_maker, original_cookie) = maker_with_app(&app, "released").await;
+    let (fork_maker, fork_cookie) = app.user("Forker", "US").await;
+    // Pull requests are https; the fake GitHub isn't.
+    sqlx::query("update apps set repo_url = 'https://github.com/octo/game' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms,
+                           parent_app_id, branch_kind, branch_note)
+         select $1, 'game-fix', 'Game (fixed)', 'Fixed', 'game', 'released', $2, 'https://github.com/forker/game',
+                'MIT', '{windows}', id, 'fix', 'Fixes the jump' from apps where slug = 'game'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(fork_maker)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let offer = |url: &str| {
+        req(Method::POST, "/v1/apps/game-fix/offers")
+            .cookie(&fork_cookie)
+            .json(json!({ "pull_request_url": url, "message": "Fixes the floaty jump." }))
+    };
+    assert_eq!(
+        app.send(offer("https://github.com/evil/game/pull/1"))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app.send(offer("https://github.com/octo/game/pull/7")).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    // The same pull request twice: no.
+    assert_eq!(
+        app.send(offer("https://github.com/octo/game/pull/7"))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    // The original's maker sees it, and was told.
+    let offers = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/offers").cookie(&original_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(offers[0]["direction"], "received");
+    assert_eq!(offers[0]["branch_slug"], "game-fix");
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like '%offered you a fix'",
+    )
+    .bind(original_maker)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+    // Only the original's maker answers.
+    let answer = |cookie: &str| {
+        req(Method::POST, format!("/v1/apps/game/offers/{id}/answer"))
+            .cookie(cookie)
+            .json(json!({ "decision": "accepted", "message": "Merged, thanks!" }))
+    };
+    assert_eq!(
+        app.send(answer(&fork_cookie)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(answer(&original_cookie)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let offers = body_json(
+        app.send(req(Method::GET, "/v1/apps/game-fix/offers").cookie(&fork_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            offers[0]["direction"].as_str(),
+            offers[0]["status"].as_str()
+        ),
+        (Some("sent"), Some("accepted"))
+    );
+}

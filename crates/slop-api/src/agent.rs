@@ -618,17 +618,17 @@ const PROTOCOL: &str = "2025-06-18";
 
 /// A tool: one call to the admin API. `{name}` in the path is filled from the arguments of the
 /// same name; the other arguments are the query (GET) or the JSON body.
-struct Tool {
-    name: &'static str,
-    description: &'static str,
-    method: Method,
-    path: &'static str,
+pub(crate) struct Tool {
+    pub(crate) name: &'static str,
+    pub(crate) description: &'static str,
+    pub(crate) method: Method,
+    pub(crate) path: &'static str,
     /// JSON Schema properties, and which are required.
-    properties: fn() -> Value,
-    required: &'static [&'static str],
+    pub(crate) properties: fn() -> Value,
+    pub(crate) required: &'static [&'static str],
 }
 
-fn s(desc: &str) -> Value {
+pub(crate) fn s(desc: &str) -> Value {
     json!({ "type": "string", "description": desc })
 }
 
@@ -843,9 +843,9 @@ const TOOLS: &[Tool] = &[
     },
 ];
 
-fn tool_list() -> Value {
+fn tool_list(tools: &[Tool]) -> Value {
     Value::Array(
-        TOOLS
+        tools
             .iter()
             .map(|t| {
                 json!({
@@ -859,7 +859,7 @@ fn tool_list() -> Value {
 }
 
 /// Builds the admin API request a tool call stands for.
-fn tool_request(
+pub(crate) fn tool_request(
     tool: &Tool,
     args: &serde_json::Map<String, Value>,
 ) -> Result<(Method, String, Option<Value>), String> {
@@ -933,6 +933,24 @@ fn rpc_error(id: Value, code: i64, message: &str) -> Value {
 
 /// MCP over plain HTTP POST (JSON responses, no server-sent events).
 async fn mcp(State(state): State<AppState>, _admin: AdminUser, request: Request) -> Response {
+    serve_mcp(
+        &state,
+        request,
+        TOOLS,
+        "slop-admin",
+        "Slop's admin API. Call slop_status first, read review_guide before deciding, and only act when the admin you work for asked you to. Every action is in the audit log under your token's name.",
+    )
+    .await
+}
+
+/// Answers one MCP request with `tools`, each calling Slop's API with the caller's credentials.
+pub(crate) async fn serve_mcp(
+    state: &AppState,
+    request: Request,
+    tools: &'static [Tool],
+    server: &str,
+    instructions: &str,
+) -> Response {
     let headers = request.headers().clone();
     let connect = request
         .extensions()
@@ -955,19 +973,19 @@ async fn mcp(State(state): State<AppState>, _admin: AdminUser, request: Request)
             json!({
                 "protocolVersion": PROTOCOL,
                 "capabilities": { "tools": { "listChanged": false } },
-                "serverInfo": { "name": "slop-admin", "version": env!("CARGO_PKG_VERSION") },
-                "instructions": "Slop's admin API. Call slop_status first, read review_guide before deciding, and only act when the admin you work for asked you to. Every action is in the audit log under your token's name.",
+                "serverInfo": { "name": server, "version": env!("CARGO_PKG_VERSION") },
+                "instructions": instructions,
             }),
         ),
         "ping" => rpc_result(id, json!({})),
-        "tools/list" => rpc_result(id, json!({ "tools": tool_list() })),
+        "tools/list" => rpc_result(id, json!({ "tools": tool_list(tools) })),
         "tools/call" => {
             let name = req.params["name"].as_str().unwrap_or("");
             let empty = serde_json::Map::new();
             let args = req.params["arguments"].as_object().unwrap_or(&empty);
-            match TOOLS.iter().find(|t| t.name == name) {
+            match tools.iter().find(|t| t.name == name) {
                 None => rpc_error(id, -32602, "unknown tool"),
-                Some(tool) => match call_tool(&state, tool, args, &headers, connect).await {
+                Some(tool) => match call_tool(state, tool, args, &headers, connect).await {
                     Ok((ok, text)) => rpc_result(
                         id,
                         json!({ "content": [{ "type": "text", "text": text }], "isError": !ok }),

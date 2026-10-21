@@ -6,6 +6,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } 
 
 import { api, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
 import { StepUpPrompt } from "../components/PasskeyStepUp";
+import { AiAgents } from "../components/AiAgents";
 import { SigningKeys } from "../components/SigningKeys";
 import { createPasskey, passkeysSupported, signWithPasskey } from "../passkeys";
 import { ErrorState, Loading } from "../components/ui";
@@ -510,6 +511,7 @@ export function Account() {
 
       <SignIns />
       <SigningKeys />
+      <AiAgents />
       <AccountNotifications />
       {isDesktop && <ThisDevice />}
       <AccountDecisions />
@@ -523,7 +525,13 @@ export function Account() {
         {sessions.data?.map((s) => (
           <li key={s.id}>
             <div>
-              <b>{s.kind === "desktop" ? (s.user_agent ?? "Slop app") : describeAgent(s.user_agent)}</b>{" "}
+              <b>
+                {s.kind === "desktop"
+                  ? (s.user_agent ?? "Slop app")
+                  : s.kind === "agent"
+                    ? (s.user_agent ?? "AI agent")
+                    : describeAgent(s.user_agent)}
+              </b>{" "}
               {s.current && <span className="badge official">THIS DEVICE</span>}
               <div className="muted small">
                 Signed in {formatDate(s.created_at)} · last used {formatDate(s.last_seen_at)}

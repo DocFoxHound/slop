@@ -397,6 +397,9 @@ struct FromGithub {
     rating: Option<releases::Rating>,
     #[serde(default)]
     runtimes: Option<Vec<String>>,
+    /// What changed, for players; the GitHub release's text when left out.
+    #[serde(default)]
+    notes: Option<String>,
 }
 
 /// Submits a GitHub release: the version comes from the tag and the commit from GitHub.
@@ -428,6 +431,32 @@ async fn submit_from_github(
         req.runtimes,
     )
     .await?;
+    // The notes given, or else the GitHub release's own text (best effort).
+    let notes = match req.notes {
+        Some(n) => Some(n),
+        None => {
+            #[derive(Deserialize)]
+            struct GhRelease {
+                body: Option<String>,
+            }
+            gh_json::<GhRelease>(
+                &state,
+                &format!("repos/{repo_path}/releases/tags/{}", path_segment(&req.tag)),
+            )
+            .await
+            .ok()
+            .flatten()
+            .and_then(|r| r.body)
+            .map(|b| b.chars().take(5000).collect())
+        }
+    };
+    let release = match notes {
+        Some(n) => {
+            releases::set_notes(&state.db, release.id, &n).await?;
+            releases::load_release(&state, release.id).await?
+        }
+        None => release,
+    };
     Ok((StatusCode::CREATED, Json(release)))
 }
 
