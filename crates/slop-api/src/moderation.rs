@@ -64,6 +64,7 @@ const ALL: &[&str] = &[
     "app_review",
     "team",
     "chat_message",
+    "bounty",
 ];
 
 pub const REASONS: &[Reason] = &[
@@ -84,6 +85,7 @@ pub const REASONS: &[Reason] = &[
             "team",
             "message",
             "chat_message",
+            "bounty",
         ],
         priority: 0,
         rule: Some("threat"),
@@ -154,6 +156,7 @@ pub const REASONS: &[Reason] = &[
             "team",
             "message",
             "chat_message",
+            "bounty",
         ],
         priority: 2,
         rule: Some("harassment"),
@@ -168,6 +171,7 @@ pub const REASONS: &[Reason] = &[
             "team",
             "message",
             "chat_message",
+            "bounty",
         ],
         priority: 2,
         rule: Some("private_info"),
@@ -204,6 +208,7 @@ pub const REASONS: &[Reason] = &[
         code: "spam",
         label: "Spam",
         kinds: &[
+            "bounty",
             "review",
             "app_review",
             "profile",
@@ -275,6 +280,7 @@ pub fn action_label(action: &str) -> &'static str {
         "hide_profile" => "Profile hidden",
         "hide_team" => "Team hidden",
         "remove_reply" => "Reply removed",
+        "hide_bounty" => "Bounty hidden",
         "suspend_account" => "Account suspended",
         "warn" => "Warning",
         _ => "Decision",
@@ -290,6 +296,7 @@ fn actions_for(kind: &str) -> &'static [&'static str] {
         "app_review" => &["hide_review", "remove_reply", "warn", "suspend_account"],
         "profile" => &["hide_profile", "warn", "suspend_account"],
         "team" => &["hide_team", "warn", "suspend_account"],
+        "bounty" => &["hide_bounty", "warn", "suspend_account"],
         _ => &["warn", "suspend_account"],
     }
 }
@@ -486,6 +493,22 @@ async fn find_subject(
                 quoted: None,
             })
         }
+        "bounty" => {
+            let id: Uuid = subject.parse().map_err(|_| ApiError::NotFound)?;
+            let row: Option<(Uuid, String)> = sqlx::query_as(
+                "select created_by, title from bounties where id = $1 and status <> 'hidden'",
+            )
+            .bind(id)
+            .fetch_optional(&state.db)
+            .await?;
+            let (author, title) = row.ok_or(ApiError::NotFound)?;
+            Ok(Subject {
+                id,
+                user_id: Some(author),
+                label: format!("Bounty: {title}"),
+                quoted: None,
+            })
+        }
         "app_review" => {
             let id: Uuid = subject.parse().map_err(|_| ApiError::NotFound)?;
             let row: Option<(Uuid, String, String)> = sqlx::query_as(
@@ -572,7 +595,7 @@ async fn find_subject(
         }
         _ => Err(ApiError::invalid(
             "kind",
-            "app, review, app_review, profile, message or chat_message",
+            "app, review, app_review, profile, message, chat_message or bounty",
         )),
     }
 }
@@ -914,6 +937,29 @@ async fn apply(
             .execute(&mut *tx)
             .await?;
         }
+        ("hide_bounty", "bounty") => {
+            // Hiding ends it: saved cards are released by the charger's expiry pass.
+            sqlx::query(
+                "update bounties set status = case when $2 then 'open' else 'hidden' end,
+                        hidden_reason = case when $2 then null else $3 end,
+                        expires_at = case when $2 then expires_at else now() end
+                 where id = $1",
+            )
+            .bind(subject_id)
+            .bind(undo)
+            .bind(why)
+            .execute(&mut *tx)
+            .await?;
+            if !undo {
+                sqlx::query(
+                    "update bounty_pledges set status = 'released'
+                     where bounty_id = $1 and status in ('saving', 'active')",
+                )
+                .bind(subject_id)
+                .execute(&mut *tx)
+                .await?;
+            }
+        }
         ("remove_reply", "app_review") => {
             sqlx::query(
                 "update app_reviews set reply_hidden_at = case when $2 then null else now() end,
@@ -1249,6 +1295,7 @@ async fn link(db: &sqlx::PgPool, kind: &str, id: Uuid) -> sqlx::Result<Option<St
         .fetch_optional(db)
         .await?
         .map(|s| format!("/app/{s}#review-{id}")),
+        "bounty" => Some(format!("/bounties/{id}")),
         "review" => sqlx::query_scalar::<_, String>(
             "select c.handle from creative_reviews r join creatives c on c.user_id = r.creative_id
              where r.job_id = $1",

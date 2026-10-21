@@ -8,6 +8,7 @@ import { Gallery } from "../components/Gallery";
 import { RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
 import { AppLabel, LabelNotes } from "../components/AppLabel";
+import { AppBounties } from "./Bounties";
 import { Reviews } from "../components/Reviews";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, STAGE_LABEL } from "../format";
@@ -241,6 +242,7 @@ function AppView({ app }: { app: AppDetail }) {
           <AppLabel slug={app.slug} />
           {!app.private && <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />}
           {!app.private && <Reviews slug={app.slug} />}
+          {!app.private && !app.platforms.includes("any") && <AppBounties slug={app.slug} title={app.title} />}
         </div>
         <aside className="side-col">
           <div className="panel panel-pad install-box">

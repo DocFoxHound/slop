@@ -109,6 +109,11 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/apps/{slug}/media/check", true, Slug::Own),
     ("POST", "/apps/{slug}/offers", true, Slug::Own),
     ("PUT", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
+    ("GET", "/apps/{slug}/bounties", false, Slug::Any),
+    ("GET", "/bounties", false, Slug::Any),
+    ("GET", "/bounties/*", false, Slug::Any),
+    // Claiming pays the maker; it's checked by the app's maker or the backers.
+    ("POST", "/bounties/*/claims", true, Slug::Any),
     ("DELETE", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/answer", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/withdraw", true, Slug::Own),
@@ -673,6 +678,36 @@ pub(crate) const TOOLS: &[Tool] = &[
             })
         },
         required: &["slug", "id", "body"],
+    },
+    Tool {
+        name: "list_bounties",
+        description: "Open fix bounties: what players will pay for, biggest first. With an app's address: that app's bounties. A bounty is paid to whoever delivers it in an approved release of the app or of a community build of it.",
+        method: Method::GET,
+        path: "/v1/bounties",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "get_bounty",
+        description: "One bounty: what's wanted, how much is pledged, and deliveries so far.",
+        method: Method::GET,
+        path: "/v1/bounties/{id}",
+        properties: || json!({ "id": s("The bounty's ID") }),
+        required: &["id"],
+    },
+    Tool {
+        name: "claim_bounty",
+        description: "Says your maker's newest approved release delivers a bounty. Only when it truly does what the bounty asks: the app's maker or the backers check it before anyone is charged. Your maker needs a donation account (their Stripe account) to be paid.",
+        method: Method::POST,
+        path: "/v1/bounties/{id}/claims",
+        properties: || {
+            json!({
+                "id": s("The bounty's ID"),
+                "app_slug": s("Your maker's app it's delivered in: the bounty's app or a community build of it"),
+                "note": s("What was done, for the backers: up to 2,000 characters"),
+            })
+        },
+        required: &["id", "app_slug", "note"],
     },
     Tool {
         name: "list_categories",

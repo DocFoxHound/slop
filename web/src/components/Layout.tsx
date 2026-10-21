@@ -271,6 +271,7 @@ export function Sidebar({ active }: { active?: string }) {
       <Link to="/publish">⬆️ Publish your app</Link>
       <Link to="/publish/guide">📖 How to publish</Link>
       <Link to="/people">🎨 Hire artists &amp; composers</Link>
+      <Link to="/bounties">💰 Fix bounties</Link>
       <h4>Slop</h4>
       <Link to="/legal">📜 Terms &amp; policies</Link>
       <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>

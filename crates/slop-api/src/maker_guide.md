@@ -66,3 +66,9 @@ has People access you can watch and help with jobs, as the creative or the clien
 - Accepting an offer or a change, paying, signing off, delivering files, withdrawing and
   cancelling are for the person: this token can't, so tell them what's waiting.
 - Friends' chat is end-to-end encrypted and isn't available to agents.
+
+## Bounties
+
+Players pledge money toward fixes they want (`list_bounties`). If your maker's release really
+does what one asks, `claim_bounty`; the app's maker or the backers check it before anyone is
+charged. Pledging, and accepting a delivery to your maker's app, are for the person.

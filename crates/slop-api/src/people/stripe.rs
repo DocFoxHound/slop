@@ -523,6 +523,12 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
                 sync_session(state, stripe, acct, &object_id).await?;
             }
         }
+        // A bounty pledge's card saved on Slop's own account (bounties.rs).
+        ("checkout.session.completed", None)
+            if event.data.object["metadata"]["bounty_pledge_id"].is_string() =>
+        {
+            crate::bounties::sync_pledge(state, stripe, &object_id).await?;
+        }
         ("invoice.paid", Some(acct)) => {
             crate::donations::sync_invoice(state, stripe, acct, &object_id).await?;
         }
