@@ -1128,9 +1128,56 @@ pub fn archive_url(kind: Kind, repo_url: &Url, commit: &str) -> Option<Url> {
             percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC)
         ),
         Kind::Gitea => format!("{origin}/api/v1/repos/{path}/archive/{commit}.tar.gz"),
-        Kind::Bitbucket => return None,
+        // Bitbucket Cloud's download link for a commit.
+        Kind::Bitbucket => format!("{origin}/{path}/get/{commit}.tar.gz"),
     };
     Url::parse(&url).ok()
+}
+
+/// What software a self-hosted server runs, by asking it: Gitea and Forgejo answer
+/// `/api/v1/version`, GitLab its project API for a public project. Never on a private network,
+/// and in tests only on this machine (tests never reach the internet).
+async fn detect(state: &AppState, repo: &Url) -> Option<Kind> {
+    let host = repo.host_str()?;
+    if state.config.releases.allow_http_downloads && !matches!(host, "127.0.0.1" | "localhost") {
+        return None;
+    }
+    let origin = repo.origin().ascii_serialization();
+    let path = repo.path().trim_matches('/').trim_end_matches(".git");
+    let ask = |url: String, key: &'static str| async move {
+        let url = Url::parse(&url).ok()?;
+        crate::repo_owner::public_host(state, &url).await.ok()?;
+        let res = state
+            .http
+            .get(url)
+            .header("user-agent", "slop-api")
+            .timeout(std::time::Duration::from_secs(5))
+            .send()
+            .await
+            .ok()?;
+        if !res.status().is_success() {
+            return None;
+        }
+        let body: Value = res.json().await.ok()?;
+        body[key].is_string().then_some(())
+    };
+    if ask(format!("{origin}/api/v1/version"), "version")
+        .await
+        .is_some()
+    {
+        return Some(Kind::Gitea);
+    }
+    let project = percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC);
+    if ask(
+        format!("{origin}/api/v4/projects/{project}"),
+        "path_with_namespace",
+    )
+    .await
+    .is_some()
+    {
+        return Some(Kind::Gitlab);
+    }
+    None
 }
 
 /// Where to read a release's source, or None for hosts Slop can't read.
@@ -1148,33 +1195,6 @@ async fn source(
     if let Some(repo) = slop_provenance::github_repo_path(repo_url) {
         return github_source(state, &repo, commit).map(Some);
     }
-    let Ok(url) = Url::parse(repo_url) else {
-        return Ok(None);
-    };
-    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
-    // A token the maker saved says what the host is (self-hosted servers); then the list.
-    let kind = match crate::repo_tokens::saved_kind(&state.db, app_id).await? {
-        Some(kind) => Some(kind),
-        None => state
-            .config
-            .releases
-            .source_hosts
-            .iter()
-            .find(|(h, _)| *h == host)
-            .map(|(_, k)| *k),
-    };
-    if let Some(archive) = kind.and_then(|k| archive_url(k, &url, commit)) {
-        let name = match (host.as_str(), kind) {
-            ("codeberg.org", _) => "Codeberg".to_string(),
-            (_, Some(Kind::Gitlab)) => "GitLab".to_string(),
-            _ => host.clone(),
-        };
-        return Ok(Some(Source {
-            host: name,
-            url: archive,
-            github: false,
-        }));
-    }
     // Development and tests: a stand-in GitHub serves repositories under its own address.
     let base = state.config.releases.github_api_base.as_str();
     let stand_in = state
@@ -1185,9 +1205,43 @@ async fn source(
         .flatten()
         .map(|p| p.trim_matches('/').to_string())
         .filter(|p| p.split('/').count() == 2);
-    stand_in
-        .map(|repo| github_source(state, &repo, commit))
-        .transpose()
+    if let Some(repo) = stand_in {
+        return github_source(state, &repo, commit).map(Some);
+    }
+    let Ok(url) = Url::parse(repo_url) else {
+        return Ok(None);
+    };
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    // A token the maker saved says what the host is (self-hosted servers); then the list; then
+    // asking the server itself.
+    let kind = match crate::repo_tokens::saved_kind(&state.db, app_id).await? {
+        Some(kind) => Some(kind),
+        None => match state
+            .config
+            .releases
+            .source_hosts
+            .iter()
+            .find(|(h, _)| *h == host)
+            .map(|(_, k)| *k)
+        {
+            Some(k) => Some(k),
+            None => detect(state, &url).await,
+        },
+    };
+    if let Some(archive) = kind.and_then(|k| archive_url(k, &url, commit)) {
+        let name = match (host.as_str(), kind) {
+            ("codeberg.org", _) => "Codeberg".to_string(),
+            ("bitbucket.org", _) => "Bitbucket".to_string(),
+            (_, Some(Kind::Gitlab)) => "GitLab".to_string(),
+            _ => host.clone(),
+        };
+        return Ok(Some(Source {
+            host: name,
+            url: archive,
+            github: false,
+        }));
+    }
+    Ok(None)
 }
 
 fn github_source(state: &AppState, repo: &str, commit: &str) -> anyhow::Result<Source> {
@@ -1278,7 +1332,7 @@ pub async fn scan_release(
             (serde_json::to_value(report).unwrap_or_default(), packages)
         }
         Ok(None) => (
-            json!({ "status": "not_checked", "detail": "Slop can only read source on GitHub, GitLab and Codeberg so far; a reviewer checks the licence by hand." }),
+            json!({ "status": "not_checked", "detail": "Slop can only read source on GitHub, GitLab, Bitbucket, Codeberg and other Gitea or Forgejo servers so far; a reviewer checks the licence by hand." }),
             vec![],
         ),
         Err(err) if err.downcast_ref::<TooBig>().is_some() => (
@@ -1474,6 +1528,29 @@ pub async fn run(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archives_come_from_each_hosts_own_address() {
+        let url = |s: &str| Url::parse(s).unwrap();
+        let c = "a".repeat(40);
+        assert_eq!(
+            archive_url(
+                Kind::Bitbucket,
+                &url("https://bitbucket.org/ws/game.git"),
+                &c
+            )
+            .unwrap()
+            .as_str(),
+            format!("https://bitbucket.org/ws/game/get/{c}.tar.gz")
+        );
+        assert_eq!(
+            archive_url(Kind::Gitea, &url("https://git.example/me/game"), &c)
+                .unwrap()
+                .as_str(),
+            format!("https://git.example/api/v1/repos/me/game/archive/{c}.tar.gz")
+        );
+        assert!(archive_url(Kind::Gitea, &url("https://git.example/onlyone"), &c).is_none());
+    }
 
     #[test]
     fn saves_outside_slops_save_folder_become_notes() {
