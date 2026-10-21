@@ -606,6 +606,8 @@ struct AppDetail {
     accessibility: Vec<String>,
     /// Takes bug reports from players (bug_reports.rs).
     bug_reports: bool,
+    /// A browser demo running now (demos.rs): where to play it, and until when.
+    demo: Option<serde_json::Value>,
 }
 
 #[derive(Serialize)]
@@ -746,6 +748,18 @@ async fn load_detail(
         mods_folder: extra.mods_folder,
         accessibility: extra.accessibility,
         bug_reports: extra.bug_reports,
+        demo: match crate::demos::play_link(state, slug) {
+            Some(url) => sqlx::query_scalar::<_, OffsetDateTime>(
+                "select ends_at from demos where app_id = $1 and status = 'live' and ends_at > now()",
+            )
+            .bind(extra.id)
+            .fetch_optional(&state.db)
+            .await?
+            .map(|ends| {
+                serde_json::json!({ "url": url, "ends_at": ends.format(&time::format_description::well_known::Rfc3339).ok() })
+            }),
+            None => None,
+        },
         sandbox: sandbox_info(&state.db, extra.id).await?,
         sandbox_reported: match user {
             Some(u) => sqlx::query_scalar(

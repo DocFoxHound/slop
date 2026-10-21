@@ -165,7 +165,11 @@ fn is_github(url: &Url) -> bool {
 
 /// Release files must live on the maker's own release page (ARCHITECTURE §6.4): for GitHub,
 /// under `<repo>/releases/download/`; elsewhere, on the repo's own host.
-fn validate_file_url(repo_url: &str, value: &str, allow_http: bool) -> ApiResult<(String, String)> {
+pub(crate) fn validate_file_url(
+    repo_url: &str,
+    value: &str,
+    allow_http: bool,
+) -> ApiResult<(String, String)> {
     let invalid = |msg: &str| ApiError::invalid("files", msg.to_string());
     let url = Url::parse(value.trim()).map_err(|_| invalid("a file URL isn't valid"))?;
     let repo = Url::parse(repo_url).map_err(|_| invalid("the app's repository URL isn't valid"))?;

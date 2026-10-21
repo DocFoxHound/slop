@@ -117,6 +117,9 @@ async fn fake_github() -> String {
             "/octo/game/releases/download/{tag}/{file}",
             // A maker's .sig beside a file, when a test has set one (maker keys).
             get(|axum::extract::Path((_, file)): axum::extract::Path<(String, String)>| async move {
+                if file == "web.zip" {
+                    return web_build().into_response();
+                }
                 if file.ends_with(".sig") {
                     let sig = MAKER_SIG.lock().unwrap().clone();
                     return if sig.is_empty() { StatusCode::NOT_FOUND.into_response() } else { sig.into_response() };
@@ -545,6 +548,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
+        demos: Default::default(),
         media: slop_api::config::MediaConfig {
             github_raw_base: format!("{github_base}raw/").parse().unwrap(),
         },
@@ -15107,4 +15111,160 @@ async fn saves_sync_without_silent_overwrites(db: PgPool) {
             .status(),
         StatusCode::NOT_FOUND
     );
+}
+
+/// A tiny web build (an HTML5 export) for browser demos.
+fn web_build() -> Vec<u8> {
+    use std::io::Write;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in [
+        (
+            "web/index.html",
+            "<!doctype html><script src=game.js></script>",
+        ),
+        ("web/game.js", "console.log('pong')"),
+    ] {
+        w.start_file(name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(data.as_bytes()).unwrap();
+    }
+    w.finish().unwrap().into_inner()
+}
+
+/// Browser demos (demos.rs): a new game's web build, scanned, unpacked and served from the play
+/// origin only, with its own headers; not for apps released too long ago; ended and deleted.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn new_games_get_a_browser_demo_for_a_while(db: PgPool) {
+    let dir = std::env::temp_dir().join(format!("slop-demos-test-{}", rand::random::<u64>()));
+    let demo_dir = dir.clone();
+    let app = test_app_with(db, move |c| {
+        c.demos.play_url = Some("http://play.localhost:8080".parse().unwrap());
+        c.demos.dir = demo_dir;
+    })
+    .await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    sqlx::query("update apps set status = 'listed', stage_entered_at = now() where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let url = format!("{}octo/game/releases/download/v1/web.zip", app.fake_base);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/demo")
+                .cookie(&maker)
+                .json(json!({ "url": url })),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::ACCEPTED,
+        "{}",
+        body_json(res).await
+    );
+    let mut status = Value::Null;
+    for _ in 0..100 {
+        status = body_json(
+            app.send(req(Method::GET, "/v1/apps/game/demo").cookie(&maker))
+                .await,
+        )
+        .await;
+        if status["demo"]["status"] != "fetching" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    assert_eq!(status["demo"]["status"], "live", "{status}");
+    assert_eq!(status["play_url"], "http://play.localhost:8080/play/game/");
+    assert_eq!(
+        status["demo"]["scan_result"], "skipped",
+        "this test server doesn't scan"
+    );
+
+    let get = |host: &'static str, path: &str| {
+        let router = app.router.clone();
+        let path = path.to_string();
+        async move {
+            router
+                .oneshot(
+                    Request::builder()
+                        .uri(path)
+                        .header(header::HOST, host)
+                        .body(Body::empty())
+                        .unwrap(),
+                )
+                .await
+                .unwrap()
+        }
+    };
+    let res = get("play.localhost:8080", "/play/game/").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let csp = res.headers()[header::CONTENT_SECURITY_POLICY]
+        .to_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        csp.contains("connect-src 'self'") && csp.contains("wasm-unsafe-eval"),
+        "{csp}"
+    );
+    assert_eq!(
+        res.headers()["cross-origin-embedder-policy"],
+        "require-corp"
+    );
+    let body = axum::body::to_bytes(res.into_body(), 1 << 20)
+        .await
+        .unwrap();
+    assert!(String::from_utf8_lossy(&body).contains("game.js"));
+    assert_eq!(
+        get("play.localhost:8080", "/play/game/game.js")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        get("play.localhost:8080", "/play/game/../secret")
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // Never on Slop's own origin; nothing but demos on the play origin.
+    assert_eq!(
+        get("localhost:8080", "/play/game/").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        get("play.localhost:8080", "/v1/apps").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let plays: i32 = sqlx::query_scalar("select plays from demos")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(plays, 1);
+
+    // Past its days: ended and deleted.
+    sqlx::query("update demos set ends_at = now() - interval '1 minute'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::demos::expire(&app.state).await.unwrap(), 1);
+    assert!(!dir.join("game").exists());
+    assert_eq!(
+        get("play.localhost:8080", "/play/game/").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    // Released long ago: no demo.
+    sqlx::query(
+        "update apps set stage_entered_at = now() - interval '30 days' where slug = 'game'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/demo")
+                .cookie(&maker)
+                .json(json!({ "url": url })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
 }

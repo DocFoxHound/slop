@@ -264,6 +264,20 @@ then `sudo systemctl restart systemd-journald`. Records with legal keeping perio
 decisions, law-enforcement requests, agreement acceptances) are purged by the API itself
 (`retention.rs`).
 
+## Browser demos
+
+New games with a web build can be played in the browser for their first 14 days (demos.rs). Off
+until set up, and capped so it can't grow into a bill:
+
+1. Copy the updated `deploy/slop.caddyfile` (it adds `play.188-68-41-241.sslip.io`) to
+   `/etc/caddy/Caddyfile.d/` and reload Caddy.
+2. In `~/.config/slop/slop.env`: `SLOP_PLAY_URL=https://play.188-68-41-241.sslip.io` and
+   `SLOP_DEMO_DIR=/home/brian/slop-demos`, then `systemctl --user restart slop-api`.
+
+Limits (optional settings): `SLOP_DEMO_DAYS` (14), `SLOP_DEMO_MAX` demos at once (10) and
+`SLOP_DEMO_DAILY_GB` served per day across all demos (20); past the daily cap, players are told
+to install the game instead. Demos are deleted when they end.
+
 ## Source code link
 
 The server, website and desktop app are under the AGPL (README "License"), which asks a network

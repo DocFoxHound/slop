@@ -33,6 +33,8 @@ pub struct Config {
     pub releases: ReleaseConfig,
     pub rate_limits: crate::ratelimit::Limits,
     pub desktop: DesktopConfig,
+    /// Browser demos of new games (demos.rs).
+    pub demos: DemoConfig,
     pub media: MediaConfig,
     pub payments: PaymentsConfig,
     /// Product emails (notify.rs). Unset: notifications stay in Slop, nothing is emailed.
@@ -76,6 +78,39 @@ pub struct OpsConfig {
 }
 
 /// Updates for the Slop desktop app itself (desktop_updates.rs).
+/// Browser demos (demos.rs): off unless `SLOP_PLAY_URL` names the separate origin they're
+/// served from.
+#[derive(Clone, Debug)]
+pub struct DemoConfig {
+    /// The demos' own origin, e.g. https://play.slop.example (never Slop's own).
+    pub play_url: Option<Url>,
+    /// Where unpacked demos are kept.
+    pub dir: std::path::PathBuf,
+    /// Days after release a demo is hosted.
+    pub days: i64,
+    /// Demos hosted at once.
+    pub max_live: i64,
+    /// Bytes served per day across all demos; past it, "install instead".
+    pub daily_bytes: u64,
+    /// Largest web build (zip) and its unpacked size.
+    pub max_zip_bytes: u64,
+    pub max_unpacked_bytes: u64,
+}
+
+impl Default for DemoConfig {
+    fn default() -> Self {
+        Self {
+            play_url: None,
+            dir: std::env::temp_dir().join("slop-demos"),
+            days: 14,
+            max_live: 10,
+            daily_bytes: 20 * 1024 * 1024 * 1024,
+            max_zip_bytes: 100 * 1024 * 1024,
+            max_unpacked_bytes: 250 * 1024 * 1024,
+        }
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct DesktopConfig {
     /// Where uploaded builds are kept.
@@ -552,6 +587,26 @@ impl Config {
                 auth_per_minute: int_var("SLOP_RATE_AUTH_PER_MIN", 20)?.max(1) as u32,
                 write_per_minute: int_var("SLOP_RATE_WRITE_PER_MIN", 60)?.max(1) as u32,
                 read_per_minute: int_var("SLOP_RATE_READ_PER_MIN", 600)?.max(1) as u32,
+            },
+            demos: DemoConfig {
+                play_url: env::var("SLOP_PLAY_URL")
+                    .ok()
+                    .filter(|v| !v.trim().is_empty())
+                    .map(|v| v.trim().parse())
+                    .transpose()
+                    .context("SLOP_PLAY_URL")?,
+                dir: env::var("SLOP_DEMO_DIR")
+                    .ok()
+                    .filter(|s| !s.is_empty())
+                    .map(std::path::PathBuf::from)
+                    .unwrap_or_else(|| DemoConfig::default().dir),
+                days: i64::from(int_var("SLOP_DEMO_DAYS", 14)?.clamp(1, 30)),
+                max_live: i64::from(int_var("SLOP_DEMO_MAX", 10)?.max(0)),
+                daily_bytes: (int_var("SLOP_DEMO_DAILY_GB", 20)?.max(0) as u64)
+                    * 1024
+                    * 1024
+                    * 1024,
+                ..DemoConfig::default()
             },
             desktop: DesktopConfig {
                 dir: env::var("SLOP_DESKTOP_DIR")

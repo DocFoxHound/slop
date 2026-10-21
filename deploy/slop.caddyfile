@@ -14,3 +14,10 @@ sim.188-68-41-241.sslip.io {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8092
 }
+
+# Browser demos of new games (demos.rs): a separate origin, so a game's code never runs where
+# Slop's sign-in cookies are. The API serves only demos here. Needs SLOP_PLAY_URL in slop.env.
+play.188-68-41-241.sslip.io {
+	encode zstd gzip
+	reverse_proxy 127.0.0.1:8090
+}

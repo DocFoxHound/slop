@@ -70,6 +70,11 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "pulse cleanup failed"),
         }
+        match crate::demos::expire(&state).await {
+            Ok(n) if n > 0 => tracing::info!(ended = n, "browser demos"),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "ending demos failed"),
+        }
         match crate::retention::purge(&state.db).await {
             Ok(p) if p != crate::retention::Purged::default() => {
                 tracing::info!(?p, "records past their time")

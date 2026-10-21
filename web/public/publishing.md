@@ -1179,6 +1179,20 @@ inline std::string request_mods(const std::vector<std::pair<std::string, std::st
 }  // namespace slop
 ```
 
+## Browser demos for new games
+
+For a new game's first 14 days on Slop, players can try it in their browser from its store page,
+with nothing to install. Export a web build (Godot: the Web export; any engine whose build runs in
+a browser), zip it with `index.html` at the top, attach it to a release on your repository, and
+paste its address under **Browser demo** on your Manage page. Slop scans it and hosts it from a
+separate address until the 14 days are up, then deletes it.
+
+- Up to 100 MB zipped (250 MB unpacked).
+- Demos can't go online: they reach only their own files. Show the part of the game that works
+  offline.
+- There are a limited number of demo slots, and a daily traffic limit; when it's reached,
+  players are asked to install the game instead.
+
 ## Working with your AI agent
 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
