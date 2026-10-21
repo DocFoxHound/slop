@@ -12940,3 +12940,93 @@ async fn publishers_need_a_passkey_after_their_grace_period(db: PgPool) {
         "staff only"
     );
 }
+
+/// A new icon like another maker's live one is pointed out to the reviewer (media.rs
+/// `lookalikes`); the maker's own apps don't count.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn icons_like_another_makers_are_pointed_out(db: PgPool) {
+    let app = test_app(db).await;
+    let (famous_maker, _) = app.user("Famous Studio", "US").await;
+    let (copycat, cookie) = app.user("Copy Cat", "US").await;
+    let (_, admin_cookie) = make_admin(&app, "Admin").await;
+    // The famous game's live icon: stripes on a gradient.
+    let icon = |w: u32, h: u32, tint: u8| {
+        let img = image::RgbImage::from_fn(w, h, |x, y| {
+            let band = (x * 8 / w + y * 3 / h).is_multiple_of(2);
+            let fx = (x * 255 / w) as u8;
+            if band {
+                image::Rgb([fx.saturating_add(tint), 40, 200])
+            } else {
+                image::Rgb([20, fx, 60u8.saturating_add(tint)])
+            }
+        });
+        let mut out = Vec::new();
+        img.write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+            .unwrap();
+        out
+    };
+    listed_with(&app, famous_maker, "famous", "released", "").await;
+    let hash = format!(
+        "{:016x}",
+        slop_api::media::dhash(&icon(920, 430, 0)).unwrap()
+    );
+    sqlx::query(
+        "with s as (
+             insert into media_sets (id, app_id, commit_sha, thumbnail, fingerprint, source, status)
+             select $1, a.id, repeat('c', 40),
+                    jsonb_build_object('path', 'thumb.png', 'url', 'https://example.com/t.png', 'sha256', 'x',
+                                       'width', 920, 'height', 430, 'format', 'png', 'dhash', $2::text),
+                    'f', 'maker', 'approved'
+             from apps a where a.slug = 'famous' returning id, app_id)
+         update apps set media_set_id = s.id from s where apps.id = s.app_id",
+    )
+    .bind(Uuid::now_v7())
+    .bind(&hash)
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    // The copy: the same picture, a little bigger and tinted.
+    let head = "b".repeat(40);
+    app_with_pictures(&app, copycat, "not-famous", &head).await;
+    put_raw(&head, "thumb.png", icon(1000, 470, 10));
+    let res = app
+        .send(req(Method::POST, "/v1/apps/not-famous/media/check").cookie(&cookie))
+        .await;
+    let body = body_json(res).await;
+    assert_eq!(body["result"], "pending", "{body}");
+    let like = &body["pending"]["lookalikes"];
+    assert_eq!(like[0]["slug"], "famous", "{body}");
+    assert!(like[0]["distance"].as_u64().unwrap() <= 10);
+
+    // Reviewers see it with the pictures.
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/review").cookie(&admin_cookie))
+            .await,
+    )
+    .await;
+    let media = queue["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|i| i["kind"] == "media")
+        .expect("pictures waiting");
+    assert_eq!(
+        media["detail"]["pictures"]["lookalikes"][0]["title"],
+        "famous"
+    );
+
+    // The same maker reusing their own icon isn't pointed out.
+    sqlx::query("update apps set maker_id = $1 where slug = 'famous'")
+        .bind(copycat)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    put_raw(&head, "thumb.png", icon(1000, 470, 12));
+    let body = body_json(
+        app.send(req(Method::POST, "/v1/apps/not-famous/media/check").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(body["pending"]["lookalikes"], json!([]), "{body}");
+}

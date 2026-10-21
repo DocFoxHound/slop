@@ -572,6 +572,7 @@ fn svg_picture(path: &str, w: u32, h: u32, color: &str, mark: &str, title: &str)
         width: w,
         height: h,
         format: "svg".into(),
+        dhash: None,
     }
 }
 

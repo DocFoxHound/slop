@@ -475,6 +475,8 @@ export interface MediaSet {
   source: "maker" | "release";
   created_at: string;
   reviewed_at: string | null;
+  /** Other makers' apps whose icon looks like this thumbnail (bits differing out of 64). */
+  lookalikes?: Array<{ slug: string; title: string; distance: number }>;
 }
 
 export interface MediaOverview {
