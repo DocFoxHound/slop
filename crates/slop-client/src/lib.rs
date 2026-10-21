@@ -12,6 +12,7 @@ pub mod chat;
 pub mod library;
 pub mod link;
 pub mod mods_folder;
+pub mod output;
 pub mod runtimes;
 pub mod sandbox;
 pub mod saves;

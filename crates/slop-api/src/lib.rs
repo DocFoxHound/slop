@@ -10,6 +10,7 @@ pub mod auth;
 pub mod bad_links;
 pub mod bounties;
 pub mod branches;
+pub mod bug_reports;
 pub mod catalog;
 pub mod challenge;
 pub mod chat;
@@ -174,6 +175,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(offers::routes())
         .merge(label::routes())
         .merge(bounties::routes())
+        .merge(bug_reports::routes())
         .merge(review::routes())
         .merge(pulse::routes())
         .merge(legal_requests::routes())

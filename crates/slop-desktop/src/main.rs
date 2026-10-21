@@ -754,6 +754,13 @@ async fn add_requested_mod(
 }
 
 #[derive(Clone, Serialize)]
+struct AppCrashed {
+    slug: String,
+    code: Option<i32>,
+    log: String,
+}
+
+#[derive(Clone, Serialize)]
 struct SandboxFailed {
     slug: String,
 }
@@ -856,6 +863,10 @@ async fn launch_app(
             }
         }
     }
+    // The last lines it writes, offered for a bug report if it crashes (slop-client output.rs).
+    command
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped());
     let mut child = command.spawn().map_err(|e| {
         link.close(&link_dir);
         CommandError {
@@ -865,6 +876,13 @@ async fn launch_app(
     })?;
     // Known while it runs, for the in-game overlay (overlay.rs); reaped when it exits.
     let pid = child.id();
+    let tail = slop_client::output::Tail::default();
+    if let Some(out) = child.stdout.take() {
+        tail.follow(out);
+    }
+    if let Some(err) = child.stderr.take() {
+        tail.follow(err);
+    }
     let running = app.state::<overlay::Running>();
     running.0.lock().unwrap().insert(pid, slug.clone());
     let app = app.clone();
@@ -879,11 +897,23 @@ async fn launch_app(
             .unwrap()
             .remove(&pid);
         // Closed with an error right after starting in the box: probably doesn't work there.
-        if sandboxed
-            && started.elapsed() < Duration::from_secs(15)
-            && status.is_ok_and(|s| !s.success())
-        {
-            let _ = app.emit("sandbox-failed", SandboxFailed { slug });
+        let failed = status.as_ref().is_ok_and(|s| !s.success());
+        if sandboxed && started.elapsed() < Duration::from_secs(15) && failed {
+            let _ = app.emit("sandbox-failed", SandboxFailed { slug: slug.clone() });
+        }
+        // Closed with an error: offer a bug report with its last output (the player sees it,
+        // edits it or leaves it out before anything is sent).
+        if failed {
+            // Let the readers catch the last lines.
+            std::thread::sleep(Duration::from_millis(200));
+            let _ = app.emit(
+                "app-crashed",
+                AppCrashed {
+                    slug,
+                    code: status.ok().and_then(|s| s.code()),
+                    log: tail.text(slop_client::output::home_dir().as_deref()),
+                },
+            );
         }
     });
     Ok(launched)

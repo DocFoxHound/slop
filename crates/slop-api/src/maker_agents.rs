@@ -110,6 +110,11 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/apps/{slug}/offers", true, Slug::Own),
     ("PUT", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
     ("GET", "/apps/{slug}/bounties", false, Slug::Any),
+    ("GET", "/apps/{slug}/bug-reports", false, Slug::Own),
+    ("GET", "/apps/{slug}/release-feedback", false, Slug::Own),
+    ("GET", "/bug-reports/*", false, Slug::Any),
+    // Each route checks the report is on the user's own app.
+    ("PATCH", "/bug-reports/*", true, Slug::Any),
     ("GET", "/bounties", false, Slug::Any),
     ("GET", "/bounties/*", false, Slug::Any),
     // Claiming pays the maker; it's checked by the app's maker or the backers.
@@ -561,6 +566,7 @@ fn store_page_fields() -> Value {
         "online_hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it connects to" },
         "sandbox_ready": { "type": "boolean", "description": "Works in sandbox mode: local saves only in SLOP_SAVE_DIR" },
         "mods_folder": { "type": ["object", "null"], "description": "Where it reads mods from: {base: game|saves, path, layout: folder|flat}; null if it reads SLOP_MODS or has no mods" },
+        "bug_reports": { "type": "boolean", "description": "Take bug reports from players on Slop (on by default)" },
         "accessibility": { "type": "array", "items": { "type": "string" }, "description": "Accessibility features it really has (players confirm or dispute them): remap_controls, colorblind, subtitles, text_size, one_handed, difficulty, no_flashing, screen_reader, controller. Check the code before claiming one" },
     })
 }
@@ -678,6 +684,36 @@ pub(crate) const TOOLS: &[Tool] = &[
             })
         },
         required: &["slug", "id", "body"],
+    },
+    Tool {
+        name: "list_bug_reports",
+        description: "Players' bug reports on the app, most \"me too\" first: what's wrong, the version and platform, and crash output when the player sent it. status: open (default), fixed, wont_fix, duplicate or all. File the ones worth tracking as issues on the repository yourself (e.g. gh issue create), without the player's name or anything personal from the log.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/bug-reports",
+        properties: || json!({ "slug": s("The app's store address"), "status": s("open, fixed, wont_fix, duplicate or all") }),
+        required: &["slug"],
+    },
+    Tool {
+        name: "update_bug_report",
+        description: "Marks a bug report fixed (say in which version), wont_fix or duplicate, or open again, with a short note the player sees. The player, and everyone who said \"me too\" when it's fixed, is told.",
+        method: Method::PATCH,
+        path: "/v1/bug-reports/{id}",
+        properties: || {
+            json!({
+                "id": s("The report's ID"),
+                "status": s("open, fixed, wont_fix or duplicate"),
+                "maker_note": s("For the player: up to 2,000 characters"),
+            })
+        },
+        required: &["id"],
+    },
+    Tool {
+        name: "release_feedback",
+        description: "For each recent release: % Not Slop from votes cast on it, reviews written while it was current with their most common phrases (praised and criticised), and its bug reports. Use it to see what an update changed for players.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/release-feedback",
+        properties: slug_only,
+        required: &["slug"],
     },
     Tool {
         name: "list_bounties",

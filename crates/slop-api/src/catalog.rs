@@ -604,6 +604,8 @@ struct AppDetail {
     mods_folder: Option<serde_json::Value>,
     /// Accessibility features the maker says it has (label.rs `FEATURES`).
     accessibility: Vec<String>,
+    /// Takes bug reports from players (bug_reports.rs).
+    bug_reports: bool,
 }
 
 #[derive(Serialize)]
@@ -629,6 +631,7 @@ struct AppExtra {
     online_hosts: Vec<String>,
     mods_folder: Option<serde_json::Value>,
     accessibility: Vec<String>,
+    bug_reports: bool,
 }
 
 /// Finds an app the viewer may see: one in the store for them, or their own. Returns its ID and
@@ -692,7 +695,7 @@ async fn load_detail(
     let rules = state.config.catalog;
     let mut qb = QueryBuilder::new(
         "select a.id, a.maker_id, a.description_md, a.repo_url, a.license_spdx, a.platforms, u.display_name as maker_name,
-                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, a.mods_folder, a.accessibility, (",
+                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, a.mods_folder, a.accessibility, a.bug_reports, (",
     );
     push_store_visible(&mut qb, rules, policy);
     qb.push(") or ");
@@ -742,6 +745,7 @@ async fn load_detail(
         online_hosts: extra.online_hosts,
         mods_folder: extra.mods_folder,
         accessibility: extra.accessibility,
+        bug_reports: extra.bug_reports,
         sandbox: sandbox_info(&state.db, extra.id).await?,
         sandbox_reported: match user {
             Some(u) => sqlx::query_scalar(
@@ -1005,6 +1009,13 @@ struct NewApp {
     /// Accessibility features it has (label.rs `FEATURES`).
     #[serde(default)]
     accessibility: Vec<String>,
+    /// Takes bug reports from players (bug_reports.rs); on unless turned off.
+    #[serde(default = "yes")]
+    bug_reports: bool,
+}
+
+fn yes() -> bool {
+    true
 }
 
 /// Fields a maker can change. Slug, kind and stage aren't editable here: stage changes go
@@ -1028,6 +1039,8 @@ struct AppChanges {
     #[serde(default, deserialize_with = "present")]
     mods_folder: Option<Option<slop_manifest::ModsFolder>>,
     accessibility: Option<Vec<String>>,
+    /// Takes bug reports from players (bug_reports.rs).
+    bug_reports: Option<bool>,
 }
 
 /// A field that was sent, even as `null`: `Some(None)`.
@@ -1334,8 +1347,8 @@ async fn create_app(
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
                            platforms, visibility, content_labels, online, online_hosts, sandbox_ready, mods_folder,
-                           accessibility)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19)",
+                           accessibility, bug_reports)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -1356,6 +1369,7 @@ async fn create_app(
     .bind(req.sandbox_ready)
     .bind(&mods_folder)
     .bind(crate::label::validate_accessibility(&req.accessibility)?)
+    .bind(req.bug_reports)
     .execute(&mut *tx)
     .await
     .map_err(|err| {
@@ -1502,6 +1516,9 @@ async fn update_app(
     }
     if let Some(ready) = changes.sandbox_ready {
         qb.push(", sandbox_ready = ").push_bind(ready);
+    }
+    if let Some(on) = changes.bug_reports {
+        qb.push(", bug_reports = ").push_bind(on);
     }
     if let Some(features) = &changes.accessibility {
         qb.push(", accessibility = ")

@@ -13339,7 +13339,8 @@ async fn records_are_purged_after_their_keeping_period(db: PgPool) {
             decisions: 1,
             legal_requests: 1,
             removed_content: 0,
-            acceptances: 3
+            acceptances: 3,
+            bug_logs: 0,
         }
     );
     let left = |sql: &'static str| {
@@ -14792,4 +14793,208 @@ async fn bounty_pledges_are_charged_on_the_builders_stripe_account(db: PgPool) {
         (object.as_str(), amount, slop_fee, simulated),
         ("pi_1", 2000, 100, false)
     );
+}
+
+/// Feedback for makers (bug_reports.rs): players who played file bug reports, others add "me
+/// too", makers see them in full and mark them fixed; feedback per release; crash logs go after
+/// 90 days.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bug_reports_and_feedback_per_release(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    approved_release(&app, "tower", maker_id).await;
+    let (pat_id, pat) = app.user("Pat Player", "US").await;
+    let (sam_id, sam) = app.user("Sam Player", "US").await;
+    let report = |cookie: &str| {
+        req(Method::POST, "/v1/apps/tower/bug-reports")
+            .cookie(cookie)
+            .json(json!({
+                "title": "Crash when the wave starts", "body": "Wave 3 always crashes.",
+                "version": "1.0.0", "platform": "windows", "log": "panic at wave.rs:12"
+            }))
+    };
+    assert_eq!(
+        app.send(report(&pat)).await.status(),
+        StatusCode::CONFLICT,
+        "hasn't played"
+    );
+    for c in [&pat, &sam] {
+        app.send(req(Method::POST, "/v1/apps/tower/launch").cookie(c))
+            .await;
+    }
+    let res = app.send(report(&pat)).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like 'A bug report on%'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+
+    // Another player sees the open report's title, not its details, and says "me too".
+    let theirs = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/bug-reports").cookie(&sam))
+            .await,
+    )
+    .await;
+    assert_eq!(theirs["reports"][0]["title"], "Crash when the wave starts");
+    assert!(
+        theirs["reports"][0].get("log").is_none() && theirs["reports"][0].get("body").is_none()
+    );
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/bug-reports/{id}/me-too")).cookie(&sam))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/bug-reports/{id}/me-too")).cookie(&pat))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, format!("/v1/bug-reports/{id}")).cookie(&sam))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // The maker sees it all, and marks it fixed: both players are told.
+    let all = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/bug-reports").cookie(&maker))
+            .await,
+    )
+    .await;
+    let r = &all["reports"][0];
+    assert_eq!(
+        (
+            r["log"].as_str(),
+            r["reporter"].as_str(),
+            r["me_too"].as_i64()
+        ),
+        (Some("panic at wave.rs:12"), Some("Pat Player"), Some(1))
+    );
+    let fix = |cookie: &str| {
+        req(Method::PATCH, format!("/v1/bug-reports/{id}"))
+            .cookie(cookie)
+            .json(json!({ "status": "fixed", "maker_note": "Fixed in 1.0.1." }))
+    };
+    assert_eq!(app.send(fix(&pat)).await.status(), StatusCode::NOT_FOUND);
+    let res = app.send(fix(&maker)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    for user in [pat_id, sam_id] {
+        let n: i64 = sqlx::query_scalar("select count(*) from notifications where user_id = $1 and title = 'Your bug report was fixed'")
+            .bind(user)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(n, 1);
+    }
+    let mine = body_json(
+        app.send(req(Method::GET, format!("/v1/bug-reports/{id}")).cookie(&pat))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["maker_note"], "Fixed in 1.0.1.");
+
+    // The maker can turn reports off.
+    app.send(
+        req(Method::PATCH, "/v1/apps/tower")
+            .cookie(&maker)
+            .json(json!({ "bug_reports": false })),
+    )
+    .await;
+    assert_eq!(app.send(report(&sam)).await.status(), StatusCode::CONFLICT);
+
+    // Feedback per release: votes on 1.0.0, and what its reviews say.
+    let tower: Uuid = sqlx::query_scalar("select id from apps where slug = 'tower'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    for (user, vote, text) in [
+        (
+            pat_id,
+            1i16,
+            "The new jump feels floaty but the music is great.",
+        ),
+        (sam_id, 1, "Great music, and the jump feels floaty."),
+    ] {
+        sqlx::query("insert into vote_events (id, user_id, app_id, vote, weight, release_version) values ($1, $2, $3, $4, 1, '1.0.0')")
+            .bind(Uuid::now_v7())
+            .bind(user)
+            .bind(tower)
+            .bind(vote)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        sqlx::query("insert into votes (user_id, app_id, vote, weight) values ($1, $2, $3, 1)")
+            .bind(user)
+            .bind(tower)
+            .bind(vote)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        sqlx::query("insert into app_reviews (id, user_id, app_id, body, updated_at) values ($1, $2, $3, $4, now() + interval '1 minute')")
+            .bind(Uuid::now_v7())
+            .bind(user)
+            .bind(tower)
+            .bind(text)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    let feedback = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/release-feedback").cookie(&maker))
+            .await,
+    )
+    .await;
+    let f = &feedback[0];
+    assert_eq!(
+        (
+            f["version"].as_str(),
+            f["votes"].as_i64(),
+            f["not_slop_percent"].as_i64()
+        ),
+        (Some("1.0.0"), Some(2), Some(100))
+    );
+    assert_eq!(
+        (f["reviews_up"].as_i64(), f["bug_reports"].as_i64()),
+        (Some(2), Some(1))
+    );
+    let praised: Vec<&str> = f["praised"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p[0].as_str().unwrap())
+        .collect();
+    assert!(
+        praised.contains(&"feels floaty") && praised.contains(&"music"),
+        "{praised:?}"
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/tower/release-feedback").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Crash logs go after 90 days; the report stays.
+    sqlx::query("update bug_reports set created_at = now() - interval '91 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        slop_api::retention::purge(&app.db).await.unwrap().bug_logs,
+        1
+    );
+    let log: Option<String> = sqlx::query_scalar("select log from bug_reports")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(log, None);
 }

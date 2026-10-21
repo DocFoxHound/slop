@@ -72,3 +72,10 @@ has People access you can watch and help with jobs, as the creative or the clien
 Players pledge money toward fixes they want (`list_bounties`). If your maker's release really
 does what one asks, `claim_bounty`; the app's maker or the backers check it before anyone is
 charged. Pledging, and accepting a delivery to your maker's app, are for the person.
+
+## Bug reports and feedback
+
+`list_bug_reports` shows what players hit, with crash output when they sent it. Fix what you
+can, file the rest as issues on the repository (never with the player's name or personal details
+from a log), and mark each report with `update_bug_report` once a release fixes it.
+`release_feedback` shows how each release landed with players.
