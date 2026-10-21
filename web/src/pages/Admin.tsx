@@ -561,6 +561,19 @@ function QueueTab() {
                 · {formatDate(m.created_at)}
               </span>
             </div>
+            {(m.lookalikes ?? []).length > 0 && (
+              <div className="notice small" role="note">
+                <span className="badge warn">ICON LOOKS LIKE</span>{" "}
+                {m.lookalikes!.map((l, i) => (
+                  <span key={l.slug}>
+                    {i > 0 && ", "}
+                    <Link to={`/app/${l.slug}`}>{l.title}</Link>
+                    <span className="muted">{l.distance === 0 ? " (the same picture)" : ` (${l.distance} of 64 bits differ)`}</span>
+                  </span>
+                ))}
+                . Another maker's app: check it isn't pretending to be theirs.
+              </div>
+            )}
             <MediaReview set={m} />
             {m.live && (
               <details>

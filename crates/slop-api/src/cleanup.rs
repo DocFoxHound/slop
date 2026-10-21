@@ -69,6 +69,11 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "pulse cleanup failed"),
         }
+        match crate::media::hash_old_thumbnails(&state, 20).await {
+            Ok(n) if n > 0 => tracing::info!(hashed = n, "old thumbnails"),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "hashing old thumbnails failed"),
+        }
         match crate::passkeys::remind(&state.db).await {
             Ok(n) if n > 0 => tracing::info!(sent = n, "passkey reminders"),
             Ok(_) => {}

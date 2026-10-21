@@ -155,6 +155,10 @@ can't change. It also has `width`, `height`, `format` and `sha256`.
 - Captions count as content too.
 - Pictures should show the app (screenshots, art, a logo or title), not unrelated material,
   advertising for something else, or text that breaks the rules above.
+- `detail.pictures.lookalikes` lists other makers' apps whose live icon looks like the new
+  thumbnail (`distance`: bits that differ out of 64; 0 is the same picture). Open them: an icon
+  copied to pass as another game is a reason to turn the pictures down (and to report the app
+  for impersonation). A shared style or a common shape isn't.
 
 ### `portfolio`: a creative's People portfolio
 

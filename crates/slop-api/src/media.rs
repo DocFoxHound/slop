@@ -86,6 +86,9 @@ pub struct Picture {
     pub height: u32,
     /// png, jpeg, webp or gif.
     pub format: String,
+    /// Perceptual hash (`dhash`, 16 hex digits): near-copies of a picture hash alike.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dhash: Option<String>,
 }
 
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
@@ -140,10 +143,24 @@ pub struct MediaSet {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     pub reviewed_at: Option<OffsetDateTime>,
+    /// Other makers' apps whose icon looks like this thumbnail, for the reviewer.
+    #[sqlx(json)]
+    pub lookalikes: Vec<Lookalike>,
 }
 
-pub const SET_COLUMNS: &str =
-    "id, commit_sha, thumbnail, gallery, status, status_reason, source, created_at, reviewed_at";
+/// Another maker's app with an icon like a new thumbnail.
+#[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
+pub struct Lookalike {
+    pub slug: String,
+    pub title: String,
+    /// Differing bits out of 64: 0 is the same picture.
+    pub distance: u32,
+}
+
+/// Hashes this close (out of 64 bits) count as looking alike.
+const LOOKALIKE_DISTANCE: u32 = 10;
+
+pub const SET_COLUMNS: &str = "id, commit_sha, thumbnail, gallery, status, status_reason, source, created_at, reviewed_at, lookalikes";
 
 pub async fn load_set(db: &sqlx::PgPool, id: Uuid) -> sqlx::Result<MediaSet> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
@@ -422,6 +439,7 @@ impl<'a> Reader<'a> {
             width,
             height,
             format,
+            dhash: dhash(&bytes).map(|h| format!("{h:016x}")),
         };
         self.seen.insert(path, picture.clone());
         Ok(picture)
@@ -625,9 +643,10 @@ async fn read_and_store(
         problem!("these are the pictures that were turned down: {reason}");
     }
     let id = Uuid::now_v7();
+    let like = lookalikes(&mut tx, app_id, thumbnail.as_ref()).await?;
     sqlx::query(
-        "insert into media_sets (id, app_id, commit_sha, thumbnail, gallery, fingerprint, source)
-         values ($1, $2, $3, $4, $5, $6, $7)",
+        "insert into media_sets (id, app_id, commit_sha, thumbnail, gallery, fingerprint, source, lookalikes)
+         values ($1, $2, $3, $4, $5, $6, $7, $8)",
     )
     .bind(id)
     .bind(app_id)
@@ -636,10 +655,94 @@ async fn read_and_store(
     .bind(sqlx::types::Json(&gallery))
     .bind(&fingerprint)
     .bind(source)
+    .bind(sqlx::types::Json(&like))
     .execute(&mut *tx)
     .await?;
     tx.commit().await?;
     Ok(Outcome::Pending(id))
+}
+
+/// A difference hash: the picture shrunk to 9×8 in grey, one bit per pair of neighbours (is the
+/// left one brighter?). Resizing, recompressing or a small colour change barely moves it.
+pub fn dhash(bytes: &[u8]) -> Option<u64> {
+    let img = image::load_from_memory(bytes).ok()?.into_luma8();
+    let small = image::imageops::resize(&img, 9, 8, image::imageops::FilterType::Triangle);
+    let mut hash = 0u64;
+    for y in 0..8 {
+        for x in 0..8 {
+            hash <<= 1;
+            if small.get_pixel(x, y).0[0] > small.get_pixel(x + 1, y).0[0] {
+                hash |= 1;
+            }
+        }
+    }
+    Some(hash)
+}
+
+/// Other makers' apps whose live icon looks like `thumbnail`, closest first.
+async fn lookalikes(
+    conn: &mut sqlx::PgConnection,
+    app_id: Uuid,
+    thumbnail: Option<&Picture>,
+) -> sqlx::Result<Vec<Lookalike>> {
+    let Some(mine) = thumbnail
+        .and_then(|t| t.dhash.as_deref())
+        .and_then(|h| u64::from_str_radix(h, 16).ok())
+    else {
+        return Ok(vec![]);
+    };
+    let others: Vec<(String, String, String)> = sqlx::query_as(
+        "select a.slug, a.title, ms.thumbnail->>'dhash'
+         from apps a join media_sets ms on ms.id = a.media_set_id
+         where a.maker_id <> (select maker_id from apps where id = $1)
+           and ms.thumbnail ? 'dhash'",
+    )
+    .bind(app_id)
+    .fetch_all(&mut *conn)
+    .await?;
+    let mut found: Vec<Lookalike> = others
+        .into_iter()
+        .filter_map(|(slug, title, hash)| {
+            let distance = (u64::from_str_radix(&hash, 16).ok()? ^ mine).count_ones();
+            (distance <= LOOKALIKE_DISTANCE).then_some(Lookalike {
+                slug,
+                title,
+                distance,
+            })
+        })
+        .collect();
+    found.sort_by_key(|l| l.distance);
+    found.truncate(5);
+    Ok(found)
+}
+
+/// Live thumbnails from before hashing: hash a few at a time (cleanup.rs), so look-alikes are
+/// found among them too.
+pub async fn hash_old_thumbnails(state: &AppState, limit: i64) -> anyhow::Result<usize> {
+    let rows: Vec<(Uuid, String)> = sqlx::query_as(
+        "select ms.id, ms.thumbnail->>'url' from apps a join media_sets ms on ms.id = a.media_set_id
+         where ms.thumbnail is not null and not ms.thumbnail ? 'dhash'
+           and ms.thumbnail->>'url' like 'http%'
+         limit $1",
+    )
+    .bind(limit)
+    .fetch_all(&state.db)
+    .await?;
+    let mut done = 0;
+    for (id, url) in rows {
+        // A picture that can't be read gets an empty hash, so it isn't tried again.
+        let hash = match download(state, url.parse()?, MAX_IMAGE_BYTES).await {
+            Ok(Some(bytes)) => dhash(&bytes).map(|h| format!("{h:016x}")),
+            _ => None,
+        };
+        sqlx::query("update media_sets set thumbnail = thumbnail || jsonb_build_object('dhash', $2::text) where id = $1")
+            .bind(id)
+            .bind(hash.unwrap_or_default())
+            .execute(&state.db)
+            .await?;
+        done += 1;
+    }
+    Ok(done)
 }
 
 /// What the pictures are, regardless of which commit they were read at or their order.
@@ -904,6 +1007,44 @@ async fn set_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// An icon: a coloured disc on a gradient, as PNG.
+    fn icon(size: u32, shift: u8, disc_at: f32) -> Vec<u8> {
+        let img = image::RgbImage::from_fn(size, size, |x, y| {
+            let (fx, fy) = (x as f32 / size as f32, y as f32 / size as f32);
+            let inside = (fx - disc_at).powi(2) + (fy - 0.5).powi(2) < 0.08;
+            if inside {
+                image::Rgb([220u8.saturating_add(shift), 40, 40])
+            } else {
+                let g = (fx * 200.0) as u8;
+                image::Rgb([g.saturating_add(shift), g, 255 - g])
+            }
+        });
+        let mut out = Cursor::new(Vec::new());
+        img.write_to(&mut out, ImageFormat::Png).unwrap();
+        out.into_inner()
+    }
+
+    #[test]
+    fn near_copies_of_an_icon_hash_alike() {
+        let original = dhash(&icon(256, 0, 0.35)).unwrap();
+        let resized_and_tinted = dhash(&icon(96, 12, 0.35)).unwrap();
+        // Another game's icon: stripes, darkening downwards.
+        let stripes = image::RgbImage::from_fn(256, 256, |x, y| {
+            let v = if (x / 32 + y / 48).is_multiple_of(2) {
+                230
+            } else {
+                30
+            };
+            image::Rgb([v, (255 - y) as u8, v / 2])
+        });
+        let mut png = Cursor::new(Vec::new());
+        stripes.write_to(&mut png, ImageFormat::Png).unwrap();
+        let different = dhash(&png.into_inner()).unwrap();
+        assert!((original ^ resized_and_tinted).count_ones() <= LOOKALIKE_DISTANCE);
+        assert!((original ^ different).count_ones() > LOOKALIKE_DISTANCE);
+        assert_eq!(dhash(b"not a picture"), None);
+    }
 
     #[test]
     fn youtube_links() {
