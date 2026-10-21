@@ -101,7 +101,17 @@ export interface Launched {
   copy_skipped: boolean;
   /** Things in the game's own mods folder that aren't mods from Slop, moved out (DESIGN §9). */
   unapproved_mods: string[];
+  /** What save sync did before the start, when it's on. */
+  save_sync?: SaveSyncOutcome | null;
 }
+
+/** crates/slop-client/src/save_sync.rs Outcome. */
+export type SaveSyncOutcome =
+  | { outcome: "up_to_date" }
+  | { outcome: "fetched"; generation: number }
+  | { outcome: "sent"; generation: number }
+  | { outcome: "both_changed"; other_device: string }
+  | { outcome: "too_big" };
 
 /** A running game asking for mods, for the player to confirm (Slop Link, DESIGN §9). */
 export interface ModRequest {
@@ -300,6 +310,17 @@ export const desktop = {
   onAppCrashed: async (handler: (e: { slug: string; code: number | null; log: string }) => void) => {
     const { listen } = await import("@tauri-apps/api/event");
     return listen<{ slug: string; code: number | null; log: string }>("app-crashed", (e) => handler(e.payload));
+  },
+  /** Save sync: whether this computer can (signed in, chat set up with backups) and it's on. */
+  saveSyncStatus: () => call<{ available: boolean; on: boolean }>("save_sync_status"),
+  setSaveSync: (on: boolean) => call<void>("set_save_sync", { on }),
+  /** Both computers changed an app's saves: keep this computer's or the other's. */
+  resolveSaveConflict: (slug: string, keep: "here" | "other") =>
+    call<SaveSyncOutcome | null>("resolve_save_conflict", { slug, keep }),
+  /** Saves were sent after an app closed, or couldn't be. */
+  onSavesSynced: async (handler: (e: { slug: string; result: SaveSyncOutcome }) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<{ slug: string; result: SaveSyncOutcome }>("saves-synced", (e) => handler(e.payload));
   },
   /** A running game asked for mods (Slop Link). */
   onModRequest: async (handler: (r: ModRequest) => void) => {

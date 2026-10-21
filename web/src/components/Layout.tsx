@@ -9,6 +9,7 @@ import { desktop, isDesktop } from "../platform";
 import { useAutoUpdates } from "./AppUpdates";
 import { ModRequests } from "./ModRequests";
 import { CrashPrompt } from "./BugReports";
+import { SaveSyncEvents } from "./Sandbox";
 import { UpdateNotice } from "./UpdateNotice";
 import { WindowControls } from "./WindowControls";
 import { useSession } from "../session";
@@ -131,6 +132,7 @@ export function Layout() {
       <UpdateNotice />
       <ModRequests />
       <CrashPrompt />
+      <SaveSyncEvents />
       <SimulationBanner />
       <AccountNotices />
       <main className="view" id="main" ref={view} tabIndex={-1}>

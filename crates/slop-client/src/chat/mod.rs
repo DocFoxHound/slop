@@ -2147,6 +2147,14 @@ impl Chat {
         self.save(&mut inner)
     }
 
+    /// The key for save sync (save_sync.rs), from the backup key the user's devices share.
+    /// None until this device has it (chat set up here, with backups on).
+    pub async fn save_sync_key(&self) -> Option<[u8; 32]> {
+        let key = self.inner.lock().await.state.backup_key.clone()?;
+        let bytes: [u8; 32] = B64.decode(key).ok()?.try_into().ok()?;
+        Some(crate::save_sync::derive_key(&bytes))
+    }
+
     /// Restores history from the backup with the recovery code (after starting over).
     pub async fn restore_backup(&self, recovery_code: &str) -> Result<usize> {
         let user = self.inner.lock().await.state.user;

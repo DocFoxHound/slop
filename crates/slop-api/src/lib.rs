@@ -55,6 +55,7 @@ pub mod rescan;
 pub mod retention;
 pub mod review;
 pub mod reviews;
+pub mod save_sync;
 pub mod scan;
 pub mod sim;
 pub mod sim_donations;
@@ -252,6 +253,17 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
                 .layer(TimeoutLayer::with_status_code(
                     StatusCode::SERVICE_UNAVAILABLE,
                     Duration::from_secs(20),
+                )),
+        )
+        .merge(
+            save_sync::routes()
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    save_sync::MAX_SAVE_BYTES,
+                ))
+                .layer(RequestBodyLimitLayer::new(save_sync::MAX_SAVE_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(120),
                 )),
         )
         .merge(

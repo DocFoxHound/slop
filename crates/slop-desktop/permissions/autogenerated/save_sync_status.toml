@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-save-sync-status"
+description = "Enables the save_sync_status command without any pre-configured scope."
+commands.allow = ["save_sync_status"]
+
+[[permission]]
+identifier = "deny-save-sync-status"
+description = "Denies the save_sync_status command without any pre-configured scope."
+commands.deny = ["save_sync_status"]

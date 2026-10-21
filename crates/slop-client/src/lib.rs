@@ -15,6 +15,7 @@ pub mod mods_folder;
 pub mod output;
 pub mod runtimes;
 pub mod sandbox;
+pub mod save_sync;
 pub mod saves;
 pub mod signin;
 

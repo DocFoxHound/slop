@@ -1037,6 +1037,17 @@ impl Library {
     // Saves and sandbox settings
 
     /// An app's save folder, created if needed.
+    /// For save sync (save_sync.rs): the app's save folder, its copies, a scratch folder, and
+    /// where the sync state is kept.
+    pub fn save_sync_paths(&self, slug: &str) -> Result<(PathBuf, PathBuf, PathBuf, PathBuf)> {
+        Ok((
+            self.save_dir(slug)?,
+            self.root.join("save-copies").join(slug),
+            self.root.join("staging"),
+            self.root.join("save-sync.json"),
+        ))
+    }
+
     pub fn save_dir(&self, slug: &str) -> Result<PathBuf> {
         if !valid_slug(slug) {
             return Err(Error::Install(format!("not an app: {slug:?}")));

@@ -54,9 +54,19 @@ pub enum RawBody {
 pub struct RawResponse {
     pub status: u16,
     pub bytes: Vec<u8>,
+    /// Slop's own `x-slop-…` headers (lowercase names).
+    pub slop_headers: Vec<(String, String)>,
 }
 
 impl RawResponse {
+    /// One of Slop's own `x-slop-…` headers.
+    pub fn header(&self, name: &str) -> Option<String> {
+        self.slop_headers
+            .iter()
+            .find(|(n, _)| n == name)
+            .map(|(_, v)| v.clone())
+    }
+
     pub fn json(&self) -> Value {
         serde_json::from_slice(&self.bytes).unwrap_or(Value::Null)
     }
@@ -226,8 +236,18 @@ impl ApiClient {
         };
         let res = req.send().await?;
         let status = res.status().as_u16();
+        let slop_headers = res
+            .headers()
+            .iter()
+            .filter(|(n, _)| n.as_str().starts_with("x-slop-"))
+            .filter_map(|(n, v)| Some((n.as_str().to_string(), v.to_str().ok()?.to_string())))
+            .collect();
         let bytes = res.bytes().await?.to_vec();
-        Ok(RawResponse { status, bytes })
+        Ok(RawResponse {
+            status,
+            bytes,
+            slop_headers,
+        })
     }
 
     /// Calls the API without credentials.
