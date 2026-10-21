@@ -371,6 +371,43 @@ export function RepoScanList({
         </div>
       )}
       <SaveFolderCheck scan={scan} audience={audience} />
+      {(scan.design ?? []).length > 0 && (
+        <div>
+          <span className="badge warn">PAY-TO-WIN DESIGN? ({scan.design!.length})</span>{" "}
+          <span className="muted">
+            {audience === "maker"
+              ? "Patterns that usually go with paying to win: premium currencies, skipping timers, VIP tiers, passes, bought boosts. Nothing on Slop can be sold, so a reviewer checks they're earned in play. If they are, nothing needs changing."
+              : "Patterns only: check each is earned in play and can't be bought or traded for anything outside the game. Paying to win breaks the Content Policy."}
+          </span>
+          <ul>
+            {scan.design!.map((h) => (
+              <li key={h.rule}>
+                {h.label} ({h.count}): <span className="muted">{h.examples.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+      {scan.pulse_missing ? (
+        <div>
+          <span className="badge warn">NO SLOP PULSE</span>{" "}
+          <span className="muted">
+            {audience === "maker"
+              ? "The game this builds on counts players with Slop Pulse, so community builds must too: keep its Pulse code (see Slop Pulse in the publishing guide)."
+              : "A community build of a game that counts players, with no Pulse code: it can't be listed before its first Pulse handshake."}
+          </span>
+        </div>
+      ) : (
+        scan.pulse === "start_only" && (
+          <div>
+            <span className="badge neutral">PULSE WITHOUT HEARTBEATS</span>{" "}
+            <span className="muted">
+              The code starts a Pulse session but never sends heartbeats, so a player counts for 10 minutes at most. Send{" "}
+              <code>/heartbeat</code> every <code>SLOP_PULSE_INTERVAL</code> seconds.
+            </span>
+          </div>
+        )
+      )}
       {(scan.mod_code || scan.mod_online) && (
         <div>
           {scan.mod_code && <span className="badge warn">MOD WITH CODE</span>}{" "}
