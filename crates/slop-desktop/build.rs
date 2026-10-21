@@ -26,6 +26,11 @@ fn main() {
             "installed_mods",
             "install_mod",
             "uninstall_mod",
+            "sandbox_status",
+            "set_sandbox",
+            "save_copies",
+            "restore_saves",
+            "copy_saves",
         ]),
     ))
     .expect("failed to run tauri-build");

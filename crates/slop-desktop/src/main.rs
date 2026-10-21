@@ -491,8 +491,93 @@ async fn install_app(
 }
 
 #[tauri::command]
-fn uninstall_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()> {
-    Ok(desktop.library.uninstall(&slug)?)
+fn uninstall_app(
+    desktop: State<'_, Desktop>,
+    slug: String,
+    delete_saves: Option<bool>,
+) -> CommandResult<()> {
+    desktop.library.uninstall(&slug)?;
+    if delete_saves == Some(true) {
+        desktop.library.delete_saves(&slug)?;
+    }
+    Ok(())
+}
+
+// Sandbox mode and save folders (DESIGN §6) ------------------------------------------------
+
+static SANDBOX: std::sync::OnceLock<Result<(), String>> = std::sync::OnceLock::new();
+
+#[derive(Serialize)]
+struct SandboxStatus {
+    /// Whether sandbox mode works on this computer, and why not.
+    available: bool,
+    reason: Option<String>,
+    settings: slop_client::sandbox::SandboxSettings,
+}
+
+#[tauri::command]
+fn sandbox_status(desktop: State<'_, Desktop>) -> SandboxStatus {
+    let available = SANDBOX.get_or_init(slop_client::sandbox::available);
+    SandboxStatus {
+        available: available.is_ok(),
+        reason: available.clone().err(),
+        settings: desktop.library.sandbox_settings(),
+    }
+}
+
+/// The player's choice for one app (`slug`), or "run every app in sandbox mode" (no slug).
+#[tauri::command]
+fn set_sandbox(
+    desktop: State<'_, Desktop>,
+    slug: Option<String>,
+    on: bool,
+    block_network: Option<bool>,
+) -> CommandResult<slop_client::sandbox::SandboxSettings> {
+    Ok(desktop.library.set_sandbox(|s| match slug {
+        Some(slug) => {
+            s.apps.insert(
+                slug,
+                slop_client::sandbox::AppSandbox {
+                    on,
+                    block_network: on && block_network.unwrap_or(false),
+                },
+            );
+        }
+        None => s.all = on,
+    })?)
+}
+
+#[tauri::command]
+fn save_copies(
+    desktop: State<'_, Desktop>,
+    slug: String,
+) -> CommandResult<Vec<slop_client::saves::SaveCopy>> {
+    Ok(desktop.library.save_copies(&slug)?)
+}
+
+#[tauri::command]
+fn restore_saves(desktop: State<'_, Desktop>, slug: String, id: String) -> CommandResult<()> {
+    Ok(desktop.library.restore_saves(&slug, &id)?)
+}
+
+/// Switching to another build of a game: brings the saves along.
+#[tauri::command]
+fn copy_saves(desktop: State<'_, Desktop>, from: String, to: String) -> CommandResult<()> {
+    Ok(desktop.library.copy_saves(&from, &to)?)
+}
+
+#[derive(Serialize)]
+struct Launched {
+    sandboxed: bool,
+    /// Programs found in the save folder and moved out before the start.
+    quarantined: Vec<String>,
+    /// The saves were too big to copy before this sandboxed session.
+    copy_skipped: bool,
+}
+
+#[derive(Clone, Serialize)]
+struct SandboxFailed {
+    slug: String,
 }
 
 /// The mods added to an installed game (DESIGN §9).
@@ -532,17 +617,38 @@ fn uninstall_mod(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()>
     Ok(desktop.library.uninstall_mod(&slug)?)
 }
 
-/// Starts an installed app after checking its signature, revocation and files.
+/// Starts an installed app after checking its signature, revocation and files: in sandbox mode
+/// if the player chose it for this app, unless `normal_once` ("Run normally this time").
 #[tauri::command]
 async fn launch_app(
     app: AppHandle,
     desktop: State<'_, Desktop>,
     slug: String,
-) -> CommandResult<()> {
+    normal_once: Option<bool>,
+) -> CommandResult<Launched> {
     let revocations = desktop.library.revocations_for_launch(&desktop.api).await;
-    let mut command = desktop
+    let sandbox = if normal_once == Some(true) {
+        None
+    } else {
+        desktop.library.sandbox_settings().for_app(&slug)
+    };
+    if sandbox.is_some()
+        && let Err(reason) = SANDBOX.get_or_init(slop_client::sandbox::available)
+    {
+        return Err(CommandError {
+            code: "sandbox",
+            message: reason.clone(),
+        });
+    }
+    let launch = desktop
         .library
-        .launch_command(&slug, revocations.as_ref())?;
+        .prepare_launch(&slug, revocations.as_ref(), sandbox)?;
+    let launched = Launched {
+        sandboxed: launch.sandboxed,
+        quarantined: launch.quarantined,
+        copy_skipped: launch.copy_skipped,
+    };
+    let mut command = launch.command;
     // Slop Pulse: a signed-in launch gets a one-time token for the game to ping with
     // (DESIGN §11). Best effort: the game starts either way.
     if desktop.api.has_session() {
@@ -574,17 +680,26 @@ async fn launch_app(
     // Known while it runs, for the in-game overlay (overlay.rs); reaped when it exits.
     let pid = child.id();
     let running = app.state::<overlay::Running>();
-    running.0.lock().unwrap().insert(pid, slug);
+    running.0.lock().unwrap().insert(pid, slug.clone());
     let app = app.clone();
+    let sandboxed = launched.sandboxed;
+    let started = std::time::Instant::now();
     std::thread::spawn(move || {
-        let _ = child.wait();
+        let status = child.wait();
         app.state::<overlay::Running>()
             .0
             .lock()
             .unwrap()
             .remove(&pid);
+        // Closed with an error right after starting in the box: probably doesn't work there.
+        if sandboxed
+            && started.elapsed() < Duration::from_secs(15)
+            && status.is_ok_and(|s| !s.success())
+        {
+            let _ = app.emit("sandbox-failed", SandboxFailed { slug });
+        }
     });
-    Ok(())
+    Ok(launched)
 }
 
 /// Opens a maker's installer with the system, after the user confirmed in the UI.
@@ -1185,6 +1300,11 @@ fn main() {
             installed_mods,
             install_mod,
             uninstall_mod,
+            sandbox_status,
+            set_sandbox,
+            save_copies,
+            restore_saves,
+            copy_saves,
             launch_app,
             run_installer,
             chat,

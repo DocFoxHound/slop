@@ -77,6 +77,27 @@ export interface InstalledMod {
   revoked: string | null;
 }
 
+/** Sandbox mode (DESIGN §6): whether it works here, and the player's choices. */
+export interface SandboxStatus {
+  available: boolean;
+  reason: string | null;
+  settings: { all: boolean; apps: Record<string, { on: boolean; block_network: boolean }> };
+}
+
+/** A copy of an app's save folder, taken before a sandboxed session. */
+export interface SaveCopy {
+  id: string;
+  taken_at: string;
+  bytes: number;
+}
+
+export interface Launched {
+  sandboxed: boolean;
+  /** Programs found in the save folder and moved out before the start. */
+  quarantined: string[];
+  copy_skipped: boolean;
+}
+
 export interface UpdateInfo {
   version: string;
   current_version: string;
@@ -238,8 +259,20 @@ export const desktop = {
   /** Apps Slop started that are still running; they're updated once they close. */
   running: () => call<string[]>("running_apps"),
   install: (slug: string) => call<InstalledApp>("install_app", { slug }),
-  uninstall: (slug: string) => call<void>("uninstall_app", { slug }),
-  launch: (slug: string) => call<void>("launch_app", { slug }),
+  uninstall: (slug: string, deleteSaves = false) => call<void>("uninstall_app", { slug, deleteSaves }),
+  launch: (slug: string, normalOnce = false) => call<Launched>("launch_app", { slug, normalOnce }),
+  sandboxStatus: () => call<SandboxStatus>("sandbox_status"),
+  /** One app's choice, or "run every app in sandbox mode" when `slug` is null. */
+  setSandbox: (slug: string | null, on: boolean, blockNetwork = false) =>
+    call<SandboxStatus["settings"]>("set_sandbox", { slug, on, blockNetwork }),
+  saveCopies: (slug: string) => call<SaveCopy[]>("save_copies", { slug }),
+  restoreSaves: (slug: string, id: string) => call<void>("restore_saves", { slug, id }),
+  copySaves: (from: string, to: string) => call<void>("copy_saves", { from, to }),
+  /** An app closed with an error right after starting in sandbox mode. */
+  onSandboxFailed: async (handler: (e: { slug: string }) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<{ slug: string }>("sandbox-failed", (e) => handler(e.payload));
+  },
   /** Mods: files for an installed game to load, handed to it at launch in SLOP_MODS. */
   installedMods: (game: string) => call<InstalledMod[]>("installed_mods", { game }),
   installMod: (slug: string) => call<InstalledMod>("install_mod", { slug }),

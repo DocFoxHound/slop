@@ -7,6 +7,8 @@
 pub mod api;
 pub mod chat;
 pub mod library;
+pub mod sandbox;
+pub mod saves;
 pub mod signin;
 
 pub use reqwest::Method;

@@ -163,7 +163,7 @@ Apps from Slop run as normal programs with the user's permissions, as on Steam. 
 - shared components only from Slop's own verified copies;
 - revocation.
 
-Running apps in an OS container (Flatpak or a Slop runtime on Linux, MSIX on Windows) is **optional** and may come later (`ARCHITECTURE.md` §9).
+Players can also run an app in **sandbox mode** (§6.2).
 - Store pages show a **"What this app can access"** section: what the publisher declared, compared with what the sandbox scan actually saw. A mismatch fails the scan.
 - **Android:** the OS's permission list is shown before install.
 - **The Slop Pulse SDK** is small, open source, and pinned by hash. The scan checks that games include the real SDK, not a modified copy.
@@ -173,7 +173,21 @@ Slop checks an app's code, never the servers it talks to: those belong to the ma
 - **The rule** (Content Policy, "Code from outside Slop"): an app only runs code that came in its release or in a mod approved on Slop. No code, scripts, packs or mods from servers, and no self-updaters. Data the app's own code reads (maps, levels, settings) may come from anywhere. The publishing guide's "Online play and mods" section is written for makers' AI agents to copy into their projects.
   - **Built 2026-10-21 (`source_scan.rs`):** the source check notes code loading (assemblies, Java classes, native libraries, `eval`/`exec`/`loadstring`, Godot packs and scripts, Unity asset bundles), self-updaters (in code and lockfiles) and data formats that can rebuild any object (`BinaryFormatter`, `pickle`, `bytes_to_var_with_objects`, `ObjectInputStream`…). Notes go to the reviewer; an update with a new one waits for a person. Reports for "Runs code or mods from outside Slop" are reviewed within 24 hours.
 - **Telling players** (built 2026-10-21, migration 0045): makers declare under **Online** what an app connects to (their servers or database, servers players host, direct connections, other online services) and name their servers. The store page of an app that goes online says Slop can't check its servers and suggests sandbox mode. The source check notes networking code (engines' multiplayer, sockets, HTTP/WebSocket clients, online-service SDKs; files with the Slop Pulse snippet don't count), and a release whose app doesn't declare online play gets a note that holds an update for a person.
-- **What's left over:** a server sending deliberately broken data to exploit a bug in how the game reads it. No check of the source can rule that out. Not built yet: Slop-approved mods, and the optional sandbox mode the notice suggests.
+- **What's left over:** a server sending deliberately broken data to exploit a bug in how the game reads it. No check of the source can rule that out; sandbox mode (§6.2) limits what such an exploit reaches.
+
+### 6.2 Sandbox mode and save folders (built 2026-10-21)
+**Sandbox mode** is optional, per app, and the player's choice (decided 2026-10-21). Slop suggests it the first time a player starts an app that goes online (declared, or networking code the store page doesn't declare); "Run every app in sandbox mode" turns it on for everything. It limits what a compromised app can reach; it isn't a guarantee, and Slop never calls it "safe".
+- **Linux (`slop-client/src/sandbox.rs`):** bubblewrap, as in Flatpak. The app gets new namespaces and no capabilities; the system's `/usr` and `/etc` read-only; an empty home and `/tmp`; its installed files and mods read-only; its save and cache folders writable; the graphics, sound and controller devices (their normal permissions still apply); the Wayland, X11, PulseAudio and PipeWire sockets; and the network unless the player blocked it (offered only for apps that don't declare going online). No session bus, SSH or keyring agents. The Linux packages depend on `bubblewrap`; where it can't make a sandbox (some systems restrict user namespaces), the app says why.
+- **Known gaps:** on X11 any window can read the keyboard, inside the box or not (Wayland doesn't allow it); kernel anti-cheat and apps that run their own installer can't be sandboxed.
+- **Windows:** AppContainer, next; until then the switch says it isn't available.
+- **If an app closes with an error within 15 seconds of starting sandboxed**, the Slop app offers "Run normally this time", turning it off for that app, and telling Slop. Makers can declare "Works in sandbox mode"; three or more players' reports show a note on the store page.
+
+**Save folders** are what make switching seamless: each app gets `saves/<slug>/` in Slop's library, outside its installed files, and finds it in `SLOP_SAVE_DIR`, in both modes. On Linux the usual per-user folders (`XDG_DATA_HOME`, `XDG_CONFIG_HOME`, `XDG_STATE_HOME`) point inside it, and on Windows `APPDATA` and `LOCALAPPDATA`, so engines that follow them need no change; the cache goes to a separate folder. Because the folder is the one bridge between a sandboxed session and a normal one, it's hardened:
+- **Swept before every launch:** links, pipes and devices are removed; programs and libraries (ELF, PE, Mach-O, by their first bytes) are moved to a quarantine folder and the player is told; execute permission is taken off every file. A sandboxed session can only leave data behind, so it can't plant a library that a normal session would load (for example through a Vulkan layer or GStreamer plugin folder under `XDG_DATA_HOME`).
+- **Copied before every sandboxed session** (the newest 3, up to 2 GB): the player can go back from the library, and a restore copies the current saves first.
+- **Saves are data:** the publishing guide requires plain formats for saves (the same rule as for anything from a server), and the source check notes formats that can rebuild objects, code loading, and code that writes to fixed per-user folders instead of `SLOP_SAVE_DIR`.
+- What remains: a game that reads its own saves carelessly can still be exploited by a poisoned save, as on any platform.
+- Saves stay when an app is uninstalled, unless the player ticks "Delete my saves too". Switching to another build offers to copy the saves across; each build has its own folder.
 
 ## 7. The Slop client itself
 

@@ -547,6 +547,110 @@ async fn mods_are_added_to_their_game_and_handed_to_it_at_launch() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
+/// Sandbox mode (DESIGN §6): the same save folder in both modes; in the box the app writes
+/// only there and can't see the rest of the home folder. Skipped where bubblewrap can't run.
+#[cfg(target_os = "linux")]
+#[tokio::test]
+async fn sandboxed_apps_see_only_their_own_folders() {
+    if let Err(why) = slop_client::sandbox::available() {
+        eprintln!("skipping: {why}");
+        return;
+    }
+    let (base, fake) = fake_api().await;
+    // The "game" reports what it can reach, into its save folder.
+    let script = br#"#!/bin/sh
+cd "$SLOP_SAVE_DIR" || exit 3
+echo "mode=${SLOP_SANDBOX:-normal}" > report.txt
+if cat "$SECRET" >/dev/null 2>&1; then echo "secret=seen" >> report.txt; else echo "secret=hidden" >> report.txt; fi
+if echo x > "$ESCAPE" 2>/dev/null; then echo "escape=written" >> report.txt; else echo "escape=blocked" >> report.txt; fi
+if echo x > "$(dirname "$0")/../new" 2>/dev/null; then echo "files=written" >> report.txt; else echo "files=readonly" >> report.txt; fi
+echo "config=$XDG_CONFIG_HOME" >> report.txt
+cat old.txt >> report.txt 2>/dev/null
+"#;
+    let zip = zip_of(&[("bin/game", script, 0o755)]);
+    fake.files
+        .lock()
+        .unwrap()
+        .push(("game.zip".into(), zip.clone()));
+    // A pretend home folder with a secret in it, holding the library like the real one.
+    let home = tempdir();
+    let dir = home.join(".local/share/slop");
+    let lib = library(&dir);
+    lib.install(
+        &manifest_for(&base, "game.zip", &zip, "r1"),
+        Platform::Linux,
+        None,
+        |_, _| {},
+    )
+    .await
+    .unwrap();
+    std::fs::write(home.join("secret.txt"), b"password").unwrap();
+    let saves = lib.save_dir("game").unwrap();
+    std::fs::write(saves.join("old.txt"), b"old=kept\n").unwrap();
+    std::fs::write(saves.join("plugin.so"), b"\x7fELF\x02").unwrap();
+
+    let run = |sandbox: Option<slop_client::sandbox::AppSandbox>| {
+        let mut launch = lib.prepare_launch("game", None, sandbox).unwrap();
+        let status = launch
+            .command
+            .env("HOME", &home)
+            .env("SECRET", home.join("secret.txt"))
+            .env("ESCAPE", home.join("escape.txt"))
+            .status()
+            .unwrap();
+        assert!(status.success(), "{status}");
+        (
+            launch.quarantined,
+            std::fs::read_to_string(saves.join("report.txt")).unwrap(),
+        )
+    };
+
+    let (quarantined, normal) = run(None);
+    assert_eq!(
+        quarantined,
+        ["plugin.so"],
+        "programs never stay in a save folder"
+    );
+    assert!(
+        normal.contains("mode=normal") && normal.contains("secret=seen"),
+        "{normal}"
+    );
+    assert!(normal.contains(&format!("config={}", saves.join(".config").display())));
+    let _ = std::fs::remove_file(home.join("escape.txt"));
+
+    let (_, boxed) = run(Some(slop_client::sandbox::AppSandbox {
+        on: true,
+        block_network: true,
+    }));
+    assert!(boxed.contains("mode=1"), "{boxed}");
+    assert!(boxed.contains("secret=hidden"), "{boxed}");
+    assert!(
+        boxed.contains("escape=blocked") || !home.join("escape.txt").exists(),
+        "{boxed}"
+    );
+    assert!(
+        !home.join("escape.txt").exists(),
+        "nothing written outside the save folder"
+    );
+    assert!(boxed.contains("files=readonly"), "{boxed}");
+    assert!(
+        boxed.contains("old=kept"),
+        "same saves in both modes: {boxed}"
+    );
+    assert_eq!(
+        lib.save_copies("game").unwrap().len(),
+        1,
+        "copied before the sandboxed session"
+    );
+
+    // Saves outlive an uninstall, until the player deletes them.
+    lib.uninstall("game").unwrap();
+    assert!(saves.join("old.txt").exists());
+    lib.delete_saves("game").unwrap();
+    assert!(!dir.join("saves/game").exists());
+    std::fs::remove_dir_all(home).unwrap();
+}
+
 #[tokio::test]
 async fn a_changed_file_is_never_installed() {
     let (base, fake) = fake_api().await;

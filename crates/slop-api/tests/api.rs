@@ -8242,6 +8242,113 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
     assert_eq!(page["community"][0]["adds"], json!([]));
 }
 
+/// Sandbox mode (DESIGN §10): makers declare an app works in it, it's suggested for apps that go
+/// online, and players report apps that don't work in it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn sandbox_mode_declarations_suggestions_and_reports(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "castle",
+        "released",
+        "online = '{player_servers}'",
+    )
+    .await;
+    listed_with(&app, maker_id, "quiet", "released", "").await;
+    listed_with(
+        &app,
+        maker_id,
+        "hidden",
+        "released",
+        "visibility = 'private'",
+    )
+    .await;
+    let page = |slug: &str, cookie: Option<&str>| {
+        let mut r = req(Method::GET, format!("/v1/apps/{slug}"));
+        if let Some(c) = cookie {
+            r = r.cookie(c);
+        }
+        let app = &app;
+        async move { body_json(app.send(r).await).await }
+    };
+
+    let castle = page("castle", None).await;
+    assert_eq!(castle["sandbox_ready"], false);
+    assert_eq!(castle["sandbox_suggested"], true, "it plays online");
+    assert_eq!(castle["sandbox_trouble"], false);
+    assert_eq!(castle["sandbox_reported"], false);
+    assert_eq!(page("quiet", None).await["sandbox_suggested"], false);
+
+    // The maker's declaration.
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/quiet")
+                .cookie(&maker)
+                .json(json!({ "sandbox_ready": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(page("quiet", None).await["sandbox_ready"], true);
+
+    // Players' reports: three mark it, each player once, and they can take it back.
+    let report = |method: Method, slug: &str, cookie: Option<&str>| {
+        let mut r = req(method, format!("/v1/apps/{slug}/sandbox-report"));
+        if let Some(c) = cookie {
+            r = r.cookie(c);
+        }
+        let app = &app;
+        async move { app.send(r).await.status() }
+    };
+    assert_eq!(
+        report(Method::PUT, "quiet", None).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let mut players = Vec::new();
+    for name in ["Ann", "Bo", "Cy"] {
+        let (_, cookie) = app.user(name, "US").await;
+        assert_eq!(
+            report(Method::PUT, "quiet", Some(&cookie)).await,
+            StatusCode::NO_CONTENT
+        );
+        players.push(cookie);
+    }
+    assert_eq!(
+        report(Method::PUT, "quiet", Some(&players[0])).await,
+        StatusCode::NO_CONTENT,
+        "again is fine"
+    );
+    let quiet = page("quiet", Some(&players[0])).await;
+    assert_eq!(quiet["sandbox_trouble"], true);
+    assert_eq!(quiet["sandbox_reported"], true);
+    assert_eq!(page("quiet", Some(&maker)).await["sandbox_reported"], false);
+    assert_eq!(
+        report(Method::DELETE, "quiet", Some(&players[0])).await,
+        StatusCode::NO_CONTENT
+    );
+    let quiet = page("quiet", Some(&players[0])).await;
+    assert_eq!(quiet["sandbox_trouble"], false, "two reports left");
+    assert_eq!(quiet["sandbox_reported"], false);
+    for slug in ["hidden", "nope"] {
+        assert_eq!(
+            report(Method::PUT, slug, Some(&players[1])).await,
+            StatusCode::NOT_FOUND
+        );
+    }
+
+    // The library's update check carries the same, for the Slop app's switch and prompt.
+    let updates = body_json(
+        app.send(req(Method::GET, "/v1/library/updates?apps=castle,quiet"))
+            .await,
+    )
+    .await;
+    assert_eq!(updates[0]["slug"], "castle");
+    assert_eq!(updates[0]["sandbox_suggested"], true);
+    assert_eq!(updates[1]["sandbox_ready"], true);
+    assert_eq!(updates[1]["sandbox_trouble"], false);
+}
+
 // ---------------------------------------------------------------------------------------------
 // Private Slop (DESIGN §13)
 

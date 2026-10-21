@@ -38,6 +38,11 @@
     "allow-running-apps",
     "allow-installed-mods",
     "allow-install-mod",
-    "allow-uninstall-mod"
+    "allow-uninstall-mod",
+    "allow-sandbox-status",
+    "allow-set-sandbox",
+    "allow-save-copies",
+    "allow-restore-saves",
+    "allow-copy-saves"
   ]
 }

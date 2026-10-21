@@ -7,9 +7,10 @@ import { api, type AppSummary, type AppUpdate } from "../api";
 import { checkUpdates, installUpdates, LIBRARY_CHANGED } from "../components/AppUpdates";
 import { InstallControls } from "../components/InstallControls";
 import { GameMods } from "../components/ModControls";
+import { isOn, useSandboxStatus } from "../components/Sandbox";
 import { Art, ErrorState, Loading, StageBadge } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
-import { desktop, isDesktop, type InstalledApp } from "../platform";
+import { desktop, isDesktop, type InstalledApp, type SaveCopy } from "../platform";
 import { useSession } from "../session";
 
 interface Row {
@@ -33,6 +34,7 @@ export function Library() {
     return () => window.removeEventListener(LIBRARY_CHANGED, reload);
   }, [installed]);
   const interested = useLoad(() => (me ? api.interested.mine() : Promise.resolve([])), [me?.id]);
+  const sandbox = useLoad(() => (isDesktop ? desktop.sandboxStatus() : Promise.resolve(undefined)), []);
   const privateSlop = useLoad(() => (me ? api.private.mine() : Promise.resolve({ mine: [], shared: [] })), [me?.id]);
 
   if (me === undefined || library.loading || installed.loading) return <Loading />;
@@ -87,13 +89,26 @@ export function Library() {
                   </Link>
                   {row.app && <StageBadge app={row.app} />}
                   {row.installed && <span className="badge official">INSTALLED</span>}
+                  {row.installed && sandbox.data?.available && isOn(sandbox.data, row.slug) && (
+                    <span className="badge neutral">SANDBOX</span>
+                  )}
                 </div>
                 <div className="muted small">{row.subtitle}</div>
                 {row.installed && <UpdateLine row={row} />}
                 {row.installed && <Community row={row} onSwitched={installed.reload} />}
+                {row.installed && row.installed.kind !== "installer" && <Saves slug={row.slug} />}
               </div>
               <div className="library-actions">
-                <InstallControls slug={row.slug} title={row.title} inLibrary={Boolean(row.app)} />
+                <InstallControls
+                  slug={row.slug}
+                  title={row.title}
+                  inLibrary={Boolean(row.app)}
+                  sandbox={
+                    row.update
+                      ? { suggested: Boolean(row.update.sandbox_suggested), offline: !row.update.sandbox_suggested }
+                      : undefined
+                  }
+                />
               </div>
             </li>
           ))}
@@ -174,6 +189,7 @@ export function Library() {
 /** "Update apps automatically", and updating everything now. */
 function UpdateBar({ waiting, onUpdated }: { waiting: number; onUpdated: () => void }) {
   const auto = useLoad(() => desktop.autoUpdateSetting(), []);
+  const sandbox = useSandboxStatus();
   const [busy, setBusy] = useState(false);
   return (
     <div className="update-bar panel panel-pad">
@@ -186,6 +202,16 @@ function UpdateBar({ waiting, onUpdated }: { waiting: number; onUpdated: () => v
         />{" "}
         Update apps automatically <span className="muted small">(never while an app is running)</span>
       </label>
+      {sandbox.data?.available && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={sandbox.data.settings.all}
+            onChange={(e) => void desktop.setSandbox(null, e.target.checked).then(sandbox.reload)}
+          />{" "}
+          Run every app in sandbox mode <span className="muted small">(unless you turned it off for one)</span>
+        </label>
+      )}
       {waiting > 0 && (
         <button
           className="btn small slime"
@@ -250,6 +276,7 @@ function BuildSwitcher({ current, builds, onSwitched }: { current: InstalledApp;
   const [target, setTarget] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  const [bringSaves, setBringSaves] = useState(true);
   const os = platform.data?.platform;
   const options = builds.filter((b) => b.slug === current.slug || (os && b.platforms.includes(os)));
   if (options.length < 2) return null;
@@ -260,6 +287,7 @@ function BuildSwitcher({ current, builds, onSwitched }: { current: InstalledApp;
     setError(undefined);
     try {
       await desktop.install(chosen.slug);
+      if (bringSaves) await desktop.copySaves(current.slug, chosen.slug);
       await desktop.uninstall(current.slug);
       setTarget(undefined);
       onSwitched();
@@ -285,9 +313,13 @@ function BuildSwitcher({ current, builds, onSwitched }: { current: InstalledApp;
         <div className="notice">
           <p>
             Install <b>{chosen.title}</b> and uninstall <b>{current.title}</b>?{" "}
-            {!chosen.official && "Community builds are made by other people from the original's code and reviewed like any app."} Most
-            games keep saves in your user folder, so they usually carry over, but check the game's own notes.
+            {!chosen.official && "Community builds are made by other people from the original's code and reviewed like any app."} Each
+            build has its own saves; your saves for {current.title} are kept either way.
           </p>
+          <label className="check">
+            <input type="checkbox" checked={bringSaves} onChange={(e) => setBringSaves(e.target.checked)} /> Copy my saves to{" "}
+            {chosen.title} <span className="muted">(a fork may store saves differently)</span>
+          </label>
           <div className="actions">
             <button className="btn small ghost" onClick={() => setTarget(undefined)} disabled={busy}>
               Cancel
@@ -304,5 +336,51 @@ function BuildSwitcher({ current, builds, onSwitched }: { current: InstalledApp;
         </p>
       )}
     </div>
+  );
+}
+
+/** An installed app's save folder: copies taken before sandboxed sessions, to go back to. */
+function Saves({ slug }: { slug: string }) {
+  const [open, setOpen] = useState(false);
+  const copies = useLoad(() => (open ? desktop.saveCopies(slug) : Promise.resolve([] as SaveCopy[])), [open, slug]);
+  const [done, setDone] = useState<string>();
+  const [error, setError] = useState<string>();
+  return (
+    <details className="library-community small" onToggle={(e) => setOpen((e.target as HTMLDetailsElement).open)}>
+      <summary>Saves</summary>
+      <p className="muted">
+        Kept in Slop's save folder for this app, the same in normal and sandbox mode, and kept when you uninstall. Slop copies
+        them before each sandboxed session.
+      </p>
+      {copies.data && copies.data.length === 0 && <p className="muted">No copies yet.</p>}
+      <ul className="plain">
+        {copies.data?.map((c) => (
+          <li key={c.id}>
+            {new Date(c.taken_at).toLocaleString()} · {Math.max(1, Math.round(c.bytes / 1024))} KB{" "}
+            <button
+              className="btn small ghost"
+              onClick={() => {
+                setError(undefined);
+                void desktop.restoreSaves(slug, c.id).then(
+                  () => {
+                    setDone(c.id);
+                    copies.reload();
+                  },
+                  (err: unknown) => setError(err instanceof Error ? err.message : String(err)),
+                );
+              }}
+            >
+              Go back to this
+            </button>
+            {done === c.id && <span className="muted"> Restored. Your saves before that were copied too.</span>}
+          </li>
+        ))}
+      </ul>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </details>
   );
 }

@@ -39,6 +39,7 @@ function AppView({ app }: { app: AppDetail }) {
   const { me } = useSession();
   const library = useLoad(() => (me && !isDesktop ? api.library() : Promise.resolve([])), [me?.id]);
   const inLibrary = library.data?.some((e) => e.slug === app.slug);
+  const sandboxHint = { suggested: app.sandbox_suggested, offline: !app.sandbox_suggested };
   const players = useLoad(() => (app.kind === "game" ? api.players(app.slug) : Promise.resolve(undefined)), [app.slug]);
   const counted = players.data && (players.data.playing_now > 0 || players.data.peak_this_month > 0);
   const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
@@ -247,11 +248,12 @@ function AppView({ app }: { app: AppDetail }) {
               <ModControls slug={app.slug} game={{ slug: app.branch.parent_slug, title: app.branch.parent_title }} />
             ) : app.branch && !app.is_mine ? (
               <CommunityGate app={app}>
-                <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
+                <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
               </CommunityGate>
             ) : (
-              <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
+              <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
             )}
+            {app.stage !== "coming_soon" && !app.platforms.includes("any") && <SandboxNote app={app} />}
             {!app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />}
             {packages.length > 0 && (
               <p className="muted small packages">
@@ -563,14 +565,34 @@ function SharePanel({ slug }: { slug: string }) {
 }
 
 /** Apps that go online talk to servers Slop can't check (SECURITY §6.1). */
+/** What's known about running the app in sandbox mode (DESIGN §6). */
+function SandboxNote({ app }: { app: AppDetail }) {
+  if (!app.sandbox_ready && !app.sandbox_trouble) return null;
+  return (
+    <p className="small sandbox-note">
+      {app.sandbox_ready && (
+        <>
+          <span className="badge neutral">WORKS IN SANDBOX MODE</span>{" "}
+          <span className="muted">The maker says so: it keeps its saves in Slop's save folder.</span>
+        </>
+      )}
+      {app.sandbox_trouble && (
+        <span className="muted">
+          {app.sandbox_ready && " "}Some players say it doesn't start in sandbox mode.
+        </span>
+      )}
+    </p>
+  );
+}
+
 function OnlineNotice({ app }: { app: AppDetail }) {
   return (
     <div className="notice online-notice" role="note">
       <span className="badge warn">PLAYS ONLINE · SERVERS NOT CHECKED</span>{" "}
       Slop checked this {app.kind === "game" ? "game" : "app"}'s code, but it can't check the servers it connects to, and
       those can change at any time. A server could send something that harms your computer through a bug in the{" "}
-      {app.kind === "game" ? "game" : "app"}. We suggest running it in <b>sandbox mode</b>{" "}
-      <span className="muted">(coming to the Slop app)</span>.
+      {app.kind === "game" ? "game" : "app"}. We suggest running it in <b>sandbox mode</b> in the Slop app (Linux now,
+      Windows soon), where it can use only its own files and saves.
       <ul className="small">
         {app.online.map((k) => (
           <li key={k}>{ONLINE_LABEL[k]}</li>

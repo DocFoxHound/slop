@@ -171,6 +171,7 @@ const EMPTY: NewApp = {
   platforms: [],
   online: [],
   online_hosts: [],
+  sandbox_ready: false,
 };
 
 function slugify(title: string): string {
@@ -219,6 +220,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           platforms: existing.platforms,
           online: existing.online,
           online_hosts: existing.online_hosts,
+          sandbox_ready: existing.sandbox_ready,
         }
       : EMPTY,
   );
@@ -262,6 +264,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             platforms: form.platforms,
             online: form.online,
             online_hosts: hosts(),
+            sandbox_ready: form.sandbox_ready,
           })
         : await terms.guard(() => {
             const app = { ...form, online_hosts: hosts() };
@@ -513,6 +516,19 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             </label>
           )}
         </fieldset>
+
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={form.sandbox_ready ?? false}
+            onChange={(e) => set("sandbox_ready", e.target.checked)}
+          />{" "}
+          Works in sandbox mode
+          <span className="hint">
+            It keeps local saves, settings and logs only in SLOP_SAVE_DIR when that's set, and runs with no access to the rest
+            of the computer. See <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>.
+          </span>
+        </label>
 
         <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
 

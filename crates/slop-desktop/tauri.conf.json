@@ -58,10 +58,16 @@
       "icons/icon.ico"
     ],
     "linux": {
+      "deb": {
+        "depends": [
+          "bubblewrap"
+        ]
+      },
       "rpm": {
         "depends": [
           "webkit2gtk4.1",
-          "gtk3"
+          "gtk3",
+          "bubblewrap"
         ]
       }
     },

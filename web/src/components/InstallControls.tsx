@@ -9,7 +9,17 @@ import { Link, useLocation } from "react-router";
 
 import { api } from "../api";
 import { useLoad } from "../hooks";
-import { desktop, isDesktop, type InstalledApp } from "../platform";
+import { desktop, isDesktop, type InstalledApp, type Launched } from "../platform";
+import {
+  decided,
+  LaunchNotices,
+  SandboxFailedNotice,
+  SandboxPrompt,
+  SandboxSwitch,
+  useSandboxFailed,
+  useSandboxStatus,
+  type SandboxHint,
+} from "./Sandbox";
 import { useSession } from "../session";
 
 function formatBytes(n: number): string {
@@ -18,8 +28,23 @@ function formatBytes(n: number): string {
   return `${Math.max(1, Math.round(n / 1e3))} KB`;
 }
 
-export function InstallControls({ slug, title, inLibrary }: { slug: string; title: string; inLibrary?: boolean }) {
-  return isDesktop ? <DesktopControls slug={slug} title={title} /> : <WebControls slug={slug} inLibrary={inLibrary} />;
+export function InstallControls({
+  slug,
+  title,
+  inLibrary,
+  sandbox,
+}: {
+  slug: string;
+  title: string;
+  inLibrary?: boolean;
+  /** For suggesting sandbox mode (DESIGN §6). */
+  sandbox?: SandboxHint;
+}) {
+  return isDesktop ? (
+    <DesktopControls slug={slug} title={title} sandbox={sandbox} />
+  ) : (
+    <WebControls slug={slug} inLibrary={inLibrary} />
+  );
 }
 
 function WebControls({ slug, inLibrary }: { slug: string; inLibrary?: boolean }) {
@@ -61,8 +86,14 @@ function WebControls({ slug, inLibrary }: { slug: string; inLibrary?: boolean })
   );
 }
 
-function DesktopControls({ slug, title }: { slug: string; title: string }) {
+function DesktopControls({ slug, title, sandbox }: { slug: string; title: string; sandbox?: SandboxHint }) {
   const build = useLoad(() => api.hasBuild(slug), [slug]);
+  const sandboxStatus = useSandboxStatus();
+  const [askSandbox, setAskSandbox] = useState(false);
+  const [launched, setLaunched] = useState<Launched>();
+  const [failed, clearFailed] = useSandboxFailed(slug);
+  const [confirmUninstall, setConfirmUninstall] = useState(false);
+  const [deleteSaves, setDeleteSaves] = useState(false);
   const [installed, setInstalled] = useState<InstalledApp | null>();
   const [busy, setBusy] = useState<"install" | "launch" | "uninstall" | null>(null);
   const [progress, setProgress] = useState<{ got: number; total: number }>();
@@ -97,6 +128,16 @@ function DesktopControls({ slug, title }: { slug: string; title: string }) {
       setBusy(null);
       setProgress(undefined);
     }
+  };
+
+  const launch = (normalOnce = false) => {
+    clearFailed();
+    void run("launch", async () => setLaunched(await desktop.launch(slug, normalOnce)));
+  };
+  const play = () => {
+    const status = sandboxStatus.data;
+    if (status?.available && sandbox?.suggested && !decided(status, slug)) setAskSandbox(true);
+    else launch();
   };
 
   if (installed === undefined || build.loading) return <div className="install-controls muted">Checking…</div>;
@@ -136,9 +177,37 @@ function DesktopControls({ slug, title }: { slug: string; title: string }) {
               </button>
             )
           ) : (
-            <button className="btn big slime" disabled={busy !== null} onClick={() => void run("launch", () => desktop.launch(slug))}>
+            <button className="btn big slime" disabled={busy !== null} onClick={play}>
               {busy === "launch" ? "Starting…" : "▶ Play"}
             </button>
+          )}
+          {askSandbox && (
+            <SandboxPrompt
+              title={title}
+              onChoose={(on) => {
+                setAskSandbox(false);
+                void desktop.setSandbox(slug, on).then(() => {
+                  sandboxStatus.reload();
+                  launch();
+                });
+              }}
+            />
+          )}
+          {installed.kind !== "installer" && sandboxStatus.data && (
+            <SandboxSwitch slug={slug} status={sandboxStatus.data} hint={sandbox} onChanged={sandboxStatus.reload} />
+          )}
+          {launched && <LaunchNotices launched={launched} title={title} />}
+          {failed && (
+            <SandboxFailedNotice
+              slug={slug}
+              title={title}
+              onRunNormally={() => launch(true)}
+              onTurnOff={() => {
+                clearFailed();
+                void desktop.setSandbox(slug, false).then(sandboxStatus.reload);
+              }}
+              onClose={clearFailed}
+            />
           )}
           <p className="muted small">Version {installed.version} is installed.</p>
           <div className="row-actions">
@@ -149,10 +218,35 @@ function DesktopControls({ slug, title }: { slug: string; title: string }) {
             >
               {installing ? `Updating… ${pct}%` : "Reinstall / update"}
             </button>
-            <button className="btn small ghost danger" disabled={busy !== null} onClick={() => void run("uninstall", () => desktop.uninstall(slug))}>
+            <button className="btn small ghost danger" disabled={busy !== null} onClick={() => setConfirmUninstall(true)}>
               Uninstall
             </button>
           </div>
+          {confirmUninstall && (
+            <div className="notice">
+              <p>
+                Uninstall <b>{title}</b>? Its mods go too. Your saves stay, so reinstalling picks up where you left off.
+              </p>
+              <label className="check">
+                <input type="checkbox" checked={deleteSaves} onChange={(e) => setDeleteSaves(e.target.checked)} /> Delete my
+                saves too
+              </label>
+              <div className="actions">
+                <button className="btn small ghost" onClick={() => setConfirmUninstall(false)}>
+                  Cancel
+                </button>
+                <button
+                  className="btn small danger"
+                  onClick={() => {
+                    setConfirmUninstall(false);
+                    void run("uninstall", () => desktop.uninstall(slug, deleteSaves));
+                  }}
+                >
+                  Uninstall
+                </button>
+              </div>
+            </div>
+          )}
         </>
       ) : build.data ? (
         <>
