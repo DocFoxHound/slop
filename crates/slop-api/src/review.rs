@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Reviewing at scale: AI reviewers and review notes (decided 2026-10-19).
 //!
 //! An admin makes an **API token** for an AI reviewer in the admin panel. With it, the reviewer

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Deletes what's no longer needed (LEGAL-GUIDANCE PRIV-1, §15: keep as little as possible), and
 //! completes People jobs whose 7-day window has passed.
 //!

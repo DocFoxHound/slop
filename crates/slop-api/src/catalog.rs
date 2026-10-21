@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Catalog: categories, tags, store listings and makers' app drafts (DESIGN §5, §8).
 //!
 //! Makers can create and edit drafts. Moving a draft into the store happens through Publishing

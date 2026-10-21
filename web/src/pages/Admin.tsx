@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The admin panel for Slop staff: review releases, list and moderate apps, read the audit log.
 // Every action is recorded in the audit log under the admin's name (crates/slop-api/src/admin_web.rs).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Display helpers shared by the pages.
 
 import type { AppStage, AppSummary, ContentLabel, OnlineKind } from "./api";

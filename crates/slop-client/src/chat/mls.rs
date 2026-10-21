@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The MLS side of chat (RFC 9420, through OpenMLS): this device's identity, its key packages,
 //! and each chat's group. Everything here runs on the device; Slop only relays the results.
 //!

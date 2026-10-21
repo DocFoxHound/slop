@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Re-scanning live releases (SECURITY §5.6, DESIGN §16). The release players get for each app is
 //! scanned again at least weekly, with the scanner's latest signatures, and straight away when
 //! someone reports the app for malware or for not matching its source.

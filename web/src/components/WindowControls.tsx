@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The desktop app is borderless (no system title bar), like Steam: Slop's own top bar is where the
 // window is dragged, and these are its minimize / maximize / close buttons.
 

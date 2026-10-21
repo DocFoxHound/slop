@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // People: the directory of creatives and their pages (DESIGN §15.1). A creative's page is
 // built to sell a service — banner, accent colour, their own section order — so it isn't an app
 // page with a different header.

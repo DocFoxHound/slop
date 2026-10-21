@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // "How to publish": renders public/publishing.md, which is also served as-is for AI agents
 // (see public/llms.txt).
 

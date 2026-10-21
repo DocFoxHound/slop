@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Repository access (SECURITY §12.2–12.3, DESIGN §17 decision 11).
 //!
 //! Slop keeps no copies of source or builds, so it has to be able to read every app's repository.

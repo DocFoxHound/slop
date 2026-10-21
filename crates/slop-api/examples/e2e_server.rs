@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! A throwaway Slop for the browser tests (web/e2e). Never for real use.
 //!
 //! Makes a new database (`slop_e2e_<random>_sim`) on the test Postgres, migrates and seeds it
@@ -233,6 +234,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         approvals_required: 1,
         field_key: Some([11; 32]),
         security_contact: None,
+        source_url: None,
     };
 
     // The load test wants a full store: the simulation's games, players, votes and history.

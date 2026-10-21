@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Signed documents shared by the Slop API and the Slop client (docs/SECURITY.md §5.3, §5.5).
 //!
 //! - A **release manifest** lists every file of a release with its URL on the maker's release

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Review and moderation actions, run by Slop staff from the command line (`slop-api review …`).
 //!
 //! Phase 1 has no web admin: an operator with production access runs these, which keeps the

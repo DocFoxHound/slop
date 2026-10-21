@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! What a viewer may see, from the per-country policy table (LEGAL-GUIDANCE AGE-1, AGE-4, AGE-5).
 
 use axum::http::HeaderMap;

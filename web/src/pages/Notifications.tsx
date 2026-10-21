@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The bell's page (crates/slop-api/src/notify.rs): job steps, Interested apps moving on, and
 // moderation. Opening one marks it read.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! A user's library (DESIGN §6). Adding is free and instant; installing happens on the device.
 
 use axum::{

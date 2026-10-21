@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // What the tests share: the test server's address and accounts.
 import { test as base, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Sandbox mode in the Slop app (DESIGN §6): an app runs in a box where it can use only its own
 // files, mods and save folder, plus the screen, sound and controllers. Players turn it on per
 // app; Slop suggests it for apps that go online. It limits what a compromised app can reach;

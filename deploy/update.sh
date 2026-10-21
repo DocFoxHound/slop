@@ -86,7 +86,7 @@ if ! cargo clippy --all-targets -q -- -D warnings >"$ROOT/lint.log" 2>&1; then
   tail -n 30 "$ROOT/lint.log"
   fail "lint"
 fi
-cargo build -q --release -p slop-api || fail "build"
+SLOP_COMMIT="$target" cargo build -q --release -p slop-api || fail "build"
 (cd web && npm ci --silent --no-audit --no-fund && npm test --silent && npm run build --silent) || fail "web build"
 # Browser tests: the built website against a throwaway Slop on the test database (web/e2e).
 if ! (cd web && SLOP_TEST_DATABASE_URL="$TEST_DATABASE_URL" npx playwright test >"$ROOT/e2e.log" 2>&1); then

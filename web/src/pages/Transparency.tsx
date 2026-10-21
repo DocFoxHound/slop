@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The yearly transparency report (LEGAL-GUIDANCE CHAT-4): requests from authorities, and the
 // year's reports, decisions and appeals. Counts only.
 

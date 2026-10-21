@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Sign-in, sign-up and the account page (with the devices list, docs/SECURITY.md §4.2).
 
 import { useEffect, useState, type FormEvent } from "react";

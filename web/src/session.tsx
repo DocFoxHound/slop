@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The signed-in user, shared across the app.
 //
 // - Website: a cookie session; signing in is a full-page trip to GitHub (see pages/Auth.tsx).

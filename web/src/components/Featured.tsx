@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The Featured carousel at the top of the front page (DESIGN §5), picked by Slop staff.
 // It never moves by itself (WCAG 2.2.2): players page through it with the buttons or arrow keys.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, signIn, test } from "./fixtures";
 
 test("signed out, adding to the library asks you to sign in", async ({ page }) => {

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, signIn, test } from "./fixtures";
 
 test("publishing a mod starts from the game it's for", async ({ page }) => {

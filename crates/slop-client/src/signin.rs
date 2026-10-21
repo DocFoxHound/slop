@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Signing in through the system browser (SECURITY §4.1, RFC 8252 loopback redirect).
 //!
 //! 1. [`begin`] listens on a random port on 127.0.0.1 and asks the API for a sign-in request,

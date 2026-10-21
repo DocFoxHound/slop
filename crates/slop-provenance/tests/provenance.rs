@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Against a real GitHub Actions attestation (see fixtures/README.md).
 
 use slop_provenance::{Expected, ProvenanceError, ProvenanceVerifier};

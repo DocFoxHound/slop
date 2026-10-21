@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The client core against a fake Slop API and release host.
 
 use std::{

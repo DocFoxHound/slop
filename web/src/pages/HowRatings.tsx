@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // "How ratings work" (METRICS §2): the weighting formula is published, so players and makers
 // can check what a rating means. The numbers here match crates/slop-api/src/votes.rs.
 

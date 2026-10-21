@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Chat (docs/DESIGN.md §19, SECURITY §8.5): direct messages, group chats and team chats, end-to-end
 // encrypted in the Slop app's Rust core (crates/slop-client/src/chat). This page only shows what
 // the app decrypts and asks it to send; keys never reach it. On the website, chat isn't

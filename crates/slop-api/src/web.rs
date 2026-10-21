@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Serving the built website (`web/dist`) from the API, when `SLOP_WEB_DIR` is set.
 //!
 //! The site and the API then share an origin, which the session cookie and the CSRF checks

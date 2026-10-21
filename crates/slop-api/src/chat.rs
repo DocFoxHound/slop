@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Chat's delivery service (DESIGN §19, SECURITY §8.5).
 //!
 //! Messages are end-to-end encrypted with MLS (RFC 9420) in the Slop app (`slop-client`'s

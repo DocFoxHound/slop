@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Ratings: 👍 Not Slop / 👎 Slop (DESIGN §7, METRICS §1.2, §2).
 //!
 //! - Only players who launched the app through Slop can vote (that's `user_app_usage`), and only

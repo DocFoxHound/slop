@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // "A new version of Slop is available": a dismissible notice in the desktop app. Updates are
 // never forced; the player chooses when to install (crates/slop-desktop, watch_for_updates).
 

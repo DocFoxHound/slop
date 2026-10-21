@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! People in the simulation sandbox (DESIGN §15): made-up artists, composers, writers and
 //! studios, with a hidden truth (how good and how reliable each one is), and jobs from the
 //! simulated makers in every state — requested, offered, paid, delivered, completed, declined,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Rate limits per account (SECURITY §8.1), on top of the per-IP limits in ratelimit.rs: someone
 //! with many addresses still can't vote, report, message or invite faster than a person would.
 //!

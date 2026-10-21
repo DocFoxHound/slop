@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, server, signIn, test } from "./fixtures";
 
 test("a maker creates a store page, submits a release, and staff approve it", async ({ browser }) => {

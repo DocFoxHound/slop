@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // A running game asking for mods (Slop Link, DESIGN §9): a server or lobby needs them. The
 // player sees each one and says yes or no; on yes the Slop app fetches each from Slop, checks it
 // against Slop's signature, adds it to the game, and tells the game. Servers only name mods.

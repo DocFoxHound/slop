@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Slop Build (docs/ARCHITECTURE.md §6.2): the shared recipe in `slop-build/` builds a maker's app
 //! on GitHub Actions, signs it, attaches it to their release, and calls
 //! `POST /v1/slop-build/releases` here.

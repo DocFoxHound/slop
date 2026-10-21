@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Read-only access tokens for private repositories outside GitHub (DESIGN §13, ARCHITECTURE
 //! §6.5): GitLab, Bitbucket, and Gitea or Forgejo servers. GitHub uses Slop's GitHub App instead.
 //!

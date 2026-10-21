@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! A game's own mods folder (DESIGN §9). Its maker can name the folder the game already reads
 //! mods from (`mods/` next to the game, `Content/Paks/~mods`, a folder in its saves). Before each
 //! start, and when the player adds mods while it runs, Slop makes that folder hold exactly the

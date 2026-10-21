@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Requests from police, courts and authorities (LEGAL-GUIDANCE CHAT-3), and the yearly
 //! transparency report (CHAT-4).
 //!

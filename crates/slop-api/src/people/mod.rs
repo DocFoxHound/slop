@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! People: creatives offering services to makers (DESIGN §15, PAYMENTS §7, LEGAL §4).
 //!
 //! - `mod.rs`: profiles (customisable pages, unlike app pages), the directory, verified reviews.

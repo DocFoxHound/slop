@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Get the Slop desktop app: Windows, and Linux as .deb or .rpm. Reached from the "Download" button
 // in the website's top bar (not shown in the desktop app itself).
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The maker's pictures and videos, on the store-page editor. They live in the maker's repository
 // (.slop/media.json, crates/slop-api/src/media.rs); every new set waits for review before the
 // store shows it. The maker puts the gallery in order here, which isn't reviewed.

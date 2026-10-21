@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Problems with jobs, and disputes about reviews (DESIGN §15.6, LEGAL §4.1, §4.5).
 //!
 //! **Problems.** Either side opens one, states their case, the other answers, and either

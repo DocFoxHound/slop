@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The desktop app's sign-in window: a small window shown before the store, like Steam's.
 // Skipped at launch when a remembered sign-in still works (crates/slop-desktop, `startup`).
 //

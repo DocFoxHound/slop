@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shared runtimes (DESIGN §6): the Windows runtimes games often need, from an approved list.
 //! A release names the ones it needs (by `id`, signed into its manifest); the Slop app installs a
 //! missing one before the game starts, once the player agrees, from the vendor's own download,

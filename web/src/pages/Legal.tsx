@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Slop's legal documents (crates/slop-api/legal/): every version kept, changes announced 15 days
 // ahead, and each user's acceptance recorded (crates/slop-api/src/legal.rs).
 

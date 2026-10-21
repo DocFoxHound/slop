@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Small shared pieces: app artwork, tiles, badges, links, loading and error states.
 
 import type { MouseEvent, ReactNode } from "react";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Only a repository's owner can put it on Slop (DESIGN §8).
 //!
 //! Every way a repository gets linked (publishing an app, changing or moving its repository,

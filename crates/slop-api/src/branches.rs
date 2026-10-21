@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Branches and community builds (DESIGN §9).
 //!
 //! Anyone can fork an app and register a branch: a mod, a fix, a translation or a port. A branch

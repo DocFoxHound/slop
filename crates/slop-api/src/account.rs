@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! A user's own account: downloading their data and closing the account (DESIGN §4;
 //! LEGAL-GUIDANCE PRIV-3; METRICS §6).
 //!

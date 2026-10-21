@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sandbox mode (DESIGN §6, SECURITY §6.2): an app started in its own box, where it can read
 //! its installed files and mods, write only its save folder, and use the screen, sound, graphics
 //! card and controllers. The rest of the computer (documents, browsers, keys, other apps, Slop

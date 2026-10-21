@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The admin panel's API: the review queue and moderation for Slop staff (`users.is_admin`).
 //!
 //! Every action goes through the same functions as the `slop-api review …` commands (admin.rs),

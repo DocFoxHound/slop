@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The sandbox's reports, moderation decisions and appeals (moderation.rs), and the agreements
 //! simulated users accepted (legal.rs). Decisions go through the real `moderation::decide`, so the
 //! admin panel, statements of reasons and appeals can be tried with realistic data.

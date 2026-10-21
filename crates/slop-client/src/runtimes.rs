@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Installing shared runtimes (slop-manifest runtimes.rs) before a game that needs them starts.
 //! Windows only: elsewhere every runtime counts as present.
 //!

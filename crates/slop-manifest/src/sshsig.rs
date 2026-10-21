@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! A maker's own signature on a release file (SECURITY §5.3, "files attached by hand"): an
 //! OpenSSH signature (`ssh-keygen -Y sign -n slop-release`) made with an Ed25519 key the maker
 //! registered on Slop. The format is OpenSSH's PROTOCOL.sshsig; only `ssh-ed25519` keys and the

@@ -206,9 +206,18 @@ Errors are `{"error": {"code", "message", "field"?}}`. The desktop app authentic
 
 Copyright © 2026 IronPoint Development LLC.
 
-Licensed under either of [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT)
-at your option.
+Slop is open source under two licences, so improvements to the service stay open while code that
+makers and other stores build on stays free to use in anything:
 
-Unless you explicitly state otherwise, any contribution intentionally submitted for inclusion in
-this project by you, as defined in the Apache-2.0 license, shall be dual licensed as above, without
-any additional terms or conditions.
+| Part | Licence |
+|---|---|
+| The server (`crates/slop-api`), the website (`web/`), the desktop app (`crates/slop-desktop`, `crates/slop-client`), and the deployment and development scripts (`deploy/`, `dev/`) | [GNU Affero General Public License v3.0 or later](LICENSE-AGPL) |
+| Everything else, including the manifest and provenance crates (`crates/slop-manifest`, `crates/slop-provenance`), the engine snippets and examples (`examples/`), the build and check recipes (`slop-build/`), the docs and the mockup | [Apache License, Version 2.0](LICENSE-APACHE) or [MIT license](LICENSE-MIT), at your option |
+
+The AGPL means anyone who runs a changed version of Slop's server or website for others must offer
+those users its source code. Code from the second group never brings the AGPL into your own game
+or store: the snippets, the recipes and the manifest checker are yours to copy.
+
+Unless you explicitly state otherwise, any contribution you intentionally submit for inclusion in
+this project is licensed as the part it changes is licensed above, without any additional terms or
+conditions. See [CONTRIBUTING.md](CONTRIBUTING.md).

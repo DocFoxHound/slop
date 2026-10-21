@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Desktop sign-in (SECURITY §4.1-4.2, RFC 8252).
 //!
 //! 1. The app creates a sign-in request with a PKCE challenge and the loopback port it listens

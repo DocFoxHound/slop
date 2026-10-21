@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Manage an app: which release players get, the repository, update settings and the requests
 // that change them (crates/slop-api/src/manage.rs). Anything that would have players download
 // something different is checked before it happens; everything else the maker changes directly.

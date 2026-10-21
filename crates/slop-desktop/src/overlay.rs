@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The in-game overlay (DESIGN §19): Shift+Tab over a game launched from Slop brings up a small
 //! panel with friends and chats, and Shift+Tab (or Esc) puts the game back.
 //!

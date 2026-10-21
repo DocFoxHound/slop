@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Slop's own look at an app's source, at the commit a release was built from (DESIGN §10's
 //! "Licence" and "Monetization rules" rows, LEGAL-GUIDANCE IP-2). Slop downloads the
 //! repository's archive at that commit once, reads it in memory, and deletes it:

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // 👍 Not Slop / 👎 Slop on an app's page: the rating (weighted by playtime, with the unweighted
 // one beside it), the vote buttons, and the rating, votes and players over time
 // (crates/slop-api/src/votes.rs, pulse.rs; DESIGN §7, METRICS §2).

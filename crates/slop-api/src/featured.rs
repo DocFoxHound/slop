@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The Featured carousel at the top of the front page (DESIGN §5): apps Slop staff pick, in
 //! their order, each with one line saying why. Only apps in the store for the viewer show.
 

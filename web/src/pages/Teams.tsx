@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Teams (DESIGN §14): player teams with picks, game nights and shared Private Slop; official
 // studio teams verified through their GitHub organization (crates/slop-api/src/teams.rs).
 

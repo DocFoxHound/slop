@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Store-page pictures and videos, from the maker's repository (decided 2026-10-19).
 //!
 //! Slop doesn't host them. A maker lists them in `.slop/media.json` in their repository:

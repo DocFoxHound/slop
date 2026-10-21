@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Passkeys in the browser (crates/slop-api/src/passkeys.rs). The server sends WebAuthn options as
 // JSON with base64url binary fields; the browser API wants ArrayBuffers, and its answer goes back
 // as JSON the same way.

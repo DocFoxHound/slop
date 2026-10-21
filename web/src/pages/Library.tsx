@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The library (DESIGN §6): what you've added, and on the desktop app, what's installed.
 
 import { useEffect, useState } from "react";

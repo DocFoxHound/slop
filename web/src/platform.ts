@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Where the UI is running: the website, or the Tauri desktop app.
 
 declare global {

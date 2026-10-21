@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Private Slop (DESIGN §13, SECURITY §12): apps only their owner and the people they choose can
 //! see. Same requirements as public apps (an approved release), and the source may be a private
 //! repository Slop can read; builds stay on the owner's release page and are downloaded through

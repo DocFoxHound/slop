@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Makers' side: their apps with where each one is on its way into the store, and the draft editor.
 
 import { useEffect, useState, type FormEvent, type ReactNode } from "react";

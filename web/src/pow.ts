@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The proof-of-work check Slop asks for after a few unfinished donation checkouts
 // (crates/slop-api/src/challenge.rs): find a number whose SHA-256 of "prefix:number" starts with
 // `difficulty` zero bits. A plain synchronous SHA-256 is far faster here than Web Crypto's

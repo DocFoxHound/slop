@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Makers' signing keys (SECURITY §5.3): for builds a maker makes and attaches by hand, outside
 //! GitHub Actions (on GitLab, Bitbucket, a self-hosted server, or their own computer). They
 //! register an Ed25519 SSH public key, sign each file with

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 /// <reference types="vitest/config" />
 import { readFileSync, writeFileSync } from "node:fs";
 import { join } from "node:path";

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The Slop API: one modular application (docs/ARCHITECTURE.md §4).
 
 pub mod abuse;
@@ -69,7 +70,7 @@ use axum::{
     http::{HeaderName, HeaderValue, StatusCode, header},
     routing::get,
 };
-use serde_json::json;
+use serde_json::{Value, json};
 use sqlx::PgPool;
 use tower_http::{
     csrf::CsrfLayer, limit::RequestBodyLimitLayer, set_header::SetResponseHeaderLayer,
@@ -145,6 +146,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     }
 
     let v1 = Router::new()
+        .route("/source", get(source))
         .merge(abuse::routes())
         .merge(auth::routes())
         .merge(catalog::routes())
@@ -300,6 +302,23 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
 
 fn header_layer(name: HeaderName, value: &'static str) -> SetResponseHeaderLayer<HeaderValue> {
     SetResponseHeaderLayer::if_not_present(name, HeaderValue::from_static(value))
+}
+
+/// The commit this server was built from (`SLOP_COMMIT` at build time, deploy/update.sh).
+const COMMIT: Option<&str> = option_env!("SLOP_COMMIT");
+
+/// Where to get this Slop's source code, at the version that's running (the AGPL's section 13).
+async fn source(axum::extract::State(state): axum::extract::State<AppState>) -> Json<Value> {
+    let url = state.config.source_url.as_deref();
+    let commit = COMMIT.filter(|c| c.len() == 40 && c.bytes().all(|b| b.is_ascii_hexdigit()));
+    // GitHub, GitLab, Codeberg and Forgejo all show a commit's files at /tree/<commit>.
+    let version_url = url.zip(commit).map(|(u, c)| format!("{u}/tree/{c}"));
+    Json(json!({
+        "licence": "AGPL-3.0-or-later",
+        "url": url,
+        "commit": commit,
+        "version_url": version_url,
+    }))
 }
 
 /// How to report a security problem (RFC 9116), once `SLOP_SECURITY_CONTACT` names a contact.

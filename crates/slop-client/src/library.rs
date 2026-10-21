@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Installing, verifying and launching apps (ARCHITECTURE §6.3, SECURITY §5.3, §5.5, §7).
 //!
 //! Layout under the library root (in the user's profile, so no admin rights are needed):

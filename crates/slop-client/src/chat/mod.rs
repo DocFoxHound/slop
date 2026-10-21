@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Chat on this device (DESIGN §19, SECURITY §8.5): end-to-end encrypted with MLS, so Slop's
 //! server (`slop-api`'s `chat.rs`) only relays what this module encrypts.
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sessions (SECURITY §4.2).
 //!
 //! - **Website:** an opaque random token in an `HttpOnly`, `SameSite=Lax` cookie, stored hashed.

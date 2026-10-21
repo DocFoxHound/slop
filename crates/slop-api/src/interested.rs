@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Interested (DESIGN §5, §6, §8): people mark Coming soon and Beta apps they want. It puts them
 //! in their library, counts publicly as the app's demand signal ("Most anticipated"), feeds "For
 //! you", and tells them when the app moves to Beta or is released.

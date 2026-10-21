@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Alerts for Slop's admins (SECURITY §13, ARCHITECTURE §7). Every five minutes the API checks
 //! what needs a person and tells every admin under the 🔔, by phone push, and by email once SMTP
 //! is set up. Each alert is sent once, then repeated at most daily while it lasts.

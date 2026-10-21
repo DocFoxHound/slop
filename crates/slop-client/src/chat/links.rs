@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Links in messages. The sender's app fetches what a link points to, so recipients' apps never
 //! contact the site (and it never learns who read the message):
 //!

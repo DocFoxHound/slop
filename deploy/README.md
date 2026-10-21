@@ -264,6 +264,14 @@ then `sudo systemctl restart systemd-journald`. Records with legal keeping perio
 decisions, law-enforcement requests, agreement acceptances) are purged by the API itself
 (`retention.rs`).
 
+## Source code link
+
+The server, website and desktop app are under the AGPL (README "License"), which asks a network
+service to offer its users the source of the version they use. The website's **Source code** page
+(`/source`, from `GET /v1/source`) says the code isn't public yet until `SLOP_SOURCE_URL` is set in
+`~/.config/slop/slop.env` to the public repository (`https://…`, no trailing slash). The deploy
+builds with `SLOP_COMMIT`, so the page then links the exact commit running.
+
 ## Setting it up again
 
 ```sh

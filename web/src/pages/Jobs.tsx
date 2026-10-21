@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // People jobs: the list of yours, and one job's page (DESIGN §15.2–15.6). Each page says what's
 // happening in one sentence and offers only the next steps. The agreement, every Change to
 // Agreement and the steps are the contract record; conversations are recorded too, and both

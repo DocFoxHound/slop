@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Phone and browser notifications on the website (crates/slop-api/src/push.rs, public/sw.js).
 // The desktop app shows its own notifications instead.
 

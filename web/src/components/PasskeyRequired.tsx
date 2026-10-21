@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Publishing and payout changes need a passkey (crates/slop-api/src/passkeys.rs `require`): when
 // the API answers "passkey_required", this asks the person to confirm with theirs, or to add one
 // first, then the action runs again (useTermsGate in Terms.tsx). Nothing they typed is lost.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Phone and browser notifications through web push (DESIGN §19).
 //!
 //! Slop has no phone app, so phones get notifications through the website: Android browsers

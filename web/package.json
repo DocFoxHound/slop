@@ -1,7 +1,7 @@
 {
   "name": "slop-web",
   "private": true,
-  "license": "MIT OR Apache-2.0",
+  "license": "AGPL-3.0-or-later",
   "type": "module",
   "scripts": {
     "dev": "vite",
