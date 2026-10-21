@@ -53,6 +53,7 @@ cargo fmt
 cargo clippy --all-targets          # no warnings
 DATABASE_URL=postgres://slop:slop@127.0.0.1:5433/slop cargo test
 cd web && npm test && npm run typecheck
+cd web && npm run build && npm run e2e   # browser tests, for changes to the website
 ```
 
 Add tests for new behaviour, especially who may see or change what. Commit only when the user

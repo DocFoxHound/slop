@@ -472,6 +472,11 @@ async fn serve() -> anyhow::Result<()> {
         .await
         .with_context(|| format!("binding {bind}"))?;
     tracing::info!(%bind, "Slop API listening");
+    // Send each response as soon as it's written: without this, small responses streamed in
+    // pieces (the website's files) wait ~40 ms for the client's delayed acknowledgement.
+    let listener = axum::serve::ListenerExt::tap_io(listener, |tcp| {
+        let _ = tcp.set_nodelay(true);
+    });
     axum::serve(
         listener,
         app.into_make_service_with_connect_info::<std::net::SocketAddr>(),
