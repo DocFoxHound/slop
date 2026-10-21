@@ -7,6 +7,10 @@
 //!   licence, and (for public apps) licences that aren't OSI-approved become notes.
 //! - **Monetization:** apps on Slop can't sell anything (LEGAL §8). Payment libraries, in-app
 //!   purchase APIs, checkout links, loot boxes and premium currencies in the code become notes.
+//! - **Code from outside Slop:** apps may only run code from releases and mods Slop checked
+//!   (Content Policy, "Code from outside Slop"). Code that loads programs, libraries or scripts at
+//!   run time, self-updaters, and data formats that can rebuild arbitrary objects (the usual way a
+//!   hostile game server takes over a player's computer) become notes.
 //! - **Packages:** the dependencies named in lockfiles (Cargo.lock, package-lock.json, yarn.lock,
 //!   go.mod, poetry.lock, Pipfile.lock, requirements.txt, NuGet's packages.lock.json), kept for
 //!   the daily advisory watch (dep_watch.rs).
@@ -65,6 +69,8 @@ pub struct Report {
     pub lockfiles: Vec<String>,
     pub packages: usize,
     pub monetization: Vec<Hit>,
+    /// Loading code at run time, self-updaters, and unsafe data formats.
+    pub code_loading: Vec<Hit>,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -338,6 +344,84 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     ]
 });
 
+/// Code from outside Slop: loading code at run time, self-updaters, and data formats that can
+/// rebuild arbitrary objects. (rule, label, file extensions it applies to, pattern)
+static CODE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new(|| {
+    let r = |rule, label, exts, re: &str| {
+        (
+            Rule {
+                rule,
+                label,
+                re: Regex::new(re).unwrap(),
+            },
+            exts,
+        )
+    };
+    vec![
+        r(
+            "load_assembly",
+            "Loads .NET assemblies or Java classes at run time",
+            &["cs", "java", "kt"][..],
+            r"\bAssembly\.(Load|LoadFrom|LoadFile|UnsafeLoadFrom)\s*\(|\.LoadFromStream\s*\(|\bAppDomain\.\w*\.Load\s*\(|\bURLClassLoader\b|\bDexClassLoader\b|\bdefineClass\s*\(",
+        ),
+        r(
+            "load_native",
+            "Loads native libraries at run time",
+            &[
+                "cs", "c", "cc", "cpp", "h", "hpp", "rs", "py", "go", "gd", "java", "kt",
+            ][..],
+            r"\bdlopen\s*\(|\bLoadLibrary(A|W|Ex|ExA|ExW)?\s*\(|\bNativeLibrary\.(Load|TryLoad)\s*\(|libloading::|ctypes\.(CDLL|WinDLL|cdll|windll)|\bplugin\.Open\s*\(|GDExtensionManager\.load_extension|System\.loadLibrary\s*\(|System\.load\s*\(",
+        ),
+        r(
+            "load_script",
+            "Runs code from text at run time (eval, exec, loadstring)",
+            &[
+                "py", "js", "mjs", "cjs", "ts", "tsx", "jsx", "lua", "gd", "html", "htm", "vue",
+                "svelte", "rb", "php", "java", "kt",
+            ][..],
+            r#"\bloadstring\s*\(|(^|[^.\w])eval\s*\(|(^|[^.\w])exec\s*\(|\bnew\s+Function\s*\(|\bcompile\s*\([^)]*['"]exec['"]|\.source_code\s*=|\bExpression\.new\s*\(|vm\.(runInNewContext|runInThisContext|Script)\b|\bevaluateString\s*\(|\bScriptEngineManager\b|\bcompileString\s*\("#,
+        ),
+        r(
+            "load_resource_pack",
+            "Loads packs or scenes from outside the build (Godot resource packs, Unity asset bundles)",
+            &["gd", "cs"][..],
+            r"\bload_resource_pack\s*\(|AssetBundle\.LoadFrom(File|Memory|Stream)(Async)?\s*\(|UnityWebRequestAssetBundle|Addressables\.LoadContentCatalogAsync",
+        ),
+        r(
+            "self_update",
+            "Updates itself outside Slop",
+            &["rs", "go", "cs", "js", "mjs", "cjs", "ts", "py", "gd"][..],
+            r"\belectron-updater\b|\bautoUpdater\.|\bSquirrel\.|\bVelopack\b|\bNetSparkle\b|\bself_update::|\bgo-selfupdate\b|\bpyupdater\b|\btufup\b",
+        ),
+        r(
+            "unsafe_format",
+            "A data format that can rebuild any object (unsafe for data from a server or a file)",
+            &[
+                "cs", "py", "gd", "java", "kt", "js", "mjs", "cjs", "ts", "rb", "php",
+            ][..],
+            r"\bBinaryFormatter\b|\bNetDataContractSerializer\b|\bSoapFormatter\b|\bLosFormatter\b|\bObjectStateFormatter\b|TypeNameHandling\.(All|Auto|Objects|Arrays)|\bpickle\.loads?\s*\(|\bcPickle\b|\bdill\.loads?\s*\(|\bmarshal\.loads?\s*\(|\byaml\.(unsafe_)?load\s*\(|\bjsonpickle\.decode\s*\(|bytes_to_var_with_objects|str_to_var\s*\(|\bget_var\s*\(\s*true|\bbytes2var\s*\([^)]*,\s*true|\bObjectInputStream\b|node-serialize|\bunserialize\s*\(|Marshal\.load\s*\(|YAML\.load\s*\(",
+        ),
+    ]
+});
+
+/// Self-updaters: they replace the app with whatever their server sends, bypassing Slop.
+const UPDATER_PACKAGES: &[(&str, &str)] = &[
+    ("npm", "electron-updater"),
+    ("npm", "update-electron-app"),
+    ("crates.io", "self_update"),
+    ("crates.io", "self-replace"),
+    ("crates.io", "velopack"),
+    ("NuGet", "Velopack"),
+    ("NuGet", "NetSparkleUpdater*"),
+    ("NuGet", "Squirrel.Windows"),
+    ("NuGet", "Clowd.Squirrel"),
+    ("PyPI", "pyupdater"),
+    ("PyPI", "tufup"),
+    ("Go", "github.com/creativeprojects/go-selfupdate*"),
+    ("Go", "github.com/minio/selfupdate*"),
+    ("Go", "github.com/rhysd/go-github-selfupdate*"),
+];
+
 /// Payment libraries, by ecosystem and name (a trailing `*` matches a prefix).
 const PAYMENT_PACKAGES: &[(&str, &str)] = &[
     ("npm", "stripe"),
@@ -362,7 +446,11 @@ const PAYMENT_PACKAGES: &[(&str, &str)] = &[
 ];
 
 fn is_payment_package(p: &Package) -> bool {
-    PAYMENT_PACKAGES.iter().any(|(eco, name)| {
+    in_list(PAYMENT_PACKAGES, p)
+}
+
+fn in_list(list: &[(&str, &str)], p: &Package) -> bool {
+    list.iter().any(|(eco, name)| {
         *eco == p.ecosystem
             && match name.strip_suffix('*') {
                 Some(prefix) => p.name.starts_with(prefix),
@@ -612,6 +700,7 @@ pub fn scan_archive(
     let mut packages = BTreeSet::new();
     let mut monetization = Tally::default();
     let mut headers = Tally::default();
+    let mut code_loading = Tally::default();
     let mut text_total: u64 = 0;
     for entry in tar.entries().context("reading the repository archive")? {
         let mut entry = entry.context("reading the repository archive")?;
@@ -677,6 +766,11 @@ pub fn scan_archive(
                         monetization.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
                     }
                 }
+                for (rule, exts) in CODE_RULES.iter() {
+                    if exts.contains(&ext.as_str()) && rule.re.is_match(line) {
+                        code_loading.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
+                    }
+                }
                 if i < 30
                     && let Some(m) = SPDX_HEADER.captures(line)
                 {
@@ -699,8 +793,16 @@ pub fn scan_archive(
             format!("{} {} ({})", p.name, p.version, p.ecosystem),
         );
     }
+    for p in packages.iter().filter(|p| in_list(UPDATER_PACKAGES, p)) {
+        code_loading.add(
+            "self_update",
+            "Updates itself outside Slop",
+            format!("{} {} ({})", p.name, p.version, p.ecosystem),
+        );
+    }
     report.packages = packages.len();
     report.monetization = monetization.into_hits();
+    report.code_loading = code_loading.into_hits();
     report.licence.headers = headers.into_hits();
     report.licence.declared = declared.to_string();
     (report.licence.kinds, report.licence.problems) =
@@ -1048,9 +1150,11 @@ fn concerns(scan: &Value) -> Option<BTreeSet<String>> {
         .into_iter()
         .map(|k| format!("licence:{k}"))
         .collect();
-    for hit in scan["monetization"].as_array().into_iter().flatten() {
-        if let Some(rule) = hit["rule"].as_str() {
-            out.insert(format!("monetization:{rule}"));
+    for (section, key) in [("monetization", "monetization"), ("code_loading", "code")] {
+        for hit in scan[section].as_array().into_iter().flatten() {
+            if let Some(rule) = hit["rule"].as_str() {
+                out.insert(format!("{key}:{rule}"));
+            }
         }
     }
     Some(out)
@@ -1080,16 +1184,23 @@ pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result
     if new.is_empty() {
         return Ok(None);
     }
-    let money = new.iter().any(|k| k.starts_with("monetization:"));
-    let licence = new.iter().any(|k| k.starts_with("licence:"));
-    Ok(Some(
-        match (money, licence) {
-            (true, true) => "the source check found possible purchases and licence problems the last approved release didn't have",
-            (true, false) => "the source check found possible purchases or loot boxes the last approved release didn't have",
-            _ => "the source check found licence problems the last approved release didn't have",
-        }
-        .into(),
-    ))
+    let kinds: Vec<&str> = [
+        ("monetization:", "possible purchases or loot boxes"),
+        ("code:", "code loading from outside Slop"),
+        ("licence:", "licence problems"),
+    ]
+    .into_iter()
+    .filter(|(prefix, _)| new.iter().any(|k| k.starts_with(prefix)))
+    .map(|(_, what)| what)
+    .collect();
+    let what = match kinds.as_slice() {
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+        [] => unreachable!("new is not empty"),
+    };
+    Ok(Some(format!(
+        "the source check found {what} the last approved release didn't have"
+    )))
 }
 
 pub async fn run(state: AppState) {
@@ -1105,6 +1216,65 @@ pub async fn run(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn code_from_outside_slop_becomes_notes() {
+        let data = archive(&[
+            (
+                "LICENSE",
+                "MIT License\n\nPermission is hereby granted, free of charge",
+            ),
+            (
+                "net/Client.cs",
+                "var asm = Assembly.Load(bytes);\nvar f = new BinaryFormatter();",
+            ),
+            (
+                "net/client.gd",
+                "var mod = load_resource_pack(path)\nvar v = bytes_to_var_with_objects(packet)",
+            ),
+            ("mods/run.lua", "local f = loadstring(body)"),
+            (
+                "tools/train.py",
+                "model.eval()\nresult = re.compile('x').match(s)",
+            ),
+            ("web/app.js", "const m = /a/.exec(s);"),
+            (
+                "web/package-lock.json",
+                r#"{"packages":{"node_modules/electron-updater":{"version":"6.0.0"}}}"#,
+            ),
+        ]);
+        let (report, _) = scan_archive(&data[..], "MIT", true).unwrap();
+        let rules: Vec<_> = report
+            .code_loading
+            .iter()
+            .map(|h| h.rule.as_str())
+            .collect();
+        assert_eq!(
+            rules,
+            [
+                "load_assembly",
+                "load_resource_pack",
+                "load_script",
+                "self_update",
+                "unsafe_format"
+            ],
+            "model.eval() and regex .exec() aren't eval or exec"
+        );
+        let unsafe_format = report
+            .code_loading
+            .iter()
+            .find(|h| h.rule == "unsafe_format")
+            .unwrap();
+        assert_eq!(unsafe_format.count, 2);
+        assert_eq!(
+            concerns(&serde_json::to_value(&report).unwrap())
+                .unwrap()
+                .into_iter()
+                .filter(|k| k.starts_with("code:"))
+                .count(),
+            5
+        );
+    }
 
     #[test]
     fn archives_on_gitlab_and_gitea_hosts() {

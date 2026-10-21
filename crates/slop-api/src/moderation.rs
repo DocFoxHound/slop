@@ -109,6 +109,13 @@ pub const REASONS: &[Reason] = &[
         rule: Some("source_mismatch"),
     },
     Reason {
+        code: "outside_code",
+        label: "Runs code or mods from outside Slop",
+        kinds: &["app"],
+        priority: 1,
+        rule: Some("outside_code"),
+    },
+    Reason {
         code: "scam",
         label: "A scam or fraud",
         kinds: ALL,
@@ -226,6 +233,7 @@ pub const REASONS: &[Reason] = &[
 pub const RULES: &[(&str, &str)] = &[
     ("malware", "Malware and data theft"),
     ("source_mismatch", "Builds must match their source"),
+    ("outside_code", "Code from outside Slop"),
     ("scam", "Scams and fraud"),
     ("illegal", "Illegal content"),
     ("child_abuse", "Child sexual abuse material"),

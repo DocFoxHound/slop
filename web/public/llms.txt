@@ -7,5 +7,6 @@
 
 - [How to publish on Slop](/publishing.md): requirements, store pages, releases, Slop Build
   (GitHub Actions), maker signatures, Slop Pulse player counts (with code for Python, JS, Rust,
-  Go, C# and Godot), and a step-by-step checklist for agents. This one Markdown file is the whole
+  Go, C# and Godot), rules for online play and mods (copy them into your project's agent
+  instructions), and a step-by-step checklist for agents. This one Markdown file is the whole
   guide; the page at /publish/guide shows the same text.

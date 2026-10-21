@@ -64,7 +64,9 @@ optional.
 3. **The commit the build came from.** Every release names the full 40-character commit SHA. Tags
    can move; commits can't.
 4. **The rules.** No sexual content, no gambling or loot boxes, no pay-to-win, nothing for sale,
-   no malware, no hidden tracking, nothing stolen. Rate your app honestly (Everyone, 3+, 7+, 12+,
+   no malware, no hidden tracking, nothing stolen, and no code from outside Slop: an app only
+   runs code that came in its release or in a mod Slop approved, never code or mods a server
+   sends. See [Online play and mods](#online-play-and-mods). Rate your app honestly (Everyone, 3+, 7+, 12+,
    16+ or 18+; 18+ apps are hidden from players in the UK's under-18 view).
 5. **A maker signature** on each build: a GitHub artifact attestation, made by your GitHub Actions
    build (Slop Build does this for you). It proves the file came from your repository at that
@@ -378,7 +380,8 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
    notes three things for you and the reviewer: whether your licence file
    matches the store page's licence; anything that looks like selling in the app (payment
    libraries, in-app purchase APIs, checkout links, loot boxes, premium currencies), which Slop
-   doesn't allow; and the packages in your lockfiles. Notes don't stop a release by themselves, but
+   doesn't allow; code that loads code from outside Slop, updates itself, or uses an unsafe data
+   format (see [Online play and mods](#online-play-and-mods)); and the packages in your lockfiles. Notes don't stop a release by themselves, but
    an update with a new one waits for a person. After that, Slop checks those packages against
    [OSV](https://osv.dev) every day and tells you when a new security advisory affects your live
    release.
@@ -418,6 +421,69 @@ Changes that would have players download something different are checked before 
 Switching to another approved release follows the same rule as updates: it goes through straight
 away when automatic approval applies (the release already passed every check), otherwise a person
 looks. Everything else, like the store page, platforms and settings, changes straight away.
+
+## Online play and mods
+
+Slop checks your app's code, but it can't check the servers your app talks to, and those can
+change at any time. A game that runs whatever a server sends would let anyone who runs (or
+breaks into) a server take over players' computers. So these are rules, and Slop's source check
+looks for code that breaks them. What it finds goes to a reviewer as a note: a note isn't a
+rejection, but a real break is.
+
+**Agents:** copy this section into the project's own instructions (`AGENTS.md`, `CLAUDE.md` or
+similar) and follow it whenever you write networking, save files or mod support.
+
+### What a game may get from a server
+
+| What | Allowed? |
+|---|---|
+| Game data your code reads: positions, chat, match state, scores | Yes |
+| Content your code reads: maps, levels, skins, pictures, sounds, settings | Yes, read safely (below) |
+| Mods: anything that adds or changes code, scripts or rules | Only mods approved on Slop *(coming)* |
+| Programs, libraries (`.dll`, `.so`), scripts, Godot `.pck` packs, Unity asset bundles with code | Never |
+| A new version of the game itself | Never: updates come through Slop |
+
+Community servers can't hand players mods either. A server can name the Slop mods it needs, and
+the game gets them from Slop *(coming: until mods are on Slop, games on Slop can't load mods
+from outside their release)*.
+
+### Rules for the code
+
+1. **Never run code from the network or from downloaded files.** No `eval`, `exec`,
+   `loadstring`, `new Function`, `Assembly.Load` on downloaded bytes, Java class loaders,
+   `dlopen`/`LoadLibrary` on downloaded files, Godot `load_resource_pack` or setting
+   `GDScript.source_code`, or Unity `AssetBundle` loads from a server.
+2. **Never update yourself.** No Electron `autoUpdater`, Squirrel, Velopack, NetSparkle,
+   `self_update` or similar. Slop delivers updates.
+3. **Use data formats that can't rebuild objects.** For anything from a server, another player,
+   or a file a player could have been sent (saves, levels), use JSON, MessagePack, protobuf,
+   FlatBuffers or your own plain format. Never use .NET `BinaryFormatter` (or `SoapFormatter`,
+   `NetDataContractSerializer`, Json.NET with `TypeNameHandling` other than `None`), Python
+   `pickle`/`marshal`/`yaml.load` (use `yaml.safe_load`), Java `ObjectInputStream`, Godot
+   `bytes_to_var_with_objects`, `get_var(true)` or `str_to_var`, or Lua `loadstring` as a
+   deserializer.
+4. **Treat every message as hostile.** Check sizes and counts before allocating, check every
+   index and enum, and drop messages that don't parse. Don't trust a client's claims: the server
+   decides what happens in the game (where players are, what they hit, what they own).
+5. **Keep downloaded content in its place.** Write only inside the game's own data folder.
+   Reject archive entries with `..`, absolute paths or links. Never use a name from the network
+   as a file path without checking it.
+6. **Never start programs from what a server says.** No shell commands or opening URLs a server
+   sends without the player seeing and confirming the address.
+7. **Encrypt connections** to your own servers (TLS or the engine's encrypted transport), so
+   nobody between the player and the server can change what's sent.
+8. **Say what your app connects to.** Name your servers on the store page, and whether players
+   can host their own *(coming: an "Online" section on the store page)*.
+
+### What Slop does
+
+- The **source check** reads your code at each release's commit and notes the patterns above
+  (code loading, self-updaters, unsafe data formats). A reviewer looks at each. An update with a
+  new note waits for a person.
+- Anyone can report an app that **runs code from outside Slop**; reports are reviewed within
+  24 hours.
+- *(Coming)* Store pages show players when an app plays online with servers Slop can't check,
+  and suggest running it in **sandbox mode**.
 
 ## Keeping Windows from blocking your app
 
@@ -766,23 +832,27 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    OSI-approved licence. If not, ask the owner which licence to use; don't choose one for them.
 2. Make sure the project builds to a runnable program for each target platform, from a clean
    checkout, with a single command. Note the program's path relative to the build folder.
-3. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
+3. If the project talks to servers or other players, or loads mods, saves or levels: follow
+   [Online play and mods](#online-play-and-mods), and copy that section into the project's
+   agent instructions (`AGENTS.md` or similar). Replace anything that runs downloaded code,
+   updates the app itself, or uses an unsafe data format.
+4. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
    language and call it once at startup. Send nothing but the token.
-4. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
+5. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
    program path, which the owner enters on Slop), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
    owner will use, `slop-url` set to the Slop site, and `project-type` set to `rust`, `go` or
    `custom` (with `build-command`, `output-dir` and `exec`). For private repositories without
    GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option C. For
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
-5. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
+6. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
    same store address, the repository URL, licence, type, stage, age rating and tags.
-6. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
+7. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
-7. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the
+8. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the
    first release is approved and the app is in the store. Later releases are picked up and
    approved automatically if they pass every check.
-8. Optional but recommended, ideally before step 6: add `.slop/media.json` with a 920×430
+9. Optional but recommended, ideally before step 7: add `.slop/media.json` with a 920×430
    thumbnail and some screenshots (see **Pictures and videos**), push it, and have the owner press **Check my
    repository now** under **Edit store page**. An agent can capture screenshots from the
    running app if the owner wants. Leave the gallery order to the owner; they set it on the

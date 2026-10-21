@@ -260,6 +260,7 @@ export function RepoScanList({
   }
   const licence = scan.licence;
   const money = scan.monetization ?? [];
+  const code = scan.code_loading ?? [];
   const found = advisories ?? [];
   const malicious = found.filter((a) => a.malicious);
   const since = found.filter((a) => !a.malicious && !a.known_at_build);
@@ -312,6 +313,35 @@ export function RepoScanList({
           </span>{" "}
           <span className="muted">
             payment libraries, in-app purchase APIs, checkout links, loot boxes
+          </span>
+        </div>
+      )}
+      {code.length > 0 ? (
+        <div>
+          <span className="badge warn">
+            CODE FROM OUTSIDE SLOP? ({code.length})
+          </span>{" "}
+          <span className="muted">
+            {audience === "maker"
+              ? "Apps on Slop only run code that came in a release or mod Slop checked, never programs, scripts or mods from a server. Data from servers must use formats that can't rebuild objects. A reviewer looks at each; loading your own files is fine. See \"Online play and mods\" in the publishing guide."
+              : "Patterns only: open the files and decide. Running code a server sends, a self-updater, or a mod loader outside Slop's mods breaks the Content Policy; an unsafe format reading server data is a reason to reject until it's fixed."}
+          </span>
+          <ul>
+            {code.map((h) => (
+              <li key={h.rule}>
+                {h.label} ({h.count}):{" "}
+                <span className="muted">{h.examples.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : (
+        <div>
+          <span className="badge official">
+            NO SIGNS OF OUTSIDE CODE IN THE SOURCE
+          </span>{" "}
+          <span className="muted">
+            code loading, self-updaters, unsafe data formats
           </span>
         </div>
       )}

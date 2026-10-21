@@ -168,6 +168,12 @@ Running apps in an OS container (Flatpak or a Slop runtime on Linux, MSIX on Win
 - **Android:** the OS's permission list is shown before install.
 - **The Slop Pulse SDK** is small, open source, and pinned by hash. The scan checks that games include the real SDK, not a modified copy.
 
+### 6.1 Servers Slop can't check (online play and mods)
+Slop checks an app's code, never the servers it talks to: those belong to the maker or to other players, and can change at any moment. A game that runs whatever a server sends turns every server into a way onto players' computers. What Slop does about it:
+- **The rule** (Content Policy, "Code from outside Slop"): an app only runs code that came in its release or in a mod approved on Slop. No code, scripts, packs or mods from servers, and no self-updaters. Data the app's own code reads (maps, levels, settings) may come from anywhere. The publishing guide's "Online play and mods" section is written for makers' AI agents to copy into their projects.
+  - **Built 2026-10-21 (`source_scan.rs`):** the source check notes code loading (assemblies, Java classes, native libraries, `eval`/`exec`/`loadstring`, Godot packs and scripts, Unity asset bundles), self-updaters (in code and lockfiles) and data formats that can rebuild any object (`BinaryFormatter`, `pickle`, `bytes_to_var_with_objects`, `ObjectInputStream`…). Notes go to the reviewer; an update with a new one waits for a person. Reports for "Runs code or mods from outside Slop" are reviewed within 24 hours.
+- **What's left over:** a server sending deliberately broken data to exploit a bug in how the game reads it. No check of the source can rule that out. Not built yet: an "Online" declaration on store pages, detection of networking code that isn't declared, a notice for players on apps that play online with servers Slop can't check, Slop-approved mods, and an optional sandbox mode that the notice suggests.
+
 ## 7. The Slop client itself
 
 The client installs software, so it's a prime target:
