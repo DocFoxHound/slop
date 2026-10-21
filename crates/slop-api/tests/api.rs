@@ -13608,3 +13608,75 @@ async fn self_hosted_forges_are_recognised_and_read(db: PgPool) {
     assert_eq!(scan["status"], "checked", "{scan}");
     assert_eq!(scan["licence"]["declared"], "MIT");
 }
+
+/// Shared runtimes (slop-manifest runtimes.rs): only IDs from Slop's list, kept per release,
+/// inherited when an update leaves them out, and signed into the manifest.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn releases_name_shared_runtimes(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let submit = |version: &str, runtimes: Option<Value>| {
+        let mut body = release_body(&app, version, "game-windows.zip");
+        if let Some(r) = runtimes {
+            body["runtimes"] = r;
+        }
+        req(Method::POST, "/v1/apps/game/releases")
+            .cookie(&maker)
+            .json(body)
+    };
+
+    let res = app.send(req(Method::GET, "/v1/runtimes")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let list = body_json(res).await;
+    assert!(list.to_string().contains("vcredist-x64"), "{list}");
+
+    let res = app
+        .send(submit("0.9.0", Some(json!(["vcredist-x64", "nope"]))))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "runtimes");
+
+    let res = app
+        .send(submit(
+            "1.0.0",
+            Some(json!(["vcredist-x64", "dotnet-desktop-8"])),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let first = body_json(res).await;
+    assert_eq!(
+        first["runtimes"],
+        json!(["vcredist-x64", "dotnet-desktop-8"])
+    );
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first["id"].as_str().unwrap().parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let res = app
+        .send(req(Method::GET, "/v1/apps/game/manifest").cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let signed: slop_manifest::Signed = serde_json::from_value(body_json(res).await).unwrap();
+    let manifest: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    assert_eq!(manifest.runtimes, ["vcredist-x64", "dotnet-desktop-8"]);
+
+    // Left out, the update keeps them; an empty list says none.
+    let res = app.send(submit("1.1.0", None)).await;
+    assert_eq!(
+        body_json(res).await["runtimes"],
+        json!(["vcredist-x64", "dotnet-desktop-8"])
+    );
+    let res = app.send(submit("1.2.0", Some(json!([])))).await;
+    assert_eq!(body_json(res).await["runtimes"], json!([]));
+}

@@ -44,6 +44,7 @@ pub fn routes() -> Router<AppState> {
             get(list_releases).post(submit_release),
         )
         .route("/apps/{slug}/manifest", get(latest_manifest))
+        .route("/runtimes", get(runtimes_list))
         .route(
             "/apps/{slug}/releases/{release_id}/download/{platform}",
             get(file_download_link),
@@ -83,6 +84,10 @@ struct NewRelease {
     /// This release's rating (AGE-7); the store page's when left out.
     #[serde(default)]
     rating: Option<Rating>,
+    /// Shared runtimes it needs (slop-manifest runtimes.rs); the last approved release's when
+    /// left out.
+    #[serde(default)]
+    runtimes: Option<Vec<String>>,
 }
 
 /// A release's age rating and content labels (AGE-7).
@@ -418,6 +423,8 @@ pub(crate) struct ReleaseInfo {
     auto_approved: bool,
     /// Its rating (AGE-7).
     rating: Option<Rating>,
+    /// Shared runtimes it needs.
+    runtimes: Vec<String>,
     files: Vec<ReleaseFileInfo>,
     /// Slop Build's source checks: possible secrets and vulnerable dependencies.
     source_checks: Option<serde_json::Value>,
@@ -473,6 +480,7 @@ async fn submit_release(
         req.files,
         "maker",
         req.rating,
+        req.runtimes,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(release)))
@@ -492,6 +500,7 @@ pub(crate) async fn create_release(
     files: Vec<NewFile>,
     source: &str,
     rating: Option<Rating>,
+    runtimes: Option<Vec<String>>,
 ) -> ApiResult<ReleaseInfo> {
     validate_version(version)?;
     validate_commit(commit_sha)?;
@@ -513,6 +522,35 @@ pub(crate) async fn create_release(
                 content_labels,
             }
         }
+    };
+    let runtimes = match runtimes {
+        Some(list) => {
+            let mut out: Vec<String> = Vec::new();
+            for id in list {
+                if slop_manifest::runtimes::runtime(&id).is_none() {
+                    let known: Vec<&str> = slop_manifest::runtimes::RUNTIMES
+                        .iter()
+                        .map(|r| r.id)
+                        .collect();
+                    return Err(ApiError::invalid(
+                        "runtimes",
+                        format!("{id:?} isn't on the list: {}", known.join(", ")),
+                    ));
+                }
+                if !out.contains(&id) {
+                    out.push(id);
+                }
+            }
+            out
+        }
+        None => sqlx::query_scalar(
+            "select runtimes from releases where app_id = $1 and status = 'approved'
+             order by reviewed_at desc limit 1",
+        )
+        .bind(app_id)
+        .fetch_optional(&state.db)
+        .await?
+        .unwrap_or_default(),
     };
     if let Some(floor) =
         crate::branches::rating_floor(&mut *state.db.acquire().await?, app_id).await?
@@ -551,7 +589,7 @@ pub(crate) async fn create_release(
 
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
-    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by, source, min_age, content_labels) values ($1, $2, $3, $4, $5, $6, $7, $8)")
+    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by, source, min_age, content_labels, runtimes) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
         .bind(id)
         .bind(app_id)
         .bind(version)
@@ -560,6 +598,7 @@ pub(crate) async fn create_release(
         .bind(source)
         .bind(rating.min_age)
         .bind(&rating.content_labels)
+        .bind(&runtimes)
         .execute(&mut *tx)
         .await
         .map_err(|err| {
@@ -686,10 +725,11 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         auto_approved: bool,
         min_age: Option<i16>,
         content_labels: Option<Vec<String>>,
+        runtimes: Vec<String>,
     }
     let row: Row = sqlx::query_as(
         "select id, version, commit_sha, status::text as status, status_reason, commit_verified, created_at, source,
-                coalesce(reviewed_by = 'slop', false) as auto_approved, min_age, content_labels
+                coalesce(reviewed_by = 'slop', false) as auto_approved, min_age, content_labels, runtimes
          from releases where id = $1",
     )
     .bind(id)
@@ -733,6 +773,7 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
             min_age,
             content_labels: row.content_labels.unwrap_or_default(),
         }),
+        runtimes: row.runtimes,
         files,
     })
 }
@@ -1629,6 +1670,16 @@ async fn maker_signature(
         }
     }
     Ok(Err(format!("the .sig file doesn't check out: {last}")))
+}
+
+/// The approved shared runtimes a release can name (slop-manifest runtimes.rs).
+async fn runtimes_list() -> Json<serde_json::Value> {
+    Json(serde_json::Value::Array(
+        slop_manifest::runtimes::RUNTIMES
+            .iter()
+            .map(|r| serde_json::json!({ "id": r.id, "name": r.name, "vendor": r.vendor }))
+            .collect(),
+    ))
 }
 
 #[cfg(test)]

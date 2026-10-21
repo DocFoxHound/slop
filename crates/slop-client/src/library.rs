@@ -1092,6 +1092,28 @@ impl Library {
         Ok(())
     }
 
+    /// The shared runtimes an installed app needs and this computer doesn't have (Windows).
+    pub fn missing_runtimes(
+        &self,
+        slug: &str,
+    ) -> Result<Vec<&'static slop_manifest::runtimes::Runtime>> {
+        let (_, manifest) = self.record(slug)?;
+        Ok(manifest
+            .runtimes
+            .iter()
+            .filter_map(|id| slop_manifest::runtimes::runtime(id))
+            .filter(|r| !crate::runtimes::installed(r))
+            .collect())
+    }
+
+    /// Installs the shared runtimes an app is missing, one at a time, from their vendors.
+    pub async fn install_runtimes(&self, slug: &str) -> Result<()> {
+        for r in self.missing_runtimes(slug)? {
+            crate::runtimes::install(&self.http, r, &self.root.join("staging")).await?;
+        }
+        Ok(())
+    }
+
     /// Bytes in an app's save folder, so the UI can offer to copy saves into an empty one.
     pub fn save_size(&self, slug: &str) -> Result<u64> {
         Ok(crate::saves::size(&self.save_dir(slug)?)?)

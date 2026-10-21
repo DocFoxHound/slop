@@ -357,6 +357,7 @@ fn manifest_with(
         mod_for: None,
         build_of: None,
         mods_folder,
+        runtimes: vec![],
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -472,6 +473,7 @@ fn mod_manifest(base: &str, bytes: &[u8], release_id: &str) -> Signed {
         }),
         build_of: None,
         mods_folder: None,
+        runtimes: vec![],
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -511,6 +513,7 @@ fn community_manifest(base: &str, file: &str, bytes: &[u8], release_id: &str) ->
             app_title: "Game".into(),
         }),
         mods_folder: None,
+        runtimes: vec![],
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
@@ -1222,6 +1225,7 @@ fn parts_manifest(base: &str, whole: &[u8], parts: &[(&str, &[u8])]) -> Signed {
         mod_for: None,
         build_of: None,
         mods_folder: None,
+        runtimes: vec![],
     };
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }

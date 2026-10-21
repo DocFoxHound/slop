@@ -74,6 +74,7 @@ struct ReleaseRow {
     /// A mod or community build: the original's ID, address and name.
     branch_kind: Option<String>,
     mods_folder: Option<serde_json::Value>,
+    runtimes: Vec<String>,
     game_id: Option<Uuid>,
     game_slug: Option<String>,
     game_title: Option<String>,
@@ -138,7 +139,7 @@ pub async fn approve(
     let mut tx = db.begin().await?;
     let release: ReleaseRow = sqlx::query_as(
         "select r.status::text as status, a.id as app_id, a.slug, a.title, u.display_name as maker,
-                a.repo_url, r.version, r.commit_sha, a.branch_kind, a.mods_folder, g.id as game_id, g.slug as game_slug,
+                a.repo_url, r.version, r.commit_sha, a.branch_kind, a.mods_folder, r.runtimes, g.id as game_id, g.slug as game_slug,
                 g.title as game_title
          from releases r join apps a on a.id = r.app_id join users u on u.id = a.maker_id
               left join apps g on g.id = a.parent_app_id
@@ -280,6 +281,7 @@ pub async fn approve(
             .mods_folder
             .and_then(|f| serde_json::from_value(f).ok())
             .filter(|f: &slop_manifest::ModsFolder| !is_mod && f.is_valid()),
+        runtimes: release.runtimes,
     };
     let signed = slop_manifest::sign(&manifest, Purpose::ReleaseManifest, key);
     sqlx::query(

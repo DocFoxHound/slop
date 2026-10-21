@@ -333,6 +333,26 @@ args = ["--fullscreen"]
 args = ["--fullscreen", "--renderer=d3d12"]
 ```
 
+**Shared runtimes.** If your Windows build needs a runtime players may not have, name it and the
+Slop app installs it before the first start (once the player agrees), straight from Microsoft,
+after Windows confirms the download is signed by Microsoft. Don't ship these installers in your
+build. With Slop Build, list them in `slop.toml`; otherwise tick them on the release form.
+
+```toml
+runtimes = ["vcredist-x64"]  # at the top, before [launch]
+```
+
+| ID | Runtime |
+|---|---|
+| `vcredist-x64` | Microsoft Visual C++ Redistributable (64-bit) |
+| `vcredist-x86` | Microsoft Visual C++ Redistributable (32-bit) |
+| `dotnet-desktop-8` | .NET Desktop Runtime 8 |
+| `dotnet-desktop-9` | .NET Desktop Runtime 9 |
+| `directx-9` | DirectX End-User Runtime (DirectX 9 extras, e.g. `d3dx9_43.dll`) |
+
+Leaving `runtimes` out keeps the last release's list; `runtimes = []` clears it. Need one that
+isn't listed? Ask us.
+
 **Build now.** Every push to your main branch builds. To build without pushing, open the
 workflow on GitHub (the **Build now** button on your Releases page) and press **Run workflow**.
 

@@ -32,6 +32,8 @@ fn main() {
             "restore_saves",
             "copy_saves",
             "save_size",
+            "missing_runtimes",
+            "install_runtimes",
             "play_choices",
             "set_play_choice",
             "mod_request",

@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-install-runtimes"
+description = "Enables the install_runtimes command without any pre-configured scope."
+commands.allow = ["install_runtimes"]
+
+[[permission]]
+identifier = "deny-install-runtimes"
+description = "Denies the install_runtimes command without any pre-configured scope."
+commands.deny = ["install_runtimes"]
