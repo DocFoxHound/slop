@@ -139,7 +139,7 @@ async fn create(
     });
     let id = Uuid::now_v7();
     // The ID's random end: its start is the time, which two requests can share.
-    let reference = format!("LR-{}", &id.simple().to_string()[22..].to_ascii_uppercase());
+    let reference = format!("LR-{}", id.simple().to_string()[22..].to_ascii_uppercase());
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into legal_requests (id, reference, received_at, country, authority, kind, legal_basis, asked,
