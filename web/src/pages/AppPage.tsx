@@ -9,6 +9,7 @@ import { RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
 import { AppLabel, LabelNotes } from "../components/AppLabel";
 import { AppBounties } from "./Bounties";
+import { DemoButton } from "../components/Demo";
 import { BugReports } from "../components/BugReports";
 import { Reviews } from "../components/Reviews";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
@@ -261,6 +262,7 @@ function AppView({ app }: { app: AppDetail }) {
               <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
             )}
             {app.stage !== "coming_soon" && !app.platforms.includes("any") && <SandboxNote app={app} />}
+            <DemoButton demo={app.demo} />
             {app.stage !== "coming_soon" && <LabelNotes slug={app.slug} />}
             {!app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />}
             {packages.length > 0 && (

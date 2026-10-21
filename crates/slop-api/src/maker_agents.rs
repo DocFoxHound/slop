@@ -112,6 +112,9 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("GET", "/apps/{slug}/bounties", false, Slug::Any),
     ("GET", "/apps/{slug}/bug-reports", false, Slug::Own),
     ("GET", "/apps/{slug}/release-feedback", false, Slug::Own),
+    ("GET", "/apps/{slug}/demo", false, Slug::Own),
+    ("POST", "/apps/{slug}/demo", true, Slug::Own),
+    ("DELETE", "/apps/{slug}/demo", true, Slug::Own),
     ("GET", "/bug-reports/*", false, Slug::Any),
     // Each route checks the report is on the user's own app.
     ("PATCH", "/bug-reports/*", true, Slug::Any),
@@ -714,6 +717,22 @@ pub(crate) const TOOLS: &[Tool] = &[
         path: "/v1/apps/{slug}/release-feedback",
         properties: slug_only,
         required: &["slug"],
+    },
+    Tool {
+        name: "browser_demo",
+        description: "Whether the app can have a browser demo now (new releases only, for a few days), and the demo's state: fetching, live (with its address and plays), failed (why) or ended.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/demo",
+        properties: slug_only,
+        required: &["slug"],
+    },
+    Tool {
+        name: "host_browser_demo",
+        description: "Hosts a browser demo of a newly released game: give the address of a web build (a .zip with index.html at its top, e.g. Godot's Web export) attached to a release on the app's repository. Slop scans and hosts it for its first days, with no network access. Check browser_demo afterwards.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/demo",
+        properties: || json!({ "slug": s("The app's store address"), "url": s("The web build's address on the release page") }),
+        required: &["slug", "url"],
     },
     Tool {
         name: "list_bounties",

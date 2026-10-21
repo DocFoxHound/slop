@@ -16,6 +16,7 @@ pub mod challenge;
 pub mod chat;
 pub mod cleanup;
 pub mod config;
+pub mod demos;
 pub mod dep_watch;
 pub mod desktop_updates;
 pub mod donations;
@@ -177,6 +178,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(label::routes())
         .merge(bounties::routes())
         .merge(bug_reports::routes())
+        .merge(demos::routes())
         .merge(review::routes())
         .merge(pulse::routes())
         .merge(legal_requests::routes())
@@ -285,6 +287,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     let mut router = Router::new()
         .route("/healthz", get(health))
         .route("/.well-known/security.txt", get(security_txt))
+        .merge(demos::play_routes())
         .nest("/v1", v1.fallback(not_found));
     // Optionally serve the built website (web/dist) from the same origin, so one process runs the
     // whole site. Otherwise everything outside /v1 is a JSON 404.
@@ -292,7 +295,22 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         Some(dir) => router.fallback_service(web::service(dir)),
         None => router.fallback(not_found),
     };
+    // The play origin serves demos and nothing else; demos are only on it.
+    let play_only = axum::middleware::from_fn_with_state(
+        state.clone(),
+        |axum::extract::State(state): axum::extract::State<AppState>,
+         req: axum::extract::Request,
+         next: axum::middleware::Next| async move {
+            let on_play = demos::is_play_host(&state, req.headers());
+            let is_demo = req.uri().path().starts_with("/play/");
+            if on_play != is_demo {
+                return axum::response::IntoResponse::into_response(StatusCode::NOT_FOUND);
+            }
+            next.run(req).await
+        },
+    );
     let mut router = router
+        .layer(play_only)
         .layer(csrf)
         .layer(axum::middleware::from_fn_with_state(
             state.clone(),

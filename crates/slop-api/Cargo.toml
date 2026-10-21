@@ -47,6 +47,7 @@ tracing = "0.1.44"
 tracing-subscriber = { version = "0.3.23", features = ["env-filter", "json"] }
 url = "2.5.8"
 uuid = { version = "1.28.0", features = ["v7", "serde"] }
+zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
 [dev-dependencies]
 webauthn-authenticator-rs = { version = "0.5", features = ["softpasskey"] }
@@ -60,4 +61,3 @@ sha2 = "0.11.1"
 slop-client = { path = "../slop-client" }
 slop-manifest = { path = "../slop-manifest" }
 # The browser tests' server (examples/e2e_server.rs) makes a release .zip.
-zip = { version = "9.0.5", default-features = false, features = ["deflate"] }

@@ -551,6 +551,8 @@ export interface AppDetail extends AppSummary {
   accessibility: string[];
   /** Takes bug reports from players. */
   bug_reports: boolean;
+  /** A browser demo running now: where to play it, and until when. */
+  demo: { url: string; ends_at: string } | null;
   /** ...but the check of its newest release found saves elsewhere: players aren't told it works. */
   sandbox_mismatch: boolean;
   /** Sandbox mode is suggested: it goes online (servers Slop can't check). */
@@ -2120,6 +2122,26 @@ export const api = {
       : request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/accessibility/${encodeURIComponent(feature)}`, {
           works,
         }),
+  demo: {
+    status: (slug: string) =>
+      request<{
+        available: boolean;
+        eligible: boolean;
+        eligible_until: string | null;
+        days: number;
+        play_url: string | null;
+        demo: {
+          status: "fetching" | "live" | "failed" | "ended";
+          detail: string | null;
+          scan_result: string | null;
+          size_bytes: number | null;
+          plays: number;
+          ends_at: string;
+        } | null;
+      }>("GET", `/v1/apps/${encodeURIComponent(slug)}/demo`),
+    start: (slug: string, url: string) => request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/demo`, { url }),
+    end: (slug: string) => request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/demo`),
+  },
   bugReports: {
     list: (slug: string, status?: string) =>
       request<{ reports: BugReport[]; is_maker: boolean; can_report: boolean; accepting: boolean }>(

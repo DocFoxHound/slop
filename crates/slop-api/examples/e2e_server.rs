@@ -220,6 +220,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             read_per_minute: 1_000_000,
         },
         desktop: Default::default(),
+        demos: Default::default(),
         media: slop_api::config::MediaConfig {
             github_raw_base: format!("{fake}raw/").parse()?,
         },
