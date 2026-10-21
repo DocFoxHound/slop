@@ -274,6 +274,7 @@ pub fn action_label(action: &str) -> &'static str {
         "hide_review" => "Review hidden",
         "hide_profile" => "Profile hidden",
         "hide_team" => "Team hidden",
+        "remove_reply" => "Reply removed",
         "suspend_account" => "Account suspended",
         "warn" => "Warning",
         _ => "Decision",
@@ -284,7 +285,9 @@ pub fn action_label(action: &str) -> &'static str {
 fn actions_for(kind: &str) -> &'static [&'static str] {
     match kind {
         "app" => &["delist_app", "warn", "suspend_account"],
-        "review" | "app_review" => &["hide_review", "warn", "suspend_account"],
+        "review" => &["hide_review", "warn", "suspend_account"],
+        // A review and the maker's reply under it: either can be the problem.
+        "app_review" => &["hide_review", "remove_reply", "warn", "suspend_account"],
         "profile" => &["hide_profile", "warn", "suspend_account"],
         "team" => &["hide_team", "warn", "suspend_account"],
         _ => &["warn", "suspend_account"],
@@ -662,7 +665,16 @@ async fn report(
         body.chat.as_ref(),
     )
     .await?;
-    if user.as_ref().is_some_and(|u| Some(u.id) == subject.user_id) {
+    // A reviewer can report the maker's reply under their own review, so only then is reporting
+    // your own review allowed.
+    let reply_under_own_review = body.kind == "app_review"
+        && sqlx::query_scalar::<_, bool>(
+            "select exists (select 1 from app_reviews where id = $1 and reply is not null and reply_hidden_at is null)",
+        )
+        .bind(subject.id)
+        .fetch_one(&state.db)
+        .await?;
+    if user.as_ref().is_some_and(|u| Some(u.id) == subject.user_id) && !reply_under_own_review {
         return Err(ApiError::invalid("subject", "you can't report your own"));
     }
     let due = if reason.priority < 2 {
@@ -894,6 +906,18 @@ async fn apply(
             sqlx::query(
                 "update app_reviews set hidden_at = case when $2 then null else now() end,
                         hidden_reason = case when $2 then null else $3 end
+                 where id = $1",
+            )
+            .bind(subject_id)
+            .bind(undo)
+            .bind(why)
+            .execute(&mut *tx)
+            .await?;
+        }
+        ("remove_reply", "app_review") => {
+            sqlx::query(
+                "update app_reviews set reply_hidden_at = case when $2 then null else now() end,
+                        reply_hidden_reason = case when $2 then null else $3 end
                  where id = $1",
             )
             .bind(subject_id)
@@ -1443,6 +1467,19 @@ async fn act_on_report(
     let user_id = user_id
         .context("the report isn't about an account")
         .map_err(refused)?;
+    // Removing a reply is a decision about the app's maker, who wrote it.
+    let user_id = if b.action == "remove_reply" {
+        sqlx::query_scalar::<_, Uuid>(
+            "select a.maker_id from app_reviews r join apps a on a.id = r.app_id
+             where r.id = $1 and r.reply is not null and r.reply_hidden_at is null",
+        )
+        .bind(subject_id)
+        .fetch_optional(&mut *tx)
+        .await?
+        .ok_or_else(|| ApiError::invalid("action", "there's no reply to remove"))?
+    } else {
+        user_id
+    };
     let decision = decide(
         &mut tx,
         &NewDecision {

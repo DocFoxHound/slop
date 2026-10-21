@@ -7,6 +7,7 @@ import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 
 import { api, ApiError, type AppChange, type ManageOverview, type RatingGroup } from "../api";
+import { OffersPanel } from "../components/Offers";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -87,6 +88,7 @@ export function Manage() {
       {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
       <RepoMove slug={slug} overview={m} onChanged={changed} />
       {app.data.private && <RepoAccessPanel slug={slug} repoUrl={app.data.repo_url} />}
+      <OffersPanel slug={slug} originalSlug={app.data.branch_of} />
       <Requests slug={slug} changes={m.changes} onChanged={changed} />
     </div>
   );

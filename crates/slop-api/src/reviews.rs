@@ -5,6 +5,9 @@
 //!   they have a vote on the app. Editing keeps one review per player per app.
 //! - Reviews are never hidden for being negative (REV-2), only by a moderation decision
 //!   (moderation.rs, kind `app_review`).
+//! - The app's maker can reply under a review, once (editing replaces it). The reply shows with
+//!   the review, marked when the review was changed after it; the reviewer is told. Staff can
+//!   remove a reply (moderation.rs `remove_reply`), and the maker can't post it again.
 //! - Profiles show a player's current votes and reviews, **public by default**. In the UK
 //!   under-18 view they're private by default (PRIV-6). A private profile's reviews still appear
 //!   on app pages, as "A player", with no link.
@@ -32,6 +35,10 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/apps/{slug}/reviews", get(list))
         .route("/apps/{slug}/review", put(write).delete(remove))
+        .route(
+            "/apps/{slug}/reviews/{id}/reply",
+            put(write_reply).delete(remove_reply),
+        )
         .route("/users/{id}", get(profile))
 }
 
@@ -65,6 +72,12 @@ struct Review {
     updated_at: OffsetDateTime,
     edited: bool,
     mine: bool,
+    /// The app maker's reply, unless staff removed it.
+    reply: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    reply_at: Option<OffsetDateTime>,
+    /// The review changed after the maker replied.
+    reply_outdated: bool,
 }
 
 #[derive(Deserialize)]
@@ -80,6 +93,8 @@ struct ReviewPage {
     not_slop: i64,
     slop: i64,
     next_offset: Option<i64>,
+    /// The viewer made the app, so they can reply.
+    can_reply: bool,
 }
 
 async fn list(
@@ -90,7 +105,7 @@ async fn list(
     Query(q): Query<ListQuery>,
 ) -> ApiResult<Json<ReviewPage>> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
-    let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
+    let (app_id, is_mine) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
     let offset = q.offset.unwrap_or(0).clamp(0, 10_000);
     let vote: Option<i16> = match q.vote.as_deref() {
         Some("not_slop") => Some(1),
@@ -110,7 +125,11 @@ async fn list(
         )
         .push_bind(viewer)
         .push(
-            ", false) as mine from app_reviews r join votes v on v.user_id = r.user_id and v.app_id = r.app_id
+            ", false) as mine,
+               case when r.reply_hidden_at is null then r.reply end as reply,
+               case when r.reply_hidden_at is null then r.reply_at end as reply_at,
+               coalesce(r.reply_hidden_at is null and r.updated_at > r.reply_at, false) as reply_outdated
+             from app_reviews r join votes v on v.user_id = r.user_id and v.app_id = r.app_id
              join users u on u.id = r.user_id
              where r.hidden_at is null and u.closed_at is null and u.suspended_at is null and r.app_id = ",
         )
@@ -139,6 +158,7 @@ async fn list(
         not_slop,
         slop,
         next_offset,
+        can_reply: is_mine,
     }))
 }
 
@@ -309,4 +329,82 @@ async fn profile(
         apps,
         votes,
     }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ReplyBody {
+    body: String,
+}
+
+/// The app's maker replies under a review (or changes their reply). The reviewer is told.
+async fn write_reply(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((slug, id)): Path<(String, Uuid)>,
+    Json(b): Json<ReplyBody>,
+) -> ApiResult<StatusCode> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Review)?;
+    let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
+    let body = b.body.trim();
+    if body.is_empty() || body.chars().count() > 2000 {
+        return Err(ApiError::invalid("body", "1 to 2,000 characters"));
+    }
+    let mut tx = state.db.begin().await?;
+    let row: Option<(Uuid, Option<OffsetDateTime>, String)> = sqlx::query_as(
+        "select r.user_id, r.reply_hidden_at, a.title from app_reviews r join apps a on a.id = r.app_id
+         where r.id = $1 and r.app_id = $2 and r.hidden_at is null for update of r",
+    )
+    .bind(id)
+    .bind(app_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (reviewer, removed, title) = row.ok_or(ApiError::NotFound)?;
+    if removed.is_some() {
+        return Err(ApiError::Conflict(
+            "your reply was removed by a moderation decision; you can appeal it from your account"
+                .into(),
+        ));
+    }
+    sqlx::query("update app_reviews set reply = $2, reply_at = now() where id = $1")
+        .bind(id)
+        .bind(body)
+        .execute(&mut *tx)
+        .await?;
+    if reviewer != user.id {
+        crate::notify::send(
+            &mut tx,
+            crate::notify::Notice {
+                user_id: reviewer,
+                category: "apps",
+                title: format!("{title}'s maker replied to your review"),
+                body: body.chars().take(200).collect(),
+                link: format!("/app/{slug}#reviews"),
+                collapse_key: Some(format!("review-reply:{id}")),
+            },
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+async fn remove_reply(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((slug, id)): Path<(String, Uuid)>,
+) -> ApiResult<StatusCode> {
+    let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
+    let done = sqlx::query(
+        "update app_reviews set reply = null, reply_at = null
+         where id = $1 and app_id = $2 and reply is not null and reply_hidden_at is null",
+    )
+    .bind(id)
+    .bind(app_id)
+    .execute(&state.db)
+    .await?;
+    if done.rows_affected() == 0 {
+        return Err(ApiError::NotFound);
+    }
+    Ok(StatusCode::NO_CONTENT)
 }

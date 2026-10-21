@@ -14070,3 +14070,122 @@ async fn community_builds_offer_fixes_to_the_original(db: PgPool) {
         (Some("sent"), Some("accepted"))
     );
 }
+
+/// The app's maker replies under a review; the reviewer is told; staff can remove a reply, and
+/// then the maker can't post it again.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_reply_to_reviews(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (player_id, player) = app.user("Pat Player", "US").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    app.send(req(Method::POST, "/v1/apps/tower/launch").cookie(&player))
+        .await;
+    app.send(
+        req(Method::POST, "/v1/apps/tower/vote")
+            .cookie(&player)
+            .json(json!({ "vote": "slop" })),
+    )
+    .await;
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/tower/review")
+                .cookie(&player)
+                .json(json!({ "body": "Too grindy after level 5." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/reviews").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(page["can_reply"], true);
+    let id = page["reviews"][0]["id"].as_str().unwrap().to_string();
+    let reply = |cookie: &str, body: &str| {
+        req(Method::PUT, format!("/v1/apps/tower/reviews/{id}/reply"))
+            .cookie(cookie)
+            .json(json!({ "body": body }))
+    };
+
+    // Only the maker replies.
+    assert_eq!(
+        app.send(reply(&player, "Me too")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(reply(&maker, "Thanks! 1.2 halves the grind."))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(page["can_reply"], false);
+    let r = &page["reviews"][0];
+    assert_eq!(r["reply"], "Thanks! 1.2 halves the grind.");
+    assert_eq!(r["reply_outdated"], false);
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like '%replied to your review'",
+    )
+    .bind(player_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+
+    // The reviewer changes the review later: the reply is marked as about an earlier version.
+    sqlx::query("update app_reviews set updated_at = now() + interval '1 hour' where id = $1")
+        .bind(Uuid::parse_str(&id).unwrap())
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(page["reviews"][0]["reply_outdated"], true);
+
+    // Staff remove the reply: the decision is about the maker, and the reply can't come back.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&player)
+                .json(json!({
+                    "kind": "app_review", "subject": id, "reason": "harassment",
+                    "details": "The maker's reply insults me.", "good_faith": true
+                })),
+        )
+        .await;
+    let status = res.status();
+    assert_eq!(status, StatusCode::OK, "{}", body_json(res).await);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&admin))
+            .await,
+    )
+    .await;
+    let report_id = queue["reports"][0]["id"].as_str().unwrap();
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/reports/{report_id}/act")).cookie(&admin).json(json!({
+                "action": "remove_reply", "rule": "harassment", "facts": "The reply insults the reviewer.",
+                "outcome": "The maker's reply was removed."
+            })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let about: Uuid = sqlx::query_scalar(
+        "select user_id from moderation_decisions where action = 'remove_reply'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(about, maker_id);
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(page["reviews"][0]["reply"], Value::Null);
+    assert_eq!(
+        page["reviews"][0]["body"], "Too grindy after level 5.",
+        "the review stays"
+    );
+    assert_eq!(
+        app.send(reply(&maker, "Sorry.")).await.status(),
+        StatusCode::CONFLICT
+    );
+}

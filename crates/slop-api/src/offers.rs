@@ -160,7 +160,7 @@ async fn offer(
                 user.display_name,
                 message.chars().take(200).collect::<String>()
             ),
-            link: format!("/app/{original_slug}/manage"),
+            link: format!("/publish/{original_slug}/manage#offers"),
             collapse_key: None,
         },
     )
@@ -224,7 +224,7 @@ async fn answer(
             category: "apps",
             title: format!("{original_title} {} your fix", body.decision),
             body: message.unwrap_or_default().chars().take(200).collect(),
-            link: format!("/app/{branch_slug}/manage"),
+            link: format!("/publish/{branch_slug}/manage#offers"),
             collapse_key: None,
         },
     )

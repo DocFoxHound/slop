@@ -27,6 +27,12 @@ reviews it. Read only the guide sections you need (`publishing_guide`).
 3. `get_fixes`: every problem Slop's checks found, with what to do. Fix the `must` ones first. `check_repository` checks the source again without a release.
 4. Fix, commit, push, and release again with a new version.
 
+## Reviews
+
+`list_reviews` shows what players say. Reply with `reply_to_review` only when your maker wants
+you to: brief, polite, specific (what was fixed or is planned). Never argue, and never ask for
+or reward a better vote.
+
 ## Community builds and mods
 
 - **Community build** (a fix, translation, port or modded version of someone's app): fork their repository, then `register_community_build` with `kind` fix, translation, port, mod or other. Read "Publishing a community build".

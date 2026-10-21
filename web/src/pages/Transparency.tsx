@@ -27,6 +27,7 @@ const LABEL: Record<string, string> = {
   dismissed: "No action needed",
   delist_app: "App taken out of the store",
   hide_review: "Review hidden",
+  remove_reply: "Maker's reply removed",
   hide_profile: "Profile hidden",
   suspend_account: "Account suspended",
   warn: "Warning",

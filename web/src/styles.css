@@ -908,3 +908,6 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .fix-list { list-style: none; padding: 0; margin: 0 0 12px; display: grid; gap: 12px; }
 .fix-list li { border-left: 3px solid var(--line, #333); padding-left: 10px; }
 .release-notes { margin: 8px 0; }
+.review-reply { margin: 8px 0 8px 16px; padding-left: 10px; border-left: 3px solid var(--line); }
+.offer-list { list-style: none; padding: 0; display: grid; gap: 12px; }
+.offer-list li { border-left: 3px solid var(--line); padding-left: 10px; }
