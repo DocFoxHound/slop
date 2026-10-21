@@ -158,6 +158,9 @@ struct CiRelease {
     /// values), and dependencies with known vulnerabilities.
     #[serde(default)]
     source_checks: Option<serde_json::Value>,
+    /// Shared runtimes from slop.toml's `[runtimes]` (slop-manifest runtimes.rs).
+    #[serde(default)]
+    runtimes: Option<Vec<String>>,
 }
 
 /// Everything but URL-unreserved characters (RFC 3986) is escaped in a path segment.
@@ -267,6 +270,7 @@ async fn submit_from_ci(
         files,
         "slop_build",
         None,
+        req.runtimes.clone(),
     )
     .await?;
     if let Some(checks) = &req.source_checks {

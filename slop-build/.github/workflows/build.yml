@@ -648,6 +648,8 @@ jobs:
           #   [launch]                 [launch.windows]
           #   exec = "game{ext}"        exec = "Game.exe"
           #   args = ["--fullscreen"]   args = []
+          # and the shared runtimes the Windows build needs, from Slop's list (Slop's /v1/runtimes):
+          #   runtimes = ["vcredist-x64"]
           launch=$(python3 - "$PLATFORM" "$PROJECT" "$ext" <<'PY'
           import json, os, sys, tomllib
           platform, project, ext = sys.argv[1:4]
@@ -667,7 +669,11 @@ jobs:
               raise SystemExit("::error::slop.toml: exec is a string and args a list of strings")
           if len(args) > 16 or any(len(a) > 200 for a in args):
               raise SystemExit("::error::slop.toml: at most 16 arguments of up to 200 characters")
-          print(json.dumps({"exec": exec_.replace("{ext}", ext), "args": args}))
+          # None (not in slop.toml) keeps the last release's runtimes; [] says none.
+          runtimes = cfg.get("runtimes")
+          if runtimes is not None and (not isinstance(runtimes, list) or not all(isinstance(r, str) for r in runtimes)):
+              raise SystemExit("::error::slop.toml: runtimes is a list of runtime IDs, e.g. [\"vcredist-x64\"]")
+          print(json.dumps({"exec": exec_.replace("{ext}", ext), "args": args, "runtimes": runtimes}))
           PY
           )
           toml_exec=$(echo "$launch" | jq -r .exec)
@@ -678,6 +684,7 @@ jobs:
           [ -f "$out/$exec" ] || { echo "::error::the build has no $exec"; exit 1; }
           echo "SLOP_EXEC=$exec" >> "$GITHUB_ENV"
           echo "SLOP_ARGS=$(echo "$launch" | jq -c .args)" >> "$GITHUB_ENV"
+          echo "SLOP_RUNTIMES=$(echo "$launch" | jq -c .runtimes)" >> "$GITHUB_ENV"
 
       # Optional: sign the Windows program with the maker's SignPath Foundation certificate (free
       # for open-source projects). SignPath checks the build came from this repository on GitHub's
@@ -749,6 +756,8 @@ jobs:
                       with open(path, "rb") as fh:
                           t.addfile(info, fh)
           files = [{"platform": platform, "file_name": name, "exec": exe, "args": json.loads(os.environ.get("SLOP_ARGS") or "[]")}]
+          if platform == "windows":
+              files[0]["runtimes"] = json.loads(os.environ.get("SLOP_RUNTIMES") or "null")
           with open(os.path.join("slop-dist", "files.json"), "w") as fh:
               json.dump(files, fh)
           print(f"packed {name}")
@@ -1023,8 +1032,13 @@ jobs:
           import glob, json, os
           files = [f for p in sorted(glob.glob("slop-files/*.json")) for f in json.load(open(p))]
           checks = json.load(open("slop-checks/source.json"))
-          print(json.dumps({"app": os.environ["APP"], "version": os.environ["VERSION"], "tag": os.environ["TAG"],
-                            "commit": os.environ["GITHUB_SHA"], "files": files, "source_checks": checks}))
+          body = {"app": os.environ["APP"], "version": os.environ["VERSION"], "tag": os.environ["TAG"],
+                  "commit": os.environ["GITHUB_SHA"], "files": files, "source_checks": checks}
+          # slop.toml's runtimes travel with the Windows file; Slop takes them for the release.
+          runtimes = [f.pop("runtimes", None) for f in files]
+          if any(r is not None for r in runtimes):
+              body["runtimes"] = next(r for r in runtimes if r is not None)
+          print(json.dumps(body))
           PY
           status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$base/v1/slop-build/releases" \
             -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)

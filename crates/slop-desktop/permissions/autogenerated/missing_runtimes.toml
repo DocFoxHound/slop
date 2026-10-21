@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-missing-runtimes"
+description = "Enables the missing_runtimes command without any pre-configured scope."
+commands.allow = ["missing_runtimes"]
+
+[[permission]]
+identifier = "deny-missing-runtimes"
+description = "Denies the missing_runtimes command without any pre-configured scope."
+commands.deny = ["missing_runtimes"]

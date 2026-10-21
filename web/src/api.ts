@@ -1650,6 +1650,8 @@ export interface Release {
   auto_approved: boolean;
   /** Its rating (AGE-7). */
   rating?: ReleaseRating | null;
+  /** Shared runtimes it needs (Visual C++, .NET Desktop, DirectX). */
+  runtimes?: string[];
   files: ReleaseFile[];
   /** Slop Build's source checks. */
   source_checks: SourceChecks | null;
@@ -1703,6 +1705,8 @@ export interface NewRelease {
   }>;
   /** This release's rating (AGE-7); the store page's when left out. */
   rating?: ReleaseRating;
+  /** Shared runtimes it needs; the last approved release's when left out. */
+  runtimes?: string[];
 }
 
 /** A release's age rating and content labels. */
@@ -1980,12 +1984,15 @@ export const api = {
     tag: string,
     files: NewRelease["files"],
     rating?: ReleaseRating,
+    runtimes?: string[],
   ) =>
     request<Release>(
       "POST",
       `/v1/apps/${encodeURIComponent(slug)}/releases/from-github`,
-      { tag, files, rating },
+      { tag, files, rating, runtimes },
     ),
+  /** The approved shared runtimes a release can need. */
+  runtimes: () => request<Array<{ id: string; name: string; vendor: string }>>("GET", "/v1/runtimes"),
   updateSettings: (slug: string) =>
     request<UpdateSettings>(
       "GET",

@@ -168,11 +168,24 @@ function DesktopControls({ slug, title, sandbox: given }: { slug: string; title:
     clearFailed();
     void run("launch", async () => setLaunched(await desktop.launch(targetSlug, normalOnce)));
   };
-  const play = () => {
+  const [needs, setNeeds] = useState<Array<{ id: string; name: string; vendor: string }>>();
+  const play = async () => {
+    // Shared runtimes first: the player agrees before anything is installed.
+    const missing = await desktop.missingRuntimes(targetSlug).catch(() => []);
+    if (missing.length > 0) {
+      setNeeds(missing);
+      return;
+    }
     const status = sandboxStatus.data;
     if (status?.available && sandbox?.suggested && !decided(status, targetSlug)) setAskSandbox(true);
     else launch();
   };
+  const installNeeds = () =>
+    void run("install", async () => {
+      await desktop.installRuntimes(targetSlug);
+      setNeeds(undefined);
+      await play();
+    });
   const pick = async (next: string) => {
     setError(undefined);
     setOfferSaves(undefined);
@@ -230,7 +243,7 @@ function DesktopControls({ slug, title, sandbox: given }: { slug: string; title:
             )
           ) : (
             <div className="play-split">
-              <button className="btn big slime" disabled={busy !== null} onClick={play}>
+              <button className="btn big slime" disabled={busy !== null} onClick={() => void play()}>
                 {busy === "launch" ? "Starting…" : "▶ Play"}
               </button>
               {builds.length > 0 && (
@@ -249,6 +262,24 @@ function DesktopControls({ slug, title, sandbox: given }: { slug: string; title:
                   ))}
                 </select>
               )}
+            </div>
+          )}
+          {needs && (
+            <div className="notice small" role="dialog" aria-label="Runtimes needed">
+              <p>
+                <b>{targetTitle}</b> needs {needs.map((n) => n.name).join(" and ")}, which this computer doesn't have yet.
+                Slop downloads {needs.length === 1 ? "it" : "them"} from {[...new Set(needs.map((n) => n.vendor))].join(" and ")}{" "}
+                and only runs {needs.length === 1 ? "it" : "them"} if Windows confirms the signature. Windows asks you to
+                allow the install.
+              </p>
+              <div className="actions">
+                <button className="btn small ghost" disabled={busy !== null} onClick={() => setNeeds(undefined)}>
+                  Not now
+                </button>
+                <button className="btn small slime" disabled={busy !== null} onClick={installNeeds}>
+                  {busy === "install" ? "Installing…" : "Install and play"}
+                </button>
+              </div>
             </div>
           )}
           {targetSlug !== slug && (

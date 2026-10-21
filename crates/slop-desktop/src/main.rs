@@ -569,6 +569,38 @@ fn copy_saves(desktop: State<'_, Desktop>, from: String, to: String) -> CommandR
     Ok(desktop.library.copy_saves(&from, &to)?)
 }
 
+/// A shared runtime an app needs (slop-manifest runtimes.rs).
+#[derive(Serialize)]
+struct NeededRuntime {
+    id: &'static str,
+    name: &'static str,
+    vendor: &'static str,
+}
+
+/// The shared runtimes an installed app needs and this computer doesn't have.
+#[tauri::command]
+fn missing_runtimes(
+    desktop: State<'_, Desktop>,
+    slug: String,
+) -> CommandResult<Vec<NeededRuntime>> {
+    Ok(desktop
+        .library
+        .missing_runtimes(&slug)?
+        .into_iter()
+        .map(|r| NeededRuntime {
+            id: r.id,
+            name: r.name,
+            vendor: r.vendor,
+        })
+        .collect())
+}
+
+/// Installs them, after the player agreed: from each vendor, checked against its signature.
+#[tauri::command]
+async fn install_runtimes(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()> {
+    Ok(desktop.library.install_runtimes(&slug).await?)
+}
+
 /// Bytes in an app's save folder.
 #[tauri::command]
 fn save_size(desktop: State<'_, Desktop>, slug: String) -> CommandResult<u64> {
@@ -1484,6 +1516,8 @@ fn main() {
             restore_saves,
             copy_saves,
             save_size,
+            missing_runtimes,
+            install_runtimes,
             play_choices,
             set_play_choice,
             mod_request,

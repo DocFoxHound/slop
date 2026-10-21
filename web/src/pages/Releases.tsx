@@ -134,6 +134,8 @@ export function Releases() {
     [slug, me?.id],
   );
   const server = useLoad(() => api.server(), []);
+  // New releases start from what the last approved one needed.
+  const lastRuntimes = releases.data?.find((r) => r.status === "approved")?.runtimes ?? [];
   // While files are being checked, refresh every few seconds so progress moves on its own.
   const checking = releases.data?.some((r) => r.status === "fetching");
   useEffect(() => {
@@ -207,6 +209,7 @@ export function Releases() {
           slug={slug}
           platforms={app.data.platforms}
           rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
+          lastRuntimes={lastRuntimes}
           onSubmitted={onSubmitted}
         />
       ) : (
@@ -215,6 +218,7 @@ export function Releases() {
           slug={slug}
           platforms={app.data.platforms}
           rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
+          lastRuntimes={lastRuntimes}
           onSubmitted={onSubmitted}
         />
       )}
@@ -235,6 +239,7 @@ export function Releases() {
             slug={slug}
             platforms={app.data.platforms}
             rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
+            lastRuntimes={lastRuntimes}
             onSubmitted={onSubmitted}
           />
         </details>
@@ -537,15 +542,18 @@ function ReleaseForm({
   slug,
   platforms,
   rating: storeRating,
+  lastRuntimes,
   onSubmitted,
 }: {
   repoUrl: string;
   slug: string;
   platforms: AppPlatform[];
   rating: ReleaseRating;
+  lastRuntimes: string[];
   onSubmitted: () => void;
 }) {
   const [rating, setRating] = useState(storeRating);
+  const [runtimes, setRuntimes] = useState(lastRuntimes);
   const blank = () =>
     platforms.map((platform): FileRow => ({
       platform,
@@ -581,6 +589,7 @@ function ReleaseForm({
         args: r.args.trim() ? r.args.trim().split(/\s+/) : [],
       })),
       rating,
+      runtimes: runtimes.length > 0 || lastRuntimes.length > 0 ? runtimes : undefined,
     };
     try {
       await gate.guard(() => api.submitRelease(slug, release));
@@ -697,6 +706,7 @@ function ReleaseForm({
         </fieldset>
       ))}
       <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
+      <RuntimeFields value={runtimes} onChange={setRuntimes} />
       {error && (error.field === "files" || !error.field) && (
         <p className="form-error" role="alert">
           {error.message}
@@ -750,14 +760,17 @@ function ReleasePicker({
   slug,
   platforms,
   rating: storeRating,
+  lastRuntimes,
   onSubmitted,
 }: {
   slug: string;
   platforms: AppPlatform[];
   rating: ReleaseRating;
+  lastRuntimes: string[];
   onSubmitted: () => void;
 }) {
   const [rating, setRating] = useState(storeRating);
+  const [runtimes, setRuntimes] = useState(lastRuntimes);
   const list = useLoad(() => api.githubReleases(slug), [slug]);
   const picker = useTermsGate();
   const [tag, setTag] = useState("");
@@ -812,6 +825,7 @@ function ReleasePicker({
             : {}),
         })),
         rating,
+        runtimes,
       ));
       setDone(chosen.version);
       list.reload();
@@ -973,6 +987,7 @@ function ReleasePicker({
             </p>
           )}
           <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
+          <RuntimeFields value={runtimes} onChange={setRuntimes} />
           <div className="actions">
             <button
               className="btn slime"
@@ -1117,6 +1132,34 @@ function RatingFields({
           ? "Lower than the store page now: a person reviews this release before it goes out, even if your updates are approved automatically."
           : "When this release is approved, the store page shows its rating."}
       </p>
+    </details>
+  );
+}
+
+/** Shared runtimes the release needs: the Slop app installs missing ones from the vendor. */
+function RuntimeFields({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
+  const list = useLoad(() => api.runtimes(), []);
+  if (!list.data) return null;
+  return (
+    <details className="release-rating">
+      <summary className="small">
+        Shared runtimes (Windows):{" "}
+        <b>{value.length === 0 ? "none" : list.data.filter((r) => value.includes(r.id)).map((r) => r.name).join(", ")}</b>
+      </summary>
+      <p className="muted small">
+        Tick what your game needs and doesn't ship. Before it starts, the Slop app installs any that are missing, from the
+        vendor, once the player agrees.
+      </p>
+      {list.data.map((r) => (
+        <label className="check" key={r.id}>
+          <input
+            type="checkbox"
+            checked={value.includes(r.id)}
+            onChange={(e) => onChange(e.target.checked ? [...value, r.id] : value.filter((x) => x !== r.id))}
+          />{" "}
+          {r.name}
+        </label>
+      ))}
     </details>
   );
 }

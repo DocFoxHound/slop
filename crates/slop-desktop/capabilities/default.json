@@ -45,6 +45,8 @@
     "allow-restore-saves",
     "allow-copy-saves",
     "allow-save-size",
+    "allow-missing-runtimes",
+    "allow-install-runtimes",
     "allow-play-choices",
     "allow-set-play-choice",
     "allow-mod-request",

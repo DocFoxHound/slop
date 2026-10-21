@@ -394,6 +394,8 @@ struct FromGithub {
     /// This release's rating (AGE-7); the store page's when left out.
     #[serde(default)]
     rating: Option<releases::Rating>,
+    #[serde(default)]
+    runtimes: Option<Vec<String>>,
 }
 
 /// Submits a GitHub release: the version comes from the tag and the commit from GitHub.
@@ -422,6 +424,7 @@ async fn submit_from_github(
         req.files,
         "maker",
         req.rating,
+        req.runtimes,
     )
     .await?;
     Ok((StatusCode::CREATED, Json(release)))
@@ -778,6 +781,7 @@ async fn watch_app(
         &commit,
         files,
         "github_release",
+        None,
         None,
     )
     .await

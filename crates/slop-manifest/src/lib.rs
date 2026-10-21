@@ -12,6 +12,7 @@
 //! Key management is deliberately simple for now: the client trusts a pinned list of public
 //! keys. The TUF-style root / targets / timestamp roles in SECURITY §5.3 replace that later.
 
+pub mod runtimes;
 pub mod sshsig;
 use base64::{Engine, engine::general_purpose::STANDARD};
 use ed25519_dalek::{Signature, Signer, SigningKey, VerifyingKey};
@@ -207,6 +208,10 @@ pub struct ReleaseManifest {
     /// approved mods there (DESIGN §9). Absent: the app reads `SLOP_MODS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mods_folder: Option<ModsFolder>,
+    /// Shared runtimes the app needs (runtimes.rs IDs); the Slop app installs missing ones
+    /// before the first start, with the player's say-so.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub runtimes: Vec<String>,
 }
 
 /// Where an app reads mods from, and how they're laid out there.
@@ -451,6 +456,7 @@ mod tests {
             mod_for: None,
             build_of: None,
             mods_folder: None,
+            runtimes: vec![],
         }
     }
 

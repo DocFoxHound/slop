@@ -282,6 +282,10 @@ export const desktop = {
   restoreSaves: (slug: string, id: string) => call<void>("restore_saves", { slug, id }),
   copySaves: (from: string, to: string) => call<void>("copy_saves", { from, to }),
   saveSize: (slug: string) => call<number>("save_size", { slug }),
+  /** Shared runtimes (Visual C++, .NET, DirectX) an installed app needs and this computer lacks. */
+  missingRuntimes: (slug: string) =>
+    call<Array<{ id: string; name: string; vendor: string }>>("missing_runtimes", { slug }),
+  installRuntimes: (slug: string) => call<void>("install_runtimes", { slug }),
   /** What each original's Play button starts, when the player picked a community build. */
   playChoices: () => call<Record<string, string>>("play_choices"),
   /** Picks the build `app`'s Play button starts; null for the original. */
