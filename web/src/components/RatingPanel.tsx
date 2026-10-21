@@ -182,13 +182,21 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
       {r.daily.length > 0 && (
         <UpDownBars
           title="Votes per day (90 days)"
-          summary={`Votes cast per day over the last 90 days: ${r.daily.reduce((n, d) => n + d.not_slop, 0)} Not Slop and ${r.daily.reduce((n, d) => n + d.slop, 0)} Slop.`}
+          summary={`Votes cast per day over the last 90 days: ${r.daily.reduce((n, d) => n + d.not_slop, 0)} Not Slop and ${r.daily.reduce((n, d) => n + d.slop, 0)} Slop.${(r.unusual_days ?? []).length > 0 ? ` ${(r.unusual_days ?? []).length} of those days had unusual voting.` : ""}`}
           labels={days}
           up={r.daily.map((d) => d.not_slop)}
           down={r.daily.map((d) => d.slop)}
           upName="👍 Not Slop"
           downName="👎 Slop"
+          marked={r.daily.map((d) => (r.unusual_days ?? []).includes(d.day))}
+          markedName="Unusual voting"
         />
+      )}
+      {r.daily.some((d) => (r.unusual_days ?? []).includes(d.day)) && (
+        <p className="muted small">
+          Shaded days had unusual voting: a sudden wave of 👎, many votes from brand-new accounts, or many players changing
+          their vote at once. Slop's staff look into these; nothing is changed automatically.
+        </p>
       )}
       {peaks.length > 0 && (
         <LineChart

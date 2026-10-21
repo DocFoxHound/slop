@@ -14,7 +14,7 @@ const W = 600;
 const H = 180;
 const PAD = { l: 34, r: 8, t: 10, b: 24 };
 
-function DataTable({ labels, columns }: { labels: string[]; columns: Array<{ name: string; values: Array<number | null> }> }) {
+function DataTable({ labels, columns }: { labels: string[]; columns: Array<{ name: string; values: Array<number | string | null> }> }) {
   return (
     <table className="audit chart-table">
       <thead>
@@ -134,7 +134,7 @@ export function LineChart({
   );
 }
 
-/** Up (above the line) and down (below) bars per day. */
+/** Up (above the line) and down (below) bars per day; `marked` days are shaded. */
 export function UpDownBars({
   title,
   summary,
@@ -143,6 +143,8 @@ export function UpDownBars({
   down,
   upName,
   downName,
+  marked,
+  markedName = "Marked",
 }: {
   title: string;
   summary: string;
@@ -151,7 +153,10 @@ export function UpDownBars({
   down: number[];
   upName: string;
   downName: string;
+  marked?: boolean[];
+  markedName?: string;
 }) {
+  const anyMarked = Boolean(marked?.some(Boolean));
   const max = Math.max(1, ...up, ...down);
   const mid = PAD.t + (H - PAD.t - PAD.b) / 2;
   const half = (H - PAD.t - PAD.b) / 2;
@@ -165,9 +170,19 @@ export function UpDownBars({
         <>
           <span className="key up">{upName}</span>
           <span className="key down">{downName}</span>
+          {anyMarked && <span className="key marked">{markedName}</span>}
         </>
       }
-      table={<DataTable labels={labels} columns={[{ name: upName, values: up }, { name: downName, values: down }]} />}
+      table={
+        <DataTable
+          labels={labels}
+          columns={[
+            { name: upName, values: up },
+            { name: downName, values: down },
+            ...(anyMarked ? [{ name: markedName, values: marked!.map((m) => (m ? "yes" : "")) }] : []),
+          ]}
+        />
+      }
     >
       <line className="grid" x1={PAD.l} x2={W - PAD.r} y1={mid} y2={mid} />
       <text className="axis" x={PAD.l - 4} y={PAD.t + 8} textAnchor="end">
@@ -180,6 +195,7 @@ export function UpDownBars({
         const x = PAD.l + (i * (W - PAD.l - PAD.r)) / Math.max(labels.length, 1);
         return (
           <g key={l}>
+            {marked?.[i] && <rect className="marked" x={x - 1} width={bw + 2} y={PAD.t} height={H - PAD.t - PAD.b} />}
             {up[i] > 0 && <rect className="up" x={x} width={bw} y={mid - (up[i] / max) * half} height={(up[i] / max) * half} />}
             {down[i] > 0 && <rect className="down" x={x} width={bw} y={mid} height={(down[i] / max) * half} />}
             {i % every === 0 && (

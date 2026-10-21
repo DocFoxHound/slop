@@ -150,6 +150,9 @@ pub struct Ratings {
     pub monthly: Vec<Month>,
     /// Votes cast per day, last 90 days.
     pub daily: Vec<Day>,
+    /// Days in those 90 with unusual voting the abuse checks found (abuse.rs: review bombs,
+    /// bursts from new accounts, swings), unless staff found nothing wrong. Shaded on the chart.
+    pub unusual_days: Vec<String>,
     /// Voting opens at full release.
     pub open: bool,
     pub min_votes: i64,
@@ -205,6 +208,21 @@ pub async fn monthly(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<Month>
             tally: Tally::new(up, down, upw, downw),
         })
         .collect())
+}
+
+/// Days with unusual voting (see `Ratings::unusual_days`).
+pub async fn unusual_days(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<String>> {
+    sqlx::query_scalar(
+        "select distinct to_char((detected_at at time zone 'UTC')::date, 'YYYY-MM-DD')
+         from abuse_signals
+         where subject_kind = 'app' and subject_id = $1
+           and kind in ('review_bomb', 'vote_burst', 'vote_swing') and status <> 'dismissed'
+           and detected_at > now() - interval '90 days'
+         order by 1",
+    )
+    .bind(app_id)
+    .fetch_all(db)
+    .await
 }
 
 pub async fn daily(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<Day>> {
@@ -447,6 +465,7 @@ async fn load(state: &AppState, user: Option<&CurrentUser>, app_id: Uuid) -> Api
         now: tally(&state.db, app_id).await?,
         monthly: monthly(&state.db, app_id).await?,
         daily: daily(&state.db, app_id).await?,
+        unusual_days: unusual_days(&state.db, app_id).await?,
         open,
         min_votes: MIN_VOTES,
         mine,
