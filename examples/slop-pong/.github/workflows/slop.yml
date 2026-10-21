@@ -1,0 +1,23 @@
+# Slop Build for Slop Pong, once it lives in its own repository (see README.md).
+name: Slop Build
+on:
+  push:
+    branches: [main]
+    tags: ["v*"]
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  id-token: write
+  attestations: write
+
+jobs:
+  slop:
+    uses: DocFoxHound/slop-build/.github/workflows/build.yml@v1
+    with:
+      app: slop-pong
+      slop-url: https://slop.188-68-41-241.sslip.io
+      project-type: godot
+      godot-version: "4.4.1"
+      godot-preset-windows: Windows Desktop
+      godot-preset-linux: Linux

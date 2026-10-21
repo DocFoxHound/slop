@@ -1,0 +1,25 @@
+; Slop Pong: the test game for Slop (see README.md).
+
+config_version=5
+
+[application]
+
+config/name="Slop Pong"
+config/description="Pong, and a test of every Slop feature: saves, mods, mod requests and player counts."
+run/main_scene="res://main.tscn"
+config/features=PackedStringArray("4.4")
+
+[autoload]
+
+Slop="*res://slop/slop.gd"
+
+[display]
+
+window/size/viewport_width=800
+window/size/viewport_height=600
+window/stretch/mode="canvas_items"
+
+[rendering]
+
+renderer/rendering_method="gl_compatibility"
+renderer/rendering_method.mobile="gl_compatibility"
