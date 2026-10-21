@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::get,
+    routing::{get, patch},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -44,6 +44,7 @@ pub fn routes() -> Router<AppState> {
             "/apps/{slug}/releases",
             get(list_releases).post(submit_release),
         )
+        .route("/apps/{slug}/releases/{release_id}", patch(edit_release))
         .route("/apps/{slug}/manifest", get(latest_manifest))
         .route("/runtimes", get(runtimes_list))
         .route(
@@ -90,6 +91,9 @@ struct NewRelease {
     /// left out.
     #[serde(default)]
     runtimes: Option<Vec<String>>,
+    /// What changed, for players (Markdown).
+    #[serde(default)]
+    notes: Option<String>,
 }
 
 /// A release's age rating and content labels (AGE-7).
@@ -427,6 +431,8 @@ pub(crate) struct ReleaseInfo {
     rating: Option<Rating>,
     /// Shared runtimes it needs.
     runtimes: Vec<String>,
+    /// What changed, for players (Markdown).
+    notes: Option<String>,
     files: Vec<ReleaseFileInfo>,
     /// Slop Build's source checks: possible secrets and vulnerable dependencies.
     source_checks: Option<serde_json::Value>,
@@ -485,7 +491,58 @@ async fn submit_release(
         req.runtimes,
     )
     .await?;
+    let release = match req.notes {
+        Some(notes) => {
+            set_notes(&state.db, release.id, &notes).await?;
+            load_release(&state, release.id).await?
+        }
+        None => release,
+    };
     Ok((StatusCode::CREATED, Json(release)))
+}
+
+/// Up to this many characters of release notes.
+const MAX_NOTES: usize = 5000;
+
+/// Sets a release's notes: what changed, for players. Empty clears them.
+pub(crate) async fn set_notes(db: &sqlx::PgPool, release_id: Uuid, notes: &str) -> ApiResult<()> {
+    let notes = notes.trim();
+    if notes.chars().count() > MAX_NOTES {
+        return Err(ApiError::invalid("notes", "up to 5,000 characters"));
+    }
+    sqlx::query("update releases set notes = $2 where id = $1")
+        .bind(release_id)
+        .bind((!notes.is_empty()).then_some(notes))
+        .execute(db)
+        .await?;
+    Ok(())
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct EditRelease {
+    notes: String,
+}
+
+/// The maker changes a release's notes (any time: they're not part of the signed manifest).
+async fn edit_release(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((slug, release_id)): Path<(String, Uuid)>,
+    Json(req): Json<EditRelease>,
+) -> ApiResult<Json<ReleaseInfo>> {
+    let (app_id, _) = owned_app(&state, &slug, &user).await?;
+    let found: bool =
+        sqlx::query_scalar("select exists (select 1 from releases where id = $1 and app_id = $2)")
+            .bind(release_id)
+            .bind(app_id)
+            .fetch_one(&state.db)
+            .await?;
+    if !found {
+        return Err(ApiError::NotFound);
+    }
+    set_notes(&state.db, release_id, &req.notes).await?;
+    Ok(Json(load_release(&state, release_id).await?))
 }
 
 /// Checks and records a new release for fetching and review. Shared by makers' own submissions,
@@ -728,10 +785,11 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         min_age: Option<i16>,
         content_labels: Option<Vec<String>>,
         runtimes: Vec<String>,
+        notes: Option<String>,
     }
     let row: Row = sqlx::query_as(
         "select id, version, commit_sha, status::text as status, status_reason, commit_verified, created_at, source,
-                coalesce(reviewed_by = 'slop', false) as auto_approved, min_age, content_labels, runtimes
+                coalesce(reviewed_by = 'slop', false) as auto_approved, min_age, content_labels, runtimes, notes
          from releases where id = $1",
     )
     .bind(id)
@@ -759,6 +817,7 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     .fetch_all(&state.db)
     .await?;
     Ok(ReleaseInfo {
+        notes: row.notes,
         source_checks,
         repo_scan,
         advisories,

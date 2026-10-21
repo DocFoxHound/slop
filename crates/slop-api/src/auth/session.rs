@@ -34,11 +34,11 @@ pub const DESKTOP_IDLE_TIMEOUT: Duration = Duration::days(30);
 pub fn live_session_sql(idle: &str, desktop_idle: &str) -> String {
     format!(
         "s.revoked_at is null and s.expires_at > now()
-         and s.last_seen_at > now() - case s.kind when 'desktop' then {desktop_idle} else {idle} end"
+         and s.last_seen_at > now() - case when s.kind in ('desktop', 'agent') then {desktop_idle} else {idle} end"
     )
 }
 /// `last_seen_at` is only written when it is older than this, to avoid a write per request.
-const TOUCH_INTERVAL: Duration = Duration::minutes(5);
+pub(crate) const TOUCH_INTERVAL: Duration = Duration::minutes(5);
 
 /// The signed-in user. Extracting it fails with 401 when there is no valid session.
 #[derive(Clone, Debug)]
@@ -50,6 +50,8 @@ pub struct CurrentUser {
     /// Suspended by a moderation decision: may read, appeal, download their data, sign out or
     /// close the account, and nothing else (`allowed_while_suspended`).
     pub suspended: bool,
+    /// Signed in with a maker's AI agent token (maker_agents.rs): only maker work, only its apps.
+    pub agent: Option<crate::maker_agents::AgentToken>,
 }
 
 /// The signed-in user, if any. Never fails because of a missing or stale session.
@@ -126,6 +128,9 @@ fn bearer(headers: &HeaderMap) -> Option<&str> {
 /// Finds the session for a request: a desktop bearer token if present, else the website cookie.
 async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<CurrentUser>> {
     let live = live_session_sql("$2", "$3");
+    if let Some(token) = bearer(headers).filter(|t| t.starts_with(crate::maker_agents::PREFIX)) {
+        return crate::maker_agents::lookup(state, token).await;
+    }
     let (sql, token) = if let Some(token) = bearer(headers) {
         (
             format!(
@@ -176,6 +181,7 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
         display_name,
         country_code,
         suspended,
+        agent: None,
     }))
 }
 
@@ -219,6 +225,9 @@ impl FromRequestParts<AppState> for CurrentUser {
         let user = lookup(state, &parts.headers)
             .await?
             .ok_or(ApiError::Unauthorized)?;
+        if let Some(agent) = &user.agent {
+            agent.allows(state, &parts.method, parts.uri.path()).await?;
+        }
         if user.suspended && !allowed_while_suspended(&parts.method, parts.uri.path()) {
             return Err(ApiError::Suspended);
         }
@@ -230,6 +239,10 @@ impl FromRequestParts<AppState> for MaybeUser {
     type Rejection = ApiError;
 
     async fn from_request_parts(parts: &mut Parts, state: &AppState) -> ApiResult<Self> {
-        Ok(Self(lookup(state, &parts.headers).await?))
+        let user = lookup(state, &parts.headers).await?;
+        if let Some(agent) = user.as_ref().and_then(|u| u.agent.as_ref()) {
+            agent.allows(state, &parts.method, parts.uri.path()).await?;
+        }
+        Ok(Self(user))
     }
 }

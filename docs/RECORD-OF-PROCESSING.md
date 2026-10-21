@@ -17,6 +17,8 @@ personal-data field. Lawful bases follow `LEGAL-GUIDANCE.md` §8.1.
 | Repository ownership codes (account, repository, code, when proved) | `repo_claims` | Proving a repository is yours on hosts that can't say who owns it | Contract | Kept with the account; a proof counts for 30 days |
 | Pending sign-up (name, email) | `pending_signups` | Finishing sign-up | Contract | 30 minutes, then deleted |
 | Session (hashed token, user agent, times) | `sessions` | Keeping the user signed in; devices page | Contract | Until it ends (expiry, idle timeout or sign-out), then deleted after 7 days by the hourly cleanup |
+| AI agent token (name, scope, apps, People access) | `maker_tokens`, `sessions` (kind `agent`) | Letting the maker's or creative's own AI agent act for them within limits; Account → AI agents and the devices page | Contract | Until it expires (at most 30 days) or is removed; then as sessions above |
+| Fix offered to an original app (pull request link, message, answer) | `upstream_offers` | Telling the original's maker about a community build's fix, and the answer | Contract | While either app exists |
 | Desktop device name | `desktop_auth_requests.device_name`, `sessions.user_agent` | Approval page and devices page | Contract | 10 minutes for requests; sessions as above |
 | Desktop access and refresh tokens (hashed) | `access_tokens`, `refresh_tokens` | Keeping the desktop app signed in | Contract | Deleted by the hourly cleanup once expired (15 minutes / 30 days), or with their session |
 | Client IP address | Memory only (rate limiter) | Rate limiting | Legitimate interest | Never stored; forgotten once the client is idle |

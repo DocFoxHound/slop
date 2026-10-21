@@ -10,7 +10,8 @@
 //! - **Required for publishers and creatives** (`require`): 30 days after someone first publishes
 //!   or sets up as a creative, publishing and payout changes need a passkey used in the last 12
 //!   hours (signing in with it, or confirming with it). Reminders go a week and a day before.
-//!   Staff can give a week's grace to someone who lost theirs (`grace`, agent.rs).
+//!   Staff can give a week's grace to someone who lost theirs (`grace`, agent.rs). A maker's agent
+//!   token made within 12 hours of a passkey confirmation counts for its lifetime (maker_agents.rs).
 //!
 //! Slop keeps only public keys and signature counters. Each ceremony's state waits in
 //! `webauthn_challenges` for five minutes and is used once.
@@ -411,7 +412,8 @@ pub async fn require(state: &AppState, user: &CurrentUser) -> ApiResult<()> {
         sqlx::query_as(
             "select u.passkey_due_at, u.passkey_grace_until,
                     exists (select 1 from passkeys p where p.user_id = u.id),
-                    coalesce((select s.passkey_at > now() - $3 from sessions s where s.id = $2), false)
+                    coalesce((select s.passkey_at > now() - $3 or (s.kind = 'agent' and s.passkey_at is not null)
+                              from sessions s where s.id = $2), false)
              from users u where u.id = $1",
         )
         .bind(user.id)

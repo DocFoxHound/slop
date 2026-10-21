@@ -147,6 +147,10 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 - Each kind can also be **emailed**, on by default and switched off per kind on the account page. Product emails only, never marketing (TERMS-3). Signed-out reporters get their report's outcome by email.
 - Emails go out only when the server has SMTP set (`deploy/README.md`).
 
+### Makers' and creatives' AI agents (built 2026-10-21)
+
+Makers and creatives can hand their work to their own AI coding agent (`maker_agents.rs`, `fixes.rs`, `offers.rs`; guide: publishing.md "Working with your AI agent"). A token from Account → AI agents (look or publish; some apps or all; People jobs or not; at most 30 days) works over the API and as an MCP server with tools for store pages, releases with notes, Slop's checks and a fix for every problem found, community builds, mods, offering fixes to an original (a pull request the agent opens itself, which the original's maker accepts or declines), and People requests, quotes, changes and job conversations. **Slop runs no AI for this:** fixes are fixed text built from the check results, and the agent does the writing and fixing on the maker's side. Paying, accepting agreements, offers or changes, payouts and account settings stay with the person. Friends' chat is end-to-end encrypted and isn't available to agents.
+
 ## 9. Branches & community builds
 
 - Anyone can fork the repo and **register a branch**: mods, fixes, translations, ports.

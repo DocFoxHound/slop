@@ -1487,7 +1487,7 @@ export interface SignupInfo {
 
 export interface SessionInfo {
   id: string;
-  kind: "web" | "desktop";
+  kind: "web" | "desktop" | "agent";
   user_agent: string | null;
   created_at: string;
   last_seen_at: string;
@@ -1653,6 +1653,8 @@ export interface Release {
   rating?: ReleaseRating | null;
   /** Shared runtimes it needs (Visual C++, .NET Desktop, DirectX). */
   runtimes?: string[];
+  /** What changed, for players (Markdown). */
+  notes?: string | null;
   files: ReleaseFile[];
   /** Slop Build's source checks. */
   source_checks: SourceChecks | null;
@@ -1660,6 +1662,29 @@ export interface Release {
   repo_scan: RepoScan | null;
   /** Advisories for its packages, from the daily watch (makers and reviewers). */
   advisories: Advisory[];
+}
+
+/** A token for a maker's or creative's AI agent (crates/slop-api/src/maker_agents.rs). */
+export interface AgentToken {
+  id: string;
+  name: string;
+  scope: "read" | "publish";
+  /** App addresses; empty: all your apps. */
+  apps: string[];
+  people: boolean;
+  passkey_proved: boolean;
+  created_at: string;
+  expires_at: string;
+  last_used_at: string;
+}
+
+/** A fix for a problem Slop's checks found (crates/slop-api/src/fixes.rs). */
+export interface Fix {
+  kind: string;
+  severity: "must" | "should";
+  problem: string;
+  instruction: string;
+  guide_section?: string;
 }
 
 /** One of the repository's GitHub releases, for "Pick a release". */
@@ -1697,6 +1722,8 @@ export interface UpdateSettings {
 export interface NewRelease {
   version: string;
   commit_sha: string;
+  /** What changed, for players (Markdown). */
+  notes?: string;
   files: Array<{
     platform: Platform;
     kind: FileKind;
@@ -2008,11 +2035,12 @@ export const api = {
     files: NewRelease["files"],
     rating?: ReleaseRating,
     runtimes?: string[],
+    notes?: string,
   ) =>
     request<Release>(
       "POST",
       `/v1/apps/${encodeURIComponent(slug)}/releases/from-github`,
-      { tag, files, rating, runtimes },
+      { tag, files, rating, runtimes, notes },
     ),
   /** The approved shared runtimes a release can need. */
   runtimes: () => request<Array<{ id: string; name: string; vendor: string }>>("GET", "/v1/runtimes"),
@@ -2935,6 +2963,22 @@ export const api = {
   },
   /** Everything linked to the account, as JSON text to save. */
   exportData: () => requestText("GET", "/v1/me/export"),
+  agentTokens: () => request<AgentToken[]>("GET", "/v1/me/maker-tokens"),
+  createAgentToken: (body: { name: string; scope: AgentToken["scope"]; apps: string[]; people: boolean; days: number }) =>
+    request<AgentToken & { secret: string; mcp_url: string; claude_command: string }>(
+      "POST",
+      "/v1/me/maker-tokens",
+      body,
+    ),
+  revokeAgentToken: (id: string) => request<void>("DELETE", `/v1/me/maker-tokens/${encodeURIComponent(id)}`),
+  /** Fixes for the problems in an app's newest release. */
+  fixes: (slug: string) =>
+    request<{ release: { id: string; version: string; status: string } | null; fixes: Fix[]; next: string }>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/fixes`,
+    ),
+  setReleaseNotes: (slug: string, id: string, notes: string) =>
+    request<Release>("PATCH", `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}`, { notes }),
   closeAccount: (confirm: string) =>
     request<void>("POST", "/v1/me/close", { confirm }),
   sessions: () => request<SessionInfo[]>("GET", "/v1/me/sessions"),
