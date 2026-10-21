@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The Interested button for Coming soon and Beta apps (DESIGN §5, §6, §8): it puts the app in
 // your library and tells you when it moves to beta or is released.
 

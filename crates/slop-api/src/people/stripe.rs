@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Stripe Connect for People payments (PAYMENTS §3, §7, §8).
 //!
 //! - Each creative connects **their own** Stripe account (full Stripe dashboard, Stripe carries

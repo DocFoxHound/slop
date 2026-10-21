@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Random tokens and hashing. Tokens are only ever stored hashed.
 
 use base64::{Engine, engine::general_purpose::URL_SAFE_NO_PAD};

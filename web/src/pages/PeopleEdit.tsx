@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // A creative's own page editor (DESIGN §15.1): profile, look, packages, portfolio and "Get paid".
 // Three steps for a new creative: describe yourself, point Slop at your portfolio, set up Stripe.
 

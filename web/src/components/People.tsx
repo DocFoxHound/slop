@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Shared pieces for People (DESIGN §15): accent colours, the AI-use badge, ratings, portfolio
 // works and creative cards.
 

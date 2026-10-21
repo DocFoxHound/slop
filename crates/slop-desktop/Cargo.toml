@@ -3,7 +3,7 @@ name = "slop-desktop"
 version = "0.1.0"
 edition.workspace = true
 publish.workspace = true
-license.workspace = true
+license = "AGPL-3.0-or-later"
 authors.workspace = true
 
 [dependencies]

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Slop Pulse (DESIGN §11, METRICS §2): live player counts and playtime, from games that ping.
 //!
 //! Optional for makers. A game reads `SLOP_PULSE_TOKEN` and `SLOP_PULSE_URL` from its

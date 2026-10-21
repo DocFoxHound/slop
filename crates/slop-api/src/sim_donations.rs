@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The sandbox's donations (donations.rs): about a third of the makers turn donations on, some
 //! apps declare servers, and players who like an app donate now and then over the last 60
 //! days. Amounts go through the real `donations::quote`, so the report can check the fee is

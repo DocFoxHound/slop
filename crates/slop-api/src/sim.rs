@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The simulation sandbox: a made-up store full of apps and players, for testing recommendations
 //! ("For you"), ratings (% Not Slop over time) and player counts against a known truth.
 //!

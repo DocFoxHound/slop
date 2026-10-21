@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Written reviews on an app's page (crates/slop-api/src/reviews.rs). Each shows the vote it goes
 // with; a private profile's review shows as "A player". Never hidden for being negative.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The Slop desktop app: a Tauri shell around the shared web UI (`web/`).
 //!
 //! The commands here are thin wrappers over `slop-client`, which does the real work (and is

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The scan step of the release pipeline (DESIGN §10, SECURITY §5.2).
 //!
 //! Two parts, both free:

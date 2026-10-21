@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Personal fields encrypted at rest (SECURITY §8.1, §10): ChaCha20-Poly1305 under
 //! `SLOP_FIELD_KEY`, with the column's name as associated data so a value can't be moved to
 //! another column. Stored as `enc1:<base64 of nonce and ciphertext>`.

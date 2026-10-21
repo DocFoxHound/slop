@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The screenshots-and-videos carousel on an app's page: one big view and a strip of thumbnails,
 // like Steam's. Pictures come from the maker's repository (crates/slop-api/src/media.rs). Videos
 // stay on YouTube: the page shows the maker's poster (or a plain card), and only loads YouTube's

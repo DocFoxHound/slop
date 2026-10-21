@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Agreements that stand in front of an action (crates/slop-api/src/legal.rs): the Publisher
 // Agreement before a first app, the People Terms before a creative profile or a hire. When the
 // API answers "terms_required", the page shows the document, the user accepts it, and the action

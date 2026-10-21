@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Adding mods to installed games (DESIGN §9). A mod is a .zip of files for its game to load;
 // the Slop app checks it against Slop's signed manifest like any build, keeps it beside the game,
 // and tells the game where its mods are when it starts (SLOP_MODS). Nothing in a mod is started

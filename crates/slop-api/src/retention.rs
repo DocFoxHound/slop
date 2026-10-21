@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Keeping records only as long as the law asks (LEGAL-GUIDANCE §15). Run with the hourly
 //! cleanup (cleanup.rs); each rule deletes what's past its time and nothing else.
 //!

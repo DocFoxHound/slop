@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Jobs (DESIGN §15.2–15.6, PAYMENTS §7):
 //!
 //! request (or inquiry) → offer → accept & pay → [sign-off on the direction] → deliver a preview

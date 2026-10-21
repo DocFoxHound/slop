@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! "For you": recommendations from a user's own activity (DESIGN §5, METRICS §5), mixed with
 //! discovery so the feed isn't only more of the same.
 //!

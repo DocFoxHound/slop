@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, test } from "./fixtures";
 
 test("the store lists games, search finds them, and a game has its page", async ({ page }) => {

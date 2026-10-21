@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Confirming it's you for a sensitive action (SECURITY §4.3): with a passkey when you have one,
 // otherwise by signing in again.
 

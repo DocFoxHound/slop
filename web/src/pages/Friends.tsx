@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Friends (crates/slop-api/src/friends.rs): requests, the friends list, blocked people, and who may
 // message you. Works on the website too; chatting itself is in the app (pages/Chat.tsx).
 

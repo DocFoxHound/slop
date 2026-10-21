@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Updates without the paperwork (decided 2026-10-19).
 //!
 //! - **Picking a release:** makers choose one of their repository's GitHub releases instead of

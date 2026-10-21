@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Running Slop with an AI agent (decided 2026-10-20). An admin makes an admin API token (Admin →
 //! AI reviewers) and gives it to an agent, which then watches the system and does what the
 //! admin asks: approvals, rejections, reports, warnings, suspensions.

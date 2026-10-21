@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sandbox mode on Windows (DESIGN §6, SECURITY §6.2): the app runs in an AppContainer, the box
 //! Windows gives Store apps. A process in one can only open files and folders whose permissions
 //! name its container (or all app packages, as Windows' own files do), so it can't see the

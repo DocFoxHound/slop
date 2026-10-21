@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Reports, moderation decisions and appeals (DESIGN §16; LEGAL-GUIDANCE CON-3, CON-5, CON-8,
 //! CON-9, CON-16).
 //!

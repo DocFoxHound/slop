@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { expect, server, signIn, test } from "./fixtures";
 
 test("past the deadline, publishing asks for a passkey first, and keeps what was typed", async ({ page }) => {

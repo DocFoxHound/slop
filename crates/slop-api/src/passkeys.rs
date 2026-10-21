@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Passkeys (SECURITY §4.1, §4.3): WebAuthn through webauthn-rs.
 //!
 //! - **Adding one** (Account → Sign-ins) needs a recent sign-in, like linking a provider.

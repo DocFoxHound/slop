@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Rate limits per client IP (SECURITY §8.1): strictest for sign-in, then writes, then reads.
 //!
 //! Token buckets kept in memory. Each API instance limits on its own, so with N instances behind

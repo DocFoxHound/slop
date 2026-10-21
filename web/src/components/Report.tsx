@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The Report button (DESIGN §16; LEGAL-GUIDANCE CON-8): on apps, People profiles, reviews and job
 // messages. Anyone can report, signed in or not. The report is acknowledged with a reference
 // number; signed-in reporters can follow it on their account page.

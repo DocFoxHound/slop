@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Creatives' portfolios, from a public GitHub repository (DESIGN §15.1).
 //!
 //! Like store-page pictures (media.rs), Slop doesn't host them. The creative lists their work in

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The deadline for publishers and creatives to add a passkey (crates/slop-api/src/passkeys.rs).
 
 import { Link } from "react-router";

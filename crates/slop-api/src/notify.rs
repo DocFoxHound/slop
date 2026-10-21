@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Notifications in Slop (the bell) and product emails (decided 2026-10-20).
 //!
 //! Anything that should reach a user calls `send` inside its own transaction; it only writes a

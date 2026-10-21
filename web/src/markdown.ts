@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Store-page Markdown, rendered with raw HTML switched off (docs/SECURITY.md §8.1: Markdown with
 // a strict allowlist, no raw HTML). markdown-it escapes any HTML in the source and refuses
 // javascript:, vbscript:, file: and most data: links.

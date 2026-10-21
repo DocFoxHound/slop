@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! What's inside an encrypted chat message, and the small crypto around it: franking tags,
 //! attachment encryption, the local store's key and the backup key.
 

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The law-enforcement request log (crates/slop-api/src/legal_requests.rs, LEGAL-GUIDANCE CHAT-3):
 // log a request as it arrives, then record what Slop gave and whether the person was told.
 

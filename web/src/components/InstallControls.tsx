@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Install, launch and library buttons for one app.
 //
 // Desktop: the Rust side downloads the maker's file, checks it against Slop's signed manifest,

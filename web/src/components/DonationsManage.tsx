@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The maker's donation settings and totals, on the Manage page (PAYMENTS §4–6). One Stripe
 // account per app: the maker's own. Breakdowns appear only from 10 donations up (METRICS §3).
 

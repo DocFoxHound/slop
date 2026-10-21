@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Combining two Slop accounts (DESIGN §4).
 //!
 //! When someone links a sign-in that already has its own Slop account, signing in to it proves

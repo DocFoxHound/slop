@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Staff roles and two-person approval (SECURITY §8.4).
 //!
 //! **Roles.** Every staff member (`users.is_admin`) has roles that say what they may do:

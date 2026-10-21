@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Registering a branch of an app (DESIGN §9): a mod the game loads, or a modded version, fix,
 // translation or port built from your own fork. It's made for one original: the page starts from
 // the original's rating, labels and online answers, and asks everything creating an app asks, so

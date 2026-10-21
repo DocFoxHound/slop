@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! End-to-end API tests against a real Postgres (one fresh database per test, via `sqlx::test`)
 //! and a fake GitHub server. Needs `DATABASE_URL`; see README.
 
@@ -558,6 +559,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         approvals_required: 1,
         field_key: Some([11; 32]),
         security_contact: Some("mailto:security@slop.example".into()),
+        source_url: Some("https://github.com/slop/slop".into()),
     };
     let mut config = config;
     adjust(&mut config);
@@ -13679,4 +13681,19 @@ async fn releases_name_shared_runtimes(db: PgPool) {
     );
     let res = app.send(submit("1.2.0", Some(json!([])))).await;
     assert_eq!(body_json(res).await["runtimes"], json!([]));
+}
+
+/// The AGPL's offer of source: the licence, where the code is, and the running commit when the
+/// build knows it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_source_code_is_offered(db: PgPool) {
+    let app = test_app(db).await;
+    let res = app.send(req(Method::GET, "/v1/source")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    assert_eq!(body["licence"], "AGPL-3.0-or-later");
+    assert_eq!(body["url"], "https://github.com/slop/slop");
+    // Tests aren't built by the deploy, so there's no commit to point at.
+    assert_eq!(body["commit"], Value::Null);
+    assert_eq!(body["version_url"], Value::Null);
 }

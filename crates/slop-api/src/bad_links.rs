@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Known-bad links (SECURITY §11): once a day Slop downloads public lists of malware and
 //! phishing addresses (URLhaus by default, `SLOP_BAD_LINK_FEEDS`), and the hourly abuse checks
 //! (abuse.rs) look for them in store pages and creative profiles. A match is an abuse signal for

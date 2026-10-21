@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Slop's GitHub App (decided 2026-10-19).
 //!
 //! Makers install the App on their repository. GitHub then:

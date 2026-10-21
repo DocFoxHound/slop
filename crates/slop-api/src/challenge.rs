@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Proof-of-work checks (PAYMENTS §9: card testing).
 //!
 //! After a few unfinished checkouts, starting another donation needs the browser to find a

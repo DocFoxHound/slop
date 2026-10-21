@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Updates for the Slop desktop app itself (SECURITY §7: self-updates are signed and verified).
 //!
 //! CI builds the app on every push to main and uploads it here, proving where it came from with

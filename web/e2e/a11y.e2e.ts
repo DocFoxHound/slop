@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // WCAG 2.2 AA (AGENTS.md): no serious or critical problems axe can find on the main pages.
 import AxeBuilder from "@axe-core/playwright";
 import { expect, signIn, test } from "./fixtures";

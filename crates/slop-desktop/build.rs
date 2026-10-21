@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 fn main() {
     // Every command the UI may call is listed here and granted in capabilities/default.json, so
     // nothing else on the Rust side is reachable from the page (SECURITY §7).

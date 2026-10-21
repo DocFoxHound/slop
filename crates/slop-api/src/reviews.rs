@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Written reviews on apps, and public profiles (DESIGN §7; LEGAL §7; PRIV-6; REV-2).
 //!
 //! - A review goes with a vote: only players who can vote can write one, and it shows only while

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, useParams } from "react-router";
 

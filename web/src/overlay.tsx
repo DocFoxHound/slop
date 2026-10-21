@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The in-game overlay (crates/slop-desktop/src/overlay.rs): Shift+Tab over a fullscreen game
 // started from Slop. A small panel with chats and friends over a dimmed game; Esc, Shift+Tab or a
 // click outside goes back to the game. Kept deliberately small.

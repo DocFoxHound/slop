@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Slop's legal documents, their versions, and who accepted which (LEGAL §11, LEGAL-GUIDANCE §14
 //! and §15).
 //!

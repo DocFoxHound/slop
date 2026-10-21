@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The API client. Tokens never leave Rust: the UI asks for a request and gets back the status
 //! and JSON body (SECURITY §7: a compromised page can't read the user's tokens).
 

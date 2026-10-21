@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Donations and monthly server donations (DESIGN §12; PAYMENTS §4–6, §8; LEGAL §3;
 //! LEGAL-GUIDANCE PAY-1 to PAY-17).
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: MIT OR Apache-2.0
 //! Maker signatures (docs/SECURITY.md §5.3).
 //!
 //! Every build must carry its maker's signature as well as Slop's. The default is a GitHub

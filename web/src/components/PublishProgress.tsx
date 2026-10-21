@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Where an app is on its way into the store, step by step, for its maker.
 // Built from the app, its releases and what this server checks (GET /v1/server).
 

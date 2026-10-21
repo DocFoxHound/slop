@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Small SVG charts: a line over time and up/down bars per day. Each has a text summary for
 // screen readers and a table behind a "Show numbers" toggle (A11Y-1: no chart-only information).
 

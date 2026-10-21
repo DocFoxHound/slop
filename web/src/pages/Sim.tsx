@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The simulation sandbox's "view as": pick a simulated user and see the store, "For you" and
 // ratings as they would (crates/slop-api/src/sim.rs). Only on a server running the sandbox.
 

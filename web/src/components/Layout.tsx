@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
 
@@ -273,6 +274,7 @@ export function Sidebar({ active }: { active?: string }) {
       <h4>Slop</h4>
       <Link to="/legal">📜 Terms &amp; policies</Link>
       <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>
+      <Link to="/source">🧾 Source code</Link>
     </aside>
   );
 }

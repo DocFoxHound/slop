@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Typed client for the Slop API (crates/slop-api). Types mirror the Rust response structs.
 
 import { isDesktop } from "./platform";
@@ -2083,6 +2084,12 @@ export const api = {
       `/v1/apps/${encodeURIComponent(slug)}/changes/${encodeURIComponent(id)}/cancel`,
     ),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
+  /** Where Slop's source code is, at the version running (the AGPL's offer). */
+  source: () =>
+    request<{ licence: string; url: string | null; commit: string | null; version_url: string | null }>(
+      "GET",
+      "/v1/source",
+    ),
   /** The yearly transparency report (counts only). */
   transparency: (year: number) => request<TransparencyReport>("GET", `/v1/transparency/${year}`),
   admin: {

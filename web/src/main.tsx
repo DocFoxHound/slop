@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
 import { createBrowserRouter, RouterProvider } from "react-router";
@@ -25,6 +26,7 @@ import { People, PersonPage } from "./pages/People";
 import { PeopleEdit } from "./pages/PeopleEdit";
 import { Sim } from "./pages/Sim";
 import { Transparency } from "./pages/Transparency";
+import { Source } from "./pages/Source";
 import { Store } from "./pages/Store";
 import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
@@ -68,6 +70,7 @@ const router = createBrowserRouter([
       { path: "/teams/:slug", element: <Team /> },
       { path: "/legal/:kind", element: <LegalPage /> },
       { path: "/transparency", element: <Transparency /> },
+      { path: "/source", element: <Source /> },
       { path: "/people", element: <People /> },
       { path: "/people/me", element: <PeopleEdit /> },
       { path: "/people/jobs", element: <MyJobs /> },

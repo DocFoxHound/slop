@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The account page's sections for moderation, agreements and the user's own data (DESIGN §4,
 // §16): decisions about them with the statement of reasons and an appeal, the reports they sent,
 // the agreements waiting for them, downloading their data and closing the account.

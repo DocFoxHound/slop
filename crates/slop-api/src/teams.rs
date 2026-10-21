@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Teams (DESIGN §14).
 //!
 //! - **Player teams:** anyone creates one; others join (open teams) or are invited. Members share

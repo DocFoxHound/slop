@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // Signing keys for builds a maker makes and attaches by hand (crates/slop-api/src/maker_keys.rs):
 // an Ed25519 SSH key, a `.sig` beside each file, and 72 hours before a new key counts.
 

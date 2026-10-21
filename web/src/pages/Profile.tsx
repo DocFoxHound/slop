@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // A player's public profile (crates/slop-api/src/reviews.rs): their votes and reviews when they
 // keep them public (the default; private by default in the UK under-18 view), their apps, and
 // their People page.

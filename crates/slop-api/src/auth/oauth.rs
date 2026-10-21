@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sign-in providers: GitHub, Google, GitLab, Bitbucket, Microsoft and Discord (SECURITY §4.1).
 //!
 //! The same authorization-code flow for each (with PKCE where the provider supports it). Slop

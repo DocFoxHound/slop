@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Friends, blocks and who may message whom (DESIGN §19).
 //!
 //! - **Friends:** one side asks (from the other's profile), the other accepts. Either can remove

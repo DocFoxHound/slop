@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // A read-only token for a private repository outside GitHub (crates/slop-api/src/repo_tokens.rs).
 // Slop keeps it encrypted, only sends it to the repository's own host, and never shows it again.
 

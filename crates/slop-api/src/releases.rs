@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Releases: makers submit them, Slop fetches and hashes their files, a reviewer approves them
 //! and Slop signs the manifest (docs/ARCHITECTURE.md §6.3, docs/SECURITY.md §5).
 //!

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The publishing guide's code for other engines (examples/snippets), run against the real
 //! Slop Link: each saves and loads, lists mods from its own mods folder and SLOP_MODS, and asks
 //! for a mod. C# and C++ run where `dotnet` and `g++` are installed; skipped otherwise.

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // What Slop's checks found on a release file (docs/DESIGN.md §10, crates/slop-api/src/scan.rs):
 // Slop's scanner (ClamAV, YARA, capa), Microsoft Defender for Windows builds, the program's
 // signature, Slop Build's source checks, and Slop's own source check and dependency watch. The wording says "scanned" and what was found,

@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! GitHub OAuth: authorization code flow with PKCE (SECURITY §4.1).
 //!
 //! Slop asks only for `user:email` and keeps the GitHub access token just long enough to read

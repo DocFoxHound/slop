@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The dependency watch (SECURITY §5.6): once a day, the packages of every release players get
 //! (and of releases waiting for review) are checked against OSV, the free open-source
 //! vulnerability database, so a security advisory published after a release was built still

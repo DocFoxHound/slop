@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Save folders (DESIGN §6, SECURITY §6.2). Each app gets one, outside its installed files, so
 //! updates never touch it; the app finds it in `SLOP_SAVE_DIR`. It's the same folder in normal
 //! and sandbox mode, so switching loses nothing.

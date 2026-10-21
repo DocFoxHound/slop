@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! Runtime configuration, read from environment variables (see `.env.example`).
 
 use std::{env, fmt, net::SocketAddr};
@@ -54,6 +55,9 @@ pub struct Config {
     /// Where to report security problems (`mailto:` or https), published in
     /// /.well-known/security.txt. Unset: no security.txt.
     pub security_contact: Option<String>,
+    /// Where this Slop's source code is published (`SLOP_SOURCE_URL`, https). The AGPL asks a
+    /// network service to offer its users the source (lib.rs `source`). Unset: not public yet.
+    pub source_url: Option<String>,
     /// Encrypts personal fields at rest (fields.rs): base64 of 32 random bytes in
     /// `SLOP_FIELD_KEY`. Unset: stored as they are.
     pub field_key: Option<[u8; 32]>,
@@ -632,6 +636,10 @@ impl Config {
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| v.starts_with("mailto:") || v.starts_with("https://")),
+            source_url: env::var("SLOP_SOURCE_URL")
+                .ok()
+                .map(|v| v.trim().trim_end_matches('/').to_string())
+                .filter(|v| v.starts_with("https://")),
             field_key: match env::var("SLOP_FIELD_KEY") {
                 Ok(v) if !v.is_empty() => {
                     use base64::Engine;

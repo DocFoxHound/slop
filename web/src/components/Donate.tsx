@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // The Donate box on an app's page (DESIGN §12, PAYMENTS §5–6). The donor sees what they pay
 // first and largest (PAY-10), what the maker receives, Slop's fee and the processing addition.
 // Donations give nothing back, and the app is the same for everyone.

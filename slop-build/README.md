@@ -97,3 +97,8 @@ actionlint slop-build/.github/workflows/build.yml slop-build/.github/workflows/c
 ```
 
 The first real run needs a sample repository on GitHub.
+
+## Licence
+
+The recipes are under the [Apache License, Version 2.0](LICENSE-APACHE) or the
+[MIT license](LICENSE-MIT), at your option, so using them never changes your app's licence.

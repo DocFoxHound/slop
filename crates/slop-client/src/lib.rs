@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 //! The Slop client's core: talking to the API, signing in through the system browser, and
 //! installing, verifying and launching apps (docs/ARCHITECTURE.md §3, §6.3; docs/SECURITY.md §5).
 //!

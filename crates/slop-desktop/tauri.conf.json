@@ -73,6 +73,7 @@
     },
     "publisher": "IronPoint Development",
     "copyright": "Copyright © 2026 IronPoint Development LLC",
+    "license": "AGPL-3.0-or-later",
     "homepage": "https://slop.188-68-41-241.sslip.io"
   },
   "plugins": {

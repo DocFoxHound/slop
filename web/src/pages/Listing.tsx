@@ -1,3 +1,4 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
 // List pages: search, a category, a tag, and upcoming apps. All share one filterable grid.
 
 import { useState } from "react";
