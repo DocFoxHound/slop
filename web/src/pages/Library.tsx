@@ -6,6 +6,7 @@ import { Link } from "react-router";
 import { api, type AppSummary, type AppUpdate } from "../api";
 import { checkUpdates, installUpdates, LIBRARY_CHANGED } from "../components/AppUpdates";
 import { InstallControls } from "../components/InstallControls";
+import { GameMods } from "../components/ModControls";
 import { Art, ErrorState, Loading, StageBadge } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop, type InstalledApp } from "../platform";
@@ -89,9 +90,7 @@ export function Library() {
                 </div>
                 <div className="muted small">{row.subtitle}</div>
                 {row.installed && <UpdateLine row={row} />}
-                {row.installed && row.update && row.update.builds.length > 1 && (
-                  <BuildSwitcher current={row.installed} builds={row.update.builds} onSwitched={installed.reload} />
-                )}
+                {row.installed && <Community row={row} onSwitched={installed.reload} />}
               </div>
               <div className="library-actions">
                 <InstallControls slug={row.slug} title={row.title} inLibrary={Boolean(row.app)} />
@@ -222,6 +221,26 @@ function UpdateLine({ row }: { row: Row }) {
         </span>
       )}
     </div>
+  );
+}
+
+/** An installed app's community: other builds to switch to, and mods to add (DESIGN §9). */
+function Community({ row, onSwitched }: { row: Row; onSwitched: () => void }) {
+  const builds = row.update?.builds ?? [];
+  const mods = row.update?.mods ?? [];
+  const added = useLoad(() => desktop.installedMods(row.slug), [row.slug]);
+  const addedCount = added.data?.length ?? 0;
+  if (builds.length < 2 && mods.length === 0 && addedCount === 0) return null;
+  const parts = [
+    addedCount > 0 ? `${addedCount} ${addedCount === 1 ? "mod" : "mods"} added` : mods.length > 0 ? `${mods.length} ${mods.length === 1 ? "mod" : "mods"}` : null,
+    builds.length > 1 ? `${builds.length - 1} other ${builds.length === 2 ? "build" : "builds"}` : null,
+  ].filter(Boolean);
+  return (
+    <details className="library-community small">
+      <summary>Community: {parts.join(" · ")}</summary>
+      {row.installed && builds.length > 1 && <BuildSwitcher current={row.installed} builds={builds} onSwitched={onSwitched} />}
+      <GameMods game={row.slug} available={mods} onChanged={added.reload} />
+    </details>
   );
 }
 

@@ -17,7 +17,7 @@ use slop_client::{
     Error,
     api::{ApiClient, ApiResponse, KeyringTokenStore},
     chat::{Chat, KeyringSecrets, OutgoingFile},
-    library::{InstalledApp, Library},
+    library::{InstalledApp, InstalledMod, Library},
     signin,
     slop_manifest::{self, Platform, Signed},
 };
@@ -493,6 +493,43 @@ async fn install_app(
 #[tauri::command]
 fn uninstall_app(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()> {
     Ok(desktop.library.uninstall(&slug)?)
+}
+
+/// The mods added to an installed game (DESIGN §9).
+#[tauri::command]
+fn installed_mods(desktop: State<'_, Desktop>, game: String) -> Vec<InstalledMod> {
+    desktop.library.installed_mods(&game)
+}
+
+/// Adds the newest approved release of a mod to its game, which must be installed.
+#[tauri::command]
+async fn install_mod(
+    app: AppHandle,
+    desktop: State<'_, Desktop>,
+    slug: String,
+) -> CommandResult<InstalledMod> {
+    let signed: Signed = desktop
+        .api
+        .get_json(&format!("/v1/apps/{}/manifest", urlencode(&slug)))
+        .await?;
+    Ok(desktop
+        .library
+        .install_mod(&signed, Some(&desktop.api), |got, total| {
+            let _ = app.emit(
+                "install-progress",
+                Progress {
+                    slug: slug.clone(),
+                    got,
+                    total,
+                },
+            );
+        })
+        .await?)
+}
+
+#[tauri::command]
+fn uninstall_mod(desktop: State<'_, Desktop>, slug: String) -> CommandResult<()> {
+    Ok(desktop.library.uninstall_mod(&slug)?)
 }
 
 /// Starts an installed app after checking its signature, revocation and files.
@@ -1145,6 +1182,9 @@ fn main() {
             installed_apps,
             install_app,
             uninstall_app,
+            installed_mods,
+            install_mod,
+            uninstall_mod,
             launch_app,
             run_installer,
             chat,

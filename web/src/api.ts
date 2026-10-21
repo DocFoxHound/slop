@@ -60,6 +60,8 @@ export interface AppUpdate {
     official: boolean;
     platforms: string[];
   }>;
+  /** Approved mods for the app, to add in the Slop app. */
+  mods?: Array<{ slug: string; title: string; author: string; note: string | null }>;
 }
 
 export interface AppSummary {

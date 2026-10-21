@@ -12,6 +12,7 @@ import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LA
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
+import { ModControls } from "../components/ModControls";
 import { DonateBox } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
 import { workflowName } from "./Releases";
@@ -243,10 +244,7 @@ function AppView({ app }: { app: AppDetail }) {
             {app.stage === "coming_soon" ? (
               <p className="muted">No builds yet. This is a Coming soon page.</p>
             ) : app.platforms.includes("any") && app.branch ? (
-              <p className="muted">
-                A mod for <Link to={`/app/${app.branch.parent_slug}`}>{app.branch.parent_title}</Link>. Adding mods to games
-                in the Slop app is coming soon.
-              </p>
+              <ModControls slug={app.slug} game={{ slug: app.branch.parent_slug, title: app.branch.parent_title }} />
             ) : app.branch && !app.is_mine ? (
               <CommunityGate app={app}>
                 <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />

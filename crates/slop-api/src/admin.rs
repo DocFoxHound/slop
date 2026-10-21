@@ -71,6 +71,10 @@ struct ReleaseRow {
     repo_url: String,
     version: String,
     commit_sha: String,
+    /// A mod: its game's ID, address and name.
+    game_id: Option<Uuid>,
+    game_slug: Option<String>,
+    game_title: Option<String>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -132,8 +136,10 @@ pub async fn approve(
     let mut tx = db.begin().await?;
     let release: ReleaseRow = sqlx::query_as(
         "select r.status::text as status, a.id as app_id, a.slug, a.title, u.display_name as maker,
-                a.repo_url, r.version, r.commit_sha
+                a.repo_url, r.version, r.commit_sha, g.id as game_id, g.slug as game_slug,
+                g.title as game_title
          from releases r join apps a on a.id = r.app_id join users u on u.id = a.maker_id
+              left join apps g on g.id = a.parent_app_id and a.branch_kind = 'addon'
          where r.id = $1 for update of r",
     )
     .bind(release_id)
@@ -257,6 +263,14 @@ pub async fn approve(
         commit: release.commit_sha,
         files,
         approved_at: now.format(&Rfc3339)?,
+        mod_for: match (release.game_id, release.game_slug, release.game_title) {
+            (Some(id), Some(slug), Some(title)) => Some(slop_manifest::ModFor {
+                app_id: id.to_string(),
+                app_slug: slug,
+                app_title: title,
+            }),
+            _ => None,
+        },
     };
     let signed = slop_manifest::sign(&manifest, Purpose::ReleaseManifest, key);
     sqlx::query(

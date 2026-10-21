@@ -33,6 +33,11 @@
     "allow-run-installer",
     "allow-chat",
     "allow-overlay-hide",
-    "allow-overlay-setting"
+    "allow-overlay-setting",
+    "allow-auto-update-setting",
+    "allow-running-apps",
+    "allow-installed-mods",
+    "allow-install-mod",
+    "allow-uninstall-mod"
   ]
 }

@@ -57,6 +57,15 @@ struct Build {
     platforms: Vec<String>,
 }
 
+/// A mod for the app, with an approved release (DESIGN §9).
+#[derive(Serialize, sqlx::FromRow)]
+struct Mod {
+    slug: String,
+    title: String,
+    author: String,
+    note: Option<String>,
+}
+
 #[derive(Serialize)]
 struct AppUpdate {
     slug: String,
@@ -66,6 +75,8 @@ struct AppUpdate {
     pending: Option<Pending>,
     /// The official app and its community builds in the store, when there's more than one.
     builds: Vec<Build>,
+    /// Mods for this app in the store, to add in the Slop app.
+    mods: Vec<Mod>,
 }
 
 const MAX_UPDATE_CHECK: usize = 100;
@@ -132,11 +143,22 @@ async fn updates(
         // Mods aren't versions of the app to run.
         qb.push(")) and a.branch_kind is distinct from 'addon' order by a.parent_app_id is not null, a.title limit 20");
         let builds: Vec<Build> = qb.build_query_as().fetch_all(&state.db).await?;
+        let mut qb = QueryBuilder::new(
+            "select a.slug, a.title, u.display_name as author, a.branch_note as note
+             from apps a join users u on u.id = a.maker_id
+             where a.branch_kind = 'addon' and a.parent_app_id = ",
+        );
+        qb.push_bind(app_id).push(" and (");
+        catalog::push_store_visible(&mut qb, state.config.catalog, policy);
+        qb.push(") and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved' and r.signed_manifest is not null)
+                 order by a.title limit 100");
+        let mods: Vec<Mod> = qb.build_query_as().fetch_all(&state.db).await?;
         out.push(AppUpdate {
             slug: slug.to_string(),
             latest,
             pending,
             builds: if builds.len() > 1 { builds } else { Vec::new() },
+            mods,
         });
     }
     Ok(Json(out))

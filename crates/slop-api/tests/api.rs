@@ -8093,7 +8093,7 @@ async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
 async fn mods_are_listed_on_their_game_page(db: PgPool) {
     let app = test_app(db).await;
     let (maker, _) = app.user("Mia Maker", "US").await;
-    let (author_id, author) = app.user("Bo Modder", "US").await;
+    let (_, author) = app.user("Bo Modder", "US").await;
     listed_with(
         &app,
         maker,
@@ -8155,6 +8155,11 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
         ))
         .await;
     assert_eq!(res.status(), StatusCode::CREATED);
+    let release_id: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
     let res = app
         .send(
             req(Method::PATCH, "/v1/apps/castle-dragons")
@@ -8165,23 +8170,63 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 
     // Once approved and listed: on the game's page, not in the store or the Community shelf.
-    let id: Uuid = sqlx::query_scalar("select id from apps where slug = 'castle-dragons'")
-        .fetch_one(&app.db)
-        .await
-        .unwrap();
+    // Fetched and scanned (the fake host isn't involved here), then approved: the signed
+    // manifest names the game, so the Slop app adds it only to that game.
     sqlx::query(
-        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
-         values ($1, $2, '0.9.0', repeat('b', 40), 'approved', $3, now(), true)",
+        "update release_files set size_bytes = 10, sha256 = repeat('a', 64), scan_result = 'passed'
+         where release_id = $1",
     )
-    .bind(Uuid::now_v7())
-    .bind(id)
-    .bind(author_id)
+    .bind(release_id)
     .execute(&app.db)
     .await
     .unwrap();
+    sqlx::query("update releases set status = 'awaiting_review' where id = $1")
+        .bind(release_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    admin::approve(&app.db, Some(&app.signing_key), lax(), release_id, "rev")
+        .await
+        .unwrap();
     admin::list_app(&app.db, "castle-dragons", "test")
         .await
         .unwrap();
+    let signed: slop_manifest::Signed = serde_json::from_value(
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/castle-dragons/manifest"))
+                .await,
+        )
+        .await,
+    )
+    .unwrap();
+    let manifest: slop_manifest::ReleaseManifest = slop_manifest::verify(
+        &signed,
+        slop_manifest::Purpose::ReleaseManifest,
+        &[app.signing_key.verifying_key()],
+    )
+    .unwrap();
+    let castle_id: Uuid = sqlx::query_scalar("select id from apps where slug = 'castle'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        manifest.mod_for,
+        Some(slop_manifest::ModFor {
+            app_id: castle_id.to_string(),
+            app_slug: "castle".into(),
+            app_title: "castle".into(),
+        })
+    );
+    assert!(manifest.files[0].launch.is_none());
+    // The library's update check lists it under the installed game.
+    let updates = body_json(
+        app.send(req(Method::GET, "/v1/library/updates?apps=castle"))
+            .await,
+    )
+    .await;
+    assert_eq!(updates[0]["mods"][0]["slug"], "castle-dragons", "{updates}");
+    assert_eq!(updates[0]["mods"][0]["author"], "Bo Modder");
+    assert_eq!(updates[0]["builds"], json!([]));
     assert_eq!(
         list_slugs(&app, req(Method::GET, "/v1/apps")).await,
         ["castle"]
