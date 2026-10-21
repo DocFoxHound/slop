@@ -472,8 +472,9 @@ from outside their release)*.
    sends without the player seeing and confirming the address.
 7. **Encrypt connections** to your own servers (TLS or the engine's encrypted transport), so
    nobody between the player and the server can change what's sent.
-8. **Say what your app connects to.** Name your servers on the store page, and whether players
-   can host their own *(coming: an "Online" section on the store page)*.
+8. **Say what your app connects to.** Under **Online** on your store page, tick what it connects
+   to (your servers or database, servers players host, direct connections between players,
+   other online services) and name your servers. Slop Pulse doesn't count.
 
 ### What Slop does
 
@@ -482,8 +483,10 @@ from outside their release)*.
   new note waits for a person.
 - Anyone can report an app that **runs code from outside Slop**; reports are reviewed within
   24 hours.
-- *(Coming)* Store pages show players when an app plays online with servers Slop can't check,
-  and suggest running it in **sandbox mode**.
+- The source check also notes **networking code**. If your code goes online but your store
+  page doesn't say so, that's a note, and an update waits for a person.
+- Store pages of apps that go online tell players that Slop can't check the servers, and
+  suggest running the app in **sandbox mode** *(coming to the Slop app)*.
 
 ## Keeping Windows from blocking your app
 
@@ -846,7 +849,8 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
 6. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
-   same store address, the repository URL, licence, type, stage, age rating and tags.
+   same store address, the repository URL, licence, type, stage, age rating, tags, and **Online**
+   if the project connects to anything (see step 3).
 7. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
 8. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the

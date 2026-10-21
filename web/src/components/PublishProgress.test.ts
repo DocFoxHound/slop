@@ -116,6 +116,24 @@ describe("progressSteps", () => {
     ).toBe("active");
   });
 
+  it("counts code from outside Slop and undeclared online play as notes", () => {
+    const repo_scan = {
+      status: "checked" as const,
+      licence: { declared: "MIT", files: [], headers: [], problems: [] },
+      monetization: [],
+      code_loading: [
+        { rule: "load_script", label: "Runs code from text", count: 1, examples: ["mods.lua:4"] },
+      ],
+      network: [{ rule: "multiplayer", label: "Multiplayer", count: 1, examples: ["net.gd:1"] }],
+      online_undeclared: true,
+    };
+    const step = progressSteps(app(), [release({ repo_scan })], testServer).find(
+      (s) => s.title === "Source check",
+    )!;
+    expect(step.state).toBe("problem");
+    expect(String(step.detail)).toContain("2 notes");
+  });
+
   it("flags a missing signature when signatures are required", () => {
     const steps = progressSteps(app(), [release()], {
       scanning: false,

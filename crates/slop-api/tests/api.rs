@@ -51,6 +51,10 @@ const SCANNED_SOURCE: &[(&str, &str)] = &[
         "src/shop.js",
         "export const buy = () => location.assign('https://checkout.stripe.com/c/pay');",
     ),
+    (
+        "src/net.js",
+        "const ws = new WebSocket('wss://play.example.com');",
+    ),
 ];
 
 /// A repository archive as GitHub makes them.
@@ -1794,6 +1798,9 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
     assert_eq!(scan["packages"], 2);
     assert_eq!(scan["monetization"][0]["rule"], "checkout_link");
     assert_eq!(scan["monetization"][0]["examples"][0], "src/shop.js:1");
+    // It goes online, but its store page doesn't say so.
+    assert_eq!(scan["network"][0]["examples"][0], "src/net.js:1");
+    assert_eq!(scan["online_undeclared"], true);
 
     assert_eq!(slop_api::dep_watch::run_once(&app.state).await.unwrap(), 1);
     assert_eq!(
@@ -1890,6 +1897,31 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
             .is_some()
     );
 
+    // The maker says what it connects to; players see it on the store page.
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/scanned")
+                .cookie(&maker)
+                .json(json!({ "online": ["own_servers", "player_servers"], "online_hosts": ["Play.Example.com:7777"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/scanned").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(page["online"], json!(["own_servers", "player_servers"]));
+    assert_eq!(page["online_hosts"], json!(["play.example.com:7777"]));
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/scanned")
+                .cookie(&maker)
+                .json(json!({ "online_hosts": ["http://evil"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
     // GitLab: the same repository through GitLab's archive API.
     sqlx::query("update apps set repo_url = $2 where id = $1")
         .bind(app_id)
@@ -1913,6 +1945,7 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
         .unwrap();
     assert_eq!(scan["status"], "checked", "{scan}");
     assert_eq!(scan["licence"]["files"][0]["spdx"], "MIT", "{scan}");
+    assert!(scan.get("online_undeclared").is_none(), "declared now");
 
     // Repositories Slop can't read are recorded as not checked.
     sqlx::query("update apps set repo_url = 'https://bitbucket.org/octo/scanned' where id = $1")

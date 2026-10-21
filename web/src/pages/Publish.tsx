@@ -14,6 +14,7 @@ import {
   type Category,
   type ContentLabel,
   type NewApp,
+  type OnlineKind,
   type RepoTokenInput,
   PROVIDER_LABEL,
   type Release,
@@ -24,7 +25,7 @@ import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
 import { ErrorState, Loading } from "../components/ui";
-import { CONTENT_LABEL } from "../format";
+import { CONTENT_LABEL, ONLINE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { useTermsGate } from "../components/Terms";
@@ -168,6 +169,8 @@ const EMPTY: NewApp = {
   content_labels: [],
   tags: [],
   platforms: [],
+  online: [],
+  online_hosts: [],
 };
 
 function slugify(title: string): string {
@@ -214,6 +217,8 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           content_labels: existing.content_labels,
           tags: existing.tags,
           platforms: existing.platforms,
+          online: existing.online,
+          online_hosts: existing.online_hosts,
         }
       : EMPTY,
   );
@@ -228,6 +233,10 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const terms = useTermsGate();
 
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
+  // Server names as typed, one per line or separated by commas.
+  const [hostsText, setHostsText] = useState((existing?.online_hosts ?? []).join("\n"));
+  const hosts = () =>
+    (form.online ?? []).length === 0 ? [] : hostsText.split(/[\s,]+/).map((h) => h.trim()).filter(Boolean);
   // Private Slop from a private repository outside GitHub: a read-only token (repo_tokens.rs).
   const [token, setToken] = useState<RepoTokenInput>({ kind: "gitea", token: "" });
   const needsToken = !existing && form.visibility === "private" && /^https?:\/\/[^/]+\/.+/.test(form.repo_url.trim()) && !isGithub(form.repo_url);
@@ -251,8 +260,13 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             content_labels: form.content_labels,
             tags: form.tags,
             platforms: form.platforms,
+            online: form.online,
+            online_hosts: hosts(),
           })
-        : await terms.guard(() => api.createApp(needsToken && token.token.trim() ? { ...form, repo_token: token } : form));
+        : await terms.guard(() => {
+            const app = { ...form, online_hosts: hosts() };
+            return api.createApp(needsToken && token.token.trim() ? { ...app, repo_token: token } : app);
+          });
       navigate(`/app/${saved.slug}`);
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
@@ -450,6 +464,54 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
               );
             })}
           </div>
+        </fieldset>
+
+        <fieldset className="tag-picker">
+          <legend>Online</legend>
+          <p className="muted small">
+            Tick everything your app connects to. Slop checks your code but can't check servers, so players see this on your
+            store page with a suggestion to use sandbox mode. Leave it empty if your app never goes online (Slop Pulse doesn't
+            count). The source check notes networking code an app doesn't declare. See{" "}
+            <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
+          </p>
+          <div className="chips">
+            {(Object.keys(ONLINE_LABEL) as OnlineKind[]).map((k) => {
+              const on = (form.online ?? []).includes(k);
+              return (
+                <button
+                  type="button"
+                  key={k}
+                  className={`chip ${on ? "on" : ""}`}
+                  aria-pressed={on}
+                  onClick={() => set("online", on ? (form.online ?? []).filter((x) => x !== k) : [...(form.online ?? []), k])}
+                >
+                  {ONLINE_LABEL[k]}
+                </button>
+              );
+            })}
+          </div>
+          {error?.field === "online" && (
+            <span className="field-error" role="alert">
+              {error.message}
+            </span>
+          )}
+          {(form.online ?? []).length > 0 && (
+            <label>
+              Your servers <span className="muted">(optional, up to 10)</span>
+              <textarea
+                rows={2}
+                value={hostsText}
+                placeholder="play.example.com"
+                onChange={(e) => setHostsText(e.target.value)}
+              />
+              <span className="hint">Server names, like play.example.com or play.example.com:7777, one per line.</span>
+              {error?.field === "online_hosts" && (
+                <span className="field-error" role="alert">
+                  {error.message}
+                </span>
+              )}
+            </label>
+          )}
         </fieldset>
 
         <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />

@@ -8,7 +8,7 @@ import { RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
 import { Reviews } from "../components/Reviews";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
-import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, STAGE_LABEL } from "../format";
+import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
@@ -95,6 +95,8 @@ function AppView({ app }: { app: AppDetail }) {
           {app.branch.note && <> {app.branch.note}</>}
         </div>
       )}
+
+      {app.online.length > 0 && <OnlineNotice app={app} />}
 
       <div className="app-head">
         {hasGallery ? <Gallery items={app.gallery} title={app.title} /> : <Art app={app} withName={false} className="hero-art" />}
@@ -521,6 +523,25 @@ function SharePanel({ slug }: { slug: string }) {
           {error}
         </p>
       )}
+    </div>
+  );
+}
+
+/** Apps that go online talk to servers Slop can't check (SECURITY §6.1). */
+function OnlineNotice({ app }: { app: AppDetail }) {
+  return (
+    <div className="notice online-notice" role="note">
+      <span className="badge warn">PLAYS ONLINE · SERVERS NOT CHECKED</span>{" "}
+      Slop checked this {app.kind === "game" ? "game" : "app"}'s code, but it can't check the servers it connects to, and
+      those can change at any time. A server could send something that harms your computer through a bug in the{" "}
+      {app.kind === "game" ? "game" : "app"}. We suggest running it in <b>sandbox mode</b>{" "}
+      <span className="muted">(coming to the Slop app)</span>.
+      <ul className="small">
+        {app.online.map((k) => (
+          <li key={k}>{ONLINE_LABEL[k]}</li>
+        ))}
+        {app.online_hosts.length > 0 && <li>Servers: {app.online_hosts.join(", ")}</li>}
+      </ul>
     </div>
   );
 }

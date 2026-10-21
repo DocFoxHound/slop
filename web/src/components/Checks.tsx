@@ -261,6 +261,7 @@ export function RepoScanList({
   const licence = scan.licence;
   const money = scan.monetization ?? [];
   const code = scan.code_loading ?? [];
+  const network = scan.network ?? [];
   const found = advisories ?? [];
   const malicious = found.filter((a) => a.malicious);
   const since = found.filter((a) => !a.malicious && !a.known_at_build);
@@ -343,6 +344,30 @@ export function RepoScanList({
           <span className="muted">
             code loading, self-updaters, unsafe data formats
           </span>
+        </div>
+      )}
+      {network.length > 0 && (
+        <div>
+          {scan.online_undeclared ? (
+            <span className="badge warn">GOES ONLINE, NOT ON THE STORE PAGE</span>
+          ) : (
+            <span className="badge neutral">GOES ONLINE</span>
+          )}{" "}
+          <span className="muted">
+            {scan.online_undeclared
+              ? audience === "maker"
+                ? "Your code connects to the network, but your store page doesn't say it plays online. Tick what it connects to under Online on Edit store page, so players know about servers Slop can't check."
+                : "The store page doesn't declare online play. Ask the maker to tick what it connects to, or reject it as a misleading page if it's hidden on purpose."
+              : "Declared on the store page; players see a notice."}
+          </span>
+          <ul>
+            {network.map((h) => (
+              <li key={h.rule}>
+                {h.label} ({h.count}):{" "}
+                <span className="muted">{h.examples.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
         </div>
       )}
       {malicious.length > 0 && (

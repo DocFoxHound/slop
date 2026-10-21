@@ -100,6 +100,10 @@ Also read Slop's source check, `repo_scan` (`status` is `checked`, `not_checked`
   - an unsafe format reading anything from a server, another player or a shared file (saves,
     levels) is a rejection until it's replaced; one that only reads the app's own bundled files
     is fine.
+- `network`: networking code (multiplayer, sockets, HTTP and WebSocket clients, online
+  services). `online_undeclared: true` means the store page didn't say the app goes online when
+  the release was checked. Players are shown a notice for apps that do, so ask the maker to tick
+  what it connects to under Online; reject it as a misleading page if it looks hidden on purpose.
 - `advisories`: known vulnerabilities in its packages (from OSV). `malicious: true` means the
   package is malware: reject, or for a live release, ask your admin to withdraw it.
 

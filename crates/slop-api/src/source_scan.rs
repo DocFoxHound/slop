@@ -11,6 +11,10 @@
 //!   (Content Policy, "Code from outside Slop"). Code that loads programs, libraries or scripts at
 //!   run time, self-updaters, and data formats that can rebuild arbitrary objects (the usual way a
 //!   hostile game server takes over a player's computer) become notes.
+//! - **Online play:** networking code (engines' multiplayer, sockets, HTTP and WebSocket
+//!   clients, online-service SDKs). An app whose store page doesn't say it goes online gets a
+//!   note, since players are told about servers Slop can't check. Files with the Slop Pulse
+//!   snippet (which only talks to Slop) don't count.
 //! - **Packages:** the dependencies named in lockfiles (Cargo.lock, package-lock.json, yarn.lock,
 //!   go.mod, poetry.lock, Pipfile.lock, requirements.txt, NuGet's packages.lock.json), kept for
 //!   the daily advisory watch (dep_watch.rs).
@@ -71,6 +75,11 @@ pub struct Report {
     pub monetization: Vec<Hit>,
     /// Loading code at run time, self-updaters, and unsafe data formats.
     pub code_loading: Vec<Hit>,
+    /// Networking code: the app goes online.
+    pub network: Vec<Hit>,
+    /// It goes online, but its store page doesn't say so (set when the release is checked).
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub online_undeclared: bool,
 }
 
 #[derive(Debug, Default, Serialize)]
@@ -404,6 +413,59 @@ static CODE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::ne
     ]
 });
 
+/// Networking code, by engine and language. (rule, label, file extensions, pattern)
+static NET_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new(|| {
+    let r = |rule, label, exts, re: &str| {
+        (
+            Rule {
+                rule,
+                label,
+                re: Regex::new(re).unwrap(),
+            },
+            exts,
+        )
+    };
+    vec![
+        r(
+            "multiplayer",
+            "Multiplayer networking (engine or library)",
+            &[
+                "gd", "cs", "rs", "c", "cc", "cpp", "h", "hpp", "lua", "java", "kt", "js", "ts",
+                "py", "go",
+            ][..],
+            r"\b(ENetMultiplayerPeer|WebSocketMultiplayerPeer|WebRTCMultiplayerPeer|MultiplayerAPI|SceneMultiplayer|NetworkedMultiplayerENet)\b|@rpc\b|\bUnity\.Netcode\b|\busing Mirror\b|\bPhoton(Network|\.Pun|\.Realtime)\b|\bFishNet\b|\bLiteNetLib\b|\bRiptide\b|\bSteamNetworking\w*|\benet_host_create\b|\bSDLNet_|\bbevy_replicon\b|\brenet::|\bnaia_\w+|\bmatchbox_socket\b|\bcolyseus\b|\bkryonet\b|\bgame-networking-sockets\b",
+        ),
+        r(
+            "sockets",
+            "Network sockets (TCP, UDP)",
+            &[
+                "gd", "cs", "rs", "c", "cc", "cpp", "h", "hpp", "lua", "java", "kt", "py", "go",
+                "js", "ts",
+            ][..],
+            r#"\b(StreamPeerTCP|PacketPeerUDP|TCPServer|UDPServer)\b|\b(TcpClient|UdpClient|TcpListener)\b|\bnew Socket\s*\(|\bstd::net::(TcpStream|UdpSocket|TcpListener)|\btokio::net::|\bsocket\.socket\s*\(|\bnet\.(Dial|Listen)\w*\s*\(|\bWSAStartup\b|\bsocket\s*\(\s*AF_INET|\bjava\.net\.(Socket|ServerSocket|DatagramSocket)\b|\bdgram\.createSocket\b|\bnet\.createServer\b|require\s*\(?\s*['"]socket['"]"#,
+        ),
+        r(
+            "http",
+            "HTTP or WebSocket clients",
+            &[
+                "gd", "cs", "rs", "c", "cc", "cpp", "h", "hpp", "lua", "java", "kt", "py", "go",
+                "js", "mjs", "cjs", "ts", "tsx", "jsx", "html", "htm", "vue", "svelte", "dart",
+                "rb", "php",
+            ][..],
+            r#"\b(HTTPRequest|HTTPClient|WebSocketPeer)\.new\s*\(|\bUnityWebRequest\b|\bnew HttpClient\s*\(|\bClientWebSocket\b|\breqwest::|\bureq::|\btungstenite\b|\brequests\.(get|post|put|delete|Session)\b|\bhttpx\.|\baiohttp\.|\burllib\.request\b|\bwebsockets\.connect\b|\bhttp\.(Get|Post|NewRequest)\s*\(|(^|[^.\w])fetch\s*\(\s*['"`]https?://|\bnew WebSocket\s*\(|\bXMLHttpRequest\b|\baxios\.|\bio\s*\(\s*['"`]https?://|\bcurl_easy_\w+|\bjava\.net\.http\b|\bHttpURLConnection\b|\bokhttp3\b|\bsocket\.http\b"#,
+        ),
+        r(
+            "online_service",
+            "Online services (cloud databases, backends, AI APIs)",
+            &[
+                "gd", "cs", "rs", "js", "mjs", "cjs", "ts", "tsx", "jsx", "py", "go", "java", "kt",
+                "dart", "html", "vue", "svelte",
+            ][..],
+            r"(?i)\bfirebase\b|\bsupabase\b|\bplayfab\b|\bnakama\b|\bappwrite\b|\bpocketbase\b|\bmongodb(\+srv)?://|\bpostgres(ql)?://|\bmysql://|\bredis://|\bapi\.openai\.com\b|\bapi\.anthropic\.com\b|\bgenerativelanguage\.googleapis\.com\b|\bLootLocker\b|\bGameSparks\b|\bbraincloud\b",
+        ),
+    ]
+});
+
 /// Self-updaters: they replace the app with whatever their server sends, bypassing Slop.
 const UPDATER_PACKAGES: &[(&str, &str)] = &[
     ("npm", "electron-updater"),
@@ -701,6 +763,7 @@ pub fn scan_archive(
     let mut monetization = Tally::default();
     let mut headers = Tally::default();
     let mut code_loading = Tally::default();
+    let mut network = Tally::default();
     let mut text_total: u64 = 0;
     for entry in tar.entries().context("reading the repository archive")? {
         let mut entry = entry.context("reading the repository archive")?;
@@ -757,6 +820,8 @@ pub fn scan_archive(
             }
         }
         if unity_manifest || source {
+            // The Slop Pulse snippet only talks to Slop.
+            let pulse = text.contains("SLOP_PULSE");
             for (i, line) in text.lines().enumerate() {
                 if line.len() > 2000 {
                     continue;
@@ -769,6 +834,11 @@ pub fn scan_archive(
                 for (rule, exts) in CODE_RULES.iter() {
                     if exts.contains(&ext.as_str()) && rule.re.is_match(line) {
                         code_loading.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
+                    }
+                }
+                for (rule, exts) in NET_RULES.iter() {
+                    if !pulse && exts.contains(&ext.as_str()) && rule.re.is_match(line) {
+                        network.add(rule.rule, rule.label, format!("{path}:{}", i + 1));
                     }
                 }
                 if i < 30
@@ -803,6 +873,7 @@ pub fn scan_archive(
     report.packages = packages.len();
     report.monetization = monetization.into_hits();
     report.code_loading = code_loading.into_hits();
+    report.network = network.into_hits();
     report.licence.headers = headers.into_hits();
     report.licence.declared = declared.to_string();
     (report.licence.kinds, report.licence.problems) =
@@ -1093,17 +1164,22 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
 /// Checks one release's source now and stores the result. Called when a release's files are
 /// fetched, before automatic approval, and by the background round for the rest.
 pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
-    let (app_id, repo_url, commit, declared, public): (Uuid, String, String, String, bool) =
-        sqlx::query_as(
-            "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public'
+    type Row = (Uuid, String, String, String, bool, bool);
+    let (app_id, repo_url, commit, declared, public, online): Row = sqlx::query_as(
+        "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public',
+                cardinality(a.online) > 0
          from releases r join apps a on a.id = r.app_id where r.id = $1",
-        )
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
+    )
+    .bind(id)
+    .fetch_one(&state.db)
+    .await?;
     {
-        let (report, packages) =
+        let (mut report, packages) =
             scan_release(state, app_id, &repo_url, &commit, &declared, public).await;
+        // Players are told about apps that go online; one that doesn't say so needs a look.
+        if !online && report["network"].as_array().is_some_and(|n| !n.is_empty()) {
+            report["online_undeclared"] = json!(true);
+        }
         let mut tx = state.db.begin().await?;
         sqlx::query("update releases set repo_scan = $2, repo_scanned_at = now() where id = $1")
             .bind(id)
@@ -1150,6 +1226,9 @@ fn concerns(scan: &Value) -> Option<BTreeSet<String>> {
         .into_iter()
         .map(|k| format!("licence:{k}"))
         .collect();
+    if scan["online_undeclared"] == json!(true) {
+        out.insert("online:undeclared".into());
+    }
     for (section, key) in [("monetization", "monetization"), ("code_loading", "code")] {
         for hit in scan[section].as_array().into_iter().flatten() {
             if let Some(rule) = hit["rule"].as_str() {
@@ -1187,6 +1266,7 @@ pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result
     let kinds: Vec<&str> = [
         ("monetization:", "possible purchases or loot boxes"),
         ("code:", "code loading from outside Slop"),
+        ("online:", "online play the store page doesn't mention"),
         ("licence:", "licence problems"),
     ]
     .into_iter()
@@ -1230,14 +1310,21 @@ mod tests {
             ),
             (
                 "net/client.gd",
-                "var mod = load_resource_pack(path)\nvar v = bytes_to_var_with_objects(packet)",
+                "var mod = load_resource_pack(path)\nvar v = bytes_to_var_with_objects(packet)\nvar peer = ENetMultiplayerPeer.new()",
             ),
             ("mods/run.lua", "local f = loadstring(body)"),
             (
                 "tools/train.py",
                 "model.eval()\nresult = re.compile('x').match(s)",
             ),
-            ("web/app.js", "const m = /a/.exec(s);"),
+            (
+                "web/app.js",
+                "const m = /a/.exec(s);\nconst ws = new WebSocket(url);",
+            ),
+            (
+                "pulse.py",
+                "import urllib.request\nurl = os.environ['SLOP_PULSE_URL']",
+            ),
             (
                 "web/package-lock.json",
                 r#"{"packages":{"node_modules/electron-updater":{"version":"6.0.0"}}}"#,
@@ -1260,6 +1347,13 @@ mod tests {
             ],
             "model.eval() and regex .exec() aren't eval or exec"
         );
+        let net: Vec<_> = report.network.iter().map(|h| h.rule.as_str()).collect();
+        assert_eq!(
+            net,
+            ["http", "multiplayer"],
+            "the Pulse snippet doesn't count"
+        );
+        assert_eq!(report.network[0].examples, ["web/app.js:2"]);
         let unsafe_format = report
             .code_loading
             .iter()

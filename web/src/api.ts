@@ -18,6 +18,9 @@ export interface Category {
   tags: TagRef[];
 }
 
+/** What an app connects to online: servers Slop can't check. */
+export type OnlineKind = "own_servers" | "player_servers" | "peer_to_peer" | "other_services";
+
 export type ContentLabel =
   | "romance"
   | "suggestive"
@@ -514,6 +517,9 @@ export interface AppDetail extends AppSummary {
   private: boolean;
   /** The verified official team that publishes it. */
   official_team: { slug: string; name: string } | null;
+  /** What it connects to online (servers Slop can't check); empty: it doesn't. */
+  online: OnlineKind[];
+  online_hosts: string[];
   is_interested: boolean;
   /** For a community branch: what it branches from. */
   branch: {
@@ -1544,6 +1550,10 @@ export interface RepoScan {
   monetization?: SourceHit[];
   /** Loading code at run time, self-updaters, unsafe data formats. */
   code_loading?: SourceHit[];
+  /** Networking code: it goes online. */
+  network?: SourceHit[];
+  /** It goes online, but the store page didn't say so when this release was checked. */
+  online_undeclared?: boolean;
 }
 
 /** An advisory OSV lists for one of the release's packages (crates/slop-api/src/dep_watch.rs). */
@@ -1645,6 +1655,10 @@ export interface NewApp {
   visibility?: "public" | "private";
   /** A private repository outside GitHub: a read-only token for it. */
   repo_token?: RepoTokenInput;
+  /** What it connects to online; empty: it doesn't play online. */
+  online?: OnlineKind[];
+  /** The maker's servers by name (play.example.com, play.example.com:7777). */
+  online_hosts?: string[];
 }
 
 export type RepoTokenKind = "gitlab" | "bitbucket" | "gitea";
