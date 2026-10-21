@@ -235,10 +235,8 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const terms = useTermsGate();
 
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
-  // Server names as typed, one per line or separated by commas.
   const [hostsText, setHostsText] = useState((existing?.online_hosts ?? []).join("\n"));
-  const hosts = () =>
-    (form.online ?? []).length === 0 ? [] : hostsText.split(/[\s,]+/).map((h) => h.trim()).filter(Boolean);
+  const hosts = () => parseHosts(form.online ?? [], hostsText);
   // Private Slop from a private repository outside GitHub: a read-only token (repo_tokens.rs).
   const [token, setToken] = useState<RepoTokenInput>({ kind: "gitea", token: "" });
   const needsToken = !existing && form.visibility === "private" && /^https?:\/\/[^/]+\/.+/.test(form.repo_url.trim()) && !isGithub(form.repo_url);
@@ -433,102 +431,24 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           {field(
             "min_age",
             "Age rating",
-            <select value={form.min_age} onChange={(e) => set("min_age", Number(e.target.value))}>
-              {[0, 3, 7, 12, 16, 18].map((a) => (
-                <option key={a} value={a}>
-                  {a === 0 ? "Everyone" : `${a}+`}
-                </option>
-              ))}
-            </select>,
+            <AgeSelect value={form.min_age} onChange={(a) => set("min_age", a)} />,
             "18+ apps are hidden in the UK under-18 view.",
           )}
         </div>
 
-        <fieldset className="tag-picker">
-          <legend>Content labels</legend>
-          <p className="muted small">
-            Tick any that apply, so players know what to expect. Sexually explicit content isn't allowed on Slop at all.
-          </p>
-          <div className="chips">
-            {(Object.keys(CONTENT_LABEL) as ContentLabel[]).map((l) => {
-              const on = (form.content_labels ?? []).includes(l);
-              return (
-                <button
-                  type="button"
-                  key={l}
-                  className={`chip ${on ? "on" : ""}`}
-                  aria-pressed={on}
-                  onClick={() =>
-                    set("content_labels", on ? (form.content_labels ?? []).filter((x) => x !== l) : [...(form.content_labels ?? []), l])
-                  }
-                >
-                  {CONTENT_LABEL[l]}
-                </button>
-              );
-            })}
-          </div>
-        </fieldset>
-
-        <fieldset className="tag-picker">
-          <legend>Online</legend>
-          <p className="muted small">
-            Tick everything your app connects to. Slop checks your code but can't check servers, so players see this on your
-            store page with a suggestion to use sandbox mode. Leave it empty if your app never goes online (Slop Pulse doesn't
-            count). The source check notes networking code an app doesn't declare. See{" "}
-            <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
-          </p>
-          <div className="chips">
-            {(Object.keys(ONLINE_LABEL) as OnlineKind[]).map((k) => {
-              const on = (form.online ?? []).includes(k);
-              return (
-                <button
-                  type="button"
-                  key={k}
-                  className={`chip ${on ? "on" : ""}`}
-                  aria-pressed={on}
-                  onClick={() => set("online", on ? (form.online ?? []).filter((x) => x !== k) : [...(form.online ?? []), k])}
-                >
-                  {ONLINE_LABEL[k]}
-                </button>
-              );
-            })}
-          </div>
-          {error?.field === "online" && (
-            <span className="field-error" role="alert">
-              {error.message}
-            </span>
-          )}
-          {(form.online ?? []).length > 0 && (
-            <label>
-              Your servers <span className="muted">(optional, up to 10)</span>
-              <textarea
-                rows={2}
-                value={hostsText}
-                placeholder="play.example.com"
-                onChange={(e) => setHostsText(e.target.value)}
-              />
-              <span className="hint">Server names, like play.example.com or play.example.com:7777, one per line.</span>
-              {error?.field === "online_hosts" && (
-                <span className="field-error" role="alert">
-                  {error.message}
-                </span>
-              )}
-            </label>
-          )}
-        </fieldset>
-
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={form.sandbox_ready ?? false}
-            onChange={(e) => set("sandbox_ready", e.target.checked)}
-          />{" "}
-          Works in sandbox mode
-          <span className="hint">
-            It keeps local saves, settings and logs only in SLOP_SAVE_DIR when that's set, and runs with no access to the rest
-            of the computer. See <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>.
-          </span>
-        </label>
+        <ContentLabelPicker
+          value={form.content_labels ?? []}
+          onChange={(v) => set("content_labels", v)}
+          error={error?.field === "content_labels" ? error.message : undefined}
+        />
+        <OnlinePicker
+          value={form.online ?? []}
+          onChange={(v) => set("online", v)}
+          hostsText={hostsText}
+          onHostsText={setHostsText}
+          error={error?.field === "online" || error?.field === "online_hosts" ? error : undefined}
+        />
+        <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
 
         <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
 
@@ -582,6 +502,145 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
       </form>
       {existing && <MediaEditor app={existing} />}
     </div>
+  );
+}
+
+const AGES = [0, 3, 7, 12, 16, 18];
+
+/** The age rating; `min` for a branch, which can't be rated below the original. */
+export function AgeSelect({ value, onChange, min = 0 }: { value: number; onChange: (a: number) => void; min?: number }) {
+  return (
+    <select value={value} onChange={(e) => onChange(Number(e.target.value))}>
+      {AGES.filter((a) => a >= min).map((a) => (
+        <option key={a} value={a}>
+          {a === 0 ? "Everyone" : `${a}+`}
+        </option>
+      ))}
+    </select>
+  );
+}
+
+/** Content labels; `locked` ones (a branch's original's) can't be taken off. */
+export function ContentLabelPicker({
+  value,
+  onChange,
+  locked = [],
+  error,
+}: {
+  value: ContentLabel[];
+  onChange: (v: ContentLabel[]) => void;
+  locked?: ContentLabel[];
+  error?: string;
+}) {
+  return (
+    <fieldset className="tag-picker">
+      <legend>Content labels</legend>
+      <p className="muted small">
+        Tick any that apply, so players know what to expect. Sexually explicit content isn't allowed on Slop at all.
+        {locked.length > 0 && " The original's labels stay on."}
+      </p>
+      <div className="chips">
+        {(Object.keys(CONTENT_LABEL) as ContentLabel[]).map((l) => {
+          const on = value.includes(l);
+          const fixed = locked.includes(l);
+          return (
+            <button
+              type="button"
+              key={l}
+              className={`chip ${on ? "on" : ""}`}
+              aria-pressed={on}
+              disabled={fixed}
+              onClick={() => onChange(on ? value.filter((x) => x !== l) : [...value, l])}
+            >
+              {CONTENT_LABEL[l]}
+            </button>
+          );
+        })}
+      </div>
+      {error && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </fieldset>
+  );
+}
+
+/** What the app connects to online, and the maker's servers. */
+export function OnlinePicker({
+  value,
+  onChange,
+  hostsText,
+  onHostsText,
+  error,
+}: {
+  value: OnlineKind[];
+  onChange: (v: OnlineKind[]) => void;
+  hostsText: string;
+  onHostsText: (t: string) => void;
+  error?: ApiError;
+}) {
+  return (
+    <fieldset className="tag-picker">
+      <legend>Online</legend>
+      <p className="muted small">
+        Tick everything your app connects to. Slop checks your code but can't check servers, so players see this on your
+        store page with a suggestion to use sandbox mode. Leave it empty if your app never goes online (Slop Pulse doesn't
+        count). The source check notes networking code an app doesn't declare. See{" "}
+        <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
+      </p>
+      <div className="chips">
+        {(Object.keys(ONLINE_LABEL) as OnlineKind[]).map((k) => {
+          const on = value.includes(k);
+          return (
+            <button
+              type="button"
+              key={k}
+              className={`chip ${on ? "on" : ""}`}
+              aria-pressed={on}
+              onClick={() => onChange(on ? value.filter((x) => x !== k) : [...value, k])}
+            >
+              {ONLINE_LABEL[k]}
+            </button>
+          );
+        })}
+      </div>
+      {error?.field === "online" && (
+        <span className="field-error" role="alert">
+          {error.message}
+        </span>
+      )}
+      {value.length > 0 && (
+        <label>
+          Your servers <span className="muted">(optional, up to 10)</span>
+          <textarea rows={2} value={hostsText} placeholder="play.example.com" onChange={(e) => onHostsText(e.target.value)} />
+          <span className="hint">Server names, like play.example.com or play.example.com:7777, one per line.</span>
+          {error?.field === "online_hosts" && (
+            <span className="field-error" role="alert">
+              {error.message}
+            </span>
+          )}
+        </label>
+      )}
+    </fieldset>
+  );
+}
+
+/** Server names as typed, one per line or separated by commas. */
+export function parseHosts(online: OnlineKind[], text: string): string[] {
+  return online.length === 0 ? [] : text.split(/[\s,]+/).map((h) => h.trim()).filter(Boolean);
+}
+
+export function SandboxReadyCheck({ checked, onChange }: { checked: boolean; onChange: (v: boolean) => void }) {
+  return (
+    <label className="check">
+      <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} /> Works in sandbox mode
+      <span className="hint">
+        It keeps local saves, settings and logs only in SLOP_SAVE_DIR when that's set, and runs with no access to the rest of
+        the computer. Slop's source check looks for it in every release. See{" "}
+        <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>.
+      </span>
+    </label>
   );
 }
 

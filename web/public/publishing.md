@@ -68,7 +68,11 @@ optional.
    runs code that came in its release or in a mod Slop approved, never code or mods a server
    sends. See [Online play and mods](#online-play-and-mods). Rate your app honestly (Everyone, 3+, 7+, 12+,
    16+ or 18+; 18+ apps are hidden from players in the UK's under-18 view).
-5. **A maker signature** on each build: a GitHub artifact attestation, made by your GitHub Actions
+5. **Local saves in Slop's save folder.** If your app keeps saves, settings or logs on the
+   player's computer, keep them in the folder named by `SLOP_SAVE_DIR` when it's set. See
+   [Saves and sandbox mode](#saves-and-sandbox-mode). Saves on your own server are fine too.
+   Slop's source check reports where each release saves.
+6. **A maker signature** on each build: a GitHub artifact attestation, made by your GitHub Actions
    build (Slop Build does this for you). It proves the file came from your repository at that
    commit, so someone who only stole your Slop password can't publish anything. *Not required on
    this test server; GitHub only makes attestations for private repositories on its Enterprise
@@ -477,6 +481,21 @@ page. Players add it to the installed game in the Slop app, which hands it to th
 starts (see [Loading mods in your game](#loading-mods-in-your-game)). Say in your mod's
 description which version of the game it's for.
 
+### Publishing a community build
+
+A community build (a modded version, port, fix or translation) is built from **your own fork**
+of an app on Slop: on the app's page, under **Community**, choose **Register a branch from your
+fork**. It's held to the same rules as a new app. The form asks what creating an app asks: its
+licence, platforms, age rating and content labels, what it connects to online, and whether it
+works in sandbox mode. Every release is scanned, its source checked and a person reviews it.
+It starts from the original's answers. It **can't be rated below the original** and keeps the
+original's content labels; add to them if your build adds stronger content.
+
+Players install it beside the original and can pick it from the list on the original's
+**Play** button. It's an app of its own, so it gets **its own save folder** (`SLOP_SAVE_DIR`
+names it). Keep the original's save format if you can: players are offered to copy their saves
+across when they pick your build.
+
 ### Rules for the code
 
 1. **Never run code from the network or from downloaded files.** No `eval`, `exec`,
@@ -516,7 +535,8 @@ description which version of the game it's for.
 - The source check also notes **networking code**. If your code goes online but your store
   page doesn't say so, that's a note, and an update waits for a person.
 - Store pages of apps that go online tell players that Slop can't check the servers, and
-  suggest running the app in **sandbox mode** *(coming to the Slop app)*.
+  suggest running the app in **sandbox mode** in the Slop app (Linux now, Windows soon); see
+  [Saves and sandbox mode](#saves-and-sandbox-mode).
 
 ## Saves and sandbox mode
 
@@ -528,6 +548,18 @@ without losing anything, **local saves must live in Slop's save folder**.
 When the Slop app starts your app, it sets **`SLOP_SAVE_DIR`**: a folder that belongs to your
 app, the same in both modes, outside the installed files (updates never touch it), and kept when
 the player uninstalls.
+
+**Where it is.** Each app has its own, named after its store address:
+
+| | The save folder for `your-app` |
+|---|---|
+| Linux | `~/.local/share/dev.ironpoint.slop/library/saves/your-app/` |
+| Windows | `%APPDATA%\dev.ironpoint.slop\library\saves\your-app\` |
+
+(On Linux, `~/.local/share` is `$XDG_DATA_HOME` when that's set.) Don't write these paths into
+your code: **read `SLOP_SAVE_DIR`**, which is always right. Organise the folder however you like
+(`slot1.json`, `settings.cfg`, `logs/`…). A community build of your app has its own address, so
+it gets its own folder.
 
 1. **If your app keeps anything on the player's computer** (saves, settings, logs,
    screenshots), and `SLOP_SAVE_DIR` is set, keep it there and nowhere else. When it isn't set,
@@ -567,7 +599,20 @@ saves = os.environ.get("SLOP_SAVE_DIR") or platformdirs.user_data_dir("my-game")
 Also in sandbox mode: no session bus (no system tray, notifications or keyring), no other
 programs, and the network unless the player blocked it (offered only when your store page says
 the app doesn't go online). If your app follows the rules above, tick **Works in sandbox mode**
-on its store page. Slop's source check notes code that writes to fixed per-user folders.
+on its store page.
+
+**What Slop checks.** Every release's source check says where it saves, on your Releases page
+and to the reviewer:
+
+| The check shows | Means |
+|---|---|
+| Saves in Slop's save folder | The code reads `SLOP_SAVE_DIR`, or uses Godot's `user://` |
+| No local saves found | Neither, and no writes to the player's folders: fine if it saves nothing locally or only on your server |
+| Saves outside Slop's save folder | It writes to fixed per-user folders (Documents, `%APPDATA%`, the home folder, Unity's `persistentDataPath`, Electron's `userData`…), listed with file and line |
+
+Saving outside the folder is a note asking you to move them, not a rejection. But while your
+newest release does, players aren't told your app works in sandbox mode, even if you ticked it,
+and the reviewer asks you to fix it or untick it.
 
 ## Keeping Windows from blocking your app
 
@@ -922,7 +967,9 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    updates the app itself, or uses an unsafe data format.
 4. If the app keeps anything on the player's computer (saves, settings, logs): keep it in
    `SLOP_SAVE_DIR` when that's set, as in [Saves and sandbox mode](#saves-and-sandbox-mode), as
-   plain data, and nowhere else. Then the owner can tick "Works in sandbox mode".
+   plain data, and nowhere else. Read the variable; never hard-code the folder's path. Then the
+   owner can tick "Works in sandbox mode". Slop's source check looks for `SLOP_SAVE_DIR` (or
+   Godot's `user://`) in every release.
 5. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
    language and call it once at startup. Send nothing but the token.
 6. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the

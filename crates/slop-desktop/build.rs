@@ -31,6 +31,9 @@ fn main() {
             "save_copies",
             "restore_saves",
             "copy_saves",
+            "save_size",
+            "play_choices",
+            "set_play_choice",
         ]),
     ))
     .expect("failed to run tauri-build");

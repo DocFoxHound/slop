@@ -21,6 +21,8 @@ interface Row {
   installed?: InstalledApp;
   update?: AppUpdate;
   available?: boolean;
+  /** A community build shown under its installed original. */
+  nested?: boolean;
 }
 
 export function Library() {
@@ -40,17 +42,28 @@ export function Library() {
   if (me === undefined || library.loading || installed.loading) return <Loading />;
 
   // Installed apps first (they work signed out and offline), then the rest of the library.
+  // Community builds sit under their original when it's installed too; its Play button can
+  // start them (DESIGN §9).
   const rows: Row[] = [];
-  for (const { installed: app, update, available } of installed.data ?? []) {
+  const all = installed.data ?? [];
+  const originalOf = (app: InstalledApp) => all.find((o) => o.installed.slug === app.build_of)?.installed;
+  const ordered = all
+    .filter(({ installed: app }) => !originalOf(app))
+    .flatMap((entry) => [entry, ...all.filter(({ installed: app }) => app.build_of === entry.installed.slug)]);
+  for (const { installed: app, update, available } of ordered) {
     const entry = library.data?.find((e) => e.slug === app.slug);
+    const original = originalOf(app);
     rows.push({
       slug: app.slug,
       title: app.title,
-      subtitle: `by ${app.maker} · version ${app.version}`,
+      subtitle: original
+        ? `Community build of ${original.title} · by ${app.maker} · version ${app.version}`
+        : `by ${app.maker} · version ${app.version}`,
       app: entry,
       installed: app,
       update,
       available,
+      nested: Boolean(original),
     });
   }
   const waiting = rows.filter((r) => r.available).length;
@@ -78,7 +91,7 @@ export function Library() {
       ) : (
         <ul className="library-list">
           {rows.map((row) => (
-            <li key={row.slug} className="panel library-row">
+            <li key={row.slug} className={`panel library-row${row.nested ? " nested" : ""}`}>
               <Link to={`/app/${row.slug}`} className="library-art" aria-label={row.title}>
                 <Art app={{ slug: row.slug, title: row.title }} withName={false} />
               </Link>
@@ -88,6 +101,7 @@ export function Library() {
                     <b>{row.title}</b>
                   </Link>
                   {row.app && <StageBadge app={row.app} />}
+                  {row.nested && <span className="badge neutral">COMMUNITY</span>}
                   {row.installed && <span className="badge official">INSTALLED</span>}
                   {row.installed && sandbox.data?.available && isOn(sandbox.data, row.slug) && (
                     <span className="badge neutral">SANDBOX</span>
@@ -95,7 +109,9 @@ export function Library() {
                 </div>
                 <div className="muted small">{row.subtitle}</div>
                 {row.installed && <UpdateLine row={row} />}
-                {row.installed && <Community row={row} onSwitched={installed.reload} />}
+                {row.installed && (
+                  <Community row={row} installed={all.map((e) => e.installed)} onChanged={installed.reload} />
+                )}
                 {row.installed && row.installed.kind !== "installer" && <Saves slug={row.slug} />}
               </div>
               <div className="library-actions">
@@ -250,47 +266,64 @@ function UpdateLine({ row }: { row: Row }) {
   );
 }
 
-/** An installed app's community: other builds to switch to, and mods to add (DESIGN §9). */
-function Community({ row, onSwitched }: { row: Row; onSwitched: () => void }) {
+/** An installed app's community: other builds to install beside it, and mods to add (DESIGN §9). */
+function Community({ row, installed, onChanged }: { row: Row; installed: InstalledApp[]; onChanged: () => void }) {
   const builds = row.update?.builds ?? [];
   const mods = row.update?.mods ?? [];
   const added = useLoad(() => desktop.installedMods(row.slug), [row.slug]);
   const addedCount = added.data?.length ?? 0;
-  if (builds.length < 2 && mods.length === 0 && addedCount === 0) return null;
+  const others = builds.filter((b) => b.slug !== row.slug && !installed.some((a) => a.slug === b.slug));
+  if (others.length === 0 && mods.length === 0 && addedCount === 0) return null;
   const parts = [
     addedCount > 0 ? `${addedCount} ${addedCount === 1 ? "mod" : "mods"} added` : mods.length > 0 ? `${mods.length} ${mods.length === 1 ? "mod" : "mods"}` : null,
-    builds.length > 1 ? `${builds.length - 1} other ${builds.length === 2 ? "build" : "builds"}` : null,
+    others.length > 0 ? `${others.length} other ${others.length === 1 ? "build" : "builds"}` : null,
   ].filter(Boolean);
   return (
     <details className="library-community small">
       <summary>Community: {parts.join(" · ")}</summary>
-      {row.installed && builds.length > 1 && <BuildSwitcher current={row.installed} builds={builds} onSwitched={onSwitched} />}
+      {row.installed && others.length > 0 && (
+        <OtherBuilds current={row.installed} builds={builds} others={others} onInstalled={onChanged} />
+      )}
       <GameMods game={row.slug} available={mods} onChanged={added.reload} />
     </details>
   );
 }
 
-/** Switch between the official app and its community builds (DESIGN §6, §9). */
-function BuildSwitcher({ current, builds, onSwitched }: { current: InstalledApp; builds: AppUpdate["builds"]; onSwitched: () => void }) {
+/** Install the official app or a community build beside this one (DESIGN §6, §9). Community
+ * builds of an installed original show in its Play button's list. */
+function OtherBuilds({
+  current,
+  builds,
+  others,
+  onInstalled,
+}: {
+  current: InstalledApp;
+  builds: AppUpdate["builds"];
+  others: AppUpdate["builds"];
+  onInstalled: () => void;
+}) {
   const platform = useLoad(() => desktop.platformInfo(), []);
   const [target, setTarget] = useState<string>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [bringSaves, setBringSaves] = useState(true);
+  const [playIt, setPlayIt] = useState(true);
   const os = platform.data?.platform;
-  const options = builds.filter((b) => b.slug === current.slug || (os && b.platforms.includes(os)));
-  if (options.length < 2) return null;
+  const options = others.filter((b) => os && b.platforms.includes(os));
+  if (options.length === 0) return null;
   const chosen = options.find((b) => b.slug === target);
-  const switchTo = async () => {
+  const original = builds.find((b) => b.official);
+  const install = async () => {
     if (!chosen) return;
     setBusy(true);
     setError(undefined);
     try {
       await desktop.install(chosen.slug);
       if (bringSaves) await desktop.copySaves(current.slug, chosen.slug);
-      await desktop.uninstall(current.slug);
+      if (playIt && original) await desktop.setPlayChoice(original.slug, chosen.official ? null : chosen.slug);
       setTarget(undefined);
-      onSwitched();
+      window.dispatchEvent(new Event(LIBRARY_CHANGED));
+      onInstalled();
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     } finally {
@@ -300,8 +333,9 @@ function BuildSwitcher({ current, builds, onSwitched }: { current: InstalledApp;
   return (
     <div className="small build-switch">
       <label>
-        Build{" "}
-        <select value={target ?? current.slug} onChange={(e) => setTarget(e.target.value === current.slug ? undefined : e.target.value)}>
+        Other builds{" "}
+        <select value={target ?? ""} onChange={(e) => setTarget(e.target.value || undefined)}>
+          <option value="">Choose one to install…</option>
           {options.map((b) => (
             <option key={b.slug} value={b.slug}>
               {b.official ? `${b.title} (official)` : `${b.title} (community)`}
@@ -312,20 +346,27 @@ function BuildSwitcher({ current, builds, onSwitched }: { current: InstalledApp;
       {chosen && (
         <div className="notice">
           <p>
-            Install <b>{chosen.title}</b> and uninstall <b>{current.title}</b>?{" "}
-            {!chosen.official && "Community builds are made by other people from the original's code and reviewed like any app."} Each
-            build has its own saves; your saves for {current.title} are kept either way.
+            Install <b>{chosen.title}</b> beside <b>{current.title}</b>?{" "}
+            {!chosen.official &&
+              "Community builds are made by other people from the original's code, and checked and reviewed like any app."}{" "}
+            Each build has its own saves.
           </p>
           <label className="check">
             <input type="checkbox" checked={bringSaves} onChange={(e) => setBringSaves(e.target.checked)} /> Copy my saves to{" "}
             {chosen.title} <span className="muted">(a fork may store saves differently)</span>
           </label>
+          {original && (
+            <label className="check">
+              <input type="checkbox" checked={playIt} onChange={(e) => setPlayIt(e.target.checked)} /> Make it what{" "}
+              {original.title}'s Play button starts <span className="muted">(change it any time from Play's list)</span>
+            </label>
+          )}
           <div className="actions">
             <button className="btn small ghost" onClick={() => setTarget(undefined)} disabled={busy}>
               Cancel
             </button>
-            <button className="btn small slime" onClick={() => void switchTo()} disabled={busy}>
-              {busy ? "Switching…" : "Switch"}
+            <button className="btn small slime" onClick={() => void install()} disabled={busy}>
+              {busy ? "Installing…" : "Install"}
             </button>
           </div>
         </div>

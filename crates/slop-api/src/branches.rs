@@ -154,6 +154,60 @@ pub async fn community(
     Ok(builds)
 }
 
+/// The original's age rating and content labels: a branch or mod can add to them, never go
+/// below them, since it carries the original's content.
+pub(crate) struct RatingFloor {
+    min_age: i16,
+    labels: Vec<String>,
+}
+
+impl RatingFloor {
+    pub(crate) fn check_age(&self, min_age: i16) -> ApiResult<()> {
+        if min_age < self.min_age {
+            return Err(ApiError::invalid(
+                "min_age",
+                match self.min_age {
+                    0 => "rate it at least Everyone, like the original".to_string(),
+                    n => format!("rate it at least {n}+, like the original"),
+                },
+            ));
+        }
+        Ok(())
+    }
+
+    pub(crate) fn check_labels(&self, labels: &[String]) -> ApiResult<()> {
+        let missing: Vec<&str> = self
+            .labels
+            .iter()
+            .filter(|l| !labels.contains(l))
+            .map(String::as_str)
+            .collect();
+        if !missing.is_empty() {
+            return Err(ApiError::invalid(
+                "content_labels",
+                format!("keep the original's labels: {}", missing.join(", ")),
+            ));
+        }
+        Ok(())
+    }
+}
+
+/// The original's rating, when `app_id` is a branch or mod.
+pub(crate) async fn rating_floor(
+    conn: &mut PgConnection,
+    app_id: Uuid,
+) -> sqlx::Result<Option<RatingFloor>> {
+    let row: Option<(i16, Vec<String>)> = sqlx::query_as(
+        "select p.min_age, p.content_labels from apps a join apps p on p.id = a.parent_app_id where a.id = $1",
+    )
+    .bind(app_id)
+    .fetch_optional(conn)
+    .await?;
+    Ok(row.map(|(min_age, labels)| RatingFloor { min_age, labels }))
+}
+
+/// Registering a branch asks what creating an app asks (catalog.rs `NewApp`), so branches and
+/// mods are held to the same rules; what isn't given comes from the original.
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct Register {
@@ -167,6 +221,18 @@ struct Register {
     /// Not needed for a mod (`addon`): its releases are one .zip for every platform.
     #[serde(default)]
     platforms: Vec<String>,
+    /// The store page text; the note when empty.
+    #[serde(default)]
+    description_md: String,
+    /// Age rating and content labels: at least the original's (the original's when left out).
+    min_age: Option<i16>,
+    content_labels: Option<Vec<String>>,
+    /// What it connects to online; the original's when left out.
+    online: Option<Vec<String>>,
+    online_hosts: Option<Vec<String>>,
+    /// Works in sandbox mode: local saves only in SLOP_SAVE_DIR.
+    #[serde(default)]
+    sandbox_ready: bool,
 }
 
 /// Registers a branch of an app the author can see. It starts as a draft: the author submits a
@@ -178,6 +244,8 @@ async fn register(
     Path(parent_slug): Path<String>,
     Json(b): Json<Register>,
 ) -> ApiResult<(StatusCode, Json<serde_json::Value>)> {
+    // A branch is a new app: the same limit applies.
+    crate::limits::check(&state, user.id, crate::limits::Action::NewApp)?;
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (parent, _) = catalog::visible_app(&state, &parent_slug, Some(&user), policy).await?;
     let is_branch: bool =
@@ -198,6 +266,7 @@ async fn register(
     let title = catalog::validate_text("title", &b.title, 80, false)?;
     let summary = catalog::validate_text("summary", &b.summary, 200, false)?;
     let note = catalog::validate_text("note", &b.note, 500, false)?;
+    let description = catalog::validate_text("description_md", &b.description_md, 20_000, true)?;
     let repo_url = catalog::validate_repo_url_in(&state, &b.repo_url)?;
     let license = catalog::validate_license(&b.license_spdx)?;
     if !KINDS.iter().any(|(k, _)| *k == b.kind) {
@@ -224,16 +293,44 @@ async fn register(
             "a branch or mod builds from your own repository, not the original one",
         ));
     }
+    let (parent_age, parent_labels, parent_online, parent_hosts): (
+        i16,
+        Vec<String>,
+        Vec<String>,
+        Vec<String>,
+    ) = sqlx::query_as(
+        "select min_age, content_labels, online, online_hosts from apps where id = $1",
+    )
+    .bind(parent)
+    .fetch_one(&state.db)
+    .await?;
+    let floor = RatingFloor {
+        min_age: parent_age,
+        labels: parent_labels.clone(),
+    };
+    let min_age = catalog::validate_min_age(b.min_age.unwrap_or(parent_age))?;
+    floor.check_age(min_age)?;
+    let content_labels =
+        catalog::validate_content_labels(b.content_labels.as_ref().unwrap_or(&parent_labels))?;
+    floor.check_labels(&content_labels)?;
+    let online = catalog::validate_online(b.online.as_ref().unwrap_or(&parent_online))?;
+    let online_hosts = if online.is_empty() {
+        Vec::new()
+    } else {
+        catalog::validate_online_hosts(b.online_hosts.as_ref().unwrap_or(&parent_hosts))?
+    };
     // The fork must be the author's own.
     crate::repo_owner::check(&state, user.id, &repo_url, None).await?;
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
-    // The branch takes the original's kind, age rating and tags; it's Released from the start,
-    // and can be listed once it has an approved release.
+    // The branch takes the original's kind and tags; it's Released from the start, and can be
+    // listed once it has an approved release, checked and reviewed like any other.
     sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx,
-                           min_age, platforms, parent_app_id, branch_kind, branch_note)
-         select $1, $2, $3, $4, $5, p.kind, 'released', $6, $7, $8, p.min_age, $9, p.id, $10, nullif($5, '')
+                           min_age, platforms, parent_app_id, branch_kind, branch_note,
+                           content_labels, online, online_hosts, sandbox_ready)
+         select $1, $2, $3, $4, coalesce(nullif($12, ''), $5), p.kind, 'released', $6, $7, $8, $13, $9, p.id, $10,
+                nullif($5, ''), $14, $15, $16, $17
          from apps p where p.id = $11",
     )
     .bind(id)
@@ -247,6 +344,12 @@ async fn register(
     .bind(&platforms)
     .bind(&b.kind)
     .bind(parent)
+    .bind(&description)
+    .bind(min_age)
+    .bind(&content_labels)
+    .bind(&online)
+    .bind(&online_hosts)
+    .bind(b.sandbox_ready)
     .execute(&mut *tx)
     .await
     .map_err(|err| {

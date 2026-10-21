@@ -82,6 +82,16 @@ pub struct Report {
     /// when the code reads SLOP_SAVE_DIR.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub saves: Vec<Hit>,
+    /// Where local saves go, as far as the source shows: `slop` (it reads SLOP_SAVE_DIR),
+    /// `engine` (an engine folder the Slop app points into the save folder, like Godot's
+    /// `user://`), `elsewhere` (fixed per-user folders: see `saves`) or `none` (no local saves
+    /// found). Every checked release says which, so makers and reviewers see it's there.
+    #[serde(skip_serializing_if = "str::is_empty")]
+    pub save_folder: &'static str,
+    /// The store page says it works in sandbox mode, but the code saves elsewhere (set when
+    /// the release is checked). Players aren't told it works in sandbox mode while it's so.
+    #[serde(skip_serializing_if = "std::ops::Not::not")]
+    pub sandbox_mismatch: bool,
     /// It goes online, but its store page doesn't say so (set when the release is checked).
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub online_undeclared: bool,
@@ -829,6 +839,8 @@ pub fn scan_archive(
     let mut saves = Tally::default();
     // Code that reads SLOP_SAVE_DIR knows about Slop's save folder: no save notes then.
     let mut uses_save_dir = false;
+    // Godot's user:// lands in the save folder by itself.
+    let mut engine_saves = false;
     let mut text_total: u64 = 0;
     for entry in tar.entries().context("reading the repository archive")? {
         let mut entry = entry.context("reading the repository archive")?;
@@ -888,6 +900,8 @@ pub fn scan_archive(
             // The Slop Pulse snippet only talks to Slop.
             let pulse = text.contains("SLOP_PULSE");
             uses_save_dir |= text.contains("SLOP_SAVE_DIR");
+            engine_saves |=
+                matches!(ext.as_str(), "gd" | "cs" | "godot" | "cfg") && text.contains("user://");
             for (i, line) in text.lines().enumerate() {
                 if line.len() > 2000 {
                     continue;
@@ -948,6 +962,15 @@ pub fn scan_archive(
     if !uses_save_dir {
         report.saves = saves.into_hits();
     }
+    report.save_folder = if uses_save_dir {
+        "slop"
+    } else if !report.saves.is_empty() {
+        "elsewhere"
+    } else if engine_saves {
+        "engine"
+    } else {
+        "none"
+    };
     report.licence.headers = headers.into_hits();
     report.licence.declared = declared.to_string();
     (report.licence.kinds, report.licence.problems) =
@@ -1238,10 +1261,10 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
 /// Checks one release's source now and stores the result. Called when a release's files are
 /// fetched, before automatic approval, and by the background round for the rest.
 pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
-    type Row = (Uuid, String, String, String, bool, bool);
-    let (app_id, repo_url, commit, declared, public, online): Row = sqlx::query_as(
+    type Row = (Uuid, String, String, String, bool, bool, bool);
+    let (app_id, repo_url, commit, declared, public, online, sandbox_ready): Row = sqlx::query_as(
         "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public',
-                cardinality(a.online) > 0
+                cardinality(a.online) > 0, a.sandbox_ready
          from releases r join apps a on a.id = r.app_id where r.id = $1",
     )
     .bind(id)
@@ -1253,6 +1276,10 @@ pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
         // Players are told about apps that go online; one that doesn't say so needs a look.
         if !online && report["network"].as_array().is_some_and(|n| !n.is_empty()) {
             report["online_undeclared"] = json!(true);
+        }
+        // "Works in sandbox mode" means local saves only in SLOP_SAVE_DIR.
+        if sandbox_ready && report["save_folder"] == "elsewhere" {
+            report["sandbox_mismatch"] = json!(true);
         }
         let mut tx = state.db.begin().await?;
         sqlx::query("update releases set repo_scan = $2, repo_scanned_at = now() where id = $1")
@@ -1302,6 +1329,9 @@ fn concerns(scan: &Value) -> Option<BTreeSet<String>> {
         .collect();
     if scan["online_undeclared"] == json!(true) {
         out.insert("online:undeclared".into());
+    }
+    if scan["sandbox_mismatch"] == json!(true) {
+        out.insert("saves:sandbox_mismatch".into());
     }
     for (section, key) in [("monetization", "monetization"), ("code_loading", "code")] {
         for hit in scan[section].as_array().into_iter().flatten() {
@@ -1408,6 +1438,7 @@ mod tests {
             ],
             "Godot's user:// isn't a note"
         );
+        assert_eq!(report.save_folder, "elsewhere");
         let value = serde_json::to_value(&report).unwrap();
         // (The short licence text here isn't recognised; that's a licence note.)
         assert!(
@@ -1428,11 +1459,27 @@ mod tests {
         ]);
         let (report, _) = scan_archive(&data[..], "MIT", true).unwrap();
         assert!(report.saves.is_empty());
-        assert!(
-            serde_json::to_value(&report)
-                .unwrap()
-                .get("saves")
-                .is_none()
+        assert_eq!(report.save_folder, "slop");
+        let value = serde_json::to_value(&report).unwrap();
+        assert!(value.get("saves").is_none());
+        assert_eq!(value["save_folder"], "slop", "every checked release says");
+
+        // Godot's user:// lands in the save folder; code that saves nothing says so.
+        let data = archive(&[
+            mit,
+            (
+                "save.gd",
+                "var f = FileAccess.open(\"user://save.json\", FileAccess.WRITE)",
+            ),
+        ]);
+        assert_eq!(
+            scan_archive(&data[..], "MIT", true).unwrap().0.save_folder,
+            "engine"
+        );
+        let data = archive(&[mit, ("main.gd", "func _ready():\n\tpass")]);
+        assert_eq!(
+            scan_archive(&data[..], "MIT", true).unwrap().0.save_folder,
+            "none"
         );
     }
 

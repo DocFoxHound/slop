@@ -564,13 +564,14 @@ function SharePanel({ slug }: { slug: string }) {
   );
 }
 
-/** Apps that go online talk to servers Slop can't check (SECURITY §6.1). */
 /** What's known about running the app in sandbox mode (DESIGN §6). */
 function SandboxNote({ app }: { app: AppDetail }) {
-  if (!app.sandbox_ready && !app.sandbox_trouble) return null;
+  // The maker's word holds until a release's code shows saves outside the save folder.
+  const ready = app.sandbox_ready && !app.sandbox_mismatch;
+  if (!ready && !app.sandbox_trouble) return null;
   return (
     <p className="small sandbox-note">
-      {app.sandbox_ready && (
+      {ready && (
         <>
           <span className="badge neutral">WORKS IN SANDBOX MODE</span>{" "}
           <span className="muted">The maker says so: it keeps its saves in Slop's save folder.</span>
@@ -578,13 +579,14 @@ function SandboxNote({ app }: { app: AppDetail }) {
       )}
       {app.sandbox_trouble && (
         <span className="muted">
-          {app.sandbox_ready && " "}Some players say it doesn't start in sandbox mode.
+          {ready && " "}Some players say it doesn't start in sandbox mode.
         </span>
       )}
     </p>
   );
 }
 
+/** Apps that go online talk to servers Slop can't check (SECURITY §6.1). */
 function OnlineNotice({ app }: { app: AppDetail }) {
   return (
     <div className="notice online-notice" role="note">

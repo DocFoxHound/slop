@@ -61,6 +61,8 @@ export interface InstalledApp {
   release_id: string;
   kind: "archive" | "installer" | "apk";
   installed_at: string;
+  /** A community build: the original app's address, from its signed manifest (DESIGN §9). */
+  build_of?: string | null;
 }
 
 /** A mod added to an installed game (DESIGN §9). */
@@ -268,6 +270,11 @@ export const desktop = {
   saveCopies: (slug: string) => call<SaveCopy[]>("save_copies", { slug }),
   restoreSaves: (slug: string, id: string) => call<void>("restore_saves", { slug, id }),
   copySaves: (from: string, to: string) => call<void>("copy_saves", { from, to }),
+  saveSize: (slug: string) => call<number>("save_size", { slug }),
+  /** What each original's Play button starts, when the player picked a community build. */
+  playChoices: () => call<Record<string, string>>("play_choices"),
+  /** Picks the build `app`'s Play button starts; null for the original. */
+  setPlayChoice: (app: string, build: string | null) => call<void>("set_play_choice", { app, build }),
   /** An app closed with an error right after starting in sandbox mode. */
   onSandboxFailed: async (handler: (e: { slug: string }) => void) => {
     const { listen } = await import("@tauri-apps/api/event");

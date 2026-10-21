@@ -1,0 +1,11 @@
+# Automatically generated - DO NOT EDIT!
+
+[[permission]]
+identifier = "allow-set-play-choice"
+description = "Enables the set_play_choice command without any pre-configured scope."
+commands.allow = ["set_play_choice"]
+
+[[permission]]
+identifier = "deny-set-play-choice"
+description = "Denies the set_play_choice command without any pre-configured scope."
+commands.deny = ["set_play_choice"]

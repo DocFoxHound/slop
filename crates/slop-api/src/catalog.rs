@@ -752,6 +752,9 @@ pub(crate) const SANDBOX_TROUBLE_REPORTS: i64 = 3;
 pub(crate) struct SandboxInfo {
     /// The maker says it keeps local saves only in SLOP_SAVE_DIR and works in sandbox mode.
     pub sandbox_ready: bool,
+    /// ...but the source check of its newest release found saves elsewhere, so players aren't
+    /// told it works in sandbox mode.
+    pub sandbox_mismatch: bool,
     /// Sandbox mode is suggested: it plays online (servers Slop can't check), or its newest
     /// release has networking code its store page doesn't declare.
     pub sandbox_suggested: bool,
@@ -761,12 +764,17 @@ pub(crate) struct SandboxInfo {
 
 pub(crate) async fn sandbox_info(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<SandboxInfo> {
     sqlx::query_as(
-        "select a.sandbox_ready,
-                cardinality(a.online) > 0 or coalesce((
-                    select (r.source_checks ->> 'online_undeclared')::boolean from releases r
-                    where r.app_id = a.id and r.status = 'approved' and r.signed_manifest is not null
-                    order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
-                    limit 1), false) as sandbox_suggested,
+        "with newest as (
+             select r.repo_scan from releases r join apps a on a.id = r.app_id
+             where r.app_id = $1 and r.status = 'approved' and r.signed_manifest is not null
+             order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
+             limit 1)
+         select a.sandbox_ready,
+                a.sandbox_ready and coalesce((select repo_scan ->> 'save_folder' = 'elsewhere' from newest), false)
+                    as sandbox_mismatch,
+                cardinality(a.online) > 0
+                    or coalesce((select (repo_scan ->> 'online_undeclared')::boolean from newest), false)
+                    as sandbox_suggested,
                 (select count(*) from sandbox_reports s where s.app_id = a.id) >= $2 as sandbox_trouble
          from apps a where a.id = $1",
     )
@@ -988,7 +996,7 @@ pub const CONTENT_LABELS: [&str; 6] = [
     "gambling_themes",
 ];
 
-fn validate_content_labels(labels: &[String]) -> ApiResult<Vec<String>> {
+pub(crate) fn validate_content_labels(labels: &[String]) -> ApiResult<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for l in labels {
         if !CONTENT_LABELS.contains(&l.as_str()) {
@@ -1012,7 +1020,7 @@ pub const ONLINE: [&str; 4] = [
     "other_services",
 ];
 
-fn validate_online(kinds: &[String]) -> ApiResult<Vec<String>> {
+pub(crate) fn validate_online(kinds: &[String]) -> ApiResult<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for k in kinds {
         if !ONLINE.contains(&k.as_str()) {
@@ -1029,7 +1037,7 @@ fn validate_online(kinds: &[String]) -> ApiResult<Vec<String>> {
 }
 
 /// Server names: `host` or `host:port`, lowercase, with a dot (`play.example.com`).
-fn validate_online_hosts(hosts: &[String]) -> ApiResult<Vec<String>> {
+pub(crate) fn validate_online_hosts(hosts: &[String]) -> ApiResult<Vec<String>> {
     let mut out: Vec<String> = Vec::new();
     for h in hosts {
         let h = h.trim().to_ascii_lowercase();
@@ -1176,7 +1184,7 @@ pub(crate) fn validate_platforms(value: &[String]) -> ApiResult<Vec<String>> {
         .collect())
 }
 
-fn validate_min_age(value: i16) -> ApiResult<i16> {
+pub(crate) fn validate_min_age(value: i16) -> ApiResult<i16> {
     if ![0, 3, 7, 12, 16, 18].contains(&value) {
         return Err(ApiError::invalid("min_age", "use 0, 3, 7, 12, 16 or 18"));
     }
@@ -1353,6 +1361,17 @@ async fn update_app(
     if let Some(license) = &changes.license_spdx {
         qb.push(", license_spdx = ")
             .push_bind(validate_license(license)?);
+    }
+    // A branch is rated at least as the original, with its content labels (DESIGN §9).
+    if (changes.min_age.is_some() || changes.content_labels.is_some())
+        && let Some(floor) = crate::branches::rating_floor(&mut tx, app_id).await?
+    {
+        if let Some(min_age) = changes.min_age {
+            floor.check_age(min_age)?;
+        }
+        if let Some(labels) = &changes.content_labels {
+            floor.check_labels(labels)?;
+        }
     }
     if let Some(min_age) = changes.min_age {
         qb.push(", min_age = ")

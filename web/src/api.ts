@@ -64,6 +64,7 @@ export interface AppUpdate {
   mods?: Array<{ slug: string; title: string; author: string; note: string | null }>;
   /** Sandbox mode: the maker's declaration, whether it's suggested, and player reports. */
   sandbox_ready?: boolean;
+  sandbox_mismatch?: boolean;
   sandbox_suggested?: boolean;
   sandbox_trouble?: boolean;
 }
@@ -530,6 +531,8 @@ export interface AppDetail extends AppSummary {
   online_hosts: string[];
   /** The maker says it keeps local saves only in SLOP_SAVE_DIR and works in sandbox mode. */
   sandbox_ready: boolean;
+  /** ...but the check of its newest release found saves elsewhere: players aren't told it works. */
+  sandbox_mismatch: boolean;
   /** Sandbox mode is suggested: it goes online (servers Slop can't check). */
   sandbox_suggested: boolean;
   /** Enough players reported it doesn't work in sandbox mode. */
@@ -1571,6 +1574,14 @@ export interface RepoScan {
   network?: SourceHit[];
   /** Saves written to fixed places in the user's folders instead of SLOP_SAVE_DIR. */
   saves?: SourceHit[];
+  /**
+   * Where local saves go, as far as the source shows: SLOP_SAVE_DIR (`slop`), an engine folder
+   * the Slop app points into the save folder (`engine`, Godot's user://), fixed per-user folders
+   * (`elsewhere`, see `saves`), or no local saves found (`none`).
+   */
+  save_folder?: "slop" | "engine" | "elsewhere" | "none";
+  /** The store page says it works in sandbox mode, but the code saves elsewhere. */
+  sandbox_mismatch?: boolean;
   /** It goes online, but the store page didn't say so when this release was checked. */
   online_undeclared?: boolean;
 }
@@ -2613,6 +2624,13 @@ export const api = {
       kind: string;
       note: string;
       platforms: string[];
+      description_md?: string;
+      /** At least the original's; the original's when left out. */
+      min_age?: number;
+      content_labels?: ContentLabel[];
+      online?: OnlineKind[];
+      online_hosts?: string[];
+      sandbox_ready?: boolean;
     },
   ) =>
     request<{ slug: string }>(
