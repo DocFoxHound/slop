@@ -713,7 +713,7 @@ async fn the_games_own_mods_folder_holds_only_approved_mods() {
         std::fs::create_dir_all(&target).unwrap();
         std::fs::write(target.join("MyCheat.dll"), b"MZ hand-made").unwrap();
 
-        let launch = lib.prepare_launch("game", None, None).unwrap();
+        let launch = lib.prepare_launch("game", None, None, None).unwrap();
         assert_eq!(launch.unapproved_mods, ["MyCheat.dll"], "{folder}");
         assert!(
             launch.quarantined.is_empty(),
@@ -731,7 +731,7 @@ async fn the_games_own_mods_folder_holds_only_approved_mods() {
 
         // Removing the mod empties the folder at the next start, quietly.
         lib.uninstall_mod("big-mod").unwrap();
-        let launch = lib.prepare_launch("game", None, None).unwrap();
+        let launch = lib.prepare_launch("game", None, None, None).unwrap();
         assert!(launch.unapproved_mods.is_empty());
         assert!(!target.join("Plugin.dll").exists());
         std::fs::remove_dir_all(dir).unwrap();
@@ -757,6 +757,8 @@ if echo x > "$ESCAPE" 2>/dev/null; then echo "escape=written" >> report.txt; els
 if echo x > "$(dirname "$0")/../new" 2>/dev/null; then echo "files=written" >> report.txt; else echo "files=readonly" >> report.txt; fi
 echo "config=$XDG_CONFIG_HOME" >> report.txt
 cat old.txt >> report.txt 2>/dev/null
+if echo '{"mods": [{"slug": "dragons"}]}' > "$SLOP_LINK/requests/r.json" 2>/dev/null; then echo "request=written" >> report.txt; else echo "request=blocked" >> report.txt; fi
+if echo x > "$SLOP_LINK/answers/fake.json" 2>/dev/null; then echo "answers=written" >> report.txt; else echo "answers=readonly" >> report.txt; fi
 "#;
     let zip = zip_of(&[("bin/game", script, 0o755)]);
     fake.files
@@ -780,8 +782,15 @@ cat old.txt >> report.txt 2>/dev/null
     std::fs::write(saves.join("old.txt"), b"old=kept\n").unwrap();
     std::fs::write(saves.join("plugin.so"), b"\x7fELF\x02").unwrap();
 
+    // Slop Link: the game writes requests, and can only read answers in the box.
+    let link = dir.join("link/run");
+    std::fs::create_dir_all(link.join("requests")).unwrap();
+    std::fs::create_dir_all(link.join("answers")).unwrap();
     let run = |sandbox: Option<slop_client::sandbox::AppSandbox>| {
-        let mut launch = lib.prepare_launch("game", None, sandbox).unwrap();
+        let _ = std::fs::remove_file(link.join("answers/fake.json"));
+        let mut launch = lib
+            .prepare_launch("game", None, sandbox, Some(&link))
+            .unwrap();
         let status = launch
             .command
             .env("HOME", &home)
@@ -824,6 +833,11 @@ cat old.txt >> report.txt 2>/dev/null
         "nothing written outside the save folder"
     );
     assert!(boxed.contains("files=readonly"), "{boxed}");
+    assert!(
+        boxed.contains("request=written") && boxed.contains("answers=readonly"),
+        "{boxed}"
+    );
+    assert!(link.join("requests/r.json").exists());
     assert!(
         boxed.contains("old=kept"),
         "same saves in both modes: {boxed}"
@@ -1266,4 +1280,62 @@ async fn files_in_parts_are_checked_and_joined() {
         "{err}"
     );
     std::fs::remove_dir_all(dir).unwrap();
+}
+
+/// Sandbox mode on Windows (AppContainer): run on a Windows PC with
+/// `cargo test -p slop-client --test client windows_sandbox`. Starts Windows' own cmd.exe in an
+/// app's container and checks it reaches only the app's folders.
+#[cfg(windows)]
+#[test]
+fn windows_sandbox_sees_only_its_own_folders() {
+    use slop_client::sandbox::{Spec, container_name};
+    let root = tempdir();
+    let (files, saves, cache, mods) = (
+        root.join("apps/game/files"),
+        root.join("saves/game"),
+        root.join("cache/game"),
+        root.join("saves/game/mods"),
+    );
+    for d in [&files, &saves, &cache, &mods] {
+        std::fs::create_dir_all(d).unwrap();
+    }
+    std::fs::copy(r"C:\Windows\System32\cmd.exe", files.join("cmd.exe")).unwrap();
+    let secret = root.join("secret.txt");
+    std::fs::write(&secret, b"password").unwrap();
+    let p = |p: &std::path::Path| p.display().to_string();
+    let script = format!(
+        r#"type "{}" > "{}\copy.txt" & echo x> "{}\escape.txt" & echo x> "{}\new.txt" & echo x> "{}\cheat.txt" & echo ok> "{}\ok.txt""#,
+        p(&secret),
+        p(&saves),
+        p(&root),
+        p(&files),
+        p(&mods),
+        p(&saves)
+    );
+    let name = container_name("slop-test-game");
+    let spec = Spec {
+        name: name.clone(),
+        network: false,
+        read: vec![files.clone()],
+        write: vec![saves.clone(), cache.clone()],
+        read_only: vec![mods.clone()],
+        cwd: files.clone(),
+        program: files.join("cmd.exe"),
+        args: vec!["/c".into(), script],
+    };
+    slop_client::appcontainer::run(&spec).unwrap();
+    assert!(
+        saves.join("ok.txt").exists(),
+        "it ran and could write its saves"
+    );
+    let copied = std::fs::read(saves.join("copy.txt")).unwrap_or_default();
+    assert!(!copied.starts_with(b"password"), "the secret stayed hidden");
+    assert!(!root.join("escape.txt").exists(), "nothing written outside");
+    assert!(!files.join("new.txt").exists(), "its files are read-only");
+    assert!(
+        !mods.join("cheat.txt").exists(),
+        "its mods folder is read-only"
+    );
+    slop_client::appcontainer::remove(&name);
+    let _ = std::fs::remove_dir_all(root);
 }

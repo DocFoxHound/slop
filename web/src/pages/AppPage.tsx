@@ -595,8 +595,8 @@ function OnlineNotice({ app }: { app: AppDetail }) {
       <span className="badge warn">PLAYS ONLINE · SERVERS NOT CHECKED</span>{" "}
       Slop checked this {app.kind === "game" ? "game" : "app"}'s code, but it can't check the servers it connects to, and
       those can change at any time. A server could send something that harms your computer through a bug in the{" "}
-      {app.kind === "game" ? "game" : "app"}. We suggest running it in <b>sandbox mode</b> in the Slop app (Linux now,
-      Windows soon), where it can use only its own files and saves.
+      {app.kind === "game" ? "game" : "app"}. We suggest running it in <b>sandbox mode</b> in the Slop app, where it can use
+      only its own files and saves.
       <ul className="small">
         {app.online.map((k) => (
           <li key={k}>{ONLINE_LABEL[k]}</li>

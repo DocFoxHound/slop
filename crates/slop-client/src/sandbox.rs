@@ -3,8 +3,8 @@
 //! card and controllers. The rest of the computer (documents, browsers, keys, other apps, Slop
 //! itself) isn't there. Players choose it per app; Slop suggests it for apps that go online.
 //!
-//! Linux uses bubblewrap, the sandbox Flatpak is built on. Windows (AppContainer) comes next;
-//! until then `available` says no there.
+//! Linux uses bubblewrap, the sandbox Flatpak is built on. Windows uses an AppContainer, the
+//! box Store apps run in (appcontainer.rs).
 //!
 //! It limits what a compromised app can reach. It isn't a guarantee: on X11 desktops any window
 //! can read the keyboard, sandboxed or not.
@@ -27,9 +27,11 @@ pub struct Sandbox<'a> {
     pub saves: &'a Path,
     /// Its cache folder (writable, never copied or kept with saves).
     pub cache: &'a Path,
-    /// Folders inside the save folder kept read-only: a mods folder the game reads, which only
-    /// Slop fills (DESIGN §9).
+    /// Folders kept read-only: a mods folder in the saves the game reads, which only Slop
+    /// fills (DESIGN §9), and Slop Link's answers.
     pub read_only: &'a [PathBuf],
+    /// More writable folders: Slop Link's requests.
+    pub writable: &'a [PathBuf],
     /// Whether it may use the network.
     pub network: bool,
 }
@@ -99,9 +101,118 @@ pub fn available() -> Result<(), String> {
             ))
         }
     }
-    #[cfg(not(target_os = "linux"))]
+    #[cfg(windows)]
+    {
+        // Making (or finding) a container is the check: it fails where AppContainers can't be
+        // used, such as on old Windows or locked-down machines.
+        crate::appcontainer::check()
+            .map_err(|e| format!("Windows didn't let Slop make a sandbox: {e}"))
+    }
+    #[cfg(not(any(target_os = "linux", windows)))]
     {
         Err("sandbox mode isn't available on this system yet".into())
+    }
+}
+
+/// What the Windows launcher sets up (`--slop-sandbox <spec>`, appcontainer.rs).
+#[derive(Debug, Serialize, Deserialize, PartialEq, Eq)]
+pub struct Spec {
+    /// The app's container: `slop.<address>`.
+    pub name: String,
+    pub network: bool,
+    /// Readable: the app's files and its mods.
+    pub read: Vec<PathBuf>,
+    /// Writable: its save and cache folders.
+    pub write: Vec<PathBuf>,
+    /// Inside a writable folder but kept read-only: a mods folder in the saves.
+    pub read_only: Vec<PathBuf>,
+    pub cwd: PathBuf,
+    pub program: PathBuf,
+    pub args: Vec<String>,
+}
+
+impl Spec {
+    pub fn new(sandbox: &Sandbox, name: String, program: &Path, args: &[String]) -> Self {
+        Spec {
+            name,
+            network: sandbox.network,
+            read: std::iter::once(sandbox.files.to_path_buf())
+                .chain(sandbox.mods.iter().cloned())
+                .collect(),
+            write: [sandbox.saves, sandbox.cache]
+                .into_iter()
+                .map(Path::to_path_buf)
+                .chain(sandbox.writable.iter().cloned())
+                .collect(),
+            read_only: sandbox.read_only.to_vec(),
+            cwd: sandbox.files.to_path_buf(),
+            program: program.to_path_buf(),
+            args: args.to_vec(),
+        }
+    }
+}
+
+/// An app's container name on Windows: at most 64 characters.
+pub fn container_name(slug: &str) -> String {
+    format!("slop.{slug}").chars().take(64).collect()
+}
+
+/// Quotes one argument for a Windows command line, as the C runtime splits it again.
+pub fn quote_windows_arg(arg: &str) -> String {
+    if !arg.is_empty() && !arg.contains([' ', '\t', '\n', '\x0b', '"']) {
+        return arg.to_string();
+    }
+    let mut out = String::from('"');
+    let mut slashes = 0;
+    for c in arg.chars() {
+        match c {
+            '\\' => slashes += 1,
+            '"' => {
+                out.extend(std::iter::repeat_n('\\', slashes * 2 + 1));
+                out.push('"');
+                slashes = 0;
+            }
+            _ => {
+                out.extend(std::iter::repeat_n('\\', slashes));
+                out.push(c);
+                slashes = 0;
+            }
+        }
+    }
+    out.extend(std::iter::repeat_n('\\', slashes * 2));
+    out.push('"');
+    out
+}
+
+/// The Windows launcher's entry point: the Slop app calls this when started with
+/// `--slop-sandbox <spec>`, and exits with what it returns.
+#[cfg(windows)]
+pub fn launcher_main(spec: &str) -> i32 {
+    let spec: Spec = match serde_json::from_str(spec) {
+        Ok(s) => s,
+        Err(e) => {
+            eprintln!("slop sandbox: bad spec: {e}");
+            return 125;
+        }
+    };
+    // Temporary files go to the app's cache, which it can write.
+    let tmp = spec.write.get(1).map(|c| c.join("tmp"));
+    // SAFETY: the launcher is single-threaded at this point.
+    unsafe {
+        if let Some(tmp) = &tmp
+            && std::fs::create_dir_all(tmp).is_ok()
+        {
+            std::env::set_var("TMP", tmp);
+            std::env::set_var("TEMP", tmp);
+        }
+        std::env::set_var("SLOP_SANDBOX", "1");
+    }
+    match crate::appcontainer::run(&spec) {
+        Ok(code) => code as i32,
+        Err(e) => {
+            eprintln!("slop sandbox: {e}");
+            125
+        }
     }
 }
 
@@ -118,7 +229,12 @@ fn bwrap_path() -> Option<PathBuf> {
 /// Wraps `program args…` in the sandbox. The environment set on the returned command reaches
 /// the app, except for the session secrets removed here.
 #[cfg(target_os = "linux")]
-pub fn command(sandbox: &Sandbox, program: &Path, args: &[String]) -> std::io::Result<Command> {
+pub fn command(
+    sandbox: &Sandbox,
+    program: &Path,
+    args: &[String],
+    _name: String,
+) -> std::io::Result<Command> {
     let bwrap = bwrap_path().ok_or_else(|| std::io::Error::other("bubblewrap isn't installed"))?;
     let mut cmd = Command::new(bwrap);
     cmd.args(arguments(sandbox, &Host::current()))
@@ -129,8 +245,30 @@ pub fn command(sandbox: &Sandbox, program: &Path, args: &[String]) -> std::io::R
     Ok(cmd)
 }
 
-#[cfg(not(target_os = "linux"))]
-pub fn command(_: &Sandbox, _: &Path, _: &[String]) -> std::io::Result<Command> {
+/// On Windows: the Slop app itself, as the launcher (`--slop-sandbox <spec>`). `name` is the
+/// app's container (`container_name`).
+#[cfg(windows)]
+pub fn command(
+    sandbox: &Sandbox,
+    program: &Path,
+    args: &[String],
+    name: String,
+) -> std::io::Result<Command> {
+    let launcher = match std::env::var_os("SLOP_SANDBOX_LAUNCHER") {
+        Some(p) => PathBuf::from(p),
+        None => std::env::current_exe()?,
+    };
+    let spec = serde_json::to_string(&Spec::new(sandbox, name, program, args))
+        .map_err(std::io::Error::other)?;
+    let mut cmd = Command::new(launcher);
+    cmd.arg("--slop-sandbox")
+        .arg(spec)
+        .current_dir(sandbox.files);
+    Ok(cmd)
+}
+
+#[cfg(not(any(target_os = "linux", windows)))]
+pub fn command(_: &Sandbox, _: &Path, _: &[String], _: String) -> std::io::Result<Command> {
     Err(std::io::Error::other(
         "sandbox mode isn't available on this system yet",
     ))
@@ -270,10 +408,13 @@ pub fn arguments(s: &Sandbox, host: &Host) -> Vec<OsString> {
         args.extend(bind("--ro-bind", m));
     }
     args.extend(bind("--bind", s.saves));
+    args.extend(bind("--bind", s.cache));
+    for w in s.writable {
+        args.extend(bind("--bind", w));
+    }
     for r in s.read_only {
         args.extend(bind("--ro-bind", r));
     }
-    args.extend(bind("--bind", s.cache));
     for name in UNSET {
         args.extend([os("--unsetenv"), os(name)]);
     }
@@ -307,6 +448,7 @@ mod tests {
             saves: Path::new("/home/ann/.slop/saves/game"),
             cache: Path::new("/home/ann/.slop/cache/game"),
             read_only: &read_only,
+            writable: &[],
             network,
         };
         arguments(&s, &host())
@@ -319,6 +461,58 @@ mod tests {
         args.windows(seq.len())
             .position(|w| w.iter().zip(seq).all(|(a, b)| a == b))
             .unwrap_or_else(|| panic!("{seq:?} not in {args:?}"))
+    }
+
+    #[test]
+    fn windows_arguments_survive_quoting() {
+        for (arg, quoted) in [
+            ("plain", "plain"),
+            ("", "\"\""),
+            ("two words", "\"two words\""),
+            ("C:\\Games\\My Game\\", "\"C:\\Games\\My Game\\\\\""),
+            ("say \"hi\"", "\"say \\\"hi\\\"\""),
+            ("a\\\\\"b", "\"a\\\\\\\\\\\"b\""),
+        ] {
+            assert_eq!(quote_windows_arg(arg), quoted, "{arg}");
+        }
+        assert_eq!(container_name(&"x".repeat(80)).len(), 64);
+    }
+
+    #[test]
+    fn the_windows_launcher_gets_the_same_folders() {
+        let mods = [PathBuf::from("C:/s/mods/m/files")];
+        let read_only = [PathBuf::from("C:/s/saves/game/mods")];
+        let s = Sandbox {
+            files: Path::new("C:/s/apps/game/files"),
+            mods: &mods,
+            saves: Path::new("C:/s/saves/game"),
+            cache: Path::new("C:/s/cache/game"),
+            read_only: &read_only,
+            writable: &[],
+            network: false,
+        };
+        let spec = Spec::new(
+            &s,
+            container_name("game"),
+            Path::new("C:/s/apps/game/files/game.exe"),
+            &["-x".into()],
+        );
+        assert_eq!(spec.name, "slop.game");
+        assert_eq!(
+            spec.read,
+            [PathBuf::from("C:/s/apps/game/files"), mods[0].clone()]
+        );
+        assert_eq!(
+            spec.write,
+            [
+                PathBuf::from("C:/s/saves/game"),
+                PathBuf::from("C:/s/cache/game")
+            ]
+        );
+        assert_eq!(spec.read_only, read_only);
+        assert!(!spec.network);
+        let back: Spec = serde_json::from_str(&serde_json::to_string(&spec).unwrap()).unwrap();
+        assert_eq!(back, spec);
     }
 
     #[test]
