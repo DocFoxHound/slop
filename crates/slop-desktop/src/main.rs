@@ -143,6 +143,7 @@ async fn sign_in_start(desktop: State<'_, Desktop>) -> CommandResult<SignInStart
             Platform::Mac => "macOS",
             Platform::Linux | Platform::LinuxDeb | Platform::LinuxRpm => "Linux",
             Platform::Android => "Android",
+            Platform::Any => "desktop",
         })
     );
     let pending = signin::begin(&desktop.api, &device).await?;

@@ -287,7 +287,8 @@ async fn list_apps(
     qb.push(" where ");
     push_store_visible(&mut qb, rules, policy);
     qb.push(if query.community {
-        " and a.parent_app_id is not null"
+        // Community builds you can run; mods show on their game's page.
+        " and a.parent_app_id is not null and a.branch_kind <> 'addon'"
     } else {
         " and a.parent_app_id is null"
     });
@@ -1263,6 +1264,18 @@ async fn update_app(
             .push_bind(validate_min_age(min_age)?);
     }
     if let Some(platforms) = &changes.platforms {
+        let is_mod: bool = sqlx::query_scalar(
+            "select branch_kind is not distinct from 'addon' from apps where id = $1",
+        )
+        .bind(app_id)
+        .fetch_one(&mut *tx)
+        .await?;
+        if is_mod {
+            return Err(ApiError::invalid(
+                "platforms",
+                "a mod is one .zip for every platform",
+            ));
+        }
         qb.push(", platforms = ")
             .push_bind(validate_platforms(platforms)?);
     }

@@ -7955,6 +7955,116 @@ async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
     assert_eq!(own["maker"]["display_name"], "Bo Brancher");
 }
 
+/// Mods (Content Policy, "Code from outside Slop"): anyone publishes one for any app, it's
+/// checked and reviewed like an app, and it's listed only on the app's page, never on its own.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn mods_are_listed_on_their_game_page(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (author_id, author) = app.user("Bo Modder", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "castle",
+        "released",
+        "platforms = '{windows}', repo_url = 'https://github.com/mia/castle'",
+    )
+    .await;
+    let res = app
+        .send(req(Method::POST, "/v1/apps/castle/branches").cookie(&author).json(json!({
+            "slug": "castle-dragons", "title": "Dragons", "summary": "Adds dragons to Castle.",
+            "repo_url": "https://github.com/bo/castle-dragons", "license_spdx": "MIT", "kind": "addon",
+            "note": "Three new dragons and a lair."
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/castle-dragons").cookie(&author))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        page["platforms"],
+        json!(["any"]),
+        "one .zip for every platform"
+    );
+    assert_eq!(page["branch"]["kind_label"], "Mod");
+
+    // Its release is one .zip with nothing to start.
+    let release = |file: Value| {
+        req(Method::POST, "/v1/apps/castle-dragons/releases")
+            .cookie(&author)
+            .json(json!({ "version": "1.0.0", "commit_sha": "a".repeat(40), "files": [file] }))
+    };
+    let url = "https://github.com/bo/castle-dragons/releases/download/v1.0.0/dragons.zip";
+    let res = app
+        .send(release(
+            json!({ "platform": "any", "kind": "archive", "url": url, "exec": "dragons.exe" }),
+        ))
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "no program to start"
+    );
+    let res = app
+        .send(release(
+            json!({ "platform": "windows", "kind": "archive", "url": url, "exec": "x.exe" }),
+        ))
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "mods aren't per platform"
+    );
+    let res = app
+        .send(release(
+            json!({ "platform": "any", "kind": "archive", "url": url }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/castle-dragons")
+                .cookie(&author)
+                .json(json!({ "platforms": ["windows"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Once approved and listed: on the game's page, not in the store or the Community shelf.
+    let id: Uuid = sqlx::query_scalar("select id from apps where slug = 'castle-dragons'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
+         values ($1, $2, '0.9.0', repeat('b', 40), 'approved', $3, now(), true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(author_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    admin::list_app(&app.db, "castle-dragons", "test")
+        .await
+        .unwrap();
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps")).await,
+        ["castle"]
+    );
+    assert!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?community=true"))
+            .await
+            .is_empty()
+    );
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/castle")).await).await;
+    assert_eq!(page["community"][0]["slug"], "castle-dragons");
+    assert_eq!(page["community"][0]["branch_kind"], "addon");
+    assert_eq!(page["community"][0]["adds"], json!([]));
+}
+
 // ---------------------------------------------------------------------------------------------
 // Private Slop (DESIGN §13)
 

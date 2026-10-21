@@ -7,6 +7,12 @@
 //! with what platforms it adds, and in the "Community branches" shelf. Installing one needs an
 //! "I understand" first: made by its author, not the publisher; checked the same way; may lag
 //! behind official updates.
+//!
+//! A **mod** (kind `addon`) is a branch too: anyone can publish one for any app, from their own
+//! repository, and it's checked, reviewed and signed the same way. Its releases are one `.zip`
+//! for every platform (`any`) with nothing to start; the Slop app installs it for the game, which
+//! loads it. Apps may only load mods approved on Slop (Content Policy, "Code from outside Slop").
+//! Mods show beside community builds on the original's page, never in the store on their own.
 
 use axum::{
     Json, Router,
@@ -27,7 +33,8 @@ use crate::{
 };
 
 pub const KINDS: &[(&str, &str)] = &[
-    ("mod", "Mod"),
+    ("addon", "Mod"),
+    ("mod", "Modded version"),
     ("fix", "Fix"),
     ("translation", "Translation"),
     ("port", "Port"),
@@ -44,7 +51,7 @@ pub fn routes() -> Router<AppState> {
 pub async fn needs_pulse(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "select exists (select 1 from apps b join apps p on p.id = b.parent_app_id
-                        where b.id = $1 and p.kind = 'game'
+                        where b.id = $1 and p.kind = 'game' and b.branch_kind <> 'addon'
                           and exists (select 1 from pulse_sessions s where s.app_id = p.id and s.started_at is not null))",
     )
     .bind(app_id)
@@ -106,7 +113,7 @@ pub struct CommunityBuild {
     branch_kind: String,
     branch_note: Option<String>,
     platforms: Vec<String>,
-    /// Platforms it has that the original doesn't: the gaps it fills.
+    /// Platforms it has that the original doesn't: the gaps it fills (never for mods).
     #[sqlx(skip)]
     adds: Vec<String>,
 }
@@ -134,7 +141,7 @@ pub async fn community(
         b.adds = b
             .platforms
             .iter()
-            .filter(|p| !parent_platforms.contains(p))
+            .filter(|p| *p != "any" && !parent_platforms.contains(p))
             .cloned()
             .collect();
     }
@@ -157,6 +164,8 @@ struct Register {
     license_spdx: String,
     kind: String,
     note: String,
+    /// Not needed for a mod (`addon`): its releases are one .zip for every platform.
+    #[serde(default)]
     platforms: Vec<String>,
 }
 
@@ -191,13 +200,18 @@ async fn register(
     let note = catalog::validate_text("note", &b.note, 500, false)?;
     let repo_url = catalog::validate_repo_url_in(&state, &b.repo_url)?;
     let license = catalog::validate_license(&b.license_spdx)?;
-    let platforms = catalog::validate_platforms(&b.platforms)?;
     if !KINDS.iter().any(|(k, _)| *k == b.kind) {
         return Err(ApiError::invalid(
             "kind",
-            "mod, fix, translation, port or other",
+            "addon, mod, fix, translation, port or other",
         ));
     }
+    // A mod is one .zip for every platform; other branches are builds of the app.
+    let platforms = if b.kind == "addon" {
+        vec!["any".to_string()]
+    } else {
+        catalog::validate_platforms(&b.platforms)?
+    };
     let same_repo: bool =
         sqlx::query_scalar("select lower(repo_url) = lower($2) from apps where id = $1")
             .bind(parent)
@@ -207,7 +221,7 @@ async fn register(
     if same_repo {
         return Err(ApiError::invalid(
             "repo_url",
-            "a branch builds from your own fork, not the original repository",
+            "a branch or mod builds from your own repository, not the original one",
         ));
     }
     // The fork must be the author's own.

@@ -242,6 +242,11 @@ function AppView({ app }: { app: AppDetail }) {
             <h3>{app.stage === "coming_soon" ? "Coming soon" : "Get it"}</h3>
             {app.stage === "coming_soon" ? (
               <p className="muted">No builds yet. This is a Coming soon page.</p>
+            ) : app.platforms.includes("any") && app.branch ? (
+              <p className="muted">
+                A mod for <Link to={`/app/${app.branch.parent_slug}`}>{app.branch.parent_title}</Link>. Adding mods to games
+                in the Slop app is coming soon.
+              </p>
             ) : app.branch && !app.is_mine ? (
               <CommunityGate app={app}>
                 <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} />
@@ -360,6 +365,13 @@ function runsOn(platforms: AppPlatform[]): string {
   return parts.join(" · ");
 }
 
+const BRANCH_LABEL: Record<string, string> = {
+  mod: "Modded version",
+  fix: "Fix",
+  translation: "Translation",
+  port: "Port",
+  other: "Other",
+};
 const PLATFORM_NAME: Record<string, string> = { windows: "Windows", linux: "Linux", "linux-deb": ".deb", "linux-rpm": ".rpm" };
 
 /** A community build's caveats (DESIGN §9), ticked before it can be installed. */
@@ -387,23 +399,47 @@ function CommunityGate({ app, children }: { app: AppDetail; children: ReactNode 
   );
 }
 
-/** Community builds of this app: ones that fill a platform gap first. */
+/** The Community area: mods for this app, then community builds (ones that fill a platform gap
+ * first). Both are made by other people and checked and reviewed like any app. */
 function CommunityBuilds({ app }: { app: AppDetail }) {
+  const mods = app.community.filter((b) => b.branch_kind === "addon");
+  const builds = app.community.filter((b) => b.branch_kind !== "addon");
   return (
     <div className="panel panel-pad community-builds">
-      <h3>Community builds</h3>
-      {app.community.length === 0 ? (
-        <p className="muted small">None yet. Mods, fixes, translations and ports from forks show here.</p>
+      <h3>Community</h3>
+      <h4>Mods</h4>
+      {mods.length === 0 ? (
+        <p className="muted small">None yet. Mods are checked and reviewed like apps; only approved ones are listed.</p>
       ) : (
         <ul className="plain">
-          {app.community.map((b) => (
+          {mods.map((b) => (
+            <li key={b.slug}>
+              <Link to={`/app/${b.slug}`}>
+                <b>{b.title}</b>
+              </Link>{" "}
+              <span className="badge neutral">MOD</span>
+              <div className="muted small">
+                by {b.author}
+                {b.branch_note && <> · {b.branch_note}</>}
+                {b.not_slop_percent !== null && <> · {b.not_slop_percent}% Not Slop</>}
+              </div>
+            </li>
+          ))}
+        </ul>
+      )}
+      <h4>Community builds</h4>
+      {builds.length === 0 ? (
+        <p className="muted small">None yet. Modded versions, fixes, translations and ports from forks show here.</p>
+      ) : (
+        <ul className="plain">
+          {builds.map((b) => (
             <li key={b.slug}>
               <Link to={`/app/${b.slug}`}>
                 <b>{b.title}</b>
               </Link>{" "}
               <span className="badge neutral">COMMUNITY</span>
               <div className="muted small">
-                {b.branch_kind} by {b.author}
+                {BRANCH_LABEL[b.branch_kind] ?? b.branch_kind} by {b.author}
                 {b.adds.length > 0 && <> · adds {b.adds.map((p) => PLATFORM_NAME[p] ?? p).join(", ")}</>}
                 {b.not_slop_percent !== null && <> · {b.not_slop_percent}% Not Slop</>}
               </div>
@@ -412,9 +448,10 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
         </ul>
       )}
       {!app.is_mine && (
-        <Link className="small" to={`/app/${app.slug}/branch`}>
-          Register a branch from your fork →
-        </Link>
+        <div className="row-actions small">
+          <Link to={`/app/${app.slug}/branch?kind=addon`}>Publish a mod →</Link>
+          <Link to={`/app/${app.slug}/branch`}>Register a branch from your fork →</Link>
+        </div>
       )}
     </div>
   );
