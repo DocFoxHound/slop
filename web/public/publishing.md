@@ -261,6 +261,8 @@ jobs:
 | `linux-runtime` | `steam-sniper` builds the Linux program inside Valve's Steam Runtime 3 (sniper), so it runs on older Linux systems too (anything with glibc 2.31, e.g. Ubuntu 20.04 or Debian 11). For `rust`, `go` and `custom`; Rust is installed in the container, following your `rust-toolchain.toml`. The container is a fixed version Slop tested, so builds don't change unexpectedly |
 | `publish` | `false` builds and checks only: no release, nothing sent to Slop, the files kept as the run's artifacts for a day. For trying it out |
 | `sign` | `true` by default; set `false` for private repositories without GitHub Enterprise |
+| `itch-target` | Optional: also publish each build to your itch.io page, as `user/game` (from `user.itch.io/game`). Windows and Linux go to the `windows` and `linux` channels with itch's own tool. Needs the `BUTLER_API_KEY` secret (itch.io → Settings → API keys). Slop stays your store page and checks; itch is extra reach |
+| `flatpak-app-id` | Optional: a Flatpak ID such as `io.github.you.Game`. Each release then carries a draft Flatpak manifest for the Linux build, for you to finish (permissions, metainfo, screenshots) and submit to Flathub |
 | `signpath-organization-id` | Optional: sign the Windows program for free with SignPath Foundation (see [Signing](#signing)). Needs the `SIGNPATH_API_TOKEN` secret |
 | `signpath-project-slug` | Your SignPath project (default: the app's store address) |
 | `signpath-signing-policy-slug` | Your SignPath signing policy (default: `release-signing`) |

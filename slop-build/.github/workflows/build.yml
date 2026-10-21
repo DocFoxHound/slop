@@ -147,6 +147,21 @@ on:
         required: false
         type: string
         default: ""
+      itch-target:
+        description: >-
+          Optional: also publish each build to your itch.io page, as "user/game" (from the page's
+          address, user.itch.io/game). Windows and Linux go to the windows and linux channels with
+          itch's own tool (butler). Needs the BUTLER_API_KEY secret.
+        required: false
+        type: string
+        default: ""
+      flatpak-app-id:
+        description: >-
+          Optional: a Flatpak app ID, e.g. io.github.you.Game, to attach a draft Flatpak manifest
+          for the Linux build to each release, for you to finish and submit to Flathub.
+        required: false
+        type: string
+        default: ""
       signpath-organization-id:
         description: >-
           Optional: your SignPath organization ID, to sign the Windows program with a free
@@ -166,6 +181,9 @@ on:
         type: string
         default: release-signing
     secrets:
+      BUTLER_API_KEY:
+        description: Your itch.io API key (itch.io → Settings → API keys), only with itch-target.
+        required: false
       SIGNPATH_API_TOKEN:
         description: Your SignPath CI user's API token (only with signpath-organization-id).
         required: false
@@ -962,6 +980,85 @@ jobs:
           GH_TOKEN: ${{ github.token }}
           TAG: ${{ needs.prepare.outputs.tag }}
         run: gh release upload "$TAG" slop-dist/out/* --repo "$GITHUB_REPOSITORY" --clobber
+
+      # itch.io: the same files, pushed with itch's own tool (butler, pinned and checked).
+      - name: Push to itch.io
+        if: inputs.publish && inputs.itch-target != ''
+        env:
+          ITCH: ${{ inputs.itch-target }}
+          PLATFORM: ${{ matrix.platform }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}
+        run: |
+          [[ "$ITCH" =~ ^[A-Za-z0-9_-]+/[A-Za-z0-9_-]+$ ]] || { echo "::error::itch-target is user/game, from your page's address"; exit 1; }
+          [ -n "$BUTLER_API_KEY" ] || { echo "::error::itch-target needs the BUTLER_API_KEY secret (itch.io → Settings → API keys)"; exit 1; }
+          python3 - "$PLATFORM" "$RUNNER_TEMP/butler" <<'PY'
+          import hashlib, sys, urllib.request, zipfile, io, os
+          platform, dest = sys.argv[1:3]
+          # butler 15.32.0 from itch.io, checked against the hash Slop recorded.
+          builds = {
+              "linux": ("linux-amd64", "2335971394ef6596f95ded0833e85ee28755e13761716ef4c91d6b11f69162f5"),
+              "windows": ("windows-amd64", "5902c488b86bb3518ca00bf4e706d7687f229e3f0f28653cd943348ea9ec8878"),
+          }
+          os_name, sha = builds[platform]
+          data = urllib.request.urlopen(f"https://broth.itch.zone/butler/{os_name}/15.32.0/archive/default").read()
+          if hashlib.sha256(data).hexdigest() != sha:
+              raise SystemExit("::error::butler's download doesn't match the expected hash; not running it")
+          zipfile.ZipFile(io.BytesIO(data)).extractall(dest)
+          PY
+          butler="$RUNNER_TEMP/butler/butler"; [ "$PLATFORM" = windows ] && butler="$butler.exe"
+          chmod +x "$butler" 2>/dev/null || true
+          "$butler" push slop-dist/app "$ITCH:$PLATFORM" --userversion "$VERSION"
+
+      # A draft Flatpak manifest for the Linux build, for the maker to finish and send to Flathub.
+      - name: Draft Flatpak manifest
+        if: inputs.publish && inputs.flatpak-app-id != '' && matrix.platform == 'linux'
+        env:
+          APP: ${{ inputs.app }}
+          APP_ID: ${{ inputs.flatpak-app-id }}
+          TAG: ${{ needs.prepare.outputs.tag }}
+          VERSION: ${{ needs.prepare.outputs.version }}
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          [[ "$APP_ID" =~ ^[A-Za-z][A-Za-z0-9_]*(\.[A-Za-z0-9_-]+){2,}$ ]] || { echo "::error::flatpak-app-id is reverse-DNS, e.g. io.github.you.Game"; exit 1; }
+          python3 - <<'PY' > "slop-dist/$APP_ID.yml"
+          import glob, hashlib, json, os
+          app, app_id, tag, version = (os.environ[k] for k in ("APP", "APP_ID", "TAG", "VERSION"))
+          archive = glob.glob(f"slop-dist/out/{app}-{version}-linux-x86_64.tar.gz")[0]
+          name = os.path.basename(archive)
+          sha = hashlib.sha256(open(archive, "rb").read()).hexdigest()
+          url = f"https://github.com/{os.environ['GITHUB_REPOSITORY']}/releases/download/{tag}/{name}"
+          exe = os.environ["SLOP_EXEC"]
+          print(f"""# Draft made by Slop Build for {app} {version}. Check the permissions (finish-args),
+          # add a metainfo file with screenshots, and follow https://docs.flathub.org/docs/for-app-authors/submission
+          app-id: {app_id}
+          runtime: org.freedesktop.Platform
+          runtime-version: '24.08'
+          sdk: org.freedesktop.Sdk
+          command: {app}
+          finish-args:
+            - --share=ipc
+            - --socket=x11
+            - --socket=wayland
+            - --socket=pulseaudio
+            - --device=dri
+            # - --share=network   # only if it goes online
+          modules:
+            - name: {app}
+              buildsystem: simple
+              build-commands:
+                - mkdir -p /app/lib/{app} /app/bin
+                - cp -r . /app/lib/{app}/
+                - printf '#!/bin/sh\\nexec /app/lib/{app}/{exe} "$@"\\n' > /app/bin/{app}
+                - chmod +x /app/bin/{app}
+              sources:
+                - type: archive
+                  url: {url}
+                  sha256: {sha}
+                  strip-components: 0
+          """)
+          PY
+          gh release upload "$TAG" "slop-dist/$APP_ID.yml" --repo "$GITHUB_REPOSITORY" --clobber
 
       - name: Keep the build (build and check only)
         if: ${{ !inputs.publish }}

@@ -63,6 +63,8 @@ GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split
 | `node-version` | `electron`, `tauri`, `web` |
 | `linux-runtime` | `steam-sniper`: `rust`, `go` and `custom` compile Linux inside Valve's Steam Runtime 3 (sniper) SDK container, so the program needs only glibc 2.31 (tried with podman, 2026-10-21). The image is pinned to version 3.0.20260928.262393 by digest, so a change at Valve can't alter builds; moving it is a recipe change. Godot and Unity ship their engine's own prebuilt player (Godot 4.4 needs glibc 2.28), so they don't need it: the Pong example's 16 tests pass inside sniper |
 | `publish` | `false`: build and check only, no release, nothing sent to Slop |
+| `itch-target` | Optional: also push each build to itch.io (`user/game`) with butler 15.32.0, checked by hash; needs the `BUTLER_API_KEY` secret |
+| `flatpak-app-id` | Optional: attach a draft Flatpak manifest for the Linux build to each release (`io.github.you.Game`) |
 | `signpath-organization-id` | Optional: sign the Windows program with SignPath (needs the `SIGNPATH_API_TOKEN` secret) |
 | `signpath-project-slug` | SignPath project; defaults to `app` |
 | `signpath-signing-policy-slug` | `release-signing` by default |
