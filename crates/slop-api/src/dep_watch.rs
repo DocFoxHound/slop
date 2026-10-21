@@ -55,6 +55,9 @@ impl Found {
     }
 }
 
+/// Ecosystems OSV has advisories for, as Slop names them.
+const OSV_ECOSYSTEMS: &[&str] = &["crates.io", "npm", "PyPI", "Go", "NuGet", "Maven"];
+
 /// Asks OSV which advisories affect these packages. Returns (package index, advisory ID) pairs.
 async fn query(state: &AppState, packages: &[Package]) -> anyhow::Result<Vec<(usize, String)>> {
     #[derive(Deserialize)]
@@ -72,10 +75,16 @@ async fn query(state: &AppState, packages: &[Package]) -> anyhow::Result<Vec<(us
     }
     let url = state.config.releases.osv_api_base.join("v1/querybatch")?;
     let mut out = Vec::new();
-    for (chunk_no, chunk) in packages.chunks(BATCH).enumerate() {
+    // OSV knows these ecosystems; Unity and Godot packages are read for the payment check only.
+    let known: Vec<(usize, &Package)> = packages
+        .iter()
+        .enumerate()
+        .filter(|(_, p)| OSV_ECOSYSTEMS.contains(&p.ecosystem.as_str()))
+        .collect();
+    for chunk in known.chunks(BATCH) {
         let queries: Vec<Value> = chunk
             .iter()
-            .map(|p| json!({ "package": { "ecosystem": p.ecosystem, "name": p.name }, "version": p.version }))
+            .map(|(_, p)| json!({ "package": { "ecosystem": p.ecosystem, "name": p.name }, "version": p.version }))
             .collect();
         let res = state
             .fetch_http
@@ -89,9 +98,9 @@ async fn query(state: &AppState, packages: &[Package]) -> anyhow::Result<Vec<(us
             anyhow::bail!("OSV answered {}", res.status().as_u16());
         }
         let batch: Batch = res.json().await.context("OSV's answer")?;
-        for (i, r) in batch.results.into_iter().enumerate() {
+        for ((index, _), r) in chunk.iter().zip(batch.results) {
             for v in r.vulns {
-                out.push((chunk_no * BATCH + i, v.id));
+                out.push((*index, v.id));
             }
         }
     }
