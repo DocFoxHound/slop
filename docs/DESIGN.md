@@ -1,7 +1,7 @@
 # Slop — Design Document
 
-**Status:** Concept · clickable mockup in this folder
-**Last updated:** 2026-10-17
+**Status:** Built and running as a private test deployment; sections say what's built and when. The original clickable mockup is kept in `mockup/` for reference
+**Last updated:** 2026-10-21
 **Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) (how it's built) · [`PAYMENTS.md`](PAYMENTS.md) (donations and People payments) · [`SECURITY.md`](SECURITY.md) (security and trust) · [`METRICS.md`](METRICS.md) (donation & vote history) · [`LEGAL.md`](LEGAL.md) (legal framework)
 
 ---
@@ -359,9 +359,11 @@ The maker pays the creative **directly** (Stripe, the creative's own account). S
 6. **Private Slop downloads** through short-lived GitHub links (`ARCHITECTURE.md` §6.5).
 7. **Where exactly "explicit" begins:** the wording for the Content Policy (`LEGAL.md` §5.11).
 
-## 18. What the mockup simulates
+## 18. The mockup and the simulation
 
-All data is invented. Sign-in, scans, installs, Pulse handshakes, donations, reports, GitHub links, phone sending and quotes are simulated in the browser. Everything you do is saved only in your browser. Use the **Preview as** switch in the title bar to see Windows, macOS, Linux, iOS and Android.
+- **The real Slop** (website, desktop app and API) runs on the test deployment (`deploy/README.md`). Sign-in, scans, installs, Pulse and reports are real there; People payments are built but wait for a Stripe account.
+- **The mockup** (`mockup/`) is the original design reference. All its data is invented and saved only in your browser, and its **Preview as** switch shows Windows, macOS, Linux, iOS and Android. It isn't updated as the real app changes, and its fake data and shortcuts are never copied into real code (`AGENTS.md`).
+- **The simulation sandbox** (`docs/SIMULATION.md`) runs the real Slop on its own `_sim` database with invented apps, players, votes and play, to test recommendations, ratings and player counts against a known truth. The browser tests use the same simulation on throwaway databases.
 
 ## 19. Chat
 

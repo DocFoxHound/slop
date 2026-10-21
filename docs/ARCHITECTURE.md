@@ -1,7 +1,7 @@
 # Slop — Technical Architecture
 
-**Status:** Draft · companion to [`DESIGN.md`](DESIGN.md)
-**Last updated:** 2026-10-17
+**Status:** Built and running as a test deployment (§0); the cloud setup below is still the plan · companion to [`DESIGN.md`](DESIGN.md)
+**Last updated:** 2026-10-21
 **Related:** [`PAYMENTS.md`](PAYMENTS.md) · [`SECURITY.md`](SECURITY.md) · [`METRICS.md`](METRICS.md) · [`LEGAL.md`](LEGAL.md)
 
 ---
@@ -18,6 +18,23 @@
 - **No staged rollouts.**
 
 **Decided 2026-10-18:** the **API server is written in Rust** (axum, sqlx), matching the Tauri core.
+
+## 0. What runs today (2026-10-21)
+
+The diagram in §2 is the target. Today everything runs on **one server** (details and setup in
+`deploy/README.md`):
+
+| Part | Today | Target |
+|---|---|---|
+| API and website | One Rust program (`crates/slop-api`) behind Caddy, deployed by a systemd timer from `main` after the tests pass | The same program on a cloud container service |
+| Database | Postgres in podman on the same server, nightly backups with a weekly restore check | Managed Postgres with point-in-time recovery |
+| Job queue, search | In Postgres (as planned) | The same |
+| Files | None stored: builds stay on makers' release pages; store-page pictures and videos are read from the repository (`GITHUB_RAW_BASE`) | Object storage + CDN for manifests and reports |
+| Scanning | A locked-down container per file on the same server (ClamAV, YARA, capa), plus Microsoft Defender results from makers' GitHub runs (§6.7) | A separate cloud account, signed verdicts |
+| Desktop app | Windows (built on GitHub, signed updates) and Linux (`.deb`, `.rpm`, built on the server) | Plus macOS, Android, and iOS if it goes ahead |
+| Slop Build | GitHub Actions on makers' repositories (§6.2) | Plus Slop-run builders for other hosts |
+
+The domain is a temporary `sslip.io` name; there's no staging environment yet.
 
 ## 1. Goals and constraints
 
@@ -43,7 +60,7 @@
        ┌─────────────────────▼─────────────────────────────────┼──────────────────────┐
        │  Slop API: one modular application on the cloud container service, autoscaled  │
        │  Identity · Catalog · Publishing · Distribution · Library · Ratings · Pulse    │
-       │  Payment records · People · Teams · Chat (planned) · Moderation · Notify       │
+       │  Payment records · People · Teams · Chat · Moderation · Notify                 │
        └──────┬───────────────────┬──────────────────────┬──────────────────┬──────────┘
               │                   │                      │                  │
        ┌──────▼──────┐    ┌───────▼───────┐       ┌──────▼──────┐    ┌──────▼──────┐
@@ -126,7 +143,7 @@
    - tells Slop.
 5. **Slop updates the recipe centrally** (it's a versioned shared workflow), so makers never maintain it.
 
-**Built (updated 2026-10-20):** the recipe (`slop-build/`) builds Windows and Linux (not macOS yet) for `rust`, `go`, `dotnet` (self-contained `dotnet publish`), `godot` (with C# when the project has a .csproj), `unity` (GameCI on Linux runners; the maker's own Unity licence in their secrets), `python` (PyInstaller), `electron` (electron-builder, unpacked), `tauri` (no bundle), `web` (the built site in a minimal Tauri shell generated in the run) and `custom`, each tested on GitHub's runners (Unity up to activation, as there's no test licence). Slop's setup panel detects the type (package.json decides Electron or web). `slop.toml` sets the program and arguments; `publish: false` builds and checks without a release. "Build now" opens the workflow on GitHub, where Run workflow starts it; starting it from Slop needs the GitHub App. Archives over 2 GiB go up in parts (§6.4). Still to do: macOS, Android, Unreal, shared runtimes, and Slop-run builders for other hosts.
+**Built (updated 2026-10-20):** the recipe (`slop-build/`) builds Windows and Linux (not macOS yet) for `rust`, `go`, `dotnet` (self-contained `dotnet publish`), `godot` (with C# when the project has a .csproj), `unity` (GameCI on Linux runners; the maker's own Unity licence in their secrets), `python` (PyInstaller), `electron` (electron-builder, unpacked), `tauri` (no bundle), `web` (the built site in a minimal Tauri shell generated in the run) and `custom`, each tested on GitHub's runners (Unity up to activation, as there's no test licence). Slop's setup panel detects the type (package.json decides Electron or web). `slop.toml` sets the program and arguments; `publish: false` builds and checks without a release. "Build now" opens the workflow on GitHub, where Run workflow starts it; starting it from Slop needs the GitHub App. Archives over 2 GiB go up in parts (§6.4). `slop.toml` also names shared runtimes (§6.3), and `linux-runtime: steam-sniper` compiles `rust`, `go` and `custom` Linux builds inside Valve's Steam Runtime 3 (sniper) SDK, so they run on any Linux with glibc 2.31 (built 2026-10-21). Still to do: macOS, Android, Unreal, and Slop-run builders for other hosts.
 
 **Why this costs Slop almost nothing:** GitHub's standard runners are **free for public repos**, including macOS. Private repos get a monthly allowance on GitHub's free plan. Slop pays for no build machines and no storage.
 
@@ -147,14 +164,14 @@
 
 **Makers who build by hand:** they can still attach files to their own release page and sign them with a registered key (§6.3). Labelled "**Uploaded by maker**". There's **no upload to Slop**: every build lives on the maker's release page, and **every public app needs public source**.
 
-**Built (2026-10-18):** the recipe is in `slop-build/` (Rust, Go and custom build commands for
-Windows, macOS and Linux; Godot, web, Electron/Tauri and Python next). It runs on the maker's
-pushes to their main branch and `v*` tags, signs with `actions/attest-build-provenance`, uploads
-to a release on the maker's repo, and submits to `POST /v1/slop-build/releases` with the run's
-GitHub OIDC token: Slop accepts it only from the recipe (`job_workflow_ref`), in the app's
-repository, at the commit being released. The **Add Slop Build** button opens GitHub's
-create-file page with the workflow filled in. Differences from the plan above: no Slop GitHub App
-yet (public repos only; detection uses the public API), and builds also run on `v*` tags.
+**How a run reaches Slop (built 2026-10-18):** the recipe runs on the maker's pushes to their
+main branch and `v*` tags, signs with `actions/attest-build-provenance`, uploads to a release on
+the maker's repo, and submits to `POST /v1/slop-build/releases` with the run's GitHub OIDC token:
+Slop accepts it only from the recipe (`job_workflow_ref`), in the app's repository, at the commit
+being released. The **Add Slop Build** button opens GitHub's create-file page with the workflow
+filled in. The Slop GitHub App (`github_app.rs`: release webhooks, private repositories) is built
+but switched off until its GitHub registration is set up; without it, detection uses GitHub's
+public API.
 
 ### 6.3 From build to launched app
 
@@ -172,11 +189,7 @@ yet (public repos only; detection uses the public API), and builds also run on `
    - **Preferred: the app's files** (a zip per platform), like Steam's depots.
    - **Allowed: an installer** (`.exe`/`.msi`/`.pkg`/`.deb`) when the app really needs one. It's labelled "**Runs its own installer**" and gets stricter sandbox checks.
    - **Android: an APK.**
-   - **A launch config** (`slop.toml`, generated by Slop Build):
-     - executable and arguments, per platform;
-     - required shared components, from Slop's approved list;
-     - declared network and file access;
-     - whether the app runs servers (for server donations).
+   - **A launch config:** the executable and arguments per platform (from `slop.toml` in the repository, or the release form), and the shared runtimes the Windows build needs from Slop's approved list (`slop-manifest/src/runtimes.rs`; built 2026-10-21). Network use, the mods folder and sandbox readiness are set on the store page and signed into the manifest.
 2. **Signing** (details in `SECURITY.md` §5.3):
    - The build is signed **inside the pipeline**, with Sigstore "keyless" signing tied to the repo and workflow. The certificate even records **which recipe** built it, so Slop can show "**Built by Slop Build from source**".
    - Hand-built uploads are signed with a key registered to the maker's account.
@@ -188,7 +201,7 @@ yet (public repos only; detection uses the public API), and builds also run on `
    - downloads each file from the maker's release page;
    - checks **both** signatures and the SHA-256 before writing anything;
    - installs into **Slop's library folder in the user's profile**, so normal apps need no admin rights;
-   - installs shared components only from their official sources, with fixed hashes;
+   - installs a missing shared runtime only after asking the player, from the vendor's own link, and runs it only when Windows says it's validly signed by that vendor (the vendors' links always serve the newest version, so a fixed hash can't be used);
    - runs a maker's installer only after asking the user, and with the OS's normal admin prompt.
    - adds a **mod** (DESIGN §9) only to the game its signed manifest names, and only once that game is installed. A mod is unpacked into its own folder (`mods/<slug>/files`); nothing in it is started. Uninstalling the game removes its mods.
    - installs a **community build** beside its original; its signed manifest names the original (`build_of`), so the original's Play button can offer it. Each app keeps its own save folder (`saves/<slug>`).
@@ -223,14 +236,18 @@ Slop never holds the file, and the link is useless after a few minutes.
 2. The Pulse SDK in the game sends `start` and then heartbeats.
 3. The first valid `start` marks the account as **launched**, which allows voting. Playtime from the heartbeats feeds the vote weighting (`METRICS.md` §2).
 
-### 6.7 The scan step today (2026-10-18)
-Automated scanning is deferred; the plan is a **self-hosted scan service** (its own cloud account,
-no route back to the core, verdicts signed with its own key, SECURITY §5.2). The release pipeline
-already has the step (`crates/slop-api/src/scan.rs`): each file gets a result on DESIGN §10's scale
-(passed, note, on hold, rejected, blocked) or `skipped` when the server runs with `SLOP_SCANNER=off`.
-With scanning off, reviewers and makers see "not scanned", the store says so, and nothing claims a
-file was scanned. Adding the service means a new `Scanner` variant that sends the file's URL, hash,
-repository and commit, and checks the signed verdict.
+### 6.7 The scan step today (2026-10-21)
+Each release file gets a result on DESIGN §10's scale (passed, note, on hold, rejected, blocked) from
+`crates/slop-api/src/scan.rs`. With `SLOP_SCANNER=local` (the test deployment), the API starts a
+locked-down container per file (`deploy/scanner`: ClamAV, YARA with YARA-Forge rules, capa; no
+network, read-only, nothing executed). Windows files also need a clean Microsoft Defender result
+from Slop Build or Slop Check on GitHub's Windows runners. Source checks (`source_scan.rs`: secrets,
+vulnerable or payment packages, licences, save folder, mods and Pulse use) run on the maker's
+runner and come back with the release. With `SLOP_SCANNER=off`, reviewers, makers and the store
+see "not scanned", and nothing claims a file was scanned.
+
+Still to do (SECURITY §5.2): moving the scanner to its own cloud account, signing its verdicts, and
+running builds in a sandbox VM to watch what they do.
 
 ## 7. Running it
 - **Separate environments:** production, staging and development, with separate keys. Staging uses Stripe's test mode.
@@ -255,10 +272,13 @@ repository and commit, and checks the signed verdict.
 4. Branches and community builds. Teams. Private Slop with private repos.
 5. People and People payments. Chat.
 
+**Status 2026-10-21:** a first version of all five steps is built and running on the test
+deployment. What's left is in §0 and §6.7.
+
 ## 9. Open questions
 1. **iOS:** whether to support it, and how (`DESIGN.md` §17).
-2. **Linux runtime container:** require one, offer it as an option, or skip it?
+2. **Linux runtime container:** decided 2026-10-21, offered as an option (`linux-runtime: steam-sniper`, §6.2). Godot and Unity already ship engine players built for old systems.
 3. **Which cloud provider?** The design only needs managed Postgres, a container service, small object storage, and a second account for scanning.
 4. **Slop Build (§6.2):** GitHub only at launch (decided). When to add Slop-run build machines for GitLab/Bitbucket?
 5. **Private Slop downloads (§6.5):** confirm GitHub allows short-lived links for this. What about other hosts?
-6. **Engines:** decided. Launch with Godot, web/HTML5, Electron/Tauri, Python, Rust and Go. Unity in phase 2, Unreal later. Is .NET worth adding at launch?
+6. **Engines:** decided. Godot, web/HTML5, Electron/Tauri, Python, Rust, Go, .NET and Unity are built (§6.2). Unreal later.

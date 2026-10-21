@@ -155,5 +155,5 @@ Database permissions: the application's database role can only **insert** into `
 - **Export:** a user's full donation, payment and vote history can be downloaded.
 - Public votes by default are explained at sign-up (`LEGAL.md` §7).
 
-## 7. What the mockup simulates
-The rating chart, votes and donations use invented data saved in your browser. The mockup doesn't yet show weighted vs unweighted ratings.
+## 7. The mockup and the simulation
+The real store page shows the weighted and unweighted % Not Slop and the rating over time (`web/src/components/RatingPanel.tsx`), from real votes. Invented data lives in two places only: the original mockup (`mockup/`, saved in your browser, and without the weighted figure) and the simulation sandbox (`docs/SIMULATION.md`), which checks these numbers against a known truth.
