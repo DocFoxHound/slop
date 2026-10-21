@@ -785,9 +785,12 @@ async fn launch_app(
             message: reason.clone(),
         });
     }
+    // Slop Link: where the game asks for mods while it runs; closed when it exits.
+    let link_dir = desktop.link.open(&slug).map_err(Error::from)?;
     let launch = desktop
         .library
-        .prepare_launch(&slug, revocations.as_ref(), sandbox)?;
+        .prepare_launch(&slug, revocations.as_ref(), sandbox, Some(&link_dir))
+        .inspect_err(|_| desktop.link.close(&link_dir))?;
     let launched = Launched {
         sandboxed: launch.sandboxed,
         quarantined: launch.quarantined,
@@ -795,9 +798,6 @@ async fn launch_app(
         unapproved_mods: launch.unapproved_mods,
     };
     let mut command = launch.command;
-    // Slop Link: where the game asks for mods while it runs; closed when it exits.
-    let link_url = desktop.link.open(&slug);
-    command.env("SLOP_LINK", &link_url);
     let link = desktop.link.clone();
     // Slop Pulse: a signed-in launch gets a one-time token for the game to ping with
     // (DESIGN §11). Best effort: the game starts either way.
@@ -824,7 +824,7 @@ async fn launch_app(
         }
     }
     let mut child = command.spawn().map_err(|e| {
-        link.close(&link_url);
+        link.close(&link_dir);
         CommandError {
             code: "launch",
             message: format!("couldn't start the app: {e}"),
@@ -839,7 +839,7 @@ async fn launch_app(
     let started = std::time::Instant::now();
     std::thread::spawn(move || {
         let status = child.wait();
-        link.close(&link_url);
+        link.close(&link_dir);
         app.state::<overlay::Running>()
             .0
             .lock()
@@ -1367,6 +1367,16 @@ fn trusted_keys() -> Vec<slop_manifest::ed25519_dalek::VerifyingKey> {
 }
 
 fn main() {
+    // Sandbox mode on Windows: a copy of the app sets up the box and starts the game in it
+    // (slop_client::sandbox::launcher_main), before anything else runs.
+    #[cfg(windows)]
+    {
+        let mut args = std::env::args().skip(1);
+        if args.next().as_deref() == Some("--slop-sandbox") {
+            let spec = args.next().unwrap_or_default();
+            std::process::exit(slop_client::sandbox::launcher_main(&spec));
+        }
+    }
     tracing_subscriber::fmt()
         .with_env_filter(
             tracing_subscriber::EnvFilter::try_from_default_env()
@@ -1392,12 +1402,12 @@ fn main() {
             let allow_http = cfg!(debug_assertions) && API_URL.starts_with("http://localhost");
             // Unsigned builds too, for the same local-development case, or when this build was
             // made for a private test setup (SECURITY §5.3 otherwise).
-            let library = Library::new(root, trusted_keys())?
+            let library = Library::new(root.clone(), trusted_keys())?
                 .allow_http_downloads(allow_http)
                 .require_maker_signature(!allow_http && !allow_unsigned());
             // A game asking for mods: the player answers in the main window.
             let handle = app.handle().clone();
-            let link = Link::start(move |request: &ModRequest| {
+            let link = Link::start(root.join("link"), move |request: &ModRequest| {
                 let _ = handle.emit("mod-request", request);
                 bring_back(&handle);
                 use tauri_plugin_notification::NotificationExt;

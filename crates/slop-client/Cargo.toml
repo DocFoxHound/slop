@@ -34,6 +34,10 @@ url = "2.5.8"
 uuid = { version = "1.28.0", features = ["v4", "v7", "serde"] }
 zip = { version = "9.0.5", default-features = false, features = ["deflate"] }
 
+# Sandbox mode on Windows: AppContainers, file permissions and job objects (appcontainer.rs).
+[target.'cfg(windows)'.dependencies]
+windows-sys = { version = "0.61", features = ["Win32_Foundation", "Win32_Security", "Win32_Security_Authorization", "Win32_Security_Isolation", "Win32_System_JobObjects", "Win32_System_SystemServices", "Win32_System_Threading"] }
+
 [dev-dependencies]
 axum = "0.8.9"
 base64 = "0.23.1"

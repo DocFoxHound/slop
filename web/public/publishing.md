@@ -510,37 +510,43 @@ contains code and whether it goes online, and the player says yes or no. On yes,
 each from Slop, checks it against Slop's signature, adds it to your game, and tells your game.
 Only approved mods for your game can be added; the player sees any that aren't.
 
-When it starts your game, the Slop app sets **`SLOP_LINK`** (`http://127.0.0.1:<port>/<token>/`,
-only for this run of your game):
+When it starts your game, the Slop app sets **`SLOP_LINK`**: a folder for this run of your game,
+with `requests/` and `answers/` in it. It works the same in sandbox mode and offline.
 
-1. `POST {SLOP_LINK}mods/request` with `{"mods": [{"slug": "dragons", "version": "1.2.0"}],
-   "for": "Castle Rock server"}`. The answer is `{"id": "…"}`. `for` is shown to the player.
-2. Every second or two, `GET {SLOP_LINK}mods/request/<id>` until `status` isn't `waiting`:
+1. Write the request as `requests/<name>.json`. Write `<name>.tmp` first, then rename it, so Slop
+   never reads half a file. `<name>` is letters, digits, `-` and `_`:
+   `{"mods": [{"slug": "dragons", "version": "1.2.0"}], "for": "Castle Rock server"}`. `for` is
+   shown to the player.
+2. Every second or two, read `answers/<name>.json`. It says `{"status": "waiting"}` until the
+   player answers, then:
    - `done`: `mods` says for each `added`, `already_added`, `version_differs` (another version
      was added) or `unavailable`, and `folders` lists all its mod folders now, as in
      `SLOP_MODS`. With your own mods folder, they're already in it.
    - `declined`: the player said no.
+   - `failed`: `message` says why (a bad request, or one already waiting for the player).
 
 Then load the new mods (or ask the player to restart). Servers should list mods by Slop address
-and version so every player has the same files.
+and version so every player has the same files. If `SLOP_LINK` isn't set, the game wasn't started
+from Slop: tell the player which mods to add in their Slop library.
 
 ```gdscript
 # Godot: ask for a server's mods, then wait for the player
 var link := OS.get_environment("SLOP_LINK")   # empty when not started from Slop
+
 func request_mods(names: Array, server: String) -> void:
-    var http := HTTPRequest.new()
-    add_child(http)
-    var mods := names.map(func(n): return {"slug": n})
-    http.request(link + "mods/request", ["Content-Type: application/json"],
-        HTTPClient.METHOD_POST, JSON.stringify({"mods": mods, "for": server}))
-    var res = await http.request_completed
-    var id: String = JSON.parse_string(res[3].get_string_from_utf8())["id"]
+    var name := "r%d" % Time.get_ticks_msec()
+    var tmp := link.path_join("requests/%s.tmp" % name)
+    var f := FileAccess.open(tmp, FileAccess.WRITE)
+    f.store_string(JSON.stringify({"mods": names.map(func(n): return {"slug": n}), "for": server}))
+    f.close()
+    DirAccess.rename_absolute(tmp, link.path_join("requests/%s.json" % name))
+    var answer_path := link.path_join("answers/%s.json" % name)
     while true:
-        await get_tree().create_timer(1.5).timeout
-        http.request(link + "mods/request/" + id)
-        res = await http.request_completed
-        var answer = JSON.parse_string(res[3].get_string_from_utf8())
-        if answer["status"] != "waiting":
+        await get_tree().create_timer(1.0).timeout
+        if not FileAccess.file_exists(answer_path):
+            continue
+        var answer = JSON.parse_string(FileAccess.get_file_as_string(answer_path))
+        if answer and answer["status"] != "waiting":
             mods_answered(answer)   # your code: load the new mods, or say they were declined
             return
 ```
@@ -616,7 +622,7 @@ across when they pick your build.
 - The source check also notes **networking code**. If your code goes online but your store
   page doesn't say so, that's a note, and an update waits for a person.
 - Store pages of apps that go online tell players that Slop can't check the servers, and
-  suggest running the app in **sandbox mode** in the Slop app (Linux now, Windows soon); see
+  suggest running the app in **sandbox mode** in the Slop app; see
   [Saves and sandbox mode](#saves-and-sandbox-mode).
 
 ## Saves and sandbox mode
@@ -677,9 +683,12 @@ if (process.env.SLOP_SAVE_DIR) app.setPath("userData", process.env.SLOP_SAVE_DIR
 saves = os.environ.get("SLOP_SAVE_DIR") or platformdirs.user_data_dir("my-game")
 ```
 
-Also in sandbox mode: no session bus (no system tray, notifications or keyring), no other
-programs, and the network unless the player blocked it (offered only when your store page says
-the app doesn't go online). If your app follows the rules above, tick **Works in sandbox mode**
+Also in sandbox mode: no other programs' files, and the network unless the player blocked it
+(offered only when your store page says the app doesn't go online). On Linux there's no session
+bus (no system tray, notifications or keyring). On Windows the app runs in an **AppContainer**,
+the sandbox Store apps use: Windows' known folders (`FOLDERID_RoamingAppData` and the like) point
+into the container, not the save folder, so read `SLOP_SAVE_DIR`; temporary files (`TEMP`) go
+to a cache folder; and it can't log the player off or switch desktops. If your app follows the rules above, tick **Works in sandbox mode**
 on its store page.
 
 **What Slop checks.** Every release's source check says where it saves, on your Releases page

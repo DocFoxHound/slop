@@ -828,6 +828,10 @@ impl Library {
         }
         let mods = self.installed_mods(slug);
         self.remove_dir(&dir)?;
+        // Its sandbox on Windows; the saves keep their permissions for a reinstall, which gets
+        // the same container back.
+        #[cfg(windows)]
+        crate::appcontainer::remove(&crate::sandbox::container_name(slug));
         for m in mods {
             if let Ok(dir) = self.mod_dir(&m.slug) {
                 let _ = self.remove_dir(&dir);
@@ -906,16 +910,18 @@ impl Library {
         slug: &str,
         revocations: Option<&RevocationList>,
     ) -> Result<Command> {
-        Ok(self.prepare_launch(slug, revocations, None)?.command)
+        Ok(self.prepare_launch(slug, revocations, None, None)?.command)
     }
 
     /// Checks an installed app, sweeps its save folder, and builds the command that starts it:
     /// in sandbox mode when `sandbox` is given (a copy of the saves is taken first).
+    /// `link` is the run's Slop Link folder (link.rs), when the caller watches one.
     pub fn prepare_launch(
         &self,
         slug: &str,
         revocations: Option<&RevocationList>,
         sandbox: Option<AppSandbox>,
+        link: Option<&Path>,
     ) -> Result<Launch> {
         let (record, manifest) = self.record(slug)?;
         if let Some(revoked) = revocations.and_then(|r| r.is_revoked(&manifest.release_id)) {
@@ -967,7 +973,12 @@ impl Library {
         let cache = self.root.join("cache").join(slug);
         fs::create_dir_all(&cache)?;
         let (mods, synced) = self.sync_mods(slug, revocations)?;
-        let read_only: Vec<PathBuf> = in_saves.into_iter().collect();
+        // Slop Link: the game writes requests and reads answers.
+        let read_only: Vec<PathBuf> = in_saves
+            .into_iter()
+            .chain(link.map(|l| l.join("answers")))
+            .collect();
+        let writable: Vec<PathBuf> = link.map(|l| l.join("requests")).into_iter().collect();
 
         let mut cmd = match sandbox {
             Some(opts) => crate::sandbox::command(
@@ -977,10 +988,12 @@ impl Library {
                     saves: &saves,
                     cache: &cache,
                     read_only: &read_only,
+                    writable: &writable,
                     network: !opts.block_network,
                 },
                 &exec,
                 &launch.args,
+                crate::sandbox::container_name(slug),
             )
             .map_err(|e| Error::Install(e.to_string()))?,
             None => {
@@ -1001,6 +1014,9 @@ impl Library {
         #[cfg(windows)]
         cmd.env("APPDATA", saves.join("AppData").join("Roaming"))
             .env("LOCALAPPDATA", saves.join("AppData").join("Local"));
+        if let Some(link) = link {
+            cmd.env("SLOP_LINK", link);
+        }
         // The game's mods (DESIGN §9): a list of folders, separated like PATH.
         if !mods.is_empty()
             && let Ok(list) = std::env::join_paths(&mods)

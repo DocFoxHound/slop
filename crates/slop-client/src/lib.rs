@@ -5,6 +5,8 @@
 //! it to the UI as a small set of commands.
 
 pub mod api;
+#[cfg(windows)]
+pub mod appcontainer;
 pub mod chat;
 pub mod library;
 pub mod link;

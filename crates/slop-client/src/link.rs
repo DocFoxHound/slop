@@ -3,29 +3,32 @@
 //! the player, downloads and checks each one against Slop's signature, adds them, and tells the
 //! game where they are. Servers only ever name mods; their files always come from Slop.
 //!
-//! The game finds it in `SLOP_LINK`: `http://127.0.0.1:<port>/<token>/`, one token per start,
-//! which stops working when the game exits. It answers on the loopback interface only, and
-//! checks the `Host` header, so web pages can't reach it.
+//! It's a pair of folders, so it works the same everywhere, sandbox mode included (an
+//! AppContainer can't reach the loopback interface, and a sandbox with the internet blocked has
+//! no network at all). The game finds them in `SLOP_LINK`, a folder for this run only:
 //!
-//! - `POST {SLOP_LINK}mods/request` with `{"mods": [{"slug": "dragons", "version": "1.2.0"}],
-//!   "for": "Castle Rock server"}` → `202 {"id": "…"}`. One request waits at a time.
-//! - `GET {SLOP_LINK}mods/request/<id>` → `{"status": "waiting" | "declined" | "done" |
-//!   "failed", "mods": [{"slug", "result", "version"}], "folders": [...]}`; ask every second or
-//!   two until it isn't `waiting`.
+//! - it writes a request as `requests/<name>.json` (write `<name>.tmp`, then rename it), with
+//!   `<name>` made of letters, digits, `-` and `_`: `{"mods": [{"slug": "dragons", "version":
+//!   "1.2.0"}], "for": "Castle Rock server"}`;
+//! - Slop takes it, and writes `answers/<name>.json`: `{"status": "waiting"}`, then `"done"`
+//!   (with `mods`, each `added`, `already_added`, `version_differs` or `unavailable`, and
+//!   `folders`), `"declined"` or `"failed"` (with `message`).
+//!
+//! In sandbox mode the game can write only `requests/`; `answers/` is read-only to it. Slop
+//! reads requests as plain files of at most 16 KiB and never follows links in either folder.
 
 use std::{
     collections::HashMap,
-    io::{self, BufRead, BufReader, Read, Write},
-    net::{SocketAddr, TcpListener, TcpStream},
+    fs, io,
+    path::{Path, PathBuf},
     sync::{Arc, Mutex},
     time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
-use serde_json::{Value, json};
+use serde_json::json;
 
-const MAX_BODY: usize = 16 * 1024;
-const MAX_HEADERS: usize = 8 * 1024;
+const MAX_REQUEST: u64 = 16 * 1024;
 const MAX_MODS: usize = 50;
 
 /// A mod the game asked for.
@@ -73,17 +76,25 @@ pub enum Outcome {
     },
 }
 
+/// One run of a game: its link folder.
+struct Run {
+    game: String,
+    dir: PathBuf,
+}
+
 struct Pending {
     request: ModRequest,
-    outcome: Outcome,
+    /// The run's answers folder and the request's name.
+    answers: PathBuf,
+    name: String,
+    waiting: bool,
 }
 
 type OnRequest = Box<dyn Fn(&ModRequest) + Send + Sync>;
 
 struct Inner {
-    port: u16,
-    /// token → game
-    games: Mutex<HashMap<String, String>>,
+    root: PathBuf,
+    runs: Mutex<HashMap<String, Run>>,
     requests: Mutex<HashMap<String, Pending>>,
     on_request: OnRequest,
 }
@@ -98,60 +109,88 @@ fn valid_slug(s: &str) -> bool {
             .all(|b| b.is_ascii_lowercase() || b.is_ascii_digit() || b == b'-')
 }
 
+fn valid_name(s: &str) -> bool {
+    (1..=64).contains(&s.len())
+        && s.bytes()
+            .all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+}
+
 /// Plain text a person will read: no control characters, at most `max` characters.
 fn clean(s: &str, max: usize) -> String {
     s.chars().filter(|c| !c.is_control()).take(max).collect()
 }
 
+/// Writes an answer without following links: a new file beside it, renamed over it.
+fn write_answer(answers: &Path, name: &str, outcome: &Outcome) -> io::Result<()> {
+    if fs::symlink_metadata(answers)?.file_type().is_symlink() {
+        return Err(io::Error::other("the answers folder is a link"));
+    }
+    let tmp = answers.join(format!(".{name}-{}.tmp", crate::random_token()));
+    fs::write(&tmp, serde_json::to_vec(outcome).expect("serialises"))?;
+    fs::rename(&tmp, answers.join(format!("{name}.json")))
+}
+
 impl Link {
-    /// Starts listening on a free loopback port. `on_request` is called for each request the
-    /// player needs to answer (`finish` it later).
-    pub fn start(on_request: impl Fn(&ModRequest) + Send + Sync + 'static) -> io::Result<Link> {
-        let listener = TcpListener::bind(("127.0.0.1", 0))?;
-        let port = listener.local_addr()?.port();
+    /// Starts watching run folders under `root` (emptied first). `on_request` is called for
+    /// each request the player needs to answer (`finish` it later).
+    pub fn start(
+        root: PathBuf,
+        on_request: impl Fn(&ModRequest) + Send + Sync + 'static,
+    ) -> io::Result<Link> {
+        Self::start_every(root, Duration::from_millis(500), on_request)
+    }
+
+    pub fn start_every(
+        root: PathBuf,
+        every: Duration,
+        on_request: impl Fn(&ModRequest) + Send + Sync + 'static,
+    ) -> io::Result<Link> {
+        let _ = fs::remove_dir_all(&root);
+        fs::create_dir_all(&root)?;
         let link = Link(Arc::new(Inner {
-            port,
-            games: Mutex::default(),
+            root,
+            runs: Mutex::default(),
             requests: Mutex::default(),
             on_request: Box::new(on_request),
         }));
-        let server = link.clone();
+        let watcher = Arc::downgrade(&link.0);
         std::thread::spawn(move || {
-            for stream in listener.incoming().flatten() {
-                let server = server.clone();
-                std::thread::spawn(move || {
-                    let _ = server.serve(stream);
-                });
+            while let Some(inner) = watcher.upgrade() {
+                Link(inner).look();
+                std::thread::sleep(every);
             }
         });
         Ok(link)
     }
 
-    /// A new `SLOP_LINK` for one start of `game`. `close` it when the game exits.
-    pub fn open(&self, game: &str) -> String {
-        let token = crate::random_token();
-        self.0
-            .games
-            .lock()
-            .unwrap()
-            .insert(token.clone(), game.to_string());
-        format!("http://127.0.0.1:{}/{token}/", self.0.port)
+    /// A new link folder for one run of `game`, with `requests/` and `answers/` in it (the
+    /// sandbox makes only `requests/` writable). `close` it when the game exits.
+    pub fn open(&self, game: &str) -> io::Result<PathBuf> {
+        let run = crate::random_token();
+        let dir = self.0.root.join(&run);
+        fs::create_dir_all(dir.join("requests"))?;
+        fs::create_dir_all(dir.join("answers"))?;
+        self.0.runs.lock().unwrap().insert(
+            run,
+            Run {
+                game: game.to_string(),
+                dir: dir.clone(),
+            },
+        );
+        Ok(dir)
     }
 
-    /// Stops a `SLOP_LINK` from working, and forgets its requests.
-    pub fn close(&self, url: &str) {
-        let token = url.trim_end_matches('/').rsplit('/').next().unwrap_or("");
-        let game = self.0.games.lock().unwrap().remove(token);
-        if let Some(game) = game {
-            let still_running = self.0.games.lock().unwrap().values().any(|g| *g == game);
-            if !still_running {
-                self.0
-                    .requests
-                    .lock()
-                    .unwrap()
-                    .retain(|_, p| p.request.game != game);
-            }
-        }
+    /// Stops a run's link and removes its folder.
+    pub fn close(&self, dir: &Path) {
+        let mut runs = self.0.runs.lock().unwrap();
+        runs.retain(|_, r| r.dir != dir);
+        drop(runs);
+        self.0
+            .requests
+            .lock()
+            .unwrap()
+            .retain(|_, p| !p.answers.starts_with(dir));
+        let _ = fs::remove_dir_all(dir);
     }
 
     /// A request still waiting for the player.
@@ -161,98 +200,71 @@ impl Link {
             .lock()
             .unwrap()
             .get(id)
-            .filter(|p| matches!(p.outcome, Outcome::Waiting))
+            .filter(|p| p.waiting)
             .map(|p| p.request.clone())
     }
 
     /// Records the player's answer, for the game to read.
     pub fn finish(&self, id: &str, outcome: Outcome) {
-        if let Some(p) = self.0.requests.lock().unwrap().get_mut(id) {
-            p.outcome = outcome;
+        let mut requests = self.0.requests.lock().unwrap();
+        if let Some(p) = requests.get_mut(id) {
+            p.waiting = false;
+            if let Err(e) = write_answer(&p.answers, &p.name, &outcome) {
+                tracing::warn!(error = %e, "couldn't answer a game's mod request");
+            }
         }
     }
 
-    fn serve(&self, mut stream: TcpStream) -> io::Result<()> {
-        stream.set_read_timeout(Some(Duration::from_secs(5)))?;
-        stream.set_write_timeout(Some(Duration::from_secs(5)))?;
-        let (status, body) = match self.handle(&stream) {
-            Ok(r) => r,
-            Err(e) => (400, json!({ "error": e })),
-        };
-        let body = body.to_string();
-        let reason = match status {
-            200 => "OK",
-            202 => "Accepted",
-            404 => "Not Found",
-            409 => "Conflict",
-            413 => "Payload Too Large",
-            _ => "Bad Request",
-        };
-        write!(
-            stream,
-            "HTTP/1.1 {status} {reason}\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{body}",
-            body.len()
-        )?;
-        stream.flush()
-    }
-
-    fn handle(&self, stream: &TcpStream) -> Result<(u16, Value), String> {
-        let mut reader = BufReader::new(stream.take((MAX_HEADERS + MAX_BODY) as u64));
-        let mut line = String::new();
-        reader.read_line(&mut line).map_err(|e| e.to_string())?;
-        let mut parts = line.split_whitespace();
-        let (method, path) = (parts.next().unwrap_or(""), parts.next().unwrap_or(""));
-        let (mut length, mut host, mut read) = (0usize, String::new(), line.len());
-        loop {
-            let mut h = String::new();
-            let n = reader.read_line(&mut h).map_err(|e| e.to_string())?;
-            read += n;
-            if n == 0 || read > MAX_HEADERS {
-                return Err("headers too long".into());
-            }
-            let h = h.trim_end();
-            if h.is_empty() {
-                break;
-            }
-            if let Some((name, value)) = h.split_once(':') {
-                match name.trim().to_ascii_lowercase().as_str() {
-                    "content-length" => length = value.trim().parse().unwrap_or(usize::MAX),
-                    "host" => host = value.trim().to_string(),
-                    _ => {}
+    /// Takes new requests from every run's folder.
+    fn look(&self) {
+        let runs: Vec<(String, PathBuf)> = self
+            .0
+            .runs
+            .lock()
+            .unwrap()
+            .values()
+            .map(|r| (r.game.clone(), r.dir.clone()))
+            .collect();
+        for (game, dir) in runs {
+            let Ok(entries) = fs::read_dir(dir.join("requests")) else {
+                continue;
+            };
+            for entry in entries.flatten() {
+                let path = entry.path();
+                let Some(name) = path
+                    .file_name()
+                    .and_then(|n| n.to_str())
+                    .and_then(|n| n.strip_suffix(".json"))
+                    .map(str::to_string)
+                else {
+                    continue;
+                };
+                // Plain files only, small, read once.
+                let Ok(meta) = fs::symlink_metadata(&path) else {
+                    continue;
+                };
+                let body = (meta.is_file() && meta.len() <= MAX_REQUEST)
+                    .then(|| fs::read(&path).ok())
+                    .flatten();
+                let _ = fs::remove_file(&path);
+                if !valid_name(&name) {
+                    continue;
+                }
+                let answers = dir.join("answers");
+                match body.ok_or_else(|| "not a plain file of at most 16 KiB".to_string()) {
+                    Ok(body) => self.take(&game, &answers, &name, &body),
+                    Err(message) => {
+                        let _ = write_answer(&answers, &name, &Outcome::Failed { message });
+                    }
                 }
             }
         }
-        // Only for programs on this computer that were given the address, never web pages.
-        let port = self.0.port;
-        if host != format!("127.0.0.1:{port}") && host != format!("localhost:{port}") {
-            return Ok((404, json!({ "error": "not found" })));
-        }
-        if length > MAX_BODY {
-            return Ok((413, json!({ "error": "too large" })));
-        }
-        let mut body = vec![0; length];
-        reader.read_exact(&mut body).map_err(|e| e.to_string())?;
-
-        let rest = path.strip_prefix('/').unwrap_or("");
-        let (token, route) = rest.split_once('/').unwrap_or((rest, ""));
-        let Some(game) = self.0.games.lock().unwrap().get(token).cloned() else {
-            return Ok((404, json!({ "error": "not found" })));
-        };
-        match (method, route) {
-            ("POST", "mods/request") => self.new_request(&game, &body),
-            ("GET", r) if r.starts_with("mods/request/") => {
-                let id = &r["mods/request/".len()..];
-                let requests = self.0.requests.lock().unwrap();
-                match requests.get(id).filter(|p| p.request.game == game) {
-                    Some(p) => Ok((200, serde_json::to_value(&p.outcome).unwrap())),
-                    None => Ok((404, json!({ "error": "no such request" }))),
-                }
-            }
-            _ => Ok((404, json!({ "error": "not found" }))),
-        }
     }
 
-    fn new_request(&self, game: &str, body: &[u8]) -> Result<(u16, Value), String> {
+    fn take(&self, game: &str, answers: &Path, name: &str, body: &[u8]) {
+        let fail = |message: String| {
+            let _ = write_answer(answers, name, &Outcome::Failed { message });
+        };
         #[derive(Deserialize)]
         #[serde(deny_unknown_fields)]
         struct Body {
@@ -260,14 +272,17 @@ impl Link {
             #[serde(default, rename = "for")]
             from: Option<String>,
         }
-        let b: Body = serde_json::from_slice(body).map_err(|e| e.to_string())?;
+        let b: Body = match serde_json::from_slice(body) {
+            Ok(b) => b,
+            Err(e) => return fail(format!("not a request: {e}")),
+        };
         if b.mods.is_empty() || b.mods.len() > MAX_MODS {
-            return Err(format!("name 1 to {MAX_MODS} mods"));
+            return fail(format!("name 1 to {MAX_MODS} mods"));
         }
         let mut mods: Vec<Wanted> = Vec::new();
         for m in b.mods {
             if !valid_slug(&m.slug) {
-                return Err(format!("{:?} isn't a Slop address", m.slug));
+                return fail(format!("{:?} isn't a Slop address", m.slug));
             }
             if !mods.iter().any(|x| x.slug == m.slug) {
                 mods.push(Wanted {
@@ -279,130 +294,104 @@ impl Link {
         let mut requests = self.0.requests.lock().unwrap();
         if requests
             .values()
-            .any(|p| p.request.game == game && matches!(p.outcome, Outcome::Waiting))
+            .any(|p| p.request.game == game && p.waiting)
         {
-            return Ok((
-                409,
-                json!({ "error": "a request is already waiting for the player" }),
-            ));
-        }
-        // Keep the last few answers per game for the game to read.
-        let mut done: Vec<String> = requests
-            .iter()
-            .filter(|(_, p)| p.request.game == game)
-            .map(|(id, _)| id.clone())
-            .collect();
-        done.sort();
-        for id in done.iter().rev().skip(10) {
-            requests.remove(id);
+            drop(requests);
+            return fail("a request is already waiting for the player".into());
         }
         let request = ModRequest {
-            id: format!("{:020}-{}", now_ms(), crate::random_token()),
+            id: crate::random_token(),
             game: game.to_string(),
             from: b.from.map(|f| clean(&f, 100)).filter(|f| !f.is_empty()),
             mods,
         };
+        let _ = write_answer(answers, name, &Outcome::Waiting);
         requests.insert(
             request.id.clone(),
             Pending {
                 request: request.clone(),
-                outcome: Outcome::Waiting,
+                answers: answers.to_path_buf(),
+                name: name.to_string(),
+                waiting: true,
             },
         );
         drop(requests);
         (self.0.on_request)(&request);
-        Ok((202, json!({ "id": request.id })))
-    }
-
-    pub fn local_addr(&self) -> SocketAddr {
-        SocketAddr::from(([127, 0, 0, 1], self.0.port))
     }
 }
 
-fn now_ms() -> u128 {
-    std::time::SystemTime::now()
-        .duration_since(std::time::UNIX_EPOCH)
-        .map_or(0, |d| d.as_millis())
+/// The answer a game reads, for tests and tools.
+pub fn read_answer(link: &Path, name: &str) -> Option<serde_json::Value> {
+    let bytes = fs::read(link.join("answers").join(format!("{name}.json"))).ok()?;
+    serde_json::from_slice(&bytes).ok()
+}
+
+/// A request as a game writes it, for tests and tools.
+pub fn write_request(link: &Path, name: &str, mods: &[&str], from: &str) -> io::Result<()> {
+    let body = json!({ "mods": mods.iter().map(|m| json!({ "slug": m })).collect::<Vec<_>>(), "for": from });
+    let tmp = link.join("requests").join(format!("{name}.tmp"));
+    fs::write(&tmp, body.to_string())?;
+    fs::rename(&tmp, link.join("requests").join(format!("{name}.json")))
 }
 
 #[cfg(test)]
 mod tests {
     use super::*;
 
-    fn call(addr: SocketAddr, host: &str, method: &str, path: &str, body: &str) -> (u16, Value) {
-        let mut s = TcpStream::connect(addr).unwrap();
-        write!(
-            s,
-            "{method} {path} HTTP/1.1\r\nHost: {host}\r\nContent-Length: {}\r\n\r\n{body}",
-            body.len()
-        )
-        .unwrap();
-        let mut out = String::new();
-        s.read_to_string(&mut out).unwrap();
-        let status = out[9..12].parse().unwrap();
-        let body = out.split_once("\r\n\r\n").unwrap().1;
-        (status, serde_json::from_str(body).unwrap())
+    fn wait_for(mut done: impl FnMut() -> bool) {
+        for _ in 0..200 {
+            if done() {
+                return;
+            }
+            std::thread::sleep(Duration::from_millis(10));
+        }
+        panic!("timed out");
     }
 
     #[test]
     fn a_game_asks_and_reads_the_players_answer() {
+        let root = std::env::temp_dir().join(format!("slop-link-{}", rand::random::<u64>()));
         let seen = Arc::new(Mutex::new(Vec::new()));
         let s2 = seen.clone();
-        let link = Link::start(move |r| s2.lock().unwrap().push(r.clone())).unwrap();
-        let addr = link.local_addr();
-        let host = format!("127.0.0.1:{}", addr.port());
-        let url = link.open("castle");
-        let base = url
-            .trim_start_matches(&format!("http://{host}"))
-            .to_string();
+        let link = Link::start_every(root.clone(), Duration::from_millis(10), move |r| {
+            s2.lock().unwrap().push(r.clone())
+        })
+        .unwrap();
+        let run = link.open("castle").unwrap();
 
-        // Web pages (another Host) and wrong tokens get nothing.
-        let body = r#"{"mods": [{"slug": "dragons", "version": "1.2.0"}, {"slug": "dragons"}], "for": "Rock\u0007 server"}"#;
-        assert_eq!(
-            call(
-                addr,
-                "evil.example",
-                "POST",
-                &format!("{base}mods/request"),
-                body
-            )
-            .0,
-            404
-        );
-        assert_eq!(call(addr, &host, "POST", "/nope/mods/request", body).0, 404);
-        assert_eq!(
-            call(
-                addr,
-                &host,
-                "POST",
-                &format!("{base}mods/request"),
-                r#"{"mods": [{"slug": "../x"}]}"#
-            )
-            .0,
-            400
-        );
+        // Bad requests get a "failed" answer and never reach the player.
+        fs::write(
+            run.join("requests/bad.json"),
+            br#"{"mods": [{"slug": "../x"}]}"#,
+        )
+        .unwrap();
+        wait_for(|| read_answer(&run, "bad").is_some());
+        assert_eq!(read_answer(&run, "bad").unwrap()["status"], "failed");
+        fs::write(run.join("requests/half.tmp"), b"{").unwrap();
 
-        let (status, res) = call(addr, &host, "POST", &format!("{base}mods/request"), body);
-        assert_eq!(status, 202);
-        let id = res["id"].as_str().unwrap().to_string();
+        // A good one waits for the player; a second waits its turn.
+        fs::write(
+            run.join("requests/r1.json"),
+            br#"{"mods": [{"slug": "dragons", "version": "1.2.0"}, {"slug": "dragons"}], "for": "Rock\u0007 server"}"#,
+        )
+        .unwrap();
+        wait_for(|| !seen.lock().unwrap().is_empty());
+        assert_eq!(read_answer(&run, "r1").unwrap()["status"], "waiting");
         let asked = seen.lock().unwrap()[0].clone();
         assert_eq!(asked.game, "castle");
         assert_eq!(asked.from.as_deref(), Some("Rock server"));
         assert_eq!(asked.mods.len(), 1, "named once");
-        assert_eq!(
-            call(addr, &host, "POST", &format!("{base}mods/request"), body).0,
-            409,
-            "one at a time"
-        );
-        let status_path = format!("{base}mods/request/{id}");
-        assert_eq!(
-            call(addr, &host, "GET", &status_path, "").1["status"],
-            "waiting"
+        write_request(&run, "r2", &["dragons"], "again").unwrap();
+        wait_for(|| read_answer(&run, "r2").is_some());
+        assert_eq!(read_answer(&run, "r2").unwrap()["status"], "failed");
+        assert!(
+            run.join("requests/half.tmp").exists(),
+            "unfinished writes are left alone"
         );
 
-        assert!(link.waiting(&id).is_some());
+        assert!(link.waiting(&asked.id).is_some());
         link.finish(
-            &id,
+            &asked.id,
             Outcome::Done {
                 mods: vec![ModResult {
                     slug: "dragons".into(),
@@ -412,12 +401,35 @@ mod tests {
                 folders: vec!["/x/mods/dragons/files".into()],
             },
         );
-        let (_, res) = call(addr, &host, "GET", &status_path, "");
-        assert_eq!(res["status"], "done");
-        assert_eq!(res["mods"][0]["result"], "added");
+        let answer = read_answer(&run, "r1").unwrap();
+        assert_eq!(answer["status"], "done");
+        assert_eq!(answer["mods"][0]["result"], "added");
+        assert!(link.waiting(&asked.id).is_none());
 
         // Closed when the game exits.
-        link.close(&url);
-        assert_eq!(call(addr, &host, "GET", &status_path, "").0, 404);
+        link.close(&run);
+        assert!(!run.exists());
+        drop(link);
+        let _ = fs::remove_dir_all(root);
+    }
+
+    #[cfg(unix)]
+    #[test]
+    fn links_are_never_followed() {
+        let root = std::env::temp_dir().join(format!("slop-link-{}", rand::random::<u64>()));
+        let link = Link::start_every(root.clone(), Duration::from_millis(10), |_| {}).unwrap();
+        let run = link.open("castle").unwrap();
+        let secret = root.join("secret.txt");
+        fs::write(&secret, b"keep").unwrap();
+        std::os::unix::fs::symlink(&secret, run.join("requests/peek.json")).unwrap();
+        wait_for(|| read_answer(&run, "peek").is_some());
+        assert_eq!(read_answer(&run, "peek").unwrap()["status"], "failed");
+        assert_eq!(fs::read(&secret).unwrap(), b"keep");
+        // An answer over a link replaces the link, not what it points to.
+        std::os::unix::fs::symlink(&secret, run.join("answers/x.json")).unwrap();
+        write_answer(&run.join("answers"), "x", &Outcome::Declined).unwrap();
+        assert_eq!(fs::read(&secret).unwrap(), b"keep");
+        link.close(&run);
+        let _ = fs::remove_dir_all(root);
     }
 }
