@@ -1195,6 +1195,13 @@ async fn source(
     if let Some(repo) = slop_provenance::github_repo_path(repo_url) {
         return github_source(state, &repo, commit).map(Some);
     }
+    let Ok(url) = Url::parse(repo_url) else {
+        return Ok(None);
+    };
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    // A token the maker saved says what the host is (self-hosted servers); then the list; then
+    // asking the server itself.
+    let saved = crate::repo_tokens::saved_kind(&state.db, app_id).await?;
     // Development and tests: a stand-in GitHub serves repositories under its own address.
     let base = state.config.releases.github_api_base.as_str();
     let stand_in = state
@@ -1205,16 +1212,10 @@ async fn source(
         .flatten()
         .map(|p| p.trim_matches('/').to_string())
         .filter(|p| p.split('/').count() == 2);
-    if let Some(repo) = stand_in {
+    if let (None, Some(repo)) = (saved, stand_in) {
         return github_source(state, &repo, commit).map(Some);
     }
-    let Ok(url) = Url::parse(repo_url) else {
-        return Ok(None);
-    };
-    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
-    // A token the maker saved says what the host is (self-hosted servers); then the list; then
-    // asking the server itself.
-    let kind = match crate::repo_tokens::saved_kind(&state.db, app_id).await? {
+    let kind = match saved {
         Some(kind) => Some(kind),
         None => match state
             .config
@@ -1755,13 +1756,16 @@ mod tests {
             )
             .is_none()
         );
-        assert!(
+        assert_eq!(
             archive_url(
                 Kind::Bitbucket,
                 &"https://bitbucket.org/a/b".parse().unwrap(),
                 &commit
             )
-            .is_none()
+            .unwrap()
+            .as_str(),
+            format!("https://bitbucket.org/a/b/get/{commit}.tar.gz"),
+            "Bitbucket archives are read since 2026-10-21"
         );
     }
 
