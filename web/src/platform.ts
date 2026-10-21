@@ -296,6 +296,11 @@ export const desktop = {
     const { listen } = await import("@tauri-apps/api/event");
     return listen<{ slug: string }>("sandbox-failed", (e) => handler(e.payload));
   },
+  /** An app closed with an error: its last output, home folder blanked out (never sent unasked). */
+  onAppCrashed: async (handler: (e: { slug: string; code: number | null; log: string }) => void) => {
+    const { listen } = await import("@tauri-apps/api/event");
+    return listen<{ slug: string; code: number | null; log: string }>("app-crashed", (e) => handler(e.payload));
+  },
   /** A running game asked for mods (Slop Link). */
   onModRequest: async (handler: (r: ModRequest) => void) => {
     const { listen } = await import("@tauri-apps/api/event");

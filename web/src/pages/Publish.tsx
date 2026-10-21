@@ -179,6 +179,7 @@ const EMPTY: NewApp = {
   sandbox_ready: false,
   mods_folder: null,
   accessibility: [],
+  bug_reports: true,
 };
 
 function slugify(title: string): string {
@@ -230,6 +231,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           sandbox_ready: existing.sandbox_ready,
           mods_folder: existing.mods_folder,
           accessibility: existing.accessibility,
+          bug_reports: existing.bug_reports,
         }
       : EMPTY,
   );
@@ -275,6 +277,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             online_hosts: hosts(),
             sandbox_ready: form.sandbox_ready,
             accessibility: form.accessibility,
+            bug_reports: form.bug_reports,
             ...(isMod ? {} : { mods_folder: form.mods_folder ?? null }),
           })
         : await terms.guard(() => {
@@ -462,6 +465,11 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           error={error?.field === "online" || error?.field === "online_hosts" ? error : undefined}
         />
         <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
+        <label className="check">
+          <input type="checkbox" checked={form.bug_reports ?? true} onChange={(e) => set("bug_reports", e.target.checked)} />{" "}
+          Take bug reports from players on Slop (you see them on the Manage page; turn off if you only use your own issue
+          tracker)
+        </label>
         <fieldset>
           <legend>Accessibility</legend>
           <p className="hint">Only what it really has: players who play it confirm or dispute each one on its store page.</p>

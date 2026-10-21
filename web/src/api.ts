@@ -549,6 +549,8 @@ export interface AppDetail extends AppSummary {
   sandbox_ready: boolean;
   /** Accessibility features the maker says it has (ACCESSIBILITY keys). */
   accessibility: string[];
+  /** Takes bug reports from players. */
+  bug_reports: boolean;
   /** ...but the check of its newest release found saves elsewhere: players aren't told it works. */
   sandbox_mismatch: boolean;
   /** Sandbox mode is suggested: it goes online (servers Slop can't check). */
@@ -1800,6 +1802,8 @@ export interface NewApp {
   mods_folder?: ModsFolder | null;
   /** Accessibility features it has (ACCESSIBILITY keys). */
   accessibility?: string[];
+  /** Takes bug reports from players. */
+  bug_reports?: boolean;
 }
 
 /** Where a game reads mods from: Slop keeps only approved mods there (DESIGN §9). */
@@ -1876,6 +1880,37 @@ export const ACCESSIBILITY: Array<[string, string]> = [
   ["screen_reader", "Works with a screen reader"],
   ["controller", "Full controller support"],
 ];
+
+/** A player's bug report (crates/slop-api/src/bug_reports.rs). */
+export interface BugReport {
+  id: string;
+  title: string;
+  status: "open" | "fixed" | "wont_fix" | "duplicate";
+  version: string | null;
+  platform: string | null;
+  me_too: number;
+  mine: boolean;
+  i_have_it_too: boolean;
+  created_at: string;
+  /** For the maker and the player who filed it. */
+  body?: string;
+  log?: string;
+  maker_note?: string;
+  /** For the maker. */
+  reporter?: string;
+}
+
+export interface ReleaseFeedback {
+  version: string;
+  approved_at: string;
+  votes: number;
+  not_slop_percent: number | null;
+  reviews_up: number;
+  reviews_down: number;
+  praised: Array<[string, number]>;
+  criticised: Array<[string, number]>;
+  bug_reports: number;
+}
 
 /** A fix bounty (crates/slop-api/src/bounties.rs). */
 export interface Bounty {
@@ -2085,6 +2120,23 @@ export const api = {
       : request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/accessibility/${encodeURIComponent(feature)}`, {
           works,
         }),
+  bugReports: {
+    list: (slug: string, status?: string) =>
+      request<{ reports: BugReport[]; is_maker: boolean; can_report: boolean; accepting: boolean }>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/bug-reports${query({ status })}`,
+      ),
+    file: (
+      slug: string,
+      body: { title: string; body: string; version?: string; platform?: string; log?: string },
+    ) => request<BugReport>("POST", `/v1/apps/${encodeURIComponent(slug)}/bug-reports`, body),
+    update: (id: string, change: { status?: BugReport["status"]; maker_note?: string }) =>
+      request<BugReport>("PATCH", `/v1/bug-reports/${encodeURIComponent(id)}`, change),
+    meToo: (id: string, on: boolean) =>
+      request<void>(on ? "POST" : "DELETE", `/v1/bug-reports/${encodeURIComponent(id)}/me-too`),
+    feedback: (slug: string) =>
+      request<ReleaseFeedback[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/release-feedback`),
+  },
   bounties: {
     forApp: (slug: string) => request<Bounty[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/bounties`),
     all: () => request<Bounty[]>("GET", "/v1/bounties"),
