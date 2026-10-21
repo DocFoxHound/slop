@@ -12,6 +12,8 @@ pub struct Config {
     /// The tables' owner, for migrations only (SLOP_MIGRATE_DATABASE_URL). When set, the API
     /// itself connects with DATABASE_URL as its own role, which can only add to the ledgers.
     pub migrate_database_url: Option<String>,
+    /// Public lists of malware and phishing addresses (bad_links.rs), one address per line.
+    pub bad_link_feeds: Vec<Url>,
     /// Public origin of the site (web UI and API share it), e.g. `https://slop.example`.
     pub public_url: Url,
     /// GitHub sign-in. `None` turns sign-in off.
@@ -389,6 +391,16 @@ impl Config {
         let migrate_database_url = env::var("SLOP_MIGRATE_DATABASE_URL")
             .ok()
             .filter(|s| !s.is_empty());
+        // URLhaus (abuse.ch, public domain) by default; "off" for none.
+        let bad_link_feeds = match env::var("SLOP_BAD_LINK_FEEDS") {
+            Ok(v) if v.trim() == "off" => vec![],
+            Ok(v) if !v.trim().is_empty() => v
+                .split(',')
+                .map(|s| s.trim().parse())
+                .collect::<Result<_, _>>()
+                .context("SLOP_BAD_LINK_FEEDS: addresses separated by commas")?,
+            _ => vec!["https://urlhaus.abuse.ch/downloads/text_online/".parse()?],
+        };
         let public_url: Url = var_or("SLOP_PUBLIC_URL", "http://localhost:8080")
             .parse()
             .context("SLOP_PUBLIC_URL")?;
@@ -520,6 +532,7 @@ impl Config {
             bind,
             database_url,
             migrate_database_url,
+            bad_link_feeds,
             public_url,
             github,
             google,

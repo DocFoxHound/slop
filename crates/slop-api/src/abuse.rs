@@ -10,6 +10,9 @@
 //!   (ignoring case, spacing, punctuation and look-alike characters such as 0/o, 1/l).
 //! - **Rate limits:** accounts that keep hitting the per-account limits (limits.rs).
 //! - **Malicious dependencies:** a release using a package OSV lists as malware (dep_watch.rs).
+//! - **Known-bad links:** a store page, creative profile or review linking to an address a public
+//!   malware or phishing list names (bad_links.rs): new and changed ones every hour, everything
+//!   after the lists are refreshed (daily).
 
 use axum::{
     Json, Router,
@@ -226,6 +229,43 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
                     detail: json!({ "looks_like": other_title, "other_app": other_slug }),
                 });
             }
+        }
+    }
+
+    // Known-bad links: everything when the lists are new, otherwise what changed today.
+    let refreshed = match crate::bad_links::refresh_if_due(state).await {
+        Ok(r) => r,
+        Err(err) => {
+            tracing::warn!(error = %format!("{err:#}"), "couldn't refresh the bad-link lists");
+            false
+        }
+    };
+    let pages: Vec<(&'static str, Uuid, String, String)> = sqlx::query_as::<_, (String, Uuid, String, String)>(
+        "select 'app', id, title, concat_ws(' ', summary, description_md, branch_note) from apps
+         where $1 or updated_at > now() - interval '25 hours'
+         union all
+         select 'account', user_id, name, concat_ws(' ', headline, about_md, ai_note, services::text) from creatives
+         where $1 or updated_at > now() - interval '25 hours'
+         union all
+         select 'account', r.user_id, u.display_name, r.body from app_reviews r join users u on u.id = r.user_id
+         where r.hidden_at is null and ($1 or r.updated_at > now() - interval '25 hours')",
+    )
+    .bind(refreshed)
+    .fetch_all(db)
+    .await?
+    .into_iter()
+    .map(|(k, id, label, text)| (if k == "app" { "app" } else { "account" }, id, label, text))
+    .collect();
+    for (kind, id, label, text) in pages {
+        for (url, source) in crate::bad_links::find(db, &crate::bad_links::urls_in(&text)).await? {
+            found.push(Found {
+                kind: "bad_link",
+                key: format!("bad_link:{id}:{url}"),
+                subject_kind: kind,
+                subject_id: id,
+                label: label.clone(),
+                detail: json!({ "link": url, "listed_by": source }),
+            });
         }
     }
 

@@ -177,6 +177,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         bind: addr,
         database_url: String::new(),
         migrate_database_url: None,
+        bad_link_feeds: vec![],
         public_url: format!("http://{addr}").parse()?,
         github: Some(GithubConfig {
             client_id: "e2e".into(),

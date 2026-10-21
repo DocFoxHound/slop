@@ -507,6 +507,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         bind: "127.0.0.1:0".parse().unwrap(),
         database_url: String::new(),
         migrate_database_url: None,
+        bad_link_feeds: vec![],
         public_url: "http://localhost:8080".parse().unwrap(),
         github: Some(GithubConfig {
             client_id: "client".into(),
@@ -13029,4 +13030,70 @@ async fn icons_like_another_makers_are_pointed_out(db: PgPool) {
     )
     .await;
     assert_eq!(body["pending"]["lookalikes"], json!([]), "{body}");
+}
+
+/// Known-bad links (bad_links.rs): a store page linking to an address on a public malware list
+/// becomes an abuse signal for a person; shared sites only match the exact address.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn links_to_known_bad_addresses_are_pointed_out(db: PgPool) {
+    put_raw(
+        "feed",
+        "bad.txt",
+        b"# URLhaus-style list\nhttp://evil.example/other.exe\nhttps://raw.githubusercontent.com/x/y/main/z.exe\n"
+            .to_vec(),
+    );
+    let fake = fake_github().await;
+    let app = test_app_with(db, |c| {
+        c.bad_link_feeds = vec![
+            format!("{fake}raw/octo/game/feed/.slop/bad.txt")
+                .parse()
+                .unwrap(),
+        ]
+    })
+    .await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker, "castle", "released", "").await;
+    sqlx::query(
+        "update apps set description_md = $1, updated_at = now() where slug = 'castle'",
+    )
+    .bind(
+        "Get the [mod tools](https://www.evil.example/tools.zip). Code: https://github.com/mia/castle. \
+         Extras: https://raw.githubusercontent.com/x/y/main/z.exe and https://raw.githubusercontent.com/mia/castle/main/readme.md",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    slop_api::abuse::run_once(&app.state).await.unwrap();
+    let mut found: Vec<(String, String)> = sqlx::query_as(
+        "select detail->>'link', detail->>'listed_by' from abuse_signals where kind = 'bad_link'",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    found.sort();
+    let host = url::Url::parse(&fake)
+        .unwrap()
+        .host_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        found,
+        [
+            (
+                "https://raw.githubusercontent.com/x/y/main/z.exe".to_string(),
+                host.clone()
+            ),
+            ("https://www.evil.example/tools.zip".to_string(), host),
+        ],
+        "the listed site, and on a shared site only the listed address"
+    );
+    let lists: i64 = sqlx::query_scalar("select count(*) from bad_links")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(lists, 2);
+
+    // Raised once.
+    assert_eq!(slop_api::abuse::run_once(&app.state).await.unwrap(), 0);
 }

@@ -1357,7 +1357,8 @@ export interface AdminQueue {
       | "vote_swing"
       | "lookalike_name"
       | "rate_limited"
-      | "malicious_dependency";
+      | "malicious_dependency"
+      | "bad_link";
     subject_kind: "app" | "account";
     subject_id: string;
     subject_label: string;
