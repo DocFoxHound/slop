@@ -14,6 +14,8 @@ const pages: Array<[string, "player" | "maker" | null]> = [
   ["/app/castle-rock/branch", "maker"],
   ["/publish/guide", null],
   ["/transparency", null],
+  ["/verify", null],
+  ["/source", null],
 ];
 
 for (const [path, who] of pages) {

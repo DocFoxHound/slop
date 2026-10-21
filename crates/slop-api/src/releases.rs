@@ -18,8 +18,8 @@ use axum::{
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use slop_manifest::{
-    FileKind, Platform, Purpose, REVOCATIONS_SCHEMA, RevocationList, Revoked, Signed,
-    is_safe_relative_path,
+    FileKind, FileMatch, FileVerification, MatchStatus, Platform, Purpose, REVOCATIONS_SCHEMA,
+    RevocationList, Revoked, Signed, VERIFICATION_SCHEMA, is_safe_relative_path,
 };
 use time::{Duration, OffsetDateTime, format_description::well_known::Rfc3339};
 use url::Url;
@@ -52,6 +52,7 @@ pub fn routes() -> Router<AppState> {
         )
         .route("/revocations", get(revocations))
         .route("/keys", get(keys))
+        .route("/verify/{sha256}", get(verify_file))
         .route("/server", get(server_info))
 }
 
@@ -1028,6 +1029,127 @@ async fn revocations(State(state): State<AppState>) -> ApiResult<Json<Signed>> {
     Ok(Json(slop_manifest::sign(
         &list,
         Purpose::RevocationList,
+        key,
+    )))
+}
+
+/// How long a file verification is valid.
+pub const VERIFICATION_LIFETIME: Duration = Duration::hours(24);
+
+/// "Does Slop know this file?" (docs/standard/file-verification.md), signed, for anyone: other
+/// stores showing "verified by Slop", or players checking a download. Only public apps are
+/// named, as a viewer with no account would see them; revoked releases of public apps are named
+/// even once the app has left the store, since that's the answer that matters most. Private
+/// apps are never disclosed, so an unknown file and a private one look the same.
+async fn verify_file(
+    State(state): State<AppState>,
+    headers: HeaderMap,
+    Path(sha256): Path<String>,
+) -> ApiResult<Json<Signed>> {
+    let key = state
+        .config
+        .releases
+        .signing_key
+        .as_ref()
+        .ok_or(ApiError::Unavailable("release signing isn't set up"))?;
+    if sha256.len() != 64 || !sha256.bytes().all(|b| b.is_ascii_hexdigit()) {
+        return Err(ApiError::invalid(
+            "sha256",
+            "a SHA-256 is 64 hex characters",
+        ));
+    }
+    let sha256 = sha256.to_ascii_lowercase();
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, None, &headers).await?;
+    let mut qb = sqlx::QueryBuilder::new(
+        "select a.slug, a.title, (r.signed_manifest->>'payload')::jsonb->>'maker', r.id, r.version,
+                f.platform, r.status::text, (r.signed_manifest->>'payload')::jsonb->>'approved_at',
+                r.revoked_at,
+                -- A re-scan of the same file counts; changed and unreachable are about the
+                -- maker's page, not this file.
+                case when f.rescan_result in ('passed', 'note', 'on_hold') then f.rescan_result
+                     else f.scan_result end,
+                case when f.defender is null then null
+                     when jsonb_array_length(coalesce(f.defender->'detections', '[]')) = 0 then 'clean'
+                     else 'detections' end
+         from release_files f join releases r on r.id = f.release_id join apps a on a.id = r.app_id
+         where f.sha256 = ",
+    );
+    qb.push_bind(&sha256).push(
+        " and r.signed_manifest is not null
+          and (r.status = 'revoked' and a.visibility = 'public' or r.status = 'approved' and ",
+    );
+    catalog::push_store_visible(&mut qb, state.config.catalog, policy);
+    qb.push(") order by r.reviewed_at desc limit 20");
+    type Row = (
+        String,
+        String,
+        Option<String>,
+        Uuid,
+        String,
+        String,
+        String,
+        Option<String>,
+        Option<OffsetDateTime>,
+        Option<String>,
+        Option<String>,
+    );
+    let rows: Vec<Row> = qb.build_query_as().fetch_all(&state.db).await?;
+    let site = state.config.public_url.as_str().trim_end_matches('/');
+    let matches = rows
+        .into_iter()
+        .filter_map(
+            |(
+                slug,
+                title,
+                maker,
+                id,
+                version,
+                platform,
+                status,
+                approved,
+                revoked,
+                scan,
+                defender,
+            )| {
+                Some(FileMatch {
+                    page_url: format!("{site}/app/{slug}"),
+                    app_slug: slug,
+                    app_title: title,
+                    maker: maker.unwrap_or_default(),
+                    release_id: id.to_string(),
+                    version,
+                    platform: Platform::parse(&platform)?,
+                    status: if status == "revoked" {
+                        MatchStatus::Revoked
+                    } else {
+                        MatchStatus::Approved
+                    },
+                    approved_at: approved.unwrap_or_default(),
+                    revoked_at: revoked.and_then(|t| t.format(&Rfc3339).ok()),
+                    scan: match scan.as_deref() {
+                        None | Some("skipped") => "not_scanned".into(),
+                        Some(s) => s.into(),
+                    },
+                    defender,
+                })
+            },
+        )
+        .collect();
+    let now = OffsetDateTime::now_utc()
+        .replace_nanosecond(0)
+        .expect("valid");
+    let answer = FileVerification {
+        schema: VERIFICATION_SCHEMA,
+        sha256,
+        issued_at: now.format(&Rfc3339).expect("formats"),
+        expires_at: (now + VERIFICATION_LIFETIME)
+            .format(&Rfc3339)
+            .expect("formats"),
+        matches,
+    };
+    Ok(Json(slop_manifest::sign(
+        &answer,
+        Purpose::FileVerification,
         key,
     )))
 }

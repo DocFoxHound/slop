@@ -1,0 +1,258 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slop.example/standard/v1/release-manifest.schema.json",
+  "title": "Slop release manifest",
+  "description": "The payload of a release manifest (purpose slop/release-manifest/v1): release-manifest.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "app_id",
+    "app_slug",
+    "app_title",
+    "maker",
+    "repo_url",
+    "release_id",
+    "version",
+    "commit",
+    "files",
+    "approved_at"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "app_id": {
+      "type": "string"
+    },
+    "app_slug": {
+      "type": "string"
+    },
+    "app_title": {
+      "type": "string"
+    },
+    "maker": {
+      "type": "string"
+    },
+    "repo_url": {
+      "type": "string"
+    },
+    "release_id": {
+      "type": "string"
+    },
+    "version": {
+      "type": "string"
+    },
+    "commit": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{40}$"
+    },
+    "files": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "platform",
+          "kind",
+          "url",
+          "file_name",
+          "size",
+          "sha256",
+          "launch"
+        ],
+        "properties": {
+          "platform": {
+            "enum": [
+              "windows",
+              "mac",
+              "linux",
+              "android",
+              "linux-deb",
+              "linux-rpm",
+              "any"
+            ]
+          },
+          "kind": {
+            "enum": [
+              "archive",
+              "installer",
+              "apk"
+            ]
+          },
+          "url": {
+            "type": "string"
+          },
+          "file_name": {
+            "type": "string"
+          },
+          "size": {
+            "type": "integer",
+            "minimum": 0
+          },
+          "sha256": {
+            "type": "string",
+            "pattern": "^[0-9a-f]{64}$"
+          },
+          "launch": {
+            "oneOf": [
+              {
+                "type": "null"
+              },
+              {
+                "type": "object",
+                "additionalProperties": false,
+                "required": [
+                  "exec"
+                ],
+                "properties": {
+                  "exec": {
+                    "type": "string"
+                  },
+                  "args": {
+                    "type": "array",
+                    "items": {
+                      "type": "string"
+                    }
+                  }
+                }
+              }
+            ]
+          },
+          "attestation": {
+            "type": [
+              "string",
+              "null"
+            ],
+            "description": "A Sigstore bundle as JSON text"
+          },
+          "maker_signature": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "public_key",
+              "signature"
+            ],
+            "properties": {
+              "public_key": {
+                "type": "string"
+              },
+              "signature": {
+                "type": "string"
+              }
+            }
+          },
+          "parts": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": [
+                "url",
+                "size",
+                "sha256"
+              ],
+              "properties": {
+                "url": {
+                  "type": "string"
+                },
+                "size": {
+                  "type": "integer",
+                  "minimum": 0
+                },
+                "sha256": {
+                  "type": "string",
+                  "pattern": "^[0-9a-f]{64}$"
+                },
+                "attestation": {
+                  "type": [
+                    "string",
+                    "null"
+                  ]
+                }
+              }
+            }
+          }
+        }
+      }
+    },
+    "approved_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "mod_for": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "app_slug",
+        "app_title"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "app_slug": {
+          "type": "string"
+        },
+        "app_title": {
+          "type": "string"
+        }
+      }
+    },
+    "build_of": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "app_id",
+        "app_slug",
+        "app_title"
+      ],
+      "properties": {
+        "app_id": {
+          "type": "string"
+        },
+        "app_slug": {
+          "type": "string"
+        },
+        "app_title": {
+          "type": "string"
+        }
+      }
+    },
+    "mods_folder": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "base",
+        "path",
+        "layout"
+      ],
+      "properties": {
+        "base": {
+          "enum": [
+            "game",
+            "saves"
+          ]
+        },
+        "path": {
+          "type": "string",
+          "minLength": 1,
+          "maxLength": 200
+        },
+        "layout": {
+          "enum": [
+            "folder",
+            "flat"
+          ]
+        }
+      }
+    },
+    "runtimes": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  }
+}

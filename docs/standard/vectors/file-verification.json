@@ -1,0 +1,5 @@
+{
+  "payload": "{\"schema\":1,\"sha256\":\"c14f3125720b91151b88cb8c5a574c2b3a80a695e9c4c619fda002bc4918ecb7\",\"issued_at\":\"2026-10-21T12:00:00Z\",\"expires_at\":\"2099-12-31T00:00:00Z\",\"matches\":[{\"app_slug\":\"example-game\",\"app_title\":\"Example Game\",\"maker\":\"Example Maker\",\"release_id\":\"0192f0c4-0000-7000-8000-000000000002\",\"version\":\"1.0.0\",\"platform\":\"windows\",\"status\":\"approved\",\"approved_at\":\"2026-10-21T12:00:00Z\",\"scan\":\"passed\",\"defender\":\"clean\",\"page_url\":\"https://slop.example/app/example-game\"}]}",
+  "signature": "txtrkzXOqrEBRpHypLRHS4EMmTolehIOPY3yN/fibx9EshgpLe4VCeyeyy1MUh8raY1xQKwHpJ6lsaoMPnjaCA==",
+  "key_id": "0fe235fd1bd5a064"
+}

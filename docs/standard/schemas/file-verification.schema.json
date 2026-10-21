@@ -1,0 +1,112 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slop.example/standard/v1/file-verification.schema.json",
+  "title": "Slop file verification",
+  "description": "The payload of a file verification (purpose slop/file-verification/v1): file-verification.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "sha256",
+    "issued_at",
+    "expires_at",
+    "matches"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "sha256": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{64}$"
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "matches": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "app_slug",
+          "app_title",
+          "maker",
+          "release_id",
+          "version",
+          "platform",
+          "status",
+          "approved_at",
+          "scan",
+          "page_url"
+        ],
+        "properties": {
+          "app_slug": {
+            "type": "string"
+          },
+          "app_title": {
+            "type": "string"
+          },
+          "maker": {
+            "type": "string"
+          },
+          "release_id": {
+            "type": "string"
+          },
+          "version": {
+            "type": "string"
+          },
+          "platform": {
+            "enum": [
+              "windows",
+              "mac",
+              "linux",
+              "android",
+              "linux-deb",
+              "linux-rpm",
+              "any"
+            ]
+          },
+          "status": {
+            "enum": [
+              "approved",
+              "revoked"
+            ]
+          },
+          "approved_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time"
+          },
+          "scan": {
+            "enum": [
+              "passed",
+              "note",
+              "on_hold",
+              "rejected",
+              "blocked",
+              "not_scanned"
+            ]
+          },
+          "defender": {
+            "enum": [
+              "clean",
+              "detections"
+            ]
+          },
+          "page_url": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

@@ -6432,6 +6432,20 @@ dependencies = [
 ]
 
 [[package]]
+name = "slop-verify"
+version = "0.1.0"
+dependencies = [
+ "hex",
+ "rand 0.10.3",
+ "serde",
+ "serde_json",
+ "sha2 0.11.1",
+ "slop-manifest",
+ "slop-provenance",
+ "time",
+]
+
+[[package]]
 name = "smallvec"
 version = "1.16.3"
 source = "registry+https://github.com/rust-lang/crates.io-index"

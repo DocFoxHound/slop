@@ -1,0 +1,28 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slop.example/standard/v1/signed.schema.json",
+  "title": "Signed Slop document",
+  "description": "The envelope every Slop document travels in. Check the signature over payload's exact bytes before parsing it (README.md).",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "payload",
+    "signature",
+    "key_id"
+  ],
+  "properties": {
+    "payload": {
+      "type": "string",
+      "description": "The document as JSON text: the signed bytes"
+    },
+    "signature": {
+      "type": "string",
+      "description": "Standard base64 of a 64-byte Ed25519 signature over the purpose prefix, a newline and the payload"
+    },
+    "key_id": {
+      "type": "string",
+      "pattern": "^[0-9a-f]{16}$",
+      "description": "First 16 hex characters of the SHA-256 of the public key"
+    }
+  }
+}

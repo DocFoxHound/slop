@@ -1,7 +1,7 @@
 ---
 title: People Terms
-version: 2026-10-20
-summary: First version.
+version: 2026-10-21
+summary: Slop's fee promise: never more than 5%, and 12 months' notice of any other fee change that costs creatives more.
 ---
 > **Draft for legal review.** These terms haven't been reviewed by a lawyer yet. You'll get 15 days' notice of any change.
 
@@ -18,6 +18,7 @@ The Service Agreement binds both sides to its words: the creative delivers what'
 ## 3. Payments and fees
 - The client pays the creative directly through Stripe, on the creative's own Stripe account. Slop never holds the money.
 - Slop's fee is **5%** of each payment, taken from what the creative receives. Nothing is added to the client's price.
+- **Slop's fee promise:** the fee will never be more than 5%. Any other change to fees that costs creatives more takes effect at least 12 months after Slop announces it, instead of the usual 15 days.
 - Refunds are issued by the creative.
 - Creatives are responsible for their own taxes. Slop may have to report creatives' income to tax authorities (EU DAC7, US 1099-K).
 

@@ -274,6 +274,7 @@ export function Sidebar({ active }: { active?: string }) {
       <h4>Slop</h4>
       <Link to="/legal">📜 Terms &amp; policies</Link>
       <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>
+      <Link to="/verify">🔎 Check a file</Link>
       <Link to="/source">🧾 Source code</Link>
     </aside>
   );
