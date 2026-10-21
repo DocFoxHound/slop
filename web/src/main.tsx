@@ -24,6 +24,7 @@ import { JobPage, MyJobs } from "./pages/Jobs";
 import { People, PersonPage } from "./pages/People";
 import { PeopleEdit } from "./pages/PeopleEdit";
 import { Sim } from "./pages/Sim";
+import { Transparency } from "./pages/Transparency";
 import { Store } from "./pages/Store";
 import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
@@ -66,6 +67,7 @@ const router = createBrowserRouter([
       { path: "/teams", element: <Teams /> },
       { path: "/teams/:slug", element: <Team /> },
       { path: "/legal/:kind", element: <LegalPage /> },
+      { path: "/transparency", element: <Transparency /> },
       { path: "/people", element: <People /> },
       { path: "/people/me", element: <PeopleEdit /> },
       { path: "/people/jobs", element: <MyJobs /> },

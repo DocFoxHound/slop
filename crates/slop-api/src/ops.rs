@@ -331,6 +331,23 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
         ));
     }
 
+    // Law-enforcement requests with a deadline within a day (legal_requests.rs).
+    for (reference, kind, deadline) in crate::legal_requests::due_soon(db).await? {
+        out.push(alert(
+            format!("legal-request-{reference}"),
+            if kind == "removal_order" {
+                format!("Removal order {reference}: act within the hour")
+            } else {
+                format!("Legal request {reference} is due {}", deadline.date())
+            },
+            format!(
+                "A {kind} request has its deadline at {deadline}. Open Admin → Legal requests."
+            ),
+            "/admin?tab=legal",
+            false,
+        ));
+    }
+
     let signals: i64 =
         sqlx::query_scalar("select count(*) from abuse_signals where status = 'open'")
             .fetch_one(db)

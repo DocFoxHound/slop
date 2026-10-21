@@ -13135,3 +13135,110 @@ async fn unusual_voting_days_are_marked_on_the_chart(db: PgPool) {
         "votes only, and not what staff dismissed"
     );
 }
+
+/// The law-enforcement request log (CHAT-3) and the transparency report (CHAT-4).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn legal_requests_are_logged_answered_and_counted(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, admin) = make_admin(&app, "Ada Owner").await;
+    let (player, someone) = app.user("Pat Player", "US").await;
+    let log = |cookie: &str, body: Value| {
+        req(Method::POST, "/v1/admin/legal-requests")
+            .cookie(cookie)
+            .json(body)
+    };
+    let now = OffsetDateTime::now_utc();
+    let received = now
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let order = json!({
+        "received_at": received, "country": "de", "authority": "Bundeskriminalamt",
+        "kind": "removal_order", "legal_basis": "Regulation (EU) 2021/784 Art. 3",
+        "asked": "Remove the app castle-rock within one hour."
+    });
+    assert_eq!(
+        app.send(log(&someone, order.clone())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let mut bad = order.clone();
+    bad["kind"] = json!("please");
+    assert_eq!(
+        app.send(log(&admin, bad)).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app.send(log(&admin, order)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let removal = body_json(res).await;
+    assert!(removal["reference"].as_str().unwrap().starts_with("LR-"));
+    let res = app
+        .send(log(
+            &admin,
+            json!({
+                "received_at": received, "country": "US", "authority": "County Sheriff",
+                "kind": "subpoena", "asked": "Account details for Pat Player.",
+                "subject_user_id": player
+            }),
+        ))
+        .await;
+    let subpoena = body_json(res).await;
+
+    // The removal order's hour is counted from when it arrived, and admins are told.
+    let due = slop_api::legal_requests::due_soon(&app.db).await.unwrap();
+    assert_eq!(due.len(), 1);
+    assert_eq!(due[0].1, "removal_order");
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/admin/legal-requests").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        list[0]["kind"], "removal_order",
+        "open, soonest deadline first"
+    );
+    assert_eq!(list[1]["subject_name"], "Pat Player", "{list}");
+    assert_eq!(list[1]["user_notice"], "pending");
+
+    // Answered once, with what was given and whether the person was told.
+    let answer = |id: &Value| {
+        req(Method::POST, format!("/v1/admin/legal-requests/{}/answer", id.as_str().unwrap()))
+            .cookie(&admin)
+            .json(json!({ "status": "partly_answered", "response": "Gave the sign-up date and country; no messages exist on our servers.", "user_notice": "notified" }))
+    };
+    assert_eq!(
+        app.send(answer(&subpoena["id"])).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(answer(&subpoena["id"])).await.status(),
+        StatusCode::CONFLICT
+    );
+    let audited: i64 =
+        sqlx::query_scalar("select count(*) from audit_log where action like 'legal_request.%'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(audited, 3);
+
+    // The public report: counts only, signed out.
+    let year = now.year();
+    let report = body_json(
+        app.send(req(Method::GET, format!("/v1/transparency/{year}")))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        report["legal_requests"]["by_country"],
+        json!([{ "key": "DE", "count": 1 }, { "key": "US", "count": 1 }])
+    );
+    assert_eq!(
+        report["legal_requests"]["by_outcome"],
+        json!([{ "key": "open", "count": 1 }, { "key": "partly_answered", "count": 1 }])
+    );
+    assert!(!report.to_string().contains("Pat Player"), "never who");
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/transparency/1999"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
