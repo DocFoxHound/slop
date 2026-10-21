@@ -1806,6 +1806,28 @@ export interface AppQuery {
   offset?: number;
 }
 
+/** docs/standard/file-verification.md */
+export interface FileVerification {
+  schema: number;
+  sha256: string;
+  issued_at: string;
+  expires_at: string;
+  matches: Array<{
+    app_slug: string;
+    app_title: string;
+    maker: string;
+    release_id: string;
+    version: string;
+    platform: string;
+    status: "approved" | "revoked";
+    approved_at: string;
+    revoked_at?: string;
+    scan: string;
+    defender?: "clean" | "detections";
+    page_url: string;
+  }>;
+}
+
 export class ApiError extends Error {
   constructor(
     readonly status: number,
@@ -2084,6 +2106,14 @@ export const api = {
       `/v1/apps/${encodeURIComponent(slug)}/changes/${encodeURIComponent(id)}/cancel`,
     ),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
+  /** What Slop knows about a file, by its SHA-256 (docs/standard/file-verification.md). */
+  verifyFile: async (sha256: string) => {
+    const signed = await request<{ payload: string; signature: string; key_id: string }>(
+      "GET",
+      `/v1/verify/${encodeURIComponent(sha256)}`,
+    );
+    return JSON.parse(signed.payload) as FileVerification;
+  },
   /** Where Slop's source code is, at the version running (the AGPL's offer). */
   source: () =>
     request<{ licence: string; url: string | null; commit: string | null; version_url: string | null }>(

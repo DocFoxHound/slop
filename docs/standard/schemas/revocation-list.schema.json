@@ -1,0 +1,55 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://slop.example/standard/v1/revocation-list.schema.json",
+  "title": "Slop revocation list",
+  "description": "The payload of a revocation list (purpose slop/revocation-list/v1): revocation-list.md.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema",
+    "issued_at",
+    "expires_at",
+    "revoked"
+  ],
+  "properties": {
+    "schema": {
+      "const": 1
+    },
+    "issued_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "expires_at": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "revoked": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "release_id",
+          "app_slug",
+          "reason",
+          "revoked_at"
+        ],
+        "properties": {
+          "release_id": {
+            "type": "string"
+          },
+          "app_slug": {
+            "type": "string"
+          },
+          "reason": {
+            "type": "string"
+          },
+          "revoked_at": {
+            "type": "string",
+            "format": "date-time"
+          }
+        }
+      }
+    }
+  }
+}

@@ -1,0 +1,5 @@
+{
+  "payload": "{\"schema\":1,\"app_id\":\"0192f0c4-0000-7000-8000-000000000001\",\"app_slug\":\"example-game\",\"app_title\":\"Example Game\",\"maker\":\"Example Maker\",\"repo_url\":\"https://github.com/example/example-game\",\"release_id\":\"0192f0c4-0000-7000-8000-000000000002\",\"version\":\"1.0.1\",\"commit\":\"0123456789abcdef0123456789abcdef01234567\",\"files\":[{\"platform\":\"windows\",\"kind\":\"archive\",\"url\":\"https://github.com/example/example-game/releases/download/v1.0.1/example-file.bin\",\"file_name\":\"example-file.bin\",\"size\":56,\"sha256\":\"c14f3125720b91151b88cb8c5a574c2b3a80a695e9c4c619fda002bc4918ecb7\",\"launch\":{\"exec\":\"ExampleGame.exe\",\"args\":[]},\"attestation\":null}],\"approved_at\":\"2026-10-21T12:00:00Z\",\"runtimes\":[\"vcredist-x64\"]}",
+  "signature": "J3dGUQlX4+na4A65vkRTawre3VuIEZ0lg3/zfOUE2mrCrzBss1jTpqVLgDyMY6D7h2Vtukgr3cuUuDMJbDkTCg==",
+  "key_id": "0fe235fd1bd5a064"
+}

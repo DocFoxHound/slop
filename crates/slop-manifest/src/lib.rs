@@ -5,6 +5,11 @@
 //!   page, SHA-256 and size, and how to launch it. The client installs only files whose hash
 //!   matches a manifest Slop signed.
 //! - The **revocation list** names releases that must no longer launch (the kill switch).
+//! - A **file verification** answers "does Slop know this file?" for anyone, such as another
+//!   store showing "verified by Slop": the releases it belongs to, their scan results, and
+//!   whether they were revoked.
+//!
+//! The formats are specified in `docs/standard/` (the Slop open standard).
 //!
 //! A signed document carries the exact JSON text that was signed, so both sides verify the same
 //! bytes. Signatures are Ed25519 over a purpose prefix plus that text, so a document signed for
@@ -25,6 +30,7 @@ pub use ed25519_dalek;
 
 pub const MANIFEST_SCHEMA: u32 = 1;
 pub const REVOCATIONS_SCHEMA: u32 = 1;
+pub const VERIFICATION_SCHEMA: u32 = 1;
 
 // -------------------------------------------------------------------------------------------
 // Documents
@@ -303,6 +309,61 @@ impl RevocationList {
     }
 }
 
+/// What Slop knows about one file, by its SHA-256 (docs/standard/file-verification.md).
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileVerification {
+    pub schema: u32,
+    /// Lowercase hex SHA-256 of the file asked about.
+    pub sha256: String,
+    /// RFC 3339. Past `expires_at` the answer is stale: ask again.
+    pub issued_at: String,
+    pub expires_at: String,
+    /// Releases of public apps with a file of this hash, newest first. Empty: Slop doesn't know
+    /// the file (or only as part of a private app, which it never discloses).
+    pub matches: Vec<FileMatch>,
+}
+
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FileMatch {
+    pub app_slug: String,
+    pub app_title: String,
+    pub maker: String,
+    pub release_id: String,
+    pub version: String,
+    pub platform: Platform,
+    pub status: MatchStatus,
+    /// RFC 3339.
+    pub approved_at: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub revoked_at: Option<String>,
+    /// Slop's scan of the file: `passed`, `note` (passed with something a person looked at),
+    /// `on_hold`, `rejected`, `blocked`, or `not_scanned` (the Slop that answered doesn't scan).
+    pub scan: String,
+    /// Microsoft Defender's check of a Windows file: `clean` or `detections` (a reviewer cleared
+    /// them as false positives before approving). Absent when there was none.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub defender: Option<String>,
+    /// The app's store page.
+    pub page_url: String,
+}
+
+#[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum MatchStatus {
+    /// Approved, and installable from Slop.
+    Approved,
+    /// Withdrawn after approval: it must not be installed or launched.
+    Revoked,
+}
+
+impl FileVerification {
+    pub fn is_expired(&self, now: OffsetDateTime) -> bool {
+        OffsetDateTime::parse(&self.expires_at, &Rfc3339).map_or(true, |exp| exp <= now)
+    }
+}
+
 // -------------------------------------------------------------------------------------------
 // Signing
 
@@ -311,6 +372,7 @@ impl RevocationList {
 pub enum Purpose {
     ReleaseManifest,
     RevocationList,
+    FileVerification,
 }
 
 impl Purpose {
@@ -318,6 +380,7 @@ impl Purpose {
         match self {
             Self::ReleaseManifest => b"slop/release-manifest/v1\n",
             Self::RevocationList => b"slop/revocation-list/v1\n",
+            Self::FileVerification => b"slop/file-verification/v1\n",
         }
     }
 }

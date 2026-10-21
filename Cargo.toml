@@ -3,7 +3,7 @@ resolver = "3"
 members = ["crates/*"]
 # The desktop app needs WebKitGTK and friends on Linux (see README), so plain `cargo build` and
 # `cargo test` only cover the API. Build the desktop app with `npm run desktop` in web/.
-default-members = ["crates/slop-api", "crates/slop-manifest", "crates/slop-client", "crates/slop-provenance"]
+default-members = ["crates/slop-api", "crates/slop-manifest", "crates/slop-client", "crates/slop-provenance", "crates/slop-verify"]
 
 [workspace.package]
 edition = "2024"

@@ -1,7 +1,7 @@
 ---
 title: Publisher Agreement
-version: 2026-10-20
-summary: First version.
+version: 2026-10-21
+summary: Slop's fee promise (never more than 5%, and 12 months' notice of any other fee change that costs you more), and leaving Slop with your data.
 ---
 > **Draft for legal review.** This agreement hasn't been reviewed by a lawyer yet. You'll get 15 days' notice of any change.
 
@@ -32,8 +32,13 @@ Never offer anything in exchange for votes or reviews, and never ask players for
 ## 6. Donations (when they open)
 Donations give nothing in return. Your app can't know who donated and must be the same for everyone. Slop's fee is 5% of each donation. Donations may be taxable income for you; Slop doesn't give tax advice.
 
+**Slop's fee promise.** Slop's fee on money players give makers will never be more than 5%. Slop won't add a fee to publishing, listing, downloads or updates. Any other change to fees that costs makers more takes effect at least 12 months after Slop announces it, instead of the usual 15 days, and you can leave before then.
+
 ## 7. Liability
 You're responsible for claims caused by your app or by breaking this agreement, and you'll cover Slop's reasonable costs from them (to the extent the law allows).
 
 ## 8. Ending
 You can take your app out of the store at any time. Slop may end this agreement for serious or repeated breaches, with a statement of reasons. Players who installed your app keep it.
+
+## 9. Leaving Slop
+Your code and builds stay yours, on your own repository; Slop keeps no copies. Nothing in this agreement stops you publishing your app anywhere else as well. At any time you can download your account's data, your store pages and every release with Slop's signed manifests (Account → Download my data).

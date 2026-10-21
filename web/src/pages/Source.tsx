@@ -27,6 +27,12 @@ export function Source() {
           <p>
             <a href={source.data.url}>Slop's source code</a>
           </p>
+          <p>
+            Other stores and launchers can check what Slop scanned and approved with{" "}
+            <a href={`${source.data.url}/blob/HEAD/docs/standard/README.md`}>the Slop open standard</a>: signed release
+            manifests, the revocation list and file checks, with a command-line checker, under the Apache 2.0 or MIT
+            licence.
+          </p>
           {source.data.version_url && source.data.commit && (
             <p>
               This site runs commit{" "}
@@ -38,7 +44,10 @@ export function Source() {
           )}
         </>
       ) : (
-        <p>The source code isn't public yet. It will be linked here when it is.</p>
+        <p>
+          The source code isn't public yet. It will be linked here when it is, with the Slop open standard: how other
+          stores and launchers can check what Slop scanned and approved.
+        </p>
       )}
     </div>
   );

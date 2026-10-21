@@ -27,6 +27,7 @@ import { PeopleEdit } from "./pages/PeopleEdit";
 import { Sim } from "./pages/Sim";
 import { Transparency } from "./pages/Transparency";
 import { Source } from "./pages/Source";
+import { Verify } from "./pages/Verify";
 import { Store } from "./pages/Store";
 import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
@@ -71,6 +72,7 @@ const router = createBrowserRouter([
       { path: "/legal/:kind", element: <LegalPage /> },
       { path: "/transparency", element: <Transparency /> },
       { path: "/source", element: <Source /> },
+      { path: "/verify", element: <Verify /> },
       { path: "/people", element: <People /> },
       { path: "/people/me", element: <PeopleEdit /> },
       { path: "/people/jobs", element: <MyJobs /> },

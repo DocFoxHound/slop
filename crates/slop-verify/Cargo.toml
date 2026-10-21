@@ -1,0 +1,20 @@
+[package]
+name = "slop-verify"
+version = "0.1.0"
+description = "Checks Slop's signed documents (the Slop open standard, docs/standard/) without trusting a Slop server"
+edition.workspace = true
+publish.workspace = true
+license.workspace = true
+authors.workspace = true
+
+[dependencies]
+hex = "0.4.3"
+serde = "1.0.229"
+serde_json = "1.0.154"
+sha2 = "0.11.1"
+slop-manifest = { path = "../slop-manifest" }
+slop-provenance = { path = "../slop-provenance" }
+time = "0.3.55"
+
+[dev-dependencies]
+rand = "0.10.3"

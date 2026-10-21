@@ -187,6 +187,8 @@ to run Slop Pong against the real Slop Link too.
 | `GET /v1/apps/{slug}/manifest` | anyone | Newest approved release's signed manifest |
 | `GET /v1/revocations` | anyone | Signed revocation list (valid 6 hours) |
 | `GET /v1/keys` | anyone | Slop's public signing key |
+| `GET /v1/verify/{sha256}` | anyone | Signed answer: the public releases with this file, their scans, and whether they were revoked (valid 24 hours) |
+| `GET /v1/source` | anyone | Where the source code is, and the commit running |
 | `GET /v1/server` | anyone | What this server checks (scanning, maker signatures) |
 | `POST /v1/apps/{slug}/launch` | signed in (desktop app) | Records a launch; issues a Pulse token |
 | `POST /v1/pulse/start`, `/heartbeat`, `/end` | the game (Pulse token) | Slop Pulse pings |
@@ -198,6 +200,8 @@ to run Slop Pong against the real Slop Link too.
 | `POST /v1/auth/desktop/requests` | desktop app | Start desktop sign-in |
 | `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |
 | `POST /v1/auth/desktop/token` | desktop app | Code or refresh token → access + refresh tokens |
+
+The signed documents are the [Slop open standard](docs/standard/README.md); `slop-verify` checks them.
 
 Errors are `{"error": {"code", "message", "field"?}}`. The desktop app authenticates with
 `Authorization: Bearer <access token>`; the website with its session cookie.

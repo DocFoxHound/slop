@@ -6901,6 +6901,7 @@ async fn closing_an_account_bans_the_sign_in_and_keeps_ratings_honest(db: PgPool
     assert_eq!(export["sign_ins"][0]["provider"], "github");
     assert_eq!(export["votes"][0]["app"], "liked");
     assert_eq!(export["apps"][0]["slug"], "octos-game");
+    assert!(export["app_releases"].is_array());
     assert_eq!(export["agreements_accepted"][0]["document"], "terms");
     assert!(export["sessions"][0].get("token_hash").is_none());
 
@@ -13696,4 +13697,95 @@ async fn the_source_code_is_offered(db: PgPool) {
     // Tests aren't built by the deploy, so there's no commit to point at.
     assert_eq!(body["commit"], Value::Null);
     assert_eq!(body["version_url"], Value::Null);
+}
+
+/// "Does Slop know this file?" (docs/standard/file-verification.md): a signed answer for anyone,
+/// naming public apps only, and revoked releases too.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn anyone_can_verify_a_file_by_its_hash(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let verify = |hash: String| {
+        let app = &app;
+        async move {
+            let res = app
+                .send(req(Method::GET, format!("/v1/verify/{hash}")))
+                .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let signed: slop_manifest::Signed =
+                serde_json::from_value(body_json(res).await).unwrap();
+            slop_manifest::verify::<slop_manifest::FileVerification>(
+                &signed,
+                slop_manifest::Purpose::FileVerification,
+                &[app.signing_key.verifying_key()],
+            )
+            .unwrap()
+        }
+    };
+
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(release_body(&app, "1.0.0", "game-windows.zip")),
+        )
+        .await;
+    let release: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    let sha256: String =
+        sqlx::query_scalar("select sha256 from release_files where release_id = $1")
+            .bind(release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+
+    // Not approved yet: unknown.
+    assert!(verify(sha256.clone()).await.matches.is_empty());
+
+    admin::approve(&app.db, Some(&app.signing_key), lax(), release, "rev")
+        .await
+        .unwrap();
+    admin::list_app(&app.db, "game", "rev").await.unwrap();
+    let answer = verify(sha256.to_ascii_uppercase()).await;
+    assert_eq!(answer.sha256, sha256);
+    assert_eq!(answer.matches.len(), 1);
+    let m = &answer.matches[0];
+    assert_eq!(
+        (m.app_slug.as_str(), m.version.as_str(), m.status),
+        ("game", "1.0.0", slop_manifest::MatchStatus::Approved)
+    );
+    assert_eq!(m.maker, "Maker");
+    assert_eq!(m.scan, "not_scanned", "the test server doesn't scan");
+    assert!(m.page_url.ends_with("/app/game"));
+    assert!(!answer.is_expired(time::OffsetDateTime::now_utc()));
+
+    // Revoked: still named, even once the app leaves the store.
+    admin::revoke(&app.db, release, "rev", "Malware found by re-scan")
+        .await
+        .unwrap();
+    sqlx::query("update apps set status = 'delisted' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let answer = verify(sha256.clone()).await;
+    assert_eq!(
+        answer.matches[0].status,
+        slop_manifest::MatchStatus::Revoked
+    );
+    assert!(answer.matches[0].revoked_at.is_some());
+
+    // A private app is never disclosed.
+    sqlx::query("update apps set visibility = 'private' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert!(verify(sha256).await.matches.is_empty());
+
+    assert!(verify("ab".repeat(32)).await.matches.is_empty());
+    let res = app.send(req(Method::GET, "/v1/verify/not-a-hash")).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
 }

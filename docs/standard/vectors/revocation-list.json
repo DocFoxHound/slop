@@ -1,0 +1,5 @@
+{
+  "payload": "{\"schema\":1,\"issued_at\":\"2026-10-21T12:00:00Z\",\"expires_at\":\"2099-12-31T00:00:00Z\",\"revoked\":[{\"release_id\":\"0192f0c4-0000-7000-8000-000000000003\",\"app_slug\":\"bad-example\",\"reason\":\"Malware found by re-scan\",\"revoked_at\":\"2026-10-21T11:00:00Z\"}]}",
+  "signature": "QpnUEbtjtx0DXdkqAJ8k3odeeS8GgGdXoIBNAtghsagoMAzKEDfxaefiN1XPoKj8x+yTfixSUPw6PXk6Ny3vCA==",
+  "key_id": "0fe235fd1bd5a064"
+}
