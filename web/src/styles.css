@@ -475,6 +475,9 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .chart-legend .key::before { content: ""; display: inline-block; width: 10px; height: 10px; border-radius: 2px; margin-right: 5px; vertical-align: -1px; background: var(--slime); }
 .chart-legend .key.up::before { background: var(--good); }
 .chart-legend .key.down::before { background: var(--bad); }
+/* Days with unusual voting (abuse.rs): a hatched band behind the bars, not colour alone. */
+.chart rect.marked { fill: rgba(251, 191, 36, 0.16); stroke: var(--warn); stroke-dasharray: 3 3; stroke-width: 1; }
+.chart-legend .key.marked::before { background: rgba(251, 191, 36, 0.3); outline: 1px dashed var(--warn); }
 .chart-legend .key.line-players::before { background: #60a5fa; }
 .chart-table { margin-top: 6px; font-size: 12px; }
 .link-btn { background: none; border: 0; padding: 2px 0; color: var(--slime); cursor: pointer; text-decoration: underline; }

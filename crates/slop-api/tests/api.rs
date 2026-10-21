@@ -13097,3 +13097,41 @@ async fn links_to_known_bad_addresses_are_pointed_out(db: PgPool) {
     // Raised once.
     assert_eq!(slop_api::abuse::run_once(&app.state).await.unwrap(), 0);
 }
+
+/// Days the abuse checks found unusual voting are marked on the ratings chart, unless staff
+/// found nothing wrong (votes.rs `unusual_days`).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn unusual_voting_days_are_marked_on_the_chart(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker, "castle", "released", "").await;
+    for (kind, ago, status) in [
+        ("review_bomb", "2 days", "open"),
+        ("vote_burst", "5 days", "actioned"),
+        ("vote_swing", "9 days", "dismissed"),
+        ("lookalike_name", "1 day", "open"),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "insert into abuse_signals (id, kind, key, subject_kind, subject_id, subject_label, detail, status, detected_at)
+             select $1, $2, $2 || a.id, 'app', a.id, a.title, '{{}}', $3, now() - interval '{ago}'
+             from apps a where a.slug = 'castle'"
+        )))
+        .bind(Uuid::now_v7())
+        .bind(kind)
+        .bind(status)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let ratings = body_json(app.send(req(Method::GET, "/v1/apps/castle/ratings")).await).await;
+    let day = |ago: i64| {
+        (OffsetDateTime::now_utc() - time::Duration::days(ago))
+            .date()
+            .to_string()
+    };
+    assert_eq!(
+        ratings["unusual_days"],
+        json!([day(5), day(2)]),
+        "votes only, and not what staff dismissed"
+    );
+}

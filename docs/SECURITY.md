@@ -300,7 +300,7 @@ More detail in `PAYMENTS.md`.
 
 ## 11. Trust & safety (abuse of the platform)
 
-**Built 2026-10-20 (`abuse.rs`, `limits.rs`):** hourly checks for vote bursts from accounts made in the last week, review bombs (a day's 👎 at least 5 times the usual), coordinated vote swings, app names that look like another maker's listed app (case, spacing, punctuation and look-alike characters folded), and accounts repeatedly hitting the per-account rate limits. Each is raised once in the admin queue and as an alert; nothing changes automatically, and a reviewer closes it with a note. Still to do: icon similarity, known-bad link lists, and marking review-bomb periods on the rating chart.
+**Built 2026-10-20 (`abuse.rs`, `limits.rs`):** hourly checks for vote bursts from accounts made in the last week, review bombs (a day's 👎 at least 5 times the usual), coordinated vote swings, app names that look like another maker's listed app (case, spacing, punctuation and look-alike characters folded), and accounts repeatedly hitting the per-account rate limits. Each is raised once in the admin queue and as an alert; nothing changes automatically, and a reviewer closes it with a note. **Built 2026-10-21:** icon similarity (each store-page picture gets a perceptual hash; a new thumbnail within 10 of 64 bits of another maker's live one is shown to the reviewer, `media.rs`), known-bad links (public malware and phishing lists, URLhaus by default, refreshed daily and checked against store pages, creative profiles and reviews; shared sites match only exact addresses, `bad_links.rs`), and days with unusual voting shaded on each app's votes-per-day chart unless staff dismissed the signal (`votes.rs`).
 
 | Threat | Mitigations |
 |---|---|

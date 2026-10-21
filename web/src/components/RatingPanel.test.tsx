@@ -3,7 +3,7 @@ import { afterEach, describe, expect, it } from "vitest";
 import { MemoryRouter } from "react-router";
 
 import type { Ratings } from "../api";
-import { LineChart } from "./Charts";
+import { LineChart, UpDownBars } from "./Charts";
 import { RatingSummary, SinceNewWork } from "./RatingPanel";
 
 const base: Ratings = {
@@ -60,6 +60,31 @@ describe("LineChart", () => {
     fireEvent.click(screen.getByText("Show numbers"));
     const row = [...container.querySelectorAll("tr")].find((r) => r.textContent?.startsWith("2026-09"));
     expect(row?.textContent).toContain("—");
+  });
+});
+
+describe("UpDownBars", () => {
+  afterEach(cleanup);
+
+  it("shades marked days, and says so in its numbers too", () => {
+    const { container } = render(
+      <UpDownBars
+        title="Votes per day"
+        summary="Votes"
+        labels={["Oct 1", "Oct 2", "Oct 3"]}
+        up={[2, 1, 0]}
+        down={[0, 14, 1]}
+        upName="Up"
+        downName="Down"
+        marked={[false, true, false]}
+        markedName="Unusual voting"
+      />,
+    );
+    expect(container.querySelectorAll("rect.marked").length).toBe(1);
+    expect(screen.getByText("Unusual voting")).toBeTruthy();
+    fireEvent.click(screen.getByText("Show numbers"));
+    const row = [...container.querySelectorAll("tr")].find((r) => r.textContent?.startsWith("Oct 2"));
+    expect(row?.textContent).toContain("yes");
   });
 });
 

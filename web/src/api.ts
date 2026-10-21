@@ -792,6 +792,8 @@ export interface Ratings extends Tally {
     changed: number;
     withdrawn: number;
   }>;
+  /** Days with unusual voting the abuse checks found (YYYY-MM-DD), shaded on the chart. */
+  unusual_days?: string[];
   open: boolean;
   min_votes: number;
   mine?: {
