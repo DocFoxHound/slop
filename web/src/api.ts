@@ -330,6 +330,11 @@ export interface AppReview {
   updated_at: string;
   edited: boolean;
   mine: boolean;
+  /** The app maker's reply under it. */
+  reply: string | null;
+  reply_at: string | null;
+  /** The review changed after the maker replied. */
+  reply_outdated: boolean;
 }
 
 export interface UserProfile {
@@ -708,7 +713,7 @@ export interface ModerationDecision {
   subject_kind: ReportKind | "account";
   subject_label: string;
   action:
-    "delist_app" | "hide_review" | "hide_profile" | "suspend_account" | "warn";
+    "delist_app" | "hide_review" | "remove_reply" | "hide_profile" | "hide_team" | "suspend_account" | "warn";
   action_label: string;
   rule: string;
   rule_title: string;
@@ -1678,6 +1683,24 @@ export interface AgentToken {
   last_used_at: string;
 }
 
+/** A community build's fix offered to the original (crates/slop-api/src/offers.rs). */
+export interface UpstreamOffer {
+  id: string;
+  /** received: offered to this app; sent: offered by this community build. */
+  direction: "received" | "sent";
+  branch_slug: string;
+  branch_title: string;
+  original_slug: string;
+  original_title: string;
+  offered_by: string;
+  pull_request_url: string;
+  message: string;
+  status: "open" | "accepted" | "declined" | "withdrawn";
+  answer: string | null;
+  created_at: string;
+  answered_at: string | null;
+}
+
 /** A fix for a problem Slop's checks found (crates/slop-api/src/fixes.rs). */
 export interface Fix {
   kind: string;
@@ -2590,10 +2613,15 @@ export const api = {
         not_slop: number;
         slop: number;
         next_offset: number | null;
+        can_reply: boolean;
       }>(
         "GET",
         `/v1/apps/${encodeURIComponent(slug)}/reviews${query({ vote, offset })}`,
       ),
+    reply: (slug: string, id: string, body: string) =>
+      request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/reviews/${encodeURIComponent(id)}/reply`, { body }),
+    removeReply: (slug: string, id: string) =>
+      request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/reviews/${encodeURIComponent(id)}/reply`),
     write: (slug: string, body: string) =>
       request<void>("PUT", `/v1/apps/${encodeURIComponent(slug)}/review`, {
         body,
@@ -2977,6 +3005,16 @@ export const api = {
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/fixes`,
     ),
+  offers: (slug: string) => request<UpstreamOffer[]>("GET", `/v1/apps/${encodeURIComponent(slug)}/offers`),
+  offerFix: (slug: string, pull_request_url: string, message: string) =>
+    request<UpstreamOffer>("POST", `/v1/apps/${encodeURIComponent(slug)}/offers`, { pull_request_url, message }),
+  answerOffer: (slug: string, id: string, decision: "accepted" | "declined", message: string) =>
+    request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/offers/${encodeURIComponent(id)}/answer`, {
+      decision,
+      message: message.trim() || undefined,
+    }),
+  withdrawOffer: (slug: string, id: string) =>
+    request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/offers/${encodeURIComponent(id)}/withdraw`),
   setReleaseNotes: (slug: string, id: string, notes: string) =>
     request<Release>("PATCH", `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}`, { notes }),
   closeAccount: (confirm: string) =>

@@ -755,7 +755,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "act_on_report",
-        description: "Decide an open report: delist_app, hide_review, hide_profile, hide_team, warn or suspend_account (suspending needs a moderate token). The person gets a statement of reasons; the reporter is told the outcome.",
+        description: "Decide an open report: delist_app, hide_review, remove_reply (the app maker's reply under a review), hide_profile, hide_team, warn or suspend_account (suspending needs a moderate token). The person gets a statement of reasons; the reporter is told the outcome.",
         method: Method::POST,
         path: "/v1/admin/reports/{id}/act",
         properties: || json!({ "id": s("The report ID"), "action": s("What to do"), "rule": s("A Content Policy rule code"), "facts": s("The facts, for the statement of reasons"), "outcome": s("What the reporter is told"), "law": s("Optional: the law, if it's illegal content"), "external_reference": s("Optional: where it was passed on (NCMEC, NCA, police) and its reference") }),

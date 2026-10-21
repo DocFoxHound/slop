@@ -1850,7 +1850,9 @@ function TokensTab() {
 const ACTION_LABEL: Record<ModerationDecision["action"], string> = {
   delist_app: "Take the app out of the store",
   hide_review: "Hide the review",
+  remove_reply: "Remove the maker's reply under it",
   hide_profile: "Hide the profile",
+  hide_team: "Hide the team",
   warn: "Warn them (no restriction)",
   suspend_account: "Suspend their account",
 };

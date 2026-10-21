@@ -108,6 +108,8 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/apps/{slug}/repo-check", true, Slug::Own),
     ("POST", "/apps/{slug}/media/check", true, Slug::Own),
     ("POST", "/apps/{slug}/offers", true, Slug::Own),
+    ("PUT", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
+    ("DELETE", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/answer", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/withdraw", true, Slug::Own),
     // People: never accepting agreements or changes, paying, signing off, delivering,
@@ -656,6 +658,20 @@ pub(crate) const TOOLS: &[Tool] = &[
         path: "/v1/apps/{slug}/reviews",
         properties: slug_only,
         required: &["slug"],
+    },
+    Tool {
+        name: "reply_to_review",
+        description: "Replies publicly under a player's review of the app, as its maker (a new reply replaces the old one). Be brief, polite and specific: thank them, say what was fixed or is planned. Never argue, never ask for a better vote, never offer anything for one.",
+        method: Method::PUT,
+        path: "/v1/apps/{slug}/reviews/{id}/reply",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The review's ID, from list_reviews"),
+                "body": s("The reply, up to 2,000 characters"),
+            })
+        },
+        required: &["slug", "id", "body"],
     },
     Tool {
         name: "list_categories",
