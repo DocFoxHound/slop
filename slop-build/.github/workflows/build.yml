@@ -139,6 +139,14 @@ on:
         required: false
         type: boolean
         default: true
+      linux-runtime:
+        description: >-
+          Optional: "steam-sniper" builds the Linux program inside Valve's Steam Runtime 3 (sniper)
+          SDK, so it runs on older Linux systems too (glibc 2.31 and newer). For rust, go and custom
+          builds; leave empty to build on the runner's Ubuntu.
+        required: false
+        type: string
+        default: ""
       signpath-organization-id:
         description: >-
           Optional: your SignPath organization ID, to sign the Windows program with a free
@@ -197,7 +205,11 @@ jobs:
           APP: ${{ inputs.app }}
           TYPE: ${{ inputs.project-type }}
           SLOP_URL: ${{ inputs.slop-url }}
+          LINUX_RUNTIME: ${{ inputs.linux-runtime }}
         run: |
+          [[ "$LINUX_RUNTIME" =~ ^(|steam-sniper)$ ]] || { echo "::error::linux-runtime is empty or steam-sniper"; exit 1; }
+          if [ -n "$LINUX_RUNTIME" ] && ! [[ "$TYPE" =~ ^(rust|go|custom)$ ]]; then
+            echo "::error::linux-runtime works with rust, go and custom builds"; exit 1; fi
           [[ "$APP" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "::error::app must be your app's Slop address, e.g. my-game"; exit 1; }
           [[ "$TYPE" =~ ^(rust|go|dotnet|godot|unity|web|electron|tauri|python|custom)$ ]] || { echo "::error::project-type must be rust, go, dotnet, godot, unity, web, electron, tauri, python or custom"; exit 1; }
           [[ "$SLOP_URL" =~ ^https?://[^/]+/?$ ]] || { echo "::error::slop-url must be a site address like https://slop.example"; exit 1; }
@@ -433,10 +445,24 @@ jobs:
           DOTNET_PROJECT: ${{ inputs.dotnet-project }}
           GODOT_DOTNET: ${{ inputs.godot-dotnet }}
           PY_WINDOWED: ${{ inputs.python-windowed }}
+          LINUX_RUNTIME: ${{ inputs.linux-runtime }}
         run: |
           ext=""; [ "$PLATFORM" = "windows" ] && ext=".exe"
           out="$PWD/slop-dist/app"
           mkdir -p "$out"
+          # Runs a compile command here, or for Linux with linux-runtime inside the Steam Runtime
+          # SDK, with the repository at the same path, as this user, and extra mounts from $@.
+          compile() {
+            local cmd="$1"; shift
+            if [ "$PLATFORM" != "linux" ] || [ -z "$LINUX_RUNTIME" ]; then
+              bash -euo pipefail -c "$cmd"; return
+            fi
+            mkdir -p "$RUNNER_TEMP/slop-runtime-home"
+            docker run --rm --user "$(id -u):$(id -g)" -e HOME=/slop-home \
+              -v "$RUNNER_TEMP/slop-runtime-home:/slop-home" -v "$GITHUB_WORKSPACE:$GITHUB_WORKSPACE" \
+              -w "$PWD" "$@" registry.gitlab.steamos.cloud/steamrt/sniper/sdk:latest \
+              bash -euo pipefail -c "$cmd"
+          }
           # A program inside a folder, for types whose output has one (Electron, PyInstaller).
           find_program() {
             python3 - "$1" "$PLATFORM" <<'PY'
@@ -459,7 +485,12 @@ jobs:
           }
           case "$TYPE" in
             rust)
-              cargo build --release --locked
+              if [ "$PLATFORM" = "linux" ] && [ -n "$LINUX_RUNTIME" ]; then
+                # The runner's Rust needs a newer glibc, so the SDK gets its own (rust-toolchain.toml is honoured).
+                compile 'curl -sSf https://sh.rustup.rs | sh -s -- -y -q --profile minimal; . "$HOME/.cargo/env"; cargo build --release --locked'
+              else
+                cargo build --release --locked
+              fi
               # The first binary target of the workspace's packages.
               name=$(cargo metadata --no-deps --format-version 1 | python3 -c '
           import json, sys
@@ -471,7 +502,11 @@ jobs:
               exec="$name$ext"
               ;;
             go)
-              go build -trimpath -o "$out/$REPO_NAME$ext" .
+              # Go's own tools don't need the system's libraries, so the runner's work in the SDK too.
+              export SLOP_OUT="$out/$REPO_NAME$ext" GOROOT="$(go env GOROOT)"
+              compile 'PATH="$GOROOT/bin:$PATH" go build -trimpath -o "$SLOP_OUT" .' \
+                -e SLOP_OUT -e GOROOT -e GOCACHE=/slop-home/go-cache -e GOMODCACHE=/slop-home/go-mod \
+                -v "$GOROOT:$GOROOT:ro"
               exec="$REPO_NAME$ext"
               ;;
             dotnet)
@@ -637,7 +672,7 @@ jobs:
             custom)
               [ -n "$BUILD_COMMAND" ] && [ -n "$OUTPUT_DIR" ] && [ -n "$EXEC" ] || {
                 echo "::error::custom builds need build-command, output-dir and exec"; exit 1; }
-              bash -euo pipefail -c "$BUILD_COMMAND"
+              compile "$BUILD_COMMAND"
               cp -R "$OUTPUT_DIR"/. "$out/"
               exec="${EXEC//\{ext\}/$ext}"
               ;;

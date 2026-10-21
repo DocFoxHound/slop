@@ -256,6 +256,7 @@ jobs:
 | `godot-preset-windows`, `godot-preset-linux` | `godot`: the export presets to use (default `Windows Desktop` and `Linux`) |
 | `python-version`, `python-entry`, `python-windowed` | `python`: Python version (default 3.12), the script that starts the app (default `main.py`), and `true` for apps with their own window, such as pygame games |
 | `node-version` | `electron`, `tauri`, `web`: Node.js version (default 22) |
+| `linux-runtime` | `steam-sniper` builds the Linux program inside Valve's Steam Runtime 3 (sniper), so it runs on older Linux systems too (anything with glibc 2.31, e.g. Ubuntu 20.04 or Debian 11). For `rust`, `go` and `custom`; Rust is installed in the container, following your `rust-toolchain.toml` |
 | `publish` | `false` builds and checks only: no release, nothing sent to Slop, the files kept as the run's artifacts for a day. For trying it out |
 | `sign` | `true` by default; set `false` for private repositories without GitHub Enterprise |
 | `signpath-organization-id` | Optional: sign the Windows program for free with SignPath Foundation (see [Signing](#signing)). Needs the `SIGNPATH_API_TOKEN` secret |
