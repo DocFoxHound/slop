@@ -13335,6 +13335,7 @@ async fn records_are_purged_after_their_keeping_period(db: PgPool) {
             reports: 1,
             decisions: 1,
             legal_requests: 1,
+            removed_content: 0,
             acceptances: 3
         }
     );
@@ -13369,4 +13370,72 @@ async fn records_are_purged_after_their_keeping_period(db: PgPool) {
         slop_api::retention::purge(&app.db).await.unwrap(),
         Default::default()
     );
+}
+
+/// A terrorist content removal order is acted on in one step (CON-11): taken down as a decision
+/// the maker can appeal, a sealed copy kept six months, the time it took recorded.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn removal_orders_take_content_down_in_one_step(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, admin) = make_admin(&app, "Ada Owner").await;
+    let (maker, maker_cookie) = app.user("Mia Maker", "US").await;
+    let (_, someone) = app.user("Sam", "US").await;
+    listed_with(&app, maker, "castle", "released", "").await;
+    let received = (OffsetDateTime::now_utc() - time::Duration::minutes(20))
+        .format(&time::format_description::well_known::Rfc3339)
+        .unwrap();
+    let order = |cookie: &str, subject: &str| {
+        req(Method::POST, "/v1/admin/removal-orders")
+            .cookie(cookie)
+            .json(json!({
+                "received_at": received, "country": "FR", "authority": "OCLCTIC",
+                "order": "Order 2026-117: the store page of castle", "subject_kind": "app", "subject": subject
+            }))
+    };
+    assert_eq!(
+        app.send(order(&someone, "castle")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(order(&admin, "nothing")).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app.send(order(&admin, "castle")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let done = body_json(res).await;
+    let minutes = done["minutes"].as_i64().unwrap();
+    assert!((20..=22).contains(&minutes), "{done}");
+
+    // Gone from the store, as a decision the maker sees and can appeal.
+    let status: String = sqlx::query_scalar("select status::text from apps where slug = 'castle'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "delisted");
+    let decisions = body_json(
+        app.send(req(Method::GET, "/v1/me/decisions").cookie(&maker_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(decisions[0]["action"], "delist_app");
+    assert!(decisions[0]["law"].as_str().unwrap().contains("2021/784"));
+    assert_eq!(decisions[0]["can_appeal"], true);
+
+    // Logged as answered, with a sealed copy for six months.
+    let (status, response): (String, String) =
+        sqlx::query_as("select status, response from legal_requests where reference = $1")
+            .bind(done["reference"].as_str().unwrap())
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "answered");
+    assert!(response.contains(&format!("{minutes} minutes")));
+    let (title, months): (String, f64) = sqlx::query_as(
+        "select snapshot->'app'->>'title', (extract(epoch from preserve_until - removed_at) / 2592000)::float8 from removed_content",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(title, "castle");
+    assert!((5.9..6.2).contains(&months));
 }

@@ -10,6 +10,11 @@
 //!
 //! The transparency report (`/v1/transparency/{year}`, public) counts requests by country, kind
 //! and outcome, and the year's reports, decisions and appeals.
+//!
+//! **Terrorist content removal orders** (Regulation (EU) 2021/784, CON-11) have an hour, so they
+//! take one step (`removal_order`): log the order, take the content down as a moderation
+//! decision (the person gets the statement of reasons and can appeal), keep a sealed copy for six
+//! months (Art. 6), and record how long it took. No second approval: the hour is the law's.
 
 use axum::{
     Json, Router,
@@ -47,6 +52,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/admin/legal-requests", get(list).post(create))
         .route("/admin/legal-requests/{id}/answer", post(answer))
+        .route("/admin/removal-orders", post(removal_order))
         .route("/transparency/{year}", get(transparency))
 }
 
@@ -295,4 +301,145 @@ async fn transparency(
             "by_outcome": counts(db, "select appeal_status, count(*) from moderation_decisions where appealed_at is not null and extract(year from appealed_at at time zone 'UTC') = $1 group by 1 order by 2 desc, 1", year).await?,
         },
     })))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemovalOrder {
+    #[serde(with = "time::serde::rfc3339")]
+    received_at: OffsetDateTime,
+    country: String,
+    authority: String,
+    /// The order's own reference and what it names.
+    order: String,
+    /// app (its address), app_review (its ID), profile (the creative's handle), team (its address).
+    subject_kind: String,
+    subject: String,
+}
+
+/// Takes content down on a removal order, in one step (see the module comment).
+async fn removal_order(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Json(b): Json<RemovalOrder>,
+) -> ApiResult<Json<Value>> {
+    admin.need(Perm::Sensitive)?;
+    let country = b.country.trim().to_ascii_uppercase();
+    if country.len() != 2 || !country.bytes().all(|c| c.is_ascii_uppercase()) {
+        return Err(ApiError::invalid("country", "a two-letter country code"));
+    }
+    let authority = text("authority", &b.authority, 200, false)?;
+    let order = text("order", &b.order, 4000, false)?;
+    let subject = b.subject.trim();
+    // What it is, whose, what to call it, the action, and the content as it stands.
+    let found: Option<(Uuid, Uuid, String, Value)> = match b.subject_kind.as_str() {
+        "app" => sqlx::query_as(
+            "select a.id, a.maker_id, 'App: ' || a.title,
+                    jsonb_build_object('app', to_jsonb(a), 'pictures', (select to_jsonb(ms) from media_sets ms where ms.id = a.media_set_id))
+             from apps a where a.slug = $1",
+        )
+        .bind(subject)
+        .fetch_optional(&state.db)
+        .await?,
+        "app_review" => sqlx::query_as(
+            "select r.id, r.user_id, 'Review of ' || a.title, to_jsonb(r)
+             from app_reviews r join apps a on a.id = r.app_id where r.id::text = $1",
+        )
+        .bind(subject)
+        .fetch_optional(&state.db)
+        .await?,
+        "profile" => sqlx::query_as(
+            "select c.user_id, c.user_id, 'People profile: ' || c.name, to_jsonb(c) from creatives c where c.handle = lower($1)",
+        )
+        .bind(subject)
+        .fetch_optional(&state.db)
+        .await?,
+        "team" => sqlx::query_as(
+            "select t.id, t.created_by, 'Team: ' || t.name, to_jsonb(t) from teams t where t.slug = $1",
+        )
+        .bind(subject)
+        .fetch_optional(&state.db)
+        .await?,
+        _ => return Err(ApiError::invalid("subject_kind", "app, app_review, profile or team")),
+    };
+    let (subject_id, owner, label, snapshot) =
+        found.ok_or_else(|| ApiError::invalid("subject", "nothing on Slop by that name"))?;
+    let action = match b.subject_kind.as_str() {
+        "app" => "delist_app",
+        "app_review" => "hide_review",
+        "profile" => "hide_profile",
+        _ => "hide_team",
+    };
+    let request_id = Uuid::now_v7();
+    let reference = format!(
+        "LR-{}",
+        request_id.simple().to_string()[22..].to_ascii_uppercase()
+    );
+    let mut tx = state.db.begin().await?;
+    let law = format!(
+        "Regulation (EU) 2021/784 (terrorist content online): removal order from {authority}, {country}"
+    );
+    let decision = crate::moderation::decide(
+        &mut tx,
+        &crate::moderation::NewDecision {
+            user_id: owner,
+            subject_kind: &b.subject_kind,
+            subject_id,
+            subject_label: &label,
+            action,
+            rule: "illegal",
+            law: Some(&law),
+            facts: &format!("A removal order from a competent authority named this content as terrorist content: {order}"),
+            decided_by: &admin.actor,
+        },
+    )
+    .await
+    .map_err(|e| ApiError::Conflict(format!("{e:#}")))?;
+    let removed_at = OffsetDateTime::now_utc();
+    let minutes = ((removed_at - b.received_at).whole_seconds().max(0) + 59) / 60;
+    sqlx::query(
+        "insert into legal_requests (id, reference, received_at, country, authority, kind, legal_basis, asked,
+                                     subject_user_id, deadline, status, response, user_notice, created_by,
+                                     answered_by, answered_at)
+         values ($1, $2, $3, $4, $5, 'removal_order', 'Regulation (EU) 2021/784 Art. 3', $6, $7, $8, 'answered', $9,
+                 'notified', $10, $10, $11)",
+    )
+    .bind(request_id)
+    .bind(&reference)
+    .bind(b.received_at)
+    .bind(&country)
+    .bind(&authority)
+    .bind(&order)
+    .bind(owner)
+    .bind(b.received_at + time::Duration::hours(1))
+    .bind(format!("Removed {label} {minutes} minutes after the order arrived."))
+    .bind(&admin.actor)
+    .bind(removed_at)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "insert into removed_content (id, legal_request_id, decision_id, subject_kind, subject_id, snapshot, preserve_until)
+         values ($1, $2, $3, $4, $5, $6, now() + interval '6 months')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(request_id)
+    .bind(decision)
+    .bind(&b.subject_kind)
+    .bind(subject_id)
+    .bind(&snapshot)
+    .execute(&mut *tx)
+    .await?;
+    audit(
+        &mut tx,
+        &admin.actor,
+        "legal_request.removal_order",
+        &reference,
+        json!({ "subject": label, "minutes": minutes }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tx.commit().await?;
+    Ok(Json(
+        json!({ "reference": reference, "minutes": minutes, "label": label }),
+    ))
 }

@@ -6,6 +6,7 @@
 //! | Reports, and decisions with their appeals | 6 years after the decision (or report) | DSA, OSA, DMCA |
 //! | Child-abuse reports | also until their preservation ends | 18 U.S.C. §2258A(h) |
 //! | Law-enforcement requests | 6 years after the answer (or arrival) | CHAT-3 |
+//! | Content removed on a terrorist content order | 6 months | Regulation (EU) 2021/784 Art. 6 |
 //! | Agreement acceptances | 6 years after the account closed | contract claims |
 //!
 //! Not here: payments and vote history (10 years) only grow, and the API's own database role
@@ -21,6 +22,7 @@ pub struct Purged {
     pub reports: u64,
     pub decisions: u64,
     pub legal_requests: u64,
+    pub removed_content: u64,
     pub acceptances: u64,
 }
 
@@ -48,6 +50,7 @@ pub async fn purge(db: &PgPool) -> sqlx::Result<Purged> {
             "delete from legal_requests where coalesce(answered_at, received_at) < now() - interval '6 years'",
         )
         .await?,
+        removed_content: exec("delete from removed_content where preserve_until < now()").await?,
         acceptances: exec(
             "delete from legal_acceptances a using users u
              where u.id = a.user_id and u.closed_at < now() - interval '6 years'",

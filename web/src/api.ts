@@ -2067,6 +2067,15 @@ export const api = {
     legalRequests: () => request<LegalRequest[]>("GET", "/v1/admin/legal-requests"),
     logLegalRequest: (r: NewLegalRequest) =>
       request<{ id: string; reference: string; deadline: string | null }>("POST", "/v1/admin/legal-requests", r),
+    /** A terrorist content removal order, acted on in one step (1-hour deadline). */
+    removalOrder: (o: {
+      received_at: string;
+      country: string;
+      authority: string;
+      order: string;
+      subject_kind: "app" | "app_review" | "profile" | "team";
+      subject: string;
+    }) => request<{ reference: string; minutes: number; label: string }>("POST", "/v1/admin/removal-orders", o),
     answerLegalRequest: (id: string, a: { status: string; response: string; user_notice: string }) =>
       request<{ reference: string }>("POST", `/v1/admin/legal-requests/${encodeURIComponent(id)}/answer`, a),
     /** What needs an admin right now (ops.rs): stale backups, failed deploys, overdue reports… */
