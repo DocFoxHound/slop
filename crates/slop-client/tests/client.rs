@@ -1339,3 +1339,64 @@ fn windows_sandbox_sees_only_its_own_folders() {
     slop_client::appcontainer::remove(&name);
     let _ = std::fs::remove_dir_all(root);
 }
+
+/// Slop Pong (examples/slop-pong) asks the real Slop Link for a server's mod. Runs where
+/// SLOP_TEST_GODOT names a Godot 4 binary; skipped otherwise.
+#[test]
+fn slop_pong_asks_slop_link_for_mods() {
+    let Some(godot) = std::env::var_os("SLOP_TEST_GODOT") else {
+        eprintln!("skipping: set SLOP_TEST_GODOT to a Godot 4 binary");
+        return;
+    };
+    use slop_client::link::{Link, ModResult, Outcome};
+    let (tx, rx) = std::sync::mpsc::channel();
+    let root = tempdir();
+    let link = Link::start_every(
+        root.join("link"),
+        std::time::Duration::from_millis(50),
+        move |r| {
+            tx.send(r.clone()).unwrap();
+        },
+    )
+    .unwrap();
+    // Play the player: say yes to whatever arrives.
+    let answering = link.clone();
+    let seen = std::thread::spawn(move || {
+        let request = rx.recv_timeout(std::time::Duration::from_secs(60)).unwrap();
+        answering.finish(
+            &request.id,
+            Outcome::Done {
+                mods: vec![ModResult {
+                    slug: "slop-pong-neon".into(),
+                    result: "added",
+                    version: Some("1.0.0".into()),
+                }],
+                folders: vec![],
+            },
+        );
+        request
+    });
+    let dir = link.open("slop-pong").unwrap();
+    let project = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/slop-pong");
+    let out = std::process::Command::new(godot)
+        .args(["--headless", "--path"])
+        .arg(&project)
+        .arg("res://tests/link_check.tscn")
+        .env("SLOP_LINK", &dir)
+        .output()
+        .unwrap();
+    let stdout = String::from_utf8_lossy(&out.stdout);
+    assert!(
+        out.status.success(),
+        "{stdout}\n{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    assert!(stdout.contains(r#""status":"done""#), "{stdout}");
+    let request = seen.join().unwrap();
+    assert_eq!(request.game, "slop-pong");
+    assert_eq!(request.from.as_deref(), Some("Slop Pong test server"));
+    assert_eq!(request.mods[0].slug, "slop-pong-neon");
+    assert_eq!(request.mods[0].version.as_deref(), Some("1.0.0"));
+    link.close(&dir);
+    let _ = std::fs::remove_dir_all(root);
+}

@@ -1,0 +1,5 @@
+{
+	"name": "Neon",
+	"colors": {"background": "#0b0221", "paddle": "#ff2bd6", "ball": "#39ff14"},
+	"ball_speed": 1.2
+}
