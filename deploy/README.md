@@ -230,6 +230,10 @@ base64: `openssl rand -base64 32`). Keep it with the other keys: losing or chang
 every saved token unreadable, and makers have to save theirs again. Unset, makers can't save
 tokens. The sandbox has its own key.
 
+The source check reads repositories on GitHub and on the hosts in `SLOP_SOURCE_HOSTS`
+(default `gitlab.com=gitlab,codeberg.org=gitea`). Add a self-hosted GitLab or Gitea/Forgejo
+server as `host=gitlab` or `host=gitea` to read its public repositories too.
+
 ## Setting it up again
 
 ```sh

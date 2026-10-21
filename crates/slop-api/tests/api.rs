@@ -183,6 +183,20 @@ async fn fake_github() -> String {
             }),
         )
         .route(
+            "/api/v1/repos/ann/secret-game/archive/{file}",
+            get(|headers: axum::http::HeaderMap| async move { gitea_auth(&headers, source_archive(&SCANNED_SOURCE[..1])) }),
+        )
+        // The same repository on GitLab's API (the fake server is "localhost" for GitLab).
+        .route(
+            "/api/v4/projects/{id}/repository/archive.tar.gz",
+            get(|axum::extract::Path(id): axum::extract::Path<String>, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>| async move {
+                if id != "octo/scanned" || q.get("sha").is_none_or(|s| s.len() != 40) {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                source_archive(SCANNED_SOURCE).into_response()
+            }),
+        )
+        .route(
             "/ann/secret-game/releases/download/v1/game.zip",
             get(|headers: axum::http::HeaderMap| async move {
                 let port = headers["host"].to_str().unwrap().rsplit(':').next().unwrap().to_string();
@@ -519,6 +533,8 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             require_repo_owner: false,
             repo_token_key: Some([9; 32]),
             osv_api_base: github_base.parse().unwrap(),
+            // The fake server is also "localhost", standing in for GitLab (source_scan.rs).
+            source_hosts: vec![("localhost".into(), slop_api::repo_tokens::Kind::Gitlab)],
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
         desktop: Default::default(),
@@ -1874,8 +1890,32 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
             .is_some()
     );
 
+    // GitLab: the same repository through GitLab's archive API.
+    sqlx::query("update apps set repo_url = $2 where id = $1")
+        .bind(app_id)
+        .bind(format!(
+            "{}octo/scanned",
+            app.fake_base.replace("127.0.0.1", "localhost")
+        ))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update releases set repo_scanned_at = null where id = $1")
+        .bind(release_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::source_scan::run_once(&app.state).await.unwrap();
+    let scan: Value = sqlx::query_scalar("select repo_scan from releases where id = $1")
+        .bind(release_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(scan["status"], "checked", "{scan}");
+    assert_eq!(scan["licence"]["files"][0]["spdx"], "MIT", "{scan}");
+
     // Repositories Slop can't read are recorded as not checked.
-    sqlx::query("update apps set repo_url = 'https://gitlab.com/octo/scanned' where id = $1")
+    sqlx::query("update apps set repo_url = 'https://bitbucket.org/octo/scanned' where id = $1")
         .bind(app_id)
         .execute(&app.db)
         .await
@@ -10969,6 +11009,12 @@ async fn private_repositories_outside_github_use_a_read_only_token(db: PgPool) {
         .await
         .unwrap();
     assert_eq!(status, "awaiting_review");
+    // Its source check read the private repository with the token, as a Gitea host.
+    let scan: Value = sqlx::query_scalar("select repo_scan from releases")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(scan["status"], "checked", "{scan}");
     admin::approve(
         &app.db,
         Some(&app.signing_key),

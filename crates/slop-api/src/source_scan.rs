@@ -12,8 +12,12 @@
 //!   the daily advisory watch (dep_watch.rs).
 //!
 //! Everything here is a note for the reviewer and the maker: patterns in text have false
-//! positives, so nothing is held or rejected by itself. Only GitHub repositories can be read so
-//! far; other hosts are recorded as not checked.
+//! positives, so nothing is held or rejected by itself.
+//!
+//! Slop reads repositories on GitHub, GitLab and Codeberg (and other GitLab or Gitea servers
+//! listed in `SLOP_SOURCE_HOSTS`, or whose maker saved a read-only token), through each host's
+//! archive API. Private ones are read with the maker's token (repo_tokens.rs). Anything else is
+//! recorded as not checked, for a reviewer to look at by hand.
 
 use std::{
     collections::{BTreeMap, BTreeSet},
@@ -27,9 +31,11 @@ use serde::Serialize;
 use serde_json::{Value, json};
 use uuid::Uuid;
 
-use crate::AppState;
+use url::Url;
 
-/// Largest repository archive Slop downloads (GitHub's archives leave out Git LFS files).
+use crate::{AppState, repo_tokens::Kind};
+
+/// Largest repository archive Slop downloads (hosts' archives leave out Git LFS files).
 const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
 /// Text files bigger than this aren't read.
 const MAX_TEXT_FILE: u64 = 2 * 1024 * 1024;
@@ -588,7 +594,7 @@ impl Tally {
     }
 }
 
-/// Reads a repository archive (`.tar.gz`, one top folder, as GitHub makes them).
+/// Reads a repository archive (`.tar.gz`, one top folder, as GitHub, GitLab and Gitea make them).
 pub fn scan_archive(
     archive: impl Read,
     declared: &str,
@@ -613,7 +619,7 @@ pub fn scan_archive(
             continue;
         }
         let full = entry.path()?.to_string_lossy().into_owned();
-        // GitHub's archives put everything under `<owner>-<repo>-<sha>/`.
+        // Archives put everything under one folder, such as GitHub's `<owner>-<repo>-<sha>/`.
         let Some((_, path)) = full.split_once('/') else {
             continue;
         };
@@ -773,28 +779,135 @@ fn licence_problems(
 #[error("the repository is bigger than the {} MiB Slop reads, so a reviewer checks the licence by hand", MAX_ARCHIVE / 1024 / 1024)]
 struct TooBig;
 
-/// Downloads the repository archive at a commit to a temporary file.
+/// Where a repository's archive at a commit comes from.
+#[derive(Debug, PartialEq, Eq)]
+pub struct Source {
+    /// The host's name for messages ("GitHub", "GitLab", "Codeberg").
+    pub host: String,
+    pub url: Url,
+    /// Whether it's GitHub's API, asked with Slop's GitHub App or token.
+    pub github: bool,
+}
+
+/// The archive's address on a GitLab or Gitea host: `https://host/group/sub/repo` at `commit`.
+pub fn archive_url(kind: Kind, repo_url: &Url, commit: &str) -> Option<Url> {
+    let path = repo_url.path().trim_matches('/').trim_end_matches(".git");
+    if !path.contains('/') {
+        return None;
+    }
+    let origin = repo_url.origin().ascii_serialization();
+    let url = match kind {
+        Kind::Gitlab => format!(
+            "{origin}/api/v4/projects/{}/repository/archive.tar.gz?sha={commit}",
+            percent_encoding::utf8_percent_encode(path, percent_encoding::NON_ALPHANUMERIC)
+        ),
+        Kind::Gitea => format!("{origin}/api/v1/repos/{path}/archive/{commit}.tar.gz"),
+        Kind::Bitbucket => return None,
+    };
+    Url::parse(&url).ok()
+}
+
+/// Where to read a release's source, or None for hosts Slop can't read.
+async fn source(
+    state: &AppState,
+    app_id: Uuid,
+    repo_url: &str,
+    commit: &str,
+) -> anyhow::Result<Option<Source>> {
+    // A commit is 40 (or 64) hex digits; anything else never reaches a URL.
+    anyhow::ensure!(
+        !commit.is_empty() && commit.chars().all(|c| c.is_ascii_hexdigit()),
+        "the release's commit isn't a commit ID"
+    );
+    if let Some(repo) = slop_provenance::github_repo_path(repo_url) {
+        return github_source(state, &repo, commit).map(Some);
+    }
+    let Ok(url) = Url::parse(repo_url) else {
+        return Ok(None);
+    };
+    let host = url.host_str().unwrap_or("").to_ascii_lowercase();
+    // A token the maker saved says what the host is (self-hosted servers); then the list.
+    let kind = match crate::repo_tokens::saved_kind(&state.db, app_id).await? {
+        Some(kind) => Some(kind),
+        None => state
+            .config
+            .releases
+            .source_hosts
+            .iter()
+            .find(|(h, _)| *h == host)
+            .map(|(_, k)| *k),
+    };
+    if let Some(archive) = kind.and_then(|k| archive_url(k, &url, commit)) {
+        let name = match (host.as_str(), kind) {
+            ("codeberg.org", _) => "Codeberg".to_string(),
+            (_, Some(Kind::Gitlab)) => "GitLab".to_string(),
+            _ => host.clone(),
+        };
+        return Ok(Some(Source {
+            host: name,
+            url: archive,
+            github: false,
+        }));
+    }
+    // Development and tests: a stand-in GitHub serves repositories under its own address.
+    let base = state.config.releases.github_api_base.as_str();
+    let stand_in = state
+        .config
+        .releases
+        .allow_http_downloads
+        .then(|| repo_url.strip_prefix(base))
+        .flatten()
+        .map(|p| p.trim_matches('/').to_string())
+        .filter(|p| p.split('/').count() == 2);
+    stand_in
+        .map(|repo| github_source(state, &repo, commit))
+        .transpose()
+}
+
+fn github_source(state: &AppState, repo: &str, commit: &str) -> anyhow::Result<Source> {
+    Ok(Source {
+        host: "GitHub".into(),
+        url: state
+            .config
+            .releases
+            .github_api_base
+            .join(&format!("repos/{repo}/tarball/{commit}"))?,
+        github: true,
+    })
+}
+
+/// Downloads the repository archive to a temporary file.
 async fn download_archive(
     state: &AppState,
-    repo: &str,
-    commit: &str,
+    app_id: Uuid,
+    source: &Source,
     path: &std::path::Path,
 ) -> anyhow::Result<()> {
     use tokio::io::AsyncWriteExt;
-    let url = state
-        .config
-        .releases
-        .github_api_base
-        .join(&format!("repos/{repo}/tarball/{commit}"))?;
-    let res = crate::releases::github_get(state, url)
-        .await
-        .send()
-        .await
-        .context("downloading the source")?;
+    let host = &source.host;
+    let request = if source.github {
+        crate::releases::github_get(state, source.url.clone()).await
+    } else {
+        // Self-hosted servers: never one on a private network.
+        crate::repo_owner::public_host(state, &source.url).await?;
+        let mut req = state
+            .fetch_http
+            .get(source.url.clone())
+            .header("user-agent", "slop-api");
+        // Private repositories: the maker's read-only token, only ever sent to its own host.
+        if let Some(auth) = crate::repo_tokens::auth_for(state, app_id, source.url.as_str()).await?
+        {
+            req = req.header("authorization", auth);
+        }
+        req
+    };
+    let res = request.send().await.context("downloading the source")?;
     match res.status().as_u16() {
         200 => {}
-        404 => bail!("GitHub can't find that commit (or the repository isn't visible to Slop)"),
-        code => bail!("GitHub answered {code} for the source archive"),
+        401 | 403 | 404 => bail!(
+            "{host} can't find that commit (or the repository isn't visible to Slop; for a private repository, save a read-only token)"
+        ),
+        code => bail!("{host} answered {code} for the source archive"),
     }
     let mut out = tokio::fs::File::create(path).await?;
     let mut size = 0u64;
@@ -810,49 +923,38 @@ async fn download_archive(
     Ok(())
 }
 
-/// The repository's `owner/name` on GitHub, including the test server standing in for it.
-fn github_repo(state: &AppState, repo_url: &str) -> Option<String> {
-    slop_provenance::github_repo_path(repo_url).or_else(|| {
-        // Development and tests: a stand-in GitHub serves repositories under its own address.
-        let base = state.config.releases.github_api_base.as_str();
-        state
-            .config
-            .releases
-            .allow_http_downloads
-            .then(|| repo_url.strip_prefix(base))
-            .flatten()
-            .map(|p| p.trim_matches('/').to_string())
-            .filter(|p| p.split('/').count() == 2)
-    })
-}
-
 /// Looks at one release's source. Returns the report to store and the package list.
 pub async fn scan_release(
     state: &AppState,
+    app_id: Uuid,
     repo_url: &str,
     commit: &str,
     declared: &str,
     public: bool,
 ) -> (Value, Vec<Package>) {
-    let Some(repo) = github_repo(state, repo_url) else {
-        return (
-            json!({ "status": "not_checked", "detail": "Slop can only read source on GitHub so far; a reviewer checks the licence by hand." }),
-            vec![],
-        );
-    };
     let path = std::env::temp_dir().join(format!("slop-source-{}.tar.gz", Uuid::now_v7()));
     let result = async {
-        download_archive(state, &repo, commit, &path).await?;
+        let Some(source) = source(state, app_id, repo_url, commit).await? else {
+            return Ok(None);
+        };
+        download_archive(state, app_id, &source, &path).await?;
         let (declared, file) = (declared.to_string(), std::fs::File::open(&path)?);
         tokio::task::spawn_blocking(move || {
             scan_archive(std::io::BufReader::new(file), &declared, public)
         })
         .await?
+        .map(Some)
     }
     .await;
     let _ = tokio::fs::remove_file(&path).await;
     match result {
-        Ok((report, packages)) => (serde_json::to_value(report).unwrap_or_default(), packages),
+        Ok(Some((report, packages))) => {
+            (serde_json::to_value(report).unwrap_or_default(), packages)
+        }
+        Ok(None) => (
+            json!({ "status": "not_checked", "detail": "Slop can only read source on GitHub, GitLab and Codeberg so far; a reviewer checks the licence by hand." }),
+            vec![],
+        ),
         Err(err) if err.downcast_ref::<TooBig>().is_some() => (
             json!({ "status": "not_checked", "detail": err.to_string() }),
             vec![],
@@ -889,15 +991,17 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
 /// Checks one release's source now and stores the result. Called when a release's files are
 /// fetched, before automatic approval, and by the background round for the rest.
 pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
-    let (repo_url, commit, declared, public): (String, String, String, bool) = sqlx::query_as(
-        "select a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public'
+    let (app_id, repo_url, commit, declared, public): (Uuid, String, String, String, bool) =
+        sqlx::query_as(
+            "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public'
          from releases r join apps a on a.id = r.app_id where r.id = $1",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+        )
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
     {
-        let (report, packages) = scan_release(state, &repo_url, &commit, &declared, public).await;
+        let (report, packages) =
+            scan_release(state, app_id, &repo_url, &commit, &declared, public).await;
         let mut tx = state.db.begin().await?;
         sqlx::query("update releases set repo_scan = $2, repo_scanned_at = now() where id = $1")
             .bind(id)
@@ -1001,6 +1105,49 @@ pub async fn run(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn archives_on_gitlab_and_gitea_hosts() {
+        let commit = "a".repeat(40);
+        let gitlab = archive_url(
+            Kind::Gitlab,
+            &"https://gitlab.com/group/sub/game.git".parse().unwrap(),
+            &commit,
+        )
+        .unwrap();
+        assert_eq!(
+            gitlab.as_str(),
+            format!(
+                "https://gitlab.com/api/v4/projects/group%2Fsub%2Fgame/repository/archive.tar.gz?sha={commit}"
+            )
+        );
+        let gitea = archive_url(
+            Kind::Gitea,
+            &"https://codeberg.org/ann/game/".parse().unwrap(),
+            &commit,
+        )
+        .unwrap();
+        assert_eq!(
+            gitea.as_str(),
+            format!("https://codeberg.org/api/v1/repos/ann/game/archive/{commit}.tar.gz")
+        );
+        assert!(
+            archive_url(
+                Kind::Gitlab,
+                &"https://gitlab.com/lonely".parse().unwrap(),
+                &commit
+            )
+            .is_none()
+        );
+        assert!(
+            archive_url(
+                Kind::Bitbucket,
+                &"https://bitbucket.org/a/b".parse().unwrap(),
+                &commit
+            )
+            .is_none()
+        );
+    }
 
     #[test]
     fn licences_are_recognised() {

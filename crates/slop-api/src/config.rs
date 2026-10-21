@@ -216,6 +216,9 @@ pub struct ReleaseConfig {
     pub repo_token_key: Option<[u8; 32]>,
     /// OSV's API, for the dependency watch (dep_watch.rs).
     pub osv_api_base: Url,
+    /// Hosts outside GitHub whose source the source check reads (source_scan.rs), and which API
+    /// each speaks: `SLOP_SOURCE_HOSTS`, as `host=gitlab,host=gitea`.
+    pub source_hosts: Vec<(String, crate::repo_tokens::Kind)>,
 }
 
 /// Slop's GitHub App: makers install it on a repository so GitHub sends release webhooks and
@@ -501,6 +504,10 @@ impl Config {
             osv_api_base: var_or("OSV_API_BASE", "https://api.osv.dev/")
                 .parse()
                 .context("OSV_API_BASE")?,
+            source_hosts: parse_source_hosts(&var_or(
+                "SLOP_SOURCE_HOSTS",
+                "gitlab.com=gitlab,codeberg.org=gitea",
+            ))?,
         };
 
         Ok(Self {
@@ -664,4 +671,22 @@ fn int_var(name: &str, default: i32) -> anyhow::Result<i32> {
             .with_context(|| format!("{name} must be a number")),
         _ => Ok(default),
     }
+}
+
+/// `host=gitlab,host=gitea` (source_scan.rs). Bitbucket isn't read yet.
+fn parse_source_hosts(s: &str) -> anyhow::Result<Vec<(String, crate::repo_tokens::Kind)>> {
+    use crate::repo_tokens::Kind;
+    s.split(',')
+        .map(str::trim)
+        .filter(|s| !s.is_empty())
+        .map(|entry| {
+            let (host, kind) = entry
+                .split_once('=')
+                .with_context(|| format!("SLOP_SOURCE_HOSTS: {entry:?} isn't host=kind"))?;
+            match Kind::parse(kind.trim()) {
+                Some(k @ (Kind::Gitlab | Kind::Gitea)) => Ok((host.trim().to_ascii_lowercase(), k)),
+                _ => anyhow::bail!("SLOP_SOURCE_HOSTS: {kind:?} must be gitlab or gitea"),
+            }
+        })
+        .collect()
 }

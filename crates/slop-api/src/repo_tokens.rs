@@ -59,7 +59,7 @@ impl Kind {
         }
     }
 
-    fn parse(s: &str) -> Option<Self> {
+    pub(crate) fn parse(s: &str) -> Option<Self> {
         [Self::Gitlab, Self::Bitbucket, Self::Gitea]
             .into_iter()
             .find(|k| k.name() == s)
@@ -403,6 +403,19 @@ pub async fn auth_for(state: &AppState, app_id: Uuid, url: &str) -> anyhow::Resu
         .execute(&state.db)
         .await?;
     Ok(Some(kind.header(&token)))
+}
+
+/// Which kind of host the maker's saved token is for, when there is one for the app's current
+/// repository (source_scan.rs reads self-hosted servers this way).
+pub async fn saved_kind(db: &sqlx::PgPool, app_id: Uuid) -> anyhow::Result<Option<Kind>> {
+    let kind: Option<String> = sqlx::query_scalar(
+        "select t.kind from repo_tokens t join apps a on a.id = t.app_id
+         where t.app_id = $1 and t.repo_url = a.repo_url",
+    )
+    .bind(app_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(kind.as_deref().and_then(Kind::parse))
 }
 
 /// Whether the token still reads the repository (frozen.rs), when there is one.

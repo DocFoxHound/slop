@@ -373,8 +373,9 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
    also has a **Look up on VirusTotal** link for its hash, an optional second opinion: it's not
    required, and uploading a file there shares it with VirusTotal's subscribers, so don't for a
    private app.
-6. **Source check:** Slop reads your repository at the release's commit once (GitHub
-   repositories) and notes three things for you and the reviewer: whether your licence file
+6. **Source check:** Slop reads your repository at the release's commit once (on GitHub, GitLab
+   or Codeberg; a private repository outside GitHub needs a read-only token saved on the app) and
+   notes three things for you and the reviewer: whether your licence file
    matches the store page's licence; anything that looks like selling in the app (payment
    libraries, in-app purchase APIs, checkout links, loot boxes, premium currencies), which Slop
    doesn't allow; and the packages in your lockfiles. Notes don't stop a release by themselves, but
