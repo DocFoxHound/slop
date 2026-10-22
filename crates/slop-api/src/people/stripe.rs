@@ -484,7 +484,13 @@ async fn webhook(State(state): State<AppState>, headers: HeaderMap, body: Bytes)
         .get("stripe-signature")
         .and_then(|v| v.to_str().ok());
     let now = OffsetDateTime::now_utc().unix_timestamp();
-    if !signature_ok(&stripe.webhook_secret, &body, sig, now) {
+    let signed = stripe
+        .webhook_secret
+        .split(',')
+        .map(str::trim)
+        .filter(|secret| !secret.is_empty())
+        .any(|secret| signature_ok(secret, &body, sig, now));
+    if !signed {
         return StatusCode::BAD_REQUEST;
     }
     let Ok(event) = serde_json::from_slice::<Event>(&body) else {

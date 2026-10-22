@@ -107,13 +107,16 @@ simulates payments instead.
    `https://<site>/v1/stripe/webhook`, events `checkout.session.completed`,
    `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.created`,
    `account.updated`, and for server donations `invoice.paid` and `customer.subscription.deleted`.
-3. Add to `~/.config/slop/slop.env` and restart:
+3. For fix bounties, add a **second endpoint** at the same address for events on **your account**
+   (not connected accounts), with the event `checkout.session.completed`.
+4. Add to `~/.config/slop/slop.env` and restart. Each endpoint has its own signing secret (shown
+   on its page in Stripe); list both, comma-separated:
    ```
    STRIPE_SECRET_KEY=sk_test_…   # sk_live_… only after the lawyer's review (LEGAL §4)
-   STRIPE_WEBHOOK_SECRET=whsec_…
+   STRIPE_WEBHOOK_SECRET=whsec_connected…,whsec_platform…
    ```
-4. Before live keys: DAC7 and HMRC platform-reporting registration (LEGAL-GUIDANCE §16 checklist).
-5. Once Slop has its EU OSS / UK VAT registrations, put the numbers in `SLOP_VAT_ID` so fee
+5. Before live keys: DAC7 and HMRC platform-reporting registration (LEGAL-GUIDANCE §16 checklist).
+6. Once Slop has its EU OSS / UK VAT registrations, put the numbers in `SLOP_VAT_ID` so fee
    statements show them (e.g. `SLOP_VAT_ID=EU372000000 · GB000000000`).
 
 ## Email (notifications)
