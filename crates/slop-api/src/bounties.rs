@@ -13,7 +13,7 @@
 //! - **Paying:** each pledge is charged off-session as a **direct charge on the builder's own
 //!   Stripe account** (the card is cloned there), with Slop's 5% as the application fee, and
 //!   recorded in `payments`. Slop never holds the money. A refused card marks that pledge failed
-//!   and tells its backer; the rest still pay.
+//!   and tells its backer; the rest still pay. Stripe being down leaves it due for the next run.
 //! - Without Stripe keys, pledges and charges are simulated where People payments are.
 
 use axum::{
@@ -232,8 +232,17 @@ async fn detail(
     let pending = claims.iter().find(|c| c.status == "pending").map(|c| c.id);
     let (can_vote, my_vote) = match (viewer, pending) {
         (Some(v), Some(claim)) => {
-            let can = backers_decide(&state.db, claim).await?
-                && my_pledge.as_ref().is_some_and(|p| p.status == "active");
+            // The vote's own rule (COUNTED is a constant): never the deliverer, the app's maker
+            // or a pledge made after the delivery.
+            let counted: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "select exists (select 1 from bounty_pledges p where p.bounty_id = $1 and p.user_id = $3 and {COUNTED})"
+            )))
+            .bind(id)
+            .bind(claim)
+            .bind(v)
+            .fetch_one(&state.db)
+            .await?;
+            let can = counted && backers_decide(&state.db, claim).await?;
             let mine: Option<bool> = sqlx::query_scalar(
                 "select accept from bounty_votes where claim_id = $1 and user_id = $2",
             )
@@ -274,7 +283,7 @@ async fn open(
     Path(slug): Path<String>,
     Json(b): Json<NewBounty>,
 ) -> ApiResult<(StatusCode, Json<Summary>)> {
-    crate::limits::check(&state, user.id, crate::limits::Action::Review)?;
+    crate::limits::check(&state, user.id, crate::limits::Action::Bounty)?;
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     if catalog::is_private(&state.db, app_id).await? {
@@ -635,12 +644,13 @@ async fn claim(
         return Err(ApiError::invalid("note", "1 to 2,000 characters"));
     }
     let (app_id, _) = crate::updates::owned(&state, &b.app_slug, &user).await?;
-    let fits: bool =
-        sqlx::query_scalar("select id = $2 or parent_app_id = $2 from apps where id = $1")
-            .bind(app_id)
-            .bind(bounty_app)
-            .fetch_one(&state.db)
-            .await?;
+    let fits: bool = sqlx::query_scalar(
+        "select id = $2 or coalesce(parent_app_id = $2, false) from apps where id = $1",
+    )
+    .bind(app_id)
+    .bind(bounty_app)
+    .fetch_one(&state.db)
+    .await?;
     if !fits {
         return Err(ApiError::invalid(
             "app_slug",
@@ -685,7 +695,15 @@ async fn claim(
     .bind(&account)
     .bind(note)
     .execute(&mut *tx)
-    .await?;
+    .await
+    .map_err(|e| {
+        // Another delivery got in first (bounty_claims_one_pending).
+        if crate::error::is_unique_violation(&e) {
+            ApiError::Conflict("a delivery is already waiting for confirmation".into())
+        } else {
+            e.into()
+        }
+    })?;
     sqlx::query("update bounties set status = 'claimed' where id = $1")
         .bind(id)
         .execute(&mut *tx)
@@ -864,7 +882,7 @@ async fn settle(state: &AppState, id: Uuid, claim: Uuid) -> ApiResult<()> {
 }
 
 /// Claims whose voting window has just passed, settled by the charger's loop.
-async fn settle_due(state: &AppState) -> anyhow::Result<()> {
+pub async fn settle_due(state: &AppState) -> anyhow::Result<()> {
     let due: Vec<(Uuid, Uuid)> = sqlx::query_as(
         "select c.bounty_id, c.id from bounty_claims c where c.status = 'pending'
            and c.created_at < now() - $1",
@@ -1049,8 +1067,16 @@ async fn charge_due_locked(state: &AppState) -> anyhow::Result<usize> {
             )
             .await
             .map(|id| (id, false)),
-            _ => Err(anyhow::anyhow!("no saved card, or payments are off")),
+            _ => Err(Refused("no saved card, or payments are off".into()).into()),
         };
+        if let Err(e) = &result
+            && !refused(e)
+        {
+            // Stripe or the network failing isn't the backer's card: the pledge stays due and
+            // the next run tries again (the idempotency keys stop a retry charging twice).
+            tracing::warn!(error = %e, %pledge, "charging a pledge failed; trying again later");
+            continue;
+        }
         let mut tx = state.db.begin().await?;
         match result {
             Ok((intent, simulated)) => {
@@ -1184,13 +1210,42 @@ async fn charge(
         Some(&format!("bounty-pledge-{pledge}")),
     )
     .await?;
-    anyhow::ensure!(
-        intent["status"] == "succeeded",
-        "the payment is {}",
-        intent["status"].as_str().unwrap_or("unknown")
-    );
+    if intent["status"] != "succeeded" {
+        return Err(Refused(format!(
+            "the payment is {}",
+            intent["status"].as_str().unwrap_or("unknown")
+        ))
+        .into());
+    }
     intent["id"]
         .as_str()
         .map(String::from)
         .ok_or_else(|| anyhow::anyhow!("Stripe gave no payment"))
+}
+
+/// A pledge that can't be charged for good: the card was refused, or the payment couldn't
+/// complete without the backer.
+#[derive(Debug)]
+struct Refused(String);
+
+impl std::fmt::Display for Refused {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        f.write_str(&self.0)
+    }
+}
+
+impl std::error::Error for Refused {}
+
+/// Whether a failed charge is the card's (Stripe refused it: 402 card_declined, or another 4xx
+/// that a retry won't change) rather than Stripe or the network failing (5xx, 429, 409, no
+/// answer), which the next run retries.
+fn refused(e: &anyhow::Error) -> bool {
+    if e.downcast_ref::<Refused>().is_some() {
+        return true;
+    }
+    e.downcast_ref::<stripe::StripeError>().is_some_and(|s| {
+        s.status.is_client_error()
+            && s.status != reqwest::StatusCode::TOO_MANY_REQUESTS
+            && s.status != reqwest::StatusCode::CONFLICT
+    })
 }

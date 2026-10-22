@@ -119,10 +119,29 @@ pub(crate) async fn call_once(
     let body: Value = res.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
         let message = body["error"]["message"].as_str().unwrap_or("no message");
-        anyhow::bail!("Stripe answered {status}: {message}");
+        return Err(StripeError {
+            status,
+            message: message.to_string(),
+        }
+        .into());
     }
     Ok(body)
 }
+
+/// Stripe answered with an error status: the request reached Stripe (unlike a network error).
+#[derive(Debug)]
+pub struct StripeError {
+    pub status: reqwest::StatusCode,
+    pub message: String,
+}
+
+impl std::fmt::Display for StripeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stripe answered {}: {}", self.status, self.message)
+    }
+}
+
+impl std::error::Error for StripeError {}
 
 pub(crate) fn account_status(account: &Value) -> &'static str {
     if account["charges_enabled"].as_bool() == Some(true)

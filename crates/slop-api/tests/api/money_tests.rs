@@ -47,6 +47,10 @@ struct StripeState {
     new_account_status: Option<&'static str>,
     /// The status payment intents end in: succeeded unless a test says otherwise.
     intent_status: Option<&'static str>,
+    /// Saved cards whose charges the bank declines (402 card_declined).
+    declined_cards: Vec<String>,
+    /// Cards cloned onto connected accounts: clone → the saved card.
+    clones: HashMap<String, String>,
     next: u32,
 }
 
@@ -327,9 +331,26 @@ fn stripe_answer(
             json!({ "data": page, "has_more": from + 2 < s.application_fees.len() })
         }
         ("POST", ["v1", "customers"]) => json!({ "id": format!("cus_{n}") }),
-        ("POST", ["v1", "payment_methods"]) => json!({ "id": format!("pm_clone_{n}") }),
+        ("POST", ["v1", "payment_methods"]) => {
+            let id = format!("pm_clone_{n}");
+            let card = form.get("payment_method").cloned().unwrap_or_default();
+            s.clones.insert(id.clone(), card);
+            json!({ "id": id })
+        }
         ("POST", ["v1", "payment_methods", id, "detach"]) => json!({ "id": id }),
         ("POST", ["v1", "payment_intents"]) => {
+            let card = form
+                .get("payment_method")
+                .and_then(|pm| s.clones.get(pm))
+                .cloned()
+                .unwrap_or_default();
+            if s.declined_cards.contains(&card) {
+                return (
+                    StatusCode::PAYMENT_REQUIRED,
+                    axum::Json(json!({ "error": { "code": "card_declined", "message": "Your card was declined." } })),
+                )
+                    .into_response();
+            }
             json!({ "id": format!("pi_{n}"), "status": s.intent_status.unwrap_or("succeeded") })
         }
         _ => return not_found(),
