@@ -68,7 +68,7 @@ slop-api simulate report --sample 400                                      # JSO
 slop-api simulate pulse                                                    # keeps "playing now" alive
 ```
 
-The test `the_simulation_scores_the_real_code_against_its_truth` (in `tests/api.rs`) runs a
+The test `the_simulation_scores_the_real_code_against_its_truth` (in `tests/api/main.rs`) runs a
 smaller simulation on every test run and checks the guarantees below.
 
 ## What the report checks

@@ -49,7 +49,7 @@ crates/slop-desktop/    Desktop app (Tauri 2): web/ plus slop-client
   src/auth/             Identity: GitHub OAuth, sign-up, sessions
   src/catalog.rs        Catalog: categories, tags, apps
   src/policy.rs         What a viewer may see, from the country policy table
-  tests/api.rs          End-to-end tests (real Postgres, fake GitHub)
+  tests/api/            End-to-end tests (real Postgres, fake GitHub), one module per area
 web/                    The UI, shared by the website and the desktop app
 slop-build/             Slop Build: the shared build recipe (moves to its own repo)
 dev/                    Local Postgres and sample data
