@@ -95,23 +95,29 @@ async fn save_challenge(
     Ok(id)
 }
 
-/// Takes a challenge (once): its state, if it's this kind, for this user, and not expired.
+/// Takes a challenge (once): its state, if it's this kind, for this user and the session that
+/// started it, and not expired. A confirmation counts for the session that asked for it, not
+/// for another session of the same account.
 async fn take_challenge(
     state: &AppState,
     id: Uuid,
     kind: &str,
-    user_id: Option<Uuid>,
+    user: Option<&CurrentUser>,
 ) -> ApiResult<Value> {
-    let row: Option<(Option<Uuid>, Value)> = sqlx::query_as(
+    let row: Option<(Option<Uuid>, Option<Uuid>, Value)> = sqlx::query_as(
         "delete from webauthn_challenges where id = $1 and kind = $2 and expires_at > now()
-         returning user_id, state",
+         returning user_id, session_id, state",
     )
     .bind(id)
     .bind(kind)
     .fetch_optional(&state.db)
     .await?;
     match row {
-        Some((owner, ceremony)) if owner == user_id => Ok(ceremony),
+        Some((owner, session, ceremony))
+            if owner == user.map(|u| u.id) && session == user.map(|u| u.session_id) =>
+        {
+            Ok(ceremony)
+        }
         _ => Err(ApiError::Conflict(
             "that passkey request expired: try again".into(),
         )),
@@ -276,7 +282,7 @@ async fn register_finish(
             "give it a name of up to 60 characters",
         ));
     }
-    let ceremony = take_challenge(&state, b.challenge_id, "register", Some(user.id)).await?;
+    let ceremony = take_challenge(&state, b.challenge_id, "register", Some(&user)).await?;
     let reg: PasskeyRegistration =
         serde_json::from_value(ceremony).map_err(|e| ApiError::Internal(e.into()))?;
     let key = webauthn(&state)?
@@ -426,7 +432,7 @@ async fn step_up_finish(
     user: CurrentUser,
     Json(b): Json<Finish>,
 ) -> ApiResult<StatusCode> {
-    let ceremony = take_challenge(&state, b.challenge_id, "step_up", Some(user.id)).await?;
+    let ceremony = take_challenge(&state, b.challenge_id, "step_up", Some(&user)).await?;
     let auth: PasskeyAuthentication =
         serde_json::from_value(ceremony).map_err(|e| ApiError::Internal(e.into()))?;
     let result = webauthn(&state)?

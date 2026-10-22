@@ -2170,3 +2170,623 @@ async fn the_approval_page_shows_only_pending_requests_to_signed_in_people(db: P
         StatusCode::NOT_FOUND
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Passkeys
+
+type Authenticator = webauthn_authenticator_rs::WebauthnAuthenticator<
+    webauthn_authenticator_rs::softpasskey::SoftPasskey,
+>;
+
+fn authenticator() -> Authenticator {
+    webauthn_authenticator_rs::WebauthnAuthenticator::new(
+        webauthn_authenticator_rs::softpasskey::SoftPasskey::new(true),
+    )
+}
+
+fn origin() -> url::Url {
+    "http://localhost:8080".parse().unwrap()
+}
+
+/// Starts adding a passkey and makes the credential. Returns (challenge id, credential JSON).
+async fn new_credential(app: &TestApp, cookie: &str, auth: &mut Authenticator) -> (Value, Value) {
+    let res = app
+        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let started = body_json(res).await;
+    let options = serde_json::from_value(started["options"].clone()).unwrap();
+    let credential = auth.do_registration(origin(), options).unwrap();
+    (
+        started["challenge_id"].clone(),
+        serde_json::to_value(credential).unwrap(),
+    )
+}
+
+/// Adds a passkey to the signed-in account. Returns (its id, its credential ID as sent).
+async fn add_passkey(app: &TestApp, cookie: &str, auth: &mut Authenticator) -> (Uuid, String) {
+    let (challenge, credential) = new_credential(app, cookie, auth).await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/passkeys/register/finish")
+                .cookie(cookie)
+                .json(json!({ "challenge_id": challenge, "name": "Laptop", "credential": credential })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    (id, credential["id"].as_str().unwrap().to_string())
+}
+
+/// Starts a passkey sign-in and signs it with `cred_id`. Returns (challenge id, assertion JSON).
+/// SoftPasskey can't pick a credential by itself, so the request names the one to use.
+async fn passkey_assertion(
+    app: &TestApp,
+    auth: &mut Authenticator,
+    cred_id: &str,
+) -> (Value, Value) {
+    let started = body_json(app.send(req(Method::POST, "/v1/auth/passkey/start")).await).await;
+    let mut options = started["options"].clone();
+    options["publicKey"]["allowCredentials"] = json!([{ "type": "public-key", "id": cred_id }]);
+    let assertion = auth
+        .do_authentication(origin(), serde_json::from_value(options).unwrap())
+        .unwrap();
+    (
+        started["challenge_id"].clone(),
+        serde_json::to_value(assertion).unwrap(),
+    )
+}
+
+fn passkey_finish(challenge: &Value, credential: &Value) -> Req {
+    req(Method::POST, "/v1/auth/passkey/finish")
+        .json(json!({ "challenge_id": challenge, "credential": credential }))
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn passkeys_are_listed_only_for_their_owner(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (_, bob) = app.user("Bob", "US").await;
+    let id = stored_passkey(&app, ann_id).await;
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me/passkeys")).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/passkeys").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(mine.as_array().unwrap().len(), 1);
+    assert_eq!(mine[0]["id"], json!(id));
+    assert!(mine[0].get("credential").is_none(), "{mine}");
+    let theirs = body_json(
+        app.send(req(Method::GET, "/v1/me/passkeys").cookie(&bob))
+            .await,
+    )
+    .await;
+    assert_eq!(theirs, json!([]));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn removing_a_passkey_needs_a_fresh_sign_in_and_one_of_them(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    let laptop = stored_passkey(&app, ann_id).await;
+    let bobs = stored_passkey(&app, bob_id).await;
+    let remove = |id: Uuid| req(Method::DELETE, format!("/v1/me/passkeys/{id}")).cookie(&ann);
+    let passkeys = || count(&app, "select count(*) from passkeys");
+
+    // An old session can't; nor a fresh sign-in that didn't use one of the passkeys.
+    age_sessions(&app, ann_id).await;
+    assert_eq!(error_code(&app, remove(laptop)).await, "step_up_required");
+    sessions_now(&app, ann_id, "created_at").await;
+    assert_eq!(error_code(&app, remove(laptop)).await, "step_up_required");
+    assert_eq!(passkeys().await, 2);
+
+    // Confirmed: still only Ann's own.
+    sessions_now(&app, ann_id, "passkey_at").await;
+    assert_eq!(status(&app, remove(bobs)).await, StatusCode::NOT_FOUND);
+    assert_eq!(
+        status(&app, remove(Uuid::now_v7())).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(passkeys().await, 2);
+    assert_eq!(status(&app, remove(laptop)).await, StatusCode::NO_CONTENT);
+    let left = body_json(
+        app.send(req(Method::GET, "/v1/me/passkeys").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(left, json!([]));
+    let owner: Uuid = sqlx::query_scalar("select user_id from passkeys")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(owner, bob_id);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn adding_a_passkey_checks_the_name_the_challenge_and_the_credential(db: PgPool) {
+    use base64::Engine;
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let mut auth = authenticator();
+    let finish = |cookie: &str, challenge: &Value, name: &str, credential: &Value| {
+        req(Method::POST, "/v1/me/passkeys/register/finish")
+            .cookie(cookie)
+            .json(json!({ "challenge_id": challenge, "name": name, "credential": credential }))
+    };
+
+    // A name is needed, of up to 60 characters; the challenge survives a bad name.
+    let (challenge, credential) = new_credential(&app, &ann, &mut auth).await;
+    for bad in ["", "   ", &"n".repeat(61)] {
+        let res = app.send(finish(&ann, &challenge, bad, &credential)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{bad:?}");
+        assert_eq!(body_json(res).await["error"]["field"], "name");
+    }
+    // Not finished by someone else.
+    assert_eq!(
+        status(&app, finish(&bob, &challenge, "Laptop", &credential)).await,
+        StatusCode::CONFLICT
+    );
+
+    // A credential made for one challenge doesn't finish another.
+    let (first, credential) = new_credential(&app, &ann, &mut auth).await;
+    let (second, _) = new_credential(&app, &ann, &mut auth).await;
+    let res = app.send(finish(&ann, &second, "Laptop", &credential)).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "credential");
+    // Five minutes on, a challenge has expired.
+    sqlx::query("update webauthn_challenges set expires_at = now() - interval '1 second'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        status(&app, finish(&ann, &first, "Laptop", &credential)).await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(count(&app, "select count(*) from passkeys").await, 0);
+
+    // A passkey already on another account isn't added to this one.
+    let (challenge, credential) = new_credential(&app, &bob, &mut auth).await;
+    let raw = base64::engine::general_purpose::URL_SAFE_NO_PAD
+        .decode(credential["id"].as_str().unwrap())
+        .unwrap();
+    sqlx::query(
+        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, $3, '{}', 'Ann''s')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(ann_id)
+    .bind(&raw)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(finish(&bob, &challenge, "Mine", &credential))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let bobs: i64 = sqlx::query_scalar("select count(*) from passkeys where user_id = $1")
+        .bind(bob_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(bobs, 0);
+
+    // Added: the owner is told, in case it wasn't them.
+    let (id, _) = add_passkey(&app, &bob, &mut auth).await;
+    let (title, category, body): (String, String, String) =
+        sqlx::query_as("select title, category, body from notifications where user_id = $1")
+            .bind(bob_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(title, "A passkey was added to your account");
+    assert_eq!(category, "security");
+    assert!(body.contains("\"Laptop\""), "{body}");
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/me/passkeys").cookie(&bob))
+            .await,
+    )
+    .await;
+    assert_eq!(listed[0]["id"], json!(id));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn signing_in_with_a_passkey_starts_a_session_that_has_used_it(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let mut auth = authenticator();
+    let (passkey, cred_id) = add_passkey(&app, &ann, &mut auth).await;
+    let counter = || async {
+        sqlx::query_scalar::<_, Option<i64>>(
+            "select (credential->'cred'->>'counter')::int8 from passkeys where id = $1",
+        )
+        .bind(passkey)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    let before = counter().await;
+
+    let (challenge, assertion) = passkey_assertion(&app, &mut auth, &cred_id).await;
+    let res = app
+        .send(passkey_finish(&challenge, &assertion).header("user-agent", "Firefox"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let session = set_cookie(&res, "slop_session").unwrap();
+    assert_eq!(body_json(res).await["signed_in"], true);
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&session)).await).await;
+    assert_eq!(me["id"], json!(ann_id));
+    let proved: bool = sqlx::query_scalar(
+        "select passkey_at > now() - interval '1 minute' from sessions where token_hash = $1",
+    )
+    .bind(slop_api::tokens::hash_token(
+        session.split_once('=').unwrap().1,
+    ))
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(proved, "signing in with it counts as using it");
+    let used: bool =
+        sqlx::query_scalar("select last_used_at is not null from passkeys where id = $1")
+            .bind(passkey)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(used);
+    assert!(counter().await >= before);
+    // The same ceremony works once.
+    assert_eq!(
+        status(&app, passkey_finish(&challenge, &assertion)).await,
+        StatusCode::CONFLICT
+    );
+
+    // A signature that doesn't check out.
+    let (challenge, mut assertion) = passkey_assertion(&app, &mut auth, &cred_id).await;
+    let sig = assertion["response"]["signature"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let flipped = if sig.starts_with('A') { "B" } else { "A" };
+    assertion["response"]["signature"] = json!(format!("{flipped}{}", &sig[1..]));
+    let res = app.send(passkey_finish(&challenge, &assertion)).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "credential");
+
+    // A step-up ceremony isn't a sign-in.
+    let started = body_json(
+        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&ann))
+            .await,
+    )
+    .await;
+    let (_, assertion) = passkey_assertion(&app, &mut auth, &cred_id).await;
+    assert_eq!(
+        status(&app, passkey_finish(&started["challenge_id"], &assertion)).await,
+        StatusCode::CONFLICT
+    );
+
+    // A passkey Slop doesn't know.
+    let (_, bob) = app.user("Bob", "US").await;
+    let mut other = authenticator();
+    let (_, unknown) = add_passkey(&app, &bob, &mut other).await;
+    sqlx::query("delete from passkeys where credential_id <> (select credential_id from passkeys where id = $1)")
+        .bind(passkey)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (challenge, assertion) = passkey_assertion(&app, &mut other, &unknown).await;
+    let res = app.send(passkey_finish(&challenge, &assertion)).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "credential");
+
+    // The stored passkey decides whose account it opens (combining moves them along).
+    let (cara_id, _) = app.user("Cara", "US").await;
+    sqlx::query("update passkeys set user_id = $1 where id = $2")
+        .bind(cara_id)
+        .bind(passkey)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (challenge, assertion) = passkey_assertion(&app, &mut auth, &cred_id).await;
+    let res = app.send(passkey_finish(&challenge, &assertion)).await;
+    let session = set_cookie(&res, "slop_session").unwrap();
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&session)).await).await;
+    assert_eq!(me["id"], json!(cara_id));
+
+    // A closed account's passkey signs nobody in.
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(cara_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (challenge, assertion) = passkey_assertion(&app, &mut auth, &cred_id).await;
+    let res = app.send(passkey_finish(&challenge, &assertion)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(set_cookie(&res, "slop_session").is_none());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn confirming_with_a_passkey_needs_one_on_the_account(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, cookie) = app.user("Pat", "US").await;
+    let res = app
+        .send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("add a passkey first")
+    );
+    assert_eq!(
+        count(&app, "select count(*) from webauthn_challenges").await,
+        0
+    );
+}
+
+/// b05: a passkey confirmation is for the session that asked for it. Finished from another
+/// session of the same account, it used to count for that other session.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_passkey_confirmation_counts_only_for_the_session_that_started_it(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, laptop) = app.user("Ann", "US").await;
+    let mut auth = authenticator();
+    add_passkey(&app, &laptop, &mut auth).await;
+    let phone = slop_api::auth::session::create(&app.db, &app.config, ann_id, Some("phone"))
+        .await
+        .unwrap();
+    let phone = format!("{}={}", phone.name(), phone.value());
+    age_sessions(&app, ann_id).await;
+
+    let started = body_json(
+        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&laptop))
+            .await,
+    )
+    .await;
+    let options = serde_json::from_value(started["options"].clone()).unwrap();
+    let assertion = auth.do_authentication(origin(), options).unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/step-up/finish")
+                .cookie(&phone)
+                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let confirmed: i64 = sqlx::query_scalar(
+        "select count(*) from sessions where user_id = $1 and (stepped_up_at is not null or passkey_at is not null)",
+    )
+    .bind(ann_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(confirmed, 0);
+
+    // Adding a passkey is tied to its session the same way.
+    sessions_now(&app, ann_id, "created_at").await;
+    sessions_now(&app, ann_id, "passkey_at").await;
+    let (challenge, credential) = new_credential(&app, &laptop, &mut auth).await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/passkeys/register/finish")
+                .cookie(&phone)
+                .json(
+                    json!({ "challenge_id": challenge, "name": "Key", "credential": credential }),
+                ),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // In the session that started it, it works.
+    age_sessions(&app, ann_id).await;
+    let started = body_json(
+        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&laptop))
+            .await,
+    )
+    .await;
+    let options = serde_json::from_value(started["options"].clone()).unwrap();
+    let assertion = auth.do_authentication(origin(), options).unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/step-up/finish")
+                .cookie(&laptop)
+                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn expired_passkey_ceremonies_are_cleaned_up(db: PgPool) {
+    let app = test_app(db).await;
+    for _ in 0..3 {
+        assert_eq!(
+            status(&app, req(Method::POST, "/v1/auth/passkey/start")).await,
+            StatusCode::OK
+        );
+    }
+    sqlx::query(
+        "update webauthn_challenges set expires_at = now() - interval '1 second'
+         where id in (select id from webauthn_challenges order by id limit 2)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(slop_api::passkeys::cleanup(&app.db).await.unwrap(), 2);
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from webauthn_challenges where expires_at > now()"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        count(&app, "select count(*) from webauthn_challenges").await,
+        1
+    );
+    // The hourly cleanup runs it too.
+    sqlx::query("update webauthn_challenges set expires_at = now() - interval '1 second'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(
+        count(&app, "select count(*) from webauthn_challenges").await,
+        0
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Staff passkey grace
+
+/// Staff with only the support role.
+async fn support_staff(app: &TestApp, name: &str) -> (Uuid, String) {
+    let (id, cookie) = app.user(name, "US").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into staff_roles (user_id, role, granted_by) values ($1, 'support', 'test')",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    (id, cookie)
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_passkey_grace_needs_sensitive_rights_a_live_account_and_a_second_approver(
+    db: PgPool,
+) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (_, ben) = make_admin(&app, "Ben Owner").await;
+    let (_, sue) = support_staff(&app, "Sue Support").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (gone, _) = app.user("Gone", "US").await;
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(gone)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let grace = |cookie: &str, user: Uuid| {
+        req(
+            Method::POST,
+            format!("/v1/admin/users/{user}/passkey-grace"),
+        )
+        .cookie(cookie)
+        .json(json!({ "reason": "Video call; matched their recent releases." }))
+    };
+    let until = || async {
+        sqlx::query_scalar::<_, Option<OffsetDateTime>>(
+            "select passkey_grace_until from users where id = $1",
+        )
+        .bind(maker)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+
+    assert_eq!(
+        status(&app, grace(&sue, maker)).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status(&app, grace(&ada, Uuid::now_v7())).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(status(&app, grace(&ada, gone)).await, StatusCode::NOT_FOUND);
+    assert_eq!(count(&app, "select count(*) from staff_actions").await, 0);
+
+    // Ada asks; it waits for Ben.
+    let res = app.send(grace(&ada, maker)).await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let pending = body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(until().await, None);
+    let told = || async {
+        sqlx::query_scalar::<_, i64>(
+            "select count(*) from notifications where user_id = $1 and title = 'Add a new passkey this week'",
+        )
+        .bind(maker)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    assert_eq!(told().await, 0);
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{pending}/approve")).cookie(&ben))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let until = until().await.unwrap();
+    let days = (until - OffsetDateTime::now_utc()).as_seconds_f64() / 86400.0;
+    assert!((6.9..7.01).contains(&days), "{days}");
+    assert_eq!(told().await, 1);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_ask_for_a_passkey_grace_and_staff_approve_it(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let mut tokens = std::collections::HashMap::new();
+    for scope in ["review", "moderate"] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/admin/tokens")
+                    .cookie(&ada)
+                    .json(json!({ "name": format!("Claude {scope}"), "scope": scope, "days": 7 })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        tokens.insert(
+            scope,
+            format!("Bearer {}", body_json(res).await["token"].as_str().unwrap()),
+        );
+    }
+    let call = |scope: &str| {
+        req(Method::POST, "/v1/admin/mcp")
+            .header("authorization", tokens[scope].clone())
+            .json(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "passkey_grace", "arguments": {
+                    "id": maker.to_string(), "reason": "They emailed from the address on file and matched recent releases."
+                } }
+            }))
+    };
+    let refused = body_json(app.send(call("review")).await).await;
+    assert_eq!(refused["result"]["isError"], true, "{refused}");
+    assert_eq!(count(&app, "select count(*) from staff_actions").await, 0);
+
+    let asked = body_json(app.send(call("moderate")).await).await;
+    assert_eq!(asked["result"]["isError"], false, "{asked}");
+    let (kind, status): (String, String) = sqlx::query_as("select kind, status from staff_actions")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        (kind.as_str(), status.as_str()),
+        ("account.passkey_grace", "pending")
+    );
+    let until: Option<OffsetDateTime> =
+        sqlx::query_scalar("select passkey_grace_until from users where id = $1")
+            .bind(maker)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(until, None, "not until a person approves it");
+}
