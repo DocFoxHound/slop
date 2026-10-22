@@ -59,6 +59,10 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     ),
     ("chat", "New chat messages while you're away"),
     ("friends", "Friend requests, and when someone accepts yours"),
+    (
+        "security",
+        "Your account's security: passkeys added, sign-ins linked, accounts combined",
+    ),
 ];
 
 /// Pending notifications older than this aren't emailed (e.g. when email is switched on later).

@@ -16074,3 +16074,80 @@ async fn a_public_site_behind_a_proxy_needs_the_client_ip_header(db: PgPool) {
     config.client_ip_header = Some("x-forwarded-for".into());
     assert!(slop_api::ops::config_alerts(&config).is_empty());
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn old_sessions_and_missing_passkeys_cant_change_what_protects_an_account(db: PgPool) {
+    let app = test_app(db).await;
+    let (user_id, cookie) = app.user("Pat Player", "US").await;
+    let age = |user: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query("update sessions set created_at = now() - interval '1 hour', stepped_up_at = null, passkey_at = null where user_id = $1")
+                .bind(user)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+    };
+
+    // An old (or stolen) session can't approve a desktop sign-in for itself.
+    age(user_id).await;
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/requests").json(json!({
+            "code_challenge": pkce_challenge(&"v".repeat(43)),
+            "redirect_port": 49152,
+            "state": "state-state-state-1",
+            "device_name": "Slop for Linux"
+        })))
+        .await;
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/auth/desktop/requests/{id}/approve"),
+            )
+            .cookie(&cookie),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    // Nor close the account.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/close")
+                .cookie(&cookie)
+                .json(json!({ "confirm": "close my account" })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+
+    // With a passkey on the account, a fresh sign-in alone doesn't add another or unlink.
+    sqlx::query(
+        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(user_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update sessions set created_at = now() where user_id = $1")
+        .bind(user_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    // Confirmed with the passkey a moment ago: allowed.
+    sqlx::query("update sessions set passkey_at = now() where user_id = $1")
+        .bind(user_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
+        .await;
+    assert_ne!(res.status(), StatusCode::FORBIDDEN);
+    assert_ne!(body_json(res).await["error"]["code"], "step_up_required");
+}

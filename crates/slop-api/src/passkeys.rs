@@ -174,12 +174,35 @@ async fn list(
     ))
 }
 
+/// Changing what protects an account takes one of its passkeys, when it has any, not only a
+/// fresh sign-in: otherwise whoever took over a linked GitHub (or any other sign-in) could add a
+/// passkey of their own, link another sign-in or combine the account away, and the passkey
+/// would protect nothing (security review, 2026-10-22). A passkey confirmation counts for a few
+/// minutes, like a fresh sign-in.
+pub async fn require_passkey_if_any(db: &sqlx::PgPool, user: &CurrentUser) -> ApiResult<()> {
+    let (has, proved): (bool, bool) = sqlx::query_as(
+        "select exists (select 1 from passkeys where user_id = $1),
+                coalesce((select passkey_at > now() - $3 from sessions where id = $2), false)",
+    )
+    .bind(user.id)
+    .bind(user.session_id)
+    .bind(session::STEP_UP_WINDOW)
+    .fetch_one(db)
+    .await?;
+    if !has || proved {
+        Ok(())
+    } else {
+        Err(ApiError::StepUpRequired)
+    }
+}
+
 async fn remove(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
     session::require_recent_sign_in(&state.db, &user).await?;
+    require_passkey_if_any(&state.db, &user).await?;
     let n = sqlx::query("delete from passkeys where id = $1 and user_id = $2")
         .bind(id)
         .bind(user.id)
@@ -203,6 +226,7 @@ async fn register_start(
     user: CurrentUser,
 ) -> ApiResult<Json<Started<CreationChallengeResponse>>> {
     session::require_recent_sign_in(&state.db, &user).await?;
+    require_passkey_if_any(&state.db, &user).await?;
     let existing = passkeys_of(&state, user.id).await?;
     if existing.len() as i64 >= MAX_PASSKEYS {
         return Err(ApiError::Conflict(format!(
@@ -259,6 +283,7 @@ async fn register_finish(
         .finish_passkey_registration(&b.credential, &reg)
         .map_err(refused)?;
     let id = Uuid::now_v7();
+    let mut tx = state.db.begin().await?;
     let info: PasskeyInfo = sqlx::query_as(
         "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, $3, $4, $5)
          returning id, name, created_at, last_used_at",
@@ -268,7 +293,7 @@ async fn register_finish(
     .bind(key.cred_id().as_ref())
     .bind(serde_json::to_value(&key).map_err(|e| ApiError::Internal(e.into()))?)
     .bind(name)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await
     .map_err(|e| {
         if crate::error::is_unique_violation(&e) {
@@ -277,6 +302,22 @@ async fn register_finish(
             e.into()
         }
     })?;
+    crate::notify::send(
+        &mut tx,
+        crate::notify::Notice {
+            user_id: user.id,
+            category: "security",
+            title: "A passkey was added to your account".into(),
+            body: format!(
+                "\"{name}\" can now sign in to your Slop account and confirm publishing and payouts. \
+                 If you didn't add it, remove it under Account → Sign-ins and sign out your other devices."
+            ),
+            link: "/account#sign-ins".into(),
+            collapse_key: None,
+        },
+    )
+    .await?;
+    tx.commit().await?;
     Ok((StatusCode::CREATED, Json(info)))
 }
 

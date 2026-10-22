@@ -39,7 +39,7 @@ export function StepUpPrompt({ signInAgain, onDone }: { signInAgain: string; onD
           or{" "}
         </>
       )}
-      <a href={signInAgain}>sign in again</a>, then try once more.
+      <a href={signInAgain}>sign in again</a> (with a passkey, if your account has one), then try once more.
       {error && (
         <span className="form-error" role="alert">
           {" "}

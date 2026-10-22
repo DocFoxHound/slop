@@ -27,8 +27,24 @@ use crate::{
 use oauth::Provider;
 use session::{CurrentUser, MaybeUser, build_cookie, removal_cookie};
 
-const OAUTH_COOKIE: &str = "slop_oauth_state";
-const SIGNUP_COOKIE: &str = "slop_signup";
+/// The sign-in flow's own cookies. On https they're `__Host-` cookies like the session's, so no
+/// other site on the same domain (another *.sslip.io host, a maker's browser demo) can set them
+/// and sign a visitor into someone else's account (security review, 2026-10-22).
+fn oauth_cookie(config: &crate::config::Config) -> &'static str {
+    if config.secure_cookies() {
+        "__Host-slop_oauth_state"
+    } else {
+        "slop_oauth_state"
+    }
+}
+
+fn signup_cookie(config: &crate::config::Config) -> &'static str {
+    if config.secure_cookies() {
+        "__Host-slop_signup"
+    } else {
+        "slop_signup"
+    }
+}
 const OAUTH_FLOW_LIFETIME: Duration = Duration::minutes(10);
 const SIGNUP_LIFETIME: Duration = Duration::minutes(30);
 
@@ -135,7 +151,7 @@ async fn begin(
         ))?;
     let jar = jar.add(build_cookie(
         &state.config,
-        OAUTH_COOKIE,
+        oauth_cookie(&state.config),
         oauth_state,
         OAUTH_FLOW_LIFETIME,
     ));
@@ -169,6 +185,16 @@ async fn link_start(
         Some(u) => session::require_recent_sign_in(&state.db, u).await.is_ok(),
         None => false,
     };
+    // An account with passkeys links another sign-in only after one of them confirms it: the
+    // account page asks, then comes back here.
+    if let Some(u) = user.as_ref().filter(|_| fresh)
+        && crate::passkeys::require_passkey_if_any(&state.db, u)
+            .await
+            .is_err()
+    {
+        let back = format!("/account?confirm_link={provider_name}#sign-ins");
+        return Ok(Redirect::to(&back).into_response());
+    }
     if !fresh {
         // Sign in (again) first, then come straight back here to link.
         let here: String = format!(
@@ -214,7 +240,7 @@ async fn callback(
     Query(query): Query<CallbackQuery>,
 ) -> ApiResult<Response> {
     let provider = provider_from(&provider, &state)?;
-    let jar = jar.remove(removal_cookie(&state.config, OAUTH_COOKIE));
+    let jar = jar.remove(removal_cookie(&state.config, oauth_cookie(&state.config)));
 
     if query.error.is_some() {
         return Ok((jar, Redirect::to("/signin?error=cancelled")).into_response());
@@ -224,7 +250,7 @@ async fn callback(
     };
     // The state must match the cookie of the browser that started the flow (login CSRF).
     let cookie_state = CookieJar::from_headers(&headers)
-        .get(OAUTH_COOKIE)
+        .get(oauth_cookie(&state.config))
         .map(|c| c.value().to_string());
     if cookie_state.as_deref() != Some(query_state.as_str()) {
         return Err(ApiError::invalid(
@@ -321,7 +347,7 @@ async fn callback(
                 .await?;
                 let jar = jar.add(build_cookie(
                     &state.config,
-                    merge::COOKIE,
+                    merge::cookie(&state.config),
                     token,
                     merge::CONFIRM_WITHIN,
                 ));
@@ -369,7 +395,7 @@ async fn callback(
 
     let jar = jar.add(build_cookie(
         &state.config,
-        SIGNUP_COOKIE,
+        signup_cookie(&state.config),
         signup_token,
         SIGNUP_LIFETIME,
     ));
@@ -411,6 +437,7 @@ async fn unlink(
     Path((provider, subject)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
     session::require_recent_sign_in(&state.db, &user).await?;
+    crate::passkeys::require_passkey_if_any(&state.db, &user).await?;
     let mut tx = state.db.begin().await?;
     let count: i64 = sqlx::query_scalar("select count(*) from identities where user_id = $1")
         .bind(user.id)
@@ -465,7 +492,9 @@ struct SignupInfo {
 }
 
 async fn signup_info(State(state): State<AppState>, jar: CookieJar) -> ApiResult<Json<SignupInfo>> {
-    let token = jar.get(SIGNUP_COOKIE).ok_or(ApiError::NotFound)?;
+    let token = jar
+        .get(signup_cookie(&state.config))
+        .ok_or(ApiError::NotFound)?;
     let pending: Option<(String, Option<String>)> = sqlx::query_as(
         "select suggested_name, email from pending_signups where token_hash = $1 and expires_at > now()",
     )
@@ -520,7 +549,7 @@ async fn signup(
     Json(req): Json<SignupRequest>,
 ) -> ApiResult<(StatusCode, CookieJar, Json<SignupResponse>)> {
     let token = jar
-        .get(SIGNUP_COOKIE)
+        .get(signup_cookie(&state.config))
         .ok_or(ApiError::Unauthorized)?
         .value()
         .to_string();
@@ -596,7 +625,7 @@ async fn signup(
     let user_agent = headers.get(USER_AGENT).and_then(|v| v.to_str().ok());
     let cookie = session::create(&state.db, &state.config, user_id, user_agent).await?;
     let jar = jar
-        .remove(removal_cookie(&state.config, SIGNUP_COOKIE))
+        .remove(removal_cookie(&state.config, signup_cookie(&state.config)))
         .add(cookie);
     // Recommendations default to on, except where the under-18 view applies (PRIV-6).
     let under18: Option<bool> = sqlx::query_scalar(

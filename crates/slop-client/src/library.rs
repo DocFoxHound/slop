@@ -13,6 +13,7 @@
 //! save-copies/<slug>/<time>/  copies of it taken before sandboxed sessions
 //! quarantine/<slug>/…         programs found in the save folder and moved out of it
 //! cache/<slug>/               the app's cache, never copied
+//! cache-sandbox/<slug>/       its cache in sandbox mode, emptied before each sandboxed session
 //! settings/sandbox.json       which apps run in sandbox mode
 //! staging/                    downloads and unpacking in progress
 //! revocations.json            the last signed revocation list
@@ -495,9 +496,77 @@ impl Library {
         Ok(())
     }
 
-    /// Checks the maker's signature on a build, before anything is downloaded. `previous`: the
-    /// installed release of the same app or mod, if any.
+    /// Checks the maker's signature on a build, before anything is downloaded, and that an
+    /// update is signed by the same maker as what's installed. `previous`: the installed release
+    /// of the same app or mod, if any.
     fn check_maker_signature(
+        &self,
+        previous: Option<&ReleaseManifest>,
+        manifest: &ReleaseManifest,
+        file: &slop_manifest::ManifestFile,
+    ) -> Result<Option<slop_provenance::Provenance>> {
+        let provenance = self.verify_maker_signature(previous, manifest, file)?;
+        // The same signer as the installed version (SECURITY §5.3): Slop's signature on the
+        // manifest vouches for the maker's, so without this whoever held Slop's key could swap
+        // in a key of their own, or a repository that took over the old one's name.
+        if let Some(installed) = previous
+            && let Some(before) = installed.files.iter().find(|f| f.platform == file.platform)
+        {
+            let was = self.signer_of(installed, before, None);
+            let now = self.signer_of(manifest, file, provenance.as_ref());
+            if let Some(problem) = Signer::changed(&was, &now) {
+                return Err(Error::Verify(format!(
+                    "{problem}; uninstall it first if you trust the change"
+                )));
+            }
+        }
+        Ok(provenance)
+    }
+
+    /// Who signed a build: the maker's SSH key, or the repository (by GitHub's IDs) whose CI
+    /// attested it. `known`: the provenance already verified for this file, if any.
+    fn signer_of(
+        &self,
+        manifest: &ReleaseManifest,
+        file: &slop_manifest::ManifestFile,
+        known: Option<&slop_provenance::Provenance>,
+    ) -> Signer {
+        let bundle = file
+            .attestation
+            .as_ref()
+            .map(|b| (b, &file.sha256))
+            .or_else(|| {
+                file.parts
+                    .first()
+                    .and_then(|p| p.attestation.as_ref().map(|b| (b, &p.sha256)))
+            });
+        if let Some((bundle, sha256)) = bundle {
+            let provenance = known.cloned().or_else(|| {
+                let expected = slop_provenance::Expected {
+                    repo_id: None,
+                    repo_url: &manifest.repo_url,
+                    commit: &manifest.commit,
+                    slop_build_workflow: None,
+                };
+                self.provenance.verify_sha256(bundle, sha256, expected).ok()
+            });
+            return Signer::Repository(
+                provenance.and_then(|p| p.source_repo_id.zip(p.source_owner_id)),
+            );
+        }
+        match &file.maker_signature {
+            Some(sig) => Signer::Key(
+                sig.public_key
+                    .split_whitespace()
+                    .take(2)
+                    .collect::<Vec<_>>()
+                    .join(" "),
+            ),
+            None => Signer::Unsigned,
+        }
+    }
+
+    fn verify_maker_signature(
         &self,
         previous: Option<&ReleaseManifest>,
         manifest: &ReleaseManifest,
@@ -973,7 +1042,18 @@ impl Library {
                     .is_none()
                     && crate::saves::size(&saves)? > 0;
         }
-        let cache = self.root.join("cache").join(slug);
+        // A sandboxed session gets a cache of its own, emptied each time, so nothing it leaves
+        // there (libraries, compiled shaders or scripts) is loaded by a later normal session.
+        let cache = match sandbox {
+            Some(_) => {
+                let c = self.root.join("cache-sandbox").join(slug);
+                if c.exists() {
+                    fs::remove_dir_all(&c)?;
+                }
+                c
+            }
+            None => self.root.join("cache").join(slug),
+        };
         fs::create_dir_all(&cache)?;
         let (mods, synced) = self.sync_mods(slug, revocations)?;
         // Slop Link: the game writes requests and reads answers.
@@ -1097,7 +1177,13 @@ impl Library {
     /// Deletes an app's saves and their copies.
     pub fn delete_saves(&self, slug: &str) -> Result<()> {
         self.app_dir(slug)?;
-        for dir in ["saves", "save-copies", "quarantine", "cache"] {
+        for dir in [
+            "saves",
+            "save-copies",
+            "quarantine",
+            "cache",
+            "cache-sandbox",
+        ] {
             let path = self.root.join(dir).join(slug);
             if path.exists() {
                 self.remove_dir(&path)?;
@@ -1459,8 +1545,67 @@ fn make_executable(path: &Path) -> io::Result<()> {
     Ok(())
 }
 
+/// Who signed a build, for keeping updates to the same signer (`Library::check_maker_signature`).
+#[derive(Debug, PartialEq, Eq)]
+enum Signer {
+    /// The maker's SSH key (`ssh-ed25519 <base64>`).
+    Key(String),
+    /// A GitHub build attestation from this repository: (repository ID, owner ID), when the
+    /// certificate names them (attestations made before GitHub added them don't).
+    Repository(Option<(String, String)>),
+    /// No maker signature (only on test setups that allow it).
+    Unsigned,
+}
+
+impl Signer {
+    /// Why an update signed by `now` can't replace one signed by `was`, if it can't.
+    fn changed(was: &Signer, now: &Signer) -> Option<&'static str> {
+        match (was, now) {
+            (Signer::Unsigned, _) => None,
+            (Signer::Key(a), Signer::Key(b)) if a == b => None,
+            (Signer::Key(_), Signer::Key(_)) => {
+                Some("this update is signed with a different maker key than the installed app")
+            }
+            (Signer::Repository(Some(a)), Signer::Repository(Some(b))) if a != b => Some(
+                "this update was built in a different repository than the installed app, though it has the same name",
+            ),
+            (Signer::Repository(_), Signer::Repository(_)) => None,
+            (_, Signer::Unsigned) => {
+                Some("the installed app was signed by its maker, but this update isn't")
+            }
+            _ => Some("this update is signed differently than the installed app"),
+        }
+    }
+}
+
 #[cfg(test)]
 mod tests {
+
+    #[test]
+    fn updates_keep_the_installed_signer() {
+        let key = |k: &str| Signer::Key(k.into());
+        let repo = |r: &str| Signer::Repository(Some((r.into(), "42".into())));
+        assert_eq!(
+            Signer::changed(&key("ssh-ed25519 AAA"), &key("ssh-ed25519 AAA")),
+            None
+        );
+        assert!(Signer::changed(&key("ssh-ed25519 AAA"), &key("ssh-ed25519 BBB")).is_some());
+        assert_eq!(Signer::changed(&repo("1001"), &repo("1001")), None);
+        assert!(
+            Signer::changed(&repo("1001"), &repo("9999")).is_some(),
+            "repojacking"
+        );
+        assert_eq!(
+            Signer::changed(&Signer::Repository(None), &repo("1001")),
+            None
+        );
+        assert!(Signer::changed(&repo("1001"), &key("ssh-ed25519 AAA")).is_some());
+        assert!(Signer::changed(&key("ssh-ed25519 AAA"), &Signer::Unsigned).is_some());
+        assert_eq!(
+            Signer::changed(&Signer::Unsigned, &key("ssh-ed25519 AAA")),
+            None
+        );
+    }
     use super::*;
 
     #[test]

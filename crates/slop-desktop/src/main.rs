@@ -516,6 +516,8 @@ struct SandboxStatus {
     /// Whether sandbox mode works on this computer, and why not.
     available: bool,
     reason: Option<String>,
+    /// What it can't protect against on this desktop (X11), to show the player.
+    limits: Option<String>,
     settings: slop_client::sandbox::SandboxSettings,
 }
 
@@ -525,6 +527,7 @@ fn sandbox_status(desktop: State<'_, Desktop>) -> SandboxStatus {
     SandboxStatus {
         available: available.is_ok(),
         reason: available.clone().err(),
+        limits: slop_client::sandbox::limits(),
         settings: desktop.library.sandbox_settings(),
     }
 }

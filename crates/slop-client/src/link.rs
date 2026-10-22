@@ -245,7 +245,7 @@ impl Link {
                     continue;
                 };
                 let body = (meta.is_file() && meta.len() <= MAX_REQUEST)
-                    .then(|| fs::read(&path).ok())
+                    .then(|| read_plain(&path, &meta))
                     .flatten();
                 let _ = fs::remove_file(&path);
                 if !valid_name(&name) {
@@ -333,6 +333,30 @@ pub fn write_request(link: &Path, name: &str, mods: &[&str], from: &str) -> io::
     let tmp = link.join("requests").join(format!("{name}.tmp"));
     fs::write(&tmp, body.to_string())?;
     fs::rename(&tmp, link.join("requests").join(format!("{name}.json")))
+}
+
+/// Reads a request the game left, at most `MAX_REQUEST` bytes, and only if the file opened is
+/// the plain file that was checked: a link swapped in between the check and the read (to make
+/// Slop read some other file) is refused.
+fn read_plain(path: &Path, checked: &fs::Metadata) -> Option<Vec<u8>> {
+    use std::io::Read;
+    let file = fs::File::open(path).ok()?;
+    let opened = file.metadata().ok()?;
+    if !opened.is_file() {
+        return None;
+    }
+    #[cfg(unix)]
+    {
+        use std::os::unix::fs::MetadataExt;
+        if (opened.dev(), opened.ino()) != (checked.dev(), checked.ino()) {
+            return None;
+        }
+    }
+    #[cfg(not(unix))]
+    let _ = checked;
+    let mut body = Vec::new();
+    file.take(MAX_REQUEST + 1).read_to_end(&mut body).ok()?;
+    (body.len() as u64 <= MAX_REQUEST).then_some(body)
 }
 
 #[cfg(test)]

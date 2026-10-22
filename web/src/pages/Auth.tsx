@@ -226,6 +226,7 @@ export function DesktopApprove() {
   const request = useLoad(() => (me ? api.desktopRequest(id) : Promise.resolve(undefined)), [id, me?.id]);
   const [state, setState] = useState<"ask" | "sending" | "done" | "cancelled">("ask");
   const [error, setError] = useState<string>();
+  const [stepUp, setStepUp] = useState(false);
 
   if (me === undefined) return <Loading />;
   if (!me) return <Navigate to={`/signin?return_to=${encodeURIComponent(location.pathname)}`} replace />;
@@ -249,6 +250,8 @@ export function DesktopApprove() {
       // Hand the one-time code to the app listening on this computer.
       window.location.assign(redirect_url);
     } catch (err) {
+      // An old sign-in can't approve a new device: confirm it's you first.
+      setStepUp(err instanceof ApiError && err.code === "step_up_required");
       setError(err instanceof ApiError ? err.message : String(err));
       setState("ask");
     }
@@ -279,7 +282,17 @@ export function DesktopApprove() {
             </p>
             {error && (
               <p className="form-error" role="alert">
-                {error}
+                {stepUp ? (
+                  <StepUpPrompt
+                    signInAgain={`/signin?return_to=${encodeURIComponent(location.pathname)}`}
+                    onDone={() => {
+                      setStepUp(false);
+                      setError(undefined);
+                    }}
+                  />
+                ) : (
+                  error
+                )}
               </p>
             )}
             <div className="actions">
@@ -632,19 +645,20 @@ export function SignIns() {
   const providers = useLoad(() => api.providers(), []);
   const [params] = useSearchParams();
   const [error, setError] = useState<string>();
+  const [stepUp, setStepUp] = useState(false);
   const linked = params.get("linked");
   const failed = params.get("error");
+  // Linking another sign-in to an account with passkeys: one of them confirms it first.
+  const confirmLink = params.get("confirm_link") as SignInProvider | null;
   const unlink = async (provider: string, subject: string) => {
     setError(undefined);
+    setStepUp(false);
     try {
       await api.unlink(provider, subject);
       identities.reload();
     } catch (err) {
-      if (err instanceof ApiError && err.code === "step_up_required") {
-        setError("For your safety, unlinking needs a recent sign-in. Sign out and in again, then try once more.");
-      } else {
-        setError(err instanceof ApiError ? err.message : String(err));
-      }
+      setStepUp(err instanceof ApiError && err.code === "step_up_required");
+      setError(err instanceof ApiError ? err.message : String(err));
     }
   };
   const available = (Object.keys(PROVIDER_LABEL) as SignInProvider[]).filter((p) => providers.data?.[p]);
@@ -660,6 +674,17 @@ export function SignIns() {
         )}
         {linked === "already" && <p className="notice">That account was already linked.</p>}
         {failed === "provider" && <p className="form-error">That sign-in didn't work. Please try again.</p>}
+        {confirmLink && PROVIDER_LABEL[confirmLink] && (
+          <div className="notice" role="status">
+            <p>
+              To link {PROVIDER_LABEL[confirmLink]}, confirm it's you with one of your passkeys.
+            </p>
+            <StepUpPrompt
+              signInAgain={`/signin?return_to=${encodeURIComponent("/account#sign-ins")}`}
+              onDone={() => window.location.assign(api.linkUrl(confirmLink))}
+            />
+          </div>
+        )}
         <ul className="report-list">
           {identities.data?.map((i) => (
             <li key={`${i.provider}:${i.provider_subject}`}>
@@ -689,7 +714,17 @@ export function SignIns() {
         </div>
         {error && (
           <p className="form-error" role="alert">
-            {error}
+            {stepUp ? (
+              <StepUpPrompt
+                signInAgain={`/signin?return_to=${encodeURIComponent("/account#sign-ins")}`}
+                onDone={() => {
+                  setStepUp(false);
+                  setError(undefined);
+                }}
+              />
+            ) : (
+              error
+            )}
           </p>
         )}
         <Passkeys />

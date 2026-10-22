@@ -234,6 +234,7 @@ function UpdateBar({ waiting, onUpdated }: { waiting: number; onUpdated: () => v
           Run every app in sandbox mode <span className="muted small">(unless you turned it off for one)</span>
         </label>
       )}
+      {sandbox.data?.available && sandbox.data.limits && <p className="muted small">{sandbox.data.limits}</p>}
       {saveSync.data && (
         <label className="check">
           <input

@@ -56,7 +56,7 @@ Give an account admin rights from the server, after it has signed in once:
 
 ```sh
 set -a; . ~/.config/slop/slop.env; set +a
-~/slop-deploy/current/slop-api admin grant "<display name, email or account ID>" --reviewer <you>
+~/slop-deploy/current/slop-api admin grant <account ID> --reviewer <you>   # the ID from their profile link
 ```
 
 The same staff commands also work from the server:

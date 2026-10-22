@@ -7,8 +7,13 @@
 //! Linux uses bubblewrap, the sandbox Flatpak is built on. Windows uses an AppContainer, the
 //! box Store apps run in (appcontainer.rs).
 //!
-//! It limits what a compromised app can reach. It isn't a guarantee: on X11 desktops any window
-//! can read the keyboard, sandboxed or not.
+//! It limits what a compromised app can reach. It isn't a guarantee:
+//! - On a desktop that runs X11 itself (not Wayland), any window can read the keyboard and send
+//!   keystrokes to other windows, sandboxed or not, so an app could type into a terminal. On
+//!   Wayland, X11 apps run under XWayland, which only shares with other X11 apps.
+//! - Sound goes through the PulseAudio socket (PipeWire's Pulse service on most desktops), which
+//!   also lets an app record the microphone. PipeWire's own socket, which can also see and
+//!   control every other app's audio and video streams, isn't shared.
 
 use std::{
     ffi::OsString,
@@ -73,6 +78,25 @@ impl SandboxSettings {
 }
 
 /// Whether sandbox mode works on this computer; the reason when it doesn't.
+/// What sandbox mode can't stop on this desktop, to tell the player: on a desktop that runs X11
+/// itself, any window can read the keyboard and type into other windows.
+pub fn limits() -> Option<String> {
+    #[cfg(target_os = "linux")]
+    {
+        let x11 = std::env::var_os("DISPLAY").is_some();
+        let wayland = std::env::var_os("WAYLAND_DISPLAY").is_some();
+        if x11 && !wayland {
+            return Some(
+                "Your desktop runs X11, where any app can read the keyboard and type into other \
+                 windows, sandboxed or not. Sandbox mode still keeps apps away from your files; \
+                 a Wayland session protects the keyboard too."
+                    .into(),
+            );
+        }
+    }
+    None
+}
+
 pub fn available() -> Result<(), String> {
     #[cfg(target_os = "linux")]
     {
@@ -386,10 +410,11 @@ pub fn arguments(s: &Sandbox, host: &Host) -> Vec<OsString> {
     if let Some(home) = &host.home {
         args.extend([os("--tmpfs"), home.into()]);
     }
-    // The desktop session: display and sound sockets only (no session bus).
+    // The desktop session: display and sound sockets only (no session bus, and not PipeWire's
+    // own socket: sound goes through its PulseAudio service).
     if let Some(run) = &host.runtime_dir {
         args.extend([os("--dir"), run.into()]);
-        let mut sockets = vec![run.join("pulse/native"), run.join("pipewire-0")];
+        let mut sockets = vec![run.join("pulse/native")];
         if let Some(w) = &host.wayland {
             sockets.push(run.join(w));
         }
