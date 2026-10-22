@@ -5907,3 +5907,63 @@ async fn admin_agents_decide_portfolios_and_fix_profiles_and_teams_within_their_
         ("problem", Some("concern"))
     );
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "new-1: anyone who joins an open team can message every member (teens too) in its team chat; needs a product decision"]
+async fn joining_an_open_team_is_not_a_way_to_message_its_members(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (_, owner_web) = app.user("Tess Owner", "US").await;
+    let (teen_id, teen_web) = app.user("Tia Teen", "GB").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    make_team(
+        &app,
+        &owner_web,
+        "open-crew",
+        json!({ "join_policy": "open" }),
+    )
+    .await;
+    add_to_team(&app, "open-crew", teen_id, "member").await;
+    let owner = first_device(&app, &owner_web).await;
+    let teen = first_device(&app, &teen_web).await;
+    chat_id(&app, &owner, json!({ "kind": "team", "team": "open-crew" })).await;
+    // Neither may message the teen directly (friends.rs connected: open teams aren't connections).
+    assert_eq!(
+        connection(&app, &stranger_web, teen_id).await["can_message"],
+        false
+    );
+    assert_eq!(
+        connection(&app, &owner_web, teen_id).await["can_message"],
+        false
+    );
+
+    // A stranger joins and writes in the team chat: that reaches the teen all the same.
+    app.send(req(Method::POST, "/v1/teams/open-crew/join").cookie(&stranger_web))
+        .await;
+    let stranger = first_device(&app, &stranger_web).await;
+    let (status, team) = start_chat(
+        &app,
+        &stranger,
+        json!({ "kind": "team", "team": "open-crew" }),
+    )
+    .await;
+    let refused = !status.is_success()
+        || send_message(
+            &app,
+            &stranger,
+            team["id"].as_str().unwrap().parse().unwrap(),
+            "hi, how old are you?",
+        )
+        .await
+        .status()
+            != StatusCode::OK;
+    assert!(
+        refused,
+        "a stranger reached a teen through an open team's chat"
+    );
+    assert!(
+        sync_now(&app, &teen).await["events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
