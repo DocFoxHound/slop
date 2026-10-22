@@ -20,6 +20,7 @@ use crate::{AppState, error::ApiError};
 pub enum Action {
     Vote,
     Review,
+    BugReport,
     Report,
     ChatMessage,
     FriendRequest,
@@ -45,6 +46,7 @@ impl Action {
         let (n, secs) = match self {
             Self::Vote => (60, HOUR),
             Self::Review => (10, HOUR),
+            Self::BugReport => (10, HOUR),
             Self::Report => (10, HOUR),
             Self::ChatMessage => (60, MINUTE),
             Self::FriendRequest => (40, DAY),
@@ -70,6 +72,7 @@ impl Action {
         match self {
             Self::Vote => "votes",
             Self::Review => "reviews",
+            Self::BugReport => "bug reports",
             Self::Report => "reports",
             Self::ChatMessage => "chat messages",
             Self::FriendRequest => "friend requests",
