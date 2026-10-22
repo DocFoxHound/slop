@@ -24,6 +24,16 @@ use time::{OffsetDateTime, format_description::well_known::Rfc3339};
 use tower::ServiceExt;
 use uuid::Uuid;
 
+// Tests by area (functions listed in the test-coverage inventory). The tests below this harness
+// predate the split and stay here.
+mod accounts_tests;
+mod admin_tests;
+mod agents_tests;
+mod money_tests;
+mod people_tests;
+mod publishing_tests;
+mod store_tests;
+
 // ---------------------------------------------------------------------------------------------
 // Harness
 
@@ -131,7 +141,7 @@ async fn fake_github() -> String {
         .route(
             "/.well-known/jwks",
             get(|| async {
-                axum::Json(serde_json::from_str::<Value>(include_str!("fixtures/oidc-test-jwks.json")).unwrap())
+                axum::Json(serde_json::from_str::<Value>(include_str!("../fixtures/oidc-test-jwks.json")).unwrap())
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk", "id": 1001, "owner": { "id": 42 } })) }))
@@ -484,7 +494,7 @@ async fn fake_github() -> String {
                 |axum::extract::Path((owner, _repo, _digest)): axum::extract::Path<(String, String, String)>| async move {
                     if owner == "sigstore" {
                         let bundle: Value = serde_json::from_str(include_str!(
-                            "../../slop-provenance/tests/fixtures/github-actions-provenance.sigstore.json"
+                            "../../../slop-provenance/tests/fixtures/github-actions-provenance.sigstore.json"
                         ))
                         .unwrap();
                         (StatusCode::OK, axum::Json(json!({ "attestations": [{ "bundle": bundle }] })))
@@ -2616,8 +2626,9 @@ fn github_token(app: &TestApp, overrides: Value) -> String {
     }
     let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
     header.kid = Some("test-key".into());
-    let key = jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("fixtures/oidc-test-key.pem"))
-        .unwrap();
+    let key =
+        jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("../fixtures/oidc-test-key.pem"))
+            .unwrap();
     jsonwebtoken::encode(&header, &claims, &key).unwrap()
 }
 
@@ -4159,7 +4170,7 @@ async fn the_github_app_gets_webhooks_and_its_own_tokens(db: PgPool) {
             app_id: "123".into(),
             slug: "slop-test".into(),
             private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
-                "fixtures/github-app-test-key.pem"
+                "../fixtures/github-app-test-key.pem"
             ))
             .unwrap(),
             webhook_secret: "hook-secret".into(),
@@ -8918,7 +8929,7 @@ async fn official_teams_are_verified_through_their_github_organization(db: PgPoo
             app_id: "123".into(),
             slug: "slop-test".into(),
             private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
-                "fixtures/github-app-test-key.pem"
+                "../fixtures/github-app-test-key.pem"
             ))
             .unwrap(),
             webhook_secret: "hook-secret".into(),
@@ -10438,7 +10449,7 @@ async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
             app_id: "123".into(),
             slug: "slop-test".into(),
             private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
-                "fixtures/github-app-test-key.pem"
+                "../fixtures/github-app-test-key.pem"
             ))
             .unwrap(),
             webhook_secret: "hook-secret".into(),
