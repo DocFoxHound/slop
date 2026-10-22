@@ -1778,11 +1778,24 @@ async fn pay(
                 account,
                 session,
             };
-            Some(
-                stripe::checkout_url(&state, cfg, &due, user.id)
-                    .await
-                    .map_err(|e| ApiError::Conflict(format!("{e:#}")))?,
-            )
+            // One checkout per payment: a second click waits here, then finds the first's
+            // session open and reuses it, so the client can't be charged twice.
+            let mut lock = state.db.begin().await?;
+            sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text, 0))")
+                .bind(payment_id)
+                .execute(&mut *lock)
+                .await?;
+            let session: Option<String> =
+                sqlx::query_scalar("select checkout_session_id from job_payments where id = $1")
+                    .bind(payment_id)
+                    .fetch_one(&mut *lock)
+                    .await?;
+            let due = stripe::Due { session, ..due };
+            let url = stripe::checkout_url(&state, cfg, &due, user.id)
+                .await
+                .map_err(|e| ApiError::Conflict(format!("{e:#}")))?;
+            lock.commit().await?;
+            Some(url)
         }
     };
     let (j, role) = load(&state, id, &user).await?;

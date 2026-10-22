@@ -39,23 +39,39 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// SQL: whether user `$a` is in the UK under-18 view (no age check exists yet, AGE-6).
-fn under18(user: &str) -> String {
+pub(crate) fn under18(user: &str) -> String {
     format!(
         "coalesce((select cp.under18_view_default from users uu join country_policies cp on cp.country_code = uu.country_code
                    where uu.id = {user}), true)"
     )
 }
 
-/// Whether two people are connected: friends, in the same player team, or the two sides of a
-/// People job.
+/// Whether two people are connected: friends, members of the same invite-only player team, or
+/// the two sides of a People job that went ahead. An open team anyone can join, or a job request
+/// that was never accepted, isn't a connection: otherwise joining a team or sending a request
+/// would be a way to message anyone (security review, 2026-10-22).
 pub async fn connected(conn: &mut PgConnection, a: Uuid, b: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "select exists (select 1 from friends where user_a = least($1, $2) and user_b = greatest($1, $2))
              or exists (select 1 from team_members x join team_members y on y.team_id = x.team_id
                         join teams t on t.id = x.team_id
-                        where x.user_id = $1 and y.user_id = $2 and t.kind = 'player')
-             or exists (select 1 from jobs j where (j.client_id = $1 and j.creative_id = $2)
-                                                or (j.client_id = $2 and j.creative_id = $1))",
+                        where x.user_id = $1 and y.user_id = $2 and t.kind = 'player'
+                          and t.join_policy = 'invite')
+             or exists (select 1 from jobs j where ((j.client_id = $1 and j.creative_id = $2)
+                                                 or (j.client_id = $2 and j.creative_id = $1))
+                          and j.status in ('awaiting_payment', 'in_progress', 'awaiting_sign_off',
+                                           'delivered', 'final_files', 'completed'))",
+    )
+    .bind(a)
+    .bind(b)
+    .fetch_one(conn)
+    .await
+}
+
+/// Whether the two are friends (both accepted).
+async fn friends(conn: &mut PgConnection, a: Uuid, b: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar(
+        "select exists (select 1 from friends where user_a = least($1, $2) and user_b = greatest($1, $2))",
     )
     .bind(a)
     .bind(b)
@@ -76,7 +92,8 @@ pub async fn blocked(conn: &mut PgConnection, a: Uuid, b: Uuid) -> sqlx::Result<
 }
 
 /// Whether `from` may start a chat with `to`, or add them to one: not blocked, an open account,
-/// and connected, or `to` takes messages from anyone (never in either's under-18 view).
+/// and friends; or, when neither is in the under-18 view, connected (`connected`) or `to` takes
+/// messages from anyone.
 pub async fn may_message(conn: &mut PgConnection, from: Uuid, to: Uuid) -> sqlx::Result<bool> {
     if from == to || blocked(conn, from, to).await? {
         return Ok(false);
@@ -88,6 +105,23 @@ pub async fn may_message(conn: &mut PgConnection, from: Uuid, to: Uuid) -> sqlx:
     .fetch_one(&mut *conn)
     .await?;
     if !open {
+        return Ok(false);
+    }
+    // Friends can always write to each other.
+    if friends(conn, from, to).await? {
+        return Ok(true);
+    }
+    // In the under-18 view, only friends: never someone who merely shares a team or a job.
+    let minor: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {} or {}",
+        under18("$1"),
+        under18("$2")
+    )))
+    .bind(from)
+    .bind(to)
+    .fetch_one(&mut *conn)
+    .await?;
+    if minor {
         return Ok(false);
     }
     if connected(conn, from, to).await? {

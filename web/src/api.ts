@@ -2362,9 +2362,14 @@ export const api = {
     get: (id: string) => request<BountyDetail>("GET", `/v1/bounties/${encodeURIComponent(id)}`),
     open: (slug: string, body: { title: string; body: string; currency: string }) =>
       request<Bounty>("POST", `/v1/apps/${encodeURIComponent(slug)}/bounties`, body),
-    pledge: (id: string, amount_minor: number) =>
+    pledge: (
+      id: string,
+      amount_minor: number,
+      extra: { confirm_adult?: boolean; challenge?: { id: string; nonce: string } } = {},
+    ) =>
       request<{ url: string | null; status: string }>("POST", `/v1/bounties/${encodeURIComponent(id)}/pledge`, {
         amount_minor,
+        ...extra,
       }),
     checkPledge: (id: string) => request<void>("POST", `/v1/bounties/${encodeURIComponent(id)}/pledge/check`),
     withdraw: (id: string) => request<void>("DELETE", `/v1/bounties/${encodeURIComponent(id)}/pledge`),

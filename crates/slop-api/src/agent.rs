@@ -1122,10 +1122,13 @@ pub(crate) fn tool_request(
         if name == "decision" && text != "approve" && text != "reject" {
             return Err("decision must be approve or reject".into());
         }
-        path.push_str(
-            &percent_encoding::utf8_percent_encode(&text, percent_encoding::NON_ALPHANUMERIC)
-                .to_string(),
-        );
+        if text.is_empty() || text == "." || text == ".." {
+            return Err(format!("{name} isn't a valid value"));
+        }
+        // URL-unreserved characters stay as they are (app addresses have dashes, and an
+        // app-scoped token compares them as written); everything else, `/` and `?` included,
+        // is escaped, so an argument stays one path segment.
+        path.push_str(&crate::slop_build::path_segment(&text));
         tail = &tail[end + 1..];
     }
     path.push_str(tail);

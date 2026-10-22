@@ -14,6 +14,7 @@ test("a player opens a bounty and pledges toward it", async ({ page }) => {
   const pledge = page.getByRole("button", { name: "Pledge" });
   await expect(pledge).toBeDisabled();
   await page.getByRole("checkbox", { name: /Save my card with Stripe/ }).check();
+  await page.getByRole("checkbox", { name: "I'm 18 or older" }).check();
   await pledge.click();
   // Simulated payments: the pledge is saved at once; nothing is charged.
   await expect(page.getByText(/your card is saved; charged only if a delivery is confirmed/)).toBeVisible();

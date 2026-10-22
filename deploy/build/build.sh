@@ -13,6 +13,9 @@ out=/out
 mkdir -p "$HOME"
 fail() { echo "$1" >"$out/failed"; exit 1; }
 
+# Only the release build is stamped with the commit (the tests check a plain build has none).
+commit="${SLOP_COMMIT:-}"
+unset SLOP_COMMIT
 # Tests, once more if the database was busy (someone else's run): real failures fail twice.
 run_tests() { DATABASE_URL="$SLOP_TEST_DATABASE_URL" cargo test -q --locked >"$out/test.log" 2>&1; }
 if ! run_tests; then
@@ -21,10 +24,10 @@ if ! run_tests; then
   run_tests || fail tests
 fi
 cargo clippy --locked --all-targets -q -- -D warnings >"$out/lint.log" 2>&1 || fail lint
-SLOP_COMMIT="$SLOP_COMMIT" cargo build --locked -q --release -p slop-api >"$out/build.log" 2>&1 || fail build
+SLOP_COMMIT="$commit" cargo build --locked -q --release -p slop-api >"$out/build.log" 2>&1 || fail build
 (cd web && npm ci --silent --no-audit --no-fund && npm test --silent && npm run build --silent) >"$out/web.log" 2>&1 || fail "web build"
 (cd web && npx playwright test) >"$out/e2e.log" 2>&1 || fail "browser tests"
-python3 deploy/sbom.py . "$SLOP_COMMIT" >"$out/sbom.json" 2>"$out/sbom.log" || rm -f "$out/sbom.json"
+python3 deploy/sbom.py . "$commit" >"$out/sbom.json" 2>"$out/sbom.log" || rm -f "$out/sbom.json"
 python3 - >"$out/shipped.json" <<'PY' || rm -f "$out/shipped.json"
 import json, sys
 sys.path.insert(0, "deploy")

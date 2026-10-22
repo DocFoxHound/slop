@@ -715,9 +715,12 @@ async fn admin_record(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<String> {
+    // Private conversations: for the staff who handle problems, and only while one is open
+    // (security review, 2026-10-22).
+    admin.need(crate::staff::Perm::Moderate)?;
     let reason: Option<String> = sqlx::query_scalar(
-        "select case when exists (select 1 from job_problems where job_id = $1) then 'problem'
-                     when exists (select 1 from review_disputes where job_id = $1) then 'review dispute' end",
+        "select case when exists (select 1 from job_problems where job_id = $1 and status = 'open') then 'problem'
+                     when exists (select 1 from review_disputes where job_id = $1 and status = 'pending') then 'review dispute' end",
     )
     .bind(id)
     .fetch_one(&state.db)

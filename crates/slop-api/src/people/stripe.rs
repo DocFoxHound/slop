@@ -82,6 +82,20 @@ pub(crate) async fn call(
     account: Option<&str>,
     form: &[(&str, String)],
 ) -> anyhow::Result<Value> {
+    call_once(state, stripe, method, path, account, form, None).await
+}
+
+/// `call`, with Stripe's `Idempotency-Key`: the same key within 24 hours returns the first
+/// answer instead of doing it again, so a retried charge can't charge twice.
+pub(crate) async fn call_once(
+    state: &AppState,
+    stripe: &StripeConfig,
+    method: reqwest::Method,
+    path: &str,
+    account: Option<&str>,
+    form: &[(&str, String)],
+    idempotency_key: Option<&str>,
+) -> anyhow::Result<Value> {
     let mut url = stripe.api_base.join(path)?;
     if method == reqwest::Method::GET && !form.is_empty() {
         url.query_pairs_mut()
@@ -93,6 +107,9 @@ pub(crate) async fn call(
         .bearer_auth(&stripe.secret_key);
     if let Some(acct) = account {
         req = req.header("stripe-account", acct);
+    }
+    if let Some(key) = idempotency_key {
+        req = req.header("idempotency-key", key);
     }
     if method != reqwest::Method::GET {
         req = req.form(form);
@@ -402,6 +419,29 @@ pub async fn sync_session(
         .as_str()
         .and_then(|v| v.parse().ok())
         .ok_or_else(|| anyhow::anyhow!("session without a job payment"))?;
+    // Only the session Slop made for this payment, on the creative's account, for the amount and
+    // currency due. Metadata alone proves nothing: a creative controls their own Stripe account
+    // and could make a session naming any payment, in a cheaper currency (security review,
+    // 2026-10-22).
+    let expected: Option<(Option<String>, i32, String, Option<String>)> = sqlx::query_as(
+        "select p.checkout_session_id, p.amount_minor, p.currency, c.stripe_account_id
+         from job_payments p join jobs j on j.id = p.job_id
+         join creatives c on c.user_id = j.creative_id where p.id = $1",
+    )
+    .bind(job_payment_id)
+    .fetch_optional(&state.db)
+    .await?;
+    let Some((want_session, want_amount, want_currency, want_account)) = expected else {
+        anyhow::bail!("session for an unknown job payment");
+    };
+    let matches = want_session.as_deref() == Some(session_id)
+        && want_account.as_deref() == Some(account)
+        && s["amount_total"].as_i64() == Some(i64::from(want_amount))
+        && s["currency"].as_str() == Some(want_currency.as_str());
+    if !matches {
+        tracing::warn!(%job_payment_id, session_id, account, "a paid Checkout session that isn't the one Slop made for this payment; ignored");
+        return Ok(false);
+    }
     let payer: Option<Uuid> = s["metadata"]["payer"].as_str().and_then(|v| v.parse().ok());
     let charge = s["payment_intent"]["latest_charge"]
         .as_str()

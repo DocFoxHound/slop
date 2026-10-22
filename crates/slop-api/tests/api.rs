@@ -6299,7 +6299,11 @@ async fn fake_stripe() -> String {
                 let session = json!({
                     "id": id, "status": "open", "payment_status": "unpaid",
                     "url": format!("https://checkout.stripe.example/{id}"),
-                    "amount_total": form["line_items[0][price_data][unit_amount]"].parse::<i64>().unwrap(),
+                    "amount_total": form.iter()
+                        .filter(|(k, _)| k.starts_with("line_items[") && k.ends_with("[price_data][unit_amount]"))
+                        .map(|(_, v)| v.parse::<i64>().unwrap())
+                        .sum::<i64>(),
+                    "currency": form["line_items[0][price_data][currency]"],
                     "application_fee": form.get("payment_intent_data[application_fee_amount]").map(|f| f.parse::<i64>().unwrap()),
                     "metadata": metadata,
                     // What Slop sent, for tests to check.
@@ -10469,7 +10473,7 @@ async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
         body_json(res).await["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("already on Slop")
+            .contains("already linked to an app on Slop")
     );
 
     // Organizations: only their owners, through Slop's App on the organization.
@@ -11072,7 +11076,13 @@ async fn other_hosts_prove_ownership_by_account_or_readme_code(db: PgPool) {
     // The code is Ann's: Bob gets his own, and the repository is taken anyway.
     let a = body_json(app.send(ownership(&bob, &repo, false)).await).await;
     assert_eq!(a["ok"], false);
-    assert!(a["message"].as_str().unwrap().contains("already on Slop"));
+    // A draft isn't named to someone else.
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("already linked to an app on Slop")
+    );
     let _ = std::fs::remove_dir_all(&root);
 }
 
@@ -14435,7 +14445,7 @@ async fn bounties_pay_whoever_delivers(db: PgPool) {
     let pledge = |cookie: &str, id: &str, amount: i64| {
         req(Method::POST, format!("/v1/bounties/{id}/pledge"))
             .cookie(cookie)
-            .json(json!({ "amount_minor": amount }))
+            .json(json!({ "amount_minor": amount, "confirm_adult": true }))
     };
     assert_eq!(
         app.send(pledge(&ann, &id, 50)).await.status(),
@@ -14532,9 +14542,19 @@ async fn bounties_pay_whoever_delivers(db: PgPool) {
     let id2 = body_json(res).await["id"].as_str().unwrap().to_string();
     app.send(pledge(&ann, &id2, 1000)).await;
     app.send(pledge(&bob, &id2, 3000)).await;
+    // The maker backs it too, then delivers it: their own pledge never counts in the vote.
+    assert_eq!(
+        app.send(pledge(&maker, &id2, 50000)).await.status(),
+        StatusCode::OK
+    );
     assert_eq!(
         app.send(claim(&maker, &id2, "tower")).await.status(),
         StatusCode::NO_CONTENT
+    );
+    // And nobody can pledge while it waits for a decision (a pledge then could buy the vote).
+    assert_eq!(
+        app.send(pledge(&forker, &id2, 50000)).await.status(),
+        StatusCode::CONFLICT
     );
     let detail = body_json(
         app.send(req(Method::GET, format!("/v1/bounties/{id2}")).cookie(&ann))
@@ -14562,6 +14582,11 @@ async fn bounties_pay_whoever_delivers(db: PgPool) {
         .cookie(cookie)
         .json(json!({ "accept": accept }))
     };
+    assert_eq!(
+        app.send(vote(&maker, true)).await.status(),
+        StatusCode::CONFLICT,
+        "not on their own delivery"
+    );
     assert_eq!(
         app.send(vote(&ann, true)).await.status(),
         StatusCode::NO_CONTENT
@@ -14727,7 +14752,7 @@ async fn bounty_pledges_are_charged_on_the_builders_stripe_account(db: PgPool) {
         app.send(
             req(Method::POST, format!("/v1/bounties/{id}/pledge"))
                 .cookie(&ann)
-                .json(json!({ "amount_minor": 2000 })),
+                .json(json!({ "amount_minor": 2000, "confirm_adult": true })),
         )
         .await,
     )

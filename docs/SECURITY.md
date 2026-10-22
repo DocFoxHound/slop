@@ -312,7 +312,7 @@ More detail in `PAYMENTS.md`.
 - **Encryption:** TLS 1.2+ everywhere, encryption at rest, and **field-level encryption** for tax IDs and People contact details.
 - **Age:** accounts are **16+** everywhere (decided). Donations and People jobs are 18+.
   - UK users are found from several signals (IP, billing, app-store and stated country). Slop stores only the resulting country. No VPN detection.
-  - UK accounts start in an **under-18 view**: 18+ content hidden, messages from connections only.
+  - UK accounts start in an **under-18 view**: 18+ content hidden, messages and team invites from friends only (since 2026-10-22), and open teams never list them to outsiders.
   - A third-party age check unlocks 18+ content. Slop stores only "passed", the date and the method, never ID or face images (`LEGAL.md` §6).
   - Content ratings on store pages (`LEGAL.md` §5.7).
 - **Deleting an account:** personal data is removed or anonymized. Votes become anonymous (not deleted, to keep rating history honest). Payment records stay for the legal retention period, with the personal link removed where the law allows.
