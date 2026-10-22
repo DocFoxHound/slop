@@ -1822,3 +1822,437 @@ async fn staff_fixing_a_profile_need_moderation_rights_a_reason_and_valid_text(d
         json!({ "from": "Tokyo", "to": "" })
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Official team verification, against a GitHub of our own
+
+/// What the stand-in GitHub says about one organization. Organizations not in the map don't have
+/// Slop's App installed.
+#[derive(Clone, Default)]
+struct Org {
+    verified_domain: bool,
+    two_factor: bool,
+    /// Logins that are active owners (admins) of the organization.
+    owners: Vec<&'static str>,
+    /// GitHub answers 500 about it.
+    broken: bool,
+}
+
+type Orgs = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Org>>>;
+
+/// A GitHub with Slop's App installed on the organizations in `orgs`. GitHub account 42 is
+/// "octo", 43 "bob".
+async fn fake_orgs(orgs: Orgs) -> String {
+    use axum::extract::{Path, State};
+    let app = Router::new()
+        .route(
+            "/orgs/{org}/installation",
+            get(|State(orgs): State<Orgs>, Path(org): Path<String>| async move {
+                if orgs.lock().unwrap().contains_key(&org) {
+                    axum::Json(json!({ "id": 77 })).into_response()
+                } else {
+                    StatusCode::NOT_FOUND.into_response()
+                }
+            }),
+        )
+        .route(
+            "/app/installations/{id}/access_tokens",
+            axum::routing::post(|| async {
+                (
+                    StatusCode::CREATED,
+                    axum::Json(json!({ "token": "ghs_org", "expires_at": "2099-01-01T00:00:00Z" })),
+                )
+            }),
+        )
+        .route(
+            "/user/{id}",
+            get(|Path(id): Path<i64>| async move {
+                let login = match id {
+                    42 => "octo",
+                    43 => "bob",
+                    _ => "someone",
+                };
+                axum::Json(json!({ "id": id, "login": login }))
+            }),
+        )
+        .route(
+            "/orgs/{org}/memberships/{login}",
+            get(
+                |State(orgs): State<Orgs>, Path((org, login)): Path<(String, String)>| async move {
+                    let owner = orgs
+                        .lock()
+                        .unwrap()
+                        .get(&org)
+                        .is_some_and(|o| o.owners.contains(&login.as_str()));
+                    if owner {
+                        axum::Json(json!({ "role": "admin", "state": "active" })).into_response()
+                    } else {
+                        StatusCode::NOT_FOUND.into_response()
+                    }
+                },
+            ),
+        )
+        .route(
+            "/orgs/{org}",
+            get(|State(orgs): State<Orgs>, Path(org): Path<String>| async move {
+                let o = orgs.lock().unwrap().get(&org).cloned().unwrap_or_default();
+                if o.broken {
+                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                }
+                axum::Json(json!({
+                    "login": org, "is_verified": o.verified_domain,
+                    "two_factor_requirement_enabled": o.two_factor,
+                }))
+                .into_response()
+            }),
+        )
+        .route(
+            "/dns-query",
+            get(|| async { axum::Json(json!({ "Answer": [] })) }),
+        )
+        .with_state(orgs);
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+/// An app whose GitHub is `fake_orgs`, with Slop's GitHub App set up.
+async fn official_app(db: PgPool, orgs: Orgs) -> TestApp {
+    let base = fake_orgs(orgs).await;
+    test_app_with(db, |c| {
+        chat_limits(c);
+        c.releases.github_api_base = base.parse().unwrap();
+        c.doh_url = format!("{base}dns-query").parse().unwrap();
+        c.releases.github_app = Some(slop_api::config::GithubAppConfig {
+            app_id: "123".into(),
+            slug: "slop-test".into(),
+            private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
+                "../../fixtures/github-app-test-key.pem"
+            ))
+            .unwrap(),
+            webhook_secret: "hook-secret".into(),
+        });
+    })
+    .await
+}
+
+/// Links a user to a GitHub account.
+async fn github_account(app: &TestApp, user: Uuid, github_id: &str) {
+    sqlx::query(
+        "insert into identities (provider, provider_subject, user_id) values ('github', $1, $2)",
+    )
+    .bind(github_id)
+    .bind(user)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+/// A check's result from a verify response: (ok, detail).
+fn check(res: &Value, name: &str) -> (bool, String) {
+    let c = res["checks"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["check"] == name)
+        .unwrap_or_else(|| panic!("no {name} check in {res}"));
+    (
+        c["ok"].as_bool().unwrap(),
+        c["detail"].as_str().unwrap().to_string(),
+    )
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn official_teams_need_an_organization_owner_two_factor_and_a_verified_domain(db: PgPool) {
+    let orgs = Orgs::default();
+    orgs.lock().unwrap().insert(
+        "acme".into(),
+        Org {
+            verified_domain: true,
+            two_factor: true,
+            owners: vec!["octo"],
+            broken: false,
+        },
+    );
+    orgs.lock().unwrap().insert(
+        "globex".into(),
+        Org {
+            verified_domain: true,
+            two_factor: true,
+            owners: vec!["octo"],
+            broken: false,
+        },
+    );
+    let app = official_app(db, orgs.clone()).await;
+    let (ada_id, ada) = app.user("Ada Acme", "US").await;
+    let (bob_id, bob) = app.user("Bob Globex", "US").await;
+    let (_, carl) = app.user("Carl NoGitHub", "US").await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    github_account(&app, ada_id, "42").await;
+    github_account(&app, bob_id, "43").await;
+    let verify = |cookie: &str, slug: &str| {
+        req(Method::POST, format!("/v1/teams/{slug}/verify")).cookie(cookie)
+    };
+
+    // Player teams have nothing to verify.
+    make_team(&app, &ada, "night-owls", json!({})).await;
+    assert_eq!(
+        app.send(verify(&ada, "night-owls")).await.status(),
+        StatusCode::CONFLICT
+    );
+
+    // Only the team's owners and admins ask.
+    make_team(
+        &app,
+        &ada,
+        "acme",
+        json!({ "kind": "official", "github_org": "acme", "name": "Acme" }),
+    )
+    .await;
+    add_to_team(&app, "acme", bob_id, "member").await;
+    assert_eq!(
+        app.send(verify(&bob, "acme")).await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(verify(&stranger, "acme")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // GitHub's verified-domain badge is enough for the domain; no DNS record needed.
+    let res = body_json(app.send(verify(&ada, "acme")).await).await;
+    assert_eq!(res["verified"], true, "{res}");
+    assert_eq!(
+        check(&res, "domain"),
+        (
+            true,
+            "GitHub shows the organization's domain as verified.".into()
+        )
+    );
+    assert_eq!(check(&res, "owner").1, "@octo is an owner of acme.");
+    let listed = body_json(app.send(req(Method::GET, "/v1/teams")).await).await;
+    assert_eq!(listed[0]["slug"], "acme");
+
+    // Two-factor switched off on GitHub: the badge goes, and its owners are told.
+    orgs.lock().unwrap().get_mut("acme").unwrap().two_factor = false;
+    let res = body_json(app.send(verify(&ada, "acme")).await).await;
+    assert_eq!(res["verified"], false, "{res}");
+    assert!(!check(&res, "two_factor").0);
+    assert!(check(&res, "owner").0 && check(&res, "domain").0);
+    let titles: Vec<String> = notifications(&app, ada_id)
+        .await
+        .into_iter()
+        .map(|n| n.0)
+        .collect();
+    assert_eq!(titles, ["Your team's official badge was removed"]);
+    assert!(
+        notifications(&app, bob_id).await.is_empty(),
+        "members aren't owners"
+    );
+    let listed = body_json(app.send(req(Method::GET, "/v1/teams")).await).await;
+    assert!(listed.as_array().unwrap().is_empty());
+    // Asking again while still failing doesn't tell them twice.
+    app.send(verify(&ada, "acme")).await;
+    assert_eq!(notifications(&app, ada_id).await.len(), 1);
+
+    // Someone who isn't an owner of the organization on GitHub can't claim it.
+    make_team(
+        &app,
+        &bob,
+        "globex",
+        json!({ "kind": "official", "github_org": "globex" }),
+    )
+    .await;
+    let res = body_json(app.send(verify(&bob, "globex")).await).await;
+    assert_eq!(res["verified"], false);
+    assert_eq!(
+        check(&res, "owner"),
+        (false, "@bob isn't an owner of globex on GitHub.".into())
+    );
+
+    // An owner without a GitHub sign-in can't be checked at all.
+    sqlx::query("update teams set github_org = 'acme' where slug = 'globex'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    make_team(
+        &app,
+        &carl,
+        "carls-acme",
+        json!({ "kind": "official", "github_org": "acme" }),
+    )
+    .await;
+    let res = body_json(app.send(verify(&carl, "carls-acme")).await).await;
+    assert_eq!(res["verified"], false);
+    let (ok, detail) = check(&res, "owner");
+    assert!(!ok);
+    assert!(detail.contains("couldn't find their GitHub account"), "{detail}");
+
+    // An organization without Slop's App: nothing can be checked until it's installed.
+    make_team(
+        &app,
+        &carl,
+        "initech",
+        json!({ "kind": "official", "github_org": "initech" }),
+    )
+    .await;
+    let res = body_json(app.send(verify(&carl, "initech")).await).await;
+    assert_eq!(res["verified"], false);
+    assert_eq!(res["checks"].as_array().unwrap().len(), 1);
+    let (ok, detail) = check(&res, "app_installed");
+    assert!(!ok && detail.contains("Install Slop's GitHub App on the initech organization"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_second_team_for_an_already_verified_organization_is_refused_not_an_error(db: PgPool) {
+    let orgs = Orgs::default();
+    orgs.lock().unwrap().insert(
+        "acme".into(),
+        Org {
+            verified_domain: true,
+            two_factor: true,
+            owners: vec!["octo", "bob"],
+            broken: false,
+        },
+    );
+    let app = official_app(db, orgs).await;
+    let (ada_id, ada) = app.user("Ada Acme", "US").await;
+    let (bob_id, bob) = app.user("Bob Acme", "US").await;
+    github_account(&app, ada_id, "42").await;
+    github_account(&app, bob_id, "43").await;
+    make_team(
+        &app,
+        &ada,
+        "acme",
+        json!({ "kind": "official", "github_org": "acme" }),
+    )
+    .await;
+    let res = body_json(
+        app.send(req(Method::POST, "/v1/teams/acme/verify").cookie(&ada))
+            .await,
+    )
+    .await;
+    assert_eq!(res["verified"], true, "{res}");
+
+    // Another owner of the organization makes a second team for it: every check passes for
+    // them too, but an organization has one verified team.
+    make_team(
+        &app,
+        &bob,
+        "acme-games",
+        json!({ "kind": "official", "github_org": "acme" }),
+    )
+    .await;
+    let res = app
+        .send(req(Method::POST, "/v1/teams/acme-games/verify").cookie(&bob))
+        .await;
+    let status = res.status();
+    let body = body_json(res).await;
+    assert_ne!(
+        status,
+        StatusCode::INTERNAL_SERVER_ERROR,
+        "a clear answer, not a server error: {body}"
+    );
+    assert_eq!(body["verified"], false, "{body}");
+    let (ok, detail) = check(&body, "organization");
+    assert!(!ok && detail.contains("already the verified team for acme"), "{detail}");
+    let verified: Vec<String> =
+        sqlx::query_scalar("select slug from teams where verified_at is not null")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(verified, ["acme"]);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_daily_recheck_drops_badges_that_stopped_passing_and_skips_fresh_ones(db: PgPool) {
+    let orgs = Orgs::default();
+    let passing = Org {
+        verified_domain: true,
+        two_factor: true,
+        owners: vec!["octo"],
+        broken: false,
+    };
+    orgs.lock()
+        .unwrap()
+        .insert("acme".into(), passing.clone());
+    orgs.lock()
+        .unwrap()
+        .insert("fresh".into(), passing.clone());
+    orgs.lock().unwrap().insert(
+        "broken".into(),
+        Org {
+            broken: true,
+            ..passing.clone()
+        },
+    );
+    let app = official_app(db, orgs.clone()).await;
+    let (ada_id, ada) = app.user("Ada Acme", "US").await;
+    github_account(&app, ada_id, "42").await;
+    for org in ["acme", "fresh", "broken"] {
+        make_team(
+            &app,
+            &ada,
+            org,
+            json!({ "kind": "official", "github_org": org }),
+        )
+        .await;
+    }
+    sqlx::query(
+        "update teams set verified_at = now() - interval '30 days',
+                checked_at = case slug when 'fresh' then now() - interval '1 hour' else now() - interval '2 days' end",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let checked_before: Vec<(String, OffsetDateTime)> =
+        sqlx::query_as("select slug, checked_at from teams order by slug")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    // Since the last check, acme turned off two-factor, and so did fresh (not due yet).
+    orgs.lock().unwrap().get_mut("acme").unwrap().two_factor = false;
+    orgs.lock().unwrap().get_mut("fresh").unwrap().two_factor = false;
+
+    let job = tokio::spawn(slop_api::teams::run(app.state.clone()));
+    let mut done = false;
+    for _ in 0..100 {
+        let checked: bool = sqlx::query_scalar(
+            "select checked_at > now() - interval '1 minute' from teams where slug = 'acme'",
+        )
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+        if checked {
+            done = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+    // Let the round finish (broken may come after acme).
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    job.abort();
+    assert!(done, "acme was rechecked");
+    assert!(!job.await.unwrap_err().is_panic(), "an error is logged, not fatal");
+
+    let after: Vec<(String, OffsetDateTime, bool)> = sqlx::query_as(
+        "select slug, checked_at, verified_at is not null from teams order by slug",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    let get = |slug: &str| after.iter().find(|t| t.0 == slug).unwrap().clone();
+    let before = |slug: &str| checked_before.iter().find(|t| t.0 == slug).unwrap().1;
+    assert!(!get("acme").2, "the badge went");
+    assert!(get("fresh").2, "checked within a day: left alone");
+    assert_eq!(get("fresh").1, before("fresh"));
+    assert!(get("broken").2, "GitHub's error isn't a failed check");
+    assert_eq!(get("broken").1, before("broken"));
+    let titles: Vec<String> = notifications(&app, ada_id)
+        .await
+        .into_iter()
+        .map(|n| n.0)
+        .collect();
+    assert_eq!(titles, ["Your team's official badge was removed"]);
+}
