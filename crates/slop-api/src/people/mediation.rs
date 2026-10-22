@@ -253,17 +253,28 @@ async fn propose(
     let text = note("note", &p.note, 1000, true)?;
     let amount = match (p.kind.as_str(), p.amount_minor) {
         ("refund", Some(a)) if a > 0 => {
-            let paid: i64 = sqlx::query_scalar(
-                "select coalesce(sum(p.amount_minor), 0)::int8 from payments p join job_payments jp on jp.id = p.job_payment_id
-                 where jp.job_id = $1 and p.kind = 'people_job'",
+            // What was paid, less what's been refunded already: refunds Stripe reported (stored
+            // as negative amounts), or refunds agreed in earlier problems that the creative may
+            // not have made yet, whichever is more.
+            let left: i64 = sqlx::query_scalar(
+                "select (select coalesce(sum(p.amount_minor), 0) from payments p
+                         join job_payments jp on jp.id = p.job_payment_id
+                         where jp.job_id = $1 and p.kind = 'people_job')
+                      - greatest(
+                          (select coalesce(-sum(r.amount_minor), 0) from payments r
+                           join payments p on p.id = r.refund_of join job_payments jp on jp.id = p.job_payment_id
+                           where jp.job_id = $1 and r.kind = 'refund'),
+                          (select coalesce(sum(pp.amount_minor), 0) from job_problem_proposals pp
+                           join job_problems pr on pr.id = pp.problem_id
+                           where pr.job_id = $1 and pp.kind = 'refund' and pp.status = 'accepted'))",
             )
             .bind(j.id)
             .fetch_one(&state.db)
             .await?;
-            if a > paid {
+            if a > left {
                 return Err(ApiError::invalid(
                     "amount_minor",
-                    "a refund can't be more than what was paid",
+                    "a refund can't be more than what was paid and not yet refunded",
                 ));
             }
             Some(a as i32)

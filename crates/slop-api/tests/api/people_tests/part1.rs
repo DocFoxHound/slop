@@ -4359,3 +4359,824 @@ async fn conversation_copies_are_evidence_only_for_an_open_problem_and_must_matc
     let (status, _) = evidence(huge).await;
     assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Problems and review disputes (people-042 … people-052)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn problems_are_for_accepted_jobs_one_at_a_time(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let state = json!({ "statement": "The knight has no sword." });
+    for step in ["requested", "offered"] {
+        let id = h.job("upfront", step).await;
+        h.refused(
+            &id,
+            &h.tavern,
+            "problem",
+            state.clone(),
+            StatusCode::CONFLICT,
+        )
+        .await;
+    }
+    let declined = h.job("upfront", "offered").await;
+    h.ok(&declined, &h.vera, "decline", json!({})).await;
+    h.refused(
+        &declined,
+        &h.tavern,
+        "problem",
+        state.clone(),
+        StatusCode::CONFLICT,
+    )
+    .await;
+
+    let id = h.job("upfront", "in_progress").await;
+    h.refused(
+        &id,
+        &stranger,
+        "problem",
+        state.clone(),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+    let (status, body) = h
+        .step(&id, &h.tavern, "problem", json!({ "statement": " " }))
+        .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "statement")
+    );
+    let job = h.ok(&id, &h.tavern, "problem", state.clone()).await;
+    assert_eq!(
+        (
+            job["problem"]["status"].as_str(),
+            job["problem"]["opened_by_me"].as_bool()
+        ),
+        (Some("open"), Some(true))
+    );
+    assert!(!actions(&job).contains(&"open_problem"));
+    assert!(notices(app, h.creative).await[0].starts_with("A problem was opened on"));
+    let (status, body) = h.step(&id, &h.vera, "problem", state.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body["error"]["message"],
+        "a problem is already open on this job"
+    );
+
+    // The other side answers; the one who opened it can't answer themselves.
+    h.refused(
+        &id,
+        &stranger,
+        "problem/reply",
+        state.clone(),
+        StatusCode::NOT_FOUND,
+    )
+    .await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "problem/reply",
+        json!({ "statement": "And another thing" }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let job = h
+        .ok(
+            &id,
+            &h.vera,
+            "problem/reply",
+            json!({ "statement": "Swords weren't in the scope." }),
+        )
+        .await;
+    assert_eq!(job["problem"]["reply"], "Swords weren't in the scope.");
+    assert_eq!(job["problem"]["opened_by_me"], false);
+    assert!(notices(app, h.client).await[0].starts_with("New in the problem on"));
+
+    // Only whoever opened it withdraws it; then nothing is open.
+    h.refused(
+        &id,
+        &h.vera,
+        "problem/withdraw",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let job = h.ok(&id, &h.tavern, "problem/withdraw", json!({})).await;
+    assert_eq!(job["problem"]["status"], "withdrawn");
+    assert!(actions(&job).contains(&"open_problem"));
+    for step in ["problem/withdraw", "problem/reply", "problem/propose"] {
+        let body = match step {
+            "problem/propose" => json!({ "kind": "other", "note": "x" }),
+            _ => json!({ "statement": "x" }),
+        };
+        h.refused(&id, &h.tavern, step, body, StatusCode::CONFLICT)
+            .await;
+    }
+    // A new one can be opened afterwards.
+    h.ok(
+        &id,
+        &h.vera,
+        "problem",
+        json!({ "statement": "No answers for a week." }),
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn proposals_are_checked_answered_and_carried_out(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let id = h.job("split", "in_progress").await;
+    h.ok(
+        &id,
+        &h.tavern,
+        "problem",
+        json!({ "statement": "Too slow." }),
+    )
+    .await;
+    let propose = |who: &str, body: Value| {
+        call(
+            app,
+            post(format!("/v1/jobs/{id}/problem/propose"), who, body),
+        )
+    };
+    for (body, want) in [
+        (json!({ "kind": "discount", "note": "x" }), "kind"),
+        (
+            json!({ "kind": "refund", "note": "Some back" }),
+            "amount_minor",
+        ),
+        (
+            json!({ "kind": "refund", "amount_minor": 0, "note": "None" }),
+            "amount_minor",
+        ),
+        (
+            json!({ "kind": "refund", "amount_minor": 6002, "note": "More than paid" }),
+            "amount_minor",
+        ),
+        (json!({ "kind": "other", "note": " " }), "note"),
+    ] {
+        let (status, err) = propose(&h.tavern, body.clone()).await;
+        assert_eq!(
+            (status, field(&err)),
+            (StatusCode::UNPROCESSABLE_ENTITY, want),
+            "{body}"
+        );
+    }
+    let job = propose(
+        &h.tavern,
+        json!({ "kind": "refund", "amount_minor": 6001, "note": "All of it back" }),
+    )
+    .await
+    .1;
+    let p1 = job["problem"]["proposals"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let job = propose(
+        &h.vera,
+        json!({ "kind": "other", "note": "I'll finish by Friday" }),
+    )
+    .await
+    .1;
+    let p2 = job["problem"]["proposals"][1]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let job = propose(
+        &h.vera,
+        json!({ "kind": "refund", "amount_minor": 1000, "note": "$10 back" }),
+    )
+    .await
+    .1;
+    let p3 = job["problem"]["proposals"][2]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(job["problem"]["proposals"][2]["mine"], true);
+    let answer = |who: &str, pid: &str, a: &str| {
+        call(
+            app,
+            post(
+                format!("/v1/jobs/{id}/problem/proposals/{pid}/{a}"),
+                who,
+                json!({}),
+            ),
+        )
+    };
+    // Your own: only withdraw. Theirs: accept or reject.
+    assert_eq!(
+        answer(&h.tavern, &p1, "accept").await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        answer(&h.vera, &p1, "withdraw").await.0,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(answer(&h.vera, &p1, "maybe").await.0, StatusCode::CONFLICT);
+    let (_, job) = answer(&h.vera, &p1, "reject").await;
+    assert_eq!(job["problem"]["proposals"][0]["status"], "rejected");
+    assert_eq!(
+        answer(&h.tavern, &p1, "withdraw").await.0,
+        StatusCode::CONFLICT,
+        "not open any more"
+    );
+    let (_, job) = answer(&h.vera, &p2, "withdraw").await;
+    assert_eq!(job["problem"]["proposals"][1]["status"], "withdrawn");
+    // Accepting one settles the problem; anything else pending lapses.
+    propose(
+        &h.tavern,
+        json!({ "kind": "other", "note": "A free extra frame" }),
+    )
+    .await;
+    let (status, job) = answer(&h.tavern, &p3, "accept").await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["problem"]["status"], "resolved");
+    assert_eq!(job["problem"]["proposals"][3]["status"], "withdrawn");
+    assert_eq!(
+        job["refunded_minor"], 1000,
+        "simulated refunds are recorded at once"
+    );
+    assert_eq!(h.status(&id).await, "in_progress");
+    let closing: String = sqlx::query_scalar("select closing_note from job_problems")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(closing, "Both agreed: refund — $10 back");
+    let (_, _, record) = call_text(app, fetch(format!("/v1/jobs/{id}/record"), &h.tavern)).await;
+    assert!(record.contains("## Problem (resolved)"));
+    assert!(record.contains("- Proposal (accepted): refund 10 — $10 back"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agreed_cancelling_ends_the_job_and_agreed_redoing_reopens_it(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let settle = |id: String, kind: &'static str| {
+        let h = &h;
+        async move {
+            h.ok(
+                &id,
+                &h.tavern,
+                "problem",
+                json!({ "statement": "Not as agreed." }),
+            )
+            .await;
+            let job = h
+                .ok(
+                    &id,
+                    &h.vera,
+                    "problem/propose",
+                    json!({ "kind": kind, "note": "Fair." }),
+                )
+                .await;
+            let pid = job["problem"]["proposals"][0]["id"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            h.ok(
+                &id,
+                &h.tavern,
+                &format!("problem/proposals/{pid}/accept"),
+                json!({}),
+            )
+            .await
+        }
+    };
+    // Cancel: the job ends, nothing more is due.
+    let id = h.job("split", "delivered").await;
+    let job = settle(id.clone(), "cancel").await;
+    assert_eq!(job["status"], "cancelled");
+    assert!(
+        job["payments"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|p| p["status"] != "due")
+    );
+    // Redo: back to work, the delivery payment waits for the next delivery.
+    let id = h.job("on_delivery", "delivered").await;
+    let job = settle(id.clone(), "redo").await;
+    assert_eq!(job["status"], "in_progress");
+    assert_eq!(job["payments"][0]["status"], "waiting");
+    assert_eq!(job["auto_complete_at"], Value::Null);
+    h.ok(&id, &h.vera, "deliver", json!({ "note": "Redone." }))
+        .await;
+    assert_eq!(h.view(&id, &h.tavern).await["payments"][0]["status"], "due");
+    // "Other" is recorded; Slop carries nothing out.
+    let id = h.job("upfront", "in_progress").await;
+    let job = settle(id, "other").await;
+    assert_eq!(
+        (job["status"].as_str(), job["problem"]["status"].as_str()),
+        (Some("in_progress"), Some("resolved"))
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_job_cant_be_refunded_twice_through_mediation(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let id = h.job("upfront", "in_progress").await;
+    let refund = |who: &str, amount: i64| {
+        let id = id.clone();
+        let h = &h;
+        let who = who.to_string();
+        async move {
+            h.ok(&id, &h.tavern, "problem", json!({ "statement": "Late." }))
+                .await;
+            let (status, job) = h
+                .step(
+                    &id,
+                    &who,
+                    "problem/propose",
+                    json!({ "kind": "refund", "amount_minor": amount, "note": "Refund" }),
+                )
+                .await;
+            (status, job)
+        }
+    };
+    // The whole price back, agreed.
+    let (status, job) = refund(&h.vera, 12001).await;
+    assert_eq!(status, StatusCode::OK);
+    let pid = job["problem"]["proposals"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let job = h
+        .ok(
+            &id,
+            &h.tavern,
+            &format!("problem/proposals/{pid}/accept"),
+            json!({}),
+        )
+        .await;
+    assert_eq!(job["refunded_minor"], 12001);
+    // A second problem can't ask for it again.
+    let (status, body) = refund(&h.tavern, 12001).await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "amount_minor"),
+        "{body}"
+    );
+    let (status, _) = h
+        .step(
+            &id,
+            &h.tavern,
+            "problem/propose",
+            json!({ "kind": "refund", "amount_minor": 1, "note": "A cent" }),
+        )
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agreed_refunds_with_stripe_are_the_creatives_to_make_and_still_count(db: PgPool) {
+    let h = hiring(db.clone(), "US").await;
+    let (stripe, _) = with_stripe(db).await;
+    let id = h.job("upfront", "in_progress").await;
+    let step = |who: &str, path: &str, body: Value| {
+        call(&stripe, post(format!("/v1/jobs/{id}/{path}"), who, body))
+    };
+    step(&h.tavern, "problem", json!({ "statement": "Late." })).await;
+    let (_, job) = step(
+        &h.vera,
+        "problem/propose",
+        json!({ "kind": "refund", "amount_minor": 8000, "note": "Most back" }),
+    )
+    .await;
+    let pid = job["problem"]["proposals"][0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (status, job) = step(
+        &h.tavern,
+        &format!("problem/proposals/{pid}/accept"),
+        json!({}),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK, "{job}");
+    assert_eq!(job["problem"]["status"], "resolved");
+    assert_eq!(
+        job["refunded_minor"], 0,
+        "the creative refunds it in Stripe"
+    );
+    assert_eq!(
+        count(
+            &stripe,
+            "select count(*) from payments where kind = 'refund'"
+        )
+        .await,
+        0
+    );
+    // Agreed but not yet made, it still counts against another refund.
+    step(&h.tavern, "problem", json!({ "statement": "Still late." })).await;
+    let (status, _) = step(
+        &h.tavern,
+        "problem/propose",
+        json!({ "kind": "refund", "amount_minor": 5000, "note": "More" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, _) = step(
+        &h.tavern,
+        "problem/propose",
+        json!({ "kind": "refund", "amount_minor": 4001, "note": "The rest" }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn creatives_dispute_a_review_once_until_it_changes(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, admin) = make_admin(app, "Mediator").await;
+    let id = h.job("upfront", "completed").await;
+    let review = |vote: &str, body: &str| {
+        call(
+            app,
+            req(Method::PUT, format!("/v1/jobs/{id}/review"))
+                .cookie(&h.tavern)
+                .json(json!({ "vote": vote, "body": body })),
+        )
+    };
+    let dispute = |cookie: &str, reason: &str| {
+        app.send(post(
+            format!("/v1/people/reviews/{id}/dispute"),
+            cookie,
+            json!({ "reason": reason, "statement": "It's about another job." }),
+        ))
+    };
+    let answer = |cookie: &str| {
+        call(
+            app,
+            req(Method::PUT, format!("/v1/jobs/{id}/review/dispute-answer"))
+                .cookie(cookie)
+                .json(json!({ "statement": "It's about this job." })),
+        )
+    };
+    // No review, nothing to dispute; the client's answer needs a dispute.
+    assert_eq!(
+        dispute(&h.vera, "rules").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    review("slop", "Rude and slow.").await;
+    assert_eq!(answer(&h.tavern).await.0, StatusCode::CONFLICT);
+    assert_eq!(
+        answer(&h.vera).await.0,
+        StatusCode::NOT_FOUND,
+        "the creative doesn't answer here"
+    );
+    // One of the reasons; then the client is told and can answer.
+    let res = dispute(&h.vera, "negative").await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(field(&body_json(res).await), "reason");
+    assert_eq!(
+        dispute(&h.vera, "not_about_job").await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        notices(app, h.client).await[0].starts_with("Vera Okafor disputed your review"),
+        "{:?}",
+        notices(app, h.client).await
+    );
+    assert_eq!(
+        dispute(&h.vera, "rules").await.status(),
+        StatusCode::CONFLICT,
+        "pending already"
+    );
+    let (status, job) = answer(&h.tavern).await;
+    assert_eq!(
+        (
+            status,
+            job["review"]["dispute"]["client_statement"].as_str()
+        ),
+        (StatusCode::OK, Some("It's about this job."))
+    );
+    // Decided: it can't be disputed again unless the review changes.
+    app.send(post(
+        format!("/v1/admin/review-disputes/{id}/decide"),
+        &admin,
+        json!({ "outcome": "keep", "reason": "It describes this job." }),
+    ))
+    .await;
+    assert_eq!(
+        answer(&h.tavern).await.0,
+        StatusCode::CONFLICT,
+        "nothing pending"
+    );
+    assert_eq!(
+        dispute(&h.vera, "rules").await.status(),
+        StatusCode::CONFLICT
+    );
+    review("slop", "Rude, slow, and I'll say it again.").await;
+    assert_eq!(
+        dispute(&h.vera, "rules").await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let job = h.view(&id, &h.vera).await;
+    assert_eq!(
+        (
+            job["review"]["dispute"]["status"].as_str(),
+            job["review"]["dispute"]["reason"].as_str()
+        ),
+        (Some("pending"), Some("rules"))
+    );
+    assert_eq!(job["review"]["dispute"]["client_statement"], Value::Null);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn mediators_read_the_record_only_while_a_problem_or_dispute_is_open(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, support) = staff(app, "Sam Support", "support").await;
+    let (_, reviewer) = staff(app, "Rae Reviewer", "reviewer").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let id = h.job("upfront", "completed").await;
+    let read = |cookie: &str| call_text(app, fetch(format!("/v1/admin/jobs/{id}/record"), cookie));
+    // Private until there's something to mediate.
+    assert_eq!(read(&support).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        count(
+            app,
+            "select count(*) from audit_log where action = 'job.record_read'"
+        )
+        .await,
+        0
+    );
+    h.ok(
+        &id,
+        &h.tavern,
+        "problem",
+        json!({ "statement": "Missing frames." }),
+    )
+    .await;
+    assert_eq!(read(&stranger).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(read(&h.vera).await.0, StatusCode::NOT_FOUND);
+    assert_eq!(
+        read(&reviewer).await.0,
+        StatusCode::FORBIDDEN,
+        "reviewers don't mediate"
+    );
+    let (status, _, record) = read(&support).await;
+    assert_eq!(status, StatusCode::OK);
+    assert!(record.contains("## Problem (open)"));
+    let audit: (String, Value) = sqlx::query_as(
+        "select actor, detail from audit_log where action = 'job.record_read' and subject = $1",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(audit.0.starts_with("Sam Support"));
+    assert_eq!(audit.1, json!({ "because": "problem" }));
+    // Withdrawn: private again. A pending review dispute opens it again.
+    h.ok(&id, &h.tavern, "problem/withdraw", json!({})).await;
+    assert_eq!(read(&support).await.0, StatusCode::NOT_FOUND);
+    call(
+        app,
+        req(Method::PUT, format!("/v1/jobs/{id}/review"))
+            .cookie(&h.tavern)
+            .json(json!({ "vote": "slop", "body": "Bad." })),
+    )
+    .await;
+    app.send(post(
+        format!("/v1/people/reviews/{id}/dispute"),
+        &h.vera,
+        json!({ "reason": "false_fact", "statement": "The record shows otherwise." }),
+    ))
+    .await;
+    assert_eq!(read(&support).await.0, StatusCode::OK);
+    assert_eq!(
+        count(app, "select count(*) from audit_log where action = 'job.record_read' and detail->>'because' = 'review dispute'").await,
+        1
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn mediators_suggest_and_close_problems_without_deciding_them(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, support) = staff(app, "Sam Support", "support").await;
+    let (_, reviewer) = staff(app, "Rae Reviewer", "reviewer").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let id = h.job("upfront", "in_progress").await;
+    let job = h
+        .ok(&id, &h.tavern, "problem", json!({ "statement": "Late." }))
+        .await;
+    let problem = job["problem"]["id"].as_str().unwrap().to_string();
+    let suggest = |cookie: &str, text: &str| {
+        app.send(post(
+            format!("/v1/admin/problems/{problem}/suggest"),
+            cookie,
+            json!({ "suggestion": text }),
+        ))
+    };
+    let close = |cookie: &str, note: &str| {
+        app.send(post(
+            format!("/v1/admin/problems/{problem}/close"),
+            cookie,
+            json!({ "note": note }),
+        ))
+    };
+    assert_eq!(
+        suggest(&stranger, "Refund").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        suggest(&h.tavern, "Refund").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        suggest(&reviewer, "Refund").await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        close(&reviewer, "Done").await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let res = suggest(&support, "  ").await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        suggest(&support, "Deliver by Friday, or refund $20.")
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    for (user, cookie) in [(h.client, &h.tavern), (h.creative, &h.vera)] {
+        assert!(notices(app, user).await[0].starts_with("A mediator suggested an outcome"));
+        let job = h.view(&id, cookie).await;
+        assert_eq!(
+            job["problem"]["mediator_suggestion"],
+            "Deliver by Friday, or refund $20."
+        );
+    }
+    assert_eq!(
+        h.status(&id).await,
+        "in_progress",
+        "a suggestion changes nothing"
+    );
+    assert_eq!(
+        count(
+            app,
+            "select count(*) from audit_log where action = 'problem.suggest'"
+        )
+        .await,
+        1
+    );
+    // Closing unresolved: with a note; once.
+    assert_eq!(
+        close(&support, "").await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        close(&support, "They stopped answering.").await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let job = h.view(&id, &h.tavern).await;
+    assert_eq!(
+        (
+            job["problem"]["status"].as_str(),
+            job["problem"]["closing_note"].as_str()
+        ),
+        (Some("unresolved"), Some("They stopped answering."))
+    );
+    assert_eq!(
+        close(&support, "Again").await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        suggest(&support, "Too late").await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        count(
+            app,
+            "select count(*) from audit_log where action = 'problem.close'"
+        )
+        .await,
+        1
+    );
+    assert!(notices(app, h.client).await[0].starts_with("The problem on"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn mediators_keep_note_or_remove_a_disputed_review_with_a_reason(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, support) = staff(app, "Sam Support", "support").await;
+    let (_, reviewer) = staff(app, "Rae Reviewer", "reviewer").await;
+    let id = h.job("upfront", "completed").await;
+    let review = |body: &str| {
+        call(
+            app,
+            req(Method::PUT, format!("/v1/jobs/{id}/review"))
+                .cookie(&h.tavern)
+                .json(json!({ "vote": "slop", "body": body })),
+        )
+    };
+    let dispute = || {
+        app.send(post(
+            format!("/v1/people/reviews/{id}/dispute"),
+            &h.vera,
+            json!({ "reason": "false_fact", "statement": "I delivered on time." }),
+        ))
+    };
+    let decide = |cookie: &str, body: Value| {
+        app.send(post(
+            format!("/v1/admin/review-disputes/{id}/decide"),
+            cookie,
+            body,
+        ))
+    };
+    review("Delivered late.").await;
+    assert_eq!(
+        decide(&support, json!({ "outcome": "keep", "reason": "x" }))
+            .await
+            .status(),
+        StatusCode::CONFLICT,
+        "nothing pending"
+    );
+    dispute().await;
+    assert_eq!(
+        decide(&reviewer, json!({ "outcome": "keep", "reason": "x" }))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        decide(&support, json!({ "outcome": "shrug", "reason": "x" }))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        decide(
+            &support,
+            json!({ "outcome": "note", "reason": "Partly true." })
+        )
+        .await
+        .status(),
+        StatusCode::UNPROCESSABLE_ENTITY,
+        "a note needs its text"
+    );
+    // Noted: the review stays, with the mediator's facts under it.
+    let res = decide(
+        &support,
+        json!({ "outcome": "note", "reason": "The record shows the date moved.", "note": "The due date was moved by a Change to Agreement." }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let page = call(app, req(Method::GET, "/v1/people/vera")).await.1;
+    assert_eq!(
+        (
+            page["reviews"][0]["mediator_note"].as_str(),
+            page["reviews"][0]["dispute"].as_str()
+        ),
+        (
+            Some("The due date was moved by a Change to Agreement."),
+            Some("noted")
+        )
+    );
+    assert_eq!(page["rating"]["slop"], 1);
+    assert!(notices(app, h.client).await[0].contains("decided the dispute about your review"));
+    assert_eq!(
+        decide(&support, json!({ "outcome": "keep", "reason": "x" }))
+            .await
+            .status(),
+        StatusCode::CONFLICT,
+        "decided already"
+    );
+    // Changed and disputed again: kept as it is, the note cleared.
+    review("Delivered late, twice.").await;
+    assert_eq!(dispute().await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        decide(
+            &support,
+            json!({ "outcome": "keep", "reason": "An honest opinion of this job." })
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let page = call(app, req(Method::GET, "/v1/people/vera")).await.1;
+    assert_eq!(
+        (
+            page["reviews"][0]["mediator_note"].clone(),
+            page["reviews"][0]["dispute"].as_str()
+        ),
+        (Value::Null, Some("kept"))
+    );
+    let audit: Vec<Value> = sqlx::query_scalar(
+        "select detail from audit_log where action = 'review_dispute.decide' order by id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(audit.len(), 2);
+    assert_eq!(audit[1]["outcome"], "kept");
+    assert_eq!(
+        count(app, "select count(*) from moderation_decisions").await,
+        0,
+        "only removing a review is a moderation decision"
+    );
+}
