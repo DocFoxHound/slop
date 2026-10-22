@@ -2346,17 +2346,59 @@ async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(
 
 /// Every tool the admin MCP endpoint offers (agent.rs TOOLS).
 const ADMIN_TOOLS: [&str; 54] = [
-    "slop_status", "review_guide", "review_queue", "admin_queue", "add_note", "approve_release",
-    "reject_release", "withdraw_release", "clear_scan_finding", "keep_rescanned_release",
-    "decide_change", "decide_pictures", "decide_portfolio", "list_app", "delist_app",
-    "act_on_report", "dismiss_report", "decide_appeal", "close_abuse_signal", "find_users",
-    "user_details", "moderate_user", "lift_suspension", "passkey_grace", "pending_actions",
-    "audit_log", "find_apps", "app_record", "edit_store_page", "set_app_stage", "freeze_app",
-    "unfreeze_app", "donation_pauses", "pause_donations", "lift_donation_pause",
-    "answer_donation_request", "user_profile", "edit_profile", "edit_team", "featured_apps",
-    "set_featured_apps", "store_shelves", "create_shelf", "update_shelf", "delete_shelf",
-    "order_shelves", "hide_front_shelf", "legal_documents", "publish_legal_document",
-    "withdraw_legal_document", "staff", "change_staff_role", "remove_from_staff",
+    "slop_status",
+    "review_guide",
+    "review_queue",
+    "admin_queue",
+    "add_note",
+    "approve_release",
+    "reject_release",
+    "withdraw_release",
+    "clear_scan_finding",
+    "keep_rescanned_release",
+    "decide_change",
+    "decide_pictures",
+    "decide_portfolio",
+    "list_app",
+    "delist_app",
+    "act_on_report",
+    "dismiss_report",
+    "decide_appeal",
+    "close_abuse_signal",
+    "find_users",
+    "user_details",
+    "moderate_user",
+    "lift_suspension",
+    "passkey_grace",
+    "pending_actions",
+    "audit_log",
+    "find_apps",
+    "app_record",
+    "edit_store_page",
+    "set_app_stage",
+    "freeze_app",
+    "unfreeze_app",
+    "donation_pauses",
+    "pause_donations",
+    "lift_donation_pause",
+    "answer_donation_request",
+    "user_profile",
+    "edit_profile",
+    "edit_team",
+    "featured_apps",
+    "set_featured_apps",
+    "store_shelves",
+    "create_shelf",
+    "update_shelf",
+    "delete_shelf",
+    "order_shelves",
+    "hide_front_shelf",
+    "legal_documents",
+    "publish_legal_document",
+    "withdraw_legal_document",
+    "staff",
+    "change_staff_role",
+    "remove_from_staff",
     "cancel_pending_action",
 ];
 
@@ -2376,11 +2418,19 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
                 .json(json!({ "name": "Claude", "scope": "publish" })),
         )
         .await;
-    let maker_token = format!("Bearer {}", body_json(res).await["secret"].as_str().unwrap());
+    let maker_token = format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    );
     for r in [
         req(Method::POST, "/v1/admin/mcp").json(ping.clone()),
-        req(Method::POST, "/v1/admin/mcp").cookie(&maker).json(ping.clone()),
-        with_token(req(Method::POST, "/v1/admin/mcp").json(ping.clone()), &maker_token),
+        req(Method::POST, "/v1/admin/mcp")
+            .cookie(&maker)
+            .json(ping.clone()),
+        with_token(
+            req(Method::POST, "/v1/admin/mcp").json(ping.clone()),
+            &maker_token,
+        ),
         with_token(
             req(Method::POST, "/v1/admin/mcp").json(ping.clone()),
             "Bearer slopadm_not-a-token",
@@ -2390,11 +2440,15 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
     }
     // There's no stream to open: staff get 405, everyone else still nothing.
     assert_eq!(
-        app.send(with_token(req(Method::GET, "/v1/admin/mcp"), &token)).await.status(),
+        app.send(with_token(req(Method::GET, "/v1/admin/mcp"), &token))
+            .await
+            .status(),
         StatusCode::METHOD_NOT_ALLOWED
     );
     assert_eq!(
-        app.send(req(Method::GET, "/v1/admin/mcp").cookie(&owner)).await.status(),
+        app.send(req(Method::GET, "/v1/admin/mcp").cookie(&owner))
+            .await
+            .status(),
         StatusCode::METHOD_NOT_ALLOWED
     );
     for r in [
@@ -2413,11 +2467,29 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
     .await;
     assert_eq!(init["id"], "start");
     assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
-    assert_eq!(init["result"]["capabilities"]["tools"]["listChanged"], false);
-    assert!(init["result"]["instructions"].as_str().unwrap().contains("slop_status"));
-    let pong = mcp(&app, &token, json!({ "jsonrpc": "2.0", "id": 42, "method": "ping" })).await;
+    assert_eq!(
+        init["result"]["capabilities"]["tools"]["listChanged"],
+        false
+    );
+    assert!(
+        init["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("slop_status")
+    );
+    let pong = mcp(
+        &app,
+        &token,
+        json!({ "jsonrpc": "2.0", "id": 42, "method": "ping" }),
+    )
+    .await;
     assert_eq!(pong, json!({ "jsonrpc": "2.0", "id": 42, "result": {} }));
-    let list = mcp(&app, &token, json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).await;
+    let list = mcp(
+        &app,
+        &token,
+        json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" }),
+    )
+    .await;
     let tools = list["result"]["tools"].as_array().unwrap();
     let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
     assert_eq!(names, ADMIN_TOOLS);
@@ -2433,10 +2505,22 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
         ))
         .await;
     assert_eq!(res.status(), StatusCode::ACCEPTED);
-    assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty());
+    assert!(
+        res.into_body()
+            .collect()
+            .await
+            .unwrap()
+            .to_bytes()
+            .is_empty()
+    );
 
     // Protocol errors.
-    let unknown = mcp(&app, &token, json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" })).await;
+    let unknown = mcp(
+        &app,
+        &token,
+        json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" }),
+    )
+    .await;
     assert_eq!(unknown["error"]["code"], -32601);
     assert_eq!(unknown["id"], 3);
     let no_tool = mcp(
@@ -2530,9 +2614,12 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
     app.send(req(Method::POST, format!("/v1/admin/tokens/{token_id}/revoke")).cookie(&owner))
         .await;
     assert_eq!(
-        app.send(with_token(req(Method::POST, "/v1/admin/mcp").json(ping), &token))
-            .await
-            .status(),
+        app.send(with_token(
+            req(Method::POST, "/v1/admin/mcp").json(ping),
+            &token
+        ))
+        .await
+        .status(),
         StatusCode::NOT_FOUND
     );
 }
@@ -2545,24 +2632,36 @@ async fn staff_signed_in_on_the_website_can_drive_the_admin_mcp_tools(db: PgPool
     let (maker_id, _) = app.user("Mia Maker", "US").await;
     listed_with(&app, maker_id, "arena", "released", "").await;
     let call = |cookie: &str, name: &str, args: Value| {
-        req(Method::POST, "/v1/admin/mcp").cookie(cookie).json(json!({
-            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
-            "params": { "name": name, "arguments": args }
-        }))
+        req(Method::POST, "/v1/admin/mcp")
+            .cookie(cookie)
+            .json(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": args }
+            }))
     };
     let result = |res: Response| async move {
         assert_eq!(res.status(), StatusCode::OK);
         let reply = body_json(res).await;
-        (reply["result"]["isError"] == false, reply["result"]["content"][0]["text"].clone())
+        (
+            reply["result"]["isError"] == false,
+            reply["result"]["content"][0]["text"].clone(),
+        )
     };
 
     // The session cookie is passed on: reading, and acting in the person's name.
     let (ok, text) = result(app.send(call(&owner, "slop_status", json!({}))).await).await;
-    assert!(ok && text.as_str().unwrap().contains("\"waiting\""), "{text}");
+    assert!(
+        ok && text.as_str().unwrap().contains("\"waiting\""),
+        "{text}"
+    );
     let (ok, text) = result(
         app.send(
-            call(&owner, "set_app_stage", json!({ "slug": "arena", "stage": "coming_soon" }))
-                .header("sec-fetch-site", "same-origin"),
+            call(
+                &owner,
+                "set_app_stage",
+                json!({ "slug": "arena", "stage": "coming_soon" }),
+            )
+            .header("sec-fetch-site", "same-origin"),
         )
         .await,
     )
@@ -2571,18 +2670,29 @@ async fn staff_signed_in_on_the_website_can_drive_the_admin_mcp_tools(db: PgPool
     assert!(audit_actors(&app, "app.stage").await[0].starts_with("Olive Owner ("));
     // With the person's own roles: a reviewer can't read an account.
     let (ok, _) = result(
-        app.send(call(&rex, "user_details", json!({ "id": maker_id.to_string() })))
-            .await,
+        app.send(call(
+            &rex,
+            "user_details",
+            json!({ "id": maker_id.to_string() }),
+        ))
+        .await,
     )
     .await;
     assert!(!ok);
 
     // From another site, the cookie doesn't get anywhere.
-    for (name, value) in [("sec-fetch-site", "cross-site"), ("origin", "https://evil.example")] {
+    for (name, value) in [
+        ("sec-fetch-site", "cross-site"),
+        ("origin", "https://evil.example"),
+    ] {
         let res = app
             .send(
-                call(&owner, "set_app_stage", json!({ "slug": "arena", "stage": "released" }))
-                    .header(name, value),
+                call(
+                    &owner,
+                    "set_app_stage",
+                    json!({ "slug": "arena", "stage": "released" }),
+                )
+                .header(name, value),
             )
             .await;
         assert_eq!(res.status(), StatusCode::FORBIDDEN, "{name}");
@@ -2616,4 +2726,804 @@ async fn a_long_legal_document_can_be_published_over_mcp(db: PgPool) {
     assert_eq!(res.status(), StatusCode::OK);
     let reply = body_json(res).await;
     assert_eq!(reply["result"]["isError"], false, "{reply}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Admin MCP tools
+
+/// A copy of a release, as another version in this state.
+async fn copy_release(app: &TestApp, id: &str, version: &str, status: &str) -> Uuid {
+    let new = Uuid::now_v7();
+    let mut tx = app.db.begin().await.unwrap();
+    sqlx::query("create temp table release_copy on commit drop as select * from releases where id = $1::uuid")
+        .bind(id)
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "update release_copy set id = $1, version = $2, status = '{status}', signed_manifest = null"
+    )))
+    .bind(new)
+    .bind(version)
+    .execute(&mut *tx)
+    .await
+    .unwrap();
+    sqlx::query("insert into releases select * from release_copy")
+        .execute(&mut *tx)
+        .await
+        .unwrap();
+    tx.commit().await.unwrap();
+    new
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_review_releases_changes_pictures_and_portfolios_through_mcp_tools(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let read = admin_token(&app, &owner, "read").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let w = seed_waiting(&app).await;
+    let maker: Uuid = sqlx::query_scalar("select maker_id from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let release_status = |id: String| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("select status::text from releases where id = $1::uuid")
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Looking: the status, the guide, the feed (all, or one kind), the admin queue.
+    let status = tool_ok(&app, &read, "slop_status", json!({})).await;
+    assert_eq!(status["waiting"]["releases_to_review"], 1);
+    let (ok, guide) = tool(&app, &read, "review_guide", json!({})).await;
+    assert!(ok && guide.contains("http://localhost:8080") && !guide.contains("{origin}"));
+    let all = tool_ok(&app, &read, "review_queue", json!({})).await;
+    assert_eq!(all["items"].as_array().unwrap().len(), 9);
+    assert_eq!(all["can_decide"], false);
+    let changes = tool_ok(&app, &read, "review_queue", json!({ "kind": "change" })).await;
+    let items = changes["items"].as_array().unwrap();
+    assert_eq!(items.len(), 3);
+    assert!(items.iter().all(|i| i["kind"] == "change"));
+    sqlx::query(
+        "insert into abuse_signals (id, kind, key, subject_kind, subject_id, subject_label, detail)
+         values ($1, 'vote_burst', 'vote_burst:game', 'app', $2, 'game', '{}')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(app_id(&app, "game").await)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let queue = tool_ok(&app, &read, "admin_queue", json!({})).await;
+    assert!(queue["rules"].as_array().unwrap().len() > 3);
+    assert_eq!(queue["abuse"][0]["kind"], "vote_burst");
+    assert_eq!(queue["releases"][0]["id"], w.release.as_str());
+
+    // Notes: kind and id go in the path, the rest in the body.
+    let note = tool_ok(
+        &app,
+        &read,
+        "add_note",
+        json!({ "kind": "media", "id": w.media.to_string(), "verdict": "pass", "note": "Pictures match the game." }),
+    )
+    .await;
+    assert_eq!(note["verdict"], "pass");
+    let subject: Uuid = sqlx::query_scalar("select subject_id from review_notes")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(subject, w.media);
+    let text = tool_refused(
+        &app,
+        &read,
+        "add_note",
+        json!({ "kind": "media", "id": w.media.to_string(), "verdict": "great", "note": "x" }),
+    )
+    .await;
+    assert!(text.contains("\"field\":\"verdict\""), "{text}");
+    assert_eq!(
+        tool_refused(
+            &app,
+            &read,
+            "add_note",
+            json!({ "kind": "media", "id": w.media.to_string() })
+        )
+        .await,
+        "missing argument: note"
+    );
+
+    // Listing needs an approved release first; a read token can't decide anything.
+    let text = tool_refused(&app, &review, "list_app", json!({ "slug": "game" })).await;
+    assert!(text.contains("approve a release"), "{text}");
+    assert!(
+        tool_refused(&app, &read, "list_app", json!({ "slug": "soon" }))
+            .await
+            .contains("forbidden")
+    );
+
+    // A scan finding cleared as a false positive, before approval.
+    let clear = |platform: &str, reason: &str| json!({ "id": w.release.clone(), "platform": platform, "reason": reason });
+    let why = "The packer is UPX; the same binary is clean on VirusTotal.";
+    assert!(
+        tool_refused(&app, &read, "clear_scan_finding", clear("windows", why))
+            .await
+            .contains("forbidden")
+    );
+    tool_refused(
+        &app,
+        &review,
+        "clear_scan_finding",
+        clear("windows", "fine"),
+    )
+    .await;
+    let text = tool_refused(&app, &review, "clear_scan_finding", clear("macos", why)).await;
+    assert!(text.contains("no such file"), "{text}");
+    assert_eq!(
+        tool_ok(&app, &review, "clear_scan_finding", clear("windows", why)).await,
+        Value::Null
+    );
+    let cleared: Option<String> =
+        sqlx::query_scalar("select cleared_by from release_files where release_id = $1::uuid")
+            .bind(&w.release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(cleared.unwrap().starts_with("AI reviewer \"Agent review\""));
+    assert_eq!(audit_actors(&app, "release.clear_scan").await.len(), 1);
+
+    // Rejecting a release: it needs a reason, the maker is told, and it happens once.
+    let other = copy_release(&app, &w.release, "1.0.1", "awaiting_review")
+        .await
+        .to_string();
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "reject_release",
+            json!({ "id": other, "reason": "Crashes." })
+        )
+        .await
+        .contains("forbidden")
+    );
+    assert_eq!(
+        tool_refused(&app, &review, "reject_release", json!({ "id": other })).await,
+        "missing argument: reason"
+    );
+    tool_refused(
+        &app,
+        &review,
+        "reject_release",
+        json!({ "id": other, "reason": "  " }),
+    )
+    .await;
+    let (ok, text) = tool(
+        &app,
+        &review,
+        "reject_release",
+        json!({ "id": other, "reason": "It crashes on start: the exec path is wrong." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    assert_eq!(text, "Done (HTTP 204).");
+    assert_eq!(release_status(other.clone()).await, "rejected");
+    let told: Vec<String> = sqlx::query_scalar("select body from notifications where user_id = $1")
+        .bind(maker)
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert!(
+        told.iter().any(|b| b.contains("the exec path is wrong")),
+        "{told:?}"
+    );
+    let text = tool_refused(
+        &app,
+        &review,
+        "reject_release",
+        json!({ "id": other, "reason": "Again." }),
+    )
+    .await;
+    assert!(text.contains("conflict"), "{text}");
+
+    // Approving: a read token can't; a review token approves and signs, once.
+    assert!(
+        tool_refused(&app, &read, "approve_release", json!({ "id": w.release }))
+            .await
+            .contains("forbidden")
+    );
+    assert_eq!(release_status(w.release.clone()).await, "awaiting_review");
+    let (ok, text) = tool(&app, &review, "approve_release", json!({ "id": w.release })).await;
+    assert!(ok, "{text}");
+    assert_eq!(release_status(w.release.clone()).await, "approved");
+    let signed: bool =
+        sqlx::query_scalar("select signed_manifest is not null from releases where id = $1::uuid")
+            .bind(&w.release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(signed);
+    assert!(
+        audit_actors(&app, "release.approve").await[0].starts_with("AI reviewer \"Agent review\"")
+    );
+    let text = tool_refused(&app, &review, "approve_release", json!({ "id": w.release })).await;
+    assert!(text.contains("conflict"), "{text}");
+    assert_eq!(
+        tool_ok(&app, &review, "list_app", json!({ "slug": "game" })).await,
+        Value::Null
+    );
+    let listed: String = sqlx::query_scalar("select status::text from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(listed, "listed");
+
+    // A re-scan flags the live release; it's kept as a false positive.
+    sqlx::query("update release_files set rescan_flagged_at = now() where release_id = $1::uuid")
+        .bind(&w.release)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let keep =
+        |reason: &str| json!({ "id": w.release.clone(), "platform": "windows", "reason": reason });
+    assert!(
+        tool_refused(&app, &read, "keep_rescanned_release", keep(why))
+            .await
+            .contains("forbidden")
+    );
+    let text = tool_refused(&app, &review, "keep_rescanned_release", keep("short")).await;
+    assert!(text.contains("\"field\":\"reason\""), "{text}");
+    tool_ok(&app, &review, "keep_rescanned_release", keep(why)).await;
+    let (flagged, kept): (Option<OffsetDateTime>, Option<String>) = sqlx::query_as(
+        "select rescan_flagged_at, rescan_cleared_reason from release_files where release_id = $1::uuid",
+    )
+    .bind(&w.release)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(flagged.is_none());
+    assert_eq!(kept.as_deref(), Some(why));
+    assert!(audit_actors(&app, "release.rescan_cleared").await[0].contains("Agent review"));
+    tool_refused(&app, &review, "keep_rescanned_release", keep(why)).await;
+
+    // Changes: turned down with a reason, or approved.
+    let change_status = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (String, Option<String>)>(
+                "select status, status_reason from app_changes where id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    let repo = w.repo_change.to_string();
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "decide_change",
+            json!({ "id": repo, "decision": "reject", "reason": "No." })
+        )
+        .await
+        .contains("forbidden")
+    );
+    tool_refused(
+        &app,
+        &review,
+        "decide_change",
+        json!({ "id": repo, "decision": "reject" }),
+    )
+    .await;
+    tool_ok(
+        &app,
+        &review,
+        "decide_change",
+        json!({ "id": repo, "decision": "reject", "reason": "That repository isn't yours." }),
+    )
+    .await;
+    assert_eq!(
+        change_status(w.repo_change).await,
+        (
+            "rejected".into(),
+            Some("That repository isn't yours.".into())
+        )
+    );
+    tool_ok(
+        &app,
+        &review,
+        "decide_change",
+        json!({ "id": w.follow_change.to_string(), "decision": "approve" }),
+    )
+    .await;
+    assert_eq!(change_status(w.follow_change).await.0, "approved");
+
+    // Pictures: approved, or turned down with a reason.
+    let media = w.media.to_string();
+    tool_refused(
+        &app,
+        &review,
+        "decide_pictures",
+        json!({ "id": media, "decision": "reject" }),
+    )
+    .await;
+    tool_ok(
+        &app,
+        &review,
+        "decide_pictures",
+        json!({ "id": media, "decision": "approve" }),
+    )
+    .await;
+    let shown: Option<Uuid> =
+        sqlx::query_scalar("select media_set_id from apps where slug = 'pictured'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(shown, Some(w.media));
+    let second = Uuid::now_v7();
+    sqlx::query(
+        "insert into media_sets (id, app_id, commit_sha, fingerprint, source) values ($1, $2, $3, 'fp2', 'maker')",
+    )
+    .bind(second)
+    .bind(app_id(&app, "pictured").await)
+    .bind("f".repeat(40))
+    .execute(&app.db)
+    .await
+    .unwrap();
+    tool_ok(
+        &app,
+        &review,
+        "decide_pictures",
+        json!({ "id": second.to_string(), "decision": "reject", "reason": "The thumbnail is another game's." }),
+    )
+    .await;
+    let (status, reason): (String, Option<String>) =
+        sqlx::query_as("select status, status_reason from media_sets where id = $1")
+            .bind(second)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), reason.as_deref()),
+        ("rejected", Some("The thumbnail is another game's."))
+    );
+
+    // A portfolio: not with a read token; turning it down needs a reason.
+    let portfolio = w.portfolio.to_string();
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "decide_portfolio",
+            json!({ "id": portfolio, "decision": "approve" })
+        )
+        .await
+        .contains("forbidden")
+    );
+    tool_refused(
+        &app,
+        &review,
+        "decide_portfolio",
+        json!({ "id": portfolio, "decision": "reject" }),
+    )
+    .await;
+    tool_ok(
+        &app,
+        &review,
+        "decide_portfolio",
+        json!({ "id": portfolio, "decision": "reject", "reason": "These works are someone else's." }),
+    )
+    .await;
+    let status: String = sqlx::query_scalar("select status from portfolio_sets where id = $1")
+        .bind(w.portfolio)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "rejected");
+
+    // Stages: only the three there are, and not with a read token.
+    let text = tool_refused(
+        &app,
+        &review,
+        "set_app_stage",
+        json!({ "slug": "other", "stage": "gold" }),
+    )
+    .await;
+    assert!(!text.is_empty());
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "set_app_stage",
+            json!({ "slug": "other", "stage": "coming_soon" })
+        )
+        .await
+        .contains("forbidden")
+    );
+    tool_ok(
+        &app,
+        &review,
+        "set_app_stage",
+        json!({ "slug": "other", "stage": "coming_soon" }),
+    )
+    .await;
+    let stage: String = sqlx::query_scalar("select stage::text from apps where slug = 'other'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(stage, "coming_soon");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_moderate_reports_appeals_and_accounts_through_mcp_tools(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (olive, owner) = make_admin(&app, "Olive Owner").await;
+    let read = admin_token(&app, &owner, "read").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let moderate = admin_token(&app, &owner, "moderate").await;
+    let (mia, mia_cookie) = app.user("Mia Maker", "US").await;
+    listed_with(&app, mia, "miner", "released", "").await;
+    listed_with(&app, mia, "decoy", "released", "").await;
+    let (rita, rita_cookie) = app.user("Rita Reporter", "US").await;
+    let (_, otto) = app.user("Otto Other", "US").await;
+    let (troll, troll_cookie) = app.user("Troll Account", "US").await;
+
+    // Finding and reading accounts.
+    tool_refused(&app, &read, "find_users", json!({ "q": "" })).await;
+    let found = tool_ok(&app, &read, "find_users", json!({ "q": "troll" })).await;
+    assert_eq!(found[0]["id"], troll.to_string());
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "user_details",
+            json!({ "id": troll.to_string() })
+        )
+        .await
+        .contains("forbidden")
+    );
+    let text = tool_refused(
+        &app,
+        &review,
+        "user_details",
+        json!({ "id": Uuid::now_v7().to_string() }),
+    )
+    .await;
+    assert!(text.contains("not_found"), "{text}");
+    let details = tool_ok(
+        &app,
+        &review,
+        "user_details",
+        json!({ "id": mia.to_string() }),
+    )
+    .await;
+    assert_eq!(details["apps"].as_array().unwrap().len(), 2);
+
+    // Warning without a report; bad rules, empty facts and your own account are refused.
+    let warn = |who: Uuid, rule: &str, facts: &str| json!({ "id": who.to_string(), "action": "warn", "rule": rule, "facts": facts });
+    let text = tool_refused(
+        &app,
+        &review,
+        "moderate_user",
+        warn(troll, "rudeness", "Insults."),
+    )
+    .await;
+    assert!(text.contains("\"field\":\"rule\""), "{text}");
+    let text = tool_refused(
+        &app,
+        &review,
+        "moderate_user",
+        warn(troll, "harassment", " "),
+    )
+    .await;
+    assert!(text.contains("\"field\":\"facts\""), "{text}");
+    let text = tool_refused(
+        &app,
+        &review,
+        "moderate_user",
+        warn(olive, "harassment", "Me."),
+    )
+    .await;
+    assert!(text.contains("own account"), "{text}");
+    let warned = tool_ok(
+        &app,
+        &review,
+        "moderate_user",
+        warn(troll, "harassment", "Insults in reviews."),
+    )
+    .await;
+    let decision = warned["decision"].as_str().unwrap().to_string();
+
+    // Lifting a suspension that isn't there, or without enough reason, or with a review token.
+    let lift = |reason: &str| json!({ "id": troll.to_string(), "reason": reason });
+    assert!(
+        tool_refused(&app, &review, "lift_suspension", lift("They apologised."))
+            .await
+            .contains("forbidden")
+    );
+    assert!(
+        tool_refused(&app, &moderate, "lift_suspension", lift("They apologised."))
+            .await
+            .contains("isn't suspended")
+    );
+    assert!(
+        tool_refused(&app, &moderate, "lift_suspension", lift("Sorry"))
+            .await
+            .contains("\"field\":\"reason\"")
+    );
+
+    // Passkey grace: a moderate token, not a review one.
+    let grace =
+        json!({ "id": mia.to_string(), "reason": "Video call; matched her GitHub account." });
+    assert!(
+        tool_refused(&app, &review, "passkey_grace", grace.clone())
+            .await
+            .contains("forbidden")
+    );
+    let given = tool_ok(&app, &moderate, "passkey_grace", grace).await;
+    assert!(given["until"].is_string());
+
+    // Appeals: kept, or reversed; the boolean goes through as one.
+    let appeal = |cookie: &str, id: &str| {
+        req(Method::POST, format!("/v1/me/decisions/{id}/appeal"))
+            .cookie(cookie)
+            .json(json!({ "appeal": "That wasn't me." }))
+    };
+    assert_eq!(
+        app.send(appeal(&troll_cookie, &decision)).await.status(),
+        StatusCode::OK
+    );
+    let keep = json!({ "id": decision, "reverse": false, "reason": "The messages are from your account." });
+    assert!(
+        tool_refused(&app, &read, "decide_appeal", keep.clone())
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &review, "decide_appeal", keep.clone()).await;
+    let (status, reversed): (String, Option<OffsetDateTime>) = sqlx::query_as(
+        "select appeal_status, reversed_at from moderation_decisions where id = $1::uuid",
+    )
+    .bind(&decision)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((status.as_str(), reversed), ("upheld", None));
+    assert!(
+        tool_refused(&app, &review, "decide_appeal", keep)
+            .await
+            .contains("isn't pending")
+    );
+
+    // Reports: acting needs the outcome; suspending needs a moderate token; the reporter hears.
+    let first = report(&app, &rita_cookie, "miner", "malware")
+        .await
+        .to_string();
+    let act = |action: &str| {
+        json!({ "id": first, "action": action, "rule": "malware",
+                "facts": "Version 1.2 starts a crypto miner.", "outcome": "We took it out of the store.",
+                "external_reference": "NCA-2026-77" })
+    };
+    assert!(
+        tool_refused(&app, &read, "act_on_report", act("delist_app"))
+            .await
+            .contains("forbidden")
+    );
+    let mut no_outcome = act("delist_app");
+    no_outcome.as_object_mut().unwrap().remove("outcome");
+    assert_eq!(
+        tool_refused(&app, &review, "act_on_report", no_outcome).await,
+        "missing argument: outcome"
+    );
+    assert!(
+        tool_refused(&app, &review, "act_on_report", act("suspend_account"))
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &review, "act_on_report", act("delist_app")).await;
+    let (status, outcome, external): (String, String, Option<String>) = sqlx::query_as(
+        "select status, outcome, external_reference from reports where id = $1::uuid",
+    )
+    .bind(&first)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (status.as_str(), outcome.as_str(), external.as_deref()),
+        (
+            "actioned",
+            "We took it out of the store.",
+            Some("NCA-2026-77")
+        )
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/reports").cookie(&rita_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(mine[0]["outcome"], "We took it out of the store.");
+    let delisted: String = sqlx::query_scalar("select status::text from apps where slug = 'miner'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(delisted, "delisted");
+    // A report about a person, acted on with a suspension by a moderate token.
+    let about_troll = report(&app, &otto, "decoy", "scam").await.to_string();
+    tool_ok(
+        &app,
+        &moderate,
+        "act_on_report",
+        json!({ "id": about_troll, "action": "suspend_account", "rule": "scam",
+                "facts": "The app takes payments and never delivers.", "outcome": "We suspended the account." }),
+    )
+    .await;
+    assert!(is_suspended(&app, mia).await);
+
+    // Dismissing: not with a read token; the reporter is told; only once.
+    listed_with(&app, troll, "harmless", "released", "").await;
+    let third = report(&app, &rita_cookie, "harmless", "broken")
+        .await
+        .to_string();
+    let dismiss = json!({ "id": third, "outcome": "It works for us: try reinstalling." });
+    assert!(
+        tool_refused(&app, &read, "dismiss_report", dismiss.clone())
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &review, "dismiss_report", dismiss.clone()).await;
+    let status: String = sqlx::query_scalar("select status from reports where id = $1::uuid")
+        .bind(&third)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "dismissed");
+    let told = notice_titles(&app, rita).await;
+    assert!(told.len() >= 2, "{told:?}");
+    assert!(
+        tool_refused(&app, &review, "dismiss_report", dismiss)
+            .await
+            .contains("isn't open")
+    );
+
+    // The maker appeals the delisting, and it's reversed.
+    let delist_decision: String = sqlx::query_scalar(
+        "select id::text from moderation_decisions where action = 'delist_app' and user_id = $1",
+    )
+    .bind(mia)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    // (Suspended people can still appeal.)
+    assert_eq!(
+        app.send(appeal(&mia_cookie, &delist_decision))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    tool_ok(
+        &app,
+        &review,
+        "decide_appeal",
+        json!({ "id": delist_decision, "reverse": true, "reason": "It was a worker thread, not a miner." }),
+    )
+    .await;
+    let relisted: String = sqlx::query_scalar("select status::text from apps where slug = 'miner'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(relisted, "listed");
+
+    // An abuse signal closed as acted on, with the note kept.
+    let signal = Uuid::now_v7();
+    sqlx::query(
+        "insert into abuse_signals (id, kind, key, subject_kind, subject_id, subject_label, detail)
+         values ($1, 'vote_burst', 'vote_burst:decoy', 'app', $2, 'decoy', '{}')",
+    )
+    .bind(signal)
+    .bind(app_id(&app, "decoy").await)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "close_abuse_signal",
+            json!({ "id": signal.to_string(), "note": "x" })
+        )
+        .await
+        .contains("forbidden")
+    );
+    tool_ok(
+        &app,
+        &review,
+        "close_abuse_signal",
+        json!({ "id": signal.to_string(), "note": "Votes from one address range; removed them.", "acted": true }),
+    )
+    .await;
+    let (status, note, by): (String, String, String) =
+        sqlx::query_as("select status, decision_note, decided_by from abuse_signals where id = $1")
+            .bind(signal)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), note.as_str()),
+        ("actioned", "Votes from one address range; removed them.")
+    );
+    assert!(by.contains("Agent review"));
+
+    // Taking an app out of the store directly: a moderate token, a real rule; the maker hears why.
+    let delist = |rule: &str| json!({ "slug": "harmless", "rule": rule, "reason": "Impersonates another studio." });
+    assert!(
+        tool_refused(&app, &review, "delist_app", delist("misleading"))
+            .await
+            .contains("forbidden")
+    );
+    assert!(
+        tool_refused(&app, &moderate, "delist_app", delist("bad_vibes"))
+            .await
+            .contains("\"field\":\"rule\"")
+    );
+    tool_ok(&app, &moderate, "delist_app", delist("misleading")).await;
+    let reasons: Vec<String> = sqlx::query_scalar(
+        "select facts from moderation_decisions where user_id = $1 and action = 'delist_app'",
+    )
+    .bind(troll)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(reasons, ["Impersonates another studio."]);
+    assert!(
+        notice_titles(&app, troll)
+            .await
+            .contains(&"Taken out of the store: App: harmless".to_string())
+    );
+    let text = tool_refused(&app, &moderate, "delist_app", delist("misleading")).await;
+    assert!(text.contains("isn't in the store"), "{text}");
+
+    // The audit log, searched and paged; the sensitive actions, all done (one approval here).
+    let log = tool_ok(&app, &read, "audit_log", json!({ "q": "moderation." })).await;
+    let entries = log.as_array().unwrap();
+    assert!(entries.len() >= 4);
+    assert!(
+        entries
+            .iter()
+            .all(|e| e["action"].as_str().unwrap().contains("moderation.")
+                || e["actor"].as_str().unwrap().contains("moderation.")
+                || e["subject"].as_str().unwrap().contains("moderation."))
+    );
+    let newest = entries[0]["id"].as_i64().unwrap();
+    let older = tool_ok(
+        &app,
+        &read,
+        "audit_log",
+        json!({ "q": "moderation.", "before": newest }),
+    )
+    .await;
+    assert_eq!(older.as_array().unwrap().len(), entries.len() - 1);
+    assert!(
+        older
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|e| e["id"].as_i64().unwrap() < newest)
+    );
+    let waiting = tool_ok(&app, &read, "pending_actions", json!({})).await;
+    assert_eq!(waiting["actions"], json!([]));
+    let history = tool_ok(&app, &read, "pending_actions", json!({ "status": "all" })).await;
+    let kinds: Vec<&str> = history["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["kind"].as_str().unwrap())
+        .collect();
+    assert!(
+        kinds.contains(&"app.delist") && kinds.contains(&"account.passkey_grace"),
+        "{kinds:?}"
+    );
 }
