@@ -6012,3 +6012,735 @@ async fn the_ops_page_shows_the_newest_fifty_unresolved_alerts(db: PgPool) {
     assert_eq!(keys[0], "k4", "resolved ones are gone; newest first");
     assert_eq!(keys[49], "k53");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Rate limits: per client address, and per account
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn writes_are_limited_per_client_address(db: PgPool) {
+    let app = test_app(db).await;
+    let write = |ip: Option<&str>| {
+        let mut r = req(Method::POST, "/v1/reports").json(json!({}));
+        if let Some(ip) = ip {
+            r = r.header("x-test-client-ip", ip.to_string());
+        }
+        r
+    };
+    // Sixty writes a minute; the sixty-first waits.
+    for _ in 0..60 {
+        let res = app.send(write(Some("10.0.0.1"))).await;
+        assert_ne!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+    let res = app.send(write(Some("10.0.0.1"))).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    let wait: u64 = res.headers()["retry-after"]
+        .to_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    assert!((1..=2).contains(&wait), "{wait}");
+    assert_eq!(body_json(res).await["error"]["code"], "rate_limited");
+    // Reads are a separate allowance; another client has its own.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/legal").header("x-test-client-ip", "10.0.0.1"))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_ne!(
+        app.send(write(Some("10.0.0.2"))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // Behind a load balancer the client is the last address in the list.
+    assert_eq!(
+        app.send(write(Some("192.0.2.9, 10.0.0.1"))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_ne!(
+        app.send(write(Some("10.0.0.1, 192.0.2.9"))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    // GitHub's webhooks and the health check are never limited.
+    for _ in 0..70 {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/github/webhook")
+                    .header("x-test-client-ip", "10.0.0.1")
+                    .json(json!({})),
+            )
+            .await;
+        assert_ne!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    }
+    let res = app
+        .send(req(Method::GET, "/healthz").header("x-test-client-ip", "10.0.0.1"))
+        .await;
+    assert_ne!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn clients_the_server_cannot_tell_apart_share_one_allowance(db: PgPool) {
+    let app = test_app(db).await;
+    let write = |ip: Option<&str>| {
+        let mut r = req(Method::POST, "/v1/reports").json(json!({}));
+        if let Some(ip) = ip {
+            r = r.header("x-test-client-ip", ip.to_string());
+        }
+        r
+    };
+    for i in 0..60 {
+        let ip = if i % 2 == 0 {
+            Some("not an address")
+        } else {
+            None
+        };
+        assert_ne!(
+            app.send(write(ip)).await.status(),
+            StatusCode::TOO_MANY_REQUESTS
+        );
+    }
+    for ip in [Some("garbage"), Some(""), None] {
+        assert_eq!(
+            app.send(write(ip)).await.status(),
+            StatusCode::TOO_MANY_REQUESTS,
+            "{ip:?}"
+        );
+    }
+    assert_ne!(
+        app.send(write(Some("10.0.0.3"))).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn every_account_action_has_its_own_allowance(db: PgPool) {
+    use slop_api::limits::{AccountLimiter, Action};
+    let _ = db;
+    let limiter = AccountLimiter::default();
+    let user = Uuid::now_v7();
+    let t0 = std::time::Instant::now();
+    let hour = std::time::Duration::from_secs(3600);
+    let day = std::time::Duration::from_secs(86_400);
+    let minute = std::time::Duration::from_secs(60);
+    for (action, n, per, name) in [
+        (Action::Vote, 60, hour, "votes"),
+        (Action::Review, 10, hour, "reviews"),
+        (Action::Report, 10, hour, "reports"),
+        (Action::ChatMessage, 60, minute, "chat messages"),
+        (Action::FriendRequest, 40, day, "friend requests"),
+        (Action::Donation, 10, hour, "donations"),
+        (Action::Share, 60, hour, "shares"),
+        (Action::Interest, 120, hour, "Interested marks"),
+        (Action::TeamInvite, 50, day, "team invitations"),
+        (Action::NewApp, 10, day, "new apps"),
+        (Action::Release, 30, hour, "releases"),
+        (Action::Hire, 20, day, "hiring requests"),
+        (Action::JobMessage, 60, minute, "job messages"),
+        (Action::Offer, 5, day, "offers to other makers"),
+        (Action::Lookup, 30, hour, "repository lookups"),
+    ] {
+        assert_eq!(action.limit(), (n, per), "{name}");
+        assert_eq!(action.name(), name);
+        for _ in 0..n {
+            assert!(limiter.take(user, action, t0).is_ok(), "{name}");
+        }
+        let wait = limiter.take(user, action, t0).unwrap_err();
+        // One comes back after per / n.
+        let one = per.as_secs_f64() / f64::from(n);
+        assert_eq!(wait.as_secs(), one.ceil().max(1.0) as u64, "{name}");
+        assert!(
+            limiter
+                .take(
+                    user,
+                    action,
+                    t0 + std::time::Duration::from_secs_f64(one + 0.01)
+                )
+                .is_ok(),
+            "{name} refills"
+        );
+    }
+    // Fifteen kinds of refusal, each counted towards the abuse checks' signal.
+    assert_eq!(limiter.frequent(15), vec![(user, 15)]);
+    assert!(limiter.frequent(16).is_empty());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn players_vote_at_most_sixty_times_an_hour(db: PgPool) {
+    let app = test_app_with(db, |c| c.rate_limits.write_per_minute = 10_000).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (_, player) = app.user("Pat Player", "US").await;
+    listed_with(&app, maker, "castle", "released", "").await;
+    app.send(req(Method::POST, "/v1/apps/castle/launch?platform=windows").cookie(&player))
+        .await;
+    let vote = |v: &str| {
+        req(Method::POST, "/v1/apps/castle/vote")
+            .cookie(&player)
+            .json(json!({ "vote": v }))
+    };
+    for i in 0..60 {
+        let res = app
+            .send(vote(if i % 2 == 0 { "slop" } else { "not_slop" }))
+            .await;
+        assert_eq!(res.status(), StatusCode::OK, "{i}");
+    }
+    let res = app.send(vote("slop")).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("votes")
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The hourly cleanup
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn cleanup_ends_expired_sign_in_flows_tokens_and_idle_desktops(db: PgPool) {
+    let app = test_app(db).await;
+    let (user, _) = app.user("Pat Player", "US").await;
+    for (hash, expires) in [(vec![1u8], "-1 minute"), (vec![2u8], "10 minutes")] {
+        sqlx::query(
+            "insert into pending_signups (token_hash, provider, provider_subject, suggested_name, return_to, expires_at)
+             values ($1, 'github', $2, 'Pat', '/', now() + $3::interval)",
+        )
+        .bind(&hash)
+        .bind(format!("{}", hash[0]))
+        .bind(expires)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into desktop_auth_requests (id, code_challenge, redirect_port, state, device_name, expires_at)
+             values ($1, 'c', 49152, 's', 'Laptop', now() + $2::interval)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(expires)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into webauthn_challenges (id, kind, user_id, state, expires_at)
+             values ($1, 'register', $2, '{}', now() + $3::interval)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(user)
+        .bind(expires)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // Desktop sessions: one in use, one idle past its 30 days and the week kept after.
+    let desktop = |last_seen: &str| {
+        let db = app.db.clone();
+        let last_seen = last_seen.to_string();
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(
+                "insert into sessions (id, user_id, kind, expires_at, last_seen_at)
+                 values ($1, $2, 'desktop', now() + interval '1 year', now() - $3::interval)",
+            )
+            .bind(id)
+            .bind(user)
+            .bind(last_seen)
+            .execute(&db)
+            .await
+            .unwrap();
+            id
+        }
+    };
+    let in_use = desktop("20 days").await;
+    let idle = desktop("38 days").await;
+    for (hash, expires) in [(vec![3u8], "-1 minute"), (vec![4u8], "10 minutes")] {
+        sqlx::query("insert into access_tokens (token_hash, session_id, expires_at) values ($1, $2, now() + $3::interval)")
+            .bind(&hash)
+            .bind(in_use)
+            .bind(expires)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        sqlx::query("insert into refresh_tokens (token_hash, session_id, expires_at) values ($1, $2, now() + $3::interval)")
+            .bind(&hash)
+            .bind(in_use)
+            .bind(expires)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+
+    let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(
+        deleted,
+        slop_api::cleanup::Deleted {
+            oauth_flows: 0,
+            pending_signups: 1,
+            desktop_requests: 1,
+            access_tokens: 1,
+            refresh_tokens: 1,
+            sessions: 1,
+        }
+    );
+    let left: Vec<Uuid> = sqlx::query_scalar("select id from sessions where kind = 'desktop'")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(left, [in_use]);
+    let _ = idle;
+    let (signups, requests, challenges, access, refresh): (i64, i64, i64, i64, i64) = sqlx::query_as(
+        "select (select count(*) from pending_signups), (select count(*) from desktop_auth_requests),
+                (select count(*) from webauthn_challenges), (select count(*) from access_tokens),
+                (select count(*) from refresh_tokens)",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (signups, requests, challenges, access, refresh),
+        (1, 1, 1, 1, 1)
+    );
+    assert_eq!(
+        slop_api::cleanup::run_once(&app.db).await.unwrap(),
+        slop_api::cleanup::Deleted::default()
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn cleanup_forgets_old_notifications_emails_and_chat_deliveries(db: PgPool) {
+    let app = test_app(db).await;
+    let (user, _) = app.user("Pat Player", "US").await;
+    // Notifications: read ones after 180 days, any after a year.
+    for (title, created, read) in [
+        ("read long ago", "200 days", Some("181 days")),
+        ("read lately", "200 days", Some("170 days")),
+        ("never read, a year", "366 days", None),
+        ("never read", "300 days", None),
+    ] {
+        sqlx::query(
+            "insert into notifications (id, user_id, category, title, link, created_at, read_at)
+             values ($1, $2, 'moderation', $3, '/', now() - $4::interval, now() - $5::interval)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(user)
+        .bind(title)
+        .bind(created)
+        .bind(read)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // Emails: 30 days after they went (or failed for good).
+    for (to, sent, failed) in [
+        ("sent-old@example.com", Some("31 days"), None),
+        ("sent-new@example.com", Some("29 days"), None),
+        ("failed-old@example.com", None, Some("31 days")),
+        ("waiting@example.com", None, None),
+    ] {
+        sqlx::query(
+            "insert into email_outbox (id, to_address, subject, body, created_at, sent_at, failed_at)
+             values ($1, $2, 's', 'b', now() - interval '40 days', now() - $3::interval, now() - $4::interval)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(to)
+        .bind(sent)
+        .bind(failed)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    slop_api::notify::cleanup(&app.db).await.unwrap();
+    let mut titles = notice_titles(&app, user).await;
+    titles.sort();
+    assert_eq!(titles, ["never read", "read lately"]);
+    let mut kept: Vec<String> = sqlx::query_scalar("select to_address from email_outbox")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    kept.sort();
+    assert_eq!(kept, ["sent-new@example.com", "waiting@example.com"]);
+
+    // Chat: encrypted deliveries after 30 days, key packages of revoked devices, and devices
+    // nobody approved within a day.
+    let device = |status: &str, created: &str, key: u8| {
+        let db = app.db.clone();
+        let (status, created) = (status.to_string(), created.to_string());
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(
+                "insert into chat_devices (id, user_id, name, signature_key, status, created_at)
+                 values ($1, $2, 'Phone', $3, $4, now() - $5::interval)",
+            )
+            .bind(id)
+            .bind(user)
+            .bind(vec![key; 32])
+            .bind(status)
+            .bind(created)
+            .execute(&db)
+            .await
+            .unwrap();
+            sqlx::query(
+                "insert into chat_key_packages (id, device_id, key_package) values ($1, $2, '\\x01')",
+            )
+            .bind(Uuid::now_v7())
+            .bind(id)
+            .execute(&db)
+            .await
+            .unwrap();
+            id
+        }
+    };
+    let active = device("active", "60 days", 1).await;
+    let revoked = device("revoked", "60 days", 2).await;
+    let waiting = device("pending", "2 days", 3).await;
+    let fresh = device("pending", "1 hour", 4).await;
+    let conversation = Uuid::now_v7();
+    sqlx::query("insert into chat_conversations (id, kind, created_by) values ($1, 'group', $2)")
+        .bind(conversation)
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for age in ["31 days", "29 days"] {
+        sqlx::query(
+            "insert into chat_messages (conversation_id, sender_user_id, kind, epoch, body, created_at)
+             values ($1, $2, 'application', 0, '\\x01', now() - $3::interval)",
+        )
+        .bind(conversation)
+        .bind(user)
+        .bind(age)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into chat_welcomes (id, device_id, conversation_id, welcome, after_seq, created_at)
+             values ($1, $2, $3, '\\x01', 0, now() - $4::interval)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(active)
+        .bind(conversation)
+        .bind(age)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into chat_attachments (id, conversation_id, uploader_id, size_bytes, body, created_at)
+             values ($1, $2, $3, 1, '\\x01', now() - $4::interval)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(conversation)
+        .bind(user)
+        .bind(age)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    assert_eq!(slop_api::chat::cleanup(&app.db).await.unwrap(), 4);
+    let counts: (i64, i64, i64, i64) = sqlx::query_as(
+        "select (select count(*) from chat_messages), (select count(*) from chat_welcomes),
+                (select count(*) from chat_attachments),
+                (select count(*) from chat_key_packages where device_id = $1)",
+    )
+    .bind(revoked)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(counts, (1, 1, 1, 0));
+    assert_eq!(slop_api::chat::expire_pending(&app.db).await.unwrap(), 1);
+    let statuses: Vec<(Uuid, String)> =
+        sqlx::query_as("select id, status from chat_devices where status = 'pending'")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(statuses, [(fresh, "pending".to_string())]);
+    let revoked_now: bool = sqlx::query_scalar(
+        "select status = 'revoked' and revoked_at is not null from chat_devices where id = $1",
+    )
+    .bind(waiting)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(revoked_now);
+    assert_eq!(
+        slop_api::chat::cleanup(&app.db).await.unwrap(),
+        1,
+        "its key package"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn old_store_thumbnails_get_hashed_a_few_at_a_time(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    put_raw("admin-1-thumbs", "thumb.png", png(460, 215));
+    let readable = format!(
+        "{}raw/octo/game/admin-1-thumbs/.slop/thumb.png",
+        app.fake_base
+    );
+    let missing = format!(
+        "{}raw/octo/game/admin-1-thumbs/.slop/gone.png",
+        app.fake_base
+    );
+    for (slug, thumbnail) in [
+        ("readable", json!({ "path": "thumb.png", "url": readable })),
+        ("missing", json!({ "path": "gone.png", "url": missing })),
+        (
+            "hashed",
+            json!({ "path": "x.png", "url": readable, "dhash": "00ff00ff00ff00ff" }),
+        ),
+        ("no-thumbnail", Value::Null),
+    ] {
+        listed_with(&app, maker, slug, "released", "").await;
+        let set = Uuid::now_v7();
+        sqlx::query(
+            "insert into media_sets (id, app_id, commit_sha, thumbnail, fingerprint, status, source)
+             select $1, id, repeat('a', 40), $2, 'f', 'approved', 'maker' from apps where slug = $3",
+        )
+        .bind(set)
+        .bind(if thumbnail.is_null() { None } else { Some(thumbnail) })
+        .bind(slug)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query("update apps set media_set_id = $1 where slug = $2")
+            .bind(set)
+            .bind(slug)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    assert_eq!(
+        slop_api::media::hash_old_thumbnails(&app.state, 1)
+            .await
+            .unwrap(),
+        1,
+        "a few at a time"
+    );
+    assert_eq!(
+        slop_api::media::hash_old_thumbnails(&app.state, 20)
+            .await
+            .unwrap(),
+        1
+    );
+    let hashes: Vec<(String, Option<String>)> = sqlx::query_as(
+        "select a.slug, ms.thumbnail->>'dhash' from apps a join media_sets ms on ms.id = a.media_set_id order by a.slug",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    let get = |slug: &str| hashes.iter().find(|h| h.0 == slug).unwrap().1.clone();
+    assert_eq!(
+        get("hashed").as_deref(),
+        Some("00ff00ff00ff00ff"),
+        "left alone"
+    );
+    assert_eq!(get("no-thumbnail"), None);
+    assert_eq!(
+        get("missing").as_deref(),
+        Some(""),
+        "an unreadable picture isn't tried again"
+    );
+    let hash = get("readable").unwrap();
+    assert_eq!(hash.len(), 16);
+    assert!(hash.chars().all(|c| c.is_ascii_hexdigit()));
+    assert_eq!(
+        slop_api::media::hash_old_thumbnails(&app.state, 20)
+            .await
+            .unwrap(),
+        0
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// What a viewer may see
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_viewers_country_decides_the_under_18_view(db: PgPool) {
+    use slop_api::policy::ViewerPolicy;
+    let app = test_app(db).await;
+    let user = |country: &str| slop_api::auth::session::CurrentUser {
+        id: Uuid::now_v7(),
+        session_id: Uuid::now_v7(),
+        display_name: "Viewer".into(),
+        country_code: country.into(),
+        suspended: false,
+        agent: None,
+    };
+    let headers = |country: Option<&str>| {
+        let mut h = axum::http::HeaderMap::new();
+        if let Some(c) = country {
+            h.insert("x-country", c.parse().unwrap());
+        }
+        h
+    };
+    let resolve = |config: Config, u: Option<slop_api::auth::session::CurrentUser>, h| {
+        let db = app.db.clone();
+        async move {
+            ViewerPolicy::resolve(&db, &config, u.as_ref(), &h)
+                .await
+                .unwrap()
+        }
+    };
+    let config = app.config.clone();
+    // Signed in, the account's country counts, not where the request seems to come from.
+    assert_eq!(
+        resolve(config.clone(), Some(user("GB")), headers(Some("US"))).await,
+        ViewerPolicy::UNDER_18_VIEW
+    );
+    assert_eq!(
+        resolve(config.clone(), Some(user("US")), headers(Some("GB"))).await,
+        ViewerPolicy::FULL_VIEW
+    );
+    // Signed out: the CDN's country header, in any case and with spaces.
+    assert_eq!(
+        resolve(config.clone(), None, headers(Some(" de "))).await,
+        ViewerPolicy::FULL_VIEW
+    );
+    assert_eq!(
+        resolve(config.clone(), None, headers(Some("GB"))).await,
+        ViewerPolicy::UNDER_18_VIEW
+    );
+    // No header, a country Slop has no policy for, or no header configured: the safe view.
+    assert_eq!(
+        resolve(config.clone(), None, headers(None)).await,
+        ViewerPolicy::UNDER_18_VIEW
+    );
+    assert_eq!(
+        resolve(config.clone(), None, headers(Some("ZZ"))).await,
+        ViewerPolicy::UNDER_18_VIEW
+    );
+    let mut no_header = config.clone();
+    no_header.country_header = None;
+    assert_eq!(
+        resolve(no_header, None, headers(Some("US"))).await,
+        ViewerPolicy::UNDER_18_VIEW
+    );
+    assert_eq!(ViewerPolicy::UNDER_18_VIEW.max_min_age, 16);
+    assert_eq!(ViewerPolicy::FULL_VIEW.max_min_age, 18);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The simulation sandbox
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_simulations_sign_in_is_only_there_in_the_simulation(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Sim maker 1", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/sim/users")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(req(Method::POST, format!("/v1/sim/login/{maker}")))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    assert!(set_cookie(&res, "slop_session").is_none());
+    let sessions: i64 = sqlx::query_scalar("select count(*) from sessions where user_id = $1")
+        .bind(maker)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(sessions, 1, "only the one the test made");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_simulation_lets_anyone_view_as_its_own_users_only(db: PgPool) {
+    let app = test_app_with(db, |c| c.simulation = true).await;
+    slop_api::sim::generate(
+        &app.db,
+        slop_api::sim::Settings {
+            apps: 12,
+            users: 40,
+            days: 3,
+            seed: 5,
+        },
+    )
+    .await
+    .unwrap();
+    let res = app.send(req(Method::GET, "/v1/sim/users")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let users = body_json(res).await;
+    let users = users.as_array().unwrap();
+    let mut per_persona: std::collections::HashMap<&str, usize> = Default::default();
+    for u in users {
+        *per_persona
+            .entry(u["personas"].as_str().unwrap())
+            .or_default() += 1;
+    }
+    // Up to three of each persona, and the simulation's makers.
+    for (persona, n) in &per_persona {
+        if !persona.starts_with("People:") {
+            assert!(*n <= 3, "{persona}: {n}");
+        }
+    }
+    assert!(
+        per_persona.get("People: maker").copied().unwrap_or(0) > 0,
+        "{per_persona:?}"
+    );
+
+    // Viewing as one of them: a session for that user.
+    let sim_user = users
+        .iter()
+        .find(|u| !u["personas"].as_str().unwrap().starts_with("People:"))
+        .unwrap();
+    let id = sim_user["id"].as_str().unwrap();
+    let res = app
+        .send(req(Method::POST, format!("/v1/sim/login/{id}")))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let cookie = set_cookie(&res, "slop_session").unwrap();
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&cookie)).await).await;
+    assert_eq!(me["id"], id);
+
+    // Never a real account, even one that calls itself a simulated maker.
+    let (real, _) = app.user("Pat Player", "US").await;
+    let (impostor, _) = app.user("Sim maker 999", "US").await;
+    sqlx::query(
+        "insert into identities (provider, provider_subject, user_id) values ('github', '4242', $1)",
+    )
+    .bind(impostor)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    for user in [real, impostor, Uuid::now_v7()] {
+        assert_eq!(
+            app.send(req(Method::POST, format!("/v1/sim/login/{user}")))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND,
+            "{user}"
+        );
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reversing a delisting on appeal
+
+/// An app taken out of the store, then frozen (Slop lost its repository): reversing the
+/// delisting on appeal mustn't put a frozen app back in the store.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "b55: undoing delist_app on appeal sets status listed without the listing checks (frozen, pictures waiting, an approved release)"]
+async fn reversing_a_delisting_keeps_the_listing_rules(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "castle", "released", "").await;
+    app.send(
+        req(Method::POST, "/v1/admin/apps/castle/delist")
+            .cookie(&owner)
+            .json(json!({ "rule": "misleading", "reason": "Fake screenshots." })),
+    )
+    .await;
+    sqlx::query("update apps set frozen_at = now(), frozen_reason = 'Repository gone'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let decision: Uuid = sqlx::query_scalar("select id from moderation_decisions")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    appeal_and_reverse(&app, &decision.to_string(), &maker, &owner).await;
+    let status: String = sqlx::query_scalar("select status::text from apps where slug = 'castle'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_ne!(status, "listed", "a frozen app stays out of the store");
+}
