@@ -535,6 +535,8 @@ async fn save(
     Json(body): Json<Given>,
 ) -> ApiResult<Json<Status>> {
     let (app_id, repo) = owned(&state, &user, &slug).await?;
+    // What Slop reads the repository (and builds) with: as sensitive as publishing.
+    crate::passkeys::require(&state, &user).await?;
     verify_given(&state, &repo, &body).await?;
     let key = state
         .config

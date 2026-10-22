@@ -186,6 +186,12 @@ def main():
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
+    # A plain file is scanned as given and as copied into the tree: list each finding once.
+    unique = {}
+    for f in findings:
+        unique.setdefault((f["engine"], f["file"], f["name"]), f)
+    findings = list(unique.values())
+
     if findings:
         notes += incomplete
         result = "on_hold"
