@@ -1916,3 +1916,688 @@ async fn ownership_codes_are_read_through_gitea_gitlab_and_bitbucket_apis(db: Pg
         Some(false)
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Passkeys for what decides where players' downloads come from (bug b23)
+
+/// The user has a passkey and confirmed with it in this session.
+async fn passkey_proved(app: &TestApp, user: Uuid) {
+    sqlx::query(
+        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, $3, '{}', 'Laptop')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(user)
+    .bind(Uuid::now_v7().as_bytes().to_vec())
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update sessions set passkey_at = now() where user_id = $1")
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+}
+
+/// Bug b23: like publishing, moving an app to another repository, saving the token Slop reads
+/// it with, and turning on release watching or automatic updates need a passkey once the
+/// maker's grace period is over.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn moving_the_repository_and_its_token_and_update_settings_need_a_passkey(db: PgPool) {
+    let app = test_app(db).await;
+    let (forge, _) = fake_forge().await;
+    let (maker_id, maker) = app.user("Ann", "US").await;
+    let app_id = forge_app(&app, maker_id, &forge, "game").await;
+    passkey_overdue(&app, maker_id).await;
+    let elsewhere = "https://github.com/octo/other-game";
+    let refusals = [
+        request_change(
+            &app,
+            &maker,
+            json!({ "kind": "repo", "repo_url": elsewhere }),
+        )
+        .await,
+        app.send(put_token(&maker, "gitea", "good")).await,
+        app.send(
+            req(Method::PUT, "/v1/apps/game/update-settings")
+                .cookie(&maker)
+                .json(json!({ "watch_releases": true, "auto_update": true })),
+        )
+        .await,
+    ];
+    for res in refusals {
+        assert_eq!(res.status(), StatusCode::FORBIDDEN);
+        assert_eq!(body_json(res).await["error"]["code"], "passkey_required");
+    }
+    let (repo, watch): (String, bool) =
+        sqlx::query_as("select repo_url, watch_releases from apps where id = $1")
+            .bind(app_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(repo, format!("{forge}ann/game"));
+    assert!(watch, "watching stays as it was (on by default)");
+    assert_eq!(count(&app, "select count(*) from app_changes").await, 0);
+    assert_eq!(count(&app, "select count(*) from repo_tokens").await, 0);
+
+    // Confirmed with a passkey: all three go through.
+    passkey_proved(&app, maker_id).await;
+    assert_eq!(
+        status_of(&app, put_token(&maker, "gitea", "good")).await,
+        StatusCode::OK
+    );
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/game/update-settings")
+                .cookie(&maker)
+                .json(json!({ "watch_releases": false })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "repo", "repo_url": elsewhere }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(body_json(res).await["status"], "approved");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Update settings and change requests (updates.rs, manage.rs)
+
+/// Agent tokens (maker_agents.rs) for the maker signed in with `cookie`. Returns the
+/// Authorization header value.
+async fn agent_token(app: &TestApp, cookie: &str, scope: &str, apps: Option<&[&str]>) -> String {
+    let mut body = json!({ "name": "Agent", "scope": scope });
+    if let Some(apps) = apps {
+        body["apps"] = json!(apps);
+    }
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(cookie)
+                .json(body),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    )
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_switch_release_watching_and_automatic_updates(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = github_app(&app).await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    let put = |cookie: &str, body: Value| {
+        req(Method::PUT, "/v1/apps/game/update-settings")
+            .cookie(cookie)
+            .json(body)
+    };
+    let stored = || async {
+        sqlx::query_as::<_, (bool, bool)>("select watch_releases, auto_update from apps")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    let before = stored().await;
+
+    let res = app
+        .send(put(&maker, json!({ "watch_releases": !before.0 })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let settings = body_json(res).await;
+    assert_eq!(settings["watch_releases"], !before.0);
+    assert_eq!(settings["auto_update"], before.1, "left out: unchanged");
+    assert_eq!(stored().await, (!before.0, before.1));
+    let res = app
+        .send(put(&maker, json!({ "auto_update": !before.1 })))
+        .await;
+    assert_eq!(body_json(res).await["auto_update"], !before.1);
+    assert_eq!(stored().await, (!before.0, !before.1));
+
+    // Refusals change nothing.
+    assert_eq!(
+        status_of(&app, put(&stranger, json!({ "watch_releases": before.0 }))).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(
+            &app,
+            put(&maker, json!({ "watch_releases": before.0, "colour": 1 }))
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let agent = agent_token(&app, &maker, "publish", None).await;
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/game/update-settings")
+                .header("authorization", agent.clone())
+                .json(json!({ "watch_releases": before.0 })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN, "agents only read them");
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::GET, "/v1/apps/game/update-settings").header("authorization", agent)
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(stored().await, (!before.0, !before.1));
+}
+
+/// A maker cancels their own pending request; a decided one, someone else's, or another app's
+/// can't be.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_cancel_only_their_own_pending_changes(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    approved_release(&app, "game", maker_id).await;
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "repo", "repo_url": "https://github.com/octo/game-two" }),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let pending = body_json(res).await;
+    assert_eq!(pending["status"], "pending");
+    let id = pending["id"].as_str().unwrap().to_string();
+    let cancel = |cookie: &str, slug: &str, id: &str| {
+        req(Method::POST, format!("/v1/apps/{slug}/changes/{id}/cancel")).cookie(cookie)
+    };
+
+    // Another maker's app: the id isn't one of its changes.
+    let (other_id, other) = app.user("Olga Other", "US").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms)
+         values ($1, 'other', 'Other', 'Another game', 'game', 'beta', $2, 'https://github.com/olga/other', 'MIT', '{windows}')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(other_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        status_of(&app, cancel(&stranger, "game", &id)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(&app, cancel(&other, "other", &id)).await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        status_of(&app, cancel(&maker, "game", &Uuid::now_v7().to_string())).await,
+        StatusCode::CONFLICT
+    );
+    let status: String = sqlx::query_scalar("select status from app_changes")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
+
+    let res = app.send(cancel(&maker, "game", &id)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let cancelled = body_json(res).await;
+    assert_eq!(cancelled["status"], "cancelled");
+    assert_eq!(cancelled["status_reason"], "Cancelled by the maker.");
+    let res = app.send(cancel(&maker, "game", &id)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(error_message(res).await.contains("isn't waiting"));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Admin review of releases and changes (admin_web.rs, admin.rs, manage.rs)
+
+/// Staff with only these roles.
+async fn staff_with(app: &TestApp, name: &str, roles: &[&str]) -> (Uuid, String) {
+    let (id, cookie) = app.user(name, "US").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for role in roles {
+        sqlx::query("insert into staff_roles (user_id, role, granted_by) values ($1, $2, 'test')")
+            .bind(id)
+            .bind(role)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    (id, cookie)
+}
+
+/// Rejecting a release: reviewers only, with a reason the maker hears, never an approved one;
+/// and the next release waits for a person again.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviewers_reject_releases_with_a_reason_the_maker_hears(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (_, reviewer) = staff_with(&app, "Rita Reviewer", &["reviewer"]).await;
+    let (_, support) = staff_with(&app, "Sue Support", &["support"]).await;
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    // With a person's approval behind it, the second was approved on its own; the third waits.
+    assert_eq!(release_status(&app, &second).await.0, "approved");
+    sqlx::query("update apps set auto_update = false")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let third = submit_and_fetch(&app, &maker, "1.2.0").await;
+    assert_eq!(release_status(&app, &third).await.0, "awaiting_review");
+    sqlx::query("update apps set auto_update = true")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let reject = |cookie: &str, id: &str, reason: &str| {
+        req(Method::POST, format!("/v1/admin/releases/{id}/reject"))
+            .cookie(cookie)
+            .json(json!({ "reason": reason }))
+    };
+
+    assert_eq!(
+        status_of(&app, reject(&maker, &third, "No.")).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::POST, format!("/v1/admin/releases/{third}/reject"))
+                .json(json!({ "reason": "No." }))
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(&app, reject(&support, &third, "No.")).await,
+        StatusCode::FORBIDDEN
+    );
+    let res = app.send(reject(&reviewer, &third, "   ")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(error_message(res).await.contains("reason"));
+    let res = app.send(reject(&reviewer, &second, "Too late.")).await;
+    assert_eq!(
+        res.status(),
+        StatusCode::CONFLICT,
+        "an approved release isn't rejected"
+    );
+    assert_eq!(release_status(&app, &second).await.0, "approved");
+    assert_eq!(release_status(&app, &third).await.0, "awaiting_review");
+
+    let res = app
+        .send(reject(
+            &reviewer,
+            &third,
+            "  The Windows build crashes on start.  ",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let (status, reason, by) = release_status(&app, &third).await;
+    assert_eq!(status, "rejected");
+    assert_eq!(
+        reason.as_deref(),
+        Some("The Windows build crashes on start.")
+    );
+    assert!(by.unwrap().starts_with("Rita Reviewer ("));
+    let audited: Vec<(String, String)> =
+        sqlx::query_as("select actor, subject from audit_log where action = 'release.reject'")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(audited.len(), 1);
+    assert_eq!(audited[0].1, third);
+    assert!(audited[0].0.starts_with("Rita Reviewer"));
+    let told: Vec<(String, String)> = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 and title like '%wasn''t approved'",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        told,
+        [(
+            "Game 1.2.0 wasn't approved".to_string(),
+            "The Windows build crashes on start.".to_string()
+        )]
+    );
+    assert_eq!(
+        status_of(&app, reject(&reviewer, &third, "Again.")).await,
+        StatusCode::CONFLICT,
+        "already decided"
+    );
+
+    // The next release waits for a person, saying why.
+    let fourth = submit_and_fetch(&app, &maker, "1.3.0").await;
+    let (status, reason, _) = release_status(&app, &fourth).await;
+    assert_eq!(status, "awaiting_review");
+    assert!(reason.unwrap().contains("withdrawn or rejected"));
+}
+
+/// Clearing a scan finding as a false positive: reviewers only, with a reason, on a release
+/// still waiting for review.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviewers_clear_false_positive_scan_findings(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let (_, reviewer) = staff_with(&app, "Rita Reviewer", &["reviewer"]).await;
+    let (_, support) = staff_with(&app, "Sue Support", &["support"]).await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    sqlx::query(
+        "update release_files set scan_result = 'on_hold', scan_detail = 'Heuristic.Packer'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let clear = |cookie: &str, platform: &str, reason: &str| {
+        req(
+            Method::POST,
+            format!("/v1/admin/releases/{id}/files/{platform}/clear"),
+        )
+        .cookie(cookie)
+        .json(json!({ "reason": reason }))
+    };
+    let reason = "UPX-packed Godot export; checked the unpacked binary.";
+    assert_eq!(
+        status_of(&app, clear(&maker, "windows", reason)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(&app, clear(&support, "windows", reason)).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status_of(&app, clear(&reviewer, "windows", "fine")).await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        status_of(&app, clear(&reviewer, "linux", reason)).await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from release_files where cleared_by is not null"
+        )
+        .await,
+        0
+    );
+
+    assert_eq!(
+        status_of(&app, clear(&reviewer, "windows", reason)).await,
+        StatusCode::NO_CONTENT
+    );
+    let (by, why): (String, String) =
+        sqlx::query_as("select cleared_by, cleared_reason from release_files")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(by.starts_with("Rita Reviewer"));
+    assert_eq!(why, reason);
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from audit_log where action = 'release.clear_scan'"
+        )
+        .await,
+        1
+    );
+
+    // Once decided, there's nothing to clear.
+    sqlx::query("update releases set status = 'rejected'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(clear(&reviewer, "windows", reason)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(error_message(res).await.contains("waiting for review"));
+}
+
+/// Approving a maker's change: reviewers only, once; a hold at a release withdrawn since the
+/// request is refused; a repository move starts the app afresh at the new repository.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviewers_approve_changes_that_still_make_sense(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (_, reviewer) = staff_with(&app, "Rita Reviewer", &["reviewer"]).await;
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    assert_eq!(release_status(&app, &second).await.0, "approved");
+    sqlx::query("update apps set auto_update = false")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let approve = |cookie: &str, id: &str| {
+        req(Method::POST, format!("/v1/admin/changes/{id}/approve")).cookie(cookie)
+    };
+
+    // Hold at 1.0.0: waits; 1.0.0 is withdrawn meanwhile, so it can't be approved.
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "release", "release_id": first }),
+    )
+    .await;
+    let hold = body_json(res).await;
+    assert_eq!(hold["status"], "pending");
+    let hold_id = hold["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        status_of(&app, approve(&maker, &hold_id)).await,
+        StatusCode::NOT_FOUND
+    );
+    admin::revoke(&app.db, first.parse().unwrap(), "rev", "Malware found")
+        .await
+        .unwrap();
+    let res = app.send(approve(&reviewer, &hold_id)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(error_message(res).await.contains("withdrawn"));
+    let pinned: Option<Uuid> = sqlx::query_scalar("select pinned_release_id from apps")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(pinned.is_none());
+
+    // A move: watch state and the old repository's IDs are dropped.
+    sqlx::query(
+        "update apps set watch_last_tag = 'v1.1.0', watch_problem = 'odd', watch_checked_at = now(),
+                github_repo_id = 1001, github_owner_id = 42",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "repo", "repo_url": "https://github.com/octo/game-two", "note": "renamed" }),
+    )
+    .await;
+    let mv = body_json(res).await;
+    assert_eq!(mv["status"], "pending");
+    let move_id = mv["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        status_of(&app, approve(&reviewer, &move_id)).await,
+        StatusCode::NO_CONTENT
+    );
+    type AppRow = (
+        String,
+        Option<String>,
+        Option<String>,
+        Option<OffsetDateTime>,
+        Option<i64>,
+        Option<i64>,
+        Option<OffsetDateTime>,
+    );
+    let row: AppRow = sqlx::query_as(
+        "select repo_url, watch_last_tag, watch_problem, watch_checked_at, github_repo_id, github_owner_id, repo_changed_at from apps",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(row.0, "https://github.com/octo/game-two");
+    assert!(row.1.is_none() && row.2.is_none() && row.3.is_none());
+    assert!(
+        row.4.is_none() && row.5.is_none(),
+        "the old repository's IDs are forgotten"
+    );
+    assert!(row.6.is_some());
+    let (status, by): (String, String) =
+        sqlx::query_as("select status, reviewed_by from app_changes where id = $1::uuid")
+            .bind(&move_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "approved");
+    assert!(by.starts_with("Rita Reviewer"));
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from audit_log where action = 'app.repo_change'"
+        )
+        .await,
+        1
+    );
+    let res = app.send(approve(&reviewer, &move_id)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "already decided");
+    let _ = maker_id;
+}
+
+/// Turning a change down: reviewers only, with a reason, once.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviewers_turn_down_changes_with_a_reason(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (_, reviewer) = staff_with(&app, "Rita Reviewer", &["reviewer"]).await;
+    let (_, support) = staff_with(&app, "Sue Support", &["support"]).await;
+    approved_release(&app, "game", maker_id).await;
+    let res = request_change(
+        &app,
+        &maker,
+        json!({ "kind": "repo", "repo_url": "https://github.com/octo/game-two" }),
+    )
+    .await;
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let reject = |cookie: &str, reason: &str| {
+        req(Method::POST, format!("/v1/admin/changes/{id}/reject"))
+            .cookie(cookie)
+            .json(json!({ "reason": reason }))
+    };
+    assert_eq!(
+        status_of(&app, reject(&maker, "No.")).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(&app, reject(&support, "No.")).await,
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        status_of(&app, reject(&reviewer, " ")).await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::POST, format!("/v1/admin/changes/{id}/reject"))
+                .cookie(&reviewer)
+                .json(json!({ "reason": "x", "extra": 1 }))
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let status: String = sqlx::query_scalar("select status from app_changes")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
+
+    assert_eq!(
+        status_of(&app, reject(&reviewer, "Which repository is really yours?")).await,
+        StatusCode::NO_CONTENT
+    );
+    let (status, reason, repo): (String, String, String) = sqlx::query_as(
+        "select c.status, c.status_reason, a.repo_url from app_changes c join apps a on a.id = c.app_id",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(status, "rejected");
+    assert_eq!(reason, "Which repository is really yours?");
+    assert!(repo.ends_with("octo/game"), "the app stays where it was");
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from audit_log where action = 'app.change_reject'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        status_of(&app, reject(&reviewer, "Again.")).await,
+        StatusCode::CONFLICT
+    );
+    // The maker sees why on the Manage page.
+    let manage = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        manage["changes"][0]["status_reason"],
+        "Which repository is really yours?"
+    );
+}
+
+/// Bug b21: the "was submitted" notice tells the maker to withdraw an unexpected release from
+/// Manage, but makers have no way to withdraw a release.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "b21: the submitted-release notice says to withdraw it from Manage, which makers can't do"]
+async fn the_submitted_notice_only_suggests_what_makers_can_do(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let body: String = sqlx::query_scalar(
+        "select body from notifications where user_id = $1 and title = 'Game 1.0.0 was submitted'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    if body.contains("withdraw it from Manage") {
+        // Then the maker must be able to withdraw it.
+        let res = app
+            .send(
+                req(
+                    Method::POST,
+                    format!("/v1/apps/game/releases/{id}/withdraw"),
+                )
+                .cookie(&maker),
+            )
+            .await;
+        assert!(res.status().is_success(), "{body}");
+    }
+}
