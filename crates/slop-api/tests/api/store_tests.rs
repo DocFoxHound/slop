@@ -4173,3 +4173,722 @@ async fn glow_ups_take_the_later_of_two_votes_at_the_same_moment(db: PgPool) {
     let glow = inbox(&app, req(Method::GET, "/v1/shelves/glow-ups")).await;
     assert_eq!(glow, json!([]), "{glow}");
 }
+
+// ---------------------------------------------------------------------------------------------
+// For You scoring (foryou.rs), on candidates made in memory from one real row
+
+use slop_api::catalog::AppKind;
+use slop_api::foryou::{self, Candidate, PickKind, Signals};
+
+struct Shop {
+    template: Candidate,
+    list: Vec<Candidate>,
+}
+
+impl Shop {
+    async fn new(db: PgPool) -> Self {
+        let app = test_app(db).await;
+        let (maker_id, _) = app.user("Maker", "US").await;
+        listed_with(&app, maker_id, "template", "released", "").await;
+        let template = foryou::candidates(
+            &app.db,
+            &app.config,
+            slop_api::policy::ViewerPolicy::FULL_VIEW,
+        )
+        .await
+        .unwrap()
+        .remove(0);
+        Shop {
+            template,
+            list: Vec::new(),
+        }
+    }
+
+    /// Adds an app with these tags; returns its ID.
+    fn add(&mut self, slug: &str, kind: AppKind, tags: &[&str]) -> Uuid {
+        let mut c = self.template.clone();
+        c.id = Uuid::now_v7();
+        c.maker_id = Uuid::now_v7();
+        c.app.slug = slug.to_string();
+        c.app.kind = kind;
+        c.app.tags = tags.iter().map(|t| t.to_string()).collect();
+        let id = c.id;
+        self.list.push(c);
+        id
+    }
+
+    fn get(&mut self, slug: &str) -> &mut Candidate {
+        self.list.iter_mut().find(|c| c.app.slug == slug).unwrap()
+    }
+
+    fn slate(&self, signals: &Signals, personalized: bool, seed: u64) -> Vec<(String, PickKind)> {
+        foryou::recommend(
+            signals,
+            &self.list,
+            &HashMap::new(),
+            personalized,
+            seed,
+            foryou::SLATE,
+        )
+        .into_iter()
+        .map(|p| (self.list[p.index].app.slug.clone(), p.kind))
+        .collect()
+    }
+}
+
+/// Never recommended: what the user has, marked, launched or voted on, their own apps, and dead
+/// projects, whether personal or not.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn for_you_leaves_out_what_the_user_already_has(db: PgPool) {
+    let mut shop = Shop::new(db).await;
+    let mut s = Signals::default();
+    let me = Uuid::now_v7();
+    s.user_id = Some(me);
+    for slug in [
+        "owned", "marked", "launched", "voted", "mine", "dead", "fine-1", "fine-2",
+    ] {
+        shop.add(slug, AppKind::Game, &["roguelike"]);
+    }
+    s.library.insert(shop.get("owned").id);
+    s.interested.insert(shop.get("marked").id);
+    s.launched.insert(shop.get("launched").id, (600, 1));
+    s.votes.insert(shop.get("voted").id, 1);
+    shop.get("mine").maker_id = me;
+    shop.get("dead").app.is_dead = true;
+    for personalized in [true, false] {
+        let mut got: Vec<String> = shop
+            .slate(&s, personalized, 7)
+            .into_iter()
+            .map(|(slug, _)| slug)
+            .collect();
+        got.sort();
+        assert_eq!(got, ["fine-1", "fine-2"], "personalized: {personalized}");
+    }
+}
+
+/// A personal slate: matches to the user's taste, every fourth card a discovery from outside it,
+/// no two discoveries led by the same tag; disliked tags push apps down or out; the same seed
+/// gives the same slate.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn for_you_mixes_matches_and_discoveries(db: PgPool) {
+    let mut shop = Shop::new(db).await;
+    let mut s = Signals::default();
+    for i in 0..2 {
+        let id = shop.add(
+            &format!("liked-{i}"),
+            AppKind::Game,
+            &["roguelike", "pixel-art"],
+        );
+        s.library.insert(id);
+    }
+    let hated = shop.add("hated", AppKind::Game, &["horror"]);
+    s.votes.insert(hated, -1);
+    for i in 0..10 {
+        shop.add(
+            &format!("rogue-{i}"),
+            AppKind::Game,
+            &["roguelike", "pixel-art"],
+        );
+    }
+    shop.add(
+        "rogue-horror",
+        AppKind::Game,
+        &["roguelike", "pixel-art", "horror"],
+    );
+    shop.add("pure-horror", AppKind::Game, &["horror"]);
+    for (slug, tags) in [
+        ("racer-1", &["racing", "arcade"][..]),
+        ("racer-2", &["racing", "cars"][..]),
+        ("cozy", &["cozy"][..]),
+        ("puzzle", &["puzzle"][..]),
+        ("music", &["music"][..]),
+    ] {
+        shop.add(slug, AppKind::Game, tags);
+    }
+
+    let slate = shop.slate(&s, true, 42);
+    assert_eq!(slate.len(), foryou::SLATE);
+    for (i, (slug, kind)) in slate.iter().enumerate() {
+        let want = if (i + 1) % foryou::DISCOVER_EVERY == 0 {
+            PickKind::Discover
+        } else {
+            PickKind::Match
+        };
+        assert_eq!(*kind, want, "card {i} ({slug}): {slate:?}");
+    }
+    let discoveries: Vec<&str> = slate
+        .iter()
+        .filter(|(_, k)| *k == PickKind::Discover)
+        .map(|(s, _)| s.as_str())
+        .collect();
+    assert!(
+        discoveries.iter().all(|d| !d.starts_with("rogue")),
+        "{discoveries:?}"
+    );
+    assert!(
+        !(discoveries.contains(&"racer-1") && discoveries.contains(&"racer-2")),
+        "two discoveries led by racing: {discoveries:?}"
+    );
+    let all: Vec<&str> = slate.iter().map(|(s, _)| s.as_str()).collect();
+    assert!(
+        !all.contains(&"pure-horror"),
+        "a disliked tag alone keeps it out: {all:?}"
+    );
+    let pos = |slug: &str| all.iter().position(|s| *s == slug);
+    let horror = pos("rogue-horror");
+    assert!(
+        horror.is_none() || horror > pos("rogue-0").max(pos("rogue-9")),
+        "a disliked tag lowers a match: {all:?}"
+    );
+
+    assert_eq!(
+        shop.slate(&s, true, 42),
+        slate,
+        "the same seed, the same slate"
+    );
+    let seed = foryou::daily_seed(
+        Uuid::from_u128(5),
+        time::Date::from_calendar_date(2026, time::Month::October, 22).unwrap(),
+    );
+    assert_eq!(
+        seed,
+        foryou::daily_seed(
+            Uuid::from_u128(5),
+            time::Date::from_calendar_date(2026, time::Month::October, 22).unwrap()
+        )
+    );
+    assert_ne!(
+        seed,
+        foryou::daily_seed(
+            Uuid::from_u128(5),
+            time::Date::from_calendar_date(2026, time::Month::October, 23).unwrap()
+        )
+    );
+    assert_ne!(
+        seed,
+        foryou::daily_seed(
+            Uuid::from_u128(6),
+            time::Date::from_calendar_date(2026, time::Month::October, 22).unwrap()
+        )
+    );
+
+    // Without personal recommendations (or no taste yet): popular, rated and new, nothing else.
+    let plain = shop.slate(&s, false, 42);
+    assert!(plain.iter().all(|(_, k)| *k == PickKind::Popular));
+    assert_eq!(plain.len(), foryou::SLATE);
+    assert!(
+        shop.slate(&Signals::default(), true, 42)
+            .iter()
+            .all(|(_, k)| *k == PickKind::Popular)
+    );
+}
+
+/// Games and apps get the share of match cards the user gives them: someone with three games
+/// and one tool sees mostly games, and some tools.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn for_you_matches_games_and_apps_in_the_users_proportion(db: PgPool) {
+    let mut shop = Shop::new(db).await;
+    let mut s = Signals::default();
+    for i in 0..3 {
+        let id = shop.add(&format!("my-game-{i}"), AppKind::Game, &["roguelike"]);
+        s.library.insert(id);
+    }
+    let tool = shop.add("my-tool", AppKind::App, &["productivity"]);
+    s.library.insert(tool);
+    for i in 0..15 {
+        shop.add(&format!("game-{i}"), AppKind::Game, &["roguelike"]);
+    }
+    for i in 0..6 {
+        shop.add(&format!("tool-{i}"), AppKind::App, &["productivity"]);
+    }
+    let slate = shop.slate(&s, true, 1);
+    let matches: Vec<&String> = slate
+        .iter()
+        .filter(|(_, k)| *k == PickKind::Match)
+        .map(|(s, _)| s)
+        .collect();
+    assert_eq!(matches.len(), 9, "{slate:?}");
+    let tools = matches.iter().filter(|s| s.starts_with("tool-")).count();
+    assert_eq!(tools, 2, "a quarter of the matches, rounded: {slate:?}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Store-page pictures (media.rs, admin_web.rs, agent.rs)
+
+/// A draft with pictures at the head commit, checked: its set is pending. Returns the set's ID.
+async fn pending_pictures(app: &TestApp, maker: Uuid, cookie: &str, slug: &str) -> String {
+    app_with_pictures(app, maker, slug, &"b".repeat(40)).await;
+    let res = app
+        .send(req(Method::POST, format!("/v1/apps/{slug}/media/check")).cookie(cookie))
+        .await;
+    let body = body_json(res).await;
+    assert_eq!(body["result"], "pending", "{body}");
+    body["pending"]["id"].as_str().unwrap().to_string()
+}
+
+/// The maker's pictures page: only the maker (or their agent); the live, pending and turned-down
+/// sets, in the maker's order; not supported for repositories outside GitHub.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_makers_pictures_page_shows_each_set(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (_, admin) = make_admin(&app, "Admin").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let first = pending_pictures(&app, maker_id, &maker, "pics").await;
+    let overview = |r: Req| {
+        let app = &app;
+        async move { inbox(app, r).await }
+    };
+    for r in [
+        req(Method::GET, "/v1/apps/pics/media").cookie(&stranger),
+        req(Method::GET, "/v1/apps/nope/media").cookie(&maker),
+    ] {
+        assert_eq!(app.send(r).await.status(), StatusCode::NOT_FOUND);
+    }
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/pics/media"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let o = overview(req(Method::GET, "/v1/apps/pics/media").cookie(&maker)).await;
+    assert_eq!(o["pending"]["id"], first.as_str());
+    assert!(o["live"].is_null() && o["rejected"].is_null());
+    assert_eq!(o["supported"], true);
+    assert_eq!(o["manifest_path"], ".slop/media.json");
+    assert!(o["checked_at"].is_string());
+
+    // Approved: live, in the maker's order.
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/media/{first}/approve")).cookie(&admin))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    sqlx::query("update apps set media_order = '{image:shots/b.png,video:dQw4w9WgXcQ,image:shots/a.png}' where slug = 'pics'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let o = overview(req(Method::GET, "/v1/apps/pics/media").cookie(&maker)).await;
+    assert_eq!(o["live"]["id"], first.as_str());
+    let paths: Vec<Value> = o["live"]["gallery"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["path"].clone())
+        .collect();
+    assert_eq!(
+        paths,
+        [json!("shots/b.png"), Value::Null, json!("shots/a.png")]
+    );
+    assert!(o["pending"].is_null());
+
+    // A newer set turned down shows as rejected, with the reason, next to the live one.
+    let next = "9".repeat(40);
+    app_with_pictures_files(&next);
+    let id = app_id(&app, "pics").await;
+    let slop_api::media::Outcome::Pending(second) = slop_api::media::refresh(
+        &app.state,
+        id,
+        "https://github.com/octo/game",
+        Some(&next),
+        "release",
+    )
+    .await
+    .unwrap() else {
+        panic!("expected new pictures");
+    };
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/media/{second}/reject"))
+                .cookie(&admin)
+                .json(json!({ "reason": "Blurry." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let o = overview(req(Method::GET, "/v1/apps/pics/media").cookie(&maker)).await;
+    assert_eq!(o["live"]["id"], first.as_str());
+    assert_eq!(o["rejected"]["id"], second.to_string());
+    assert_eq!(o["rejected"]["status_reason"], "Blurry.");
+
+    // The maker's agent may look.
+    let agent = maker_token(&app, &maker, json!({ "name": "Claude", "scope": "read" })).await;
+    let o = overview(req(Method::GET, "/v1/apps/pics/media").header("authorization", agent)).await;
+    assert_eq!(o["live"]["id"], first.as_str());
+
+    // A repository outside GitHub: not supported.
+    listed_with(
+        &app,
+        maker_id,
+        "elsewhere",
+        "released",
+        "repo_url = 'https://codeberg.org/x/y'",
+    )
+    .await;
+    let o = overview(req(Method::GET, "/v1/apps/elsewhere/media").cookie(&maker)).await;
+    assert_eq!(o["supported"], false);
+    assert!(o["live"].is_null() && o["pending"].is_null());
+}
+
+/// Ordering the gallery: keys that look like gallery keys, 40 at most, only the maker, and not
+/// through an agent.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn gallery_orders_are_checked(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "pics",
+        "released",
+        "repo_url = 'https://github.com/octo/game'",
+    )
+    .await;
+    let order =
+        |keys: Value| req(Method::PUT, "/v1/apps/pics/media/order").json(json!({ "keys": keys }));
+    let stored = || async {
+        sqlx::query_scalar::<_, Vec<String>>("select media_order from apps where slug = 'pics'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    let long = format!("image:{}", "x".repeat(215));
+    let forty_one: Vec<String> = (0..41).map(|i| format!("image:{i}.png")).collect();
+    for bad in [
+        json!(["shots/a.png"]),
+        json!(["image:a.png", "audio:b.ogg"]),
+        json!([long]),
+        json!(forty_one),
+    ] {
+        let res = app.send(order(bad.clone()).cookie(&maker)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    assert_eq!(
+        app.send(order(json!(["image:a.png"])).cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let agent = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Claude", "scope": "publish" }),
+    )
+    .await;
+    assert_eq!(
+        app.send(order(json!(["image:a.png"])).header("authorization", agent))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert!(stored().await.is_empty());
+    let forty: Vec<String> = (0..40).map(|i| format!("image:{i}.png")).collect();
+    let res = app.send(order(json!(forty)).cookie(&maker)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(stored().await.len(), 40);
+}
+
+/// Turning pictures down: Review permission, a reason, only a pending set; logged.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_turn_down_pictures_with_a_reason(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (_, reviewer) = staff_with(&app, "Rae Reviewer", "reviewer").await;
+    let (_, support) = staff_with(&app, "Sue Support", "support").await;
+    let set = pending_pictures(&app, maker_id, &maker, "pics").await;
+    let reject = |cookie: &str, reason: &str| {
+        req(Method::POST, format!("/v1/admin/media/{set}/reject"))
+            .cookie(cookie)
+            .json(json!({ "reason": reason }))
+    };
+    let status = || async {
+        sqlx::query_scalar::<_, String>("select status from media_sets where id = $1::uuid")
+            .bind(&set)
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    assert_eq!(
+        app.send(reject(&maker, "No.")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(reject(&support, "No.")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let res = app.send(reject(&reviewer, "   ")).await;
+    assert!(res.status().is_client_error(), "{}", res.status());
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("say why")
+    );
+    assert_eq!(status().await, "pending");
+    assert!(audits(&app, "media.reject").await.is_empty());
+
+    assert_eq!(
+        app.send(reject(&reviewer, " Shows another game. "))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(status().await, "rejected");
+    let logged = audits(&app, "media.reject").await;
+    assert_eq!(
+        logged,
+        [json!({ "set": set, "reason": "Shows another game." })]
+    );
+    // Not pending any more: neither again nor approved now.
+    assert_eq!(
+        app.send(reject(&reviewer, "Again.")).await.status(),
+        StatusCode::CONFLICT
+    );
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/media/{set}/approve")).cookie(&reviewer))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/media/{}/reject", Uuid::now_v7()),
+            )
+            .cookie(&reviewer)
+            .json(json!({ "reason": "x" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+/// Reviewer agents decide pictures through MCP: a review token approves or turns down (with a
+/// reason); a read token can't.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviewer_agents_decide_pictures(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let first = pending_pictures(&app, maker_id, &maker, "pics-a").await;
+    let token = |scope: &str| {
+        let app = &app;
+        let r = req(Method::POST, "/v1/admin/tokens")
+            .cookie(&owner)
+            .json(json!({ "name": format!("{scope} agent"), "scope": scope, "days": 7 }));
+        async move {
+            format!(
+                "Bearer {}",
+                body_json(app.send(r).await).await["token"]
+                    .as_str()
+                    .unwrap()
+            )
+        }
+    };
+    let (read, review) = (token("read").await, token("review").await);
+    let call = |bearer: &str, args: Value| {
+        let app = &app;
+        let r = req(Method::POST, "/v1/admin/mcp")
+            .header("authorization", bearer.to_string())
+            .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "decide_pictures", "arguments": args } }));
+        async move {
+            let out = body_json(app.send(r).await).await;
+            (
+                out["result"]["isError"] == false,
+                out["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        }
+    };
+    let status = |id: String| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("select status from media_sets where id = $1::uuid")
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    let (ok, _) = call(&read, json!({ "id": first, "decision": "approve" })).await;
+    assert!(!ok);
+    assert_eq!(status(first.clone()).await, "pending");
+    let (ok, text) = call(&review, json!({ "id": first, "decision": "reject" })).await;
+    assert!(!ok, "a reason is needed: {text}");
+    let (ok, text) = call(
+        &review,
+        json!({ "id": first, "decision": "reject", "reason": "Watermarked." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    assert_eq!(status(first.clone()).await, "rejected");
+    let actor: String =
+        sqlx::query_scalar("select actor from audit_log where action = 'media.reject'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(actor.contains("review agent"), "{actor}");
+
+    // A second app's pictures, approved by the agent.
+    sqlx::query("update apps set slug = 'pics-old' where slug = 'pics-a'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let second = pending_pictures(&app, maker_id, &maker, "pics-b").await;
+    let (ok, text) = call(&review, json!({ "id": second, "decision": "approve" })).await;
+    assert!(ok, "{text}");
+    assert_eq!(status(second.clone()).await, "approved");
+    let live: Option<Uuid> =
+        sqlx::query_scalar("select media_set_id from apps where slug = 'pics-b'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(live.map(|u| u.to_string()), Some(second));
+}
+
+/// After a release is fetched, its commit's pictures are read: a new set waits for review; a
+/// repository outside GitHub is skipped, and a broken picture list never fails anything.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn releases_bring_their_pictures_for_review(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    // A release fetched for an app outside GitHub: fetched fine, no pictures read.
+    let _ = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let (status, problem): (String, Option<String>) = sqlx::query_as(
+        "select r.status::text, a.media_problem from releases r join apps a on a.id = r.app_id",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(status, "awaiting_review");
+    assert!(problem.is_none());
+    assert_eq!(count(&app.db, "select count(*) from media_sets").await, 0);
+
+    let commit = "7".repeat(40);
+    app_with_pictures(&app, maker_id, "pics", &commit).await;
+    let id = app_id(&app, "pics").await;
+    slop_api::media::refresh_for_release(&app.state, id, "https://github.com/octo/game", &commit)
+        .await;
+    let (status, source): (String, String) =
+        sqlx::query_as("select status, source from media_sets where app_id = $1")
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), source.as_str()), ("pending", "release"));
+
+    // A broken list at the next release: no new set, the problem kept for the maker.
+    let broken = "8".repeat(40);
+    put_raw(&broken, "media.json", b"{ not json".to_vec());
+    slop_api::media::refresh_for_release(&app.state, id, "https://github.com/octo/game", &broken)
+        .await;
+    assert_eq!(
+        count(
+            &app.db,
+            &format!("select count(*) from media_sets where app_id = '{id}'")
+        )
+        .await,
+        1
+    );
+    let problem: Option<String> =
+        sqlx::query_scalar("select media_problem from apps where id = $1")
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(problem.unwrap().contains("isn't valid"));
+    // Outside GitHub: nothing read, nothing recorded.
+    slop_api::media::refresh_for_release(&app.state, id, "https://codeberg.org/octo/game", &commit)
+        .await;
+    assert_eq!(
+        count(
+            &app.db,
+            &format!("select count(*) from media_sets where app_id = '{id}'")
+        )
+        .await,
+        1
+    );
+}
+
+/// Live thumbnails from before look-alike hashing get a hash a few at a time; one that can't be
+/// read gets an empty hash so it isn't tried again.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn old_thumbnails_are_hashed_a_few_at_a_time(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (_, admin) = make_admin(&app, "Admin").await;
+    for slug in ["one", "two", "three"] {
+        let set = pending_pictures(&app, maker_id, &maker, slug).await;
+        let res = app
+            .send(req(Method::POST, format!("/v1/admin/media/{set}/approve")).cookie(&admin))
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        // Renamed, to tell the live ones apart below.
+        sqlx::query("update apps set slug = slug || '-done' where slug = $1")
+            .bind(slug)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    // As if hashed before look-alike checks existed; one picture has since gone.
+    sqlx::query("update media_sets set thumbnail = thumbnail - 'dhash'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "update media_sets set thumbnail = jsonb_set(thumbnail, '{url}', to_jsonb($1::text))
+         where id = (select media_set_id from apps where slug = 'two-done')",
+    )
+    .bind(format!(
+        "{}raw/octo/game/{}/.slop/gone.png",
+        app.fake_base,
+        "b".repeat(40)
+    ))
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let hashes = || async {
+        let mut rows: Vec<(String, Option<String>)> = sqlx::query_as(
+            "select a.slug, ms.thumbnail->>'dhash' from apps a join media_sets ms on ms.id = a.media_set_id",
+        )
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+        rows.sort();
+        rows
+    };
+    assert!(hashes().await.iter().all(|(_, h)| h.is_none()));
+
+    assert_eq!(
+        slop_api::media::hash_old_thumbnails(&app.state, 2)
+            .await
+            .unwrap(),
+        2
+    );
+    assert_eq!(
+        hashes().await.iter().filter(|(_, h)| h.is_some()).count(),
+        2
+    );
+    assert_eq!(
+        slop_api::media::hash_old_thumbnails(&app.state, 2)
+            .await
+            .unwrap(),
+        1
+    );
+    assert_eq!(
+        slop_api::media::hash_old_thumbnails(&app.state, 2)
+            .await
+            .unwrap(),
+        0,
+        "never retried"
+    );
+    let done = hashes().await;
+    assert_eq!(done.len(), 3);
+    for (slug, hash) in done {
+        let hash = hash.unwrap();
+        if slug == "two-done" {
+            assert_eq!(hash, "", "unreadable: an empty hash");
+        } else {
+            assert_eq!(hash.len(), 16, "{slug}: {hash}");
+        }
+    }
+}
