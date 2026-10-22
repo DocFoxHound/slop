@@ -150,14 +150,24 @@ pub async fn check(state: &AppState, repo_url: &str, public: bool) -> Access {
 pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Result<()> {
     let mut tx = state.db.begin().await?;
     // A freeze staff placed by hand (admin_tools.rs) is theirs to lift: the check leaves it.
-    let (maker, slug, title, frozen, frozen_delisted): (Uuid, String, String, bool, bool) =
-        sqlx::query_as(
-            "update apps set repo_checked_at = now() where id = $1
-             returning maker_id, slug, title, frozen_at is not null and frozen_by is null, frozen_delisted",
-        )
-        .bind(app_id)
-        .fetch_one(&mut *tx)
-        .await?;
+    let (maker, slug, title, frozen, frozen_delisted, by_staff): (
+        Uuid,
+        String,
+        String,
+        bool,
+        bool,
+        bool,
+    ) = sqlx::query_as(
+        "update apps set repo_checked_at = now() where id = $1
+         returning maker_id, slug, title, frozen_at is not null and frozen_by is null, frozen_delisted,
+                   frozen_by is not null",
+    )
+    .bind(app_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    // Out of the store for being frozen, but no longer frozen (staff lifted a freeze they placed
+    // on top of the automatic one): readable again puts it back, as for the automatic freeze.
+    let left_out = frozen_delisted && !frozen && !by_staff;
     match access {
         Access::Unknown => {}
         Access::Lost(reason) if !frozen => {
@@ -194,7 +204,7 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
             .await?;
         }
         Access::Lost(_) => {}
-        Access::Readable if frozen => {
+        Access::Readable if frozen || left_out => {
             sqlx::query(
                 "update apps set frozen_at = null, frozen_reason = null, frozen_delisted = false,
                         status = case when frozen_delisted then 'listed'::app_status else status end

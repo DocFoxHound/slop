@@ -43,14 +43,19 @@ pub fn routes() -> Router<AppState> {
 }
 
 fn reason_of(reason: &str) -> ApiResult<&str> {
-    let reason = reason.trim();
-    if reason.is_empty() || reason.chars().count() > 2000 {
+    text_of("reason", reason)
+}
+
+/// A reason or note for the person, named by its field.
+fn text_of<'a>(field: &'static str, value: &'a str) -> ApiResult<&'a str> {
+    let value = value.trim();
+    if value.is_empty() || value.chars().count() > 2000 {
         return Err(ApiError::invalid(
-            "reason",
+            field,
             "say why, for the person, in up to 2000 characters",
         ));
     }
-    Ok(reason)
+    Ok(value)
 }
 
 /// One line of text (names, headlines).
@@ -456,7 +461,7 @@ async fn unfreeze(
     Json(b): Json<UnfreezeBody>,
 ) -> ApiResult<Json<Option<crate::frozen::Frozen>>> {
     admin.need(Perm::Moderate)?;
-    let note = reason_of(&b.note)?;
+    let note = text_of("note", &b.note)?;
     let row: Option<FreezeNow> = sqlx::query_as(
         "select id, maker_id, title, repo_url, visibility = 'public', frozen_at is not null, frozen_by
          from apps where slug = $1",
