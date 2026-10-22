@@ -148,7 +148,11 @@ pub(crate) fn push_summary_columns_with(
                                where at.app_id = a.id order by t.slug), '{}') as tags,
                 (select ms.thumbnail->>'url' from media_sets ms where ms.id = a.media_set_id) as thumbnail_url,
                 (select count(*) from votes v where v.app_id = a.id) as vote_count,
-                (select case when count(*) >= 5 and sum(v.weight) > 0
+                (select case when count(*) >= ",
+    )
+    .push_bind(crate::votes::MIN_VOTES)
+    .push(
+        " and sum(v.weight) > 0
                              then round(100 * coalesce(sum(v.weight) filter (where v.vote = 1), 0) / sum(v.weight))::int4 end
                  from votes v where v.app_id = a.id) as not_slop_percent,
                 exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null) as made_with_people,
@@ -352,8 +356,10 @@ async fn list_apps(
         None => {}
     }
     if let Some(min) = query.min_not_slop {
-        qb.push(
-            " and (select count(*) >= 5 and sum(v.weight) > 0
+        qb.push(" and (select count(*) >= ")
+            .push_bind(crate::votes::MIN_VOTES)
+            .push(
+            " and sum(v.weight) > 0
                           and 100 * coalesce(sum(v.weight) filter (where v.vote = 1), 0) / nullif(sum(v.weight), 0) >= ",
         )
         .push_bind(f64::from(min.clamp(0, 100)))
@@ -386,11 +392,13 @@ async fn list_apps(
             qb.push(" order by lower(a.title), a.slug");
         }
         (Sort::Rating, _) => {
-            qb.push(
-                " order by (select case when count(*) >= 5 then sum(v.weight) filter (where v.vote = 1) / nullif(sum(v.weight), 0) end
+            qb.push(" order by (select case when count(*) >= ")
+                .push_bind(crate::votes::MIN_VOTES)
+                .push(
+                    " then sum(v.weight) filter (where v.vote = 1) / nullif(sum(v.weight), 0) end
                             from votes v where v.app_id = a.id) desc nulls last,
                            (select count(*) from votes v where v.app_id = a.id) desc, a.slug",
-            );
+                );
         }
         (Sort::Anticipated, _) => {
             qb.push(

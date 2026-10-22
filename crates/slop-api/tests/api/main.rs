@@ -15187,7 +15187,8 @@ async fn saves_sync_without_silent_overwrites(db: PgPool) {
             list["saves"][0]["generation"].as_i64(),
             list["used"].as_i64()
         ),
-        (Some(3), Some(8))
+        // The newest (8 bytes) and the copy kept before it (8) both count.
+        (Some(3), Some(16))
     );
 
     // Over 20 MB: refused.

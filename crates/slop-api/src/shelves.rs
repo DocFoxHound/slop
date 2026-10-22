@@ -240,6 +240,13 @@ fn valid_slug(slug: &str) -> bool {
             .all(|c| c.is_ascii_lowercase() || c.is_ascii_digit() || c == '-')
 }
 
+async fn lock_shelves(tx: &mut sqlx::PgConnection) -> sqlx::Result<()> {
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended('store_shelves', 0))")
+        .execute(tx)
+        .await?;
+    Ok(())
+}
+
 /// Writes a shelf's fields and apps; returns the app addresses for the audit log.
 async fn write(tx: &mut sqlx::PgConnection, id: Uuid, b: &ShelfBody) -> ApiResult<Vec<String>> {
     let title = validate_text("title", &b.title, 60, false)?;
@@ -276,7 +283,7 @@ async fn write(tx: &mut sqlx::PgConnection, id: Uuid, b: &ShelfBody) -> ApiResul
                 .await?;
         let app_id =
             app_id.ok_or_else(|| ApiError::invalid("apps", format!("no public app at {slug}")))?;
-        sqlx::query(
+        let added = sqlx::query(
             "insert into store_shelf_apps (shelf_id, app_id, position) values ($1, $2, $3)
              on conflict do nothing",
         )
@@ -284,8 +291,12 @@ async fn write(tx: &mut sqlx::PgConnection, id: Uuid, b: &ShelfBody) -> ApiResul
         .bind(app_id)
         .bind(position as i32)
         .execute(&mut *tx)
-        .await?;
-        slugs.push(slug.to_string());
+        .await?
+        .rows_affected();
+        // A repeated app is on the shelf (and in the log) once, at its first place.
+        if added > 0 {
+            slugs.push(slug.to_string());
+        }
     }
     Ok(slugs)
 }
@@ -304,6 +315,8 @@ async fn create(
         ));
     }
     let mut tx = state.db.begin().await?;
+    // One shelf change at a time, so two can't both take the last place.
+    lock_shelves(&mut tx).await?;
     let count: i64 = sqlx::query_scalar("select count(*) from store_shelves")
         .fetch_one(&mut *tx)
         .await?;
@@ -417,6 +430,20 @@ async fn reorder(
 ) -> ApiResult<Json<AdminShelves>> {
     admin.need(Perm::Review)?;
     let mut tx = state.db.begin().await?;
+    lock_shelves(&mut tx).await?;
+    // Every shelf once: a partial or mistyped list would leave two shelves at one place.
+    let mut all: Vec<String> = sqlx::query_scalar("select slug from store_shelves")
+        .fetch_all(&mut *tx)
+        .await?;
+    let mut given = b.slugs.clone();
+    all.sort();
+    given.sort();
+    if all != given {
+        return Err(ApiError::invalid(
+            "slugs",
+            "name every shelf once, in the new order",
+        ));
+    }
     for (position, slug) in b.slugs.iter().enumerate() {
         sqlx::query("update store_shelves set position = $2 where slug = $1")
             .bind(slug)
