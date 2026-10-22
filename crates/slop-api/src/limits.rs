@@ -33,6 +33,7 @@ pub enum Action {
     JobMessage,
     Offer,
     Lookup,
+    Bounty,
 }
 
 impl Action {
@@ -59,6 +60,8 @@ impl Action {
             Self::Offer => (5, DAY),
             // Lookups that cost Slop a GitHub request.
             Self::Lookup => (30, HOUR),
+            // Opening fix bounties (pledging counts as Donation).
+            Self::Bounty => (10, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -80,6 +83,7 @@ impl Action {
             Self::JobMessage => "job messages",
             Self::Offer => "offers to other makers",
             Self::Lookup => "repository lookups",
+            Self::Bounty => "new bounties",
         }
     }
 }

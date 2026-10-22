@@ -119,10 +119,29 @@ pub(crate) async fn call_once(
     let body: Value = res.json().await.unwrap_or(Value::Null);
     if !status.is_success() {
         let message = body["error"]["message"].as_str().unwrap_or("no message");
-        anyhow::bail!("Stripe answered {status}: {message}");
+        return Err(StripeError {
+            status,
+            message: message.to_string(),
+        }
+        .into());
     }
     Ok(body)
 }
+
+/// Stripe answered with an error status: the request reached Stripe (unlike a network error).
+#[derive(Debug)]
+pub struct StripeError {
+    pub status: reqwest::StatusCode,
+    pub message: String,
+}
+
+impl std::fmt::Display for StripeError {
+    fn fmt(&self, f: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        write!(f, "Stripe answered {}: {}", self.status, self.message)
+    }
+}
+
+impl std::error::Error for StripeError {}
 
 pub(crate) fn account_status(account: &Value) -> &'static str {
     if account["charges_enabled"].as_bool() == Some(true)
@@ -415,10 +434,15 @@ pub async fn sync_session(
     if s["payment_status"] != "paid" {
         return Ok(false);
     }
-    let job_payment_id: Uuid = s["metadata"]["job_payment_id"]
+    // A connected account's webhooks bring every sale on it, Slop's or not (the maker's own
+    // shop, say): one without a job payment isn't Slop's to record, and failing it would only
+    // make Stripe retry it for days.
+    let Some(job_payment_id) = s["metadata"]["job_payment_id"]
         .as_str()
-        .and_then(|v| v.parse().ok())
-        .ok_or_else(|| anyhow::anyhow!("session without a job payment"))?;
+        .and_then(|v| v.parse::<Uuid>().ok())
+    else {
+        return Ok(false);
+    };
     // Only the session Slop made for this payment, on the creative's account, for the amount and
     // currency due. Metadata alone proves nothing: a creative controls their own Stripe account
     // and could make a session naming any payment, in a cheaper currency (security review,
@@ -432,7 +456,8 @@ pub async fn sync_session(
     .fetch_optional(&state.db)
     .await?;
     let Some((want_session, want_amount, want_currency, want_account)) = expected else {
-        anyhow::bail!("session for an unknown job payment");
+        tracing::warn!(%job_payment_id, session_id, account, "a paid Checkout session for a job payment Slop doesn't know; ignored");
+        return Ok(false);
     };
     let matches = want_session.as_deref() == Some(session_id)
         && want_account.as_deref() == Some(account)
@@ -560,6 +585,12 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
         .unwrap_or_default()
         .to_string();
     match (event.kind.as_str(), event.account.as_deref()) {
+        // An unpaid Checkout page that expired: only donations keep a row waiting on it.
+        ("checkout.session.expired", Some(acct))
+            if event.data.object["metadata"]["donation_id"].is_string() =>
+        {
+            crate::donations::sync_checkout(state, stripe, acct, &object_id).await?;
+        }
         ("checkout.session.completed" | "checkout.session.async_payment_succeeded", Some(acct)) => {
             // Which kind of payment it is decides who reads it; the state comes from Stripe's API.
             let meta = &event.data.object["metadata"];
