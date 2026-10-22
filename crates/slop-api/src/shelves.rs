@@ -303,6 +303,10 @@ async fn create(
             "2 to 40 lowercase letters, digits and single dashes",
         ));
     }
+    // `/admin/shelves/order` is the reordering, so a shelf there could never be changed.
+    if slug == "order" {
+        return Err(ApiError::invalid("slug", "that address is taken"));
+    }
     let mut tx = state.db.begin().await?;
     let count: i64 = sqlx::query_scalar("select count(*) from store_shelves")
         .fetch_one(&mut *tx)
@@ -417,6 +421,21 @@ async fn reorder(
 ) -> ApiResult<Json<AdminShelves>> {
     admin.need(Perm::Review)?;
     let mut tx = state.db.begin().await?;
+    // Every shelf exactly once: a partial list would leave the others where they were, sharing
+    // positions with the ones it moved.
+    let mut all: Vec<String> =
+        sqlx::query_scalar("select slug from store_shelves order by slug for update")
+            .fetch_all(&mut *tx)
+            .await?;
+    let mut given = b.slugs.clone();
+    given.sort();
+    all.sort();
+    if given != all {
+        return Err(ApiError::invalid(
+            "slugs",
+            "list every shelf's address once, in the new order",
+        ));
+    }
     for (position, slug) in b.slugs.iter().enumerate() {
         sqlx::query("update store_shelves set position = $2 where slug = $1")
             .bind(slug)

@@ -3527,3 +3527,695 @@ async fn agents_moderate_reports_appeals_and_accounts_through_mcp_tools(db: PgPo
         "{kinds:?}"
     );
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_arrange_the_front_page_through_mcp_tools(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let read = admin_token(&app, &owner, "read").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    for slug in ["cozy-farm", "tea-shop", "dark-dungeon"] {
+        listed_with(&app, maker, slug, "released", "").await;
+    }
+    let shelf_slugs = |v: &Value| -> Vec<String> {
+        v["shelves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["slug"].as_str().unwrap().to_string())
+            .collect()
+    };
+
+    // The Featured carousel: up to 8, each line up to 160 characters, set by review tokens.
+    assert_eq!(
+        tool_ok(&app, &read, "featured_apps", json!({})).await,
+        json!([])
+    );
+    let nine: Vec<Value> = (0..9).map(|_| json!({ "slug": "tea-shop" })).collect();
+    let text = tool_refused(&app, &review, "set_featured_apps", json!({ "apps": nine })).await;
+    assert!(text.contains("at most 8"), "{text}");
+    let text = tool_refused(
+        &app,
+        &review,
+        "set_featured_apps",
+        json!({ "apps": [{ "slug": "tea-shop", "blurb": "b".repeat(161) }] }),
+    )
+    .await;
+    assert!(text.contains("\"field\":\"blurb\""), "{text}");
+    let slides = json!({ "apps": [
+        { "slug": "tea-shop", "blurb": "Brew tea for tired travellers." },
+        { "slug": "cozy-farm" }
+    ] });
+    assert!(
+        tool_refused(&app, &read, "set_featured_apps", slides.clone())
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &review, "set_featured_apps", slides).await;
+    let featured = tool_ok(&app, &read, "featured_apps", json!({})).await;
+    assert_eq!(featured[0]["slug"], "tea-shop");
+    assert_eq!(featured[0]["blurb"], "Brew tea for tired travellers.");
+    assert_eq!(featured[1]["slug"], "cozy-farm");
+
+    // Shelves: a bad address or too many apps is refused; arrays and booleans pass through.
+    let listed = tool_ok(&app, &read, "store_shelves", json!({})).await;
+    assert_eq!(listed["shelves"], json!([]));
+    assert!(
+        listed["built_in"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|b| b["hidden"] == false)
+    );
+    tool_refused(
+        &app,
+        &review,
+        "create_shelf",
+        json!({ "slug": "Cozy Games", "title": "Cozy", "apps": [] }),
+    )
+    .await;
+    let many: Vec<String> = (0..25).map(|i| format!("app-{i}")).collect();
+    let text = tool_refused(
+        &app,
+        &review,
+        "create_shelf",
+        json!({ "slug": "big", "title": "Big", "apps": many }),
+    )
+    .await;
+    assert!(text.contains("at most 24"), "{text}");
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "create_shelf",
+            json!({ "slug": "cozy", "title": "Cozy games", "apps": ["tea-shop"] })
+        )
+        .await
+        .contains("forbidden")
+    );
+    let made = tool_ok(
+        &app,
+        &review,
+        "create_shelf",
+        json!({ "slug": "cozy", "title": "Cozy games", "blurb": "Slow and warm.", "apps": ["tea-shop", "cozy-farm"] }),
+    )
+    .await;
+    assert_eq!(shelf_slugs(&made), ["cozy"]);
+    tool_ok(
+        &app,
+        &review,
+        "create_shelf",
+        json!({ "slug": "spooky", "title": "Spooky", "on_front": false, "apps": ["dark-dungeon"] }),
+    )
+    .await;
+    let updated = tool_ok(
+        &app,
+        &review,
+        "update_shelf",
+        json!({ "slug": "cozy", "title": "Cozy picks", "on_front": false, "apps": ["cozy-farm"] }),
+    )
+    .await;
+    let cozy = &updated["shelves"][0];
+    assert_eq!(
+        (cozy["title"].as_str(), cozy["on_front"].as_bool()),
+        (Some("Cozy picks"), Some(false))
+    );
+    assert_eq!(cozy["apps"][0]["slug"], "cozy-farm");
+    assert_eq!(cozy["apps"].as_array().unwrap().len(), 1);
+
+    // A new order of every shelf.
+    let ordered = tool_ok(
+        &app,
+        &review,
+        "order_shelves",
+        json!({ "slugs": ["spooky", "cozy"] }),
+    )
+    .await;
+    assert_eq!(shelf_slugs(&ordered), ["spooky", "cozy"]);
+    assert_eq!(audit_actors(&app, "shelf.reordered").await.len(), 1);
+
+    // Hiding an automatic shelf, then removing a shelf (no body; an empty reply).
+    let hidden = tool_ok(
+        &app,
+        &review,
+        "hide_front_shelf",
+        json!({ "key": "fresh_slop", "hidden": true }),
+    )
+    .await;
+    assert!(
+        hidden["built_in"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|b| b["key"] == "fresh_slop" && b["hidden"] == true)
+    );
+    tool_refused(
+        &app,
+        &review,
+        "hide_front_shelf",
+        json!({ "key": "nonsense", "hidden": true }),
+    )
+    .await;
+    let (ok, text) = tool(&app, &review, "delete_shelf", json!({ "slug": "spooky" })).await;
+    assert!(ok);
+    assert_eq!(text, "Done (HTTP 204).");
+    tool_refused(&app, &review, "delete_shelf", json!({ "slug": "spooky" })).await;
+    assert_eq!(
+        shelf_slugs(&tool_ok(&app, &read, "store_shelves", json!({})).await),
+        ["cozy"]
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reordering_shelves_takes_every_shelf_exactly_once(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker, "tea-shop", "released", "").await;
+    for slug in ["cozy", "spooky"] {
+        tool_ok(
+            &app,
+            &review,
+            "create_shelf",
+            json!({ "slug": slug, "title": slug, "apps": ["tea-shop"] }),
+        )
+        .await;
+    }
+    let order = || async {
+        let shelves = tool_ok(&app, &review, "store_shelves", json!({})).await;
+        shelves["shelves"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|s| s["slug"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+
+    // A shelf left out, or one that isn't there, is refused and nothing moves.
+    for slugs in [
+        json!(["spooky"]),
+        json!(["spooky", "cozy", "nope"]),
+        json!(["spooky", "spooky", "cozy"]),
+    ] {
+        tool_refused(
+            &app,
+            &review,
+            "order_shelves",
+            json!({ "slugs": slugs.clone() }),
+        )
+        .await;
+        assert_eq!(order().await, ["cozy", "spooky"], "{slugs}");
+    }
+    assert_eq!(audit_actors(&app, "shelf.reordered").await.len(), 0);
+
+    // A shelf can't take the address the reordering lives at (it could never be changed).
+    let text = tool_refused(
+        &app,
+        &review,
+        "create_shelf",
+        json!({ "slug": "order", "title": "Order", "apps": [] }),
+    )
+    .await;
+    assert!(text.contains("\"field\":\"slug\""), "{text}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_fix_apps_and_profiles_through_mcp_tools(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let read = admin_token(&app, &owner, "read").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let moderate = admin_token(&app, &owner, "moderate").await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    listed_with(&app, maker_id, "sketch", "coming_soon", "status = 'draft'").await;
+
+    // Finding apps, by status and words; one app's whole record.
+    let drafts = tool_ok(&app, &read, "find_apps", json!({ "status": "draft" })).await;
+    let slugs: Vec<&str> = drafts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(slugs.len(), 2);
+    assert!(slugs.contains(&"game") && slugs.contains(&"sketch"));
+    let listed = tool_ok(
+        &app,
+        &read,
+        "find_apps",
+        json!({ "status": "listed", "q": "aren" }),
+    )
+    .await;
+    assert_eq!(listed.as_array().unwrap().len(), 1);
+    assert_eq!(listed[0]["slug"], "arena");
+    tool_refused(&app, &read, "find_apps", json!({ "status": "gone" })).await;
+    let record = tool_ok(&app, &read, "app_record", json!({ "slug": "arena" })).await;
+    assert_eq!(record["app"]["maker"], "Maker");
+    let text = tool_refused(&app, &read, "app_record", json!({ "slug": "no-such-app" })).await;
+    assert!(text.contains("not_found"), "{text}");
+
+    // Fixing a store page: arrays and integers pass through; it needs a reason and a review token.
+    let edit = json!({ "slug": "arena", "min_age": 16, "content_labels": ["violence", "horror"],
+                       "reason": "The trailer shows gore." });
+    assert!(
+        tool_refused(&app, &read, "edit_store_page", edit.clone())
+            .await
+            .contains("forbidden")
+    );
+    assert_eq!(
+        tool_refused(
+            &app,
+            &review,
+            "edit_store_page",
+            json!({ "slug": "arena", "min_age": 16 })
+        )
+        .await,
+        "missing argument: reason"
+    );
+    let changed = tool_ok(&app, &review, "edit_store_page", edit).await;
+    assert_eq!(changed["changed"], json!(["age rating", "content labels"]));
+    let (age, labels): (i16, Vec<String>) =
+        sqlx::query_as("select min_age, content_labels from apps where slug = 'arena'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (age, labels),
+        (16, vec!["violence".to_string(), "horror".to_string()])
+    );
+
+    // Freezing by hand: the maker is told; lifting it gives null back.
+    let freeze =
+        json!({ "slug": "arena", "reason": "A player says the last build steals passwords." });
+    assert!(
+        tool_refused(&app, &read, "freeze_app", freeze.clone())
+            .await
+            .contains("forbidden")
+    );
+    let frozen = tool_ok(&app, &review, "freeze_app", freeze.clone()).await;
+    assert_eq!(frozen["by_staff"], true);
+    assert!(
+        notice_titles(&app, maker_id)
+            .await
+            .contains(&"Slop froze arena".to_string())
+    );
+    assert!(
+        tool_refused(&app, &review, "freeze_app", freeze)
+            .await
+            .contains("conflict")
+    );
+    assert!(
+        tool_refused(
+            &app,
+            &read,
+            "unfreeze_app",
+            json!({ "slug": "arena", "note": "Fine." })
+        )
+        .await
+        .contains("forbidden")
+    );
+    let lifted = tool_ok(
+        &app,
+        &review,
+        "unfreeze_app",
+        json!({ "slug": "arena", "note": "Checked: a false report." }),
+    )
+    .await;
+    assert!(lifted.is_null());
+    tool_refused(
+        &app,
+        &review,
+        "unfreeze_app",
+        json!({ "slug": "arena", "note": "Again." }),
+    )
+    .await;
+
+    // Withdrawing a live release: a moderate token's call.
+    let release = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        release.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let withdraw = json!({ "id": release, "reason": "Ships a crypto miner." });
+    assert!(
+        tool_refused(&app, &review, "withdraw_release", withdraw.clone())
+            .await
+            .contains("forbidden")
+    );
+    let (ok, text) = tool(&app, &moderate, "withdraw_release", withdraw.clone()).await;
+    assert!(ok, "{text}");
+    assert_eq!(text, "Done (HTTP 204).");
+    let status: String =
+        sqlx::query_scalar("select status::text from releases where id = $1::uuid")
+            .bind(&release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "revoked");
+    assert!(
+        tool_refused(&app, &moderate, "withdraw_release", withdraw)
+            .await
+            .contains("only an approved release")
+    );
+
+    // An automatic freeze (Slop lost the repository): "unfreezing" checks again, and it stays.
+    sqlx::query("update apps set repo_url = $1, repo_checked_at = null, status = 'listed' where slug = 'game'")
+        .bind(format!("{}octo/gone", app.fake_base))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update apps set repo_checked_at = now() where slug <> 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    let still = tool_ok(
+        &app,
+        &review,
+        "unfreeze_app",
+        json!({ "slug": "game", "note": "Asked to check again." }),
+    )
+    .await;
+    assert!(
+        still["reason"].as_str().unwrap().contains("can't be read"),
+        "{still}"
+    );
+    assert_eq!(audit_actors(&app, "app.repo_rechecked").await.len(), 1);
+
+    // Profiles and teams: seen and fixed with moderation rights (a review token has them).
+    sqlx::query(
+        "insert into creatives (user_id, handle, name, headline, ai_use, trader, links)
+         values ($1, 'mia', 'Mia', 'Totally the real Studio Ghibli', 'none', false,
+                 '[{\"label\": \"Free gems\", \"url\": \"https://scam.example\"}]')",
+    )
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/teams").cookie(&maker).json(
+                json!({ "slug": "mias-crew", "name": "Official Valve Team", "kind": "player" }),
+            ),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let who = json!({ "id": maker_id.to_string() });
+    assert!(
+        tool_refused(&app, &read, "user_profile", who.clone())
+            .await
+            .contains("forbidden")
+    );
+    let profile = tool_ok(&app, &review, "user_profile", who).await;
+    assert_eq!(profile["creative"]["handle"], "mia");
+    assert_eq!(profile["teams"][0]["slug"], "mias-crew");
+    let fix = json!({
+        "id": maker_id.to_string(),
+        "creative": { "headline": "Pixel artist", "remove_links": true },
+        "reason": "Claiming to be a studio you aren't is impersonation."
+    });
+    assert!(
+        tool_refused(&app, &read, "edit_profile", fix.clone())
+            .await
+            .contains("forbidden")
+    );
+    let changed = tool_ok(&app, &review, "edit_profile", fix).await;
+    assert_eq!(changed["changed"], json!(["headline", "links"]));
+    let (headline, links): (String, Value) =
+        sqlx::query_as("select headline, links from creatives where user_id = $1")
+            .bind(maker_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((headline.as_str(), links), ("Pixel artist", json!([])));
+    assert!(
+        notice_titles(&app, maker_id)
+            .await
+            .contains(&"Slop changed your profile".to_string())
+    );
+    let team = json!({ "slug": "mias-crew", "name": "Mia's Crew", "reason": "Not affiliated with Valve." });
+    assert!(
+        tool_refused(&app, &read, "edit_team", team.clone())
+            .await
+            .contains("forbidden")
+    );
+    let text = tool_refused(
+        &app,
+        &review,
+        "edit_team",
+        json!({ "slug": "no-such-team", "name": "x", "reason": "x" }),
+    )
+    .await;
+    assert!(text.contains("not_found"), "{text}");
+    assert_eq!(
+        tool_ok(&app, &review, "edit_team", team).await["changed"],
+        json!(["name"])
+    );
+    assert!(
+        notice_titles(&app, maker_id)
+            .await
+            .contains(&"Slop changed your team's page".to_string())
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_pause_and_resume_donations_through_mcp_tools(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 10_000;
+    })
+    .await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let read = admin_token(&app, &owner, "read").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let moderate = admin_token(&app, &owner, "moderate").await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    donations_on(&app, &maker, "arena", false).await;
+    let open_hold = || async {
+        sqlx::query_as::<_, (Uuid, String)>(
+            "select id, kind from donation_holds where lifted_at is null",
+        )
+        .fetch_optional(&app.db)
+        .await
+        .unwrap()
+    };
+
+    // Paused for review: a review token may, a read token may not.
+    let pause = |kind: &str| {
+        json!({ "slug": "arena", "kind": kind, "reason": "A trademark complaint says the name is theirs.",
+                "ground": "Complaint TM-1" })
+    };
+    assert!(
+        tool_refused(&app, &read, "pause_donations", pause("review"))
+            .await
+            .contains("forbidden")
+    );
+    let placed = tool_ok(&app, &review, "pause_donations", pause("review")).await;
+    assert!(placed["hold"].is_string(), "{placed}");
+    let (hold, kind) = open_hold().await.unwrap();
+    assert_eq!(kind, "review");
+    let open = tool_ok(&app, &read, "donation_pauses", json!({})).await;
+    assert_eq!(open[0]["slug"], "arena");
+    assert_eq!(open[0]["ground"], "Complaint TM-1");
+
+    // The maker asks; the agent keeps it paused, and the maker reads why.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/arena/donations/hold/request")
+                .cookie(&maker)
+                .json(json!({ "message": "We renamed it." })),
+        )
+        .await;
+    assert!(res.status().is_success(), "{}", res.status());
+    let request: Uuid = sqlx::query_scalar("select id from donation_hold_requests")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let answer = json!({ "id": request.to_string(), "lift": false, "answer": "The old name is still in the store page." });
+    assert!(
+        tool_refused(&app, &read, "answer_donation_request", answer.clone())
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &review, "answer_donation_request", answer.clone()).await;
+    assert_eq!(open_hold().await.unwrap().0, hold);
+    let (outcome, said): (Option<String>, Option<String>) =
+        sqlx::query_as("select outcome, answer from donation_hold_requests where id = $1")
+            .bind(request)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (outcome.as_deref(), said.as_deref()),
+        (
+            Some("kept"),
+            Some("The old name is still in the store page.")
+        )
+    );
+    assert!(
+        notice_titles(&app, maker_id)
+            .await
+            .contains(&"Donations to arena stay paused for now".to_string())
+    );
+    tool_refused(&app, &review, "answer_donation_request", answer).await;
+
+    // Lifted with a note; then turned off (a moderate token's call), which a review token can't
+    // lift.
+    tool_ok(
+        &app,
+        &review,
+        "lift_donation_pause",
+        json!({ "id": hold.to_string(), "note": "Renamed everywhere now." }),
+    )
+    .await;
+    assert!(open_hold().await.is_none());
+    assert!(
+        tool_refused(&app, &review, "pause_donations", pause("off"))
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &moderate, "pause_donations", pause("off")).await;
+    let (off, kind) = open_hold().await.unwrap();
+    assert_eq!(kind, "off");
+    let lift = json!({ "id": off.to_string(), "note": "The complaint was withdrawn." });
+    assert!(
+        tool_refused(&app, &review, "lift_donation_pause", lift.clone())
+            .await
+            .contains("forbidden")
+    );
+    tool_ok(&app, &moderate, "lift_donation_pause", lift.clone()).await;
+    assert!(open_hold().await.is_none());
+    tool_refused(&app, &moderate, "lift_donation_pause", lift).await;
+
+    // The history: none open, both with show=all.
+    assert_eq!(
+        tool_ok(&app, &read, "donation_pauses", json!({})).await,
+        json!([])
+    );
+    let all = tool_ok(&app, &read, "donation_pauses", json!({ "show": "all" })).await;
+    assert_eq!(all.as_array().unwrap().len(), 2);
+    assert!(
+        all.as_array()
+            .unwrap()
+            .iter()
+            .all(|h| h["lifted_at"].is_string())
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_agents_sensitive_actions_wait_for_a_second_person(db: PgPool) {
+    let app = agents_app(db, 2).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (_, ben) = make_admin(&app, "Ben Owner").await;
+    let moderate = admin_token(&app, &ada, "moderate").await;
+    let read = admin_token(&app, &ada, "read").await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    let release = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        release.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+
+    // Withdrawing, delisting and turning donations off are recorded and wait.
+    for (name, args) in [
+        (
+            "withdraw_release",
+            json!({ "id": release, "reason": "Ships a crypto miner." }),
+        ),
+        (
+            "delist_app",
+            json!({ "slug": "arena", "rule": "misleading", "reason": "Impersonates a studio." }),
+        ),
+        (
+            "pause_donations",
+            json!({ "slug": "arena", "kind": "off", "reason": "Raises money for a scam." }),
+        ),
+    ] {
+        let waiting = tool_ok(&app, &moderate, name, args).await;
+        assert_eq!(waiting["approvals_still_needed"], 1, "{name}: {waiting}");
+        assert!(waiting["pending_action"].is_string());
+    }
+    let status: String =
+        sqlx::query_scalar("select status::text from releases where id = $1::uuid")
+            .bind(&release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "approved");
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from apps where slug = 'arena' and status = 'listed'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(count(&app, "select count(*) from donation_holds").await, 0);
+
+    // The agent sees what waits (by default only that), but only people approve.
+    let pending = tool_ok(&app, &read, "pending_actions", json!({})).await;
+    let actions = pending["actions"].as_array().unwrap();
+    let kinds: Vec<&str> = actions
+        .iter()
+        .map(|a| a["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["donations.off", "app.delist", "release.revoke"]);
+    assert_eq!(pending["approvals_required"], 2);
+    let first = actions[2]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        app.send(with_token(
+            req(Method::POST, format!("/v1/admin/actions/{first}/approve")),
+            &moderate
+        ))
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/admin/actions/{first}/approve")).cookie(&ben))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    // It can withdraw its own request.
+    let delist = actions[1]["id"].as_str().unwrap().to_string();
+    tool_ok(
+        &app,
+        &moderate,
+        "cancel_pending_action",
+        json!({ "id": delist }),
+    )
+    .await;
+    let left = tool_ok(&app, &read, "pending_actions", json!({})).await;
+    assert_eq!(left["actions"].as_array().unwrap().len(), 1);
+    let all = tool_ok(&app, &read, "pending_actions", json!({ "status": "all" })).await;
+    let statuses: Vec<&str> = all["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["status"].as_str().unwrap())
+        .collect();
+    assert_eq!(statuses, ["pending", "cancelled", "done"]);
+    let status: String =
+        sqlx::query_scalar("select status::text from releases where id = $1::uuid")
+            .bind(&release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "revoked");
+}
