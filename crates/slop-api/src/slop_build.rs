@@ -257,6 +257,12 @@ async fn submit_from_ci(
     if !tag_ok {
         return Err(ApiError::invalid("tag", "unexpected release tag"));
     }
+    // Checked before the release is made, so a refusal leaves nothing behind to retry against.
+    if let Some(checks) = &req.source_checks
+        && checks.to_string().len() > 256 * 1024
+    {
+        return Err(ApiError::invalid("source_checks", "too large"));
+    }
     // Download URLs are built here from the app's repository, never taken from the request.
     let base = repo_url.trim_end_matches('/');
     let mut checks = Vec::new();
@@ -312,9 +318,6 @@ async fn submit_from_ci(
     )
     .await?;
     if let Some(checks) = &req.source_checks {
-        if checks.to_string().len() > 256 * 1024 {
-            return Err(ApiError::invalid("source_checks", "too large"));
-        }
         sqlx::query("update releases set source_checks = $2 where id = $1")
             .bind(release.id)
             .bind(sqlx::types::Json(checks))
