@@ -6060,3 +6060,480 @@ async fn agents_register_community_builds_with_an_all_apps_token(db: PgPool) {
     .unwrap();
     assert_eq!((parent.as_str(), kind.as_str()), ("castle", "port"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// The scanner container (deploy/scanner): scan.py and update.sh, run in the slop-scanner image
+// with signatures and rules made by the test. These run where the image has been built
+// (`podman build -t slop-scanner deploy/scanner`) and say so and return early elsewhere.
+
+const SCANNER_IMAGE: &str = "localhost/slop-scanner";
+/// Stands in for malware: ClamAV and YARA are given signatures for these bytes.
+const FAKE_MALWARE: &[u8] = b"SLOP-TEST-MALWARE: pretend this is a virus";
+
+fn scanner_image() -> bool {
+    let found = std::process::Command::new("podman")
+        .args(["image", "exists", SCANNER_IMAGE])
+        .status()
+        .is_ok_and(|s| s.success());
+    if !found {
+        eprintln!("skipped: the {SCANNER_IMAGE} image isn't built here");
+    }
+    found
+}
+
+/// A scratch folder on disk that the container's unprivileged user can write to.
+fn scanner_dir(what: &str) -> std::path::PathBuf {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("slop-{what}-{}", Uuid::now_v7()));
+    for sub in ["", "db", "db/clamav", "db/yara", "bin"] {
+        std::fs::create_dir_all(dir.join(sub)).unwrap();
+        std::fs::set_permissions(dir.join(sub), std::fs::Permissions::from_mode(0o777)).unwrap();
+    }
+    // The scripts under test, as they are in this checkout (not as the image was built).
+    let scanner = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../deploy/scanner");
+    for file in ["scan.py", "update.sh", "slop-scan"] {
+        let to = dir.join("bin").join(file);
+        std::fs::copy(scanner.join(file), &to).unwrap();
+        std::fs::set_permissions(&to, std::fs::Permissions::from_mode(0o755)).unwrap();
+    }
+    dir
+}
+
+/// Files the container made belong to its own user; remove them from inside the user namespace.
+fn remove_scanner_dir(dir: &std::path::Path) {
+    let _ = std::process::Command::new("podman")
+        .args(["unshare", "rm", "-rf"])
+        .arg(dir)
+        .status();
+}
+
+/// Compiles a YARA rule into db/yara/core.yarc with the image's own yarac.
+fn compile_yara(dir: &std::path::Path, rule: &str, version: &str) {
+    std::fs::write(dir.join("db/yara/rule.yar"), rule).unwrap();
+    let out = std::process::Command::new("podman")
+        .args([
+            "run",
+            "--rm",
+            "--network=none",
+            "--entrypoint",
+            "yarac",
+            "-v",
+        ])
+        .arg(format!("{}:/db:Z", dir.join("db").display()))
+        .args([SCANNER_IMAGE, "/db/yara/rule.yar", "/db/yara/core.yarc"])
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    std::fs::write(dir.join("db/yara/version"), version).unwrap();
+}
+
+/// ClamAV and YARA signatures for FAKE_MALWARE and a YARA rule for a marker string.
+fn scanner_signatures(dir: &std::path::Path) {
+    use sha2::Digest;
+    std::fs::write(
+        dir.join("db/clamav/test.hsb"),
+        format!(
+            "{}:{}:Slop.Test.Malware\n",
+            hex::encode(sha2::Sha256::digest(FAKE_MALWARE)),
+            FAKE_MALWARE.len()
+        ),
+    )
+    .unwrap();
+    compile_yara(
+        dir,
+        "rule SlopMarker { strings: $a = \"SLOP_YARA_MARKER\" condition: $a }\n",
+        "test-1",
+    );
+}
+
+/// Scans `bytes` as `name` the way slop-scan does (file on stdin, no network, read-only root),
+/// with the test's signatures and this checkout's scan.py (and bin/capa instead of capa, if
+/// the test made one).
+fn scan_file(dir: &std::path::Path, name: &str, bytes: &[u8]) -> Value {
+    use std::io::Write;
+    let mut cmd = std::process::Command::new("podman");
+    cmd.args([
+        "run",
+        "--rm",
+        "-i",
+        "--network=none",
+        "--read-only",
+        "--cap-drop=ALL",
+        "--security-opt=no-new-privileges",
+        "--tmpfs",
+        "/tmp:rw,size=200m,mode=1777",
+        "-v",
+    ])
+    .arg(format!("{}:/db:ro,Z", dir.join("db").display()))
+    .arg("-v")
+    .arg(format!(
+        "{}:/usr/local/bin/slop-scan:ro,Z",
+        dir.join("bin/scan.py").display()
+    ));
+    if dir.join("bin/capa").exists() {
+        cmd.arg("-v").arg(format!(
+            "{}:/usr/local/bin/capa:ro,Z",
+            dir.join("bin/capa").display()
+        ));
+    }
+    let mut child = cmd
+        .args([SCANNER_IMAGE, "-", name])
+        .stdin(std::process::Stdio::piped())
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .spawn()
+        .unwrap();
+    child.stdin.take().unwrap().write_all(bytes).unwrap();
+    let out = child.wait_with_output().unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    serde_json::from_slice(&out.stdout)
+        .unwrap_or_else(|_| panic!("{}", String::from_utf8_lossy(&out.stdout)))
+}
+
+fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
+    use std::io::Write;
+    let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));
+    for (name, data) in files {
+        w.start_file(*name, zip::write::SimpleFileOptions::default())
+            .unwrap();
+        w.write_all(data).unwrap();
+    }
+    w.finish().unwrap().into_inner()
+}
+
+/// Known malware, even inside an archive, is held for a person with what was found and where;
+/// a YARA match too; a clean archive passes.
+#[test]
+fn the_scanner_holds_known_malware_and_passes_clean_files() {
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan");
+    scanner_signatures(&dir);
+
+    let held = scan_file(
+        &dir,
+        "game.zip",
+        &zip_of(&[("readme.txt", b"hi"), ("bin/virus.com", FAKE_MALWARE)]),
+    );
+    assert_eq!(held["result"], "on_hold", "{held}");
+    let detail = held["detail"].as_str().unwrap();
+    assert!(
+        detail.contains("ClamAV: Slop.Test.Malware.UNOFFICIAL in bin/virus.com"),
+        "{detail}"
+    );
+    assert!(detail.contains("it may be a false positive"));
+
+    let marked = scan_file(
+        &dir,
+        "game.zip",
+        &zip_of(&[("data/level.txt", b"xx SLOP_YARA_MARKER xx")]),
+    );
+    assert_eq!(marked["result"], "on_hold");
+    assert!(
+        marked["detail"]
+            .as_str()
+            .unwrap()
+            .contains("YARA: SlopMarker in data/level.txt"),
+        "{marked}"
+    );
+
+    let clean = scan_file(
+        &dir,
+        "game.zip",
+        &zip_of(&[("readme.txt", b"a clean game"), ("assets/a.txt", b"x")]),
+    );
+    assert_eq!(clean["result"], "passed", "{clean}");
+    assert_eq!(
+        clean["detail"],
+        "Scanned with ClamAV, YARA and capa: nothing found."
+    );
+    assert_eq!(clean["engines"]["yara"], "yara-forge test-1");
+    assert!(
+        clean["engines"]["clamav"]
+            .as_str()
+            .unwrap()
+            .starts_with("ClamAV")
+    );
+    assert!(
+        clean["engines"]["capa"]
+            .as_str()
+            .unwrap()
+            .starts_with("capa")
+    );
+    remove_scanner_dir(&dir);
+}
+
+/// A file that couldn't be scanned completely never passes on its own: no signatures, an
+/// archive that won't unpack, archives nested too deep.
+#[test]
+fn the_scanner_holds_files_it_couldnt_scan_completely() {
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan");
+    let bare = scan_file(&dir, "game.zip", &zip_of(&[("readme.txt", b"hi")]));
+    assert_eq!(bare["result"], "on_hold");
+    assert_eq!(
+        bare["detail"],
+        "Not fully scanned: ClamAV has no signatures yet; YARA has no rules yet. A person checks it before it can be approved."
+    );
+
+    scanner_signatures(&dir);
+    let broken = scan_file(&dir, "game.zip", b"PK\x03\x04 this is not really a zip");
+    assert_eq!(broken["result"], "on_hold");
+    assert!(
+        broken["detail"]
+            .as_str()
+            .unwrap()
+            .contains("couldn't unpack game.zip"),
+        "{broken}"
+    );
+
+    // Five archives inside each other: more than the three levels unpacked.
+    let mut nested = zip_of(&[("core.txt", b"deep")]);
+    for level in (0..4).rev() {
+        nested = zip_of(&[(&format!("level{level}.zip"), &nested)]);
+    }
+    let deep = scan_file(&dir, "game.zip", &nested);
+    assert_eq!(deep["result"], "on_hold");
+    assert!(
+        deep["detail"]
+            .as_str()
+            .unwrap()
+            .contains("archives nested too deep"),
+        "{deep}"
+    );
+    // Three levels are fine.
+    let mut shallow = zip_of(&[("core.txt", b"deep")]);
+    for level in (0..2).rev() {
+        shallow = zip_of(&[(&format!("level{level}.zip"), &shallow)]);
+    }
+    assert_eq!(scan_file(&dir, "game.zip", &shallow)["result"], "passed");
+    remove_scanner_dir(&dir);
+}
+
+/// A finding in a plain (not archived) file is listed once in the report reviewers see (ClamAV
+/// reads both the file and its copy).
+#[test]
+fn the_scanner_lists_each_finding_once() {
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan");
+    scanner_signatures(&dir);
+    let held = scan_file(&dir, "virus.com", FAKE_MALWARE);
+    assert_eq!(held["result"], "on_hold");
+    assert_eq!(held["findings"].as_array().unwrap().len(), 1, "{held}");
+    remove_scanner_dir(&dir);
+}
+
+/// slop-scan passes the scanner only a tame file name (its extension is all that matters).
+#[test]
+fn slop_scan_tames_the_file_name_it_passes_on() {
+    use std::os::unix::fs::PermissionsExt;
+    let dir = scanner_dir("slop-scan");
+    // A stand-in podman that prints what it was asked to run.
+    let podman = dir.join("bin/podman");
+    std::fs::write(
+        &podman,
+        "#!/bin/sh\nfor a in \"$@\"; do printf '%s\\n' \"$a\"; done\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&podman, std::fs::Permissions::from_mode(0o755)).unwrap();
+    let file = dir.join("upload");
+    std::fs::write(&file, b"x").unwrap();
+    let run = |name: Option<&str>| {
+        let mut cmd = std::process::Command::new("sh");
+        cmd.arg(dir.join("bin/slop-scan")).arg(&file);
+        if let Some(n) = name {
+            cmd.arg(n);
+        }
+        let out = cmd
+            .env(
+                "PATH",
+                format!("{}:/usr/bin:/bin", dir.join("bin").display()),
+            )
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+        let args: Vec<String> = String::from_utf8_lossy(&out.stdout)
+            .lines()
+            .map(String::from)
+            .collect();
+        assert!(
+            args.contains(&"--network=none".to_string())
+                && args.contains(&"--read-only".to_string())
+        );
+        args.last().unwrap().clone()
+    };
+    assert_eq!(run(Some("Game Setup (v2).exe")), "Game_Setup__v2_.exe");
+    assert_eq!(run(Some("../../etc/passwd")), "file.._.._etc_passwd");
+    assert_eq!(run(Some(".hidden.zip")), "file.hidden.zip");
+    assert_eq!(run(Some("$(reboot);x.zip")), "__reboot__x.zip");
+    assert_eq!(run(None), "upload");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// update.sh: YARA rules are replaced only when YARA-Forge has a new release, and only once the
+/// new rules compile; ClamAV's signatures are refreshed every time. (curl and freshclam are
+/// stand-ins: no network.)
+#[test]
+fn the_scanner_update_replaces_yara_rules_only_when_new_ones_compile() {
+    use std::os::unix::fs::PermissionsExt;
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan-update");
+    let stub = |name: &str, body: &str| {
+        let p = dir.join("bin").join(name);
+        std::fs::write(&p, body).unwrap();
+        std::fs::set_permissions(&p, std::fs::Permissions::from_mode(0o755)).unwrap();
+    };
+    stub("freshclam", "#!/bin/sh\necho freshclam >> /db/calls\n");
+    // The GitHub API answers with $TAG; the release download is the zip the test put in /db.
+    stub(
+        "curl",
+        "#!/bin/sh\necho \"curl $*\" >> /db/calls\nout=\"\"\nwhile [ $# -gt 0 ]; do case \"$1\" in -o) out=$2; shift;; esac; shift; done\n\
+         if [ -n \"$out\" ]; then cp /db/release.zip \"$out\"; else printf '{\"tag_name\": \"%s\"}' \"$TAG\"; fi\n",
+    );
+    let release = |rule: &str| {
+        std::fs::write(
+            dir.join("db/release.zip"),
+            zip_of(&[("packages/core/yara-rules-core.yar", rule.as_bytes())]),
+        )
+        .unwrap();
+    };
+    let update = |tag: &str| {
+        let out = std::process::Command::new("podman")
+            .args([
+                "run",
+                "--rm",
+                "--network=none",
+                "--tmpfs",
+                "/tmp:rw,size=50m,mode=1777",
+                "-e",
+            ])
+            .arg(format!("TAG={tag}"))
+            .arg("-e")
+            .arg("PATH=/stubs:/usr/local/bin:/usr/bin:/bin")
+            .arg("-v")
+            .arg(format!("{}:/db:Z", dir.join("db").display()))
+            .arg("-v")
+            .arg(format!("{}:/stubs:ro,Z", dir.join("bin").display()))
+            .args(["--entrypoint", "sh", SCANNER_IMAGE, "/stubs/update.sh"])
+            .output()
+            .unwrap();
+        (
+            out.status.success(),
+            String::from_utf8_lossy(&out.stdout).to_string(),
+        )
+    };
+    let calls = || std::fs::read_to_string(dir.join("db/calls")).unwrap_or_default();
+    let version = || {
+        std::fs::read_to_string(dir.join("db/yara/version"))
+            .unwrap_or_default()
+            .trim()
+            .to_string()
+    };
+    let compiled = || std::fs::read(dir.join("db/yara/core.yarc")).ok();
+    let good = "rule SlopOne { strings: $a = \"ONE\" condition: $a }\n";
+
+    // First run: the rules are fetched and compiled.
+    release(good);
+    let (ok, out) = update("v1");
+    assert!(ok, "{out}");
+    assert_eq!(version(), "v1");
+    let first = compiled().expect("compiled rules");
+    assert!(out.contains("yara-forge v1"), "{out}");
+
+    // Same tag: nothing downloaded or replaced (even if the release changed).
+    std::fs::write(dir.join("db/calls"), "").unwrap();
+    release("rule Broken { condition: nonsense }\n");
+    let (ok, _) = update("v1");
+    assert!(ok);
+    assert_eq!(
+        calls().matches("curl").count(),
+        1,
+        "only the release check: {}",
+        calls()
+    );
+    assert!(calls().contains("freshclam"));
+    assert_eq!(compiled().as_ref(), Some(&first));
+
+    // A new tag whose rules don't compile: the old rules stay.
+    let (ok, _) = update("v2");
+    assert!(!ok, "the run fails");
+    assert_eq!(version(), "v1");
+    assert_eq!(compiled().as_ref(), Some(&first));
+
+    // A new tag that compiles: replaced.
+    release("rule SlopTwo { strings: $a = \"TWO\" condition: $a }\n");
+    let (ok, out) = update("v2");
+    assert!(ok, "{out}");
+    assert_eq!(version(), "v2");
+    assert_ne!(compiled().as_ref(), Some(&first));
+    remove_scanner_dir(&dir);
+}
+
+/// What capa says a program can do is passed to the reviewer as a note when it's worth a look
+/// (anti-analysis, keylogging…), not for ordinary things like networking. (capa is a stand-in
+/// here: making a real program that does these things isn't the test's business.)
+#[test]
+fn the_scanner_notes_capabilities_worth_a_reviewers_look() {
+    use std::os::unix::fs::PermissionsExt;
+    if !scanner_image() {
+        return;
+    }
+    let dir = scanner_dir("scan");
+    scanner_signatures(&dir);
+    let capa = dir.join("bin/capa");
+    std::fs::write(
+        &capa,
+        "#!/bin/sh\nif [ \"$1\" = --version ]; then echo 'capa stand-in'; exit 0; fi\n\
+         case \"$3\" in *game.exe) echo '{\"rules\": {\"check for debugger\": {\"meta\": {\"namespace\": \"anti-analysis/anti-debugging\"}}, \"log keystrokes\": {\"meta\": {\"namespace\": \"collection/keylog\"}}, \"send HTTP request\": {\"meta\": {\"namespace\": \"communication/http\"}}}}';; \
+         *) echo '{\"rules\": {\"send HTTP request\": {\"meta\": {\"namespace\": \"communication/http\"}}}}';; esac\n",
+    )
+    .unwrap();
+    std::fs::set_permissions(&capa, std::fs::Permissions::from_mode(0o755)).unwrap();
+
+    let noted = scan_file(
+        &dir,
+        "game.zip",
+        &zip_of(&[
+            ("game.exe", b"MZ pretend program"),
+            ("readme.txt", b"MZ but not a program name"),
+        ]),
+    );
+    assert_eq!(noted["result"], "note", "{noted}");
+    assert_eq!(
+        noted["detail"],
+        "Scanned clean. For the reviewer, it can: check for debugger, log keystrokes."
+    );
+    let caps = noted["capabilities"].as_array().unwrap();
+    assert_eq!(caps.len(), 2, "{noted}");
+    assert!(caps.iter().all(|c| c["file"] == "game.exe"));
+    assert_eq!(noted["engines"]["capa"], "capa stand-in");
+
+    // Only networking: nothing to note.
+    let plain = scan_file(
+        &dir,
+        "tool.zip",
+        &zip_of(&[("tool.bin", b"\x7fELF pretend program")]),
+    );
+    assert_eq!(plain["result"], "passed", "{plain}");
+    remove_scanner_dir(&dir);
+}
