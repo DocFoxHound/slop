@@ -126,18 +126,23 @@ async fn subscribe(
     let endpoint = allowed(config, &b.endpoint)
         .ok_or_else(|| ApiError::invalid("endpoint", "not a push service Slop knows"))?;
     let mut tx = state.db.begin().await?;
-    let count: i64 =
-        sqlx::query_scalar("select count(*) from push_subscriptions where user_id = $1")
-            .bind(user.id)
-            .fetch_one(&mut *tx)
-            .await?;
+    // The account's others: one it already has, posted again, doesn't count twice.
+    let count: i64 = sqlx::query_scalar(
+        "select count(*) from push_subscriptions where user_id = $1 and endpoint <> $2",
+    )
+    .bind(user.id)
+    .bind(endpoint.as_str())
+    .fetch_one(&mut *tx)
+    .await?;
     if count >= MAX_PER_USER {
         // The oldest goes, so a new phone always works.
         sqlx::query(
             "delete from push_subscriptions where id = (
-                 select id from push_subscriptions where user_id = $1 order by created_at limit 1)",
+                 select id from push_subscriptions where user_id = $1 and endpoint <> $2
+                 order by created_at limit 1)",
         )
         .bind(user.id)
+        .bind(endpoint.as_str())
         .execute(&mut *tx)
         .await?;
     }
