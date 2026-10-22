@@ -172,11 +172,16 @@ async fn start(
         b.url.trim(),
         state.config.releases.allow_http_downloads,
     )?;
+    let mut tx = state.db.begin().await?;
+    // One start at a time, so two can't both take the last slot.
+    sqlx::query("select pg_advisory_xact_lock(hashtextextended('demos', 0))")
+        .execute(&mut *tx)
+        .await?;
     let live: i64 = sqlx::query_scalar(
         "select count(*) from demos where status in ('fetching', 'live') and app_id <> $1",
     )
     .bind(app_id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
     if live >= state.config.demos.max_live {
         return Err(ApiError::Conflict(
@@ -191,8 +196,9 @@ async fn start(
     .bind(app_id)
     .bind(&url)
     .bind(until)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
+    tx.commit().await?;
     let st = state.clone();
     tokio::spawn(async move {
         let result = fetch(&st, app_id, &slug, &url).await;
@@ -200,12 +206,17 @@ async fn start(
             Ok(()) => ("live", None),
             Err(e) => ("failed", Some(e.to_string())),
         };
-        let _ = sqlx::query("update demos set status = $2, detail = coalesce($3, detail) where app_id = $1 and status = 'fetching'")
+        let updated = sqlx::query("update demos set status = $2, detail = coalesce($3, detail) where app_id = $1 and status = 'fetching'")
             .bind(app_id)
             .bind(status)
             .bind(detail)
             .execute(&st.db)
             .await;
+        // Ended while it was being fetched: nothing will look at these files again, so they go
+        // now.
+        if result.is_ok() && updated.is_ok_and(|r| r.rows_affected() == 0) {
+            let _ = std::fs::remove_dir_all(st.config.demos.dir.join(&slug));
+        }
     });
     Ok(StatusCode::ACCEPTED)
 }

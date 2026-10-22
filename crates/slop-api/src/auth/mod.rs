@@ -743,7 +743,7 @@ async fn me(
             .await?;
     me.personalize = crate::foryou::personalized(&state.db, user.id, policy).await?;
     me.new_decisions = crate::moderation::unseen(&state.db, user.id).await?;
-    me.unread_notifications = crate::notify::unread(&state.db, user.id).await?;
+    me.unread_notifications = crate::notify::unread(&state.db, &user).await?;
     me.profile_public = crate::reviews::is_public(&state.db, user.id).await?;
     Ok(Json(me))
 }

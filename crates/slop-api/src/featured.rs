@@ -116,7 +116,7 @@ async fn admin_set(
         .await?;
         let app_id = app_id
             .ok_or_else(|| ApiError::invalid("apps", format!("no public app at {}", slide.slug)))?;
-        sqlx::query(
+        let added = sqlx::query(
             "insert into featured_apps (app_id, position, blurb, added_by) values ($1, $2, $3, $4)
              on conflict (app_id) do nothing",
         )
@@ -125,8 +125,12 @@ async fn admin_set(
         .bind(blurb)
         .bind(admin.user_id)
         .execute(&mut *tx)
-        .await?;
-        slugs.push(slide.slug.clone());
+        .await?
+        .rows_affected();
+        // A repeated app shows (and is logged) once, at its first place.
+        if added > 0 {
+            slugs.push(slide.slug.clone());
+        }
     }
     crate::admin::audit(
         &mut tx,
