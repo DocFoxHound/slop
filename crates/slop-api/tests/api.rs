@@ -6379,7 +6379,7 @@ async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgP
     let app = test_app_with(db, |c| {
         c.payments.stripe = Some(slop_api::config::StripeConfig {
             secret_key: "sk_test_slop".into(),
-            webhook_secret: "whsec_slop".into(),
+            webhook_secret: "whsec_platform, whsec_slop".into(),
             api_base: stripe_base.parse().unwrap(),
         })
     })
@@ -6469,6 +6469,7 @@ async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgP
     };
     let res = app.router.clone().oneshot(hook(body, sig)).await.unwrap();
     assert_eq!(res.status(), StatusCode::BAD_REQUEST);
+    // Each endpoint has its own secret; either one signs.
     let (body, sig) = stripe_signed(&event, "whsec_slop");
     let res = app
         .router

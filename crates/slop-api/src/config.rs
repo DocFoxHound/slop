@@ -191,7 +191,8 @@ pub struct PaymentsConfig {
 pub struct StripeConfig {
     /// The platform's secret key (`sk_live_…` / `sk_test_…`).
     pub secret_key: String,
-    /// Signs the Connect webhook endpoint's events (`whsec_…`).
+    /// The webhook endpoints' signing secrets (`whsec_…`), comma-separated: Stripe gives each
+    /// endpoint its own, and there are two (connected accounts, and the platform's own events).
     pub webhook_secret: String,
     /// Stripe's API. Changed only by tests.
     pub api_base: Url,
