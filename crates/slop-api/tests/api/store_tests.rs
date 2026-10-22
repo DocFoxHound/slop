@@ -4892,3 +4892,93 @@ async fn old_thumbnails_are_hashed_a_few_at_a_time(db: PgPool) {
         }
     }
 }
+
+/// Emails the law asks for (a server donation's renewal reminder) go to every donor with an
+/// address whatever their email choices, but never to a closed account, and not without SMTP.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn required_emails_skip_closed_accounts_and_need_smtp(db: PgPool) {
+    let app = test_app_with(db.clone(), |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: "smtp://localhost:2525".into(),
+            from: "Slop <n@slop.test>".into(),
+        })
+    })
+    .await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "server-game",
+        "released",
+        "title = 'Server Game'",
+    )
+    .await;
+    for (name, email, closed) in [
+        ("Open", Some("open@example.com"), false),
+        ("No email", None, false),
+        ("Closed", Some("closed@example.com"), true),
+        ("Opted out", Some("quiet@example.com"), false),
+    ] {
+        let (id, _) = app.user(name, "US").await;
+        sqlx::query(
+            "update users set email = $2, closed_at = case when $3 then now() end, email_prefs = '{\"donations\": false}' where id = $1",
+        )
+        .bind(id)
+        .bind(email)
+        .bind(closed)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into server_donations (id, app_id, donor_id, stripe_account_id, currency, donation_minor, slop_fee_minor,
+                                           total_minor, consent_text, status, started_at, next_charge_at)
+             select $1, id, $2, 'acct_x', 'usd', 500, 25, 525, 'ok', 'active', now() - interval '20 days', now() + interval '2 days'
+             from apps where slug = 'server-game'",
+        )
+        .bind(Uuid::now_v7())
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    slop_api::donations::hourly(&app.state).await.unwrap();
+    let mut to: Vec<String> = sqlx::query_scalar("select to_address from email_outbox")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    to.sort();
+    assert_eq!(to, ["open@example.com", "quiet@example.com"]);
+    let body: String =
+        sqlx::query_scalar("select body from email_outbox where to_address = 'open@example.com'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(
+        body.starts_with("Hi Open,") && body.contains("Server Game"),
+        "{body}"
+    );
+
+    // Without SMTP: the reminder is in Slop, but no email is queued.
+    sqlx::query("update server_donations set first_reminder_at = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("delete from email_outbox")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let quiet = test_app(db).await;
+    slop_api::donations::hourly(&quiet.state).await.unwrap();
+    assert_eq!(
+        count(&quiet.db, "select count(*) from email_outbox").await,
+        0
+    );
+    assert!(
+        count(
+            &quiet.db,
+            "select count(*) from notifications where category = 'donations'"
+        )
+        .await
+            >= 2
+    );
+}
