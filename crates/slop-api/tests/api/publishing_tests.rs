@@ -3666,3 +3666,691 @@ async fn slop_build_takes_source_checks_up_to_their_own_limit(db: PgPool) {
     let res = submit_ci(&app, &github_token(&app, json!({})), body).await;
     assert_eq!(res.status(), StatusCode::CREATED);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Slop's GitHub App (github_app.rs)
+
+/// Webhooks: only with the App set up and GitHub's signature; installations are remembered and
+/// forgotten (with their cached tokens); events without one change nothing.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn github_app_webhooks_remember_and_forget_installations(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app_db = db.clone();
+    let installs = || async {
+        sqlx::query_as::<_, (String, i64)>(
+            "select repo_path, installation_id from github_installations order by repo_path",
+        )
+        .fetch_all(&app_db)
+        .await
+        .unwrap()
+    };
+
+    // No App on this server: there's no webhook.
+    let without = app_on(db.clone(), &gh_base, |_| {}).await;
+    let res = without
+        .send(signed_webhook(
+            "ping",
+            json!({ "zen": "hi" }),
+            "hook-secret",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    let app = app_on(db, &gh_base, |c| {
+        c.releases.github_app = Some(github_app_config())
+    })
+    .await;
+    let hook = |event: &str, body: Value| signed_webhook(event, body, "hook-secret");
+    assert_eq!(
+        status_of(&app, hook("ping", json!({ "zen": "hi" }))).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        status_of(
+            &app,
+            hook("installation", json!({ "installation": "seventy-seven" }))
+        )
+        .await,
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    // Without an installation, nothing to do.
+    assert_eq!(
+        status_of(
+            &app,
+            hook(
+                "installation",
+                json!({ "action": "created", "repositories": [{ "full_name": "octo/game" }] })
+            )
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    assert!(installs().await.is_empty());
+    // Too big for a webhook.
+    let res = app
+        .send(hook(
+            "release",
+            json!({ "body": "x".repeat(5 * 1024 * 1024 + 1) }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Installed on two repositories, then one more added.
+    let res = app
+        .send(hook(
+            "installation",
+            json!({ "action": "created", "installation": { "id": 77 },
+                    "repositories": [{ "full_name": "Octo/Game" }, { "full_name": "octo/tool" }] }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .send(hook(
+            "installation_repositories",
+            json!({ "action": "added", "installation": { "id": 77 },
+                    "repositories_added": [{ "full_name": "octo/extra" }] }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        installs().await,
+        [
+            ("octo/extra".to_string(), 77),
+            ("octo/game".to_string(), 77),
+            ("octo/tool".to_string(), 77)
+        ]
+    );
+
+    // Its token is fetched once and cached.
+    gh.json(
+        "/app/installations/77/access_tokens",
+        201,
+        json!({ "token": "ghs_77", "expires_at": "2099-01-01T00:00:00Z" }),
+    );
+    let url = app
+        .config
+        .releases
+        .github_api_base
+        .join("repos/octo/game/license")
+        .unwrap();
+    assert_eq!(
+        slop_api::github_app::auth_for(&app.state, &url).await,
+        Some(("ghs_77".to_string(), false))
+    );
+    assert_eq!(gh.hits("/app/installations/77/access_tokens"), 1);
+
+    // Suspended: forgotten, token and all; reinstalled, a new token is fetched.
+    for action in ["suspend", "deleted"] {
+        let res = app
+            .send(hook(
+                "installation",
+                json!({ "action": action, "installation": { "id": 77 } }),
+            ))
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        assert!(installs().await.is_empty(), "{action}");
+        assert_eq!(slop_api::github_app::auth_for(&app.state, &url).await, None);
+        app.send(hook(
+            "installation",
+            json!({ "action": "unsuspend", "installation": { "id": 77 }, "repositories": [{ "full_name": "octo/game" }] }),
+        ))
+        .await;
+        assert_eq!(
+            slop_api::github_app::auth_for(&app.state, &url).await,
+            Some(("ghs_77".to_string(), false))
+        );
+    }
+    assert_eq!(
+        gh.hits("/app/installations/77/access_tokens"),
+        3,
+        "the cached token went with it"
+    );
+}
+
+/// Installation tokens are reused until five minutes before they expire; an installation GitHub
+/// no longer has is forgotten and the shared token used instead; organizations get theirs too.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn github_app_installation_tokens_are_cached_and_dropped_when_gone(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |c| {
+        c.releases.github_app = Some(github_app_config());
+        c.releases.github_token = Some("gh-shared".into());
+    })
+    .await;
+    for (repo, id) in [("octo/long", 78), ("octo/short", 79), ("octo/gone", 80)] {
+        sqlx::query(
+            "insert into github_installations (repo_path, installation_id) values ($1, $2)",
+        )
+        .bind(repo)
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let in_an_hour = (OffsetDateTime::now_utc() + time::Duration::hours(1))
+        .format(&Rfc3339)
+        .unwrap();
+    let in_four_minutes = (OffsetDateTime::now_utc() + time::Duration::minutes(4))
+        .format(&Rfc3339)
+        .unwrap();
+    gh.json(
+        "/app/installations/78/access_tokens",
+        201,
+        json!({ "token": "ghs_long", "expires_at": in_an_hour }),
+    );
+    gh.json(
+        "/app/installations/79/access_tokens",
+        201,
+        json!({ "token": "ghs_short", "expires_at": in_four_minutes }),
+    );
+    let auth = |repo: &str| {
+        let url = app
+            .config
+            .releases
+            .github_api_base
+            .join(&format!("repos/{repo}/releases"))
+            .unwrap();
+        let state = app.state.clone();
+        async move { slop_api::github_app::auth_for(&state, &url).await }
+    };
+    for _ in 0..3 {
+        assert_eq!(
+            auth("octo/long").await,
+            Some(("ghs_long".to_string(), false))
+        );
+        assert_eq!(
+            auth("octo/short").await,
+            Some(("ghs_short".to_string(), false))
+        );
+    }
+    assert_eq!(gh.hits("/app/installations/78/access_tokens"), 1);
+    assert_eq!(
+        gh.hits("/app/installations/79/access_tokens"),
+        3,
+        "too close to expiry to reuse"
+    );
+    // Asked for with the App's own signed JWT.
+    assert!(gh.auths("/app/installations/78/access_tokens")[0].starts_with("Bearer ey"));
+
+    // Uninstalled while Slop missed the webhook.
+    assert_eq!(
+        auth("octo/gone").await,
+        Some(("gh-shared".to_string(), true))
+    );
+    let left: i64 =
+        sqlx::query_scalar("select count(*) from github_installations where installation_id = 80")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(left, 0);
+    // A repository without the App, and a URL that isn't about a repository: the shared token.
+    assert_eq!(
+        auth("octo/other").await,
+        Some(("gh-shared".to_string(), true))
+    );
+
+    assert!(
+        slop_api::github_app::installed(&app.state, "OCTO/long")
+            .await
+            .unwrap()
+    );
+    assert!(
+        !slop_api::github_app::installed(&app.state, "octo/gone")
+            .await
+            .unwrap()
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The GitHub release watcher (updates.rs)
+
+/// A watched GitHub app `octo/<slug>` with an approved 1.0.0 (its file the pattern for the
+/// next), from `source`.
+async fn watched_app(app: &TestApp, maker: Uuid, slug: &str, source: &str) {
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms, watch_releases)
+         values ($1, $2, 'Game', 'A game', 'game', 'beta', $3, $4, 'MIT', '{windows}', true)",
+    )
+    .bind(Uuid::now_v7())
+    .bind(slug)
+    .bind(maker)
+    .bind(format!("https://github.com/octo/{slug}"))
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let id = release_with_file(
+        app,
+        slug,
+        "1.0.0",
+        "approved",
+        &format!(
+            "https://github.com/octo/{slug}/releases/download/v1.0.0/{slug}-1.0.0-windows.zip"
+        ),
+        None,
+    )
+    .await;
+    sqlx::query("update releases set source = $2 where id = $1")
+        .bind(id)
+        .bind(source)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update release_files set file_name = $2 where release_id = $1")
+        .bind(id)
+        .bind(format!("{slug}-1.0.0-windows.zip"))
+        .execute(&app.db)
+        .await
+        .unwrap();
+}
+
+fn latest(slug: &str, published: OffsetDateTime, with_files: bool) -> Value {
+    json!({
+        "tag_name": "v1.1.0", "draft": false, "prerelease": false,
+        "published_at": published.format(&Rfc3339).unwrap(),
+        "html_url": format!("https://github.com/octo/{slug}/releases/tag/v1.1.0"),
+        "assets": if with_files { json!([{ "name": format!("{slug}-1.1.0-windows.zip"), "size": 10 }]) } else { json!([]) }
+    })
+}
+
+async fn watch_state(
+    app: &TestApp,
+    slug: &str,
+) -> (Option<String>, Option<String>, Option<OffsetDateTime>) {
+    sqlx::query_as(
+        "select watch_last_tag, watch_problem, watch_checked_at from apps where slug = $1",
+    )
+    .bind(slug)
+    .fetch_one(&app.db)
+    .await
+    .unwrap()
+}
+
+/// A release whose files are still uploading is checked again every pass, then given up on
+/// after two hours; one that can't be made is recorded as the watch problem.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_watcher_waits_for_files_then_gives_up_and_records_problems(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |_| {}).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    watched_app(&app, maker_id, "game", "maker").await;
+    let now = OffsetDateTime::now_utc();
+    gh.set(
+        "/repos/octo/game/releases/latest",
+        200,
+        &[("etag", "\"e1\"")],
+        latest("game", now - time::Duration::minutes(5), false).to_string(),
+    );
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    let (tag, problem, checked) = watch_state(&app, "game").await;
+    assert!(tag.is_none());
+    assert!(
+        problem
+            .as_deref()
+            .unwrap()
+            .starts_with("v1.1.0: waiting for its files"),
+        "{problem:?}"
+    );
+    assert!(checked.is_some());
+    // Checked again on the very next pass, without the ETag (so the new files are seen).
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    assert_eq!(gh.hits("/repos/octo/game/releases/latest"), 2);
+    let etag: Option<String> = sqlx::query_scalar("select watch_etag from apps")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(etag.is_none());
+
+    // Two hours on, still no files: given up, with a pointer to picking it by hand.
+    gh.set(
+        "/repos/octo/game/releases/latest",
+        200,
+        &[("etag", "\"e2\"")],
+        latest("game", now - time::Duration::hours(3), false).to_string(),
+    );
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    let (tag, problem, _) = watch_state(&app, "game").await;
+    assert_eq!(tag.as_deref(), Some("v1.1.0"));
+    assert!(problem.unwrap().contains("Pick it below instead"));
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    assert_eq!(
+        gh.hits("/repos/octo/game/releases/latest"),
+        3,
+        "not due again yet"
+    );
+
+    // The files are there but the app is frozen: the reason is kept for the maker.
+    sqlx::query(
+        "update apps set watch_last_tag = null, watch_problem = null, watch_checked_at = null, watch_etag = null,
+                frozen_at = now(), frozen_reason = 'Slop can''t read the repository'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    gh.set(
+        "/repos/octo/game/releases/latest",
+        200,
+        &[],
+        latest("game", now, true).to_string(),
+    );
+    gh.json(
+        "/repos/octo/game/commits/v1.1.0",
+        200,
+        json!({ "sha": "b".repeat(40) }),
+    );
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    let (tag, problem, _) = watch_state(&app, "game").await;
+    assert_eq!(tag.as_deref(), Some("v1.1.0"));
+    let problem = problem.unwrap();
+    assert!(
+        problem.starts_with("v1.1.0 couldn't be sent automatically"),
+        "{problem}"
+    );
+    assert!(problem.contains("frozen"), "{problem}");
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from releases where version = '1.1.0'"
+        )
+        .await,
+        0
+    );
+
+    // Unfrozen: it's sent.
+    sqlx::query("update apps set frozen_at = null, frozen_reason = null, watch_last_tag = null, watch_checked_at = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 1);
+    let (tag, problem, _) = watch_state(&app, "game").await;
+    assert_eq!(tag.as_deref(), Some("v1.1.0"));
+    assert!(problem.is_none());
+}
+
+/// Which apps a pass looks at: not Slop Build's or delisted ones; apps with the App installed
+/// only every six hours; and it stops when the shared GitHub allowance runs low.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_watcher_skips_what_it_should_and_saves_the_shared_allowance(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |c| {
+        c.releases.github_app = Some(github_app_config());
+        c.releases.github_token = Some("gh-shared".into());
+    })
+    .await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    for (slug, source) in [
+        ("built", "slop_build"),
+        ("delisted", "maker"),
+        ("hooked", "maker"),
+        ("plain", "maker"),
+    ] {
+        watched_app(&app, maker_id, slug, source).await;
+        gh.set(
+            &format!("/repos/octo/{slug}/releases/latest"),
+            404,
+            &[],
+            "{}",
+        );
+    }
+    sqlx::query("update apps set status = 'delisted' where slug = 'delisted'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into github_installations (repo_path, installation_id) values ('octo/hooked', 77)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    gh.json(
+        "/app/installations/77/access_tokens",
+        201,
+        json!({ "token": "ghs_77", "expires_at": "2099-01-01T00:00:00Z" }),
+    );
+    // Both checked an hour ago, with a release this week.
+    sqlx::query("update apps set watch_checked_at = now() - interval '1 hour'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    assert_eq!(
+        gh.hits("/repos/octo/built/releases/latest"),
+        0,
+        "Slop Build sends its own"
+    );
+    assert_eq!(gh.hits("/repos/octo/delisted/releases/latest"), 0);
+    assert_eq!(
+        gh.hits("/repos/octo/hooked/releases/latest"),
+        0,
+        "the webhook covers it"
+    );
+    assert_eq!(gh.hits("/repos/octo/plain/releases/latest"), 1);
+    sqlx::query(
+        "update apps set watch_checked_at = now() - interval '7 hours' where slug = 'hooked'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    assert_eq!(gh.hits("/repos/octo/hooked/releases/latest"), 1);
+    assert_eq!(
+        gh.auths("/repos/octo/hooked/releases/latest"),
+        ["Bearer ghs_77"]
+    );
+    assert_eq!(
+        gh.auths("/repos/octo/plain/releases/latest"),
+        ["Bearer gh-shared"]
+    );
+
+    // Low on the installation's own allowance: carries on.
+    sqlx::query("update apps set watch_checked_at = null where slug in ('hooked', 'plain')")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update apps set watch_checked_at = now() - interval '1 day' where slug = 'plain'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    gh.set(
+        "/repos/octo/hooked/releases/latest",
+        404,
+        &[("x-ratelimit-remaining", "3")],
+        "{}",
+    );
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    assert_eq!(gh.hits("/repos/octo/plain/releases/latest"), 2);
+
+    // Low on the shared allowance: the pass stops, the rest wait for the next.
+    sqlx::query("update apps set watch_checked_at = null where slug = 'plain'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "update apps set watch_checked_at = now() - interval '1 day' where slug = 'hooked'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    gh.set(
+        "/repos/octo/plain/releases/latest",
+        404,
+        &[("x-ratelimit-remaining", "499")],
+        "{}",
+    );
+    assert_eq!(slop_api::updates::watch_once(&app.state).await.unwrap(), 0);
+    assert_eq!(gh.hits("/repos/octo/plain/releases/latest"), 3);
+    assert_eq!(
+        gh.hits("/repos/octo/hooked/releases/latest"),
+        2,
+        "left for the next pass"
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The dependency watch (dep_watch.rs)
+
+/// A stand-in for OSV: packages named `bad-*` have an advisory `GHSA-<name>`, fixed in 9.9.9.
+/// Answers 503 while `down` is set. Records the size of every batch asked.
+#[derive(Clone, Default)]
+struct FakeOsv {
+    down: std::sync::Arc<std::sync::atomic::AtomicBool>,
+    batches: std::sync::Arc<std::sync::Mutex<Vec<usize>>>,
+}
+
+async fn fake_osv() -> (String, FakeOsv) {
+    let osv = FakeOsv::default();
+    let (q, v) = (osv.clone(), osv.clone());
+    let router = Router::new()
+        .route(
+            "/v1/querybatch",
+            post(move |axum::Json(body): axum::Json<Value>| {
+                let osv = q.clone();
+                async move {
+                    if osv.down.load(std::sync::atomic::Ordering::SeqCst) {
+                        return StatusCode::SERVICE_UNAVAILABLE.into_response();
+                    }
+                    let queries = body["queries"].as_array().unwrap();
+                    osv.batches.lock().unwrap().push(queries.len());
+                    let results: Vec<Value> = queries
+                        .iter()
+                        .map(|q| {
+                            let name = q["package"]["name"].as_str().unwrap();
+                            if name.starts_with("bad-") {
+                                json!({ "vulns": [{ "id": format!("GHSA-{name}") }] })
+                            } else {
+                                json!({})
+                            }
+                        })
+                        .collect();
+                    axum::Json(json!({ "results": results })).into_response()
+                }
+            }),
+        )
+        .route(
+            "/v1/vulns/{id}",
+            get(move |axum::extract::Path(id): axum::extract::Path<String>| {
+                let _ = &v;
+                async move {
+                    let name = id.trim_start_matches("GHSA-").to_string();
+                    axum::Json(json!({
+                        "id": id, "summary": format!("{name} is unsafe"),
+                        "affected": [{ "package": { "name": name }, "ranges": [{ "events": [{ "introduced": "0" }, { "fixed": "9.9.9" }] }] }]
+                    }))
+                }
+            }),
+        );
+    (serve_fake(router).await, osv)
+}
+
+async fn add_packages(app: &TestApp, release: Uuid, names: impl IntoIterator<Item = String>) {
+    for name in names {
+        sqlx::query("insert into release_packages (release_id, ecosystem, name, version) values ($1, 'npm', $2, '1.0.0')")
+            .bind(release)
+            .bind(name)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+}
+
+/// OSV being down leaves releases due for the next round; many packages go in batches of
+/// 1,000; a notice lists five advisories and counts the rest; releases waiting for review are
+/// checked too, without a notice.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_dependency_watch_batches_retries_and_summarises(db: PgPool) {
+    let (osv_base, osv) = fake_osv().await;
+    let app = test_app_with(db, |c| c.releases.osv_api_base = osv_base.parse().unwrap()).await;
+    let (maker_id, _) = maker_with_app(&app, "released").await;
+    let live = release_with_file(
+        &app,
+        "game",
+        "1.0.0",
+        "approved",
+        "https://example.com/a.zip",
+        None,
+    )
+    .await;
+    let waiting = release_with_file(
+        &app,
+        "game",
+        "1.1.0",
+        "awaiting_review",
+        "https://example.com/b.zip",
+        None,
+    )
+    .await;
+    add_packages(&app, live, (0..1493).map(|i| format!("ok-{i:04}"))).await;
+    add_packages(&app, live, (0..7).map(|i| format!("bad-{i}"))).await;
+    add_packages(&app, waiting, ["bad-new".to_string(), "ok-x".to_string()]).await;
+
+    // OSV down: nothing recorded, both still due.
+    osv.down.store(true, std::sync::atomic::Ordering::SeqCst);
+    slop_api::dep_watch::run_once(&app.state).await.unwrap();
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from releases where deps_checked_at is not null"
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count(&app, "select count(*) from release_advisories").await,
+        0
+    );
+
+    osv.down.store(false, std::sync::atomic::Ordering::SeqCst);
+    assert_eq!(slop_api::dep_watch::run_once(&app.state).await.unwrap(), 2);
+    let mut batches = osv.batches.lock().unwrap().clone();
+    batches.sort();
+    assert_eq!(batches, [2, 500, 1000]);
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from releases where deps_checked_at is not null"
+        )
+        .await,
+        2
+    );
+    let advisories: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "select release_id, vuln_id, fixed from release_advisories order by vuln_id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(advisories.len(), 8);
+    assert!(
+        advisories
+            .iter()
+            .any(|(r, v, _)| *r == waiting && v == "GHSA-bad-new")
+    );
+    assert!(
+        advisories
+            .iter()
+            .all(|(_, _, fixed)| fixed.as_deref() == Some("9.9.9"))
+    );
+
+    // One notice, for the live release only, naming five and counting the rest.
+    let notices: Vec<(String, String)> = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 and title like 'New security advisories%'",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notices.len(), 1);
+    assert_eq!(notices[0].0, "New security advisories for Game 1.0.0");
+    let body = &notices[0].1;
+    assert!(body.contains("affect 7 of its packages"), "{body}");
+    assert!(
+        body.contains("bad-0 1.0.0 (GHSA-bad-0, fixed in 9.9.9)"),
+        "{body}"
+    );
+    assert!(
+        body.ends_with("and 2 more. Update them and release again."),
+        "{body}"
+    );
+    assert!(!body.contains("bad-new"));
+
+    // Not due again for a day.
+    assert_eq!(slop_api::dep_watch::run_once(&app.state).await.unwrap(), 0);
+}
