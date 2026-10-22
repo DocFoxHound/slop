@@ -1340,19 +1340,29 @@ pub async fn refund_recorded(db: &PgPool, charge: &str, refunded_total: i64) -> 
     .bind(charge)
     .fetch_optional(&mut *tx)
     .await?;
-    sqlx::query(
-        "insert into payments (id, kind, refund_of, donation_id, stripe_account_id, stripe_object_id, amount_minor, currency)
-         values ($1, 'refund', $2, $3, $4, $5, $6, $7) on conflict (stripe_object_id) do nothing",
+    // Stripe gives the total refunded so far: record only what's new since the last refund.
+    let so_far: i64 = sqlx::query_scalar(
+        "select coalesce(-sum(amount_minor), 0)::int8 from payments where donation_id = $1 and kind = 'refund'",
     )
-    .bind(Uuid::now_v7())
-    .bind(original)
     .bind(id)
-    .bind(account)
-    .bind(format!("{charge}:refunded:{refunded_total}"))
-    .bind(-(refunded_total.min(i64::from(total)) as i32))
-    .bind(currency)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
+    let new = refunded_total.min(i64::from(total)) - so_far;
+    if new > 0 {
+        sqlx::query(
+            "insert into payments (id, kind, refund_of, donation_id, stripe_account_id, stripe_object_id, amount_minor, currency)
+             values ($1, 'refund', $2, $3, $4, $5, $6, $7) on conflict (stripe_object_id) do nothing",
+        )
+        .bind(Uuid::now_v7())
+        .bind(original)
+        .bind(id)
+        .bind(account)
+        .bind(format!("{charge}:refunded:{refunded_total}"))
+        .bind(-(new as i32))
+        .bind(currency)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(())
 }
