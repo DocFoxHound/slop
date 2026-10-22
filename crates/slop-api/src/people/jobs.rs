@@ -1103,7 +1103,11 @@ fn step_text(kind: &str) -> Option<(&'static str, &'static str)> {
             "A mediator suggested an outcome for {title}",
             "A mediator suggested an outcome for {title}",
         ),
-        "disputed" => ("{creative} disputed your review", ""),
+        // A card dispute (chargeback) on one of the job's payments (`dispute_recorded`).
+        "disputed" => (
+            "A card payment for {title} was disputed with the bank",
+            "{client}'s card payment for {title} was disputed with the bank",
+        ),
         k if k.starts_with("problem_proposal_") || k.starts_with("problem_") => (
             "The problem on {title} changed",
             "The problem on {title} changed",

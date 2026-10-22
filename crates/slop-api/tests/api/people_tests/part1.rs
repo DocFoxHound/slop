@@ -1708,3 +1708,634 @@ async fn the_admin_queue_lists_people_items_oldest_first_until_decided(db: PgPoo
     let (_, feed) = call(app, fetch("/v1/admin/review?kind=review_dispute", &admin)).await;
     assert_eq!(feed["items"], json!([]));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Stripe: onboarding, paying, checking a payment, the webhook (people-012, -013, -022, -023,
+// -053)
+
+/// What the fake Stripe holds, for a test to read and change.
+#[derive(Default)]
+struct Stripe {
+    /// Checkout sessions by ID, each with the connected account it was made on.
+    sessions: std::collections::HashMap<String, Value>,
+    accounts_created: usize,
+    sessions_created: usize,
+    /// What GET /v1/accounts/{id} answers.
+    account: Value,
+    /// Stripe refuses new Checkout sessions.
+    fail_checkout: bool,
+    amount_refunded: i64,
+}
+
+type FakeStripe = std::sync::Arc<std::sync::Mutex<Stripe>>;
+
+/// A fake Stripe that, like Stripe, answers for a Checkout session only on its own account.
+async fn stripe_stand_in() -> (String, FakeStripe) {
+    let fake: FakeStripe = Default::default();
+    fake.lock().unwrap().account = json!({ "charges_enabled": true, "details_submitted": true });
+    let f = fake.clone();
+    let create_account = move || {
+        let f = f.clone();
+        async move {
+            f.lock().unwrap().accounts_created += 1;
+            axum::Json(json!({ "id": "acct_vera" }))
+        }
+    };
+    let f = fake.clone();
+    let get_account = move |axum::extract::Path(id): axum::extract::Path<String>| {
+        let f = f.clone();
+        async move {
+            let mut a = f.lock().unwrap().account.clone();
+            a["id"] = json!(id);
+            axum::Json(a)
+        }
+    };
+    let f = fake.clone();
+    let create_session = move |headers: axum::http::HeaderMap, body: String| {
+        let f = f.clone();
+        async move {
+            // Long enough for a second press to arrive while the first is here.
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            let form: std::collections::HashMap<String, String> =
+                url::form_urlencoded::parse(body.as_bytes())
+                    .into_owned()
+                    .collect();
+            let mut s = f.lock().unwrap();
+            if s.fail_checkout {
+                return (
+                    StatusCode::BAD_REQUEST,
+                    axum::Json(json!({ "error": { "message": "Your account cannot currently make charges." } })),
+                )
+                    .into_response();
+            }
+            s.sessions_created += 1;
+            let id = format!("cs_{}", s.sessions_created);
+            let session = json!({
+                "id": id, "status": "open", "payment_status": "unpaid",
+                "account": headers["stripe-account"].to_str().unwrap(),
+                "url": format!("https://checkout.stripe.example/{id}"),
+                "amount_total": form["line_items[0][price_data][unit_amount]"].parse::<i64>().unwrap(),
+                "currency": form["line_items[0][price_data][currency]"],
+                "fee": form["payment_intent_data[application_fee_amount]"].parse::<i64>().unwrap(),
+                "metadata": { "job_payment_id": form["metadata[job_payment_id]"], "payer": form["metadata[payer]"] },
+            });
+            s.sessions.insert(id, session.clone());
+            axum::Json(session).into_response()
+        }
+    };
+    let f = fake.clone();
+    let get_session =
+        move |headers: axum::http::HeaderMap,
+              axum::extract::Path(id): axum::extract::Path<String>| {
+            let f = f.clone();
+            async move {
+                let s = f.lock().unwrap().sessions.get(&id).cloned();
+                let account = headers
+                    .get("stripe-account")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("");
+                match s {
+                    Some(mut s) if s["account"] == account => {
+                        s["payment_intent"] = json!({ "latest_charge": format!("ch_{id}"), "application_fee_amount": s["fee"] });
+                        axum::Json(s).into_response()
+                    }
+                    _ => (
+                        StatusCode::NOT_FOUND,
+                        axum::Json(json!({ "error": { "message": "No such checkout.session" } })),
+                    )
+                        .into_response(),
+                }
+            }
+        };
+    let f = fake.clone();
+    let get_charge = move |axum::extract::Path(id): axum::extract::Path<String>| {
+        let f = f.clone();
+        async move {
+            let refunded = f.lock().unwrap().amount_refunded;
+            axum::Json(json!({ "id": id, "amount_refunded": refunded }))
+        }
+    };
+    let app = Router::new()
+        .route("/v1/accounts", axum::routing::post(create_account))
+        .route("/v1/accounts/{id}", axum::routing::get(get_account))
+        .route(
+            "/v1/account_links",
+            axum::routing::post(|body: String| async move {
+                let form: std::collections::HashMap<String, String> =
+                    url::form_urlencoded::parse(body.as_bytes())
+                        .into_owned()
+                        .collect();
+                axum::Json(json!({ "url": format!("https://connect.stripe.example/setup/{}", form["account"]) }))
+            }),
+        )
+        .route("/v1/checkout/sessions", axum::routing::post(create_session))
+        .route("/v1/checkout/sessions/{id}", axum::routing::get(get_session))
+        .route("/v1/charges/{id}", axum::routing::get(get_charge));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    (format!("http://{addr}/"), fake)
+}
+
+/// Marks a session paid, as if the client finished Stripe Checkout.
+fn pay_on_stripe(fake: &FakeStripe, session: &str) {
+    let mut f = fake.lock().unwrap();
+    let s = f.sessions.get_mut(session).unwrap();
+    s["status"] = json!("complete");
+    s["payment_status"] = json!("paid");
+}
+
+/// The same database served with Stripe payments, and the fake Stripe behind it.
+async fn with_stripe(db: PgPool) -> (TestApp, FakeStripe) {
+    let (base, fake) = stripe_stand_in().await;
+    let app = test_app_with(db, |c| {
+        c.payments.stripe = Some(slop_api::config::StripeConfig {
+            secret_key: "sk_test_slop".into(),
+            webhook_secret: "whsec_test".into(),
+            api_base: base.parse().unwrap(),
+        });
+        roomy(c);
+    })
+    .await;
+    (app, fake)
+}
+
+/// A signed Stripe webhook; its status.
+async fn webhook(app: &TestApp, event: &Value) -> StatusCode {
+    let (body, sig) = stripe_signed(event, "whsec_test");
+    webhook_raw(app, body, &sig).await
+}
+
+async fn webhook_raw(app: &TestApp, body: String, sig: &str) -> StatusCode {
+    let r = Request::builder()
+        .method(Method::POST)
+        .uri("/v1/stripe/webhook")
+        .header(header::HOST, "localhost:8080")
+        .header("stripe-signature", sig)
+        .header(header::CONTENT_TYPE, "application/json")
+        .body(Body::from(body))
+        .unwrap();
+    app.router.clone().oneshot(r).await.unwrap().status()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn getting_paid_sets_up_one_stripe_account(db: PgPool) {
+    // Payments off: nothing to set up.
+    let off = test_app_with(db.clone(), roomy).await;
+    let (_, nobody) = off.user("Not a creative", "US").await;
+    let (vera, cookie) = off.user("Vera", "US").await;
+    let mut p = profile("vera", true);
+    p["confirm_adult"] = json!(true);
+    off.send(req(Method::PUT, "/v1/me/creative").cookie(&cookie).json(p))
+        .await;
+    let (status, body) = call(&off, post("/v1/me/creative/stripe", &cookie, json!({}))).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("unavailable"))
+    );
+    assert_eq!(
+        call(&off, post("/v1/me/creative/stripe", &nobody, json!({})))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // Off, refreshing just says what's stored.
+    let (status, body) = call(
+        &off,
+        post("/v1/me/creative/stripe/refresh", &cookie, json!({})),
+    )
+    .await;
+    assert_eq!(
+        (status, body["status"].as_str()),
+        (StatusCode::OK, Some("none"))
+    );
+
+    // With Stripe: one account, however often the creative presses "Get paid".
+    let (app, fake) = with_stripe(db).await;
+    assert_eq!(
+        call(&app, post("/v1/me/creative/stripe", &nobody, json!({})))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        call(
+            &app,
+            post("/v1/me/creative/stripe/refresh", &nobody, json!({}))
+        )
+        .await
+        .0,
+        StatusCode::NOT_FOUND
+    );
+    // Before there's an account, refreshing asks Stripe nothing.
+    let (_, body) = call(
+        &app,
+        post("/v1/me/creative/stripe/refresh", &cookie, json!({})),
+    )
+    .await;
+    assert_eq!(body["status"], "none");
+    for _ in 0..2 {
+        let (status, body) = call(&app, post("/v1/me/creative/stripe", &cookie, json!({}))).await;
+        assert_eq!(status, StatusCode::OK, "{body}");
+        assert_eq!(
+            (body["url"].as_str(), body["status"].as_str()),
+            (
+                Some("https://connect.stripe.example/setup/acct_vera"),
+                Some("pending")
+            )
+        );
+    }
+    assert_eq!(fake.lock().unwrap().accounts_created, 1);
+    let stored: (Option<String>, String) =
+        sqlx::query_as("select stripe_account_id, stripe_status from creatives where user_id = $1")
+            .bind(vera)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(stored, (Some("acct_vera".into()), "pending".into()));
+
+    // Once their passkey is due, "Get paid" needs one.
+    sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
+        .bind(vera)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (status, body) = call(&app, post("/v1/me/creative/stripe", &cookie, json!({}))).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str()),
+        (StatusCode::FORBIDDEN, Some("passkey_required"))
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn refreshing_reads_the_account_status_from_stripe(db: PgPool) {
+    let (app, fake) = with_stripe(db).await;
+    let (vera, cookie) = app.user("Vera", "US").await;
+    let mut p = profile("vera", true);
+    p["confirm_adult"] = json!(true);
+    app.send(req(Method::PUT, "/v1/me/creative").cookie(&cookie).json(p))
+        .await;
+    app.send(post("/v1/me/creative/stripe", &cookie, json!({})))
+        .await;
+    let cases = [
+        (
+            json!({ "charges_enabled": false, "details_submitted": false }),
+            "pending",
+        ),
+        (
+            json!({ "charges_enabled": false, "details_submitted": true,
+                    "requirements": { "disabled_reason": "requirements.pending_verification" } }),
+            "pending",
+        ),
+        (
+            json!({ "charges_enabled": false, "details_submitted": true,
+                    "requirements": { "disabled_reason": "rejected.fraud" } }),
+            "restricted",
+        ),
+        (
+            json!({ "charges_enabled": false, "details_submitted": false,
+                    "requirements": { "disabled_reason": "rejected.fraud" } }),
+            "pending",
+        ),
+        (
+            json!({ "charges_enabled": true, "details_submitted": true }),
+            "active",
+        ),
+    ];
+    for (account, want) in cases {
+        fake.lock().unwrap().account = account.clone();
+        let (status, body) = call(
+            &app,
+            post("/v1/me/creative/stripe/refresh", &cookie, json!({})),
+        )
+        .await;
+        assert_eq!(
+            (status, body["status"].as_str()),
+            (StatusCode::OK, Some(want)),
+            "{account}"
+        );
+        let stored: String =
+            sqlx::query_scalar("select stripe_status from creatives where user_id = $1")
+                .bind(vera)
+                .fetch_one(&app.db)
+                .await
+                .unwrap();
+        assert_eq!(stored, want);
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn paying_is_for_the_client_when_something_is_due(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let id = h.job("split", "accepted").await;
+    // Only the client pays, and only what's due.
+    h.refused(&id, &h.vera, "pay", json!({}), StatusCode::CONFLICT)
+        .await;
+    h.refused(&id, &stranger, "pay", json!({}), StatusCode::NOT_FOUND)
+        .await;
+    let paid = h.ok(&id, &h.tavern, "pay", json!({})).await;
+    assert_eq!(paid["url"], Value::Null, "simulated: no Checkout");
+    assert_eq!(paid["job"]["status"], "in_progress");
+    assert_eq!(paid["job"]["paid_minor"], 6001);
+    assert_eq!(paid["job"]["payments"][0]["simulated"], true);
+    let (status, body) = h.step(&id, &h.tavern, "pay", json!({})).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(body["error"]["message"], "nothing is due right now");
+    let fee: i32 = sqlx::query_scalar("select slop_fee_minor from payments")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(fee, 300, "5% of 60.01, rounded");
+    // An ended job takes no payments.
+    let declined = h.job("upfront", "offered").await;
+    h.ok(&declined, &h.tavern, "decline", json!({})).await;
+    h.refused(&declined, &h.tavern, "pay", json!({}), StatusCode::CONFLICT)
+        .await;
+
+    // With payments off, nothing can be paid.
+    let waiting = h.job("upfront", "accepted").await;
+    let off = test_app_with(app.db.clone(), roomy).await;
+    let (status, body) = call(
+        &off,
+        post(format!("/v1/jobs/{waiting}/pay"), &h.tavern, json!({})),
+    )
+    .await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str()),
+        (StatusCode::SERVICE_UNAVAILABLE, Some("unavailable"))
+    );
+    assert_eq!(h.status(&waiting).await, "awaiting_payment");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn paying_through_stripe_makes_one_checkout_and_says_when_it_cannot(db: PgPool) {
+    let h = hiring(db.clone(), "US").await;
+    let (app, fake) = with_stripe(db).await;
+    exec(&app, "update creatives set stripe_account_id = 'acct_vera'").await;
+    let id = h.job("upfront", "accepted").await;
+    let pay = || {
+        call(
+            &app,
+            post(format!("/v1/jobs/{id}/pay"), &h.tavern, json!({})),
+        )
+    };
+
+    // Two presses at once: one Checkout session, the same link for both.
+    let ((s1, a), (s2, b)) = tokio::join!(pay(), pay());
+    assert_eq!((s1, s2), (StatusCode::OK, StatusCode::OK), "{a} {b}");
+    assert_eq!(a["url"], "https://checkout.stripe.example/cs_1");
+    assert_eq!(b["url"], a["url"]);
+    assert_eq!(fake.lock().unwrap().sessions_created, 1);
+    {
+        let f = fake.lock().unwrap();
+        let s = &f.sessions["cs_1"];
+        assert_eq!(
+            (s["amount_total"].as_i64(), s["fee"].as_i64()),
+            (Some(12001), Some(600))
+        );
+        assert_eq!(s["account"], "acct_vera");
+    }
+
+    // A session that has expired is replaced; when Stripe refuses, the client hears why.
+    fake.lock().unwrap().sessions.get_mut("cs_1").unwrap()["status"] = json!("expired");
+    fake.lock().unwrap().fail_checkout = true;
+    let (status, body) = pay().await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("cannot currently make charges"),
+        "{body}"
+    );
+    fake.lock().unwrap().fail_checkout = false;
+    let (_, body) = pay().await;
+    assert_eq!(body["url"], "https://checkout.stripe.example/cs_2");
+
+    // A session already paid isn't offered again: it's recorded.
+    pay_on_stripe(&fake, "cs_2");
+    let (status, body) = pay().await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("already been made")
+    );
+    assert_eq!(h.status(&id).await, "in_progress");
+
+    // A creative without a Stripe account can't be paid.
+    let other = h.job("upfront", "accepted").await;
+    exec(&app, "update creatives set stripe_account_id = null").await;
+    let (status, body) = call(
+        &app,
+        post(format!("/v1/jobs/{other}/pay"), &h.tavern, json!({})),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        body["error"]["message"],
+        "they can't take payments right now"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn checking_a_payment_reads_the_session_slop_made(db: PgPool) {
+    let h = hiring(db.clone(), "US").await;
+    let (app, fake) = with_stripe(db).await;
+    exec(&app, "update creatives set stripe_account_id = 'acct_vera'").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let id = h.job("upfront", "accepted").await;
+    let check = |cookie: &str| {
+        call(
+            &app,
+            post(format!("/v1/jobs/{id}/payment/check"), cookie, json!({})),
+        )
+    };
+    assert_eq!(check(&stranger).await.0, StatusCode::NOT_FOUND);
+    // Nothing started yet: nothing changes.
+    let (status, job) = check(&h.tavern).await;
+    assert_eq!(
+        (status, job["status"].as_str()),
+        (StatusCode::OK, Some("awaiting_payment"))
+    );
+    let (_, paid) = call(
+        &app,
+        post(format!("/v1/jobs/{id}/pay"), &h.tavern, json!({})),
+    )
+    .await;
+    assert_eq!(paid["url"], "https://checkout.stripe.example/cs_1");
+    let (_, job) = check(&h.tavern).await;
+    assert_eq!(job["status"], "awaiting_payment", "not paid yet");
+
+    // A session changed on the creative's side (a cheaper amount) isn't taken as the payment.
+    pay_on_stripe(&fake, "cs_1");
+    fake.lock().unwrap().sessions.get_mut("cs_1").unwrap()["amount_total"] = json!(100);
+    let (_, job) = check(&h.vera).await;
+    assert_eq!(job["status"], "awaiting_payment");
+    assert_eq!(count(&app, "select count(*) from payments").await, 0);
+
+    // Paid as Slop asked, without a webhook: checking moves the job on, once.
+    fake.lock().unwrap().sessions.get_mut("cs_1").unwrap()["amount_total"] = json!(12001);
+    let (status, job) = check(&h.tavern).await;
+    assert_eq!(
+        (status, job["status"].as_str()),
+        (StatusCode::OK, Some("in_progress"))
+    );
+    assert_eq!(job["paid_minor"], 12001);
+    check(&h.vera).await;
+    assert_eq!(count(&app, "select count(*) from payments").await, 1);
+    let row: (String, i32, bool) =
+        sqlx::query_as("select stripe_object_id, slop_fee_minor, simulated from payments")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(row, ("ch_cs_1".into(), 600, false));
+
+    // In the simulated mode there's nothing to check.
+    let other = h.job("upfront", "accepted").await;
+    let (status, job) = h.step(&other, &h.tavern, "payment/check", json!({})).await;
+    assert_eq!(
+        (status, job["status"].as_str()),
+        (StatusCode::OK, Some("awaiting_payment"))
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_stripe_webhook_handles_people_events_once_and_only_from_the_right_account(db: PgPool) {
+    let h = hiring(db.clone(), "US").await;
+    let (app, fake) = with_stripe(db).await;
+    exec(&app, "update creatives set stripe_account_id = 'acct_vera'").await;
+    // Without Stripe there's no webhook.
+    assert_eq!(
+        webhook(&h.app, &json!({ "id": "evt_0", "type": "account.updated", "data": { "object": { "id": "acct_vera" } } })).await,
+        StatusCode::NOT_FOUND
+    );
+    // Signed but not an event: refused.
+    let (body, sig) = stripe_signed(&json!({ "hello": "world" }), "whsec_test");
+    assert_eq!(webhook_raw(&app, body, &sig).await, StatusCode::BAD_REQUEST);
+    let (body, sig) = stripe_signed(&json!("x"), "whsec_test");
+    assert_eq!(
+        webhook_raw(&app, body.replace('"', ""), &sig).await,
+        StatusCode::BAD_REQUEST
+    );
+
+    let id = h.job("upfront", "accepted").await;
+    call(
+        &app,
+        post(format!("/v1/jobs/{id}/pay"), &h.tavern, json!({})),
+    )
+    .await;
+    let payment: String =
+        sqlx::query_scalar("select id::text from job_payments where job_id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+
+    // Someone's own session on another account, naming this payment: ignored.
+    fake.lock().unwrap().sessions.insert(
+        "cs_evil".into(),
+        json!({ "id": "cs_evil", "account": "acct_evil", "status": "complete", "payment_status": "paid",
+                "amount_total": 12001, "currency": "usd", "fee": 0,
+                "metadata": { "job_payment_id": payment } }),
+    );
+    let evil = json!({ "id": "evt_evil", "type": "checkout.session.completed", "account": "acct_evil",
+                       "data": { "object": { "id": "cs_evil" } } });
+    assert_eq!(webhook(&app, &evil).await, StatusCode::OK);
+    assert_eq!(h.status(&id).await, "awaiting_payment");
+    assert_eq!(count(&app, "select count(*) from payments").await, 0);
+
+    // A session Stripe can't find: an error, so Stripe retries; the event isn't marked handled.
+    let missing = json!({ "id": "evt_missing", "type": "checkout.session.completed", "account": "acct_vera",
+                          "data": { "object": { "id": "cs_missing" } } });
+    assert_eq!(
+        webhook(&app, &missing).await,
+        StatusCode::INTERNAL_SERVER_ERROR
+    );
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from stripe_events where id = 'evt_missing'"
+        )
+        .await,
+        0
+    );
+
+    // A delayed payment method succeeding pays the job like a completed Checkout.
+    pay_on_stripe(&fake, "cs_1");
+    let delayed = json!({ "id": "evt_async", "type": "checkout.session.async_payment_succeeded", "account": "acct_vera",
+                          "data": { "object": { "id": "cs_1" } } });
+    assert_eq!(webhook(&app, &delayed).await, StatusCode::OK);
+    assert_eq!(h.status(&id).await, "in_progress");
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from stripe_events where id = 'evt_async'"
+        )
+        .await,
+        1
+    );
+
+    // A card dispute is recorded against the charge, once; both sides hear of it.
+    let dispute = json!({ "id": "evt_dp", "type": "charge.dispute.created", "account": "acct_vera",
+                          "data": { "object": { "id": "dp_1", "charge": "ch_cs_1", "amount": 12001 } } });
+    assert_eq!(webhook(&app, &dispute).await, StatusCode::OK);
+    let mut again = dispute.clone();
+    again["id"] = json!("evt_dp_again");
+    assert_eq!(webhook(&app, &again).await, StatusCode::OK);
+    let rows: Vec<(String, i32)> = sqlx::query_as(
+        "select stripe_object_id, amount_minor from payments where kind = 'dispute'",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(rows, [("dp_1".to_string(), -12001)]);
+    let job = h.view(&id, &h.vera).await;
+    let disputes = job["events"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|e| e["kind"] == "disputed")
+        .count();
+    assert_eq!(disputes, 1);
+    assert_eq!(
+        job["events"].as_array().unwrap().last().unwrap()["note"],
+        "$120.01"
+    );
+    assert!(
+        notices(&app, h.creative).await[0].contains("disputed"),
+        "the creative, whose money it is, hears of it"
+    );
+    assert!(
+        !notices(&app, h.client)
+            .await
+            .iter()
+            .any(|t| t.contains("disputed your review")),
+        "a card dispute isn't a review dispute"
+    );
+    // A dispute about a charge Slop doesn't know: nothing recorded.
+    let unknown = json!({ "id": "evt_dp2", "type": "charge.dispute.created", "account": "acct_vera",
+                          "data": { "object": { "id": "dp_2", "charge": "ch_unknown", "amount": 500 } } });
+    assert_eq!(webhook(&app, &unknown).await, StatusCode::OK);
+    assert_eq!(
+        count(&app, "select count(*) from payments where kind = 'dispute'").await,
+        1
+    );
+
+    // account.updated re-reads the account from Stripe.
+    fake.lock().unwrap().account = json!({ "charges_enabled": false, "details_submitted": true,
+                                           "requirements": { "disabled_reason": "rejected.other" } });
+    let updated = json!({ "id": "evt_acct", "type": "account.updated", "account": "acct_vera",
+                          "data": { "object": { "id": "acct_vera" } } });
+    assert_eq!(webhook(&app, &updated).await, StatusCode::OK);
+    let status: String = sqlx::query_scalar("select stripe_status from creatives")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "restricted");
+    let (_, dir) = call(&app, req(Method::GET, "/v1/people")).await;
+    assert_eq!(dir["people"][0]["can_hire"], false);
+}
