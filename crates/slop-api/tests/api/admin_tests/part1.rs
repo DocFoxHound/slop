@@ -4228,3 +4228,639 @@ async fn an_announced_version_can_be_withdrawn_before_it_takes_effect(db: PgPool
         StatusCode::NOT_FOUND
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Repository access: the daily check, freezing, Check now, making Private Slop public
+
+/// A test app whose GitHub API is `fake_host`, with the host's base URL.
+async fn app_with_fake_host(db: PgPool) -> (TestApp, String) {
+    let host = fake_host().await;
+    let base = host.clone();
+    let app = test_app_with(db, move |c| {
+        c.releases.github_api_base = base.parse().unwrap();
+        c.rate_limits.write_per_minute = 10_000;
+    })
+    .await;
+    (app, host)
+}
+
+/// (frozen reason, by staff, status, frozen and delisted for it) of an app.
+async fn freeze_state(app: &TestApp, slug: &str) -> (Option<String>, bool, String, bool) {
+    sqlx::query_as(
+        "select case when frozen_at is not null then coalesce(frozen_reason, '') end, frozen_by is not null,
+                status::text, frozen_delisted
+         from apps where slug = $1",
+    )
+    .bind(slug)
+    .fetch_one(&app.db)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_daily_check_freezes_only_on_a_clear_answer(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    for (slug, set) in [
+        ("gh-fine", "repo_url = 'https://github.com/x/fine'".to_string()),
+        ("gh-private-now", "repo_url = 'https://github.com/x/closed'".into()),
+        (
+            "gh-private-slop",
+            "repo_url = 'https://github.com/y/closed', visibility = 'private'".into(),
+        ),
+        ("gh-down", "repo_url = 'https://github.com/x/broken'".into()),
+        (
+            "gh-down-frozen",
+            "repo_url = 'https://github.com/y/broken', frozen_at = now() - interval '1 day', frozen_reason = 'Gone yesterday'"
+                .into(),
+        ),
+        ("git-200", format!("repo_url = '{host}200/a'")),
+        ("git-401", format!("repo_url = '{host}401/a'")),
+        ("git-403", format!("repo_url = '{host}403/a'")),
+        ("git-404", format!("repo_url = '{host}404/a'")),
+        ("git-410", format!("repo_url = '{host}410/a'")),
+        ("git-500", format!("repo_url = '{host}500/a'")),
+        // Private Slop on another host, with no token saved: Slop can't tell.
+        (
+            "git-private",
+            format!("repo_url = '{host}404/b', visibility = 'private'"),
+        ),
+        // Private Slop whose saved read-only token stopped working.
+        (
+            "token-revoked",
+            format!(
+                "repo_url = '{}ann/secret-game', visibility = 'private'",
+                app.fake_base
+            ),
+        ),
+        // A draft nobody has seen isn't checked.
+        ("draft", format!("repo_url = '{host}404/c', status = 'draft'")),
+    ] {
+        listed_with(&app, maker, slug, "released", &set).await;
+    }
+    let revoked = app_id(&app, "token-revoked").await;
+    let mut conn = app.db.acquire().await.unwrap();
+    slop_api::repo_tokens::store(
+        &mut conn,
+        &[9; 32],
+        revoked,
+        &format!("{}ann/secret-game", app.fake_base),
+        &slop_api::repo_tokens::Given {
+            kind: slop_api::repo_tokens::Kind::Gitea,
+            token: "revoked".into(),
+        },
+        maker,
+    )
+    .await
+    .unwrap();
+    drop(conn);
+
+    assert_eq!(slop_api::frozen::run_once(&app.state).await.unwrap(), 13);
+    let mut frozen = Vec::new();
+    for slug in [
+        "gh-fine",
+        "gh-private-now",
+        "gh-private-slop",
+        "gh-down",
+        "gh-down-frozen",
+        "git-200",
+        "git-401",
+        "git-403",
+        "git-404",
+        "git-410",
+        "git-500",
+        "git-private",
+        "token-revoked",
+        "draft",
+    ] {
+        if let (Some(reason), ..) = freeze_state(&app, slug).await {
+            frozen.push((slug, reason));
+        }
+    }
+    let unreadable =
+        "the repository can't be read without signing in: it was deleted, made private, or moved";
+    assert_eq!(
+        frozen,
+        [
+            (
+                "gh-private-now",
+                "the repository is private now, and apps in the store need public source".to_string()
+            ),
+            ("gh-down-frozen", "Gone yesterday".to_string()),
+            ("git-401", unreadable.to_string()),
+            ("git-403", unreadable.to_string()),
+            ("git-404", unreadable.to_string()),
+            ("git-410", unreadable.to_string()),
+            (
+                "token-revoked",
+                "Slop's token can't read the repository any more: it was revoked or expired, or the repository moved. Save a new one on the Manage page"
+                    .to_string()
+            ),
+        ],
+        "an unclear answer (a host error, or no way to check) changes nothing"
+    );
+    // Each newly frozen app's maker is told once; the one frozen before isn't told again.
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like '% is frozen: %'",
+    )
+    .bind(maker)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 6);
+    // Checked today: nothing is due again until tomorrow.
+    assert_eq!(slop_api::frozen::run_once(&app.state).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_daily_check_works_in_batches_unchecked_first(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url, license_spdx)
+         select gen_random_uuid(), 'app-' || i, 'App ' || i, 'An app', 'game', 'released', 'listed', $1,
+                $2 || '200/r' || i, 'MIT'
+         from generate_series(1, 201) i",
+    )
+    .bind(maker)
+    .bind(&host)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    listed_with(
+        &app,
+        maker,
+        "checked-before",
+        "released",
+        &format!("repo_url = '{host}200/old', repo_checked_at = now() - interval '2 days'"),
+    )
+    .await;
+    let checked_before = || async {
+        sqlx::query_scalar::<_, bool>(
+            "select repo_checked_at < now() - interval '1 day' from apps where slug = 'checked-before'",
+        )
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    assert_eq!(slop_api::frozen::run_once(&app.state).await.unwrap(), 200);
+    assert!(checked_before().await, "never-checked apps go first");
+    assert_eq!(slop_api::frozen::run_once(&app.state).await.unwrap(), 2);
+    assert!(!checked_before().await);
+    assert_eq!(slop_api::frozen::run_once(&app.state).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_daily_check_puts_back_an_app_the_grace_period_took_out(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "castle",
+        "released",
+        &format!("repo_url = '{host}404/castle'"),
+    )
+    .await;
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    sqlx::query("update apps set frozen_at = now() - interval '15 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::frozen::end_grace(&app.state).await.unwrap(), 1);
+    let state = freeze_state(&app, "castle").await;
+    assert_eq!((state.2.as_str(), state.3), ("delisted", true));
+    // Access comes back; tomorrow's check finds it.
+    sqlx::query("update apps set repo_url = $1, repo_checked_at = now() - interval '25 hours'")
+        .bind(format!("{host}200/castle"))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::frozen::run_once(&app.state).await.unwrap(), 1);
+    assert_eq!(
+        freeze_state(&app, "castle").await,
+        (None, false, "listed".into(), false)
+    );
+    let told: Vec<(String, String)> = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 order by created_at desc limit 1",
+    )
+    .bind(maker)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told[0].0, "castle isn't frozen any more");
+    assert!(
+        told[0]
+            .1
+            .ends_with("takes new releases and is back in the store.")
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn check_now_answers_with_the_freeze_still_in_place(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (maker, cookie) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "castle",
+        "released",
+        &format!("repo_url = '{host}404/castle'"),
+    )
+    .await;
+    let check = |r: Req| r;
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/apps/castle/repo-check"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // Still unreadable: the freeze comes back, with its reason and when the grace period ends.
+    let res = app
+        .send(check(
+            req(Method::POST, "/v1/apps/castle/repo-check").cookie(&cookie),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let frozen = body_json(res).await;
+    assert!(
+        frozen["reason"]
+            .as_str()
+            .unwrap()
+            .contains("can't be read without signing in")
+    );
+    assert_eq!(frozen["by_staff"], false);
+    let since = OffsetDateTime::parse(frozen["since"].as_str().unwrap(), &Rfc3339).unwrap();
+    let until = OffsetDateTime::parse(frozen["until"].as_str().unwrap(), &Rfc3339).unwrap();
+    assert_eq!(until - since, time::Duration::days(14));
+
+    // A maker's agent with a publishing token can press it too.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&cookie)
+                .json(json!({ "name": "Editor agent", "scope": "publish" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let agent = format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    );
+    sqlx::query("update apps set repo_url = $1")
+        .bind(format!("{host}200/castle"))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/apps/castle/repo-check").header("authorization", agent))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await, Value::Null, "readable again: lifted");
+
+    // A freeze staff placed isn't lifted by it, however readable the repository is.
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    app.send(
+        req(Method::POST, "/v1/admin/apps/castle/freeze")
+            .cookie(&owner)
+            .json(json!({ "reason": "Checking a malware report." })),
+    )
+    .await;
+    let res = app
+        .send(req(Method::POST, "/v1/apps/castle/repo-check").cookie(&cookie))
+        .await;
+    let frozen = body_json(res).await;
+    assert_eq!(frozen["by_staff"], true);
+    assert_eq!(frozen["reason"], "Checking a malware report.");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn owners_ask_to_make_private_slop_public_and_can_take_it_back(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (owner_id, owner) = app.user("Olive Owner", "US").await;
+    let (_, other) = app.user("Otto Other", "US").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    listed_with(
+        &app,
+        owner_id,
+        "tool",
+        "coming_soon",
+        "status = 'draft', visibility = 'private', repo_url = 'https://github.com/x/broken'",
+    )
+    .await;
+    listed_with(&app, owner_id, "public-tool", "coming_soon", "").await;
+    let ask = |slug: &str, cookie: Option<&str>| {
+        let mut r = req(Method::POST, format!("/v1/apps/{slug}/make-public"));
+        if let Some(c) = cookie {
+            r = r.cookie(c);
+        }
+        r
+    };
+    let requested = || async {
+        sqlx::query_scalar::<_, Option<OffsetDateTime>>(
+            "select public_requested_at from apps where slug = 'tool'",
+        )
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    assert_eq!(
+        app.send(ask("tool", None)).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(ask("tool", Some(&other))).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(ask("public-tool", Some(&owner))).await.status(),
+        StatusCode::CONFLICT,
+        "already public"
+    );
+    // GitHub can't say whether the repository is public: ask again later.
+    let res = app.send(ask("tool", Some(&owner))).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("couldn't confirm the repository is public")
+    );
+    // A licence that's an SPDX ID is needed.
+    sqlx::query("update apps set repo_url = 'https://github.com/x/open', license_spdx = 'MIT; or not' where slug = 'tool'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(ask("tool", Some(&owner))).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(requested().await.is_none());
+    sqlx::query("update apps set license_spdx = 'MIT' where slug = 'tool'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(ask("tool", Some(&owner))).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let first = requested().await.unwrap();
+    // Asking again keeps the first request's place.
+    assert_eq!(
+        app.send(ask("tool", Some(&owner))).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(requested().await, Some(first));
+    let ready = |admin: &str| {
+        let r = req(Method::GET, "/v1/admin/queue").cookie(admin);
+        let app = &app;
+        async move {
+            body_json(app.send(r).await).await["ready_to_list"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .map(|a| a["slug"].as_str().unwrap().to_string())
+                .collect::<Vec<_>>()
+        }
+    };
+    assert!(ready(&admin).await.contains(&"tool".to_string()));
+
+    // The owner changes their mind: it leaves the reviewers' list.
+    let cancel = |cookie: Option<&str>| {
+        let mut r = req(Method::DELETE, "/v1/apps/tool/make-public");
+        if let Some(c) = cookie {
+            r = r.cookie(c);
+        }
+        r
+    };
+    assert_eq!(
+        app.send(cancel(None)).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(cancel(Some(&other))).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(requested().await.is_some());
+    assert_eq!(
+        app.send(cancel(Some(&owner))).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(requested().await.is_none());
+    assert!(!ready(&admin).await.contains(&"tool".to_string()));
+    let _ = host;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_freeze_an_app_by_hand(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let freeze = |slug: &str, who: &str, reason: &str| {
+        as_who(Method::POST, format!("/v1/admin/apps/{slug}/freeze"), who)
+            .json(json!({ "reason": reason }))
+    };
+    let reason = "A player reported the last build steals passwords; we're checking.";
+    assert_eq!(
+        app.send(freeze("game", &reviewer, reason)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    for bad in ["", " ", &"x".repeat(2001)] {
+        let res = app.send(freeze("game", &owner, bad)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(res).await["error"]["field"], "reason");
+    }
+    assert_eq!(
+        app.send(freeze("nothing", &owner, reason)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let agent = token(&app, &owner, "review").await;
+    let res = app.send(freeze("game", &agent, reason)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let frozen = body_json(res).await;
+    assert_eq!(frozen["by_staff"], true);
+    assert_eq!(frozen["reason"], reason);
+    let told: (String, String) = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 and title like 'Slop froze%'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told.0, "Slop froze Game");
+    assert!(told.1.contains(reason));
+    // Once: lift it first to change the reason.
+    assert_eq!(
+        app.send(freeze("game", &owner, "Another reason entirely."))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    // New releases are refused, with staff's words.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(release_body(&app, "2.0.0", "game-windows.zip")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let message = body_json(res).await["error"]["message"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(
+        message.starts_with(
+            "Slop staff froze this app, so it can't take new releases: A player reported"
+        ),
+        "{message}"
+    );
+
+    // An app the automatic check froze becomes staff's, keeping when it was frozen.
+    let (other_maker, _) = app.user("Otto Maker", "US").await;
+    listed_with(
+        &app,
+        other_maker,
+        "lost",
+        "released",
+        &format!("repo_url = '{host}404/lost'"),
+    )
+    .await;
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    sqlx::query("update apps set frozen_at = now() - interval '3 days' where slug = 'lost'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(freeze("lost", &owner, reason)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let frozen = body_json(res).await;
+    assert_eq!(frozen["by_staff"], true);
+    let since = OffsetDateTime::parse(frozen["since"].as_str().unwrap(), &Rfc3339).unwrap();
+    assert!(OffsetDateTime::now_utc() - since > time::Duration::days(2));
+    assert_eq!(
+        audit_actions(&app)
+            .await
+            .iter()
+            .filter(|a| *a == "app.frozen")
+            .count(),
+        2
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn lifting_a_freeze_rechecks_an_automatic_one(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "fine",
+        "released",
+        &format!("repo_url = '{host}200/fine'"),
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "lost",
+        "released",
+        &format!("repo_url = '{host}404/lost'"),
+    )
+    .await;
+    let unfreeze = |slug: &str, who: &str, note: &str| {
+        as_who(Method::POST, format!("/v1/admin/apps/{slug}/unfreeze"), who)
+            .json(json!({ "note": note }))
+    };
+    let note = "Looked into it.";
+    assert_eq!(
+        app.send(unfreeze("fine", &owner, note)).await.status(),
+        StatusCode::CONFLICT,
+        "it isn't frozen"
+    );
+    assert_eq!(
+        app.send(unfreeze("nothing", &owner, note)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    assert!(freeze_state(&app, "lost").await.0.is_some());
+    assert_eq!(
+        app.send(unfreeze("lost", &reviewer, note)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    for bad in ["", &"x".repeat(2001)] {
+        let res = app.send(unfreeze("lost", &owner, bad)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(res).await["error"]["field"], "note");
+    }
+    // An automatic freeze is only lifted by reading the repository: still unreadable, it stays.
+    let res = app.send(unfreeze("lost", &owner, note)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["by_staff"], false);
+    let rechecked: i64 = sqlx::query_scalar(
+        "select count(*) from audit_log where action = 'app.repo_rechecked' and subject = 'lost'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(rechecked, 1);
+    // Readable again: lifted.
+    sqlx::query("update apps set repo_url = $1 where slug = 'lost'")
+        .bind(format!("{host}200/lost"))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(unfreeze("lost", &owner, note)).await;
+    assert_eq!(body_json(res).await, Value::Null);
+    assert_eq!(freeze_state(&app, "lost").await.0, None);
+}
+
+/// An app the 14-day grace period took out of the store, then frozen by staff on top: once staff
+/// lift their freeze and Slop can read the repository, it goes back in the store.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn lifting_a_staff_freeze_on_a_delisted_app_lets_it_come_back(db: PgPool) {
+    let (app, host) = app_with_fake_host(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "castle",
+        "released",
+        &format!("repo_url = '{host}404/castle'"),
+    )
+    .await;
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    sqlx::query("update apps set frozen_at = now() - interval '15 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::frozen::end_grace(&app.state).await.unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/apps/castle/freeze")
+                .cookie(&owner)
+                .json(json!({ "reason": "A malware report too; checking." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    // The repository is back and staff are done.
+    sqlx::query("update apps set repo_url = $1")
+        .bind(format!("{host}200/castle"))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/apps/castle/unfreeze")
+                .cookie(&owner)
+                .json(json!({ "note": "The report was false." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    assert_eq!(
+        freeze_state(&app, "castle").await,
+        (None, false, "listed".into(), false)
+    );
+}
