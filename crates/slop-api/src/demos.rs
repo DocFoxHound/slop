@@ -200,12 +200,17 @@ async fn start(
             Ok(()) => ("live", None),
             Err(e) => ("failed", Some(e.to_string())),
         };
-        let _ = sqlx::query("update demos set status = $2, detail = coalesce($3, detail) where app_id = $1 and status = 'fetching'")
+        let updated = sqlx::query("update demos set status = $2, detail = coalesce($3, detail) where app_id = $1 and status = 'fetching'")
             .bind(app_id)
             .bind(status)
             .bind(detail)
             .execute(&st.db)
             .await;
+        // Ended while it was being fetched: nothing will look at these files again, so they go
+        // now.
+        if result.is_ok() && updated.is_ok_and(|r| r.rows_affected() == 0) {
+            let _ = std::fs::remove_dir_all(st.config.demos.dir.join(&slug));
+        }
     });
     Ok(StatusCode::ACCEPTED)
 }
