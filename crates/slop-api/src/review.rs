@@ -675,7 +675,8 @@ async fn feed(
     let cfg = &state.config.releases;
     Ok(Json(Feed {
         guide: "/v1/admin/review/guide".into(),
-        can_decide: admin.token.as_ref().is_none_or(|t| t.can_decide),
+        // Their roles and, for a token, its scope (a support or finance session can't either).
+        can_decide: admin.need(crate::staff::Perm::Review).is_ok(),
         checks: json!({
             "scanning": cfg.scanner.is_on(),
             "maker_signatures_required": cfg.require_maker_signature,
