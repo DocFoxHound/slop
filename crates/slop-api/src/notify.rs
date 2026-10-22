@@ -355,14 +355,15 @@ pub async fn run_email(state: AppState) {
         tracing::info!("SLOP_SMTP_URL / SLOP_EMAIL_FROM not set: notifications aren't emailed");
         return;
     };
-    let transport =
-        match lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::from_url(&cfg.smtp_url) {
-            Ok(t) => t.build(),
-            Err(err) => {
-                tracing::error!(error = %err, "SLOP_SMTP_URL isn't a valid SMTP URL; email is off");
-                return;
-            }
-        };
+    let transport = match lettre::AsyncSmtpTransport::<lettre::Tokio1Executor>::from_url(&smtp_url(
+        &cfg.smtp_url,
+    )) {
+        Ok(t) => t.build(),
+        Err(err) => {
+            tracing::error!(error = %err, "SLOP_SMTP_URL isn't a valid SMTP URL; email is off");
+            return;
+        }
+    };
     loop {
         if let Err(err) = queue_emails(&state.db, &state.config).await {
             tracing::warn!(error = ?err, "queueing notification emails failed");
@@ -371,6 +372,23 @@ pub async fn run_email(state: AppState) {
             tracing::warn!(error = ?err, "sending emails failed");
         }
         tokio::time::sleep(StdDuration::from_secs(20)).await;
+    }
+}
+
+/// `smtp://user:password@host:587` means STARTTLS (config.rs, .env.example), but lettre reads a
+/// plain `smtp://` as no TLS at all, which would send the password and every email in the clear:
+/// with a password and no `tls=` of its own, the address requires STARTTLS.
+fn smtp_url(raw: &str) -> String {
+    match url::Url::parse(raw) {
+        Ok(mut u)
+            if u.scheme() == "smtp"
+                && u.password().is_some()
+                && !u.query_pairs().any(|(k, _)| k == "tls") =>
+        {
+            u.query_pairs_mut().append_pair("tls", "required");
+            u.to_string()
+        }
+        _ => raw.to_string(),
     }
 }
 
