@@ -246,14 +246,13 @@ pub async fn unread(db: &PgPool, user: &CurrentUser) -> sqlx::Result<i64> {
 }
 
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Inbox>> {
-    let hidden = hidden_for(&user);
     let items = sqlx::query_as(
         "select id, category, title, body, link, count, created_at, read_at is not null as read
          from notifications where user_id = $1 and not (category = any($2))
          order by created_at desc limit 60",
     )
     .bind(user.id)
-    .bind(&hidden)
+    .bind(hidden_for(&user))
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Inbox {

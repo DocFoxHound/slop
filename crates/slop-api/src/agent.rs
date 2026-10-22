@@ -1155,8 +1155,14 @@ pub(crate) fn tool_request(
         }
         Ok((Method::GET, path, None))
     } else {
-        // Approvals and listings take no body.
-        let body = (!rest.is_empty()).then_some(Value::Object(rest));
+        // Approvals and listings take no body. Any other tool with fields beyond its path sends
+        // a JSON body even when the optional ones are all left out, since its route reads one
+        // (a job's decline with no note, say).
+        let has_body = !tool.path.contains("{decision}")
+            && (tool.properties)()
+                .as_object()
+                .is_some_and(|p| p.keys().any(|k| !tool.path.contains(&format!("{{{k}}}"))));
+        let body = (has_body || !rest.is_empty()).then_some(Value::Object(rest));
         Ok((tool.method.clone(), path, body))
     }
 }

@@ -912,9 +912,14 @@ async fn my_apps(
 ) -> ApiResult<Json<Vec<AppSummary>>> {
     let mut qb = QueryBuilder::new("");
     push_summary_columns(&mut qb, &state.config);
-    qb.push(" where a.maker_id = ")
-        .push_bind(user.id)
-        .push(" order by a.updated_at desc");
+    qb.push(" where a.maker_id = ").push_bind(user.id);
+    // An AI agent's token for some of the maker's apps sees only those.
+    if let Some(agent) = user.agent.as_ref().filter(|a| !a.app_ids.is_empty()) {
+        qb.push(" and a.id = any(")
+            .push_bind(agent.app_ids.clone())
+            .push(")");
+    }
+    qb.push(" order by a.updated_at desc");
     Ok(Json(qb.build_query_as().fetch_all(&state.db).await?))
 }
 
