@@ -294,7 +294,7 @@ async fn drive(
         ok(client, "pay", json!({})).await;
     }
     if at("delivered") {
-        job = ok(
+        ok(
             creative,
             "deliver",
             json!({ "links": ["https://drive.example/preview.png"] }),
@@ -4216,6 +4216,18 @@ async fn a_makers_agent_writes_in_the_job_conversation_for_its_person(db: PgPool
             .await
             .unwrap();
     assert!(acked.is_some());
+    // Declining a request, too.
+    let (_, other) = h.hire(json!({})).await;
+    let other = other["id"].as_str().unwrap().to_string();
+    let (status, job) = as_agent(
+        format!("/v1/jobs/{other}/decline"),
+        json!({ "note": "Booked up." }),
+    )
+    .await;
+    assert_eq!(
+        (status, job["status"].as_str()),
+        (StatusCode::OK, Some("declined"))
+    );
     // Agreeing to things stays with the person.
     for step in ["pay", "deliver", "cancel", "withdraw"] {
         let (status, _) = as_agent(format!("/v1/jobs/{id}/{step}"), json!({})).await;
@@ -5179,4 +5191,771 @@ async fn mediators_keep_note_or_remove_a_disputed_review_with_a_reason(db: PgPoo
         0,
         "only removing a review is a moderation decision"
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Slop's own steps: completing, forgetting, payments and credits (people-054 … people-056)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn delivered_jobs_complete_themselves_after_seven_days_once(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let id = h.job("upfront", "delivered").await;
+    let in_days = |d: i64| OffsetDateTime::now_utc() + time::Duration::days(d);
+    let n = slop_api::people::jobs::auto_complete(&app.db, in_days(6))
+        .await
+        .unwrap();
+    assert_eq!(n, 0, "not before the 7 days");
+    assert_eq!(h.status(&id).await, "delivered");
+    // Two runs at once (two API instances): completed once, and neither fails.
+    let (a, b) = tokio::join!(
+        slop_api::people::jobs::auto_complete(&app.db, in_days(8)),
+        slop_api::people::jobs::auto_complete(&app.db, in_days(8)),
+    );
+    assert_eq!(a.unwrap() + b.unwrap(), 1);
+    let job = h.view(&id, &h.tavern).await;
+    assert_eq!(
+        (
+            job["status"].as_str(),
+            job["completed_automatically"].as_bool(),
+            job["credited"].as_bool()
+        ),
+        (Some("completed"), Some(true), Some(true))
+    );
+    assert_eq!(
+        job["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|e| e["kind"] == "completed_automatically")
+            .count(),
+        1
+    );
+    for user in [h.client, h.creative] {
+        assert!(notices(app, user).await[0].ends_with("is complete"));
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "nb4: a delivery with an open problem about it still completes on its own after 7 days"]
+async fn an_open_problem_holds_off_automatic_completion(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let id = h.job("upfront", "delivered").await;
+    h.ok(
+        &id,
+        &h.tavern,
+        "problem",
+        json!({ "statement": "It isn't what we agreed." }),
+    )
+    .await;
+    slop_api::people::jobs::auto_complete(
+        &h.app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(8),
+    )
+    .await
+    .unwrap();
+    assert_eq!(h.status(&id).await, "delivered");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn conversation_text_is_forgotten_30_days_after_it_closes(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let in_days = |d: i64| OffsetDateTime::now_utc() + time::Duration::days(d);
+    // Left open on a finished job, and open on a job still under way.
+    let done = h.job("upfront", "completed").await;
+    let active = h.job("upfront", "in_progress").await;
+    for id in [&done, &active] {
+        h.ok(id, &h.vera, "conversation/open", json!({})).await;
+        h.ok(
+            id,
+            &h.vera,
+            "messages",
+            json!({ "body": "Note to self.", "recording_ack": true }),
+        )
+        .await;
+    }
+    let texts = || async {
+        sqlx::query_as::<_, (String, Option<String>)>(
+            "select job_id::text, body from job_messages order by job_id",
+        )
+        .fetch_all(&app.db)
+        .await
+        .unwrap()
+    };
+    // Not yet 30 days since the job ended: nothing happens.
+    assert_eq!(
+        slop_api::people::jobs::forget_conversations(&app.db, in_days(29))
+            .await
+            .unwrap(),
+        0
+    );
+    assert!(
+        h.view(&done, &h.vera).await["conversation"]["open"]
+            .as_bool()
+            .unwrap()
+    );
+    // Past it: the conversation is closed, and its text kept 30 more days for downloading.
+    assert_eq!(
+        slop_api::people::jobs::forget_conversations(&app.db, in_days(31))
+            .await
+            .unwrap(),
+        0
+    );
+    let job = h.view(&done, &h.vera).await;
+    assert_eq!(job["conversation"]["open"], false);
+    assert!(texts().await.iter().all(|(_, body)| body.is_some()));
+    assert_eq!(h.view(&active, &h.vera).await["conversation"]["open"], true);
+    assert_eq!(
+        slop_api::people::jobs::forget_conversations(&app.db, in_days(62))
+            .await
+            .unwrap(),
+        1
+    );
+    let left = texts().await;
+    assert_eq!(left.iter().find(|(id, _)| *id == done).unwrap().1, None);
+    assert_eq!(
+        left.iter()
+            .find(|(id, _)| *id == active)
+            .unwrap()
+            .1
+            .as_deref(),
+        Some("Note to self."),
+        "an open conversation on a job under way is kept"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn payments_refunds_and_credits_are_recorded_once(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    use slop_api::people::jobs::{self, Paid};
+    let id = h.job("split", "accepted").await;
+    let deposit: Uuid = sqlx::query_scalar(
+        "select id from job_payments where job_id = $1::uuid and part = 'deposit'",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    let paid = |object: &str, amount: i64| Paid {
+        job_payment_id: deposit,
+        stripe_account_id: Some("acct_vera".into()),
+        object_id: object.into(),
+        payer: Some(h.client),
+        amount_minor: amount,
+        fee_minor: 300,
+        simulated: false,
+    };
+    // Not the amount due: refused, nothing recorded.
+    assert!(
+        jobs::payment_succeeded(&app.db, paid("ch_short", 100))
+            .await
+            .is_err()
+    );
+    assert_eq!(count(app, "select count(*) from payments").await, 0);
+    // The same charge twice (a webhook and a check): recorded once.
+    jobs::payment_succeeded(&app.db, paid("ch_1", 6001))
+        .await
+        .unwrap();
+    jobs::payment_succeeded(&app.db, paid("ch_1", 6001))
+        .await
+        .unwrap();
+    // A second charge for a payment already paid: kept as money received, not counted again.
+    jobs::payment_succeeded(&app.db, paid("ch_2", 6001))
+        .await
+        .unwrap();
+    assert_eq!(
+        count(app, "select count(*) from job_events where kind = 'paid'").await,
+        1
+    );
+    assert_eq!(h.status(&id).await, "in_progress");
+
+    // Refunds as Stripe reports their running total: only the new part is added.
+    jobs::refund_recorded(&app.db, "ch_1", 2000).await.unwrap();
+    jobs::refund_recorded(&app.db, "ch_1", 2000).await.unwrap();
+    jobs::refund_recorded(&app.db, "ch_1", 5000).await.unwrap();
+    jobs::refund_recorded(&app.db, "ch_unknown", 5000)
+        .await
+        .unwrap();
+    let refunds: Vec<i32> = sqlx::query_scalar(
+        "select amount_minor from payments where kind = 'refund' order by created_at",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(refunds, [-2000, -3000]);
+    assert_eq!(h.view(&id, &h.tavern).await["refunded_minor"], 5000);
+    // A card dispute on an unknown charge records nothing; on a known one, once.
+    jobs::dispute_recorded(&app.db, "ch_unknown", "dp_0", 100)
+        .await
+        .unwrap();
+    jobs::dispute_recorded(&app.db, "ch_1", "dp_1", 6001)
+        .await
+        .unwrap();
+    jobs::dispute_recorded(&app.db, "ch_1", "dp_1", 6001)
+        .await
+        .unwrap();
+    assert_eq!(
+        count(app, "select count(*) from payments where kind = 'dispute'").await,
+        1
+    );
+
+    // A completed job is credited only when fully paid and worth at least the minimum price.
+    let small = h.job("upfront", "completed").await;
+    exec(app, "update jobs set credited_at = null").await;
+    exec(
+        app,
+        &format!("update job_payments set amount_minor = 999 where job_id = '{small}'"),
+    )
+    .await;
+    let mut conn = app.db.acquire().await.unwrap();
+    jobs::maybe_credit(&mut conn, small.parse().unwrap(), OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    assert_eq!(
+        count(
+            app,
+            "select count(*) from jobs where credited_at is not null"
+        )
+        .await,
+        0
+    );
+    exec(
+        app,
+        &format!("update job_payments set amount_minor = 1000 where job_id = '{small}'"),
+    )
+    .await;
+    jobs::maybe_credit(&mut conn, small.parse().unwrap(), OffsetDateTime::now_utc())
+        .await
+        .unwrap();
+    assert_eq!(
+        count(
+            app,
+            "select count(*) from jobs where credited_at is not null"
+        )
+        .await,
+        1
+    );
+    // Owed money: no credit.
+    let owed = h.job("on_delivery", "delivered").await;
+    slop_api::people::jobs::auto_complete(
+        &app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(8),
+    )
+    .await
+    .unwrap();
+    assert_eq!(h.view(&owed, &h.tavern).await["credited"], false);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn credited_work_marks_the_project_and_its_rating_since(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    listed_with(app, h.client, "other-game", "released", "").await;
+    // Not credited yet: no badge, no "since the new work".
+    let (_, ratings) = call(app, req(Method::GET, "/v1/apps/tavern/ratings")).await;
+    assert_eq!(ratings["since_new_work"], Value::Null);
+    h.job("upfront", "completed").await;
+    let slugs = list_slugs(app, req(Method::GET, "/v1/apps?made_with_people=true")).await;
+    assert_eq!(slugs, ["tavern"]);
+    let all = list_slugs(app, req(Method::GET, "/v1/apps")).await;
+    assert_eq!(all.len(), 2);
+    // Credited, but not in a release yet: named, no tally.
+    let (_, ratings) = call(app, req(Method::GET, "/v1/apps/tavern/ratings")).await;
+    assert_eq!(ratings["since_new_work"]["credits"], json!(["Vera Okafor"]));
+    assert_eq!(ratings["since_new_work"]["since"], Value::Null);
+    // The first release after it starts the count: votes from then on.
+    let voter = |name: &str, vote: i16, days_ago: i64| {
+        let name = name.to_string();
+        async move {
+            let (id, _) = app.user(&name, "US").await;
+            sqlx::query(
+                "insert into votes (user_id, app_id, vote, weight, updated_at)
+                 select $1, id, $2, 1, now() - make_interval(days => $3::int) from apps where slug = 'tavern'",
+            )
+            .bind(id)
+            .bind(vote)
+            .bind(days_ago as i32)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        }
+    };
+    voter("Old fan", -1, 30).await;
+    approved_release(app, "tavern", h.client).await;
+    voter("New fan", 1, 0).await;
+    let (_, ratings) = call(app, req(Method::GET, "/v1/apps/tavern/ratings")).await;
+    let since = &ratings["since_new_work"];
+    assert_eq!(since["version"], "1.0.0");
+    assert!(since["since"].is_string());
+    assert_eq!(since["credits"], json!(["Vera Okafor"]));
+    assert_eq!(since["not_slop"], 1, "{since}");
+    assert_eq!(
+        since["slop"], 0,
+        "only votes since the release count: {since}"
+    );
+    // A hidden creative isn't named, though the timing still counts their work.
+    exec(app, "update creatives set hidden_reason = 'Spam'").await;
+    let (_, ratings) = call(app, req(Method::GET, "/v1/apps/tavern/ratings")).await;
+    assert_eq!(ratings["since_new_work"]["credits"], json!([]));
+    assert_eq!(ratings["since_new_work"]["version"], "1.0.0");
+    let page = call(app, req(Method::GET, "/v1/apps/tavern")).await.1;
+    assert_eq!(page["credits"], json!([]));
+}
+
+// ---------------------------------------------------------------------------------------------
+// Friends and blocks (people-058 … people-064)
+
+fn befriend_req(cookie: &str, user: impl std::fmt::Display) -> Req {
+    post(
+        "/v1/me/friends",
+        cookie,
+        json!({ "user": user.to_string() }),
+    )
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn friend_requests_go_both_ways_and_can_be_taken_back(db: PgPool) {
+    let app = &test_app_with(db, roomy).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (cara_id, cara) = app.user("Cara", "US").await;
+    let (gone_id, _) = app.user("Gone", "US").await;
+    let list = |cookie: &str| {
+        let r = fetch("/v1/me/friends", cookie);
+        async move { call(app, r).await.1 }
+    };
+    let names = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["name"].as_str().unwrap().to_string())
+            .collect()
+    };
+    // Who: a profile link or an ID; not yourself, not someone closed or unknown.
+    let (status, body) = call(app, befriend_req(&ann, "not a link")).await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "user")
+    );
+    let (status, body) = call(app, befriend_req(&ann, ann_id)).await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "user")
+    );
+    assert_eq!(
+        call(app, befriend_req(&ann, Uuid::now_v7())).await.0,
+        StatusCode::NOT_FOUND
+    );
+    slop_api::account::close_account(&app.db, gone_id, "test")
+        .await
+        .unwrap();
+    assert_eq!(
+        call(app, befriend_req(&ann, gone_id)).await.0,
+        StatusCode::NOT_FOUND
+    );
+
+    // Ann asks Bob and Cara; each sees it the other way round.
+    for to in [bob_id, cara_id] {
+        let (status, body) = call(
+            app,
+            befriend_req(&ann, format!("https://slop.example/u/{to}/")),
+        )
+        .await;
+        assert_eq!(
+            (status, body["status"].as_str()),
+            (StatusCode::OK, Some("requested"))
+        );
+    }
+    // Asking again: no second notification.
+    call(app, befriend_req(&ann, bob_id)).await;
+    assert_eq!(notices(app, bob_id).await, ["Ann wants to be friends"]);
+    let mine = list(&ann).await;
+    assert_eq!(names(&mine["outgoing"]), ["Cara", "Bob"]);
+    assert_eq!(mine["incoming"], json!([]));
+    assert_eq!(names(&list(&bob).await["incoming"]), ["Ann"]);
+    // Bob asking back makes them friends at once.
+    let (_, body) = call(app, befriend_req(&bob, ann_id)).await;
+    assert_eq!(body["status"], "friends");
+    assert_eq!(
+        notices(app, ann_id).await[0],
+        "Bob accepted your friend request"
+    );
+    assert_eq!(names(&list(&ann).await["friends"]), ["Bob"]);
+    assert_eq!(names(&list(&bob).await["friends"]), ["Ann"]);
+    assert_eq!(list(&bob).await["incoming"], json!([]));
+    // Already friends: says so, nothing new.
+    let (_, body) = call(app, befriend_req(&ann, bob_id)).await;
+    assert_eq!(body["status"], "friends");
+    assert_eq!(count(app, "select count(*) from friend_requests").await, 1);
+
+    // Accepting: only a request made to you.
+    let accept = |cookie: &str, from: Uuid| {
+        app.send(req(Method::POST, format!("/v1/me/friends/{from}/accept")).cookie(cookie))
+    };
+    assert_eq!(
+        accept(&ann, cara_id).await.status(),
+        StatusCode::NOT_FOUND,
+        "Ann asked Cara, not the other way"
+    );
+    assert_eq!(accept(&bob, cara_id).await.status(), StatusCode::NOT_FOUND);
+    // Ann takes her request to Cara back; Cara can't accept it any more.
+    let remove = |cookie: &str, other: Uuid| {
+        app.send(req(Method::DELETE, format!("/v1/me/friends/{other}")).cookie(cookie))
+    };
+    assert_eq!(remove(&ann, cara_id).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(list(&ann).await["outgoing"], json!([]));
+    assert_eq!(accept(&cara, ann_id).await.status(), StatusCode::NOT_FOUND);
+    // Cara asks; Ann declines it.
+    call(app, befriend_req(&cara, ann_id)).await;
+    assert_eq!(remove(&ann, cara_id).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(list(&cara).await["outgoing"], json!([]));
+    // Ann unfriends Bob: gone for both, and they can't message any more.
+    let can_message = |cookie: &str, other: Uuid| {
+        let r = fetch(format!("/v1/users/{other}/connection"), cookie);
+        async move { call(app, r).await.1["can_message"].as_bool().unwrap() }
+    };
+    assert!(can_message(&bob, ann_id).await);
+    assert_eq!(remove(&ann, bob_id).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(list(&bob).await["friends"], json!([]));
+    assert!(!can_message(&bob, ann_id).await);
+    assert!(!can_message(&ann, bob_id).await);
+    assert_eq!(
+        remove(&ann, bob_id).await.status(),
+        StatusCode::NO_CONTENT,
+        "nothing left: fine"
+    );
+    // Someone whose account closed isn't listed, as a friend or a request.
+    befriend(app, ann_id, cara_id).await;
+    call(app, befriend_req(&bob, ann_id)).await;
+    assert_eq!(names(&list(&ann).await["friends"]), ["Cara"]);
+    assert_eq!(names(&list(&ann).await["incoming"]), ["Bob"]);
+    sqlx::query("update users set closed_at = now() where id = any($1)")
+        .bind(vec![bob_id, cara_id])
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let mine = list(&ann).await;
+    assert_eq!(
+        (mine["friends"].clone(), mine["incoming"].clone()),
+        (json!([]), json!([]))
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn friend_requests_are_capped_per_day_and_rate_limited(db: PgPool) {
+    let app = test_app_with(db, roomy).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    // Thirty requests a day.
+    exec(
+        &app,
+        "insert into users (id, display_name, country_code, age_16_confirmed_at)
+         select gen_random_uuid(), 'Stranger ' || n, 'US', now() from generate_series(1, 30) n",
+    )
+    .await;
+    sqlx::query(
+        "insert into friend_requests (from_id, to_id) select $1, id from users where display_name like 'Stranger %'",
+    )
+    .bind(ann_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let (status, body) = call(&app, befriend_req(&ann, bob_id)).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("try again tomorrow")
+    );
+    // Yesterday's don't count.
+    exec(
+        &app,
+        "update friend_requests set created_at = now() - interval '2 days'",
+    )
+    .await;
+    assert_eq!(
+        call(&app, befriend_req(&ann, bob_id)).await.0,
+        StatusCode::OK
+    );
+    // And no more than 40 tries a day, whatever the answer.
+    for _ in 0..39 {
+        call(&app, befriend_req(&ann, ann_id)).await;
+    }
+    let (status, body) = call(&app, befriend_req(&ann, bob_id)).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn blocking_keeps_someone_away_until_unblocked(db: PgPool) {
+    let app = test_app_with(db, roomy).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (cara_id, _) = app.user("Cara", "US").await;
+    let block = |cookie: &str, other: Uuid| {
+        app.send(req(Method::PUT, format!("/v1/me/blocks/{other}")).cookie(cookie))
+    };
+    let unblock = |cookie: &str, other: Uuid| {
+        app.send(req(Method::DELETE, format!("/v1/me/blocks/{other}")).cookie(cookie))
+    };
+    let res = block(&ann, ann_id).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        block(&ann, Uuid::now_v7()).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    // Friends, then blocked: the friendship ends.
+    befriend(&app, ann_id, bob_id).await;
+    assert_eq!(block(&ann, bob_id).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        block(&ann, bob_id).await.status(),
+        StatusCode::NO_CONTENT,
+        "twice is fine"
+    );
+    assert_eq!(block(&ann, cara_id).await.status(), StatusCode::NO_CONTENT);
+    let (_, blocks) = call(&app, fetch("/v1/me/blocks", &ann)).await;
+    let names: Vec<&str> = blocks
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|b| b["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Cara", "Bob"], "newest first");
+    assert_eq!(
+        call(&app, fetch("/v1/me/blocks", &bob)).await.1,
+        json!([]),
+        "only the blocker's list"
+    );
+
+    // Bob can't reach Ann: no friend request, no team invite.
+    assert_eq!(
+        call(&app, befriend_req(&bob, ann_id)).await.0,
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(post(
+            "/v1/teams",
+            &bob,
+            json!({ "slug": "bobs-crew", "name": "Bob's Crew", "kind": "player" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let (status, body) = call(
+        &app,
+        post(
+            "/v1/teams/bobs-crew/invites",
+            &bob,
+            json!({ "user": ann_id.to_string() }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "user")
+    );
+    assert_eq!(count(&app, "select count(*) from team_invites").await, 0);
+    let conn = call(&app, fetch(format!("/v1/users/{ann_id}/connection"), &bob))
+        .await
+        .1;
+    assert_eq!(
+        (conn["can_message"].as_bool(), conn["blocked"].as_bool()),
+        (Some(false), Some(false))
+    );
+    let conn = call(&app, fetch(format!("/v1/users/{bob_id}/connection"), &ann))
+        .await
+        .1;
+    assert_eq!(conn["blocked"], true);
+
+    // Unblocked: the block goes, the friendship doesn't come back.
+    assert_eq!(unblock(&ann, bob_id).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        unblock(&ann, bob_id).await.status(),
+        StatusCode::NO_CONTENT,
+        "idempotent"
+    );
+    assert_eq!(
+        unblock(&ann, Uuid::now_v7()).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let (_, blocks) = call(&app, fetch("/v1/me/blocks", &ann)).await;
+    assert_eq!(blocks.as_array().unwrap().len(), 1);
+    assert_eq!(
+        call(&app, fetch("/v1/me/friends", &ann)).await.1["friends"],
+        json!([])
+    );
+    let (status, body) = call(&app, befriend_req(&bob, ann_id)).await;
+    assert_eq!(
+        (status, body["status"].as_str()),
+        (StatusCode::OK, Some("requested"))
+    );
+    assert_eq!(
+        call(
+            &app,
+            post(
+                "/v1/teams/bobs-crew/invites",
+                &bob,
+                json!({ "user": ann_id.to_string() })
+            )
+        )
+        .await
+        .0,
+        StatusCode::NO_CONTENT
+    );
+}
+
+/// A user's Slop app session (chat starts only there), as an Authorization header.
+async fn app_session(app: &TestApp, web: &str) -> String {
+    let tokens = desktop_sign_in(app, web).await;
+    format!("Bearer {}", tokens["access_token"].as_str().unwrap())
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn blocked_people_arent_put_in_a_group_chat_together(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (cara_id, _) = app.user("Cara", "US").await;
+    let (dan_id, _) = app.user("Dan", "US").await;
+    for other in [bob_id, cara_id, dan_id] {
+        befriend(&app, ann_id, other).await;
+    }
+    // Bob blocked Cara.
+    app.send(req(Method::PUT, format!("/v1/me/blocks/{cara_id}")).cookie(&bob))
+        .await;
+    let bearer = app_session(&app, &ann).await;
+    let start = |users: Vec<Uuid>| {
+        call(
+            &app,
+            req(Method::POST, "/v1/chat/conversations")
+                .header("authorization", bearer.clone())
+                .json(json!({ "kind": "group", "users": users.iter().map(|u| u.to_string()).collect::<Vec<_>>() })),
+        )
+    };
+    let (status, body) = start(vec![bob_id, cara_id]).await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "users"),
+        "{body}"
+    );
+    assert_eq!(
+        count(&app, "select count(*) from chat_conversations").await,
+        0
+    );
+    // Without Cara it's fine; adding her later is refused too.
+    let (status, conv) = start(vec![bob_id, dan_id]).await;
+    assert_eq!(status, StatusCode::CREATED, "{conv}");
+    let id = conv["id"].as_str().unwrap();
+    let (status, body) = call(
+        &app,
+        post(
+            format!("/v1/chat/conversations/{id}/members"),
+            &ann,
+            json!({ "users": [cara_id.to_string()] }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "users")
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn people_who_blocked_each_other_arent_added_to_a_group_in_one_go(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (cara_id, _) = app.user("Cara", "US").await;
+    let (dan_id, _) = app.user("Dan", "US").await;
+    for other in [bob_id, cara_id, dan_id] {
+        befriend(&app, ann_id, other).await;
+    }
+    app.send(req(Method::PUT, format!("/v1/me/blocks/{cara_id}")).cookie(&bob))
+        .await;
+    let bearer = app_session(&app, &ann).await;
+    let (status, conv) = call(
+        &app,
+        req(Method::POST, "/v1/chat/conversations")
+            .header("authorization", bearer)
+            .json(json!({ "kind": "group", "users": [dan_id.to_string()] })),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    let id = conv["id"].as_str().unwrap();
+    let (status, body) = call(
+        &app,
+        post(
+            format!("/v1/chat/conversations/{id}/members"),
+            &ann,
+            json!({ "users": [bob_id.to_string(), cara_id.to_string()] }),
+        ),
+    )
+    .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "users"),
+        "{body}"
+    );
+    assert_eq!(count(&app, "select count(*) from chat_members").await, 2);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Rate limits that are shared by mistake (b46)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn filing_bug_reports_doesnt_use_up_the_review_allowance(db: PgPool) {
+    let app = test_app_with(db, roomy).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    for slug in ["tower", "castle"] {
+        listed_with(&app, maker, slug, "released", "").await;
+        approved_release(&app, slug, maker).await;
+    }
+    let (_, pat) = app.user("Pat Player", "US").await;
+    for slug in ["tower", "castle"] {
+        app.send(req(Method::POST, format!("/v1/apps/{slug}/launch")).cookie(&pat))
+            .await;
+    }
+    let report = |slug: &str, n: usize| {
+        call(
+            &app,
+            post(
+                format!("/v1/apps/{slug}/bug-reports"),
+                &pat,
+                json!({ "title": format!("Crash {n}"), "body": "It crashed." }),
+            ),
+        )
+    };
+    for n in 0..10 {
+        assert_eq!(report("tower", n).await.0, StatusCode::CREATED);
+    }
+    // Ten an hour for bug reports, counted on their own.
+    let (status, body) = report("castle", 10).await;
+    assert_eq!(status, StatusCode::TOO_MANY_REQUESTS);
+    assert!(
+        body["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("bug reports"),
+        "{body}"
+    );
+    // The player's review still goes through.
+    app.send(post(
+        "/v1/apps/castle/vote",
+        &pat,
+        json!({ "vote": "not_slop" }),
+    ))
+    .await;
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/castle/review")
+                .cookie(&pat)
+                .json(json!({ "body": "Fun, if crashy." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
 }
