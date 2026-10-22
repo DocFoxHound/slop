@@ -545,7 +545,7 @@ async fn glow_ups(
         "with then_votes as (
              select distinct on (e.app_id, e.user_id) e.app_id, e.vote
              from vote_events e where e.created_at < now() - interval '60 days'
-             order by e.app_id, e.user_id, e.created_at desc),
+             order by e.app_id, e.user_id, e.created_at desc, e.id desc),
          before as (
              select app_id, count(*) as n, 100.0 * count(*) filter (where vote = 1) / count(*) as pct
              from then_votes where vote <> 0 group by app_id),
