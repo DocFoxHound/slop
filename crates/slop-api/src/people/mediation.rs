@@ -507,6 +507,7 @@ async fn dispute_review(
         return Err(ApiError::invalid("reason", "pick one of the reasons"));
     }
     let text = note("statement", &body.statement, 2000, true)?;
+    let mut tx = state.db.begin().await?;
     // One dispute per review; a review changed after a decision can be disputed again.
     let done = sqlx::query(
         "insert into review_disputes (job_id, reason, statement) values ($1, $2, $3)
@@ -518,13 +519,36 @@ async fn dispute_review(
     .bind(job_id)
     .bind(&body.reason)
     .bind(&text)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
     if done.rows_affected() == 0 {
         return Err(ApiError::Conflict(
             "this review has already been disputed; a decided review can be disputed again only if it changes".into(),
         ));
     }
+    // The reviewer hears of it, so they can give their side before a mediator decides.
+    let (client, creative, title): (Uuid, String, String) = sqlx::query_as(
+        "select r.client_id, c.name, coalesce(j.offer->>'title', 'the job for ' || a.title)
+         from creative_reviews r join jobs j on j.id = r.job_id join apps a on a.id = j.app_id
+         join creatives c on c.user_id = r.creative_id where r.job_id = $1",
+    )
+    .bind(job_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    crate::notify::send(
+        &mut tx,
+        crate::notify::Notice {
+            user_id: client,
+            category: "jobs",
+            title: format!("{creative} disputed your review of “{title}”"),
+            body: "A mediator decides whether it breaks the rules. You can give your side on the job page."
+                .into(),
+            link: format!("/jobs/{job_id}"),
+            collapse_key: None,
+        },
+    )
+    .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
