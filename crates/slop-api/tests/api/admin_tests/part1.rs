@@ -1962,3 +1962,1061 @@ async fn a_decision_that_cannot_be_carried_out_leaves_no_trace(db: PgPool) {
             .unwrap();
     assert_eq!(status, "listed");
 }
+
+// ---------------------------------------------------------------------------------------------
+// The review queue: releases, scans, listing, stages, changes, pictures, portfolios
+
+/// A small stand-in for code hosts: GitHub's repository API (`/repos/x/broken` errors,
+/// `/repos/x/closed` is private, `/repos/x/gone` isn't there, anything else is public), and Git's
+/// discovery request on another host answering with the status its first path segment names
+/// (`/403/repo/info/refs`).
+async fn fake_host() -> String {
+    let app = Router::new()
+        .route(
+            "/repos/{owner}/{repo}",
+            get(
+                |axum::extract::Path((_, repo)): axum::extract::Path<(String, String)>| async move {
+                    match repo.as_str() {
+                        "broken" => StatusCode::BAD_GATEWAY.into_response(),
+                        "gone" => StatusCode::NOT_FOUND.into_response(),
+                        "closed" => axum::Json(json!({ "private": true })).into_response(),
+                        _ => axum::Json(json!({ "private": false })).into_response(),
+                    }
+                },
+            ),
+        )
+        .route(
+            "/{status}/{repo}/info/refs",
+            get(
+                |axum::extract::Path((status, _)): axum::extract::Path<(u16, String)>| async move {
+                    (
+                        StatusCode::from_u16(status).unwrap(),
+                        "001e# service=git-upload-pack\n",
+                    )
+                },
+            ),
+        );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+/// The maker's release of `game` (maker_with_app), fetched and waiting for review.
+async fn release_waiting(app: &TestApp) -> (Uuid, String, String) {
+    let (maker_id, maker) = maker_with_app(app, "released").await;
+    let id = submit_and_fetch(app, &maker, "1.0.0").await;
+    (maker_id, maker, id)
+}
+
+async fn release_state(app: &TestApp, id: &str) -> (String, Option<String>) {
+    sqlx::query_as("select status::text, status_reason from releases where id = $1::uuid")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+/// A request as a signed-in person or with a token ("Bearer …").
+fn as_who(method: Method, uri: String, who: &str) -> Req {
+    if who.starts_with("Bearer ") {
+        req(method, uri).header("authorization", who.to_string())
+    } else {
+        req(method, uri).cookie(who)
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn approving_a_release_signs_it_and_copies_its_rating_to_the_store_page(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (maker_id, _, id) = release_waiting(&app).await;
+    let approve = |who: &str| {
+        as_who(
+            Method::POST,
+            format!("/v1/admin/releases/{id}/approve"),
+            who,
+        )
+    };
+    let read = token(&app, &owner, "read").await;
+    assert_eq!(
+        app.send(approve(&read)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(approve(&support)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let refusal = |res: Response| async move {
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+
+    // A frozen app's releases wait.
+    sqlx::query("update apps set frozen_at = now(), frozen_reason = 'Checking a report' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let why = refusal(app.send(approve(&owner)).await).await;
+    assert!(why.contains("frozen (Checking a report)"), "{why}");
+    sqlx::query("update apps set frozen_at = null, frozen_reason = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    // A file that was never hashed can't be signed.
+    sqlx::query("update release_files set sha256 = null where release_id = $1::uuid")
+        .bind(&id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let why = refusal(app.send(approve(&owner)).await).await;
+    assert!(why.contains("windows build hasn't been hashed"), "{why}");
+    sqlx::query("update release_files set sha256 = repeat('b', 64) where release_id = $1::uuid")
+        .bind(&id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // The release carries an age rating and content labels: approving puts them on the page.
+    sqlx::query(
+        "update releases set min_age = 16, content_labels = '{violence,horror}' where id = $1::uuid",
+    )
+    .bind(&id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(approve(&review)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let (min_age, labels): (i16, Vec<String>) =
+        sqlx::query_as("select min_age, content_labels from apps where slug = 'game'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (min_age, labels),
+        (16, vec!["violence".into(), "horror".into()])
+    );
+    let (status, reviewed_by, signed): (String, String, bool) = sqlx::query_as(
+        "select status::text, reviewed_by, signed_manifest is not null from releases where id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(status, "approved");
+    assert!(
+        reviewed_by.starts_with("AI reviewer \"review agent\""),
+        "{reviewed_by}"
+    );
+    assert!(signed);
+    assert!(
+        notice_titles(&app, maker_id)
+            .await
+            .contains(&"Game 1.0.0 is approved".to_string())
+    );
+    // Not twice.
+    let why = refusal(app.send(approve(&owner)).await).await;
+    assert!(
+        why.contains("release is approved, not awaiting review"),
+        "{why}"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn without_a_signing_key_nothing_can_be_approved(db: PgPool) {
+    let app = test_app_with(db, |c| c.releases.signing_key = None).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, _, id) = release_waiting(&app).await;
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/releases/{id}/approve")).cookie(&owner))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("SLOP_SIGNING_KEY")
+    );
+    assert_eq!(release_state(&app, &id).await.0, "awaiting_review");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn rejecting_a_release_tells_the_maker_why(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (maker_id, maker, waiting) = release_waiting(&app).await;
+    let reject = |id: &str, who: &str, reason: &str| {
+        as_who(Method::POST, format!("/v1/admin/releases/{id}/reject"), who)
+            .json(json!({ "reason": reason }))
+    };
+
+    // Who may: reviewers (and review tokens), not support, not read tokens, not players.
+    assert_eq!(
+        app.send(reject(&waiting, &maker, "No.")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(reject(&waiting, &support, "No.")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let read = token(&app, &owner, "read").await;
+    assert_eq!(
+        app.send(reject(&waiting, &read, "No.")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    // A reason, for the maker.
+    let res = app.send(reject(&waiting, &reviewer, "  ")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(release_state(&app, &waiting).await.0, "awaiting_review");
+
+    let res = app
+        .send(reject(
+            &waiting,
+            &reviewer,
+            " The Windows build asks for administrator rights. ",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        release_state(&app, &waiting).await,
+        (
+            "rejected".into(),
+            Some("The Windows build asks for administrator rights.".into())
+        )
+    );
+    let told: (String, String) = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 and title like '%wasn''t approved'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        told,
+        (
+            "Game 1.0.0 wasn't approved".to_string(),
+            " The Windows build asks for administrator rights. ".to_string()
+        )
+    );
+    let (actor, subject): (String, String) =
+        sqlx::query_as("select actor, subject from audit_log where action = 'release.reject'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(actor.starts_with("Rex Reviewer ("));
+    assert_eq!(subject, waiting);
+    // Rejected already: not again.
+    assert_eq!(
+        app.send(reject(&waiting, &reviewer, "Again."))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    // Releases still being fetched, or whose checks failed, can be turned down too.
+    let still_fetching = body_json(
+        app.send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(release_body(&app, "1.1.0", "game-windows.zip")),
+        )
+        .await,
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(release_state(&app, &still_fetching).await.0, "fetching");
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(reject(&still_fetching, &review, "Wrong repository."))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let failed = submit_and_fetch(&app, &maker, "1.2.0").await;
+    sqlx::query("update releases set status = 'failed' where id = $1::uuid")
+        .bind(&failed)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(reject(&failed, &owner, "Broken download."))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    // (One more waiting, for the command line below: once a person approved a release, later
+    // ones are approved automatically.)
+    let fresh = submit_and_fetch(&app, &maker, "1.4.0").await;
+    // An approved release is withdrawn, not rejected; the command line has the same rule.
+    let approved = submit_and_fetch(&app, &maker, "1.3.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        approved.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        app.send(reject(&approved, &owner, "Changed my mind."))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert!(
+        admin::reject(
+            &app.db,
+            approved.parse().unwrap(),
+            "cli",
+            "Changed my mind."
+        )
+        .await
+        .is_err()
+    );
+    assert!(
+        admin::reject(&app.db, Uuid::now_v7(), "cli", "Nothing there.")
+            .await
+            .is_err()
+    );
+    assert!(
+        admin::reject(&app.db, fresh.parse().unwrap(), " ", "Who?")
+            .await
+            .is_err(),
+        "the reviewer says who they are"
+    );
+    admin::reject(
+        &app.db,
+        fresh.parse().unwrap(),
+        "cli",
+        "From the command line.",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        release_state(&app, &fresh).await,
+        ("rejected".into(), Some("From the command line.".into()))
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_reviewer_clears_a_false_positive_with_a_reason(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (_, _, id) = release_waiting(&app).await;
+    sqlx::query(
+        "update release_files set scan_result = 'on_hold', scan_detail = 'Generic.Trojan (heuristic)'
+         where release_id = $1::uuid",
+    )
+    .bind(&id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let approve = || req(Method::POST, format!("/v1/admin/releases/{id}/approve")).cookie(&owner);
+    let res = app.send(approve()).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("clear it with a reason")
+    );
+    let clear = |platform: &str, who: &str, reason: &str| {
+        as_who(
+            Method::POST,
+            format!("/v1/admin/releases/{id}/files/{platform}/clear"),
+            who,
+        )
+        .json(json!({ "reason": reason }))
+    };
+    let reason = "The heuristic flags every Godot export; checked the binary by hand.";
+    let read = token(&app, &owner, "read").await;
+    for who in [&support, &read] {
+        assert_eq!(
+            app.send(clear("windows", who, reason)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    // A reason of 10 to 1000 characters, for a file that's there.
+    for short_or_long in ["too short", &"x".repeat(1001)] {
+        assert_eq!(
+            app.send(clear("windows", &reviewer, short_or_long))
+                .await
+                .status(),
+            StatusCode::CONFLICT
+        );
+    }
+    assert_eq!(
+        app.send(clear("macos", &reviewer, reason)).await.status(),
+        StatusCode::CONFLICT
+    );
+    let res = app.send(clear("windows", &reviewer, reason)).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let (by, why): (String, String) = sqlx::query_as(
+        "select cleared_by, cleared_reason from release_files where release_id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(by.starts_with("Rex Reviewer ("));
+    assert_eq!(why, reason);
+    let (subject, detail): (String, Value) =
+        sqlx::query_as("select subject, detail from audit_log where action = 'release.clear_scan'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(subject, "game");
+    assert_eq!(detail["platform"], "windows");
+    assert_eq!(detail["reason"], reason);
+    // Now it can be approved; after that, nothing is waiting to be cleared.
+    assert_eq!(app.send(approve()).await.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.send(clear("windows", &reviewer, reason)).await.status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_live_release_a_rescan_flagged_can_be_kept_with_a_reason(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (_, _, id) = release_waiting(&app).await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let keep = |platform: &str, who: &str, reason: &str| {
+        as_who(
+            Method::POST,
+            format!("/v1/admin/releases/{id}/files/{platform}/rescan-clear"),
+            who,
+        )
+        .json(json!({ "reason": reason }))
+    };
+    let reason = "The new signature matches the engine's updater, not malware.";
+    // Nothing flagged yet.
+    assert_eq!(
+        app.send(keep("windows", &reviewer, reason)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    sqlx::query(
+        "update release_files set rescan_flagged_at = now(), rescan_result = 'on_hold' where release_id = $1::uuid",
+    )
+    .bind(&id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["rescans"][0]["release_id"], id.as_str());
+    let read = token(&app, &owner, "read").await;
+    for who in [&support, &read] {
+        assert_eq!(
+            app.send(keep("windows", who, reason)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    for bad in ["short", &"x".repeat(1001)] {
+        let res = app.send(keep("windows", &reviewer, bad)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(res).await["error"]["field"], "reason");
+    }
+    assert_eq!(
+        app.send(keep("linux", &reviewer, reason)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(keep("windows", &review, reason)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let (flagged, why): (bool, Option<String>) = sqlx::query_as(
+        "select rescan_flagged_at is not null, rescan_cleared_reason from release_files where release_id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((flagged, why.as_deref()), (false, Some(reason)));
+    assert_eq!(release_state(&app, &id).await.0, "approved");
+    let (subject, detail): (String, Value) = sqlx::query_as(
+        "select subject, detail from audit_log where action = 'release.rescan_cleared'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(subject, format!("{id} windows"));
+    assert_eq!(detail["reason"], reason);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(queue["rescans"], json!([]));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn listing_an_app_checks_it_is_ready(db: PgPool) {
+    let host = fake_host().await;
+    let base = host.clone();
+    let app = test_app_with(db, move |c| {
+        c.releases.github_api_base = base.parse().unwrap()
+    })
+    .await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let list =
+        |slug: &str, who: &str| as_who(Method::POST, format!("/v1/admin/apps/{slug}/list"), who);
+    let refusal = |res: Response| async move {
+        assert_eq!(res.status(), StatusCode::CONFLICT);
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let draft = |slug: &str, set: &str| {
+        let set = if set.is_empty() {
+            "status = 'draft', stage = 'coming_soon'".to_string()
+        } else {
+            format!("status = 'draft', stage = 'coming_soon', {set}")
+        };
+        let app = &app;
+        let slug = slug.to_string();
+        async move { listed_with(app, maker, &slug, "coming_soon", &set).await }
+    };
+
+    draft("soon", "").await;
+    assert_eq!(
+        app.send(list("soon", &support)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    // Frozen, or with pictures waiting: not yet.
+    draft(
+        "frozen",
+        "frozen_at = now(), frozen_reason = 'Repository gone'",
+    )
+    .await;
+    let why = refusal(app.send(list("frozen", &owner)).await).await;
+    assert!(why.contains("frozen (Repository gone)"), "{why}");
+    draft("pictures", "").await;
+    sqlx::query(
+        "insert into media_sets (id, app_id, commit_sha, fingerprint, source)
+         select $1, id, repeat('a', 40), 'f', 'maker' from apps where slug = 'pictures'",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let why = refusal(app.send(list("pictures", &owner)).await).await;
+    assert!(why.contains("review the app's pictures first"), "{why}");
+    // Private Slop goes in the store only when its owner asked.
+    draft("private", "visibility = 'private'").await;
+    let why = refusal(app.send(list("private", &owner)).await).await;
+    assert!(why.contains("Private Slop"), "{why}");
+    // Asked, but the repository is still private, or GitHub can't say.
+    draft(
+        "closed",
+        "visibility = 'private', public_requested_at = now(), repo_url = 'https://github.com/x/closed'",
+    )
+    .await;
+    let why = refusal(app.send(list("closed", &owner)).await).await;
+    assert!(why.contains("it can't go public yet"), "{why}");
+    draft(
+        "flaky",
+        "visibility = 'private', public_requested_at = now(), repo_url = 'https://github.com/x/broken'",
+    )
+    .await;
+    let why = refusal(app.send(list("flaky", &owner)).await).await;
+    assert!(
+        why.contains("couldn't confirm the repository is public"),
+        "{why}"
+    );
+    let still_private: i64 = sqlx::query_scalar(
+        "select count(*) from apps where slug in ('closed', 'flaky') and visibility = 'private' and status = 'draft'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(still_private, 2);
+
+    // Ready: listed, once.
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(list("soon", &review)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let why = refusal(app.send(list("soon", &owner)).await).await;
+    assert_eq!(why, "already listed");
+    let why = refusal(app.send(list("nothing", &owner)).await).await;
+    assert_eq!(why, "no such app");
+    assert!(audit_actions(&app).await.contains(&"app.list".to_string()));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn delisting_needs_a_rule_and_the_facts_and_waits_for_a_second_person(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, moderator) = staff(&app, "Mo Moderator", "moderator").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "castle", "released", "").await;
+    listed_with(&app, maker_id, "draft", "released", "status = 'draft'").await;
+    let delist = |slug: &str, who: &str, body: Value| {
+        as_who(Method::POST, format!("/v1/admin/apps/{slug}/delist"), who).json(body)
+    };
+    let good =
+        json!({ "rule": "misleading", "reason": "The page promises multiplayer; there is none." });
+
+    assert_eq!(
+        app.send(delist("castle", &reviewer, good.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(delist("castle", &review, good.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let res = app
+        .send(delist(
+            "castle",
+            &owner,
+            json!({ "rule": "boring", "reason": "Not fun." }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "rule");
+    let res = app
+        .send(delist(
+            "castle",
+            &owner,
+            json!({ "rule": "misleading", "reason": " " }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "reason");
+    assert_eq!(
+        app.send(delist("draft", &owner, good.clone()))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    // A moderate token's request waits for a second person like anyone's.
+    let agent = token(&app, &owner, "moderate").await;
+    let res = app.send(delist("castle", &agent, good.clone())).await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let body = body_json(res).await;
+    assert_eq!(body["approvals_still_needed"], 1);
+    let pending = body["pending_action"].as_str().unwrap().to_string();
+    let status = || async {
+        sqlx::query_scalar::<_, String>("select status::text from apps where slug = 'castle'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    assert_eq!(status().await, "listed");
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{pending}/approve")).cookie(&moderator))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(status().await, "delisted");
+    // The maker gets a statement of reasons they can appeal.
+    let decisions = body_json(
+        app.send(req(Method::GET, "/v1/me/decisions").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(decisions[0]["action"], "delist_app");
+    assert_eq!(decisions[0]["rule_title"], "Misleading pages");
+    assert_eq!(
+        decisions[0]["facts"],
+        "The page promises multiplayer; there is none."
+    );
+    assert_eq!(decisions[0]["can_appeal"], true);
+    // Out of the store already: nothing to ask for.
+    assert_eq!(
+        app.send(delist("castle", &owner, good)).await.status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn stages_move_only_with_an_approved_release(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "soon", "coming_soon", "").await;
+    let stage = |slug: &str, who: &str, body: Value| {
+        as_who(Method::POST, format!("/v1/admin/apps/{slug}/stage"), who).json(body)
+    };
+    assert_eq!(
+        app.send(stage("soon", &support, json!({ "stage": "beta" })))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(stage("soon", &owner, json!({ "stage": "finished" })))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    for (slug, body, why) in [
+        (
+            "soon",
+            json!({ "stage": "coming_soon" }),
+            "already in that stage",
+        ),
+        (
+            "soon",
+            json!({ "stage": "beta" }),
+            "approve a release first",
+        ),
+        (
+            "soon",
+            json!({ "stage": "released" }),
+            "approve a release first",
+        ),
+        ("nothing", json!({ "stage": "beta" }), "no such app"),
+    ] {
+        let res = app.send(stage(slug, &owner, body.clone())).await;
+        assert_eq!(res.status(), StatusCode::CONFLICT, "{body}");
+        assert!(
+            body_json(res).await["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains(why),
+            "{body}"
+        );
+    }
+    approved_release(&app, "soon", maker_id).await;
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(stage("soon", &review, json!({ "stage": "beta" })))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let detail: Value =
+        sqlx::query_scalar("select detail from audit_log where action = 'app.stage'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(detail["from"], "coming_soon");
+    assert_eq!(detail["to"], "beta");
+    // Back to Coming soon needs no release.
+    assert_eq!(
+        app.send(stage("soon", &owner, json!({ "stage": "coming_soon" })))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_changes_are_approved_or_rejected_by_reviewers(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (maker_id, _, first) = release_waiting(&app).await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let change = |kind: &str| {
+        let db = app.db.clone();
+        let kind = kind.to_string();
+        let first = first.clone();
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(
+                "insert into app_changes (id, app_id, kind, release_id, repo_url, note, requested_by)
+                 select $1, id, $2, case when $2 = 'release' then $3::uuid end,
+                        case when $2 = 'repo' then 'https://github.com/octo/game-v2' end, 'Please.', $4
+                 from apps where slug = 'game'",
+            )
+            .bind(id)
+            .bind(kind)
+            .bind(first)
+            .bind(maker_id)
+            .execute(&db)
+            .await
+            .unwrap();
+            id
+        }
+    };
+    let hold = change("release").await;
+    let decide = |id: Uuid, what: &str, who: &str| {
+        as_who(Method::POST, format!("/v1/admin/changes/{id}/{what}"), who)
+    };
+    let read = token(&app, &owner, "read").await;
+    for who in [&support, &read] {
+        assert_eq!(
+            app.send(decide(hold, "approve", who)).await.status(),
+            StatusCode::FORBIDDEN
+        );
+        assert_eq!(
+            app.send(decide(hold, "reject", who).json(json!({ "reason": "No." })))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    // Approving holds players at the release, and wakes the release watcher.
+    let woken = || {
+        tokio::time::timeout(
+            std::time::Duration::from_millis(50),
+            app.state.watch_wakeup.notified(),
+        )
+    };
+    assert!(woken().await.is_err(), "nothing woke it yet");
+    assert_eq!(
+        app.send(decide(hold, "approve", &reviewer)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(woken().await.is_ok());
+    let pinned: Option<Uuid> = sqlx::query_scalar("select pinned_release_id from apps")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(pinned.map(|p| p.to_string()), Some(first.clone()));
+    let res = app.send(decide(hold, "approve", &reviewer)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT, "not pending any more");
+
+    // Rejecting needs a reason, which the maker sees; only pending changes.
+    let repo = change("repo").await;
+    let res = app
+        .send(decide(repo, "reject", &reviewer).json(json!({ "reason": " " })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let review = token(&app, &owner, "review").await;
+    let res = app
+        .send(
+            decide(repo, "reject", &review)
+                .json(json!({ "reason": "The new repository doesn't have the game's history." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let (status, why): (String, String) =
+        sqlx::query_as("select status, status_reason from app_changes where id = $1")
+            .bind(repo)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "rejected");
+    assert_eq!(why, "The new repository doesn't have the game's history.");
+    let repo_url: String = sqlx::query_scalar("select repo_url from apps")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(repo_url.ends_with("octo/game"), "unchanged");
+    assert_eq!(
+        app.send(decide(repo, "reject", &reviewer).json(json!({ "reason": "Again." })))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(decide(repo, "approve", &reviewer)).await.status(),
+        StatusCode::CONFLICT
+    );
+    let actions = audit_actions(&app).await;
+    assert!(actions.contains(&"app.release_change".to_string()));
+    assert!(actions.contains(&"app.change_reject".to_string()));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviewers_turn_down_pictures_and_portfolios_with_a_reason(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    let (creative, creative_cookie) = app.user("Cass Creative", "US").await;
+    let (_, visitor) = app.user("Vic Visitor", "US").await;
+    listed_with(&app, maker_id, "castle", "released", "").await;
+    let pictures = Uuid::now_v7();
+    sqlx::query(
+        "insert into media_sets (id, app_id, commit_sha, fingerprint, source)
+         select $1, id, repeat('a', 40), 'f', 'maker' from apps where slug = 'castle'",
+    )
+    .bind(pictures)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into creatives (user_id, handle, name, ai_use, trader) values ($1, 'cass', 'Cass', 'none', false)",
+    )
+    .bind(creative)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let portfolio = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(
+                "insert into portfolio_sets (id, creative_id, repo_url, commit_sha, works, fingerprint, source)
+                 values ($1, $2, 'https://github.com/octo/game', repeat('a', 40), '[]', 'f', 'creative')",
+            )
+            .bind(id)
+            .bind(creative)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let first = Uuid::now_v7();
+    portfolio(first).await;
+    let post = |path: String, who: &str| as_who(Method::POST, format!("/v1/admin/{path}"), who);
+    let read = token(&app, &owner, "read").await;
+    for who in [&support, &read] {
+        for path in [
+            format!("media/{pictures}/reject"),
+            format!("portfolio/{first}/reject"),
+        ] {
+            assert_eq!(
+                app.send(post(path, who).json(json!({ "reason": "No." })))
+                    .await
+                    .status(),
+                StatusCode::FORBIDDEN
+            );
+        }
+        assert_eq!(
+            app.send(post(format!("portfolio/{first}/approve"), who))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN
+        );
+    }
+    // A reason, for the person.
+    for path in [
+        format!("media/{pictures}/reject"),
+        format!("portfolio/{first}/reject"),
+    ] {
+        assert_eq!(
+            app.send(post(path, &reviewer).json(json!({ "reason": "  " })))
+                .await
+                .status(),
+            StatusCode::CONFLICT
+        );
+    }
+    let res = app
+        .send(
+            post(format!("media/{pictures}/reject"), &reviewer)
+                .json(json!({ "reason": "The thumbnail is another game's logo." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let (status, why): (String, String) =
+        sqlx::query_as("select status, status_reason from media_sets where id = $1")
+            .bind(pictures)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), why.as_str()),
+        ("rejected", "The thumbnail is another game's logo.")
+    );
+    let res = app
+        .send(
+            post(format!("portfolio/{first}/reject"), &reviewer)
+                .json(json!({ "reason": "The works are someone else's." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    // The creative sees why; the page stays hidden from everyone else.
+    let overview = body_json(
+        app.send(req(Method::GET, "/v1/me/creative/portfolio").cookie(&creative_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(overview["live"], Value::Null);
+    assert_eq!(
+        overview["rejected"]["status_reason"],
+        "The works are someone else's."
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/people/cass").cookie(&visitor))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // Decided ones can't be decided again.
+    for path in [
+        format!("media/{pictures}/reject"),
+        format!("portfolio/{first}/reject"),
+    ] {
+        assert_eq!(
+            app.send(post(path, &reviewer).json(json!({ "reason": "Again." })))
+                .await
+                .status(),
+            StatusCode::CONFLICT
+        );
+    }
+    for path in [
+        format!("media/{pictures}/approve"),
+        format!("portfolio/{first}/approve"),
+    ] {
+        assert_eq!(
+            app.send(post(path, &reviewer)).await.status(),
+            StatusCode::CONFLICT
+        );
+    }
+
+    // A new portfolio, approved: the page goes live.
+    let second = Uuid::now_v7();
+    portfolio(second).await;
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(post(format!("portfolio/{second}/approve"), &review))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/people/cass").cookie(&visitor))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let actions = audit_actions(&app).await;
+    for action in ["media.reject", "portfolio.reject", "portfolio.approve"] {
+        assert!(actions.contains(&action.to_string()), "{action}");
+    }
+}
