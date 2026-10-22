@@ -113,6 +113,8 @@ async fn list_for_app(
 #[derive(Deserialize)]
 struct AllQuery {
     offset: Option<i64>,
+    /// Only this app's bounties.
+    slug: Option<String>,
 }
 
 /// Open bounties across the store, biggest first: paid work for builders.
@@ -126,6 +128,9 @@ async fn list_all(
     let mut qb = sqlx::QueryBuilder::new(SUMMARY);
     qb.push(" where b.status in ('open', 'claimed') and ");
     catalog::push_store_visible(&mut qb, state.config.catalog, policy);
+    if let Some(slug) = &q.slug {
+        qb.push(" and a.slug = ").push_bind(slug.clone());
+    }
     qb.push(" order by pledged_minor desc, b.created_at desc limit 50 offset ")
         .push_bind(q.offset.unwrap_or(0).clamp(0, 10_000));
     Ok(Json(qb.build_query_as().fetch_all(&state.db).await?))
@@ -636,7 +641,10 @@ async fn claim(
     }
     let (app_id, _) = crate::updates::owned(&state, &b.app_slug, &user).await?;
     let fits: bool =
-        sqlx::query_scalar("select id = $2 or parent_app_id = $2 from apps where id = $1")
+        // (`is not distinct from`: an app that isn't a build has no parent, and null isn't false.)
+        sqlx::query_scalar(
+            "select id = $2 or parent_app_id is not distinct from $2 from apps where id = $1",
+        )
             .bind(app_id)
             .bind(bounty_app)
             .fetch_one(&state.db)

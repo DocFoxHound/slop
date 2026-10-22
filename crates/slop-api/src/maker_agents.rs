@@ -739,7 +739,7 @@ pub(crate) const TOOLS: &[Tool] = &[
         description: "Open fix bounties: what players will pay for, biggest first. With an app's address: that app's bounties. A bounty is paid to whoever delivers it in an approved release of the app or of a community build of it.",
         method: Method::GET,
         path: "/v1/bounties",
-        properties: || json!({}),
+        properties: || json!({ "slug": s("Optional: an app's store address, for its bounties only") }),
         required: &[],
     },
     Tool {
