@@ -223,32 +223,41 @@ struct Inbox {
     items: Vec<Item>,
 }
 
-pub async fn unread(db: &PgPool, user_id: Uuid) -> sqlx::Result<i64> {
-    sqlx::query_scalar("select count(*) from notifications where user_id = $1 and read_at is null")
-        .bind(user_id)
-        .fetch_one(db)
-        .await
-}
-
-async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Inbox>> {
-    // A maker's AI agent reads only what's about maker work: never chats, friends or account
-    // security, and People jobs only with a token allowed to handle them.
-    let hidden: Vec<&str> = match &user.agent {
+/// The categories hidden from this user. A maker's AI agent reads only what's about maker work:
+/// never chats, friends or account security, and People jobs only with a token allowed to
+/// handle them.
+fn hidden(user: &CurrentUser) -> Vec<&'static str> {
+    match &user.agent {
         Some(agent) if agent.people => vec!["chat", "friends", "security"],
         Some(_) => vec!["chat", "friends", "security", "jobs"],
         None => Vec::new(),
-    };
+    }
+}
+
+/// Unread notifications the user may see (an agent can't tell how many hidden ones there are).
+pub async fn unread(db: &PgPool, user: &CurrentUser) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "select count(*) from notifications
+         where user_id = $1 and read_at is null and not (category = any($2))",
+    )
+    .bind(user.id)
+    .bind(hidden(user))
+    .fetch_one(db)
+    .await
+}
+
+async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Inbox>> {
     let items = sqlx::query_as(
         "select id, category, title, body, link, count, created_at, read_at is not null as read
          from notifications where user_id = $1 and not (category = any($2))
          order by created_at desc limit 60",
     )
     .bind(user.id)
-    .bind(&hidden)
+    .bind(hidden(&user))
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Inbox {
-        unread: unread(&state.db, user.id).await?,
+        unread: unread(&state.db, &user).await?,
         items,
     }))
 }
