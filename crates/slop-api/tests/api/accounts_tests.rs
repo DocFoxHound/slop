@@ -1208,3 +1208,965 @@ async fn under_18_view_accounts_start_private_and_may_choose_otherwise(db: PgPoo
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     assert_eq!(me().await, (json!(true), json!(false)));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sessions and step-up
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn website_sessions_end_thirty_days_after_sign_in_and_are_touched_sparingly(db: PgPool) {
+    let app = test_app(db).await;
+    let (user, cookie) = app.user("Octo", "US").await;
+    let days: f64 = sqlx::query_scalar(
+        "select (extract(epoch from expires_at - created_at) / 86400)::float8 from sessions where user_id = $1",
+    )
+    .bind(user)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!((days - 30.0).abs() < 0.01, "{days}");
+    let me = || status(&app, req(Method::GET, "/v1/me").cookie(&cookie));
+    let seen_now = || async {
+        sqlx::query_scalar::<_, bool>(
+            "select last_seen_at > now() - interval '1 minute' from sessions where user_id = $1",
+        )
+        .bind(user)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+
+    // Seen two minutes ago: not written again yet. Six minutes ago: written.
+    sqlx::query(
+        "update sessions set last_seen_at = now() - interval '2 minutes' where user_id = $1",
+    )
+    .bind(user)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(me().await, StatusCode::OK);
+    assert!(!seen_now().await);
+    sqlx::query(
+        "update sessions set last_seen_at = now() - interval '6 minutes' where user_id = $1",
+    )
+    .bind(user)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(me().await, StatusCode::OK);
+    assert!(seen_now().await);
+
+    // Used every day, but 30 days after signing in it ends anyway.
+    sqlx::query("update sessions set expires_at = now() - interval '1 second' where user_id = $1")
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(me().await, StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_closed_accounts_sessions_stop_working_at_once(db: PgPool) {
+    let app = test_app(db).await;
+    let (user, web) = app.user("Octo", "US").await;
+    let tokens = desktop_sign_in(&app, &web).await;
+    let bearer = format!("Bearer {}", tokens["access_token"].as_str().unwrap());
+    // Closed some other way than the close route (staff, a merge): the sessions are still there.
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from sessions where revoked_at is null"
+        )
+        .await,
+        2
+    );
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me").cookie(&web)).await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        status(
+            &app,
+            req(Method::GET, "/v1/me").header("authorization", bearer)
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_sessions_last_longer_and_their_access_tokens_expire_quickly(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Octo", "US").await;
+    let tokens = desktop_sign_in(&app, &web).await;
+    let bearer = format!("Bearer {}", tokens["access_token"].as_str().unwrap());
+    let me = |b: &str| req(Method::GET, "/v1/me").header("authorization", b.to_string());
+    let days: f64 = sqlx::query_scalar(
+        "select (extract(epoch from expires_at - created_at) / 86400)::float8 from sessions where kind = 'desktop'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!((days - 180.0).abs() < 0.01, "{days}");
+
+    // Unused for 20 days: a website session would have ended, the desktop one hasn't.
+    sqlx::query("update sessions set last_seen_at = now() - interval '20 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status(&app, me(&bearer)).await, StatusCode::OK);
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me").cookie(&web)).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // An access token lasts 15 minutes; the refresh token still gets a new one.
+    sqlx::query("update access_tokens set expires_at = now() - interval '1 second'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status(&app, me(&bearer)).await, StatusCode::UNAUTHORIZED);
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let rotated = body_json(res).await;
+    let fresh = format!("Bearer {}", rotated["access_token"].as_str().unwrap());
+    assert_eq!(status(&app, me(&fresh)).await, StatusCode::OK);
+
+    // Unused for 31 days: ended, refresh token and all.
+    sqlx::query(
+        "update sessions set last_seen_at = now() - interval '31 days' where kind = 'desktop'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(status(&app, me(&fresh)).await, StatusCode::UNAUTHORIZED);
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": rotated["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_empty_bearer_token_is_no_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, cookie) = app.user("Octo", "US").await;
+    for header_value in ["Bearer ", "Bearer    ", "Basic b2N0bzpwdw=="] {
+        assert_eq!(
+            status(
+                &app,
+                req(Method::GET, "/v1/me").header("authorization", header_value)
+            )
+            .await,
+            StatusCode::UNAUTHORIZED,
+            "{header_value:?}"
+        );
+        assert_eq!(
+            status(
+                &app,
+                req(Method::GET, "/v1/me")
+                    .header("authorization", header_value)
+                    .cookie(&cookie)
+            )
+            .await,
+            StatusCode::OK,
+            "the cookie is used: {header_value:?}"
+        );
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn suspended_accounts_may_only_read_appeal_accept_sign_out_and_leave(db: PgPool) {
+    use slop_api::auth::session::allowed_while_suspended as allowed;
+    for (method, path) in [
+        (Method::GET, "/v1/apps"),
+        (Method::HEAD, "/v1/me"),
+        (Method::POST, "/v1/auth/signout"),
+        (Method::POST, "/v1/me/close"),
+        (Method::POST, "/v1/me/legal/accept"),
+        (
+            Method::DELETE,
+            "/v1/me/sessions/0190a1b2-0000-7000-8000-000000000000",
+        ),
+        (Method::POST, "/v1/me/decisions/abc/appeal"),
+        (Method::POST, "/me/close"),
+    ] {
+        assert!(allowed(&method, path), "{method} {path}");
+    }
+    for (method, path) in [
+        (Method::POST, "/v1/apps"),
+        (Method::PATCH, "/v1/me"),
+        (Method::POST, "/v1/me/decisions/abc"),
+        (Method::DELETE, "/v1/me/sessions"),
+        (Method::DELETE, "/v1/me/passkeys/abc"),
+        (Method::POST, "/v1/auth/signout/extra"),
+        (Method::POST, "/v2/me/close"),
+    ] {
+        assert!(!allowed(&method, path), "{method} {path}");
+    }
+
+    // End to end: a suspended account signs out its other devices.
+    let app = test_app(db).await;
+    let (user, cookie) = app.user("Sus", "US").await;
+    let other = slop_api::auth::session::create(&app.db, &app.config, user, Some("phone"))
+        .await
+        .unwrap();
+    let other = format!("{}={}", other.name(), other.value());
+    sqlx::query("update users set suspended_at = now() where id = $1")
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let phone: Uuid = sqlx::query_scalar("select id from sessions where user_agent = 'phone'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        status(
+            &app,
+            req(Method::DELETE, format!("/v1/me/sessions/{phone}")).cookie(&cookie)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me").cookie(&other)).await,
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_recent_sign_in_means_the_last_ten_minutes(db: PgPool) {
+    let app = test_app(db).await;
+    let (user, cookie) = app.user("Octo", "US").await;
+    let set = |sql: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sql).bind(user).execute(&db).await.unwrap();
+        }
+    };
+    // Adding a passkey asks for a recent sign-in (and the account has none to confirm with).
+    let probe = || async {
+        let res = app
+            .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
+            .await;
+        let status = res.status();
+        let code = body_json(res).await["error"]["code"].clone();
+        (status, code)
+    };
+    set("update sessions set created_at = now() - interval '9 minutes 50 seconds' where user_id = $1").await;
+    assert_eq!(probe().await.0, StatusCode::OK);
+    set("update sessions set created_at = now() - interval '10 minutes 10 seconds' where user_id = $1").await;
+    assert_eq!(
+        probe().await,
+        (StatusCode::FORBIDDEN, json!("step_up_required"))
+    );
+    // A confirmation counts for the same ten minutes.
+    set("update sessions set stepped_up_at = now() - interval '9 minutes 50 seconds' where user_id = $1").await;
+    assert_eq!(probe().await.0, StatusCode::OK);
+    set("update sessions set stepped_up_at = now() - interval '10 minutes 10 seconds' where user_id = $1").await;
+    assert_eq!(
+        probe().await,
+        (StatusCode::FORBIDDEN, json!("step_up_required"))
+    );
+
+    // Other places that ask for it refuse the old session too.
+    assert_eq!(
+        error_code(
+            &app,
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&cookie)
+                .json(json!({ "name": "Claude", "scope": "read" }))
+        )
+        .await,
+        "step_up_required"
+    );
+    assert_eq!(
+        error_code(
+            &app,
+            req(
+                Method::POST,
+                format!("/v1/chat/devices/{}/start-over", Uuid::now_v7())
+            )
+            .cookie(&cookie)
+        )
+        .await,
+        "step_up_required"
+    );
+    assert_eq!(
+        count(&app, "select count(*) from sessions where kind = 'agent'").await,
+        0
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Combining accounts
+
+/// The signed-in `cookie` links the Google account `code` (which has its own Slop account).
+/// Returns the pending combination's cookie.
+async fn start_combining(app: &TestApp, cookie: &str, code: &str) -> String {
+    let res = oauth_flow(app, "/v1/auth/google/link", &[cookie], code).await;
+    assert_eq!(location(&res), "/account/combine");
+    set_cookie(&res, "slop_combine").unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn combining_is_shown_only_to_the_session_that_linked_while_it_lasts(db: PgPool) {
+    let (app, _) = app_with_providers(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    identity(&app, bob_id, "google", "g-bob").await;
+    let preview = |cookies: &[&str]| {
+        let mut r = req(Method::GET, "/v1/auth/combine");
+        for c in cookies {
+            r = r.cookie(*c);
+        }
+        r
+    };
+    assert_eq!(
+        status(&app, preview(&[&ann])).await,
+        StatusCode::NOT_FOUND,
+        "nothing pending"
+    );
+    let combine = start_combining(&app, &ann, "g-bob").await;
+    let shown = body_json(app.send(preview(&[&ann, &combine])).await).await;
+    assert_eq!(shown["name"], "Bob");
+    assert_eq!(shown["provider"], "google");
+
+    // Not someone else, and not Ann in another browser.
+    let (_, eve) = app.user("Eve", "US").await;
+    assert_eq!(
+        status(&app, preview(&[&eve, &combine])).await,
+        StatusCode::NOT_FOUND
+    );
+    let other = slop_api::auth::session::create(&app.db, &app.config, ann_id, None)
+        .await
+        .unwrap();
+    let other = format!("{}={}", other.name(), other.value());
+    assert_eq!(
+        status(&app, preview(&[&other, &combine])).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&app, preview(&[&combine])).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    // After 15 minutes it's gone, and can't be confirmed.
+    sqlx::query("update pending_merges set expires_at = now() - interval '1 second'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        status(&app, preview(&[&ann, &combine])).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(
+            &app,
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    let closed: bool = sqlx::query_scalar("select closed_at is not null from users where id = $1")
+        .bind(bob_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(!closed);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn combining_waits_for_one_people_page_one_stripe_account_and_isnt_for_staff_or_closed(
+    db: PgPool,
+) {
+    let (app, _) = app_with_providers(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    // Ann has a People page and receives donations through Stripe.
+    let page = |user: Uuid, handle: &str| {
+        let db = app.db.clone();
+        let handle = handle.to_string();
+        async move {
+            sqlx::query(
+                "insert into creatives (user_id, handle, name, ai_use, trader) values ($1, $2, $2, 'none', false)",
+            )
+            .bind(user)
+            .bind(handle)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let stripe = |user: Uuid, account: &str| {
+        let db = app.db.clone();
+        let account = account.to_string();
+        async move {
+            sqlx::query(
+                "insert into donation_accounts (user_id, stripe_account_id, tax_notice_ack_at) values ($1, $2, now())",
+            )
+            .bind(user)
+            .bind(account)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    page(ann_id, "ann-art").await;
+    stripe(ann_id, "acct_ann").await;
+
+    let (bob, _) = app.user("Bob", "US").await;
+    page(bob, "bob-art").await;
+    let (cara, _) = app.user("Cara", "US").await;
+    stripe(cara, "acct_cara").await;
+    let (dan, _) = make_admin(&app, "Dan Staff").await;
+    let (eve, _) = app.user("Eve", "US").await;
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(eve)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for (user, code, why) in [
+        (bob, "g-bob", "both accounts have a People page"),
+        (
+            cara,
+            "g-cara",
+            "both accounts receive donations through Stripe",
+        ),
+        (dan, "g-dan", "staff accounts can't be combined"),
+        (eve, "g-eve", "that account is closed"),
+    ] {
+        identity(&app, user, "google", code).await;
+        let combine = start_combining(&app, &ann, code).await;
+        let shown = body_json(
+            app.send(
+                req(Method::GET, "/v1/auth/combine")
+                    .cookie(&ann)
+                    .cookie(&combine),
+            )
+            .await,
+        )
+        .await;
+        assert!(
+            shown["blocked"].as_str().unwrap_or("").starts_with(why),
+            "{code}: {shown}"
+        );
+        let res = app
+            .send(
+                req(Method::POST, "/v1/auth/combine")
+                    .cookie(&ann)
+                    .cookie(&combine),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CONFLICT, "{code}");
+        let merged: Option<Uuid> =
+            sqlx::query_scalar("select merged_into from users where id = $1")
+                .bind(user)
+                .fetch_one(&app.db)
+                .await
+                .unwrap();
+        assert_eq!(merged, None, "{code}");
+    }
+    let pages: Vec<(Uuid, String)> =
+        sqlx::query_as("select user_id, handle from creatives order by handle")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        pages,
+        [
+            (ann_id, "ann-art".to_string()),
+            (bob, "bob-art".to_string())
+        ]
+    );
+    let dan_admin: bool = sqlx::query_scalar("select is_admin from users where id = $1")
+        .bind(dan)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(dan_admin);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn combining_moves_pages_chats_requests_and_blocks_and_keeps_the_earlier_deadline(
+    db: PgPool,
+) {
+    let (app, _) = app_with_providers(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (cara_id, _) = app.user("Cara", "US").await;
+    let (dave_id, _) = app.user("Dave", "US").await;
+    identity(&app, bob_id, "google", "g-bob").await;
+    stored_passkey(&app, ann_id).await;
+    let exec = |sql: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sql)
+                .bind(ann_id)
+                .bind(bob_id)
+                .bind(cara_id)
+                .bind(dave_id)
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+    };
+    let pair = |a: Uuid, b: Uuid| {
+        let (a, b) = (a.to_string(), b.to_string());
+        if a < b {
+            format!("{a}:{b}")
+        } else {
+            format!("{b}:{a}")
+        }
+    };
+    // Bob's People page; Bob's 18+ confirmation; the earlier passkey deadline is Bob's.
+    exec("insert into creatives (user_id, handle, name, ai_use, trader, skills) select $2, 'bob-art', 'Bob Art', 'none', false, '{pixel-art}' where $1 is not null and $3 is not null and $4 is not null").await;
+    exec("update users set adult_confirmed_at = now() - interval '1 day', passkey_due_at = now() + interval '5 days' where id = $2 and $1 is not null and $3 is not null and $4 is not null").await;
+    exec("update users set passkey_due_at = now() + interval '20 days' where id = $1 and $2 is not null and $3 is not null and $4 is not null").await;
+    // Friend requests (one between Ann and Bob, which goes), and a block.
+    exec("insert into friend_requests (from_id, to_id) values ($2, $3), ($4, $2), ($1, $2)").await;
+    exec("insert into user_blocks (user_id, blocked_id) select $2, $4 where $1 is not null and $3 is not null").await;
+    // Direct chats: both with Cara (Ann's stays), Bob with Dave (becomes Ann's), Ann with Bob.
+    for (a, b) in [
+        (ann_id, cara_id),
+        (bob_id, cara_id),
+        (bob_id, dave_id),
+        (ann_id, bob_id),
+    ] {
+        sqlx::query(
+            "insert into chat_conversations (id, kind, pair_key) values ($1, 'direct', $2)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(pair(a, b))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // Both have one game in their library; Bob has another too.
+    listed_with(&app, cara_id, "shared-game", "released", "").await;
+    listed_with(&app, cara_id, "bobs-pick", "released", "").await;
+    exec("insert into library_entries (user_id, app_id) select u, a.id from apps a, unnest(array[$1, $2]) u where a.slug = 'shared-game' and $3 is not null and $4 is not null").await;
+    exec("insert into library_entries (user_id, app_id) select $2, id from apps where slug = 'bobs-pick' and $1 is not null and $3 is not null and $4 is not null").await;
+
+    // Linking needs Ann's passkey; then she must still confirm with it to combine.
+    sessions_now(&app, ann_id, "passkey_at").await;
+    let combine = start_combining(&app, &ann, "g-bob").await;
+    let confirm = || {
+        req(Method::POST, "/v1/auth/combine")
+            .cookie(&ann)
+            .cookie(&combine)
+    };
+    sqlx::query("update sessions set passkey_at = null where user_id = $1")
+        .bind(ann_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(error_code(&app, confirm()).await, "step_up_required");
+    sessions_now(&app, ann_id, "passkey_at").await;
+    let res = app.send(confirm()).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(removes_cookie(&res, "slop_combine"));
+
+    // The People page is Ann's now, under the same handle.
+    let pages: Vec<(Uuid, String, Vec<String>)> =
+        sqlx::query_as("select user_id, handle, skills from creatives")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        pages,
+        [(ann_id, "bob-art".to_string(), vec!["pixel-art".to_string()])]
+    );
+    // Requests and blocks name Ann; the one between them is gone.
+    let requests: Vec<(Uuid, Uuid)> =
+        sqlx::query_as("select from_id, to_id from friend_requests order by created_at, from_id")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    let mut requests = requests;
+    requests.sort();
+    let mut expected = vec![(ann_id, cara_id), (dave_id, ann_id)];
+    expected.sort();
+    assert_eq!(requests, expected);
+    let blocks: Vec<(Uuid, Uuid)> = sqlx::query_as("select user_id, blocked_id from user_blocks")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(blocks, [(ann_id, dave_id)]);
+    // Chats: Ann's with Cara stays, Bob's with Dave is Ann's, and none names Bob.
+    let mut keys: Vec<String> = sqlx::query_scalar("select pair_key from chat_conversations")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    keys.sort();
+    let mut expected = vec![pair(ann_id, cara_id), pair(ann_id, dave_id)];
+    expected.sort();
+    assert_eq!(keys, expected);
+    // The library: no duplicate, and Bob's other game came along.
+    let library: Vec<String> = sqlx::query_scalar(
+        "select a.slug from library_entries l join apps a on a.id = l.app_id where l.user_id = $1 order by a.slug",
+    )
+    .bind(ann_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(library, ["bobs-pick", "shared-game"]);
+    assert_eq!(
+        count(
+            &app,
+            &format!("select count(*) from library_entries where user_id = '{bob_id}'")
+        )
+        .await,
+        0
+    );
+    // The earlier deadline and the 18+ confirmation carry over.
+    let (adult, due_days): (bool, f64) = sqlx::query_as(
+        "select adult_confirmed_at is not null, (extract(epoch from passkey_due_at - now()) / 86400)::float8
+         from users where id = $1",
+    )
+    .bind(ann_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(adult);
+    assert!((4.9..5.1).contains(&due_days), "{due_days}");
+    // Bob's sessions ended, the pending combination is gone, and it's in the audit log.
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me").cookie(&bob)).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let live: i64 = sqlx::query_scalar(
+        "select count(*) from sessions where token_hash = $1 and revoked_at is null",
+    )
+    .bind(slop_api::tokens::hash_token(bob.split_once('=').unwrap().1))
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(live, 0);
+    assert_eq!(count(&app, "select count(*) from pending_merges").await, 0);
+    let audited: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'account.combine' and subject = $1",
+    )
+    .bind(ann_id.to_string())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(audited["from"], json!(bob_id));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_account_with_passkeys_isnt_combined_into_another(db: PgPool) {
+    let (app, _) = app_with_providers(db).await;
+    let (_, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    identity(&app, bob_id, "google", "g-bob").await;
+    stored_passkey(&app, bob_id).await;
+    listed_with(&app, bob_id, "bobs-game", "released", "").await;
+    let combine = start_combining(&app, &ann, "g-bob").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let maker: Uuid = sqlx::query_scalar("select maker_id from apps where slug = 'bobs-game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(maker, bob_id, "nothing moved");
+    let (closed, passkeys): (bool, i64) = sqlx::query_as(
+        "select closed_at is not null, (select count(*) from passkeys where user_id = $1) from users where id = $1",
+    )
+    .bind(bob_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((closed, passkeys), (false, 1));
+}
+
+/// Confirming twice (a double click, or the page sent again) does nothing the second time. It
+/// used to find the pending combination still there, now naming Ann on both sides (combining
+/// had moved it along with everything else), and close Ann's own account into itself.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn confirming_a_combination_twice_does_nothing_the_second_time(db: PgPool) {
+    let (app, _) = app_with_providers(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    identity(&app, bob_id, "google", "g-bob").await;
+    let combine = start_combining(&app, &ann, "g-bob").await;
+    let confirm = || {
+        req(Method::POST, "/v1/auth/combine")
+            .cookie(&ann)
+            .cookie(&combine)
+    };
+    assert_eq!(status(&app, confirm()).await, StatusCode::NO_CONTENT);
+    assert_eq!(count(&app, "select count(*) from pending_merges").await, 0);
+    assert_eq!(
+        status(
+            &app,
+            req(Method::GET, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(status(&app, confirm()).await, StatusCode::NOT_FOUND);
+    let (closed, merged): (bool, Option<Uuid>) =
+        sqlx::query_as("select closed_at is not null, merged_into from users where id = $1")
+            .bind(ann_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((closed, merged), (false, None), "Ann's account stays open");
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me").cookie(&ann)).await,
+        StatusCode::OK
+    );
+}
+
+/// b04: confirming doesn't ask for a sign-in in the last ten minutes. It doesn't need to: the
+/// pending combination only comes from a link made with a fresh sign-in, belongs to that one
+/// session, and lasts 15 minutes.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn combining_is_confirmed_within_the_links_fifteen_minutes(db: PgPool) {
+    let (app, _) = app_with_providers(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    identity(&app, bob_id, "google", "g-bob").await;
+    let combine = start_combining(&app, &ann, "g-bob").await;
+    // Ten minutes on, the sign-in isn't recent any more, but the link was.
+    age_sessions(&app, ann_id).await;
+    sqlx::query("update pending_merges set expires_at = now() + interval '4 minutes'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let merged: Option<Uuid> = sqlx::query_scalar("select merged_into from users where id = $1")
+        .bind(bob_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(merged, Some(ann_id));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn cancelling_a_combination_forgets_it(db: PgPool) {
+    let (app, _) = app_with_providers(db).await;
+    let (_, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    identity(&app, bob_id, "google", "g-bob").await;
+    // Nothing to cancel: fine.
+    let res = app.send(req(Method::DELETE, "/v1/auth/combine")).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let combine = start_combining(&app, &ann, "g-bob").await;
+    assert_eq!(count(&app, "select count(*) from pending_merges").await, 1);
+    let res = app
+        .send(req(Method::DELETE, "/v1/auth/combine").cookie(&combine))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(removes_cookie(&res, "slop_combine"));
+    assert_eq!(count(&app, "select count(*) from pending_merges").await, 0);
+    assert_eq!(
+        status(
+            &app,
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    let merged: Option<Uuid> = sqlx::query_scalar("select merged_into from users where id = $1")
+        .bind(bob_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(merged, None);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Desktop sign-in
+
+fn desktop_request(state: &str, device: &str) -> Value {
+    json!({
+        "code_challenge": pkce_challenge(&"v".repeat(43)),
+        "redirect_port": 49152,
+        "state": state,
+        "device_name": device
+    })
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_sign_in_requests_are_checked_up_front(db: PgPool) {
+    let app = test_app(db).await;
+    let create = |body: Value| req(Method::POST, "/v1/auth/desktop/requests").json(body);
+    let field = |body: Value| {
+        let app = &app;
+        async move {
+            let res = app.send(create(body)).await;
+            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            body_json(res).await["error"]["field"].clone()
+        }
+    };
+    let long_state = "s".repeat(129);
+    for bad in [
+        "s".repeat(15),
+        long_state,
+        "has spaces in it ok".into(),
+        "plus+and/slash==ab".into(),
+    ] {
+        assert_eq!(
+            field(desktop_request(&bad, "Laptop")).await,
+            "state",
+            "{bad}"
+        );
+    }
+    let long_name = "n".repeat(41);
+    for bad in ["", "   ", long_name.as_str(), "Two\nLines"] {
+        assert_eq!(
+            field(desktop_request("state-state-state-1", bad)).await,
+            "device_name",
+            "{bad:?}"
+        );
+    }
+    let mut extra = desktop_request("state-state-state-1", "Laptop");
+    extra["approved_by"] = json!(Uuid::now_v7());
+    assert!(status(&app, create(extra)).await.is_client_error());
+    assert_eq!(
+        count(&app, "select count(*) from desktop_auth_requests").await,
+        0
+    );
+
+    // The edges are fine.
+    for ok in ["s".repeat(16), "s".repeat(128), "Az09-_".repeat(3)] {
+        assert_eq!(
+            status(&app, create(desktop_request(&ok, &"n".repeat(40)))).await,
+            StatusCode::OK,
+            "{ok}"
+        );
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_sign_in_requests_are_rate_limited_per_client(db: PgPool) {
+    let app = test_app(db).await;
+    let from = |ip: &str| {
+        req(Method::POST, "/v1/auth/desktop/requests")
+            .header("x-test-client-ip", ip.to_string())
+            .json(desktop_request("state-state-state-1", "Laptop"))
+    };
+    for _ in 0..20 {
+        assert_eq!(status(&app, from("203.0.113.9")).await, StatusCode::OK);
+    }
+    let res = app.send(from("203.0.113.9")).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(body_json(res).await["error"]["code"], "rate_limited");
+    assert_eq!(status(&app, from("203.0.113.10")).await, StatusCode::OK);
+    // Starting a passkey sign-in counts as signing in too.
+    for _ in 0..20 {
+        assert_eq!(
+            status(
+                &app,
+                req(Method::POST, "/v1/auth/passkey/start")
+                    .header("x-test-client-ip", "203.0.113.11")
+            )
+            .await,
+            StatusCode::OK
+        );
+    }
+    assert_eq!(
+        status(
+            &app,
+            req(Method::POST, "/v1/auth/passkey/start").header("x-test-client-ip", "203.0.113.11")
+        )
+        .await,
+        StatusCode::TOO_MANY_REQUESTS
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_approval_page_shows_only_pending_requests_to_signed_in_people(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Octo", "US").await;
+    let create = || async {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/auth/desktop/requests")
+                    .json(desktop_request("state-state-state-1", "Slop for Linux")),
+            )
+            .await;
+        body_json(res).await["id"].as_str().unwrap().to_string()
+    };
+    let show = |id: &str| req(Method::GET, format!("/v1/auth/desktop/requests/{id}"));
+    let id = create().await;
+    assert_eq!(status(&app, show(&id)).await, StatusCode::UNAUTHORIZED);
+    let res = app.send(show(&id).cookie(&web)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["device_name"], "Slop for Linux");
+    assert_eq!(
+        status(&app, show(&Uuid::now_v7().to_string()).cookie(&web)).await,
+        StatusCode::NOT_FOUND
+    );
+
+    // Approved: not shown again.
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/auth/desktop/requests/{id}/approve"),
+            )
+            .cookie(&web),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        status(&app, show(&id).cookie(&web)).await,
+        StatusCode::NOT_FOUND
+    );
+
+    // Expired: not shown, and can't be approved.
+    let id = create().await;
+    sqlx::query("update desktop_auth_requests set expires_at = now() - interval '1 second' where id = $1::uuid")
+        .bind(&id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        status(&app, show(&id).cookie(&web)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(
+            &app,
+            req(
+                Method::POST,
+                format!("/v1/auth/desktop/requests/{id}/approve")
+            )
+            .cookie(&web)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+}
