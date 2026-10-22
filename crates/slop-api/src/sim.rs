@@ -1990,7 +1990,8 @@ async fn sim_users(State(state): State<AppState>) -> ApiResult<Json<Vec<SimUserR
                     (select count(*) from jobs j where j.creative_id = u.id or j.client_id = u.id),
                     0
              from users u left join creatives c on c.user_id = u.id
-             where u.display_name like 'Sim maker %' or (c.user_id is not null and u.display_name like 'Sim creative %')
+             where (u.display_name like 'Sim maker %' or (c.user_id is not null and u.display_name like 'Sim creative %'))
+               and not exists (select 1 from identities i where i.user_id = u.id)
              order by personas, display_name",
         )
         .fetch_all(&state.db)
@@ -2007,10 +2008,14 @@ async fn sim_login(
     if !state.config.simulation {
         return Err(ApiError::NotFound);
     }
+    // The simulation's own users only: its makers and creatives are known by their names, so
+    // a real account (one that signs in somewhere) under such a name never counts.
     let exists: bool =
         sqlx::query_scalar(
             "select exists (select 1 from sim_users where user_id = $1)
-                 or exists (select 1 from users where id = $1 and (display_name like 'Sim maker %' or display_name like 'Sim creative %'))",
+                 or exists (select 1 from users u where u.id = $1
+                              and (u.display_name like 'Sim maker %' or u.display_name like 'Sim creative %')
+                              and not exists (select 1 from identities i where i.user_id = u.id))",
         )
             .bind(id)
             .fetch_one(&state.db)
