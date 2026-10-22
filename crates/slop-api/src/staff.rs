@@ -636,8 +636,19 @@ async fn approve(
     )
     .await
     .map_err(ApiError::Internal)?;
-    tx.commit().await?;
     let count = approvers.len() as i64;
+    if count >= i64::from(needed) {
+        // Taken out of the pending list under the lock, before it runs: someone approving at
+        // the same moment finds it decided rather than approving it again (it would run twice).
+        // `finish` records how it went.
+        sqlx::query(
+            "update staff_actions set status = 'done', result = 'running', decided_at = now() where id = $1",
+        )
+        .bind(id)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
     if count < i64::from(needed) {
         return Ok(Outcome::Pending {
             id,

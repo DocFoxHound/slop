@@ -3020,3 +3020,616 @@ async fn reviewers_turn_down_pictures_and_portfolios_with_a_reason(db: PgPool) {
         assert!(actions.contains(&action.to_string()), "{action}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Staff, roles and two-person approval
+
+/// Asks (as `who`) to take `slug` out of the store; returns the pending action's ID.
+async fn ask_to_delist(app: &TestApp, slug: &str, who: &str) -> String {
+    let res = app
+        .send(
+            as_who(Method::POST, format!("/v1/admin/apps/{slug}/delist"), who)
+                .json(json!({ "rule": "misleading", "reason": "Fake screenshots." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn pending_actions_are_listed_and_lapse_after_three_days(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, second) = make_admin(&app, "Sid Second").await;
+    let (looker_id, looker) = app.user("Lou Looker", "US").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(looker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "old", "released", "").await;
+    listed_with(&app, maker_id, "new", "released", "").await;
+    let stale = ask_to_delist(&app, "old", &owner).await;
+    let fresh = ask_to_delist(&app, "new", &owner).await;
+    // The other people who could approve were told.
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where title = 'A second approval is needed'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 2, "Sid, once for each");
+
+    // Any staff member or token can look; a player can't.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/actions").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let read = token(&app, &owner, "read").await;
+    let listed = body_json(
+        app.send(as_who(Method::GET, "/v1/admin/actions".into(), &read))
+            .await,
+    )
+    .await;
+    assert_eq!(listed["approvals_required"], 2);
+    let ids: Vec<&str> = listed["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["id"].as_str().unwrap())
+        .collect();
+    assert_eq!(ids, [fresh.as_str(), stale.as_str()], "newest first");
+    assert_eq!(listed["actions"][0]["status"], "pending");
+    assert_eq!(listed["actions"][0]["kind"], "app.delist");
+    assert_eq!(listed["actions"][0]["approvals_needed"], 2);
+    assert!(
+        listed["actions"][0]["approvals"][0]
+            .as_str()
+            .unwrap()
+            .starts_with("Olive Owner (")
+    );
+
+    // Three days on, a request lapses: it leaves the pending list and can't be approved.
+    sqlx::query("update staff_actions set requested_at = now() - interval '3 days 1 minute' where id = $1::uuid")
+        .bind(&stale)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/admin/actions").cookie(&looker))
+            .await,
+    )
+    .await;
+    assert_eq!(listed["actions"].as_array().unwrap().len(), 1);
+    assert_eq!(listed["actions"][0]["id"], fresh.as_str());
+    let all = body_json(
+        app.send(req(Method::GET, "/v1/admin/actions?status=all").cookie(&looker))
+            .await,
+    )
+    .await;
+    let statuses: Vec<(&str, &str)> = all["actions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| (a["id"].as_str().unwrap(), a["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(
+        statuses,
+        [(fresh.as_str(), "pending"), (stale.as_str(), "expired")]
+    );
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{stale}/approve")).cookie(&second))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(res).await["error"]["message"],
+        "that request is expired"
+    );
+    let status: String = sqlx::query_scalar("select status::text from apps where slug = 'old'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "listed");
+    // A staff member without a role can look but not approve.
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/admin/actions/{fresh}/approve")).cookie(&looker))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(
+            req(
+                Method::POST,
+                format!("/v1/admin/actions/{}/approve", Uuid::now_v7())
+            )
+            .cookie(&second)
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_request_is_withdrawn_by_its_requester_or_turned_down_by_an_approver(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, moderator) = staff(&app, "Mo Moderator", "moderator").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "castle", "released", "").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let cancel =
+        |id: &str, who: &str| as_who(Method::POST, format!("/v1/admin/actions/{id}/cancel"), who);
+
+    // The requester withdraws their own.
+    let mine = ask_to_delist(&app, "castle", &moderator).await;
+    assert_eq!(
+        app.send(cancel(&mine, &moderator)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let (status, result): (String, String) =
+        sqlx::query_as("select status, result from staff_actions where id = $1::uuid")
+            .bind(&mine)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "cancelled");
+    assert!(
+        result.starts_with("cancelled by Mo Moderator ("),
+        "{result}"
+    );
+    // Gone: not again, and it can't be approved.
+    assert_eq!(
+        app.send(cancel(&mine, &moderator)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{mine}/approve")).cookie(&owner))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(res).await["error"]["message"],
+        "that request is cancelled"
+    );
+
+    // Someone else's: only people who could approve it may turn it down.
+    let theirs = ask_to_delist(&app, "tower", &moderator).await;
+    assert_eq!(
+        app.send(cancel(&theirs, &reviewer)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let agent = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(cancel(&theirs, &agent)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(cancel(&theirs, &owner)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let listed: i64 = sqlx::query_scalar("select count(*) from apps where status = 'listed'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(listed, 2, "nothing was delisted");
+    let cancels = audit_actions(&app)
+        .await
+        .into_iter()
+        .filter(|a| a == "staff_action.cancel")
+        .count();
+    assert_eq!(cancels, 2);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_staff_list_shows_roles_and_suspensions_but_not_closed_accounts(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 3).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (sue_id, _) = staff(&app, "Sue Support", "support").await;
+    sqlx::query(
+        "insert into staff_roles (user_id, role, granted_by) values ($1, 'finance', 'test')",
+    )
+    .bind(sue_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let (gone_id, _) = staff(&app, "Gus Gone", "reviewer").await;
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(gone_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (sid_id, _) = staff(&app, "Sid Suspended", "moderator").await;
+    sqlx::query("update users set suspended_at = now() where id = $1")
+        .bind(sid_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let read = token(&app, &owner, "read").await;
+    let list = body_json(
+        app.send(as_who(Method::GET, "/v1/admin/staff".into(), &read))
+            .await,
+    )
+    .await;
+    let staff: Vec<(String, Value, bool)> = list["staff"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["display_name"].as_str().unwrap().to_string(),
+                s["roles"].clone(),
+                s["suspended"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        staff,
+        [
+            ("Olive Owner".to_string(), json!(["owner"]), false),
+            ("Sid Suspended".to_string(), json!(["moderator"]), true),
+            (
+                "Sue Support".to_string(),
+                json!(["finance", "support"]),
+                false
+            ),
+        ]
+    );
+    assert_eq!(
+        list["roles"],
+        json!([
+            "owner",
+            "moderator",
+            "reviewer",
+            "support",
+            "finance",
+            "security"
+        ])
+    );
+    assert_eq!(list["my_roles"], json!(["owner"]));
+    assert_eq!(list["approvals_required"], 3);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_roles_are_given_and_taken_by_security_and_owners(db: PgPool) {
+    let app = test_app(db).await;
+    let (owner_id, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, security) = staff(&app, "Sam Security", "security").await;
+    let (_, moderator) = staff(&app, "Mo Moderator", "moderator").await;
+    let (pat_id, _) = app.user("Pat Player", "US").await;
+    let (closed_id, _) = app.user("Cleo Closed", "US").await;
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(closed_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let role = |user: Uuid, who: &str, body: Value| {
+        as_who(Method::POST, format!("/v1/admin/staff/{user}/roles"), who).json(body)
+    };
+    let roles_of = |user: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (bool, Vec<String>)>(
+                "select is_admin, coalesce(array(select role from staff_roles r where r.user_id = u.id order by role), '{}')
+                 from users u where id = $1",
+            )
+            .bind(user)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    let reviewer_role = json!({ "role": "reviewer", "grant": true });
+
+    // Only staff who manage staff; tokens that only review or read can't even ask.
+    assert_eq!(
+        app.send(role(pat_id, &moderator, reviewer_role.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    for scope in ["read", "review"] {
+        let t = token(&app, &owner, scope).await;
+        assert_eq!(
+            app.send(role(pat_id, &t, reviewer_role.clone()))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN,
+            "{scope}"
+        );
+    }
+    // The owner role, only by an owner.
+    assert_eq!(
+        app.send(role(
+            pat_id,
+            &security,
+            json!({ "role": "owner", "grant": true })
+        ))
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    // Someone who isn't there, or whose account is closed.
+    assert_eq!(
+        app.send(role(Uuid::now_v7(), &security, reviewer_role.clone()))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(role(closed_id, &security, reviewer_role.clone()))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(roles_of(closed_id).await, (false, vec![]));
+    // A session from a while ago confirms first.
+    sqlx::query("update sessions set created_at = now() - interval '1 hour'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(role(pat_id, &security, reviewer_role.clone()))
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    sqlx::query("update sessions set stepped_up_at = now()")
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    // Security gives a role: Pat is staff with it.
+    assert_eq!(
+        app.send(role(pat_id, &security, reviewer_role.clone()))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(roles_of(pat_id).await, (true, vec!["reviewer".into()]));
+    // Taking the last role leaves someone who can only look.
+    assert_eq!(
+        app.send(role(
+            pat_id,
+            &security,
+            json!({ "role": "reviewer", "grant": false })
+        ))
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(roles_of(pat_id).await, (true, vec![]));
+    // The last owner stays an owner, even by their own hand.
+    let res = app
+        .send(role(
+            owner_id,
+            &owner,
+            json!({ "role": "owner", "grant": false }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(
+        body_json(res).await["error"]["message"],
+        "Slop needs at least one owner"
+    );
+    let failed: String =
+        sqlx::query_scalar("select status from staff_actions order by requested_at desc limit 1")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(failed, "failed", "recorded as tried and refused");
+    // With a second owner, the first can step down.
+    assert_eq!(
+        app.send(role(
+            pat_id,
+            &owner,
+            json!({ "role": "owner", "grant": true })
+        ))
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(role(
+            owner_id,
+            &owner,
+            json!({ "role": "owner", "grant": false })
+        ))
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(roles_of(owner_id).await, (true, vec![]));
+    let actions = audit_actions(&app).await;
+    assert!(actions.contains(&"staff.grant_role".to_string()));
+    assert!(actions.contains(&"staff.remove_role".to_string()));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn removing_someone_from_staff_ends_their_roles_and_tokens(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (second_id, second) = make_admin(&app, "Sid Second").await;
+    let (_, security) = staff(&app, "Sam Security", "security").await;
+    let (rex_id, rex) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (pat_id, _) = app.user("Pat Player", "US").await;
+    // Rex had a token (made while he could; tokens need the security permission).
+    sqlx::query(
+        "insert into staff_roles (user_id, role, granted_by) values ($1, 'security', 'test')",
+    )
+    .bind(rex_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let rex_token = token(&app, &rex, "review").await;
+    sqlx::query("delete from staff_roles where user_id = $1 and role = 'security'")
+        .bind(rex_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let remove = |user: Uuid, who: &str, reason: &str| {
+        as_who(Method::POST, format!("/v1/admin/staff/{user}/remove"), who)
+            .json(json!({ "reason": reason }))
+    };
+    let reason = "Left the team at the end of the month.";
+
+    for bad in ["Too short", &"x".repeat(2001)] {
+        let res = app.send(remove(rex_id, &security, bad)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(res).await["error"]["field"], "reason");
+    }
+    assert_eq!(
+        app.send(remove(pat_id, &security, reason)).await.status(),
+        StatusCode::CONFLICT,
+        "not staff"
+    );
+    assert_eq!(
+        app.send(remove(Uuid::now_v7(), &security, reason))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(remove(second_id, &security, reason))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN,
+        "only an owner removes an owner"
+    );
+    assert_eq!(
+        app.send(remove(rex_id, &rex, reason)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+
+    // An agent can only ask: it waits for a person, even with one approval enough.
+    let agent = token(&app, &owner, "moderate").await;
+    let res = app.send(remove(rex_id, &agent, reason)).await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let pending = body_json(res).await;
+    assert_eq!(pending["approvals_still_needed"], 1);
+    let action = pending["pending_action"].as_str().unwrap().to_string();
+    let still_staff = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("select is_admin from users where id = $1")
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(still_staff(rex_id).await);
+    assert_eq!(
+        app.send(as_who(Method::GET, "/v1/admin/queue".into(), &rex_token))
+            .await
+            .status(),
+        StatusCode::OK,
+        "his token still works while it waits"
+    );
+    let asked: Vec<String> = sqlx::query_scalar(
+        "select u.display_name from notifications n join users u on u.id = n.user_id
+         where n.title = 'An AI agent asked for a staff change' order by u.display_name",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(asked, ["Olive Owner", "Sam Security", "Sid Second"]);
+    // A person approves: every role and token goes.
+    assert_eq!(
+        app.send(req(Method::POST, format!("/v1/admin/actions/{action}/approve")).cookie(&second))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(!still_staff(rex_id).await);
+    let (roles, live_tokens): (i64, i64) = sqlx::query_as(
+        "select (select count(*) from staff_roles where user_id = $1),
+                (select count(*) from admin_tokens where user_id = $1 and revoked_at is null)",
+    )
+    .bind(rex_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((roles, live_tokens), (0, 0));
+    assert_eq!(
+        app.send(as_who(Method::GET, "/v1/admin/queue".into(), &rex_token))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let detail: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'admin.revoke' and subject = $1",
+    )
+    .bind(rex_id.to_string())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(detail, json!({ "reason": reason, "tokens_revoked": 1 }));
+
+    // An owner may remove another owner.
+    assert_eq!(
+        app.send(remove(second_id, &owner, reason)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(!still_staff(second_id).await);
+}
+
+/// Two people approving the same request at the same moment do it once.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn two_approvers_at_once_carry_out_an_action_once(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, ben) = make_admin(&app, "Ben Owner").await;
+    let (_, cat) = make_admin(&app, "Cat Owner").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/legal/privacy")
+                .cookie(&owner)
+                .json(json!({ "summary": "Adds a section on chat.", "body_md": "New words about chat." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let action = body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let approve =
+        |who: &str| req(Method::POST, format!("/v1/admin/actions/{action}/approve")).cookie(who);
+    // Both reach the request while something else holds it, so they read it one right after
+    // the other.
+    let mut hold = app.db.begin().await.unwrap();
+    sqlx::query("select 1 from staff_actions where id = $1::uuid for update")
+        .bind(&action)
+        .execute(&mut *hold)
+        .await
+        .unwrap();
+    let release = async move {
+        tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+        hold.commit().await.unwrap();
+    };
+    let (a, b, ()) = tokio::join!(app.send(approve(&ben)), app.send(approve(&cat)), release);
+    let mut statuses = [a.status(), b.status()];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
+    let versions: i64 =
+        sqlx::query_scalar("select count(*) from legal_documents where kind = 'privacy'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(versions, 2, "the repository's version and one new one");
+    let (status, approvals): (String, i64) = sqlx::query_as(
+        "select status, (select count(*) from staff_action_approvals p where p.action_id = a.id)
+         from staff_actions a where id = $1::uuid",
+    )
+    .bind(&action)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((status.as_str(), approvals), ("done", 2));
+}
