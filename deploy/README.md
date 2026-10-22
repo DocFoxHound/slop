@@ -7,7 +7,8 @@ itself from GitHub.
 
 | Unit (systemd, user `brian`) | What it does |
 |---|---|
-| `slop-pg.service` | Postgres in podman (`~/.config/containers/systemd/slop-pg.container`); data in the `slop-pg-data` volume. Dev and the deployment share the server; the deployment uses its own `slop_prod` database and role |
+| `slop-pg.service` | Production Postgres in podman (`~/.config/containers/systemd/slop-pg.container`, `127.0.0.1:5433`); data in the `slop-pg-data` volume. The `slop_prod` database and role, and `slop_sim`. Its superuser `slop` has a random password (`~/.config/slop/pg-superuser`); maintenance uses it through `podman exec` |
+| `slop-pg-dev.service` | Development and test Postgres (`slop-pg-dev.container`, `127.0.0.1:5434`, user `slop:slop`); the deploy's tests create their throwaway databases here, never in the production cluster. Install: copy `deploy/systemd/slop-pg-dev.container` to `~/.config/containers/systemd/` and `systemctl --user daemon-reload && systemctl --user start slop-pg-dev` |
 | `slop-api.service` | The API, the website (`SLOP_WEB_DIR`) and the release fetcher, on `127.0.0.1:8090` |
 | `slop-sim.service`, `slop-sim-pulse.service` | The simulation sandbox (`docs/SIMULATION.md`): the same build on the `slop_sim` database at `sim.188-68-41-241.sslip.io` (`127.0.0.1:8092`), and its simulated live players. Settings in `~/.config/slop/slop-sim.env`. Restarted with each deploy |
 | `slop-backup.timer` → `slop-backup.service` | Every night at 03:30 UTC, `slop-backup`: the `slop_prod` database, roles and `~/.config/slop` into `~/slop-backups` (below) |
@@ -20,7 +21,9 @@ server's own `*.happysrv.de` name can't get certificates (the host's customers s
 used up, Let's Encrypt's weekly limit), so the deployment uses an `sslip.io` name, which resolves
 to the IP in it. Use a real domain when there is one.
 
-Settings and keys are in `~/.config/slop/slop.env` (mode 600; never committed). The release
+Settings and keys are in `~/.config/slop/slop.env` (mode 600; never committed). Behind Caddy it
+must include `SLOP_CLIENT_IP_HEADER=x-forwarded-for` (Caddy replaces any value the visitor sends),
+or every visitor shares one rate limit; the admin panel raises an alert when it's missing. The release
 signing key's public half, which desktop builds trust, is in `~/.config/slop/desktop-build.env`.
 
 ## The desktop app
@@ -161,7 +164,10 @@ Changing the key means everyone switches phone notifications on again.
 `SLOP_SCANNER=local` scans every release file before review (DESIGN §10, SECURITY §5.2). The API
 runs `SLOP_SCAN_COMMAND` (here `~/slop-deploy/bin/slop-scan`), which starts the `slop-scanner`
 container (`deploy/scanner`: ClamAV, YARA with YARA-Forge's core rules, capa) for one file:
-no network, read-only, no capabilities, 4 GB of memory. Nothing in the file is ever run.
+no network, read-only, no capabilities, 4 GB of memory, 25 minutes, and the file on stdin to an
+unprivileged user inside (an unmapped ID outside, not this account). Nothing in the file is ever
+run. A file the scanner couldn't scan completely (an archive that won't unpack or is past the
+limits, an engine error or timeout) is held for a person, like one it flags.
 
 ```sh
 podman build -t slop-scanner deploy/scanner
@@ -239,18 +245,80 @@ server as `host=gitlab` or `host=gitea` to read its public repositories too.
 
 ## Database roles
 
-The API can run as a database role that doesn't own the tables (migration 0050, SECURITY §9). It
+The API runs as a database role that doesn't own the tables (migration 0050, SECURITY §9). It
 reads and writes as usual, but only adds rows to payments, vote history and the staff audit log,
-and can't switch off their append-only triggers; only the owner can. Until it's set up, the API
-logs "the API owns its tables" at start, and the triggers are the only guard.
+and can't switch off their append-only triggers; only the owner can. Migrations run as the owner
+in their own step (`slop-api migrate`, `slop-migrate.service`), whose env file is the only place
+the owner's password lives, so code running in the API can't reach it. Until this is set up, the
+API runs migrations itself and logs "the API owns its tables" at start.
 
 1. `deploy/db-roles.sh postgres://<owner>:<password>@<host>:<port>/<database>` (the current
    `DATABASE_URL`). It creates the role `slop_app` with a new password and prints two lines.
-2. Put them in `~/.config/slop/slop.env`: `SLOP_MIGRATE_DATABASE_URL` (the owner, used only for
-   migrations at start) and the new `DATABASE_URL`.
-3. `systemctl --user restart slop-api`. Check the warning is gone: `journalctl --user -u slop-api -n 20`.
+2. Put `SLOP_MIGRATE_DATABASE_URL=…` (the owner) in a new `~/.config/slop/slop-migrate.env`
+   (mode 600). In `~/.config/slop/slop.env`, set the new `DATABASE_URL`, add
+   `SLOP_MIGRATIONS=external`, and remove any `SLOP_MIGRATE_DATABASE_URL`.
+3. Install the units: copy `deploy/systemd/slop-migrate.service` and `slop-api.service` to
+   `~/.config/systemd/user/`, then `systemctl --user daemon-reload && systemctl --user restart slop-api`.
+   Check the warning is gone: `journalctl --user -u slop-api -n 20`.
 
 The simulation sandbox (`slop_sim`) wipes its own ledgers, so it keeps the owner's URL.
+
+## The build container
+
+`update.sh` never runs a commit's code on the server itself. Tests, lints, the release build, the
+website build and the browser tests run in `deploy/build/Containerfile` (rootless podman, as the
+deploying user but with no capabilities), which sees only the deploy clone, a cache folder
+(`~/slop-deploy/cache`) and an output folder (`~/slop-deploy/out`, with each step's log). It has
+the host's network so it can fetch crates and reach the test database on `127.0.0.1:5434`, but no
+home folder, secrets or keys. The image is rebuilt when the Containerfile changes. A commit's
+code still runs with the API's rights once it's deployed: that's what branch protection and
+signed commits are for.
+
+## Signed commits
+
+Once `~/slop-deploy/allowed_signers` exists, `update.sh` deploys only commits signed by a key in
+it (SSH signing; the file is in `ssh-keygen`'s allowed-signers format, one
+`<email> <public key>` per line). Unsigned or wrongly signed commits are skipped and logged.
+
+1. Sign your commits: `git config --global gpg.format ssh`,
+   `git config --global user.signingkey ~/.ssh/id_ed25519.pub`, `git config --global commit.gpgsign true`.
+   Add the same key on GitHub as a *signing* key.
+2. `echo "dochound1@gmail.com $(cat ~/.ssh/id_ed25519.pub)" > ~/slop-deploy/allowed_signers`.
+3. Push a signed commit and watch it deploy (`journalctl --user -u slop-deploy -f`).
+
+## A read-only deploy key
+
+The deploy fetches from GitHub over SSH. Give it its own key that can only read:
+
+1. `ssh-keygen -t ed25519 -N "" -f ~/.ssh/slop_deploy -C slop-deploy`
+2. On GitHub: the repository's Settings → Deploy keys → Add, paste `~/.ssh/slop_deploy.pub`,
+   leave "Allow write access" off.
+3. Add to `~/.ssh/config`:
+   ```
+   Host github-slop-deploy
+     HostName github.com
+     User git
+     IdentityFile ~/.ssh/slop_deploy
+     IdentitiesOnly yes
+   ```
+4. `git -C ~/slop-deploy/repo remote set-url origin git@github-slop-deploy:DocFoxHound/slop.git`
+   and set `Environment=SLOP_DEPLOY_REMOTE=git@github-slop-deploy:DocFoxHound/slop.git` in
+   `slop-deploy.service`.
+
+## Rolling back
+
+Before switching to a new build, `update.sh` dumps the production database to
+`~/slop-deploy/predeploy/` (the last three are kept). If a build's migration went wrong, after
+switching `current` back:
+
+```
+podman exec slop-pg createdb -U slop slop_prod_restored
+podman exec -i slop-pg pg_restore -U slop --no-owner --role=slop_prod -d slop_prod_restored < ~/slop-deploy/predeploy/<file>.dump
+```
+
+then swap the databases' names while the API is stopped. Migrations should also stay compatible
+with the release before them (add columns and tables; remove in a later release), so going back
+a build rarely needs this.
 
 ## Log retention
 

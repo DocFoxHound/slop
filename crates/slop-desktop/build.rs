@@ -1,5 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 fn main() {
+    // Accepting releases without a maker signature is only for private test setups whose
+    // repositories can't make GitHub attestations (docs/TESTING.md). A build for any other site
+    // that asks for it is a mistake: refuse to build it (SECURITY §5.3).
+    println!("cargo:rerun-if-env-changed=SLOP_ALLOW_UNSIGNED");
+    println!("cargo:rerun-if-env-changed=SLOP_API_URL");
+    if std::env::var("SLOP_ALLOW_UNSIGNED").as_deref() == Ok("true") {
+        let url = std::env::var("SLOP_API_URL").unwrap_or_default();
+        let host = url
+            .split("://")
+            .nth(1)
+            .and_then(|rest| rest.split(['/', ':']).next())
+            .unwrap_or("");
+        let test_site = host == "localhost" || host == "127.0.0.1" || host.ends_with(".sslip.io");
+        assert!(
+            test_site,
+            "SLOP_ALLOW_UNSIGNED=true is only for test sites (localhost, *.sslip.io), not {host:?}"
+        );
+    }
     // Every command the UI may call is listed here and granted in capabilities/default.json, so
     // nothing else on the Rust side is reachable from the page (SECURITY §7).
     tauri_build::try_build(tauri_build::Attributes::new().app_manifest(

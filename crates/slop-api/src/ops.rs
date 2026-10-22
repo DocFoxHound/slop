@@ -120,7 +120,7 @@ fn deploy_alerts(dir: &Path) -> Vec<Alert> {
                 alert(
                     format!("deploy-failed-{sha}"),
                     format!("Commit {} didn't deploy", &sha[..sha.len().min(7)]),
-                    "Its tests failed, so the server kept running the previous build. See ~/slop-deploy/test.log.",
+                    "Its tests failed, so the server kept running the previous build. See ~/slop-deploy/out/ (test.log, lint.log, e2e.log, container.log).",
                     "/admin",
                     true,
                 )
@@ -247,6 +247,29 @@ async fn set_cursor(db: &sqlx::PgPool, name: &str, value: i64) -> sqlx::Result<(
 }
 
 /// Everything that needs an admin right now.
+/// Settings that are wrong for a public deployment.
+pub fn config_alerts(config: &crate::config::Config) -> Vec<Alert> {
+    let mut out = Vec::new();
+    // Behind a reverse proxy on the same machine, every request comes from the proxy: without
+    // the header that carries the visitor's address, the rate limits (ratelimit.rs) count the
+    // whole internet as one visitor, and one script can lock everyone out of signing in.
+    if config.secure_cookies()
+        && config.bind.ip().is_loopback()
+        && config.client_ip_header.is_none()
+    {
+        out.push(alert(
+            "client-ip-header-missing",
+            "Rate limits can't tell visitors apart",
+            "Slop listens on localhost behind a proxy but SLOP_CLIENT_IP_HEADER isn't set, so every \
+             visitor shares one rate limit. Set SLOP_CLIENT_IP_HEADER=x-forwarded-for in slop.env \
+             (Caddy overwrites that header) and restart slop-api.",
+            "/admin",
+            false,
+        ));
+    }
+    out
+}
+
 pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
     let db = &state.db;
     let now = OffsetDateTime::now_utc();
@@ -265,6 +288,7 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
         disks.push(dir.as_path());
     }
     out.extend(disk_alerts(&disks));
+    out.extend(config_alerts(&state.config));
 
     // The scanner failing (not finding something: that's the review queue's job).
     let failed: Vec<(Uuid, String, String)> = sqlx::query_as(

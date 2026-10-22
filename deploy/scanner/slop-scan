@@ -1,15 +1,17 @@
 #!/bin/sh
 # Scans one file with Slop's scanner container and prints the verdict as JSON (scan.rs runs this).
 # Usage: slop-scan <path> [file name]. No network, read-only root, no capabilities, limited
-# memory, processes and scratch space: the file is only read, never run. (Root inside the
-# container is this unprivileged user outside it, so it can read the file it was handed.)
+# memory, processes, time and scratch space: the file is only read, never run. The file goes in on
+# stdin and the scanner runs as its own unprivileged user, which is an unmapped ID outside the
+# container (not this account), so a parser bug that escaped would hold nothing of ours. podman's
+# --timeout stops the container itself, not only this command, if a scan hangs.
 set -eu
 path=$1
 name=${2:-$(basename "$path")}
-# Only the extension matters to the scanner; keep characters podman's -v syntax can't misread.
+# Only the extension matters to the scanner; keep it to plain characters.
 name=$(printf '%s' "$name" | tr -c 'A-Za-z0-9._-' '_')
 case "$name" in .*|"") name=file$name ;; esac
-exec podman run --rm --user 0 --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
-  --pids-limit=256 --memory=4g --tmpfs /tmp:rw,size=6g \
-  -v slop-scan-db:/db:ro -v "$path":"/scan/$name":ro,z \
-  localhost/slop-scanner "/scan/$name"
+exec podman run --rm -i --network=none --read-only --cap-drop=ALL --security-opt=no-new-privileges \
+  --pids-limit=256 --memory=4g --tmpfs /tmp:rw,size=6g,mode=1777 --timeout=1500 \
+  -v slop-scan-db:/db:ro \
+  localhost/slop-scanner - "$name" <"$path"

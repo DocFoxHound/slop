@@ -6,7 +6,7 @@
 //! prints requests a second, latency percentiles and errors as a Markdown table.
 //!
 //! cargo build --release -p slop-api --examples
-//! DATABASE_URL=postgres://slop:slop@127.0.0.1:5433/slop target/release/examples/load_test
+//! DATABASE_URL=postgres://slop:slop@127.0.0.1:5434/slop target/release/examples/load_test
 
 use std::{
     io::BufRead,

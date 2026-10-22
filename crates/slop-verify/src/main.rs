@@ -261,6 +261,7 @@ fn manifest(signed: &Signed, args: &Args) -> Result<Vec<String>, Fail> {
             repo_url: &m.repo_url,
             commit: &m.commit,
             slop_build_workflow: args.slop_build.as_deref(),
+            repo_id: None,
         };
         for f in &m.files {
             let pieces: Vec<(String, &str, Option<&String>)> = if f.parts.is_empty() {

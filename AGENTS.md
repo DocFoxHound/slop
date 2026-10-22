@@ -51,7 +51,7 @@ lawyer before anyone builds them.
 ```sh
 cargo fmt
 cargo clippy --all-targets          # no warnings
-DATABASE_URL=postgres://slop:slop@127.0.0.1:5433/slop cargo test
+DATABASE_URL=postgres://slop:slop@127.0.0.1:5434/slop cargo test
 cd web && npm test && npm run typecheck
 cd web && npm run build && npm run e2e   # browser tests, for changes to the website
 ```

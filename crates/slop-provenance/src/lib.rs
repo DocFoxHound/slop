@@ -54,6 +54,10 @@ pub struct Expected<'a> {
     /// `https://github.com/<org>/slop-build/.github/workflows/build.yml@`. `None` until Slop Build
     /// exists.
     pub slop_build_workflow: Option<&'a str>,
+    /// GitHub's numeric (repository ID, owner ID) recorded when the app was linked. When given,
+    /// the certificate must name the same ones, so a repository registered again under the old
+    /// name (repojacking) can't sign for the app.
+    pub repo_id: Option<(i64, i64)>,
 }
 
 #[derive(Debug, thiserror::Error, PartialEq, Eq)]
@@ -257,6 +261,18 @@ impl ProvenanceVerifier {
                 "built from {source_repo}, not {}",
                 expected.repo_url
             )));
+        }
+        if let Some((repo_id, owner_id)) = expected.repo_id {
+            let same = |found: &Option<String>, want: i64| {
+                found.as_deref().and_then(|v| v.parse::<i64>().ok()) == Some(want)
+            };
+            if !same(&claims.source_repository_identifier, repo_id)
+                || !same(&claims.source_repository_owner_identifier, owner_id)
+            {
+                return Err(ProvenanceError::Mismatch(format!(
+                    "built in a different repository that has the name {source_repo} now"
+                )));
+            }
         }
         let commit = claims
             .source_repository_digest

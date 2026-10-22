@@ -1,0 +1,13 @@
+# Runs the database migrations as the tables' owner before the API starts (deploy/README.md,
+# "Database roles"). Its env file holds only the owner's URL, so the API never sees it.
+# Skipped (and the API starts as before) until ~/.config/slop/slop-migrate.env exists.
+[Unit]
+Description=Slop database migrations
+After=slop-pg.service
+ConditionPathExists=%h/.config/slop/slop-migrate.env
+
+[Service]
+Type=oneshot
+EnvironmentFile=%h/.config/slop/slop-migrate.env
+ExecStart=%h/slop-deploy/current/slop-api migrate
+NoNewPrivileges=yes

@@ -14,6 +14,7 @@ fn expected() -> Expected<'static> {
         repo_url: REPO,
         commit: COMMIT,
         slop_build_workflow: None,
+        repo_id: None,
     }
 }
 
@@ -79,6 +80,15 @@ fn another_repo_or_commit_is_refused() {
         ..expected()
     };
     assert!(v.verify_sha512(BUNDLE, SHA512, same).is_ok());
+    // The same name, but a different repository behind it (repojacking).
+    let taken_over = Expected {
+        repo_id: Some((1, 1)),
+        ..expected()
+    };
+    assert!(matches!(
+        v.verify_sha512(BUNDLE, SHA512, taken_over),
+        Err(ProvenanceError::Mismatch(_))
+    ));
 }
 
 #[test]

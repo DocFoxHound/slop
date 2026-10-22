@@ -63,7 +63,7 @@ mockup/                 The original clickable mockup (reference only)
 Needs Rust (stable, via [rustup](https://rustup.rs)), Node 22+, and podman or Docker.
 
 ```sh
-./dev/db.sh                      # start Postgres on 127.0.0.1:5433
+./dev/db.sh                      # start the development Postgres on 127.0.0.1:5434
 cp .env.example .env             # then edit; at least DATABASE_URL
 set -a; . ./.env; set +a
 cargo run -p slop-api            # runs migrations, listens on SLOP_BIND (:8080)
@@ -151,7 +151,7 @@ production). Debug builds of the desktop app pointed at `localhost` relax the sa
 ## Test
 
 ```sh
-DATABASE_URL=postgres://slop:slop@127.0.0.1:5433/slop cargo test
+DATABASE_URL=postgres://slop:slop@127.0.0.1:5434/slop cargo test
 cargo clippy --all-targets
 cargo fmt --check
 cd web && npm test && npm run typecheck

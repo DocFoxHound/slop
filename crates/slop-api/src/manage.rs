@@ -467,6 +467,8 @@ async fn apply(tx: &mut PgConnection, id: Uuid, reviewer: &str) -> anyhow::Resul
             .bind(&repo_url)
             .execute(&mut *tx)
             .await?;
+            // The new repository's IDs are recorded on first use (repo_identity.rs).
+            crate::repo_identity::forget(&mut *tx, app_id).await?;
             json!({ "change": id, "repo_url": repo_url })
         }
     };

@@ -521,6 +521,7 @@ impl Library {
         // In parts: every part must carry the maker's attestation for its own hash.
         if !file.parts.is_empty() && file.attestation.is_none() && file.maker_signature.is_none() {
             let expected = || slop_provenance::Expected {
+                repo_id: None,
                 repo_url: &manifest.repo_url,
                 commit: &manifest.commit,
                 slop_build_workflow: None,
@@ -551,6 +552,7 @@ impl Library {
         match &file.attestation {
             Some(bundle) => {
                 let expected = slop_provenance::Expected {
+                    repo_id: None,
                     repo_url: &manifest.repo_url,
                     commit: &manifest.commit,
                     slop_build_workflow: None,
