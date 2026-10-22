@@ -68,6 +68,42 @@ pub(crate) struct GithubClaims {
     pub sha: String,
     /// The reusable workflow running, e.g. `org/slop-build/.github/workflows/build.yml@refs/tags/v1`.
     pub job_workflow_ref: String,
+    /// GitHub's numeric IDs for the repository and its owner (repo_identity.rs).
+    #[serde(default)]
+    pub repository_id: Option<String>,
+    #[serde(default)]
+    pub repository_owner_id: Option<String>,
+}
+
+/// The run is in the very repository the app was linked to, not one registered again under its
+/// name (repo_identity.rs).
+pub(crate) async fn same_repository(
+    state: &AppState,
+    app_id: Uuid,
+    claims: &GithubClaims,
+) -> ApiResult<()> {
+    let Some((repo_id, owner_id)) = crate::repo_identity::ensure(state, app_id).await? else {
+        return Err(ApiError::Unavailable(
+            "Slop couldn't check the repository's identity with GitHub; try again shortly",
+        ));
+    };
+    let same = |found: &Option<String>, want: i64| {
+        found.as_deref().and_then(|v| v.parse::<i64>().ok()) == Some(want)
+    };
+    if same(&claims.repository_id, repo_id) && same(&claims.repository_owner_id, owner_id) {
+        Ok(())
+    } else {
+        tracing::warn!(%app_id, repository = %claims.repository, "a run from a different repository with the app's repository name");
+        Err(ApiError::Forbidden)
+    }
+}
+
+/// Only tagged versions of a recipe: makers pin a tag, and a fork's commit or a branch isn't one.
+fn is_recipe(job_workflow_ref: &str, workflow: &str) -> bool {
+    job_workflow_ref
+        .strip_prefix(workflow)
+        .and_then(|rest| rest.strip_prefix("@refs/tags/"))
+        .is_some_and(|tag| !tag.is_empty() && !tag.contains(['/', ' ']))
 }
 
 async fn signing_keys(state: &AppState, kid: &str) -> ApiResult<DecodingKey> {
@@ -188,8 +224,8 @@ async fn submit_from_ci(
         .ok_or(ApiError::Unauthorized)?;
     let claims = verify_github_token(&state, token.trim()).await?;
 
-    // Only the Slop Build recipe can submit this way.
-    if !claims.job_workflow_ref.starts_with(&format!("{recipe}@")) {
+    // Only the Slop Build recipe, at a tagged version, can submit this way.
+    if !is_recipe(&claims.job_workflow_ref, &recipe) {
         return Err(ApiError::Forbidden);
     }
     // The release must be the commit this run built.
@@ -211,6 +247,7 @@ async fn submit_from_ci(
     if !repo_path.is_some_and(|p| p.eq_ignore_ascii_case(&claims.repository)) {
         return Err(ApiError::Forbidden);
     }
+    same_repository(&state, app_id, &claims).await?;
 
     let tag_ok = (1..=100).contains(&req.tag.len())
         && req
@@ -301,8 +338,11 @@ async fn record_defender(
     let report = sqlx::types::Json(check);
     let sha = check.sha256.to_ascii_lowercase();
     sqlx::query(
+        // A check that found something is never replaced by one that didn't: a clean report
+        // can't wash out a detection (SECURITY §5.2).
         "insert into defender_checks (app_id, sha256, report) values ($1, $2, $3)
-         on conflict (app_id, sha256) do update set report = excluded.report, created_at = now()",
+         on conflict (app_id, sha256) do update set report = excluded.report, created_at = now()
+         where jsonb_array_length(coalesce(defender_checks.report->'detections', '[]')) = 0",
     )
     .bind(app_id)
     .bind(&sha)
@@ -311,7 +351,8 @@ async fn record_defender(
     .await?;
     Ok(sqlx::query(
         "update release_files f set defender = $3 from releases r
-         where r.id = f.release_id and r.app_id = $1 and f.sha256 = $2 and f.platform = 'windows'",
+         where r.id = f.release_id and r.app_id = $1 and f.sha256 = $2 and f.platform = 'windows'
+           and jsonb_array_length(coalesce(f.defender->'detections', '[]')) = 0",
     )
     .bind(app_id)
     .bind(&sha)
@@ -356,10 +397,8 @@ async fn submit_checks(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(ApiError::Unauthorized)?;
     let claims = verify_github_token(&state, token.trim()).await?;
-    if !claims
-        .job_workflow_ref
-        .starts_with(&format!("{check_workflow}@"))
-        && !claims.job_workflow_ref.starts_with(&format!("{recipe}@"))
+    if !is_recipe(&claims.job_workflow_ref, &check_workflow)
+        && !is_recipe(&claims.job_workflow_ref, recipe)
     {
         return Err(ApiError::Forbidden);
     }
@@ -373,6 +412,7 @@ async fn submit_checks(
     if !repo_path.is_some_and(|p| p.eq_ignore_ascii_case(&claims.repository)) {
         return Err(ApiError::Forbidden);
     }
+    same_repository(&state, app_id, &claims).await?;
     if req.files.is_empty() || req.files.len() > 20 {
         return Err(ApiError::invalid("files", "1 to 20 files"));
     }

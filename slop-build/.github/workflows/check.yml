@@ -51,6 +51,9 @@ jobs:
 
       - name: Scan
         shell: pwsh
+        # Inputs reach scripts through the environment only, never pasted into the script.
+        env:
+          SLOP_APP: ${{ inputs.app }}
         run: |
           $ErrorActionPreference = 'Stop'
           Update-MpSignature
@@ -92,7 +95,7 @@ jobs:
             foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($f.Name)::$($d.threat) in $($d.file). Slop holds the release for a person to look at. If it's a false positive, submit it at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer)." }
           }
           if ($reports.Count -eq 0) { throw "the release has no Windows files (.zip, .exe, .msi)" }
-          @{ app = '${{ inputs.app }}'; files = @($reports) } | ConvertTo-Json -Depth 5 | Set-Content body.json
+          @{ app = $env:SLOP_APP; files = @($reports) } | ConvertTo-Json -Depth 5 | Set-Content body.json
 
       - name: Tell Slop
         shell: bash

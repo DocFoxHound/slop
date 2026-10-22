@@ -20,6 +20,10 @@ struct Cli {
 enum Command {
     /// Run the API server and the release fetcher (the default).
     Serve,
+    /// Run database migrations as the tables' owner (SLOP_MIGRATE_DATABASE_URL), then give the
+    /// API's role (SLOP_APP_ROLE, default slop_app) its rights. The deployment runs this as its own
+    /// step (slop-migrate.service), so the API never holds the owner's password.
+    Migrate,
     /// Signing keys.
     Keys {
         #[command(subcommand)]
@@ -191,6 +195,7 @@ async fn main() -> anyhow::Result<()> {
     let cli = Cli::parse();
     match cli.command.unwrap_or(Command::Serve) {
         Command::Serve => serve().await,
+        Command::Migrate => migrate().await,
         Command::Keys {
             command: KeysCommand::GenerateUpdater,
         } => {
@@ -427,6 +432,20 @@ async fn connect() -> anyhow::Result<(Config, PgPool)> {
                 .context("granting the API's role")?;
             owner.close().await;
         }
+        // Migrations ran as their own step (`slop-api migrate`): only check they did.
+        None if std::env::var("SLOP_MIGRATIONS").as_deref() == Ok("external") => {
+            let applied: i64 = sqlx::query_scalar(
+                "select coalesce(max(version), 0) from _sqlx_migrations where success",
+            )
+            .fetch_one(&db)
+            .await
+            .context("reading which migrations ran")?;
+            let needed = MIGRATOR.iter().map(|m| m.version).max().unwrap_or(0);
+            anyhow::ensure!(
+                applied >= needed,
+                "the database is at migration {applied} but this build needs {needed}: run `slop-api migrate`"
+            );
+        }
         None => MIGRATOR.run(&db).await.context("running migrations")?,
     }
     let owns: i64 = sqlx::query_scalar(
@@ -444,6 +463,35 @@ async fn connect() -> anyhow::Result<(Config, PgPool)> {
         .await
         .context("publishing legal documents")?;
     Ok((config, db))
+}
+
+async fn migrate() -> anyhow::Result<()> {
+    let owner_url = std::env::var("SLOP_MIGRATE_DATABASE_URL")
+        .context("SLOP_MIGRATE_DATABASE_URL (the tables' owner) isn't set")?;
+    let role = std::env::var("SLOP_APP_ROLE").unwrap_or_else(|_| "slop_app".into());
+    let owner = PgPoolOptions::new()
+        .max_connections(1)
+        .acquire_timeout(Duration::from_secs(30))
+        .connect(&owner_url)
+        .await
+        .context("connecting to Postgres as the owner")?;
+    MIGRATOR.run(&owner).await.context("running migrations")?;
+    let exists: bool =
+        sqlx::query_scalar("select exists (select 1 from pg_roles where rolname = $1)")
+            .bind(&role)
+            .fetch_one(&owner)
+            .await?;
+    if exists {
+        sqlx::query("select slop_grant_app_role($1)")
+            .bind(&role)
+            .execute(&owner)
+            .await
+            .context("granting the API's role")?;
+    } else {
+        tracing::warn!(%role, "the API's role doesn't exist yet: see deploy/README.md, \"Database roles\"");
+    }
+    tracing::info!("migrations are up to date");
+    Ok(())
 }
 
 async fn serve() -> anyhow::Result<()> {
@@ -476,10 +524,14 @@ async fn serve() -> anyhow::Result<()> {
             "STRIPE_SECRET_KEY / STRIPE_WEBHOOK_SECRET not set: People payments are off"
         );
     }
+    for a in slop_api::ops::config_alerts(&config) {
+        tracing::warn!(problem = %a.title, "{}", a.detail);
+    }
     let bind = config.bind;
     let state = AppState::new(db, config)?;
     tokio::spawn(releases::run_fetcher(state.clone()));
     tokio::spawn(slop_api::bounties::run_charger(state.clone()));
+    tokio::spawn(slop_api::repo_identity::run_fill(state.clone()));
     tokio::spawn(slop_api::updates::run_watcher(state.clone()));
     tokio::spawn(slop_api::cleanup::run(state.clone()));
     tokio::spawn(slop_api::pulse::run_sampler(state.clone()));

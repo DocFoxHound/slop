@@ -1596,10 +1596,14 @@ pub async fn find_attestation(
         .slop_build_workflow
         .as_ref()
         .map(|w| format!("https://github.com/{w}@"));
+    let repo_id = crate::repo_identity::recorded_for_url(state, repo_url)
+        .await
+        .map_err(|e| format!("couldn't read the app's repository ID: {e}"))?;
     let expected = slop_provenance::Expected {
         repo_url,
         commit,
         slop_build_workflow: recipe_prefix.as_deref(),
+        repo_id,
     };
     let mut last_problem = NO_ATTESTATION.to_string();
     for bundle in found.attestations.into_iter().filter_map(|a| a.bundle) {

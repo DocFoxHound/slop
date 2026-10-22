@@ -62,7 +62,7 @@ code never does.
 It refuses any database whose name doesn't end in `_sim`.
 
 ```sh
-export DATABASE_URL=postgres://slop:slop@127.0.0.1:5433/slop_sim
+export DATABASE_URL=postgres://slop:slop@127.0.0.1:5434/slop_sim
 slop-api simulate generate --apps 400 --users 1500 --days 120 --seed 42   # wipes and rebuilds
 slop-api simulate report --sample 400                                      # JSON scores
 slop-api simulate pulse                                                    # keeps "playing now" alive

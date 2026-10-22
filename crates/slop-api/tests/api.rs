@@ -134,7 +134,7 @@ async fn fake_github() -> String {
                 axum::Json(serde_json::from_str::<Value>(include_str!("fixtures/oidc-test-jwks.json")).unwrap())
             }),
         )
-        .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk" })) }))
+        .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk", "id": 1001, "owner": { "id": 42 } })) }))
         // The source archive Slop's source check reads (source_scan.rs), and OSV (dep_watch.rs).
         .route("/repos/octo/scanned/tarball/{sha}", get(|| async { source_archive(SCANNED_SOURCE) }))
         .route("/repos/octo/game/tarball/{sha}", get(|| async { source_archive(&SCANNED_SOURCE[..1]) }))
@@ -441,7 +441,7 @@ async fn fake_github() -> String {
                     "globex" => (901, "Organization"),
                     _ => (7, "User"),
                 };
-                axum::Json(json!({ "private": false, "owner": { "login": owner, "id": id, "type": kind } })).into_response()
+                axum::Json(json!({ "private": false, "id": 5000 + id, "owner": { "login": owner, "id": id, "type": kind } })).into_response()
             }),
         )
         .route(
@@ -2608,6 +2608,8 @@ fn github_token(app: &TestApp, overrides: Value) -> String {
         "sha": BUILD_COMMIT,
         "job_workflow_ref": RECIPE_REF,
         "ref": "refs/heads/main",
+        "repository_id": "1001",
+        "repository_owner_id": "42",
     });
     for (k, v) in overrides.as_object().unwrap() {
         claims[k] = v.clone();
@@ -11202,7 +11204,8 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
             .unwrap();
     assert_eq!(logged, 1);
 
-    // A clean check (arriving before Slop fetched the file) lets the next release through.
+    // A later clean check never washes out a detection (SECURITY §5.2): the same file in the next
+    // release still needs a reviewer to clear it.
     let next: Uuid = {
         sqlx::query("update apps set repo_url = $1")
             .bind(format!("{}octo/game", app.fake_base))
@@ -11228,9 +11231,23 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
     .await;
     assert_eq!(
         body_json(res).await["matched"],
-        2,
-        "the same file is in both releases"
+        0,
+        "a clean report doesn't replace a detection"
     );
+    let err = admin::approve(&app.db, Some(&app.signing_key), rules, next, "rev")
+        .await
+        .unwrap_err()
+        .to_string();
+    assert!(err.contains("Wacatac"), "{err}");
+    admin::clear_scan(
+        &app.db,
+        next,
+        "windows",
+        "rev",
+        "Same file as 1.0.0, already judged a false positive and reported to Microsoft.",
+    )
+    .await
+    .unwrap();
     admin::approve(&app.db, Some(&app.signing_key), rules, next, "rev")
         .await
         .unwrap();
@@ -11240,8 +11257,8 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
     )
     .await;
     assert_eq!(
-        mine[0]["files"][0]["defender"]["signed_by"],
-        "SignPath Foundation"
+        mine[0]["files"][0]["defender"]["detections"][0]["threat"], "Trojan:Win32/Wacatac.B!ml",
+        "the detection stays on record, cleared by the reviewer"
     );
 
     // Players see the engines and Defender's result, not the findings or the reviewer's reasons.
@@ -16039,4 +16056,21 @@ async fn staff_publish_legal_changes_and_agents_only_ask_for_staff_changes(db: P
     ] {
         assert!(names.contains(&want), "{want}");
     }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_public_site_behind_a_proxy_needs_the_client_ip_header(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.public_url = "https://slop.example".parse().unwrap();
+        c.client_ip_header = None;
+    })
+    .await;
+    let keys: Vec<String> = slop_api::ops::config_alerts(&app.state.config)
+        .into_iter()
+        .map(|a| a.key)
+        .collect();
+    assert_eq!(keys, ["client-ip-header-missing"]);
+    let mut config = (*app.state.config).clone();
+    config.client_ip_header = Some("x-forwarded-for".into());
+    assert!(slop_api::ops::config_alerts(&config).is_empty());
 }

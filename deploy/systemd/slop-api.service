@@ -13,6 +13,8 @@ NoNewPrivileges=yes
 # podman can't start from inside one. Downloads being scanned go to a private folder instead.
 Environment=TMPDIR=%h/slop-deploy/tmp
 ExecStartPre=/usr/bin/mkdir -p -m 700 %h/slop-deploy/tmp
+# Migrations as their own step, with the owner's password in its own env file (slop-migrate.service).
+ExecStartPre=/usr/bin/systemctl --user start slop-migrate.service
 
 [Install]
 WantedBy=default.target

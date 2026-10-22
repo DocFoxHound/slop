@@ -1,0 +1,17 @@
+# Postgres for Slop development and tests only (never production data). Production is slop-pg.
+[Unit]
+Description=Postgres for Slop development and tests
+
+[Container]
+ContainerName=slop-pg-dev
+Image=docker.io/library/postgres:17@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
+Environment=POSTGRES_USER=slop POSTGRES_PASSWORD=slop POSTGRES_DB=slop
+PublishPort=127.0.0.1:5434:5432
+Volume=slop-pg-dev-data:/var/lib/postgresql/data
+HealthCmd=pg_isready -U slop -q
+
+[Service]
+Restart=always
+
+[Install]
+WantedBy=default.target

@@ -1,6 +1,6 @@
 # Builds Slop's .rpm for RHEL, Rocky and Alma Linux 10. WebKitGTK 4.1 comes from EPEL there, so the
 # package needs EPEL enabled. (EL9 has no WebKitGTK 4.1 at all, which Tauri 2 needs.)
-FROM docker.io/rockylinux/rockylinux:10
+FROM docker.io/rockylinux/rockylinux:10@sha256:827d37bc128288ccf160ee318bb3cb92d591164cb217e92f8bc61e3982ae1834
 RUN dnf -y install epel-release dnf-plugins-core && dnf config-manager --set-enabled crb \
     && dnf -y install gcc gcc-c++ make cmake perl curl wget file pkgconf-pkg-config xz \
        webkit2gtk4.1-devel openssl-devel librsvg2-devel gtk3-devel libsoup3-devel \
