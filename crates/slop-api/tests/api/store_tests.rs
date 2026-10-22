@@ -3741,3 +3741,435 @@ async fn upcoming_without_personalization_leaves_out_what_you_marked(db: PgPool)
     let list = slugs_of(&inbox(&app, req(Method::GET, "/v1/upcoming/for-you").cookie(&pat)).await);
     assert_eq!(list, ["later"]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The catalog: ratings on tiles, my apps, similar apps (catalog.rs)
+
+/// Tiles show % Not Slop, the rating filter and the rating sort count an app only from
+/// votes::MIN_VOTES votes.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn tile_ratings_need_the_minimum_number_of_votes(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    let min = slop_api::votes::MIN_VOTES as usize;
+    listed_with(&app, maker_id, "enough", "released", "").await;
+    listed_with(&app, maker_id, "one-short", "released", "").await;
+    votes_for(&app, "enough", min - 1, 1).await;
+    votes_for(&app, "one-short", min - 1, 0).await;
+    let page = inbox(&app, req(Method::GET, "/v1/apps?sort=rating")).await;
+    assert_eq!(slugs_of(&page["apps"]), ["enough", "one-short"]);
+    let tile = |slug: &str| {
+        page["apps"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["slug"] == slug)
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(tile("enough")["not_slop_percent"], 80);
+    assert!(tile("one-short")["not_slop_percent"].is_null());
+    assert_eq!(tile("one-short")["vote_count"], (min - 1) as i64);
+    assert_eq!(
+        list_slugs(&app, req(Method::GET, "/v1/apps?min_not_slop=50")).await,
+        ["enough"]
+    );
+}
+
+/// A maker's own apps: theirs only (drafts, delisted and private too), most recently changed
+/// first; signed out, 401.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn my_apps_lists_only_the_makers_own_newest_first(db: PgPool) {
+    let app = test_app(db).await;
+    let (mia_id, mia) = app.user("Mia", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    listed_with(
+        &app,
+        mia_id,
+        "listed",
+        "released",
+        "updated_at = now() - interval '3 days'",
+    )
+    .await;
+    listed_with(
+        &app,
+        mia_id,
+        "draft",
+        "coming_soon",
+        "status = 'draft', updated_at = now() - interval '1 day'",
+    )
+    .await;
+    listed_with(
+        &app,
+        mia_id,
+        "delisted",
+        "released",
+        "status = 'delisted', updated_at = now() - interval '2 days'",
+    )
+    .await;
+    listed_with(
+        &app,
+        mia_id,
+        "private",
+        "released",
+        "visibility = 'private', updated_at = now()",
+    )
+    .await;
+    listed_with(&app, bob_id, "bobs", "released", "").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/apps")).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let mine = inbox(&app, req(Method::GET, "/v1/me/apps").cookie(&mia)).await;
+    assert_eq!(slugs_of(&mine), ["private", "draft", "delisted", "listed"]);
+    assert_eq!(mine[1]["status"], "draft");
+}
+
+/// Similar-app shelves: at most 6 each, no app twice, never community branches, no 18+ for an
+/// under-18 viewer, nothing Coming soon under "popular", and only public apps, even on a private
+/// app's page.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn similar_app_shelves_keep_to_the_store_rules(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "base", "released", "").await;
+    tag_app(&app, "base", &["roguelike", "retro"]).await;
+    for i in 0..9 {
+        let slug = format!("match-{i}");
+        listed_with(&app, maker_id, &slug, "released", "").await;
+        tag_app(&app, &slug, &["roguelike", "retro"]).await;
+    }
+    for i in 0..9 {
+        listed_with(&app, maker_id, &format!("played-{i}"), "released", "").await;
+    }
+    listed_with(&app, maker_id, "adult", "released", "min_age = 18").await;
+    tag_app(&app, "adult", &["roguelike", "retro"]).await;
+    listed_with(&app, maker_id, "fork", "released", "").await;
+    sqlx::query("update apps set parent_app_id = (select id from apps where slug = 'base'), branch_kind = 'fix' where slug = 'fork'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    tag_app(&app, "fork", &["roguelike", "retro"]).await;
+    listed_with(&app, maker_id, "teaser", "coming_soon", "").await;
+    listed_with(
+        &app,
+        maker_id,
+        "hidden-gem",
+        "released",
+        "visibility = 'private'",
+    )
+    .await;
+    tag_app(&app, "hidden-gem", &["roguelike", "retro"]).await;
+    for slug in [
+        "teaser", "played-0", "played-1", "played-2", "played-3", "played-4", "played-5",
+        "played-6", "adult",
+    ] {
+        sqlx::query(
+            "insert into pulse_counts (app_id, bucket, players) select id, now() - interval '1 hour', 50 from apps where slug = $1",
+        )
+        .bind(slug)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let shelves = |r: Req| {
+        let app = &app;
+        async move {
+            let body = inbox(app, r).await;
+            ["like_this", "popular", "discover"].map(|k| slugs_of(&body[k]))
+        }
+    };
+    let check = |s: &[Vec<String>; 3], page: &str| {
+        let all: Vec<&String> = s.iter().flatten().collect();
+        let unique: std::collections::HashSet<&&String> = all.iter().collect();
+        assert_eq!(all.len(), unique.len(), "no app twice: {s:?}");
+        assert!(s.iter().all(|shelf| shelf.len() <= 6), "{s:?}");
+        assert!(
+            !all.iter()
+                .any(|a| *a == "fork" || *a == "hidden-gem" || *a == page),
+            "{s:?}"
+        );
+        assert!(!s[1].contains(&"teaser".to_string()), "{s:?}");
+    };
+
+    let adult_view =
+        shelves(req(Method::GET, "/v1/apps/base/similar").header("x-country", "US")).await;
+    check(&adult_view, "base");
+    assert_eq!(adult_view[0].len(), 6);
+    assert_eq!(adult_view[1].len(), 6);
+    assert!(adult_view.iter().flatten().any(|a| a == "adult"));
+    let young_view =
+        shelves(req(Method::GET, "/v1/apps/base/similar").header("x-country", "GB")).await;
+    check(&young_view, "base");
+    assert!(
+        !young_view.iter().flatten().any(|a| a == "adult"),
+        "{young_view:?}"
+    );
+
+    // A private app's page, seen by someone it's shared with: shelves of public apps only.
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "secret",
+        "released",
+        "visibility = 'private'",
+    )
+    .await;
+    tag_app(&app, "secret", &["roguelike", "retro"]).await;
+    for slug in ["secret", "hidden-gem"] {
+        approved_release(&app, slug, maker_id).await;
+        sqlx::query(
+            "insert into app_shares (app_id, user_id) select id, $1 from apps where slug = $2",
+        )
+        .bind(pat_id)
+        .bind(slug)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let shared = shelves(req(Method::GET, "/v1/apps/secret/similar").cookie(&pat)).await;
+    check(&shared, "secret");
+    assert!(!shared[0].is_empty());
+    let (_, stranger) = app.user("Stranger", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/secret/similar").cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Labels: accessibility reports and Glow-ups (label.rs)
+
+/// Withdrawing an accessibility report takes it out of the count and `mine`; nothing to withdraw
+/// is a no-op, and only the caller's own report goes.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn players_withdraw_their_accessibility_report(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(
+        &app,
+        maker_id,
+        "tower",
+        "released",
+        "accessibility = '{subtitles}'",
+    )
+    .await;
+    let (_, pat) = app.user("Pat", "US").await;
+    let (_, sam) = app.user("Sam", "US").await;
+    for c in [&pat, &sam] {
+        app.send(req(Method::POST, "/v1/apps/tower/launch").cookie(c))
+            .await;
+        let res = app
+            .send(
+                req(Method::PUT, "/v1/apps/tower/accessibility/subtitles")
+                    .cookie(c)
+                    .json(json!({ "works": true })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+    let subtitles = |cookie: &str| {
+        let app = &app;
+        let cookie = cookie.to_string();
+        async move {
+            let label = inbox(app, req(Method::GET, "/v1/apps/tower/label").cookie(cookie)).await;
+            label["accessibility"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|f| f["key"] == "subtitles")
+                .unwrap()
+                .clone()
+        }
+    };
+    assert_eq!(subtitles(&pat).await["confirmed"], 2);
+    let withdraw = |path: &str| req(Method::DELETE, path.to_string());
+    assert_eq!(
+        app.send(withdraw("/v1/apps/tower/accessibility/subtitles"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for path in [
+        "/v1/apps/tower/accessibility/colorblind",
+        "/v1/apps/no-such-app/accessibility/subtitles",
+    ] {
+        assert_eq!(
+            app.send(withdraw(path).cookie(&pat)).await.status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    assert_eq!(subtitles(&pat).await["confirmed"], 2);
+    assert_eq!(
+        app.send(withdraw("/v1/apps/tower/accessibility/subtitles").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let mine = subtitles(&pat).await;
+    assert_eq!(
+        (mine["confirmed"].as_i64(), mine["mine"].clone()),
+        (Some(1), Value::Null),
+        "{mine}"
+    );
+    assert_eq!(subtitles(&sam).await["mine"], true);
+}
+
+/// Voters made straight in the database (no sessions), for vote counts.
+async fn plain_voters(app: &TestApp, n: usize) -> Vec<Uuid> {
+    let mut out = Vec::new();
+    for i in 0..n {
+        let id = Uuid::now_v7();
+        sqlx::query("insert into users (id, display_name, country_code, age_16_confirmed_at) values ($1, $2, 'US', now())")
+            .bind(id)
+            .bind(format!("Voter {i}"))
+            .execute(&app.db)
+            .await
+            .unwrap();
+        out.push(id);
+    }
+    out
+}
+
+/// An app's votes 90 days ago (`then`: 1/-1 per voter) and now (`now`).
+async fn rated(app: &TestApp, voters: &[Uuid], slug: &str, then: &[i16], now: &[i16]) {
+    let id = app_id(app, slug).await;
+    for (voter, vote) in voters.iter().zip(then) {
+        sqlx::query("insert into vote_events (id, user_id, app_id, vote, weight, created_at) values ($1, $2, $3, $4, 1, now() - interval '90 days')")
+            .bind(Uuid::now_v7())
+            .bind(voter)
+            .bind(id)
+            .bind(vote)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    for (voter, vote) in voters.iter().zip(now) {
+        sqlx::query("insert into votes (user_id, app_id, vote, weight) values ($1, $2, $3, 1)")
+            .bind(voter)
+            .bind(id)
+            .bind(vote)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+}
+
+/// Glow-ups: enough votes then and now, a rise of 15 points or more, no community branches,
+/// the viewer's age policy, at most 8, biggest rise first.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn glow_ups_need_enough_votes_and_a_clear_rise(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    let voters = plain_voters(&app, 10).await;
+    let (u, d) = (1i16, -1i16);
+    // 1 of 5 then (20%); now k of 5 for rise-k: 40%, 60%, 80%, 100%.
+    let then = [u, d, d, d, d];
+    for k in 2..=5usize {
+        let slug = format!("rise-{k}");
+        listed_with(&app, maker_id, &slug, "released", "").await;
+        let now: Vec<i16> = (0..5).map(|i| if i < k { u } else { d }).collect();
+        rated(&app, &voters, &slug, &then, &now).await;
+    }
+    // Excluded: too few votes then or now, a small rise, a branch; and 18+ in a young view.
+    let cases: [(&str, &str, Vec<i16>, Vec<i16>); 5] = [
+        ("few-then", "", vec![d, d, d, d], vec![u, u, u, u, u]),
+        ("few-now", "", vec![d, d, d, d, d], vec![u, u, u, u]),
+        (
+            "small-rise",
+            "",
+            vec![u, u, u, d, d],
+            vec![u, u, u, u, u, u, u, d, d, d],
+        ),
+        ("branch", "", then.to_vec(), vec![u, u, u, u, u]),
+        ("adult", "min_age = 18", then.to_vec(), vec![u, u, u, u, u]),
+    ];
+    for (slug, set, then, now) in &cases {
+        listed_with(&app, maker_id, slug, "released", set).await;
+        rated(&app, &voters, slug, then, now).await;
+    }
+    sqlx::query("update apps set parent_app_id = (select id from apps where slug = 'rise-2'), branch_kind = 'fix' where slug = 'branch'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let glow = |country: &str| {
+        let app = &app;
+        let country = country.to_string();
+        async move {
+            inbox(
+                app,
+                req(Method::GET, "/v1/shelves/glow-ups").header("x-country", country),
+            )
+            .await
+        }
+    };
+    let us = glow("US").await;
+    let order = slugs_of(&us);
+    let mut tied = order[..2].to_vec();
+    tied.sort();
+    assert_eq!(tied, ["adult", "rise-5"], "the same rise: {order:?}");
+    assert_eq!(&order[2..], ["rise-4", "rise-3", "rise-2"]);
+    assert_eq!(
+        (us[0]["before"].as_i64(), us[0]["after"].as_i64()),
+        (Some(20), Some(100))
+    );
+    assert_eq!(
+        slugs_of(&glow("GB").await),
+        ["rise-5", "rise-4", "rise-3", "rise-2"]
+    );
+
+    // At most 8.
+    for k in 0..6 {
+        let slug = format!("more-{k}");
+        listed_with(&app, maker_id, &slug, "released", "").await;
+        rated(&app, &voters, &slug, &then, &[u, u, u, u, d]).await;
+    }
+    assert_eq!(slugs_of(&glow("US").await).len(), 8);
+}
+
+/// Each player's vote as it stood 60 days ago is their latest event then, even when two events
+/// share a timestamp: the later one counts.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn glow_ups_take_the_later_of_two_votes_at_the_same_moment(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    let voters = plain_voters(&app, 5).await;
+    // Then: each voter said Slop and, in the same instant, changed to Not Slop (100% then).
+    // Written in both orders, so neither the table's order nor luck decides.
+    for (slug, later_first) in [("tower-a", true), ("tower-b", false)] {
+        listed_with(&app, maker_id, slug, "released", "").await;
+        let tower = app_id(&app, slug).await;
+        for voter in &voters {
+            let first = Uuid::now_v7();
+            let second = Uuid::now_v7();
+            assert!(second > first);
+            let events = if later_first {
+                [(second, 1i16), (first, -1i16)]
+            } else {
+                [(first, -1i16), (second, 1i16)]
+            };
+            for (id, vote) in events {
+                sqlx::query("insert into vote_events (id, user_id, app_id, vote, weight, created_at) values ($1, $2, $3, $4, 1, date_trunc('second', now()) - interval '90 days')")
+                .bind(id)
+                .bind(voter)
+                .bind(tower)
+                .bind(vote)
+                .execute(&app.db)
+                .await
+                .unwrap();
+            }
+            sqlx::query("insert into votes (user_id, app_id, vote, weight) values ($1, $2, 1, 1)")
+                .bind(voter)
+                .bind(tower)
+                .execute(&app.db)
+                .await
+                .unwrap();
+        }
+    }
+    // 100% then and now: no glow-up.
+    let glow = inbox(&app, req(Method::GET, "/v1/shelves/glow-ups")).await;
+    assert_eq!(glow, json!([]), "{glow}");
+}
