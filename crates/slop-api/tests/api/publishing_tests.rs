@@ -2601,3 +2601,1068 @@ async fn the_submitted_notice_only_suggests_what_makers_can_do(db: PgPool) {
         assert!(res.status().is_success(), "{body}");
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// A GitHub whose answers each test chooses
+
+/// One answer: status, extra headers, body.
+#[derive(Clone)]
+struct Answer {
+    status: u16,
+    headers: Vec<(String, String)>,
+    body: String,
+}
+
+/// A stand-in for GitHub's API (and its OIDC keys) that answers each path the way the test set
+/// it, 404 otherwise, and remembers what it was asked.
+#[derive(Clone, Default)]
+struct FakeGh {
+    seen: Seen,
+    answers: std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Answer>>>,
+}
+
+impl FakeGh {
+    fn set(&self, path: &str, status: u16, headers: &[(&str, &str)], body: impl Into<String>) {
+        self.answers.lock().unwrap().insert(
+            path.to_string(),
+            Answer {
+                status,
+                headers: headers
+                    .iter()
+                    .map(|(k, v)| (k.to_string(), v.to_string()))
+                    .collect(),
+                body: body.into(),
+            },
+        );
+    }
+
+    fn json(&self, path: &str, status: u16, body: Value) {
+        self.set(path, status, &[], body.to_string());
+    }
+
+    /// How many requests were for this path (ignoring the query).
+    fn hits(&self, path: &str) -> usize {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(p, _)| p.split('?').next() == Some(path))
+            .count()
+    }
+
+    /// The Authorization headers sent for this path.
+    fn auths(&self, path: &str) -> Vec<String> {
+        self.seen
+            .lock()
+            .unwrap()
+            .iter()
+            .filter(|(p, _)| p.split('?').next() == Some(path))
+            .map(|(_, a)| a.clone())
+            .collect()
+    }
+}
+
+async fn fake_gh() -> (String, FakeGh) {
+    let gh = FakeGh::default();
+    let state = gh.clone();
+    let router = Router::new().fallback(
+        move |uri: axum::http::Uri, headers: axum::http::HeaderMap| {
+            let gh = state.clone();
+            async move {
+                let auth = headers
+                    .get("authorization")
+                    .and_then(|v| v.to_str().ok())
+                    .unwrap_or("")
+                    .to_string();
+                gh.seen.lock().unwrap().push((uri.to_string(), auth));
+                let answer = gh.answers.lock().unwrap().get(uri.path()).cloned();
+                match answer {
+                    Some(a) => {
+                        let mut res = axum::response::Response::new(Body::from(a.body));
+                        *res.status_mut() = StatusCode::from_u16(a.status).unwrap();
+                        res.headers_mut()
+                            .insert("content-type", "application/json".parse().unwrap());
+                        for (k, v) in a.headers {
+                            res.headers_mut().insert(
+                                axum::http::HeaderName::from_bytes(k.as_bytes()).unwrap(),
+                                v.parse().unwrap(),
+                            );
+                        }
+                        res
+                    }
+                    None => (
+                        StatusCode::NOT_FOUND,
+                        axum::Json(json!({ "message": "Not Found" })),
+                    )
+                        .into_response(),
+                }
+            }
+        },
+    );
+    let base = serve_fake(router).await;
+    // GitHub Actions' OIDC keys (the test key), so Slop Build tokens work against it.
+    gh.set(
+        "/.well-known/jwks",
+        200,
+        &[],
+        include_str!("../fixtures/oidc-test-jwks.json"),
+    );
+    (base, gh)
+}
+
+/// A test app whose GitHub API and OIDC issuer are this fake.
+async fn app_on(db: PgPool, gh_base: &str, adjust: impl FnOnce(&mut Config)) -> TestApp {
+    let base = gh_base.to_string();
+    test_app_with(db, move |c| {
+        c.releases.github_api_base = base.parse().unwrap();
+        c.releases.github_oidc_issuer = base.trim_end_matches('/').to_string();
+        adjust(c);
+    })
+    .await
+}
+
+fn github_app_config() -> slop_api::config::GithubAppConfig {
+    slop_api::config::GithubAppConfig {
+        app_id: "123".into(),
+        slug: "slop-test".into(),
+        private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
+            "../fixtures/github-app-test-key.pem"
+        ))
+        .unwrap(),
+        webhook_secret: "hook-secret".into(),
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Picking and submitting GitHub releases (updates.rs)
+
+/// The picker lists the repository's releases for its maker (or their agent), marking ones
+/// already sent; a mod's .zip is for any platform.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_pick_from_their_repositorys_github_releases(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |_| {}).await;
+    let (maker_id, maker) = github_app(&app).await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    gh.json(
+        "/repos/octo/game/releases",
+        200,
+        json!([
+            { "tag_name": "v1.1.0", "name": "  ", "draft": false, "prerelease": true,
+              "published_at": "2026-10-01T00:00:00Z", "html_url": "https://github.com/octo/game/releases/tag/v1.1.0",
+              "assets": [{ "name": "game 1.1.0.zip", "size": 10 }] },
+            { "tag_name": "v1.0.0", "name": "First", "draft": false, "prerelease": false,
+              "html_url": "https://github.com/octo/game/releases/tag/v1.0.0", "assets": [] }
+        ]),
+    );
+    release_with_file(
+        &app,
+        "game",
+        "1.0.0",
+        "rejected",
+        "https://github.com/octo/game/releases/download/v1.0.0/a.zip",
+        None,
+    )
+    .await;
+    let picks = |r: Req| async { app.send(r).await };
+
+    let res = picks(req(Method::GET, "/v1/apps/game/github-releases").cookie(&maker)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let list = body_json(res).await;
+    assert_eq!(list[0]["tag"], "v1.1.0");
+    assert_eq!(list[0]["submitted"], false);
+    assert_eq!(list[0]["prerelease"], true);
+    assert!(list[0]["name"].is_null(), "a blank name is left out");
+    assert_eq!(
+        list[0]["assets"][0]["url"],
+        "https://github.com/octo/game/releases/download/v1.1.0/game%201.1.0.zip"
+    );
+    assert_eq!(list[0]["assets"][0]["platform"], "windows");
+    assert_eq!(
+        list[1]["submitted"], true,
+        "1.0.0 was sent before (any status)"
+    );
+    assert_eq!(list[1]["name"], "First");
+
+    // The maker's agent may read them too; nobody else.
+    let agent = agent_token(&app, &maker, "read", Some(&["game"])).await;
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::GET, "/v1/apps/game/github-releases").header("authorization", agent)
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::GET, "/v1/apps/game/github-releases").cookie(&stranger)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+
+    // GitHub failing: said, as a conflict.
+    gh.json(
+        "/repos/octo/game/releases",
+        500,
+        json!({ "message": "oops" }),
+    );
+    let res = picks(req(Method::GET, "/v1/apps/game/github-releases").cookie(&maker)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        error_message(res)
+            .await
+            .contains("couldn't read the releases")
+    );
+
+    // A mod's archive is for every platform.
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms, parent_app_id, branch_kind)
+         select $1, 'game-mod', 'Game Mod', 'A mod', 'game', 'beta', $2, 'https://github.com/octo/game-mod', 'MIT', '{any}', id, 'addon'
+         from apps where slug = 'game'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    gh.json(
+        "/repos/octo/game-mod/releases",
+        200,
+        json!([{ "tag_name": "v1", "draft": false, "html_url": "https://github.com/octo/game-mod/releases/tag/v1",
+                 "assets": [{ "name": "mod.zip", "size": 3 }, { "name": "mod.tar.gz", "size": 3 }] }]),
+    );
+    let list = body_json(
+        picks(req(Method::GET, "/v1/apps/game-mod/github-releases").cookie(&maker)).await,
+    )
+    .await;
+    assert_eq!(list[0]["assets"][0]["platform"], "any");
+    assert_eq!(list[0]["assets"][1]["platform"], "linux");
+
+    // Not on GitHub: nothing to pick from.
+    sqlx::query("update apps set repo_url = 'https://gitlab.com/octo/game' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = picks(req(Method::GET, "/v1/apps/game/github-releases").cookie(&maker)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(error_message(res).await.contains("only works for GitHub"));
+}
+
+fn from_github(cookie: &str, tag: &str, notes: Option<&str>) -> Req {
+    let mut body = json!({
+        "tag": tag,
+        "files": [{
+            "platform": "windows", "kind": "archive", "exec": "game.exe",
+            "url": "https://github.com/octo/game/releases/download/v1.1.0/game.zip"
+        }]
+    });
+    if let Some(n) = notes {
+        body["notes"] = json!(n);
+    }
+    req(Method::POST, "/v1/apps/game/releases/from-github")
+        .cookie(cookie)
+        .json(body)
+}
+
+/// Submitting a picked release: the tag must be in the repository; the notes are the GitHub
+/// release's text unless given; it's the maker's, with their passkey, at the usual pace.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn submitting_a_github_release_checks_the_tag_and_takes_its_notes(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |_| {}).await;
+    let (maker_id, maker) = github_app(&app).await;
+    sqlx::query("update apps set platforms = '{windows}'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    gh.json(
+        "/repos/octo/game/commits/v1.1.0",
+        200,
+        json!({ "sha": "B".repeat(40) }),
+    );
+    gh.json(
+        "/repos/octo/game/releases/tags/v1.1.0",
+        200,
+        json!({ "body": "é".repeat(6000) }),
+    );
+    gh.json(
+        "/repos/octo/game/commits/v1.0.0",
+        200,
+        json!({ "sha": "1".repeat(40) }),
+    );
+    gh.json(
+        "/repos/octo/game/releases/tags/v1.0.0",
+        200,
+        json!({ "body": "From GitHub." }),
+    );
+
+    // Bad tags.
+    let long = "v".repeat(101);
+    for tag in ["", long.as_str(), "v1\n"] {
+        assert_eq!(
+            error_field(app.send(from_github(&maker, tag, None)).await).await,
+            "tag",
+            "{tag:?}"
+        );
+    }
+    let res = app.send(from_github(&maker, "v9.9.9", None)).await;
+    let err = body_json(res).await;
+    assert_eq!(err["error"]["field"], "tag");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("isn't in the repository"),
+        "{err}"
+    );
+    gh.json("/repos/octo/game/commits/v5", 502, json!({}));
+    assert_eq!(
+        error_field(app.send(from_github(&maker, "v5", None)).await).await,
+        "tag"
+    );
+
+    // Someone else, or nobody.
+    assert_eq!(
+        status_of(&app, from_github(&stranger, "v1.1.0", None)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::POST, "/v1/apps/game/releases/from-github")
+                .json(json!({ "tag": "v1.1.0", "files": [] }))
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+    // Past the passkey deadline without one.
+    passkey_overdue(&app, maker_id).await;
+    let res = app.send(from_github(&maker, "v1.1.0", None)).await;
+    assert_eq!(body_json(res).await["error"]["code"], "passkey_required");
+    sqlx::query("update users set passkey_due_at = null where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(count(&app, "select count(*) from releases").await, 0);
+
+    // The GitHub release's text, cut at 5,000 characters, and its commit.
+    let res = app.send(from_github(&maker, "v1.1.0", None)).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release = body_json(res).await;
+    assert_eq!(release["version"], "1.1.0");
+    assert_eq!(release["commit_sha"], "b".repeat(40));
+    assert_eq!(release["notes"].as_str().unwrap().chars().count(), 5000);
+    // Notes given win; the version comes from the tag.
+    let res = app.send(from_github(&maker, "v1.0.0", Some("Mine."))).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(body_json(res).await["notes"], "Mine.");
+
+    // Not on GitHub.
+    sqlx::query("update apps set repo_url = 'https://gitlab.com/octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        status_of(&app, from_github(&maker, "v1.1.0", None)).await,
+        StatusCode::CONFLICT
+    );
+}
+
+/// Bug b20: releases from the GitHub picker count against the same pace as any other release.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn releases_from_the_github_picker_are_rate_limited(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |_| {}).await;
+    let (maker_id, maker) = github_app(&app).await;
+    sqlx::query("update apps set platforms = '{windows}'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    gh.json(
+        "/repos/octo/game/commits/v1.1.0",
+        200,
+        json!({ "sha": "b".repeat(40) }),
+    );
+    exhaust(&app, maker_id, slop_api::limits::Action::Release);
+    let res = app.send(from_github(&maker, "v1.1.0", Some("x"))).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(count(&app, "select count(*) from releases").await, 0);
+    assert_eq!(
+        gh.hits("/repos/octo/game/commits/v1.1.0"),
+        0,
+        "refused before asking GitHub"
+    );
+}
+
+/// The fetcher asks GitHub whether the release's commit is in the repository: a 404 or 422
+/// fails the release, as does GitHub failing; other hosts are simply not verified.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn releases_fail_when_github_doesnt_have_their_commit(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |_| {}).await;
+    let (maker_id, _) = github_app(&app).await;
+    for (version, commit) in [("1.0.4", "4"), ("1.0.5", "5"), ("1.0.6", "6")] {
+        let id = release_with_file(
+            &app,
+            "game",
+            version,
+            "fetching",
+            "https://github.com/octo/game/releases/download/v1/game.zip",
+            None,
+        )
+        .await;
+        sqlx::query(
+            "update releases set commit_sha = repeat($2, 40), signed_manifest = null where id = $1",
+        )
+        .bind(id)
+        .bind(commit)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    gh.json(
+        &format!("/repos/octo/game/commits/{}", "5".repeat(40)),
+        422,
+        json!({}),
+    );
+    gh.json(
+        &format!("/repos/octo/game/commits/{}", "6".repeat(40)),
+        500,
+        json!({}),
+    );
+    for _ in 0..3 {
+        assert!(releases::fetch_next(&app.state).await.unwrap());
+    }
+    let rows: Vec<(String, String, String)> = sqlx::query_as(
+        "select version, status::text, status_reason from releases order by version",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(rows[0].1, "failed");
+    assert_eq!(
+        rows[0].2,
+        format!(
+            "commit {} isn't in https://github.com/octo/game",
+            "4".repeat(40)
+        )
+    );
+    assert_eq!(rows[1].1, "failed");
+    assert!(rows[1].2.contains("isn't in"));
+    assert_eq!(rows[2].1, "failed");
+    assert_eq!(rows[2].2, "GitHub answered 500 when checking the commit");
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like '%couldn''t be checked'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 3);
+
+    // Another host: fetched, with the commit not verified.
+    let other = test_app(app.db.clone()).await;
+    sqlx::query("delete from apps")
+        .execute(&other.db)
+        .await
+        .unwrap();
+    let (_, maker) = maker_with_app(&other, "released").await;
+    let id = submit_and_fetch(&other, &maker, "2.0.0").await;
+    let (status, verified): (String, bool) =
+        sqlx::query_as("select status::text, commit_verified from releases where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&other.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "awaiting_review");
+    assert!(!verified);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Slop Build and Slop Check (slop_build.rs), repository identity (repo_identity.rs)
+
+/// A GitHub Actions token signed with the test key under another key ID.
+fn github_token_with_kid(app: &TestApp, kid: &str) -> String {
+    let now = OffsetDateTime::now_utc().unix_timestamp();
+    let claims = json!({
+        "iss": app.config.releases.github_oidc_issuer,
+        "aud": "http://localhost:8080",
+        "iat": now, "nbf": now - 5, "exp": now + 300,
+        "repository": "octo/game", "sha": BUILD_COMMIT, "job_workflow_ref": RECIPE_REF,
+        "repository_id": "1001", "repository_owner_id": "42",
+    });
+    let mut header = jsonwebtoken::Header::new(jsonwebtoken::Algorithm::RS256);
+    header.kid = Some(kid.into());
+    let key =
+        jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!("../fixtures/oidc-test-key.pem"))
+            .unwrap();
+    jsonwebtoken::encode(&header, &claims, &key).unwrap()
+}
+
+/// A Slop Build app (octo/game, GitHub IDs 1001 and 42) on a GitHub the test controls.
+async fn slop_build_app(db: PgPool) -> (TestApp, FakeGh, Uuid, String) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |_| {}).await;
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "id": 1001, "owner": { "id": 42 } }),
+    );
+    let (maker_id, maker) = github_app(&app).await;
+    (app, gh, maker_id, maker)
+}
+
+/// Repojacking: a run in a repository registered again under the app's name (other GitHub IDs)
+/// is refused, and Slop doesn't guess when it can't ask GitHub.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_refuses_a_repository_registered_again_under_the_same_name(db: PgPool) {
+    let (app, gh, _, _) = slop_build_app(db).await;
+    for overrides in [
+        json!({ "repository_id": "999" }),
+        json!({ "repository_owner_id": "41" }),
+        json!({ "repository_id": null }),
+    ] {
+        let res = submit_ci(&app, &github_token(&app, overrides.clone()), ci_release()).await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{overrides}");
+    }
+    // The IDs were recorded on first use, from what GitHub says now.
+    let ids: (Option<i64>, Option<i64>) =
+        sqlx::query_as("select github_repo_id, github_owner_id from apps")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(ids, (Some(1001), Some(42)));
+    // Once recorded, a new repository under the name (GitHub now says 2002) is refused even
+    // with a token naming the new IDs.
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "id": 2002, "owner": { "id": 43 } }),
+    );
+    let res = submit_ci(
+        &app,
+        &github_token(
+            &app,
+            json!({ "repository_id": "2002", "repository_owner_id": "43" }),
+        ),
+        ci_release(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // Nothing recorded and GitHub not answering: try again later.
+    sqlx::query("update apps set github_repo_id = null, github_owner_id = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    gh.json("/repos/octo/game", 502, json!({}));
+    let res = submit_ci(&app, &github_token(&app, json!({})), ci_release()).await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(count(&app, "select count(*) from releases").await, 0);
+
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "id": 1001, "owner": { "id": 42 } }),
+    );
+    let res = submit_ci(&app, &github_token(&app, json!({})), ci_release()).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+}
+
+/// What a run sends is checked: the app, the recipe's tag, the release tag, the size of the
+/// source checks (bug b18: before anything is made); Defender checks, runtimes and parts are
+/// kept.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_checks_what_a_run_sends_before_making_the_release(db: PgPool) {
+    let (app, _, _, _) = slop_build_app(db).await;
+    let token = || github_token(&app, json!({}));
+    let mut unknown = ci_release();
+    unknown["app"] = json!("no-such-app");
+    assert_eq!(
+        submit_ci(&app, &token(), unknown).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let branch = github_token(
+        &app,
+        json!({ "job_workflow_ref": "slop/slop-build/.github/workflows/build.yml@refs/heads/main" }),
+    );
+    assert_eq!(
+        submit_ci(&app, &branch, ci_release()).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    for tag in ["../evil", "", "has space", &"t".repeat(101)] {
+        let mut body = ci_release();
+        body["tag"] = json!(tag);
+        assert_eq!(
+            error_field(submit_ci(&app, &token(), body).await).await,
+            "tag",
+            "{tag:?}"
+        );
+    }
+
+    // Oversized source checks: refused (today by the 64 KiB body limit, before the 256 KiB
+    // check is reached), and nothing is left to block a retry.
+    let mut body = ci_release();
+    body["source_checks"] = json!({ "secrets": "x".repeat(300 * 1024) });
+    let res = submit_ci(&app, &token(), body).await;
+    let status = res.status();
+    assert!(
+        status == StatusCode::PAYLOAD_TOO_LARGE
+            || (status == StatusCode::UNPROCESSABLE_ENTITY
+                && body_json(res).await["error"]["field"] == "source_checks"),
+        "{status}"
+    );
+    assert_eq!(count(&app, "select count(*) from releases").await, 0);
+
+    // A bad Defender check is refused too.
+    let mut body = ci_release();
+    body["files"][3]["defender"] = json!({ "sha256": "not-hex", "engine": "1", "signatures": "1" });
+    assert_eq!(
+        error_field(submit_ci(&app, &token(), body).await).await,
+        "defender"
+    );
+    assert_eq!(count(&app, "select count(*) from releases").await, 0);
+
+    // The retry: source checks, Defender's check, runtimes and parts all kept.
+    let sha = "ab".repeat(32);
+    let mut body = ci_release();
+    body["source_checks"] = json!({ "secrets": [], "vulnerable": [{ "package": "lodash" }] });
+    body["runtimes"] = json!(["dotnet-desktop-8", "dotnet-desktop-8"]);
+    body["files"][0]["parts"] = json!([
+        "game-build.12-linux.tar.gz.001",
+        "game-build.12-linux.tar.gz.002"
+    ]);
+    body["files"][3]["defender"] = json!({
+        "sha256": sha, "engine": "1.1.24000", "signatures": "1.419.1",
+        "detections": [], "signed_by": "SignPath Foundation"
+    });
+    let res = submit_ci(&app, &token(), body).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release = body_json(res).await;
+    let (checks, runtimes): (Value, Vec<String>) =
+        sqlx::query_as("select source_checks, runtimes from releases")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(checks["vulnerable"][0]["package"], "lodash");
+    assert_eq!(runtimes, ["dotnet-desktop-8"]);
+    let parts: Value =
+        sqlx::query_scalar("select parts from release_files where platform = 'linux'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        parts[1]["url"],
+        "https://github.com/octo/game/releases/download/slop-build-12/game-build.12-linux.tar.gz.002"
+    );
+    let report: Value = sqlx::query_scalar("select report from defender_checks where sha256 = $1")
+        .bind(&sha)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(report["signed_by"], "SignPath Foundation");
+    assert_eq!(release["version"], "build.12");
+
+    // Without the recipe configured, Slop Build isn't offered.
+    let off = test_app_with(app.db.clone(), |c| c.releases.slop_build_workflow = None).await;
+    let res = submit_ci(&off, &github_token(&off, json!({})), ci_release()).await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// GitHub's signing keys are fetched again for an unknown key ID at most once a minute.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn unknown_signing_keys_refetch_githubs_keys_at_most_once_a_minute(db: PgPool) {
+    let (app, gh, _, _) = slop_build_app(db).await;
+    let rotated = github_token_with_kid(&app, "rotated-key");
+    assert_eq!(
+        submit_ci(&app, &rotated, ci_release()).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(gh.hits("/.well-known/jwks"), 1);
+    assert_eq!(
+        submit_ci(&app, &rotated, ci_release()).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        gh.hits("/.well-known/jwks"),
+        1,
+        "not again within the minute"
+    );
+    // The known key is served from the cache.
+    let res = submit_ci(&app, &github_token(&app, json!({})), ci_release()).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(gh.hits("/.well-known/jwks"), 1);
+}
+
+fn defender(sha: &str) -> Value {
+    json!({ "sha256": sha, "engine": "1.1.24000", "signatures": "1.419.1", "detections": [] })
+}
+
+async fn submit_checks(app: &TestApp, token: &str, body: Value) -> Response {
+    app.send(
+        req(Method::POST, "/v1/slop-build/checks")
+            .header("authorization", format!("Bearer {token}"))
+            .json(body),
+    )
+    .await
+}
+
+/// Slop Check: from check.yml or the build recipe, in the app's very repository, with 1 to 20
+/// well-formed checks.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_check_reports_are_checked_like_slop_build_runs(db: PgPool) {
+    let (app, _, _, _) = slop_build_app(db).await;
+    let check_ref = RECIPE_REF.replace("build.yml", "check.yml");
+    let check_token = |overrides: Value| {
+        let mut o = json!({ "job_workflow_ref": check_ref });
+        for (k, v) in overrides.as_object().unwrap() {
+            o[k] = v.clone();
+        }
+        github_token(&app, o)
+    };
+    let body = |files: Vec<Value>| json!({ "app": "game", "files": files });
+
+    // Both workflows may report.
+    let res = submit_checks(
+        &app,
+        &check_token(json!({})),
+        body(vec![defender(&"a".repeat(64))]),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["matched"], 0);
+    let res = submit_checks(
+        &app,
+        &github_token(&app, json!({})),
+        body(vec![defender(&"b".repeat(64))]),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(count(&app, "select count(*) from defender_checks").await, 2);
+
+    // Refusals record nothing.
+    let other_workflow = github_token(
+        &app,
+        json!({ "job_workflow_ref": "octo/game/.github/workflows/mine.yml@refs/tags/v1" }),
+    );
+    let too_long = {
+        let mut d = defender(&"c".repeat(64));
+        d["engine"] = json!("e".repeat(101));
+        d
+    };
+    let long_threat = {
+        let mut d = defender(&"c".repeat(64));
+        d["detections"] = json!([{ "file": "a.exe", "threat": "t".repeat(201) }]);
+        d
+    };
+    let cases = [
+        (
+            check_token(json!({ "repository_id": "999" })),
+            body(vec![defender(&"c".repeat(64))]),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            check_token(json!({ "repository": "mallory/game" })),
+            body(vec![defender(&"c".repeat(64))]),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            other_workflow,
+            body(vec![defender(&"c".repeat(64))]),
+            StatusCode::FORBIDDEN,
+        ),
+        (
+            check_token(json!({})),
+            json!({ "app": "nope", "files": [defender(&"c".repeat(64))] }),
+            StatusCode::NOT_FOUND,
+        ),
+        (
+            check_token(json!({})),
+            body(vec![]),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            check_token(json!({})),
+            body(vec![defender(&"c".repeat(64)); 21]),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            check_token(json!({})),
+            body(vec![defender("xyz")]),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            check_token(json!({})),
+            body(vec![too_long]),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+        (
+            check_token(json!({})),
+            body(vec![long_threat]),
+            StatusCode::UNPROCESSABLE_ENTITY,
+        ),
+    ];
+    for (i, (token, body, status)) in cases.into_iter().enumerate() {
+        assert_eq!(
+            submit_checks(&app, &token, body).await.status(),
+            status,
+            "case {i}"
+        );
+    }
+    let res = app
+        .send(
+            req(Method::POST, "/v1/slop-build/checks").json(body(vec![defender(&"c".repeat(64))])),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(count(&app, "select count(*) from defender_checks").await, 2);
+    // Twenty is fine.
+    let twenty: Vec<Value> = (0..20).map(|i| defender(&format!("{i:064x}"))).collect();
+    let res = submit_checks(&app, &check_token(json!({})), body(twenty)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        count(&app, "select count(*) from defender_checks").await,
+        22
+    );
+
+    let off = test_app_with(app.db.clone(), |c| c.releases.slop_build_workflow = None).await;
+    let res = submit_checks(
+        &off,
+        &github_token(&off, json!({})),
+        body(vec![defender(&"d".repeat(64))]),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+/// "Add Slop Build": the workflow and links for GitHub repositories, read over GitHub's API
+/// (an Electron app by its package.json); an explanation for other hosts.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_setup_reads_the_repository_and_links_to_github(db: PgPool) {
+    use base64::Engine;
+    let (app, gh, _, maker) = slop_build_app(db).await;
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "default_branch": "main", "id": 1001, "owner": { "id": 42 } }),
+    );
+    gh.json(
+        "/repos/octo/game/contents/",
+        200,
+        json!([{ "name": "package.json" }, { "name": "src" }]),
+    );
+    let package =
+        json!({ "name": "game", "devDependencies": { "electron": "^30.0.0" } }).to_string();
+    let encoded = base64::engine::general_purpose::STANDARD.encode(package);
+    // GitHub wraps the base64 at 60 characters.
+    let wrapped = encoded
+        .as_bytes()
+        .chunks(60)
+        .map(|c| std::str::from_utf8(c).unwrap())
+        .collect::<Vec<_>>()
+        .join("\n");
+    gh.json(
+        "/repos/octo/game/contents/package.json",
+        200,
+        json!({ "content": wrapped }),
+    );
+    let res = app
+        .send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let setup = body_json(res).await;
+    assert_eq!(setup["supported"], true);
+    assert_eq!(setup["project_type"], "electron");
+    assert!(setup["note"].is_null());
+    assert_eq!(
+        setup["build_now_url"],
+        "https://github.com/octo/game/actions/workflows/slop.yml"
+    );
+    let check = setup["check_create_url"].as_str().unwrap();
+    assert!(
+        check.starts_with("https://github.com/octo/game/new/main?filename=.github%2Fworkflows%2Fslop-check.yml&value="),
+        "{check}"
+    );
+    assert!(
+        setup["check_workflow"]
+            .as_str()
+            .unwrap()
+            .contains("uses: slop/slop-build/.github/workflows/check.yml@v1")
+    );
+    assert!(gh.hits("/repos/octo/game/contents/package.json") == 1);
+
+    // Plain package.json: a website, with a note.
+    gh.json(
+        "/repos/octo/game/contents/package.json",
+        200,
+        json!({ "content": base64::engine::general_purpose::STANDARD.encode("{}") }),
+    );
+    let setup = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(setup["project_type"], "web");
+    assert!(setup["note"].as_str().unwrap().contains("website"));
+
+    // The maker's agent reads it too.
+    let agent = agent_token(&app, &maker, "read", None).await;
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::GET, "/v1/apps/game/slop-build").header("authorization", agent)
+        )
+        .await,
+        StatusCode::OK
+    );
+
+    // GitHub can't read the repository.
+    gh.json("/repos/octo/game", 404, json!({}));
+    let res = app
+        .send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(error_message(res).await.contains("GitHub answered 404"));
+
+    // Not GitHub.
+    sqlx::query("update apps set repo_url = 'https://gitlab.com/octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let setup = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(setup["supported"], false);
+    assert!(
+        setup["note"]
+            .as_str()
+            .unwrap()
+            .contains("GitHub repository")
+    );
+    assert!(
+        setup["create_url"].is_null()
+            && setup["build_now_url"].is_null()
+            && setup["check_create_url"].is_null()
+    );
+
+    let off = test_app_with(app.db.clone(), |c| c.releases.slop_build_workflow = None).await;
+    assert_eq!(
+        status_of(
+            &off,
+            req(Method::GET, "/v1/apps/game/slop-build").cookie(&maker)
+        )
+        .await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+}
+
+/// Repository IDs are filled in for apps linked before they were recorded, and only into an
+/// empty record.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn repository_ids_are_recorded_once_and_filled_in_for_older_apps(db: PgPool) {
+    let (app, gh, _, _) = slop_build_app(db).await;
+    let app_id = app_id(&app, "game").await;
+    let ids = || async {
+        sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+            "select github_repo_id, github_owner_id from apps where slug = 'game'",
+        )
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    // GitHub not answering: nothing recorded.
+    gh.json("/repos/octo/game", 500, json!({}));
+    assert_eq!(
+        slop_api::repo_identity::ensure(&app.state, app_id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(ids().await, (None, None));
+    // Recorded once; a later answer doesn't change it.
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "id": 1001, "owner": { "id": 42 } }),
+    );
+    assert_eq!(
+        slop_api::repo_identity::ensure(&app.state, app_id)
+            .await
+            .unwrap(),
+        Some((1001, 42))
+    );
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "id": 7, "owner": { "id": 8 } }),
+    );
+    assert_eq!(
+        slop_api::repo_identity::ensure(&app.state, app_id)
+            .await
+            .unwrap(),
+        Some((1001, 42))
+    );
+    assert_eq!(ids().await, (Some(1001), Some(42)));
+    assert_eq!(
+        gh.hits("/repos/octo/game"),
+        2,
+        "not asked again once recorded"
+    );
+    // Not GitHub: nothing to record.
+    sqlx::query("update apps set repo_url = 'https://gitlab.com/octo/game', github_repo_id = null, github_owner_id = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        slop_api::repo_identity::ensure(&app.state, app_id)
+            .await
+            .unwrap(),
+        None
+    );
+    assert_eq!(
+        slop_api::repo_identity::ensure(&app.state, Uuid::now_v7())
+            .await
+            .unwrap(),
+        None
+    );
+
+    // The background fill picks up apps with no record.
+    sqlx::query("update apps set repo_url = 'https://github.com/octo/game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let fill = tokio::spawn(slop_api::repo_identity::run_fill(app.state.clone()));
+    let mut filled = (None, None);
+    for _ in 0..100 {
+        filled = ids().await;
+        if filled.0.is_some() {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(50)).await;
+    }
+    fill.abort();
+    assert_eq!(filled, (Some(7), Some(8)));
+}
+
+/// Slop Build's source checks may be up to 256 KiB, but its submissions share the API's 64 KiB
+/// body limit, so a release with a long list of findings can't be submitted at all.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "n1: Slop Build submissions over 64 KiB are refused (413) though source checks may be up to 256 KiB"]
+async fn slop_build_takes_source_checks_up_to_their_own_limit(db: PgPool) {
+    let (app, _, _, _) = slop_build_app(db).await;
+    let findings: Vec<Value> = (0..1500)
+        .map(|i| json!({ "package": format!("package-{i}"), "id": format!("GHSA-0000-0000-{i:04}") }))
+        .collect();
+    let mut body = ci_release();
+    body["source_checks"] = json!({ "secrets": [], "vulnerable": findings });
+    assert!(body.to_string().len() > 64 * 1024 && body.to_string().len() < 256 * 1024);
+    let res = submit_ci(&app, &github_token(&app, json!({})), body).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+}
