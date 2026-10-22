@@ -59,7 +59,9 @@ pub struct TokenUse {
 }
 
 /// The admin behind an `Authorization: Bearer slopadm_…` header. None when the request has no
-/// admin token; an invalid one is "not found", like everything else on the admin API.
+/// admin token; an invalid one is "not found", like everything else on the admin API. A
+/// suspended admin's tokens don't work until the suspension ends (signed in themselves, a
+/// suspended account may only read, and a token mustn't be a way round that).
 pub async fn admin_from_token(
     state: &AppState,
     headers: &HeaderMap,
@@ -76,7 +78,8 @@ pub async fn admin_from_token(
     let row: Option<(Uuid, String, String, Uuid, String, bool)> = sqlx::query_as(
         "select t.id, t.name, t.scope, u.id, u.display_name, coalesce(t.last_used_at < now() - interval '1 minute', true)
          from admin_tokens t join users u on u.id = t.user_id
-         where t.token_hash = $1 and t.revoked_at is null and t.expires_at > now() and u.is_admin",
+         where t.token_hash = $1 and t.revoked_at is null and t.expires_at > now() and u.is_admin
+           and u.suspended_at is null",
     )
     .bind(hash_token(token))
     .fetch_optional(&state.db)
@@ -140,9 +143,9 @@ async fn list_tokens(
 #[serde(deny_unknown_fields)]
 struct NewToken {
     name: String,
-    /// read or review.
+    /// read, review or moderate.
     scope: String,
-    /// 1 to 365; default 90.
+    /// 1 to 365 (moderate: 90); default 90.
     days: Option<i32>,
 }
 
@@ -423,7 +426,9 @@ struct Item {
 struct Feed {
     /// How to review: read it first.
     guide: String,
-    /// Whether this token may approve and reject (read tokens may only leave notes).
+    /// Whether the caller may decide anything here: approve and reject (Review), or settle People
+    /// problems and review disputes (Moderate). Read tokens, and staff who may only look, can
+    /// only leave notes.
     can_decide: bool,
     checks: Value,
     items: Vec<Item>,
@@ -675,7 +680,8 @@ async fn feed(
     let cfg = &state.config.releases;
     Ok(Json(Feed {
         guide: "/v1/admin/review/guide".into(),
-        can_decide: admin.token.as_ref().is_none_or(|t| t.can_decide),
+        can_decide: admin.need(crate::staff::Perm::Review).is_ok()
+            || admin.need(crate::staff::Perm::Moderate).is_ok(),
         checks: json!({
             "scanning": cfg.scanner.is_on(),
             "maker_signatures_required": cfg.require_maker_signature,
