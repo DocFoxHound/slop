@@ -1969,9 +1969,19 @@ struct SimUserRow {
     votes: i64,
 }
 
+/// Whether `generate` has made the sandbox's tables yet.
+async fn generated(db: &PgPool) -> sqlx::Result<bool> {
+    sqlx::query_scalar("select to_regclass('sim_users') is not null")
+        .fetch_one(db)
+        .await
+}
+
 async fn sim_users(State(state): State<AppState>) -> ApiResult<Json<Vec<SimUserRow>>> {
     if !state.config.simulation {
         return Err(ApiError::NotFound);
+    }
+    if !generated(&state.db).await? {
+        return Ok(Json(vec![]));
     }
     Ok(Json(
         sqlx::query_as(
@@ -2004,7 +2014,7 @@ async fn sim_login(
     jar: CookieJar,
     Path(id): Path<Uuid>,
 ) -> ApiResult<(StatusCode, CookieJar)> {
-    if !state.config.simulation {
+    if !state.config.simulation || !generated(&state.db).await? {
         return Err(ApiError::NotFound);
     }
     let exists: bool =
