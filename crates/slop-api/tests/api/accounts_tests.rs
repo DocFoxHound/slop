@@ -3641,3 +3641,789 @@ async fn simulation_sign_in_exists_only_on_a_simulation_server(db: PgPool) {
         assert_eq!(me["id"], json!(id));
     }
 }
+
+// ---------------------------------------------------------------------------------------------
+// Makers' signing keys
+
+/// An Ed25519 public key line for a key made from `seed`.
+fn public_key(seed: u8) -> String {
+    let key = slop_manifest::ed25519_dalek::SigningKey::from_bytes(&[seed; 32]);
+    ssh_sign(&key, b"").0
+}
+
+fn add_key(cookie: &str, name: &str, key: &str) -> Req {
+    req(Method::POST, "/v1/me/signing-keys")
+        .cookie(cookie)
+        .json(json!({ "name": name, "public_key": key }))
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn signing_keys_are_listed_with_their_wait_and_without_removed_ones(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, mia) = app.user("Mia Maker", "US").await;
+    let (_, other) = app.user("Other", "US").await;
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me/signing-keys")).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let mut ids = vec![];
+    for (seed, name) in [(1, "Old laptop"), (2, "New laptop"), (3, "Lost")] {
+        let res = app.send(add_key(&mia, name, &public_key(seed))).await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        ids.push(body_json(res).await["id"].as_str().unwrap().to_string());
+    }
+    sqlx::query("update maker_keys set active_from = now() - interval '1 day' where id = $1::uuid")
+        .bind(&ids[0])
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        status(
+            &app,
+            req(Method::DELETE, format!("/v1/me/signing-keys/{}", ids[2])).cookie(&mia)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/me/signing-keys").cookie(&mia))
+            .await,
+    )
+    .await;
+    let rows: Vec<(String, bool)> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|k| {
+            (
+                k["name"].as_str().unwrap().to_string(),
+                k["active"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [
+            ("Old laptop".to_string(), true),
+            ("New laptop".to_string(), false)
+        ]
+    );
+    assert!(listed[1]["active_from"].is_string());
+    assert!(listed[0].get("public_key").is_none());
+    let theirs = body_json(
+        app.send(req(Method::GET, "/v1/me/signing-keys").cookie(&other))
+            .await,
+    )
+    .await;
+    assert_eq!(theirs, json!([]));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn adding_a_signing_key_checks_the_key_the_name_and_the_count(db: PgPool) {
+    let app = test_app(db).await;
+    let (mia_id, mia) = app.user("Mia Maker", "US").await;
+    let field = |r: Req| {
+        let app = &app;
+        async move {
+            let res = app.send(r).await;
+            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            body_json(res).await["error"]["field"].clone()
+        }
+    };
+    for bad in [
+        "not a key",
+        "ssh-rsa AAAAB3NzaC1yc2EAAAADAQABAAABAQC7 maker@laptop",
+        "ssh-ed25519 AAAA maker@laptop",
+        "",
+    ] {
+        assert_eq!(
+            field(add_key(&mia, "Laptop", bad)).await,
+            "public_key",
+            "{bad}"
+        );
+    }
+    for bad in ["", "  ", &"n".repeat(61)] {
+        assert_eq!(
+            field(add_key(&mia, bad, &public_key(1))).await,
+            "name",
+            "{bad:?}"
+        );
+    }
+    assert_eq!(count(&app, "select count(*) from maker_keys").await, 0);
+
+    // Five at most.
+    let mut first = String::new();
+    for seed in 1..=5 {
+        let res = app
+            .send(add_key(&mia, &format!("Key {seed}"), &public_key(seed)))
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        if seed == 1 {
+            first = body_json(res).await["id"].as_str().unwrap().to_string();
+        }
+    }
+    assert_eq!(
+        status(&app, add_key(&mia, "Key 6", &public_key(6))).await,
+        StatusCode::CONFLICT
+    );
+    let audited: i64 = sqlx::query_scalar(
+        "select count(*) from audit_log where action = 'maker_key.add' and actor = $1 and subject like 'SHA256:%'",
+    )
+    .bind(mia_id.to_string())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(audited, 5);
+
+    // A removed key added again waits its 72 hours again, however long it worked before.
+    sqlx::query(
+        "update maker_keys set active_from = now() - interval '30 days' where id = $1::uuid",
+    )
+    .bind(&first)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        status(
+            &app,
+            req(Method::DELETE, format!("/v1/me/signing-keys/{first}")).cookie(&mia)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    let res = app.send(add_key(&mia, "Back again", &public_key(1))).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let back = body_json(res).await;
+    assert_eq!(back["id"], json!(first), "the same key, restarted");
+    assert_eq!(back["active"], false);
+    let hours: f64 = sqlx::query_scalar(
+        "select (extract(epoch from active_from - now()) / 3600)::float8 from maker_keys where id = $1::uuid",
+    )
+    .bind(&first)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!((71.9..72.1).contains(&hours), "{hours}");
+}
+
+/// A release host of this test's own that serves a game file and the maker's `.sig` beside it.
+async fn signed_release_host(sig: Arc<Mutex<String>>) -> String {
+    let app = Router::new().route(
+        "/octo/game/releases/download/{tag}/{file}",
+        get(
+            move |axum::extract::Path((_, file)): axum::extract::Path<(String, String)>| {
+                let sig = sig.clone();
+                async move {
+                    if file.ends_with(".sig") {
+                        let sig = sig.lock().unwrap().clone();
+                        if sig.is_empty() {
+                            StatusCode::NOT_FOUND.into_response()
+                        } else {
+                            sig.into_response()
+                        }
+                    } else {
+                        BUILD_BYTES.into_response()
+                    }
+                }
+            },
+        ),
+    );
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn removing_a_signing_key_stops_it_signing_at_once(db: PgPool) {
+    let app = test_app(db).await;
+    let sig = Arc::new(Mutex::new(String::new()));
+    let host = signed_release_host(sig.clone()).await;
+    let (mia_id, mia) = app.user("Mia Maker", "US").await;
+    let (_, other) = app.user("Other", "US").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms)
+         values ($1, 'game', 'Game', 'A game', 'game', 'released', $2, $3, 'MIT', '{windows}')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(mia_id)
+    .bind(format!("{host}octo/game"))
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let key = slop_manifest::ed25519_dalek::SigningKey::from_bytes(&[31; 32]);
+    let (line, signature) = ssh_sign(&key, BUILD_BYTES);
+    *sig.lock().unwrap() = signature;
+    let added = body_json(app.send(add_key(&mia, "Laptop", &line)).await).await;
+    let id = added["id"].as_str().unwrap().to_string();
+    sqlx::query("update maker_keys set active_from = now() - interval '1 hour'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let submit = |version: &str| {
+        let app = &app;
+        let body = json!({
+            "version": version,
+            "commit_sha": "a".repeat(40),
+            "files": [{
+                "platform": "windows", "kind": "archive",
+                "url": format!("{host}octo/game/releases/download/v1/game-windows.zip"),
+                "exec": "bin/game"
+            }]
+        });
+        let r = req(Method::POST, "/v1/apps/game/releases")
+            .cookie(&mia)
+            .json(body);
+        async move {
+            let res = app.send(r).await;
+            assert_eq!(res.status(), StatusCode::CREATED);
+            let id = body_json(res).await["id"].as_str().unwrap().to_string();
+            assert!(releases::fetch_next(&app.state).await.unwrap());
+            sqlx::query_scalar::<_, Option<String>>(
+                "select provenance_problem from release_files where release_id = $1::uuid",
+            )
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(submit("1.0.0").await, None, "signed with the key");
+
+    // Not someone else's to remove; an unknown one isn't there.
+    let remove = |cookie: &str, id: &str| {
+        req(Method::DELETE, format!("/v1/me/signing-keys/{id}")).cookie(cookie)
+    };
+    assert_eq!(
+        status(&app, remove(&other, &id)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&app, remove(&mia, &Uuid::now_v7().to_string())).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&app, remove(&mia, &id)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        status(&app, remove(&mia, &id)).await,
+        StatusCode::NOT_FOUND,
+        "already removed"
+    );
+
+    // The next release signed with it isn't the maker's any more.
+    let problem = submit("1.0.1").await.unwrap();
+    assert!(problem.contains("no signing key"), "{problem}");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Repository tokens
+
+async fn private_app(app: &TestApp, maker: Uuid, slug: &str, repo: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms, visibility)
+         values ($1, $2, 'Secret', 'A secret game', 'game', 'released', $3, $4, 'MIT', '{windows}', 'private')",
+    )
+    .bind(id)
+    .bind(slug)
+    .bind(maker)
+    .bind(repo)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    id
+}
+
+fn save_token(cookie: &str, slug: &str, kind: &str, token: &str) -> Req {
+    req(Method::PUT, format!("/v1/apps/{slug}/repo-token"))
+        .cookie(cookie)
+        .json(json!({ "kind": kind, "token": token }))
+}
+
+/// The error message of a refused request, checking it was refused for `field`.
+async fn refused_because(app: &TestApp, r: Req, field: &str) -> String {
+    let res = app.send(r).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let body = body_json(res).await;
+    assert_eq!(body["error"]["field"], field, "{body}");
+    body["error"]["message"].as_str().unwrap().to_string()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn saving_a_repository_token_checks_it_with_the_host_and_keeps_it_sealed(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (finn_id, finn) = app.user("Finn", "US").await;
+    let repo = format!("{}ann/secret-game", app.fake_base);
+    let game = private_app(&app, ann_id, "secret-game", &repo).await;
+    private_app(
+        &app,
+        ann_id,
+        "missing-game",
+        &format!("{}ann/missing", app.fake_base),
+    )
+    .await;
+    private_app(&app, ann_id, "github-game", "https://github.com/ann/game").await;
+    // Someone it's shared with isn't its maker.
+    exec(
+        &app,
+        "insert into app_shares (app_id, user_id) values ($1, $2)",
+        &[game, finn_id],
+    )
+    .await;
+    assert_eq!(
+        status(&app, save_token(&finn, "secret-game", "gitea", "good")).await,
+        StatusCode::NOT_FOUND
+    );
+
+    // The token on its own, and one the host takes.
+    let long = "t".repeat(501);
+    for bad in ["", "  ", "go od", "go\tod", long.as_str()] {
+        let why = refused_because(
+            &app,
+            save_token(&ann, "secret-game", "gitea", bad),
+            "repo_token",
+        )
+        .await;
+        assert!(why.contains("on its own"), "{bad:?}: {why}");
+    }
+    let why = refused_because(
+        &app,
+        save_token(&ann, "secret-game", "gitea", "bad"),
+        "repo_token",
+    )
+    .await;
+    assert!(why.contains("the host refused the token"), "{why}");
+    let why = refused_because(
+        &app,
+        save_token(&ann, "missing-game", "gitea", "good"),
+        "repo_token",
+    )
+    .await;
+    assert!(why.contains("can't find the repository"), "{why}");
+    let why = refused_because(
+        &app,
+        save_token(&ann, "github-game", "gitlab", "glpat"),
+        "repo_token",
+    )
+    .await;
+    assert!(why.contains("GitHub App"), "{why}");
+    assert_eq!(count(&app, "select count(*) from repo_tokens").await, 0);
+
+    let res = app
+        .send(save_token(&ann, "secret-game", "gitea", "good"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let saved = body_json(res).await;
+    assert_eq!(
+        (saved["saved"].clone(), saved["kind"].clone()),
+        (json!(true), json!("gitea"))
+    );
+    assert!(!saved.to_string().contains("good"));
+    let (sealed, by): (Vec<u8>, Uuid) =
+        sqlx::query_as("select sealed, created_by from repo_tokens where app_id = $1")
+            .bind(game)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(!sealed.windows(4).any(|w| w == b"good"));
+    assert_eq!(by, ann_id);
+    let audited: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'repo_token.save' and subject = 'secret-game'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(audited, json!({ "kind": "gitea" }));
+
+    // Forgetting: only the maker, and the token stays until they do.
+    assert_eq!(
+        status(
+            &app,
+            req(Method::DELETE, "/v1/apps/secret-game/repo-token").cookie(&finn)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(count(&app, "select count(*) from repo_tokens").await, 1);
+}
+
+/// b06: an app has one maker, and only they manage it: its releases, store page and repository
+/// token alike. A team the app is shared with plays it; it doesn't manage it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_team_an_app_is_shared_with_doesnt_manage_its_repository_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (finn_id, finn) = app.user("Finn", "US").await;
+    let repo = format!("{}ann/secret-game", app.fake_base);
+    let game = private_app(&app, ann_id, "secret-game", &repo).await;
+    let team = Uuid::now_v7();
+    exec(
+        &app,
+        "insert into teams (id, slug, name, kind, created_by) values ($1, 'anns-team', 'Ann''s team', 'player', $2)",
+        &[team, ann_id],
+    )
+    .await;
+    exec(
+        &app,
+        "insert into team_members (team_id, user_id, role) values ($1, $2, 'owner'), ($1, $3, 'admin')",
+        &[team, ann_id, finn_id],
+    )
+    .await;
+    exec(
+        &app,
+        "insert into app_team_shares (app_id, team_id) values ($1, $2)",
+        &[game, team],
+    )
+    .await;
+    assert_eq!(
+        status(&app, save_token(&ann, "secret-game", "gitea", "good")).await,
+        StatusCode::OK
+    );
+    for r in [
+        req(Method::GET, "/v1/apps/secret-game/repo-token").cookie(&finn),
+        save_token(&finn, "secret-game", "gitea", "good"),
+        req(Method::DELETE, "/v1/apps/secret-game/repo-token").cookie(&finn),
+        req(Method::POST, "/v1/apps/secret-game/releases")
+            .cookie(&finn)
+            .json(release_body(&app, "1.0.0", "game.zip")),
+    ] {
+        let uri = r.uri.clone();
+        assert_eq!(status(&app, r).await, StatusCode::NOT_FOUND, "{uri}");
+    }
+    assert_eq!(count(&app, "select count(*) from repo_tokens").await, 1);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn repository_tokens_need_the_servers_key_and_a_public_https_host(db: PgPool) {
+    let no_key = test_app_with(db.clone(), |c| c.releases.repo_token_key = None).await;
+    let (ann_id, ann) = no_key.user("Ann", "US").await;
+    private_app(
+        &no_key,
+        ann_id,
+        "secret-game",
+        &format!("{}ann/secret-game", no_key.fake_base),
+    )
+    .await;
+    let res = no_key
+        .send(save_token(&ann, "secret-game", "gitea", "good"))
+        .await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let shown = body_json(
+        no_key
+            .send(req(Method::GET, "/v1/apps/secret-game/repo-token").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(shown["available"], false);
+
+    // A real server: https only, never a private address, and Bitbucket tokens for bitbucket.org.
+    let real = test_app_with(db, |c| c.releases.allow_http_downloads = false).await;
+    for (slug, repo) in [
+        ("plain-http", "http://example.com/ann/game"),
+        ("loopback", "https://127.0.0.1/ann/game"),
+        ("private-net", "https://10.0.0.8/ann/game"),
+        ("elsewhere", "https://1.1.1.1/ann/game"),
+    ] {
+        private_app(&real, ann_id, slug, repo).await;
+    }
+    let why = refused_because(
+        &real,
+        save_token(&ann, "plain-http", "gitea", "good"),
+        "repo_token",
+    )
+    .await;
+    assert!(why.contains("only https"), "{why}");
+    for slug in ["loopback", "private-net"] {
+        let why = refused_because(
+            &real,
+            save_token(&ann, slug, "gitlab", "good"),
+            "repo_token",
+        )
+        .await;
+        assert!(why.contains("private network"), "{slug}: {why}");
+    }
+    let why = refused_because(
+        &real,
+        save_token(&ann, "elsewhere", "bitbucket", "good"),
+        "repo_token",
+    )
+    .await;
+    assert!(why.contains("bitbucket.org"), "{why}");
+    assert_eq!(count(&real, "select count(*) from repo_tokens").await, 0);
+}
+
+/// A forge of this test's own: a GitLab API, a Bitbucket API (at /bitbucket-api, standing in for
+/// api.bitbucket.org) and file links that answer in different ways. Only "secret" reads.
+async fn fake_forge() -> String {
+    fn authorized(headers: &axum::http::HeaderMap) -> bool {
+        headers.get("authorization").and_then(|v| v.to_str().ok()) == Some("Bearer secret")
+    }
+    let readme = "# Game\n\nslop-verify: proof-123\n";
+    let app = Router::new()
+        .route(
+            "/api/v4/projects/{id}",
+            get(|headers: axum::http::HeaderMap, axum::extract::Path(id): axum::extract::Path<String>| async move {
+                if !authorized(&headers) || id != "ann/game" {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                axum::Json(json!({ "default_branch": "trunk" })).into_response()
+            }),
+        )
+        .route(
+            "/api/v4/projects/{id}/repository/tree",
+            get(|headers: axum::http::HeaderMap, axum::extract::Query(q): axum::extract::Query<std::collections::HashMap<String, String>>| async move {
+                if !authorized(&headers) || q.get("ref").map(String::as_str) != Some("trunk") {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                axum::Json(json!([
+                    { "type": "blob", "name": "README.md" },
+                    { "type": "tree", "name": "src" },
+                    { "type": "blob", "name": "notes.txt" }
+                ]))
+                .into_response()
+            }),
+        )
+        .route(
+            "/api/v4/projects/{id}/repository/files/{name}/raw",
+            get(move |headers: axum::http::HeaderMap, axum::extract::Path((_, name)): axum::extract::Path<(String, String)>| async move {
+                if !authorized(&headers) || name != "README.md" {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                readme.into_response()
+            }),
+        )
+        .route(
+            "/bitbucket-api/2.0/repositories/ann/game",
+            get(|headers: axum::http::HeaderMap| async move {
+                if !authorized(&headers) {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                axum::Json(json!({ "mainbranch": { "name": "main" } })).into_response()
+            }),
+        )
+        .route(
+            "/bitbucket-api/2.0/repositories/ann/game/src/main/",
+            get(|headers: axum::http::HeaderMap| async move {
+                if !authorized(&headers) {
+                    return StatusCode::UNAUTHORIZED.into_response();
+                }
+                axum::Json(json!({ "values": [
+                    { "type": "commit_file", "path": "slop-verify.txt" },
+                    { "type": "commit_directory", "path": "src" }
+                ] }))
+                .into_response()
+            }),
+        )
+        .route(
+            "/bitbucket-api/2.0/repositories/ann/game/src/main/{name}",
+            get(|headers: axum::http::HeaderMap, axum::extract::Path(name): axum::extract::Path<String>| async move {
+                if !authorized(&headers) || name != "slop-verify.txt" {
+                    return StatusCode::NOT_FOUND.into_response();
+                }
+                "proof-456\n".into_response()
+            }),
+        )
+        // File links: to the same host, to plain http elsewhere, to https elsewhere, or the file.
+        .route("/same/game.zip", get(|| async { axum::response::Redirect::to("/storage/game.zip") }))
+        .route(
+            "/to-http/game.zip",
+            get(|| async { axum::response::Redirect::to("http://objects.example/game.zip?sig=1") }),
+        )
+        .route(
+            "/to-https/game.zip",
+            get(|| async { axum::response::Redirect::to("https://objects.example/game.zip?sig=1") }),
+        )
+        .route("/direct/game.zip", get(|| async { BUILD_BYTES }));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn saved_repository_tokens_are_sent_only_to_their_repository(db: PgPool) {
+    use slop_api::repo_tokens::{Given, Kind, auth_for, saved_kind, store};
+    let app = test_app(db).await;
+    let (ann_id, _) = app.user("Ann", "US").await;
+    let repo = format!("{}ann/secret-game", app.fake_base);
+    let game = private_app(&app, ann_id, "secret-game", &repo).await;
+    let given = Given {
+        kind: Kind::Gitea,
+        token: "good".into(),
+    };
+    let mut conn = app.db.acquire().await.unwrap();
+    store(&mut conn, &[9; 32], game, &repo, &given, ann_id)
+        .await
+        .unwrap();
+    drop(conn);
+    let file = format!("{repo}/releases/download/v1/game.zip");
+    assert_eq!(
+        auth_for(&app.state, game, &file).await.unwrap().as_deref(),
+        Some("token good")
+    );
+    let used: bool =
+        sqlx::query_scalar("select last_used_at is not null from repo_tokens where app_id = $1")
+            .bind(game)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(used);
+    assert_eq!(saved_kind(&app.db, game).await.unwrap(), Some(Kind::Gitea));
+
+    // Another host, port or scheme never gets it.
+    let port = url::Url::parse(&app.fake_base).unwrap().port().unwrap();
+    for elsewhere in [
+        format!("http://localhost:{port}/ann/secret-game/releases/download/v1/game.zip"),
+        "http://127.0.0.1:1/ann/secret-game/releases/download/v1/game.zip".to_string(),
+        format!("https://127.0.0.1:{port}/ann/secret-game/releases/download/v1/game.zip"),
+        "not a url".to_string(),
+    ] {
+        assert_eq!(
+            auth_for(&app.state, game, &elsewhere).await.unwrap(),
+            None,
+            "{elsewhere}"
+        );
+    }
+    // Moved to another repository: the token is for the old one, so it's not used.
+    sqlx::query("update apps set repo_url = $2 where id = $1")
+        .bind(game)
+        .bind(format!("{}ann/other-game", app.fake_base))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(auth_for(&app.state, game, &file).await.unwrap(), None);
+    assert_eq!(saved_kind(&app.db, game).await.unwrap(), None);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ownership_proofs_are_read_through_gitlab_and_bitbucket(db: PgPool) {
+    use slop_api::repo_tokens::{Given, Kind, read_proof};
+    let app = test_app(db).await;
+    let forge = fake_forge().await;
+    let repo = format!("{forge}ann/game");
+    let given = |kind: Kind, token: &str| Given {
+        kind,
+        token: token.into(),
+    };
+    let gitlab = read_proof(&app.state, &repo, &given(Kind::Gitlab, "secret"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(gitlab.contains("proof-123"), "{gitlab}");
+    let bitbucket = read_proof(&app.state, &repo, &given(Kind::Bitbucket, "secret"))
+        .await
+        .unwrap()
+        .unwrap();
+    assert!(bitbucket.contains("proof-456"), "{bitbucket}");
+    // A token the host refuses.
+    for kind in [Kind::Gitlab, Kind::Bitbucket] {
+        assert!(
+            read_proof(&app.state, &repo, &given(kind, "wrong"))
+                .await
+                .is_err(),
+            "{kind:?}"
+        );
+    }
+    // A repository URL without an owner and a name.
+    assert!(
+        read_proof(
+            &app.state,
+            &format!("{forge}game"),
+            &given(Kind::Gitlab, "secret")
+        )
+        .await
+        .is_err()
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn players_get_the_hosts_short_lived_link_or_nothing(db: PgPool) {
+    use slop_api::repo_tokens::short_lived_link;
+    let app = test_app(db.clone()).await;
+    let forge = fake_forge().await;
+    let link = |state: &AppState, path: &str| {
+        let url = format!("{forge}{path}");
+        let state = state.clone();
+        async move { short_lived_link(&state, &url, "Bearer secret").await }
+    };
+    // Tests allow plain http downloads: a redirect to another host is the link.
+    assert_eq!(
+        link(&app.state, "to-http/game.zip").await.unwrap(),
+        "http://objects.example/game.zip?sig=1"
+    );
+    // A redirect on the same host would carry the token's access: not a link to hand out.
+    assert!(link(&app.state, "same/game.zip").await.is_err());
+    // A host that serves the file itself: Slop doesn't relay files.
+    let err = link(&app.state, "direct/game.zip").await.unwrap_err();
+    assert!(format!("{err:#}").contains("never relays files"), "{err:#}");
+
+    // A real server hands out https links only.
+    let real = test_app_with(db, |c| c.releases.allow_http_downloads = false).await;
+    assert!(link(&real.state, "to-http/game.zip").await.is_err());
+    assert_eq!(
+        link(&real.state, "to-https/game.zip").await.unwrap(),
+        "https://objects.example/game.zip?sig=1"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_repository_token_that_stops_working_freezes_the_app(db: PgPool) {
+    use slop_api::frozen::{Access, apply, check_app};
+    use slop_api::repo_tokens::{Given, Kind, still_works, store};
+    let app = test_app(db).await;
+    let (ann_id, _) = app.user("Ann", "US").await;
+    let repo = format!("{}ann/secret-game", app.fake_base);
+    let game = private_app(&app, ann_id, "secret-game", &repo).await;
+    // No token: nothing to say.
+    assert_eq!(still_works(&app.state, game).await, None);
+    let save = |token: &str| {
+        let given = Given {
+            kind: Kind::Gitea,
+            token: token.into(),
+        };
+        let db = app.db.clone();
+        let repo = repo.clone();
+        async move {
+            let mut conn = db.acquire().await.unwrap();
+            store(&mut conn, &[9; 32], game, &repo, &given, ann_id)
+                .await
+                .unwrap();
+        }
+    };
+    save("good").await;
+    assert_eq!(still_works(&app.state, game).await, Some(true));
+    assert_eq!(
+        check_app(&app.state, game, &repo, false).await,
+        Access::Readable
+    );
+
+    // Revoked at the host (the saved token no longer reads it).
+    save("revoked").await;
+    assert_eq!(still_works(&app.state, game).await, Some(false));
+    let access = check_app(&app.state, game, &repo, false).await;
+    assert!(
+        matches!(&access, Access::Lost(why) if why.contains("token can't read")),
+        "{access:?}"
+    );
+    apply(&app.state, game, access).await.unwrap();
+    let (frozen, reason): (bool, Option<String>) =
+        sqlx::query_as("select frozen_at is not null, frozen_reason from apps where id = $1")
+            .bind(game)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(frozen);
+    assert!(reason.unwrap().contains("Save a new one"));
+
+    // A token that doesn't decrypt (the server's key changed): Slop can't tell, so it doesn't
+    // freeze the app on it.
+    sqlx::query("update repo_tokens set sealed = '\\x00010203' where app_id = $1")
+        .bind(game)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(still_works(&app.state, game).await, None);
+}
