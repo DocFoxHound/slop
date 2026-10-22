@@ -1971,7 +1971,8 @@ async fn agents_read_and_answer_reviews_and_bug_reports(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
     let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
-    let (publish, _) = maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
     let (limited, _) = maker_token(
         &app,
         &maker,
@@ -2133,7 +2134,10 @@ async fn agents_find_bounties_and_claim_them_for_people_to_check(db: PgPool) {
     approved_release(&app, "forkers-own", forker_id).await;
     let (_, ann) = app.user("Ann Backer", "US").await;
     let mut ids = vec![];
-    for (slug, title, amount) in [("tower", "Fix lost saves", 3000), ("farm", "Add a dog", 1000)] {
+    for (slug, title, amount) in [
+        ("tower", "Fix lost saves", 3000),
+        ("farm", "Add a dog", 1000),
+    ] {
         let res = app
             .send(
                 req(Method::POST, format!("/v1/apps/{slug}/bounties"))
@@ -2193,9 +2197,15 @@ async fn agents_find_bounties_and_claim_them_for_people_to_check(db: PgPool) {
         assert!(failed && text.contains("forbidden"), "{text}");
     }
     let (failed, text) = maker_tool(&app, &all, "claim_bounty", claim("tower")).await;
-    assert!(failed && text.contains("not_found"), "not the forker's: {text}");
+    assert!(
+        failed && text.contains("not_found"),
+        "not the forker's: {text}"
+    );
     let (failed, text) = maker_tool(&app, &all, "claim_bounty", claim("forkers-own")).await;
-    assert!(failed && text.contains("app_slug"), "not a build of it: {text}");
+    assert!(
+        failed && text.contains("app_slug"),
+        "not a build of it: {text}"
+    );
     let (failed, text) = maker_tool(
         &app,
         &all,
@@ -2215,8 +2225,12 @@ async fn agents_find_bounties_and_claim_them_for_people_to_check(db: PgPool) {
     let claim_id = detail["claims"][0]["id"].as_str().unwrap().to_string();
     assert_eq!(slop_api::bounties::charge_due(&app.state).await.unwrap(), 0);
     assert_eq!(count(&app, "select count(*) from payments").await, 0);
-    let (makers_agent, _) =
-        maker_token(&app, &maker, json!({ "name": "Maker's", "scope": "publish" })).await;
+    let (makers_agent, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Maker's", "scope": "publish" }),
+    )
+    .await;
     let res = app
         .send(
             req(
@@ -2277,7 +2291,8 @@ async fn agents_register_community_builds_and_offer_fixes_back(db: PgPool) {
         "platforms": ["linux", "linux-deb"]
     });
     for token in [&bo_read, &bo_limited] {
-        let (failed, text) = maker_tool(&app, token, "register_community_build", port.clone()).await;
+        let (failed, text) =
+            maker_tool(&app, token, "register_community_build", port.clone()).await;
         assert!(failed && text.contains("forbidden"), "{text}");
     }
     let mut no_note = port.clone();
@@ -2288,7 +2303,14 @@ async fn agents_register_community_builds_and_offer_fixes_back(db: PgPool) {
     unknown["original"] = json!("no-such-castle");
     let (failed, text) = maker_tool(&app, &bo_all, "register_community_build", unknown).await;
     assert!(failed && text.contains("not_found"), "{text}");
-    assert_eq!(count(&app, "select count(*) from apps where parent_app_id is not null").await, 0);
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from apps where parent_app_id is not null"
+        )
+        .await,
+        0
+    );
     // `original` is the address in the path; the rest is the new app.
     let (failed, text) = maker_tool(&app, &bo_all, "register_community_build", port).await;
     assert!(!failed, "{text}");
@@ -2306,9 +2328,7 @@ async fn agents_register_community_builds_and_offer_fixes_back(db: PgPool) {
     );
 
     // Offering the fix back: publish tokens only, pull requests on the original only.
-    let offer = |pr: &str| {
-        json!({ "slug": "castle-linux", "pull_request_url": pr, "message": "Fixes paths on Linux." })
-    };
+    let offer = |pr: &str| json!({ "slug": "castle-linux", "pull_request_url": pr, "message": "Fixes paths on Linux." });
     let (failed, text) = maker_tool(
         &app,
         &bo_read,
@@ -2348,14 +2368,22 @@ async fn agents_register_community_builds_and_offer_fixes_back(db: PgPool) {
     );
 
     // Each side lists them.
-    let (failed, text) = maker_tool(&app, &mia_read, "list_offers", json!({ "slug": "castle" })).await;
+    let (failed, text) =
+        maker_tool(&app, &mia_read, "list_offers", json!({ "slug": "castle" })).await;
     assert!(!failed, "{text}");
     let received = parsed(&text);
     assert_eq!(received.as_array().unwrap().len(), 2);
     assert_eq!(received[0]["direction"], "received");
-    let (_, text) = maker_tool(&app, &bo_read, "list_offers", json!({ "slug": "castle-linux" })).await;
+    let (_, text) = maker_tool(
+        &app,
+        &bo_read,
+        "list_offers",
+        json!({ "slug": "castle-linux" }),
+    )
+    .await;
     assert_eq!(parsed(&text)[0]["direction"], "sent");
-    let (failed, text) = maker_tool(&app, &bo_read, "list_offers", json!({ "slug": "castle" })).await;
+    let (failed, text) =
+        maker_tool(&app, &bo_read, "list_offers", json!({ "slug": "castle" })).await;
     assert!(failed && text.contains("not_found"), "not Bo's app: {text}");
 
     // Answering: the original's maker, with a publish token.
@@ -2385,20 +2413,49 @@ async fn agents_register_community_builds_and_offer_fixes_back(db: PgPool) {
 
     // Withdrawing: the build's maker, with a publish token, an offer still open.
     let withdraw = |slug: &str, id: &str| json!({ "slug": slug, "id": id });
-    let (failed, text) =
-        maker_tool(&app, &bo_read, "withdraw_offer", withdraw("castle-linux", &ids[1])).await;
+    let (failed, text) = maker_tool(
+        &app,
+        &bo_read,
+        "withdraw_offer",
+        withdraw("castle-linux", &ids[1]),
+    )
+    .await;
     assert!(failed && text.contains("forbidden"), "{text}");
-    for (token, slug) in [(&mia_all, "castle-linux"), (&mia_all, "castle"), (&bo_all, "bos-own")] {
-        let (failed, text) = maker_tool(&app, token, "withdraw_offer", withdraw(slug, &ids[1])).await;
+    for (token, slug) in [
+        (&mia_all, "castle-linux"),
+        (&mia_all, "castle"),
+        (&bo_all, "bos-own"),
+    ] {
+        let (failed, text) =
+            maker_tool(&app, token, "withdraw_offer", withdraw(slug, &ids[1])).await;
         assert!(failed && text.contains("not_found"), "{slug}: {text}");
     }
-    let (failed, text) =
-        maker_tool(&app, &bo_all, "withdraw_offer", withdraw("castle-linux", &ids[0])).await;
-    assert!(failed && text.contains("not_found"), "already answered: {text}");
-    let (failed, text) =
-        maker_tool(&app, &bo_all, "withdraw_offer", withdraw("castle-linux", &ids[1])).await;
+    let (failed, text) = maker_tool(
+        &app,
+        &bo_all,
+        "withdraw_offer",
+        withdraw("castle-linux", &ids[0]),
+    )
+    .await;
+    assert!(
+        failed && text.contains("not_found"),
+        "already answered: {text}"
+    );
+    let (failed, text) = maker_tool(
+        &app,
+        &bo_all,
+        "withdraw_offer",
+        withdraw("castle-linux", &ids[1]),
+    )
+    .await;
     assert!(!failed, "{text}");
-    let (_, text) = maker_tool(&app, &bo_read, "list_offers", json!({ "slug": "castle-linux" })).await;
+    let (_, text) = maker_tool(
+        &app,
+        &bo_read,
+        "list_offers",
+        json!({ "slug": "castle-linux" }),
+    )
+    .await;
     let sent = parsed(&text);
     let mut statuses: Vec<&str> = sent
         .as_array()
@@ -2408,7 +2465,411 @@ async fn agents_register_community_builds_and_offer_fixes_back(db: PgPool) {
         .collect();
     statuses.sort();
     assert_eq!(statuses, ["accepted", "withdrawn"]);
-    let (failed, _) =
-        maker_tool(&app, &bo_all, "withdraw_offer", withdraw("castle-linux", &ids[1])).await;
+    let (failed, _) = maker_tool(
+        &app,
+        &bo_all,
+        "withdraw_offer",
+        withdraw("castle-linux", &ids[1]),
+    )
+    .await;
     assert!(failed, "twice");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: store pages, releases and checks
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_make_and_edit_store_pages(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (limited, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Game only", "scope": "publish", "apps": ["game"] }),
+    )
+    .await;
+    let (all, _) = maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+
+    // New pages: an all-apps publish token only.
+    for token in [&read, &limited] {
+        let (failed, text) = maker_tool(&app, token, "create_store_page", new_app("fresh")).await;
+        assert!(failed && text.contains("forbidden"), "{text}");
+    }
+    let mut no_licence = new_app("fresh");
+    no_licence.as_object_mut().unwrap().remove("license_spdx");
+    let (failed, text) = maker_tool(&app, &all, "create_store_page", no_licence).await;
+    assert!(
+        failed && text.contains("missing argument: license_spdx"),
+        "{text}"
+    );
+    assert_eq!(
+        count(&app, "select count(*) from apps where slug = 'fresh'").await,
+        0
+    );
+    let (failed, text) = maker_tool(&app, &all, "create_store_page", new_app("fresh")).await;
+    assert!(!failed, "{text}");
+    let page = parsed(&text);
+    assert_eq!(page["slug"], "fresh");
+    assert_eq!(page["status"], "draft");
+    let owner: Uuid = sqlx::query_scalar("select maker_id from apps where slug = 'fresh'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(owner, maker_id);
+
+    // Editing: its own apps, with a publish token.
+    let (failed, text) = maker_tool(
+        &app,
+        &limited,
+        "update_store_page",
+        json!({ "slug": "game", "summary": "A tiny roguelike about going down." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(
+        parsed(&text)["summary"],
+        "A tiny roguelike about going down."
+    );
+    let summary: String = sqlx::query_scalar("select summary from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(summary, "A tiny roguelike about going down.");
+    let (failed, text) = maker_tool(
+        &app,
+        &limited,
+        "update_store_page",
+        json!({ "slug": "tower", "summary": "Not this one." }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &all,
+        "update_store_page",
+        json!({ "slug": "game", "min_age": 13 }),
+    )
+    .await;
+    assert!(failed && text.contains("min_age"), "{text}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_submit_releases_with_notes_and_read_the_fixes(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let release = |version: &str| {
+        let mut b = release_body(&app, version, "game-windows.zip");
+        b["slug"] = json!("game");
+        b["notes"] = json!("First release.");
+        b
+    };
+
+    // No release yet: nothing to fix, and what to do next.
+    let (failed, text) = maker_tool(&app, &read, "get_fixes", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    let none = parsed(&text);
+    assert!(none["release"].is_null());
+    assert!(none["next"].as_str().unwrap().contains("submit_release"));
+
+    let (failed, text) = maker_tool(&app, &read, "submit_release", release("1.0.0")).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let mut no_files = release("1.0.0");
+    no_files.as_object_mut().unwrap().remove("files");
+    let (failed, text) = maker_tool(&app, &publish, "submit_release", no_files).await;
+    assert!(failed && text.contains("missing argument: files"), "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "submit_release", release("1.0.0")).await;
+    assert!(!failed, "{text}");
+    let submitted = parsed(&text);
+    assert_eq!(submitted["status"], "fetching");
+    assert_eq!(submitted["notes"], "First release.");
+    let id = submitted["id"].as_str().unwrap().to_string();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+
+    // Notes: a publish token sets them, up to 5,000 characters.
+    let notes = |n: String| json!({ "slug": "game", "id": id, "notes": n });
+    let (failed, text) =
+        maker_tool(&app, &read, "set_release_notes", notes("Better.".into())).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) =
+        maker_tool(&app, &publish, "set_release_notes", notes("x".repeat(5001))).await;
+    assert!(failed && text.contains("notes"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "set_release_notes",
+        notes("Adds a **jump**.".into()),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let saved: Option<String> =
+        sqlx::query_scalar("select notes from releases where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(saved.as_deref(), Some("Adds a **jump**."));
+    let (failed, text) = maker_tool(&app, &read, "list_releases", json!({ "slug": "game" })).await;
+    assert!(!failed && text.contains("Adds a **jump**."), "{text}");
+
+    // A rejected release with a secret Slop Build found: the reason first, then the secret.
+    sqlx::query(
+        "update releases set status = 'rejected', status_reason = 'Ships a debug console.',
+                source_checks = '{\"secrets\": [{\"file\": \"src/net.rs\", \"line\": 3, \"rule\": \"aws-access-key\"}]}'
+         where id = $1::uuid",
+    )
+    .bind(&id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let (failed, text) = maker_tool(&app, &read, "get_fixes", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    let fixes = parsed(&text);
+    assert_eq!(fixes["release"]["version"], "1.0.0");
+    let kinds: Vec<&str> = fixes["fixes"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(kinds, ["release:rejected", "secret"]);
+    assert!(
+        fixes["fixes"][0]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("Ships a debug console.")
+    );
+    assert!(
+        fixes["fixes"][1]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("src/net.rs:3")
+    );
+    assert_eq!(fixes["fixes"][1]["severity"], "must");
+
+    // Past the passkey deadline, only a token proven with a passkey submits.
+    sqlx::query(
+        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (failed, text) = maker_tool(&app, &publish, "submit_release", release("1.0.1")).await;
+    assert!(failed && text.contains("passkey_required"), "{text}");
+    sqlx::query("update sessions set passkey_at = now() where user_id = $1 and kind = 'web'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (proven, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Proven", "scope": "publish" }),
+    )
+    .await;
+    let (failed, text) = maker_tool(&app, &proven, "submit_release", release("1.0.1")).await;
+    assert!(!failed, "{text}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_use_github_releases_and_slop_build(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = github_app(&app).await;
+    sqlx::query("update apps set platforms = '{windows}'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (other_id, _) = app.user("Otto Other", "US").await;
+    listed_with(&app, other_id, "ottos", "released", "").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+
+    let (failed, text) =
+        maker_tool(&app, &read, "slop_build_setup", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    let setup = parsed(&text);
+    assert_eq!(setup["supported"], true);
+    assert_eq!(setup["project_type"], "rust");
+    assert!(setup["workflow"].as_str().unwrap().contains("app: game"));
+    let (failed, text) =
+        maker_tool(&app, &read, "slop_build_setup", json!({ "slug": "ottos" })).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+
+    let (failed, text) =
+        maker_tool(&app, &read, "github_releases", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    let picks = parsed(&text);
+    let tags: Vec<&str> = picks
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| p["tag"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, ["v1.1.0", "v1.0.0"]);
+    let (failed, text) =
+        maker_tool(&app, &read, "github_releases", json!({ "slug": "ottos" })).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+
+    let pick = json!({
+        "slug": "game", "tag": "v1.0.0",
+        "files": [{
+            "platform": "windows", "kind": "archive", "exec": "game.exe",
+            "url": "https://github.com/octo/game/releases/download/v1.0.0/game-1.0.0-windows.zip"
+        }]
+    });
+    let (failed, text) = maker_tool(&app, &read, "submit_github_release", pick.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "submit_github_release",
+        json!({ "slug": "game", "tag": "" }),
+    )
+    .await;
+    assert!(failed, "{text}");
+    let (failed, text) = maker_tool(&app, &publish, "submit_github_release", pick).await;
+    assert!(!failed, "{text}");
+    let release = parsed(&text);
+    assert_eq!(release["version"], "1.0.0");
+    assert_eq!(release["commit_sha"], "1".repeat(40));
+    let (_, text) = maker_tool(&app, &read, "github_releases", json!({ "slug": "game" })).await;
+    assert_eq!(parsed(&text)[1]["submitted"], true);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn check_repository_checks_that_slop_can_still_read_the_repository(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let (other_id, _) = app.user("Otto Other", "US").await;
+    listed_with(&app, other_id, "ottos", "released", "").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let (failed, text) =
+        maker_tool(&app, &read, "check_repository", json!({ "slug": "game" })).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "check_repository",
+        json!({ "slug": "ottos" }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    // Readable: not frozen (null).
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "check_repository",
+        json!({ "slug": "game" }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text), Value::Null);
+    let frozen: bool =
+        sqlx::query_scalar("select frozen_at is not null from apps where slug = 'game'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(!frozen);
+}
+
+/// The tool says it runs the source check (licence, saves, online code, purchases) on the newest
+/// commit, and the guide and get_fixes tell agents to use it after fixing; the route it calls
+/// only checks that Slop can still read the repository (frozen.rs), so nothing about the code
+/// comes back.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "agents-2-n1: check_repository promises a source check but only checks repository access"]
+async fn check_repository_runs_the_source_check(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "check_repository",
+        json!({ "slug": "game" }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    // octo/game's source is an MIT licence file (SCANNED_SOURCE[..1] in main.rs): the answer
+    // should say what the source check found, not only that the repository can be read.
+    assert!(text.contains("MIT"), "{text}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_host_and_watch_a_browser_demo(db: PgPool) {
+    let dir = std::env::temp_dir().join(format!("slop-demos-agents-{}", rand::random::<u64>()));
+    let demo_dir = dir.clone();
+    let app = test_app_with(db, move |c| {
+        c.demos.play_url = Some("http://play.localhost:8080".parse().unwrap());
+        c.demos.dir = demo_dir;
+    })
+    .await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    sqlx::query("update apps set status = 'listed', stage_entered_at = now() where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (other_id, _) = app.user("Otto Other", "US").await;
+    listed_with(&app, other_id, "ottos", "released", "").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let url = format!("{}octo/game/releases/download/v1/web.zip", app.fake_base);
+
+    let (failed, text) = maker_tool(&app, &read, "browser_demo", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    assert!(parsed(&text)["demo"].is_null(), "{text}");
+    let (failed, text) = maker_tool(&app, &read, "browser_demo", json!({ "slug": "ottos" })).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &read,
+        "host_browser_demo",
+        json!({ "slug": "game", "url": url }),
+    )
+    .await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "host_browser_demo",
+        json!({ "slug": "ottos", "url": url }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "host_browser_demo",
+        json!({ "slug": "game", "url": url }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let mut status = Value::Null;
+    for _ in 0..100 {
+        let (_, text) = maker_tool(&app, &read, "browser_demo", json!({ "slug": "game" })).await;
+        status = parsed(&text);
+        if status["demo"]["status"] != "fetching" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(30)).await;
+    }
+    assert_eq!(status["demo"]["status"], "live", "{status}");
+    assert_eq!(status["play_url"], "http://play.localhost:8080/play/game/");
+    let _ = std::fs::remove_dir_all(dir);
 }
