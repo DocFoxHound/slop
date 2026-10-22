@@ -4,8 +4,8 @@
 //! - **End-to-end encrypted.** The Slop app packs and encrypts an app's save folder with a key
 //!   only the player's devices have (derived from their chat backup key, slop-client
 //!   `save_sync.rs`); Slop stores and returns ciphertext it can't read.
-//! - **Limits:** 20 MB per app, 200 MB per player across apps (the newest of each), and the
-//!   newest plus the one before are kept, so a bad save can be undone once.
+//! - **Limits:** 20 MB per app, 200 MB per player across apps (everything kept counts), and
+//!   the newest plus the one before are kept, so a bad save can be undone once.
 //! - **No silent overwrites:** an upload names the generation it builds on; if another device
 //!   uploaded since, it's refused (409) and the Slop app keeps both copies for the player.
 //! - Only the player's own sessions use these routes; makers' agent tokens can't.
@@ -62,7 +62,13 @@ async fn list(
     .bind(user.id)
     .fetch_all(&state.db)
     .await?;
-    let used: i64 = saves.iter().map(|s| s.size).sum();
+    // Counted as uploads count it: every app's newest save and the copy kept before it.
+    let used: i64 = sqlx::query_scalar(
+        "select coalesce(sum(length(body)), 0)::int8 from save_blobs where user_id = $1",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
     Ok(Json(
         serde_json::json!({ "saves": saves, "used": used, "allowance": MAX_PLAYER_BYTES }),
     ))
