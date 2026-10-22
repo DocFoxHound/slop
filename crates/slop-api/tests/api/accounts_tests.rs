@@ -4427,3 +4427,774 @@ async fn a_repository_token_that_stops_working_freezes_the_app(db: PgPool) {
         .unwrap();
     assert_eq!(still_works(&app.state, game).await, None);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Legal requests and the transparency report
+
+fn rfc3339(t: OffsetDateTime) -> String {
+    t.format(&Rfc3339).unwrap()
+}
+
+fn log_request(cookie: &str, body: Value) -> Req {
+    req(Method::POST, "/v1/admin/legal-requests")
+        .cookie(cookie)
+        .json(body)
+}
+
+fn answer_request(cookie: &str, id: &str, body: Value) -> Req {
+    req(
+        Method::POST,
+        format!("/v1/admin/legal-requests/{id}/answer"),
+    )
+    .cookie(cookie)
+    .json(body)
+}
+
+fn removal_order(cookie: &str, kind: &str, subject: &str) -> Req {
+    req(Method::POST, "/v1/admin/removal-orders")
+        .cookie(cookie)
+        .json(json!({
+            "received_at": rfc3339(OffsetDateTime::now_utc() - time::Duration::minutes(5)),
+            "country": "FR", "authority": "OCLCTIC", "order": "Order 2026-118",
+            "subject_kind": kind, "subject": subject
+        }))
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn legal_requests_are_only_for_staff_with_sensitive_rights(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (_, sue) = support_staff(&app, "Sue Support").await;
+    let (_, pat) = app.user("Pat Player", "US").await;
+    let body = json!({
+        "received_at": rfc3339(OffsetDateTime::now_utc()), "country": "US",
+        "authority": "County Sheriff", "kind": "subpoena", "asked": "Account details."
+    });
+    let res = app.send(log_request(&ada, body.clone())).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let answer = json!({ "status": "answered", "response": "Gave the sign-up date.", "user_notice": "notified" });
+    // Players don't know it's there; support staff are refused.
+    for (cookie, expected) in [(&pat, StatusCode::NOT_FOUND), (&sue, StatusCode::FORBIDDEN)] {
+        for r in [
+            req(Method::GET, "/v1/admin/legal-requests").cookie(cookie),
+            log_request(cookie, body.clone()),
+            answer_request(cookie, &id, answer.clone()),
+            removal_order(cookie, "app", "castle"),
+        ] {
+            let uri = r.uri.clone();
+            assert_eq!(status(&app, r).await, expected, "{uri}");
+        }
+    }
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/admin/legal-requests")).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from legal_requests where status = 'open'"
+        )
+        .await,
+        1
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn logging_a_legal_request_checks_it_and_sets_the_deadline(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (pat, _) = app.user("Pat Player", "US").await;
+    let received = OffsetDateTime::now_utc() - time::Duration::hours(1);
+    let base = json!({
+        "received_at": rfc3339(received), "country": "de", "authority": "Bundeskriminalamt",
+        "kind": "emergency", "asked": "Where is the account holder?"
+    });
+    let with = |changes: Value| {
+        let mut body = base.clone();
+        body.as_object_mut()
+            .unwrap()
+            .extend(changes.as_object().unwrap().clone());
+        body
+    };
+    for (changes, field) in [
+        (json!({ "country": "D" }), "country"),
+        (json!({ "country": "DEU" }), "country"),
+        (json!({ "country": "1A" }), "country"),
+        (json!({ "authority": "  " }), "authority"),
+        (json!({ "authority": "a".repeat(201) }), "authority"),
+        (json!({ "asked": "" }), "asked"),
+        (json!({ "asked": "a".repeat(4001) }), "asked"),
+        (json!({ "legal_basis": "a".repeat(501) }), "legal_basis"),
+        (
+            json!({ "subject_user_id": Uuid::now_v7() }),
+            "subject_user_id",
+        ),
+    ] {
+        let res = app.send(log_request(&ada, with(changes.clone()))).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{changes}");
+        assert_eq!(body_json(res).await["error"]["field"], field, "{changes}");
+    }
+    assert!(
+        status(&app, log_request(&ada, with(json!({ "secret": true }))))
+            .await
+            .is_client_error()
+    );
+    assert_eq!(count(&app, "select count(*) from legal_requests").await, 0);
+
+    // Each kind's deadline, unless the request gives its own; the person is to be told when
+    // there is one.
+    let logged = |changes: Value| {
+        let app = &app;
+        let r = log_request(&ada, with(changes));
+        async move {
+            let res = app.send(r).await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let id = body_json(res).await["id"].as_str().unwrap().to_string();
+            sqlx::query_as::<_, (String, Option<f64>, String)>(
+                "select country, (extract(epoch from deadline - received_at) / 3600)::float8, user_notice
+                 from legal_requests where id = $1::uuid",
+            )
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(
+        logged(json!({})).await,
+        ("DE".to_string(), Some(8.0), "not_needed".to_string())
+    );
+    assert_eq!(
+        logged(json!({ "kind": "eu_production_order", "subject_user_id": pat })).await,
+        ("DE".to_string(), Some(240.0), "pending".to_string())
+    );
+    assert_eq!(logged(json!({ "kind": "subpoena" })).await.1, None);
+    assert_eq!(
+        logged(json!({ "deadline": rfc3339(received + time::Duration::hours(2)) }))
+            .await
+            .1,
+        Some(2.0),
+        "an explicit deadline wins"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn answering_a_legal_request_checks_the_outcome(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (_, pat) = app.user("Pat Player", "US").await;
+    let res = app
+        .send(log_request(
+            &ada,
+            json!({
+                "received_at": rfc3339(OffsetDateTime::now_utc()), "country": "US",
+                "authority": "County Sheriff", "kind": "subpoena", "asked": "Account details."
+            }),
+        ))
+        .await;
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let good = json!({ "status": "refused", "response": "Not a valid order for us.", "user_notice": "barred" });
+    let with = |changes: Value| {
+        let mut body = good.clone();
+        body.as_object_mut()
+            .unwrap()
+            .extend(changes.as_object().unwrap().clone());
+        body
+    };
+    for (changes, field) in [
+        (json!({ "status": "maybe" }), "status"),
+        (json!({ "status": "open" }), "status"),
+        (json!({ "user_notice": "later" }), "user_notice"),
+        (json!({ "response": " " }), "response"),
+        (json!({ "response": "a".repeat(4001) }), "response"),
+    ] {
+        let res = app
+            .send(answer_request(&ada, &id, with(changes.clone())))
+            .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{changes}");
+        assert_eq!(body_json(res).await["error"]["field"], field, "{changes}");
+    }
+    assert_eq!(
+        status(&app, answer_request(&pat, &id, good.clone())).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(
+            &app,
+            answer_request(&ada, &Uuid::now_v7().to_string(), good.clone())
+        )
+        .await,
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from legal_requests where status = 'open'"
+        )
+        .await,
+        1
+    );
+    let res = app.send(answer_request(&ada, &id, good)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let (status_, notice, by, at): (String, String, Option<String>, bool) = sqlx::query_as(
+        "select status, user_notice, answered_by, answered_at is not null from legal_requests where id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (status_.as_str(), notice.as_str(), at),
+        ("refused", "barred", true)
+    );
+    assert!(by.unwrap().starts_with("Ada Owner"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn removal_orders_hide_reviews_profiles_and_teams_and_refuse_what_they_cant(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (mia, _) = app.user("Mia Maker", "US").await;
+    let (rex, _) = app.user("Rex Reviewer", "US").await;
+    let (cris, _) = app.user("Cris Creative", "US").await;
+    let (tom, _) = app.user("Tom Team", "US").await;
+    listed_with(&app, mia, "castle", "released", "").await;
+    listed_with(&app, mia, "drafty", "released", "status = 'draft'").await;
+    let review = Uuid::now_v7();
+    let castle = app_id_of(&app, "castle").await;
+    exec(
+        &app,
+        "insert into app_reviews (id, user_id, app_id, body) values ($1, $2, $3, 'Join our cause.')",
+        &[review, rex, castle],
+    )
+    .await;
+    exec(
+        &app,
+        "insert into creatives (user_id, handle, name, ai_use, trader) values ($1, 'cris-art', 'Cris', 'none', false)",
+        &[cris],
+    )
+    .await;
+    exec(
+        &app,
+        "insert into teams (id, slug, name, kind, created_by) values ($1, 'bad-team', 'Bad team', 'player', $2)",
+        &[Uuid::now_v7(), tom],
+    )
+    .await;
+
+    // What it can't take: an unknown kind, a bad country, nothing by that name.
+    let res = app.send(removal_order(&ada, "message", "x")).await;
+    assert_eq!(body_json(res).await["error"]["field"], "subject_kind");
+    let mut bad_country = removal_order(&ada, "team", "bad-team");
+    bad_country.body.as_mut().unwrap()["country"] = json!("FRA");
+    assert_eq!(
+        body_json(app.send(bad_country).await).await["error"]["field"],
+        "country"
+    );
+    assert_eq!(
+        body_json(app.send(removal_order(&ada, "profile", "nobody")).await).await["error"]["field"],
+        "subject"
+    );
+    // An app that isn't in the store can't be taken out of it: nothing is logged.
+    let res = app.send(removal_order(&ada, "app", "drafty")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(count(&app, "select count(*) from legal_requests").await, 0);
+    assert_eq!(count(&app, "select count(*) from removed_content").await, 0);
+    assert_eq!(
+        count(&app, "select count(*) from moderation_decisions").await,
+        0
+    );
+
+    for (kind, subject) in [
+        ("app_review", review.to_string()),
+        ("profile", "CRIS-ART".to_string()),
+        ("team", "bad-team".to_string()),
+    ] {
+        let res = app.send(removal_order(&ada, kind, &subject)).await;
+        assert_eq!(res.status(), StatusCode::OK, "{kind}");
+    }
+    let hidden: (bool, bool, bool) = sqlx::query_as(
+        "select (select hidden_at is not null from app_reviews where id = $1),
+                (select hidden_reason is not null from creatives where user_id = $2),
+                (select hidden_reason is not null from teams where slug = 'bad-team')",
+    )
+    .bind(review)
+    .bind(cris)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(hidden, (true, true, true));
+    let decisions: Vec<(Uuid, String)> =
+        sqlx::query_as("select user_id, action from moderation_decisions order by created_at")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        decisions,
+        [
+            (rex, "hide_review".to_string()),
+            (cris, "hide_profile".to_string()),
+            (tom, "hide_team".to_string())
+        ]
+    );
+    let kept: Vec<String> =
+        sqlx::query_scalar("select subject_kind from removed_content order by removed_at")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(kept, ["app_review", "profile", "team"]);
+    assert_eq!(
+        count(&app, "select count(*) from legal_requests where kind = 'removal_order' and status = 'answered'").await,
+        3
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_transparency_report_counts_the_year_so_far(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (mia, mia_cookie) = app.user("Mia Maker", "US").await;
+    let (_, rita) = app.user("Rita Reporter", "US").await;
+    listed_with(&app, mia, "castle", "released", "").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/reports")
+                .cookie(&rita)
+                .json(report_app("castle", "scam")),
+        )
+        .await;
+    assert!(res.status().is_success());
+    sqlx::query(
+        "update reports set status = 'actioned', decided_at = created_at + interval '3 hours'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        status(&app, removal_order(&ada, "app", "castle")).await,
+        StatusCode::OK
+    );
+    let decision = body_json(
+        app.send(req(Method::GET, "/v1/me/decisions").cookie(&mia_cookie))
+            .await,
+    )
+    .await[0]["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/me/decisions/{decision}/appeal"))
+                .cookie(&mia_cookie)
+                .json(json!({ "appeal": "It's a game about a castle." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let year = OffsetDateTime::now_utc().year();
+    let report = body_json(
+        app.send(req(Method::GET, format!("/v1/transparency/{year}")))
+            .await,
+    )
+    .await;
+    assert_eq!(report["year"], year);
+    assert_eq!(report["complete"], false, "the year isn't over");
+    assert_eq!(
+        report["legal_requests"]["by_kind"],
+        json!([{ "key": "removal_order", "count": 1 }])
+    );
+    assert_eq!(
+        report["reports"]["by_reason"],
+        json!([{ "key": "scam", "count": 1 }])
+    );
+    assert_eq!(
+        report["reports"]["by_outcome"],
+        json!([{ "key": "actioned", "count": 1 }])
+    );
+    assert_eq!(report["reports"]["median_hours_to_decide"], 3.0);
+    assert_eq!(
+        report["decisions"]["by_action"],
+        json!([{ "key": "delist_app", "count": 1 }])
+    );
+    assert_eq!(report["decisions"]["automated"], 0);
+    let appeals = report["appeals"]["by_outcome"].as_array().unwrap();
+    assert_eq!(appeals.len(), 1, "{report}");
+    assert_eq!(appeals[0]["count"], 1);
+    for not_yet in [year + 1, 2025] {
+        assert_eq!(
+            status(
+                &app,
+                req(Method::GET, format!("/v1/transparency/{not_yet}"))
+            )
+            .await,
+            StatusCode::NOT_FOUND,
+            "{not_yet}"
+        );
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn legal_deadlines_alert_admins_until_answered(db: PgPool) {
+    let app = test_app(db).await;
+    let (ada_id, ada) = make_admin(&app, "Ada Owner").await;
+    let now = rfc3339(OffsetDateTime::now_utc());
+    let mut refs = vec![];
+    for (kind, deadline) in [
+        ("removal_order", None),
+        ("emergency", None),
+        (
+            "subpoena",
+            Some(rfc3339(OffsetDateTime::now_utc() + time::Duration::days(5))),
+        ),
+    ] {
+        let mut body = json!({
+            "received_at": now, "country": "DE", "authority": "BKA", "kind": kind, "asked": "Act."
+        });
+        if let Some(d) = deadline {
+            body["deadline"] = json!(d);
+        }
+        let logged = body_json(app.send(log_request(&ada, body)).await).await;
+        refs.push((
+            logged["id"].as_str().unwrap().to_string(),
+            logged["reference"].as_str().unwrap().to_string(),
+        ));
+    }
+    let legal_alerts = || async {
+        let mut alerts: Vec<(String, String, String)> = slop_api::ops::collect(&app.state)
+            .await
+            .unwrap()
+            .into_iter()
+            .filter(|a| a.key.starts_with("legal-request-"))
+            .map(|a| (a.key, a.title, a.link))
+            .collect();
+        alerts.sort();
+        alerts
+    };
+    let alerts = legal_alerts().await;
+    assert_eq!(alerts.len(), 2, "not the one due in five days: {alerts:?}");
+    let removal = &refs[0].1;
+    let emergency = &refs[1].1;
+    let find = |reference: &str| {
+        alerts
+            .iter()
+            .find(|a| a.0 == format!("legal-request-{reference}"))
+            .unwrap()
+            .clone()
+    };
+    assert_eq!(
+        find(removal).1,
+        format!("Removal order {removal}: act within the hour")
+    );
+    assert!(
+        find(emergency)
+            .1
+            .starts_with(&format!("Legal request {emergency} is due ")),
+        "{:?}",
+        find(emergency)
+    );
+    assert!(alerts.iter().all(|a| a.2 == "/admin?tab=legal"));
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and category = 'ops' and link = '/admin?tab=legal'",
+    )
+    .bind(ada_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 2);
+
+    // Answered: that alert clears.
+    let res = app
+        .send(answer_request(
+            &ada,
+            &refs[1].0,
+            json!({ "status": "answered", "response": "Gave the last sign-in country.", "user_notice": "barred" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let alerts = legal_alerts().await;
+    assert_eq!(alerts.len(), 1);
+    assert_eq!(alerts[0].0, format!("legal-request-{removal}"));
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let resolved: bool =
+        sqlx::query_scalar("select resolved_at is not null from ops_alerts where key = $1")
+            .bind(format!("legal-request-{emergency}"))
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(resolved);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Makers' AI agent tokens
+
+fn new_agent_token(cookie: &str, body: Value) -> Req {
+    req(Method::POST, "/v1/me/maker-tokens")
+        .cookie(cookie)
+        .json(body)
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agent_tokens_listed_are_the_live_ones_and_say_whether_a_passkey_was_proved(db: PgPool) {
+    let app = test_app(db).await;
+    let (mia_id, mia) = app.user("Mia Maker", "US").await;
+    let (_, other) = app.user("Other", "US").await;
+    let mut ids = vec![];
+    for name in ["Revoked", "Expired", "Plain"] {
+        let res = app
+            .send(new_agent_token(
+                &mia,
+                json!({ "name": name, "scope": "read" }),
+            ))
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        ids.push(body_json(res).await["id"].as_str().unwrap().to_string());
+    }
+    // Made just after confirming with a passkey.
+    sqlx::query("update sessions set passkey_at = now() where user_id = $1 and kind = 'web'")
+        .bind(mia_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(new_agent_token(
+            &mia,
+            json!({ "name": "Proved", "scope": "publish", "days": 7 }),
+        ))
+        .await;
+    let proved = body_json(res).await;
+    assert_eq!(proved["passkey_proved"], true);
+    assert_eq!(
+        status(
+            &app,
+            req(Method::DELETE, format!("/v1/me/maker-tokens/{}", ids[0])).cookie(&mia)
+        )
+        .await,
+        StatusCode::NO_CONTENT
+    );
+    sqlx::query("update sessions set expires_at = now() - interval '1 second' where id = $1::uuid")
+        .bind(&ids[1])
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&mia))
+            .await,
+    )
+    .await;
+    let rows: Vec<(String, bool)> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["name"].as_str().unwrap().to_string(),
+                t["passkey_proved"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        rows,
+        [("Proved".to_string(), true), ("Plain".to_string(), false)]
+    );
+    assert!(listed[0].get("secret").is_none());
+    let theirs = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&other))
+            .await,
+    )
+    .await;
+    assert_eq!(theirs, json!([]));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn making_an_agent_token_checks_its_scope_lifetime_and_count(db: PgPool) {
+    let app = test_app(db).await;
+    let (mia_id, mia) = app.user("Mia Maker", "US").await;
+    let field = |body: Value| {
+        let app = &app;
+        let r = new_agent_token(&mia, body);
+        async move {
+            let res = app.send(r).await;
+            assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+            body_json(res).await["error"]["field"].clone()
+        }
+    };
+    assert_eq!(
+        field(json!({ "name": "Claude", "scope": "admin" })).await,
+        "scope"
+    );
+    assert_eq!(
+        field(json!({ "name": "Claude", "scope": "" })).await,
+        "scope"
+    );
+    for days in [0, 31, -1] {
+        assert_eq!(
+            field(json!({ "name": "Claude", "scope": "read", "days": days })).await,
+            "days",
+            "{days}"
+        );
+    }
+    for name in ["", "   ", &"n".repeat(61)] {
+        assert_eq!(
+            field(json!({ "name": name, "scope": "read" })).await,
+            "name"
+        );
+    }
+    assert_eq!(
+        field(json!({ "name": "Claude", "scope": "read", "apps": ["not-mine"] })).await,
+        "apps"
+    );
+    assert_eq!(count(&app, "select count(*) from maker_tokens").await, 0);
+
+    // A passkey proved 13 hours ago doesn't carry over; one proved an hour ago does.
+    sqlx::query("update sessions set passkey_at = now() - interval '13 hours' where user_id = $1")
+        .bind(mia_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let made = body_json(
+        app.send(new_agent_token(
+            &mia,
+            json!({ "name": "Old proof", "scope": "publish", "days": 1 }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(made["passkey_proved"], false);
+    let days: f64 = sqlx::query_scalar(
+        "select (extract(epoch from expires_at - created_at) / 86400)::float8 from sessions where id = $1::uuid",
+    )
+    .bind(made["id"].as_str().unwrap())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!((days - 1.0).abs() < 0.01, "{days}");
+    sqlx::query("update sessions set passkey_at = now() - interval '1 hour' where user_id = $1 and kind = 'web'")
+        .bind(mia_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let made = body_json(
+        app.send(new_agent_token(
+            &mia,
+            json!({ "name": "New proof", "scope": "publish" }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(made["passkey_proved"], true);
+    assert!(made["secret"].as_str().unwrap().starts_with("slopmk_"));
+
+    // Ten live at most; revoked and expired ones don't count.
+    for n in 2..10 {
+        let res = app
+            .send(new_agent_token(
+                &mia,
+                json!({ "name": format!("Agent {n}"), "scope": "read" }),
+            ))
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+    let res = app
+        .send(new_agent_token(
+            &mia,
+            json!({ "name": "Eleventh", "scope": "read" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    sqlx::query("update sessions set revoked_at = now() where id = $1::uuid")
+        .bind(made["id"].as_str().unwrap())
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(new_agent_token(
+            &mia,
+            json!({ "name": "Eleventh", "scope": "read" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // An old sign-in can't make one.
+    age_sessions(&app, mia_id).await;
+    assert_eq!(
+        error_code(
+            &app,
+            new_agent_token(&mia, json!({ "name": "Late", "scope": "read" }))
+        )
+        .await,
+        "step_up_required"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agent_tokens_are_revoked_only_by_their_maker_and_only_as_tokens(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, mia) = app.user("Mia Maker", "US").await;
+    let (_, other) = app.user("Other Maker", "US").await;
+    let made = body_json(
+        app.send(new_agent_token(
+            &mia,
+            json!({ "name": "Claude", "scope": "read" }),
+        ))
+        .await,
+    )
+    .await;
+    let id = made["id"].as_str().unwrap().to_string();
+    let bearer = format!("Bearer {}", made["secret"].as_str().unwrap());
+    let works = || {
+        status(
+            &app,
+            req(Method::GET, "/v1/me").header("authorization", bearer.clone()),
+        )
+    };
+    let revoke = |cookie: &str, id: &str| {
+        req(Method::DELETE, format!("/v1/me/maker-tokens/{id}")).cookie(cookie)
+    };
+
+    assert_eq!(
+        status(&app, revoke(&other, &id)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(works().await, StatusCode::OK);
+    // A website session isn't an agent token, even Mia's own.
+    let web: String = body_json(
+        app.send(req(Method::GET, "/v1/me/sessions").cookie(&mia))
+            .await,
+    )
+    .await
+    .as_array()
+    .unwrap()
+    .iter()
+    .find(|s| s["kind"] == "web")
+    .unwrap()["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert_eq!(
+        status(&app, revoke(&mia, &web)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status(&app, req(Method::GET, "/v1/me").cookie(&mia)).await,
+        StatusCode::OK
+    );
+    // The token can't manage tokens itself.
+    assert!(
+        status(
+            &app,
+            req(Method::DELETE, format!("/v1/me/maker-tokens/{id}"))
+                .header("authorization", bearer.clone())
+        )
+        .await
+        .is_client_error()
+    );
+    assert_eq!(works().await, StatusCode::OK);
+
+    assert_eq!(
+        status(&app, revoke(&mia, &id)).await,
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(works().await, StatusCode::UNAUTHORIZED);
+    assert_eq!(status(&app, revoke(&mia, &id)).await, StatusCode::NOT_FOUND);
+}
