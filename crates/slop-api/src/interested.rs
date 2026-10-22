@@ -160,11 +160,15 @@ async fn upcoming_for_you(
         Some(u) => foryou::personalized(&state.db, u.id, policy).await?,
         None => false,
     };
+    // Never the viewer's own apps, personal or not.
+    let viewer = user.as_ref().map(|u| u.id);
     let mut candidates: Vec<foryou::Candidate> =
         foryou::candidates(&state.db, &state.config, policy)
             .await?
             .into_iter()
-            .filter(|c| c.app.stage != AppStage::Released && !c.app.is_dead)
+            .filter(|c| {
+                c.app.stage != AppStage::Released && !c.app.is_dead && Some(c.maker_id) != viewer
+            })
             .collect();
     let Some(u) = user.filter(|_| personal) else {
         candidates.sort_by(|a, b| {
