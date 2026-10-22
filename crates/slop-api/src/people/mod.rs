@@ -1177,8 +1177,11 @@ pub struct SinceNewWork {
 }
 
 pub async fn since_new_work(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Option<SinceNewWork>> {
-    let jobs: Vec<(String, Option<OffsetDateTime>, Option<String>)> = sqlx::query_as(
-        "select c.name,
+    // Named only when they chose credit and their page is visible, like `credits` (security
+    // review, 2026-10-22); the timing counts every job.
+    let jobs: Vec<(Option<String>, Option<OffsetDateTime>, Option<String>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select case when coalesce((j.offer->>'credit')::boolean, true) and {VISIBLE_SQL} then c.name end,
                 (select min(r.reviewed_at) from releases r
                   where r.app_id = j.app_id and r.status = 'approved' and r.reviewed_at >= j.credited_at),
                 (select r.version from releases r
@@ -1186,17 +1189,19 @@ pub async fn since_new_work(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Opt
                   order by r.reviewed_at limit 1)
          from jobs j join creatives c on c.user_id = j.creative_id
          where j.app_id = $1 and j.credited_at is not null
-         order by j.credited_at desc",
-    )
-    .bind(app_id)
-    .fetch_all(db)
-    .await?;
+         order by j.credited_at desc"
+        )))
+        .bind(app_id)
+        .fetch_all(db)
+        .await?;
     if jobs.is_empty() {
         return Ok(None);
     }
     let mut credits: Vec<String> = Vec::new();
     for (name, _, _) in &jobs {
-        if !credits.contains(name) {
+        if let Some(name) = name
+            && !credits.contains(name)
+        {
             credits.push(name.clone());
         }
     }
