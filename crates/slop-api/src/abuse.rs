@@ -41,6 +41,11 @@ const BOMB_MIN: i64 = 10;
 const BOMB_FACTOR: f64 = 5.0;
 /// Changes of vote in one direction in a day.
 const SWING_MIN: i64 = 10;
+/// Votes in a week from accounts that barely played the app: at least this many, and at least
+/// half the week's votes.
+const THIN_MIN: i64 = 15;
+/// "Barely played": under this much playtime and launched on one day only.
+const THIN_PLAYTIME_SECONDS: i64 = 600;
 /// Times an account hit a limit in a day.
 const RATE_LIMIT_HITS: u32 = 20;
 
@@ -178,6 +183,36 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
                 subject_id: id,
                 label: title,
                 detail: json!({ "slop_votes_today": today, "usual_per_day": (usual * 10.0).round() / 10.0 }),
+            });
+        }
+    }
+
+    // Votes paced over days from accounts that never really played: a rolling week, by
+    // play rather than account age, so aged accounts and slow pacing don't hide them
+    // (security review, 2026-10-22).
+    let week = OffsetDateTime::now_utc().date().iso_week();
+    let thin: Vec<(Uuid, String, i64, i64)> = sqlx::query_as(
+        "select a.id, a.title,
+                count(distinct e.user_id) filter (where coalesce(u.playtime_seconds, 0) < $1
+                                                    and coalesce(u.days_launched, 0) <= 1),
+                count(distinct e.user_id)
+         from vote_events e join apps a on a.id = e.app_id
+         left join user_app_usage u on u.user_id = e.user_id and u.app_id = e.app_id
+         where e.created_at > now() - interval '7 days' and e.vote <> 0
+         group by a.id, a.title",
+    )
+    .bind(THIN_PLAYTIME_SECONDS)
+    .fetch_all(db)
+    .await?;
+    for (id, title, thin, all) in thin {
+        if thin >= THIN_MIN && thin * 2 >= all {
+            found.push(Found {
+                kind: "thin_votes",
+                key: format!("thin_votes:{id}:{week}"),
+                subject_kind: "app",
+                subject_id: id,
+                label: title,
+                detail: json!({ "votes_from_barely_played": thin, "voters": all, "window": "7 days" }),
             });
         }
     }

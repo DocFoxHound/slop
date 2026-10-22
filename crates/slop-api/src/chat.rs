@@ -52,6 +52,29 @@ pub const MAX_MESSAGE_BYTES: usize = 32 * 1024;
 pub const MAX_ATTACHMENT_BYTES: usize = 16 * 1024 * 1024;
 /// Commits carry a Welcome for each added device; a big group's can be large.
 pub const MAX_COMMIT_BODY: usize = 2 * 1024 * 1024;
+/// What one account may send in a day, everything together (messages, key updates and
+/// Welcomes, attachments). Each is kept for 30 days, so this bounds what an account can store
+/// (security review, 2026-10-22: without it, a few scripts could fill the database's disk).
+pub const DAILY_BYTES: i64 = 200 * 1024 * 1024;
+
+/// Refuses when `adding` more bytes would take the account past `DAILY_BYTES` today.
+async fn within_budget(conn: &mut PgConnection, user: Uuid, adding: usize) -> ApiResult<()> {
+    let today: i64 = sqlx::query_scalar(
+        "select (select coalesce(sum(octet_length(body)), 0) from chat_messages
+                 where sender_user_id = $1 and created_at > now() - interval '1 day')
+              + (select coalesce(sum(size_bytes), 0) from chat_attachments
+                 where uploader_id = $1 and created_at > now() - interval '1 day')",
+    )
+    .bind(user)
+    .fetch_one(&mut *conn)
+    .await?;
+    if today + adding as i64 > DAILY_BYTES {
+        return Err(ApiError::Conflict(
+            "that's a lot of chat for one day; try again tomorrow".into(),
+        ));
+    }
+    Ok(())
+}
 /// People in a group chat.
 pub const MAX_GROUP: i64 = 50;
 /// How long a long-poll waits for something new.
@@ -1382,8 +1405,11 @@ async fn commit(
     Path(id): Path<Uuid>,
     Json(b): Json<CommitBody>,
 ) -> ApiResult<axum::response::Response> {
+    crate::limits::check(&state, device.user.id, crate::limits::Action::ChatMessage)?;
     let body = b64("commit", &b.commit, MAX_COMMIT_BODY)?;
     let mut tx = state.db.begin().await?;
+    let welcome_bytes: usize = b.welcomes.iter().map(|w| w.welcome.len()).sum();
+    within_budget(&mut tx, device.user.id, body.len() + welcome_bytes).await?;
     let epoch: Option<i64> =
         sqlx::query_scalar("select epoch from chat_conversations where id = $1 for update")
             .bind(id)
@@ -1478,6 +1504,7 @@ async fn send(
         return Err(ApiError::invalid("franking_tag", "32 bytes"));
     }
     let mut tx = state.db.begin().await?;
+    within_budget(&mut tx, device.user.id, body.len()).await?;
     let row: Option<(i64, String)> =
         sqlx::query_as("select epoch, kind from chat_conversations where id = $1 for update")
             .bind(id)
@@ -1779,17 +1806,7 @@ async fn upload(
             "you can't message this person any more".into(),
         ));
     }
-    let today: i64 = sqlx::query_scalar(
-        "select coalesce(sum(size_bytes), 0)::int8 from chat_attachments where uploader_id = $1 and created_at > now() - interval '1 day'",
-    )
-    .bind(device.user.id)
-    .fetch_one(&mut *tx)
-    .await?;
-    if today + body.len() as i64 > 500 * 1024 * 1024 {
-        return Err(ApiError::Conflict(
-            "that's a lot of attachments for one day; try again tomorrow".into(),
-        ));
-    }
+    within_budget(&mut tx, device.user.id, body.len()).await?;
     let attachment = Uuid::now_v7();
     sqlx::query(
         "insert into chat_attachments (id, conversation_id, uploader_id, size_bytes, body) values ($1, $2, $3, $4, $5)",

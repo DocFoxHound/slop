@@ -190,8 +190,14 @@ async fn heartbeat(
         .bind(id)
         .execute(&mut *tx)
         .await?;
+    // Never more than the clock: time another session of the same player and app already
+    // covered isn't credited again.
     sqlx::query(
-        "update user_app_usage set playtime_seconds = playtime_seconds + $3, last_played_at = now()
+        "update user_app_usage set
+                playtime_seconds = playtime_seconds + greatest(0, least($3::int8,
+                    extract(epoch from now() - coalesce(credited_until, now() - make_interval(secs => $3)))::int8)),
+                credited_until = now(),
+                last_played_at = now()
          where user_id = $1 and app_id = $2",
     )
     .bind(user_id)

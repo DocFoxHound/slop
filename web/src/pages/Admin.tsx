@@ -103,6 +103,7 @@ export function Admin() {
 
 const ABUSE_LABEL: Record<string, string> = {
   vote_burst: "VOTES FROM NEW ACCOUNTS",
+  thin_votes: "VOTES FROM PLAYERS WHO BARELY PLAYED",
   review_bomb: "REVIEW BOMB",
   vote_swing: "VOTE SWING",
   lookalike_name: "LOOKALIKE NAME",

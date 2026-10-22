@@ -95,12 +95,15 @@ async fn updates(
     headers: HeaderMap,
     Query(query): Query<UpdatesQuery>,
 ) -> ApiResult<Json<Vec<AppUpdate>>> {
-    let slugs: Vec<&str> = query
+    let mut slugs: Vec<&str> = query
         .apps
         .split(',')
         .map(str::trim)
         .filter(|s| !s.is_empty())
         .collect();
+    // Each is looked up once, however often it's listed.
+    slugs.sort_unstable();
+    slugs.dedup();
     if slugs.len() > MAX_UPDATE_CHECK {
         return Err(ApiError::invalid(
             "apps",

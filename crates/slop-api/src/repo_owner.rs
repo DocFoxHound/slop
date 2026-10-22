@@ -538,6 +538,7 @@ async fn check_code(
             .fetch_optional(&state.db)
             .await?;
     let code = code.ok_or_else(|| ApiError::Conflict("ask for a code first".into()))?;
+    crate::limits::check(&state, user.id, crate::limits::Action::Lookup)?;
     let read = match &b.repo_token {
         Some(t) => {
             crate::repo_tokens::verify_given(&state, &repo_url, t).await?;
@@ -572,21 +573,51 @@ async fn check_code(
     Ok(Json(a))
 }
 
-fn private_ip(ip: IpAddr) -> bool {
+pub(crate) fn private_ip(ip: IpAddr) -> bool {
     match ip {
         IpAddr::V4(v4) => {
+            let o = v4.octets();
             v4.is_private()
                 || v4.is_loopback()
                 || v4.is_link_local()
                 || v4.is_unspecified()
                 || v4.is_broadcast()
-                || (v4.octets()[0] == 100 && (64..128).contains(&v4.octets()[1]))
+                || v4.is_multicast()
+                || o[0] == 0
+                || (o[0] == 100 && (64..128).contains(&o[1]))
+                // Benchmarking (198.18.0.0/15) and the reserved 240.0.0.0/4.
+                || (o[0] == 198 && (18..20).contains(&o[1]))
+                || o[0] >= 240
         }
         IpAddr::V6(v6) => {
+            // An IPv4 address written as IPv6 (::ffff:127.0.0.1), or NAT64 / 6to4 wrapping one.
+            if let Some(v4) = v6.to_ipv4_mapped() {
+                return private_ip(IpAddr::V4(v4));
+            }
+            let s = v6.segments();
+            if s[0] == 0x0064 && s[1] == 0xff9b {
+                let v4 = std::net::Ipv4Addr::new(
+                    (s[6] >> 8) as u8,
+                    s[6] as u8,
+                    (s[7] >> 8) as u8,
+                    s[7] as u8,
+                );
+                return private_ip(IpAddr::V4(v4));
+            }
+            if s[0] == 0x2002 {
+                let v4 = std::net::Ipv4Addr::new(
+                    (s[1] >> 8) as u8,
+                    s[1] as u8,
+                    (s[2] >> 8) as u8,
+                    s[2] as u8,
+                );
+                return private_ip(IpAddr::V4(v4));
+            }
             v6.is_loopback()
                 || v6.is_unspecified()
-                || (v6.segments()[0] & 0xfe00) == 0xfc00
-                || (v6.segments()[0] & 0xffc0) == 0xfe80
+                || v6.is_multicast()
+                || (s[0] & 0xfe00) == 0xfc00
+                || (s[0] & 0xffc0) == 0xfe80
         }
     }
 }
@@ -628,6 +659,14 @@ pub(crate) fn is_proof_name(name: &str) -> bool {
 /// Git itself so it works on any host. Only the file list and those files are downloaded where
 /// the host allows (a partial, shallow clone).
 pub async fn read_proof(state: &AppState, repo_url: &str) -> anyhow::Result<Option<String>> {
+    // A few at a time across the whole server: each is a clone (security review, 2026-10-22).
+    static RUNNING: std::sync::OnceLock<tokio::sync::Semaphore> = std::sync::OnceLock::new();
+    let _permit = RUNNING
+        .get_or_init(|| tokio::sync::Semaphore::new(4))
+        .try_acquire()
+        .map_err(|_| {
+            anyhow::anyhow!("Slop is checking other repositories right now; try again in a minute")
+        })?;
     let url = Url::parse(repo_url)?;
     // Tests serve repositories over plain http on this machine.
     let test_setup = state.config.releases.allow_http_downloads;
@@ -685,7 +724,12 @@ pub async fn read_proof(state: &AppState, repo_url: &str) -> anyhow::Result<Opti
             &tmp,
         );
         if !run(shallow).await?.status.success() {
-            // Hosts that can't do partial clones (plain "dumb" HTTP): a normal one.
+            // Hosts that can't do partial clones (plain "dumb" HTTP) would need a whole clone of
+            // any size: only for the tests' local repositories, never on a real server.
+            anyhow::ensure!(
+                test_setup,
+                "Slop couldn't read it with a quick partial clone; prove it's yours with a linked sign-in instead"
+            );
             let _ = tokio::fs::remove_dir_all(&dir).await;
             let full = git(
                 &["clone", "--quiet", "--no-checkout", repo_url, &target],
@@ -701,6 +745,13 @@ pub async fn read_proof(state: &AppState, repo_url: &str) -> anyhow::Result<Opti
         let mut text = String::new();
         let mut any = false;
         for name in names.lines().filter(|n| is_proof_file(n)) {
+            // Only files of a sensible size are read (a multi-gigabyte README would otherwise be
+            // held in memory whole).
+            let size = run(git(&["cat-file", "-s", &format!("HEAD:{name}")], &dir)).await?;
+            let size: u64 = String::from_utf8_lossy(&size.stdout).trim().parse().unwrap_or(u64::MAX);
+            if size > 1024 * 1024 {
+                continue;
+            }
             let out = run(git(&["show", &format!("HEAD:{name}")], &dir)).await?;
             text.push_str(&String::from_utf8_lossy(
                 &out.stdout[..out.stdout.len().min(1024 * 1024)],
@@ -718,6 +769,29 @@ pub async fn read_proof(state: &AppState, repo_url: &str) -> anyhow::Result<Opti
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn private_addresses_in_every_spelling() {
+        for ip in [
+            "127.0.0.1",
+            "10.1.2.3",
+            "0.0.0.0",
+            "0.1.2.3",
+            "169.254.169.254",
+            "198.18.0.1",
+            "::1",
+            "::ffff:127.0.0.1",
+            "::ffff:10.0.0.1",
+            "64:ff9b::a00:1",
+            "2002:a00:1::",
+            "fd00::1",
+        ] {
+            assert!(private_ip(ip.parse().unwrap()), "{ip}");
+        }
+        for ip in ["93.184.216.34", "2606:4700::1111", "::ffff:93.184.216.34"] {
+            assert!(!private_ip(ip.parse().unwrap()), "{ip}");
+        }
+    }
 
     #[test]
     fn addresses_normalize() {

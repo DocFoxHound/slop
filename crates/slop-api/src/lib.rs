@@ -114,6 +114,12 @@ pub struct AppState {
     pub rate_limiter: Arc<ratelimit::RateLimiter>,
     /// GitHub's OIDC signing keys, for Slop Build submissions.
     pub oidc_keys: Arc<tokio::sync::RwLock<slop_build::OidcKeys>>,
+    /// Licences GitHub detected, by repository, for a day (catalog.rs `detect_license`).
+    pub license_cache: Arc<
+        std::sync::Mutex<
+            std::collections::HashMap<String, (std::time::Instant, serde_json::Value)>,
+        >,
+    >,
     /// Slop's GitHub App installation tokens.
     pub github_app_tokens: Arc<github_app::TokenCache>,
     /// Wakes chat long-polls (chat.rs).
@@ -122,18 +128,59 @@ pub struct AppState {
     pub account_limiter: Arc<limits::AccountLimiter>,
 }
 
+/// Resolves names to public addresses only (see `AppState::new`).
+struct PublicOnly;
+
+impl reqwest::dns::Resolve for PublicOnly {
+    fn resolve(&self, name: reqwest::dns::Name) -> reqwest::dns::Resolving {
+        let host = name.as_str().to_string();
+        Box::pin(async move {
+            let found: Vec<std::net::SocketAddr> = tokio::net::lookup_host((host.as_str(), 0))
+                .await?
+                .filter(|a| !repo_owner::private_ip(a.ip()))
+                .collect();
+            if found.is_empty() {
+                return Err(format!("{host} has no public address").into());
+            }
+            Ok(Box::new(found.into_iter()) as reqwest::dns::Addrs)
+        })
+    }
+}
+
 impl AppState {
     pub fn new(db: PgPool, config: Config) -> anyhow::Result<Self> {
         let http = reqwest::Client::builder()
             .timeout(Duration::from_secs(10))
             .redirect(reqwest::redirect::Policy::none())
             .build()?;
-        let fetch_http = reqwest::Client::builder()
+        let mut fetch_http = reqwest::Client::builder()
             .connect_timeout(Duration::from_secs(10))
             .timeout(Duration::from_secs(30 * 60))
             .redirect(reqwest::redirect::Policy::limited(5))
-            .https_only(!config.releases.allow_http_downloads)
-            .build()?;
+            .https_only(!config.releases.allow_http_downloads);
+        // Makers choose these addresses: every connection, redirects included, goes only to
+        // public addresses, checked when they're resolved, so a name that later points inside
+        // (DNS rebinding) or a redirect to one can't reach Slop's own network (security review,
+        // 2026-10-22). Tests serve files from this machine, so not there.
+        if !config.releases.allow_http_downloads {
+            fetch_http = fetch_http.dns_resolver(Arc::new(PublicOnly)).redirect(
+                reqwest::redirect::Policy::custom(|attempt| {
+                    let private_literal = match attempt.url().host() {
+                        Some(url::Host::Ipv4(ip)) => repo_owner::private_ip(ip.into()),
+                        Some(url::Host::Ipv6(ip)) => repo_owner::private_ip(ip.into()),
+                        _ => false,
+                    };
+                    if private_literal {
+                        attempt.error("a redirect to a private address")
+                    } else if attempt.previous().len() >= 5 {
+                        attempt.error("too many redirects")
+                    } else {
+                        attempt.follow()
+                    }
+                }),
+            );
+        }
+        let fetch_http = fetch_http.build()?;
         let rate_limiter = Arc::new(ratelimit::RateLimiter::new(config.rate_limits));
         Ok(Self {
             db,
@@ -146,6 +193,7 @@ impl AppState {
             provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),
             rate_limiter,
             oidc_keys: Arc::default(),
+            license_cache: Arc::default(),
             github_app_tokens: Arc::default(),
             chat_hub: chat::Hub::default(),
             account_limiter: Arc::default(),

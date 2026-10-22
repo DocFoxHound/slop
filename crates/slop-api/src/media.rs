@@ -440,7 +440,9 @@ impl<'a> Reader<'a> {
             width,
             height,
             format,
-            dhash: dhash(&bytes).map(|h| format!("{h:016x}")),
+            dhash: dhash_off_thread(bytes.to_vec())
+                .await
+                .map(|h| format!("{h:016x}")),
         };
         self.seen.insert(path, picture.clone());
         Ok(picture)
@@ -666,7 +668,15 @@ async fn read_and_store(
 /// A difference hash: the picture shrunk to 9×8 in grey, one bit per pair of neighbours (is the
 /// left one brighter?). Resizing, recompressing or a small colour change barely moves it.
 pub fn dhash(bytes: &[u8]) -> Option<u64> {
-    let img = image::load_from_memory(bytes).ok()?.into_luma8();
+    // Decoding is bounded: a picture that would need more memory than this isn't hashed (it
+    // still goes to review) rather than letting one upload take the server's memory.
+    let mut limits = image::Limits::default();
+    limits.max_alloc = Some(160 * 1024 * 1024);
+    let mut reader = image::ImageReader::new(std::io::Cursor::new(bytes))
+        .with_guessed_format()
+        .ok()?;
+    reader.limits(limits);
+    let img = reader.decode().ok()?.into_luma8();
     let small = image::imageops::resize(&img, 9, 8, image::imageops::FilterType::Triangle);
     let mut hash = 0u64;
     for y in 0..8 {
@@ -678,6 +688,14 @@ pub fn dhash(bytes: &[u8]) -> Option<u64> {
         }
     }
     Some(hash)
+}
+
+/// `dhash` off the async workers (decoding a big picture takes a while).
+pub async fn dhash_off_thread(bytes: Vec<u8>) -> Option<u64> {
+    tokio::task::spawn_blocking(move || dhash(&bytes))
+        .await
+        .ok()
+        .flatten()
 }
 
 /// Other makers' apps whose live icon looks like `thumbnail`, closest first.
@@ -733,7 +751,9 @@ pub async fn hash_old_thumbnails(state: &AppState, limit: i64) -> anyhow::Result
     for (id, url) in rows {
         // A picture that can't be read gets an empty hash, so it isn't tried again.
         let hash = match download(state, url.parse()?, MAX_IMAGE_BYTES).await {
-            Ok(Some(bytes)) => dhash(&bytes).map(|h| format!("{h:016x}")),
+            Ok(Some(bytes)) => dhash_off_thread(bytes.to_vec())
+                .await
+                .map(|h| format!("{h:016x}")),
             _ => None,
         };
         sqlx::query("update media_sets set thumbnail = thumbnail || jsonb_build_object('dhash', $2::text) where id = $1")
@@ -963,6 +983,8 @@ async fn check(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Overview>> {
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    // Each check downloads and decodes up to 21 pictures.
+    crate::limits::check(&state, user.id, crate::limits::Action::Lookup)?;
     let result = match refresh(&state, app_id, &repo_url, None, "maker").await {
         Ok(Outcome::Pending(_)) => "pending",
         Ok(Outcome::Unchanged) => "unchanged",

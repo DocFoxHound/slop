@@ -31,6 +31,8 @@ pub enum Action {
     Release,
     Hire,
     JobMessage,
+    Offer,
+    Lookup,
 }
 
 impl Action {
@@ -53,6 +55,10 @@ impl Action {
             Self::Release => (30, HOUR),
             Self::Hire => (20, DAY),
             Self::JobMessage => (60, MINUTE),
+            // Each one notifies (and emails) the original's maker.
+            Self::Offer => (5, DAY),
+            // Lookups that cost Slop a GitHub request.
+            Self::Lookup => (30, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -72,6 +78,8 @@ impl Action {
             Self::Release => "releases",
             Self::Hire => "hiring requests",
             Self::JobMessage => "job messages",
+            Self::Offer => "offers to other makers",
+            Self::Lookup => "repository lookups",
         }
     }
 }

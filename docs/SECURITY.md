@@ -319,6 +319,12 @@ More detail in `PAYMENTS.md`.
 
 ## 11. Trust & safety (abuse of the platform)
 
+**Tightened 2026-10-22 (security review: a hostile client scripting many accounts):**
+- **Storage:** each account may send 200 MB of chat a day (messages, key updates and attachments together, kept 30 days), and synced saves count every kept copy toward the 200 MB allowance. The admin panel already alerts on low disk space.
+- **Playtime** is credited at most at the speed of the clock per player and app, however many play sessions run at once, so vote weight can't be inflated with parallel sessions. A weekly check flags apps with many votes from accounts that barely played them (`thin_votes`).
+- **Spam and cost:** offers to other makers (5 a day, one collapsed notice per branch), repository and licence lookups and media checks (30 an hour per account, licences cached a day), a limit of four repository proof checks at once (no full clones, files over 1 MB skipped), store pictures decoded off the async workers with a memory limit, demos charged only for the bytes they send, signed-out reports about the same thing merged, sandbox trouble reports only from players who started the app, and a stronger proof of work before checkouts.
+- **Fetching makers' addresses:** one HTTP client whose resolver returns only public addresses (IPv4-mapped, NAT64 and 6to4 forms included) and which refuses redirects to private ones, used for release files, repository checks and demos.
+
 **Built 2026-10-20 (`abuse.rs`, `limits.rs`):** hourly checks for vote bursts from accounts made in the last week, review bombs (a day's 👎 at least 5 times the usual), coordinated vote swings, app names that look like another maker's listed app (case, spacing, punctuation and look-alike characters folded), and accounts repeatedly hitting the per-account rate limits. Each is raised once in the admin queue and as an alert; nothing changes automatically, and a reviewer closes it with a note. **Built 2026-10-21:** icon similarity (each store-page picture gets a perceptual hash; a new thumbnail within 10 of 64 bits of another maker's live one is shown to the reviewer, `media.rs`), known-bad links (public malware and phishing lists, URLhaus by default, refreshed daily and checked against store pages, creative profiles and reviews; shared sites match only exact addresses, `bad_links.rs`), and days with unusual voting shaded on each app's votes-per-day chart unless staff dismissed the signal (`votes.rs`).
 
 | Threat | Mitigations |

@@ -213,7 +213,8 @@ async fn start(
 /// Downloads, scans and unpacks a web build into `dir/<slug>`.
 async fn fetch(state: &AppState, app_id: Uuid, slug: &str, url: &str) -> anyhow::Result<()> {
     let cfg = &state.config.demos;
-    let mut res = state.http.get(url).send().await?.error_for_status()?;
+    // The client for makers' addresses: public addresses only (lib.rs `PublicOnly`).
+    let mut res = state.fetch_http.get(url).send().await?.error_for_status()?;
     let mut bytes = Vec::new();
     while let Some(chunk) = res.chunk().await? {
         bytes.extend_from_slice(&chunk);
@@ -417,14 +418,21 @@ async fn serve_file(state: &AppState, slug: &str, path: &str, req: Request) -> R
     let Ok(meta) = std::fs::metadata(&file) else {
         return StatusCode::NOT_FOUND.into_response();
     };
-    // The daily cap across all demos.
+    // The daily cap across all demos, counting what this request will really send: nothing
+    // for HEAD, the asked-for slice for a range (security review, 2026-10-22: charging the
+    // whole file for those let a few hundred tiny requests switch demos off for the day).
+    let charged = if req.method() == axum::http::Method::HEAD {
+        0
+    } else {
+        range_len(req.headers().get(axum::http::header::RANGE), meta.len()).unwrap_or(meta.len())
+    };
     let today = OffsetDateTime::now_utc().date();
     let used: i64 = sqlx::query_scalar(
         "insert into demo_traffic (day, bytes) values ($1, $2)
          on conflict (day) do update set bytes = demo_traffic.bytes + $2 returning bytes",
     )
     .bind(today)
-    .bind(meta.len() as i64)
+    .bind(charged as i64)
     .fetch_one(&state.db)
     .await
     .unwrap_or(0);
@@ -434,7 +442,7 @@ async fn serve_file(state: &AppState, slug: &str, path: &str, req: Request) -> R
             "<!doctype html><title>Demos are busy</title><p>Demos have had a lot of players today. Install the game from Slop to play, or try again tomorrow.</p>",
         );
     }
-    if path == "index.html" {
+    if path == "index.html" && req.method() == axum::http::Method::GET {
         let _ = sqlx::query("update demos set plays = plays + 1 where app_id = $1")
             .bind(app_id)
             .execute(&state.db)
@@ -471,10 +479,38 @@ async fn serve_file(state: &AppState, slug: &str, path: &str, req: Request) -> R
     Response::from_parts(parts, Body::new(body))
 }
 
+/// The bytes a single `Range: bytes=a-b` (or `a-`, `-n`) asks for, within a file of `len`.
+fn range_len(header: Option<&axum::http::HeaderValue>, len: u64) -> Option<u64> {
+    let spec = header?.to_str().ok()?.strip_prefix("bytes=")?;
+    if spec.contains(',') {
+        return None;
+    }
+    let (a, b) = spec.split_once('-')?;
+    let (start, end) = match (a.trim(), b.trim()) {
+        ("", n) => (len.saturating_sub(n.parse().ok()?), len.checked_sub(1)?),
+        (a, "") => (a.parse().ok()?, len.checked_sub(1)?),
+        (a, b) => (
+            a.parse().ok()?,
+            b.parse::<u64>().ok()?.min(len.checked_sub(1)?),
+        ),
+    };
+    (start <= end).then(|| end - start + 1)
+}
+
 #[cfg(test)]
 mod tests {
-    use super::unpack;
+    use super::{range_len, unpack};
     use std::io::Write;
+
+    #[test]
+    fn ranges_count_what_they_send() {
+        let h = |v: &str| axum::http::HeaderValue::from_str(v).unwrap();
+        assert_eq!(range_len(Some(&h("bytes=0-0")), 1000), Some(1));
+        assert_eq!(range_len(Some(&h("bytes=990-")), 1000), Some(10));
+        assert_eq!(range_len(Some(&h("bytes=-100")), 1000), Some(100));
+        assert_eq!(range_len(Some(&h("bytes=0-99999")), 1000), Some(1000));
+        assert_eq!(range_len(None, 1000), None);
+    }
 
     fn zip_of(files: &[(&str, &[u8])]) -> Vec<u8> {
         let mut w = zip::ZipWriter::new(std::io::Cursor::new(Vec::new()));

@@ -706,6 +706,28 @@ async fn report(
         Duration::days(7)
     };
     let preserve = (reason.code == "child_abuse").then(|| Duration::days(366));
+    // Signed-out reports have no account to limit (security review, 2026-10-22): the same
+    // address reporting the same thing again, or a flood about one subject, joins the report
+    // already waiting instead of adding to the queue and to outcome emails. Signed-in reports
+    // are limited per account above.
+    if user.is_none() {
+        let waiting: Option<(String, OffsetDateTime)> = sqlx::query_as(
+            "select reference, due_at from reports
+             where reporter_id is null and subject_kind = $1 and subject_id = $2 and status = 'open'
+               and (lower(reporter_email) = lower($3)
+                    or (select count(*) from reports r2 where r2.reporter_id is null and r2.subject_kind = $1
+                          and r2.subject_id = $2 and r2.created_at > now() - interval '1 day') >= 10)
+             order by created_at limit 1",
+        )
+        .bind(&body.kind)
+        .bind(subject.id)
+        .bind(email.as_deref().unwrap_or(""))
+        .fetch_optional(&state.db)
+        .await?;
+        if let Some((reference, due_at)) = waiting {
+            return Ok(Json(Acknowledgement { reference, due_at }));
+        }
+    }
     let reference = reference('R');
     let due_at: OffsetDateTime = sqlx::query_scalar(
         "insert into reports (id, reference, subject_kind, subject_id, subject_user_id, subject_label, quoted,

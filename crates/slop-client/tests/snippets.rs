@@ -157,14 +157,16 @@ fn main() {{
     .unwrap();
     // Built with this workspace's serde_json, from the target folder's dependency files.
     let deps = Path::new(env!("CARGO_MANIFEST_DIR")).join("../../target/debug/deps");
+    // The newest one: an older build (another toolchain or machine) may have left others.
     let serde_json = std::fs::read_dir(&deps)
         .unwrap()
         .flatten()
-        .map(|e| e.path())
-        .find(|p| {
-            let n = p.file_name().unwrap().to_string_lossy();
+        .filter(|e| {
+            let n = e.file_name().to_string_lossy().to_string();
             n.starts_with("libserde_json-") && n.ends_with(".rlib")
         })
+        .max_by_key(|e| e.metadata().and_then(|m| m.modified()).ok())
+        .map(|e| e.path())
         .expect("serde_json in target/debug/deps");
     let exe = dir.join("snippet");
     let build = Command::new("rustc")

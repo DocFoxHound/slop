@@ -3508,9 +3508,26 @@ async fn pulse_counts_players_and_playtime(db: PgPool) {
         .unwrap();
     app.send(pulse("heartbeat", &token)).await;
     assert!((61..=63).contains(&playtime().await));
+    // A second session running alongside adds nothing: playtime follows the clock.
+    sqlx::query("update pulse_sessions set started_at = now() - interval '2 minutes', last_beat_at = now() - interval '61 seconds' where token_hash = sha256($1::bytea)")
+        .bind(second.as_bytes())
+        .execute(&app.db)
+        .await
+        .unwrap();
+    app.send(pulse("heartbeat", &second)).await;
+    assert!(
+        (61..=63).contains(&playtime().await),
+        "{}",
+        playtime().await
+    );
     // A long gap is capped.
     sqlx::query("update pulse_sessions set last_beat_at = now() - interval '9 minutes' where token_hash = sha256($1::bytea)")
         .bind(token.as_bytes())
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update user_app_usage set credited_until = now() - interval '9 minutes' where user_id = $1")
+        .bind(player_id)
         .execute(&app.db)
         .await
         .unwrap();
@@ -4150,6 +4167,15 @@ async fn the_github_app_gets_webhooks_and_its_own_tokens(db: PgPool) {
     })
     .await;
     let (maker_id, maker) = app.user("Maker", "US").await;
+    // The maker's linked GitHub account owns octo/hooked: only an owner's lookup uses Slop's
+    // App to read a private repository.
+    sqlx::query(
+        "insert into identities (provider, provider_subject, user_id) values ('github', '42', $1)",
+    )
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
     let license = |cookie: String| {
         let app = &app;
         async move {
@@ -8501,8 +8527,21 @@ async fn sandbox_mode_declarations_suggestions_and_reports(db: PgPool) {
         StatusCode::UNAUTHORIZED
     );
     let mut players = Vec::new();
+    // Only players who've started it can report it.
+    let (_, stranger) = app.user("Stranger", "US").await;
+    assert_eq!(
+        report(Method::PUT, "quiet", Some(&stranger)).await,
+        StatusCode::CONFLICT
+    );
     for name in ["Ann", "Bo", "Cy"] {
-        let (_, cookie) = app.user(name, "US").await;
+        let (id, cookie) = app.user(name, "US").await;
+        sqlx::query(
+            "insert into user_app_usage (user_id, app_id, days_launched) select $1, id, 1 from apps where slug = 'quiet'",
+        )
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
         assert_eq!(
             report(Method::PUT, "quiet", Some(&cookie)).await,
             StatusCode::NO_CONTENT
