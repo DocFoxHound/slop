@@ -1,2 +1,1949 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Part 2 of the agents tests.
+//! Part 2 of the agents tests: the admin MCP tools for shelves, legal documents and staff; maker
+//! agent tokens (making, listing, revoking, signing in, the allow-list) and the maker MCP tools.
+
+use crate::*;
+
+// ---------------------------------------------------------------------------------------------
+// Helpers
+
+/// An admin API token with this scope, made over HTTP by a freshly signed-in admin.
+async fn admin_token(app: &TestApp, cookie: &str, scope: &str) -> String {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/tokens")
+                .cookie(cookie)
+                .json(json!({ "name": format!("Claude {scope}"), "scope": scope, "days": 30 })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    format!("Bearer {}", body_json(res).await["token"].as_str().unwrap())
+}
+
+/// Hands an admin token over to another staff member (only security staff make tokens).
+async fn give_token(app: &TestApp, token: &str, to: Uuid) {
+    sqlx::query("update admin_tokens set user_id = $1 where token_hash = $2")
+        .bind(to)
+        .bind(slop_api::tokens::hash_token(
+            token.trim_start_matches("Bearer "),
+        ))
+        .execute(&app.db)
+        .await
+        .unwrap();
+}
+
+/// A maker agent token made over HTTP. Returns the authorization header and the token's ID.
+async fn maker_token(app: &TestApp, cookie: &str, body: Value) -> (String, String) {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(cookie)
+                .json(body),
+        )
+        .await;
+    let status = res.status();
+    let created = body_json(res).await;
+    assert_eq!(status, StatusCode::CREATED, "{created}");
+    (
+        format!("Bearer {}", created["secret"].as_str().unwrap()),
+        created["id"].as_str().unwrap().to_string(),
+    )
+}
+
+/// One JSON-RPC call to an MCP endpoint (`/v1/admin/mcp` or `/v1/maker/mcp`).
+async fn rpc(app: &TestApp, endpoint: &str, auth: &str, method: &str, params: Value) -> Value {
+    let res = app
+        .send(
+            req(Method::POST, endpoint)
+                .header("authorization", auth.to_string())
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": method, "params": params })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    body_json(res).await
+}
+
+/// Calls a tool. Returns (whether it failed, its text).
+async fn tool(
+    app: &TestApp,
+    endpoint: &str,
+    auth: &str,
+    name: &str,
+    args: Value,
+) -> (bool, String) {
+    let reply = rpc(
+        app,
+        endpoint,
+        auth,
+        "tools/call",
+        json!({ "name": name, "arguments": args }),
+    )
+    .await;
+    let result = &reply["result"];
+    assert!(result.is_object(), "{reply}");
+    (
+        result["isError"].as_bool().unwrap(),
+        result["content"][0]["text"].as_str().unwrap().to_string(),
+    )
+}
+
+async fn admin_tool(app: &TestApp, auth: &str, name: &str, args: Value) -> (bool, String) {
+    tool(app, "/v1/admin/mcp", auth, name, args).await
+}
+
+async fn maker_tool(app: &TestApp, auth: &str, name: &str, args: Value) -> (bool, String) {
+    tool(app, "/v1/maker/mcp", auth, name, args).await
+}
+
+/// A tool's reply as JSON.
+fn parsed(text: &str) -> Value {
+    serde_json::from_str(text).unwrap_or_else(|e| panic!("{e}: {text}"))
+}
+
+/// A staff member with exactly these roles (not an owner unless asked).
+async fn make_staff(app: &TestApp, name: &str, roles: &[&str]) -> (Uuid, String) {
+    let (id, cookie) = app.user(name, "US").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for role in roles {
+        sqlx::query("insert into staff_roles (user_id, role, granted_by) values ($1, $2, 'test')")
+            .bind(id)
+            .bind(role)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    (id, cookie)
+}
+
+/// A count, with `$1` bound to `id`.
+async fn count_for(app: &TestApp, sql: &str, id: Uuid) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string()))
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+async fn count(app: &TestApp, sql: &str) -> i64 {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string()))
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+async fn is_staff(app: &TestApp, id: Uuid) -> bool {
+    sqlx::query_scalar("select is_admin from users where id = $1")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+async fn notification_titles(app: &TestApp, user: Uuid) -> Vec<String> {
+    sqlx::query_scalar("select title from notifications where user_id = $1 order by created_at")
+        .bind(user)
+        .fetch_all(&app.db)
+        .await
+        .unwrap()
+}
+
+// ---------------------------------------------------------------------------------------------
+// Admin MCP: shelves, legal documents, staff
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_agent_hides_and_shows_an_automatic_front_shelf(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let read = admin_token(&app, &owner, "read").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let hide = json!({ "key": "fresh_slop", "hidden": true });
+
+    let (failed, text) = admin_tool(&app, &read, "hide_front_shelf", hide.clone()).await;
+    assert!(
+        failed && text.contains("forbidden"),
+        "a read token only looks: {text}"
+    );
+    let front = body_json(app.send(req(Method::GET, "/v1/shelves")).await).await;
+    assert_eq!(front["hidden"], json!([]));
+
+    let (failed, text) = admin_tool(&app, &review, "hide_front_shelf", hide).await;
+    assert!(!failed, "{text}");
+    let front = body_json(app.send(req(Method::GET, "/v1/shelves")).await).await;
+    assert_eq!(front["hidden"], json!(["fresh_slop"]));
+    let actor: String =
+        sqlx::query_scalar("select actor from audit_log where action = 'shelf.built_in_hidden'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(
+        actor.starts_with("AI reviewer \"Claude review\""),
+        "{actor}"
+    );
+
+    // An unknown key is an error and changes nothing; so is leaving out `hidden`.
+    let (failed, text) = admin_tool(
+        &app,
+        &review,
+        "hide_front_shelf",
+        json!({ "key": "secret_shelf", "hidden": true }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &review,
+        "hide_front_shelf",
+        json!({ "key": "popular" }),
+    )
+    .await;
+    assert!(failed && text.contains("hidden"), "{text}");
+    let front = body_json(app.send(req(Method::GET, "/v1/shelves")).await).await;
+    assert_eq!(front["hidden"], json!(["fresh_slop"]));
+
+    let (failed, _) = admin_tool(
+        &app,
+        &review,
+        "hide_front_shelf",
+        json!({ "key": "fresh_slop", "hidden": false }),
+    )
+    .await;
+    assert!(!failed);
+    let front = body_json(app.send(req(Method::GET, "/v1/shelves")).await).await;
+    assert_eq!(front["hidden"], json!([]));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_agent_reads_publishes_and_withdraws_legal_documents(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, player) = app.user("Pia Player", "US").await;
+    let read = admin_token(&app, &owner, "read").await;
+    let review = admin_token(&app, &owner, "review").await;
+    let moderate = admin_token(&app, &owner, "moderate").await;
+
+    // Any token reads them.
+    let (failed, text) = admin_tool(&app, &read, "legal_documents", json!({})).await;
+    assert!(!failed, "{text}");
+    let docs = parsed(&text);
+    let kinds: Vec<&str> = docs
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| d["kind"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        kinds,
+        ["terms", "privacy", "content", "publisher", "people"]
+    );
+    let terms = docs[0].clone();
+    let in_effect = terms["latest_version"].as_str().unwrap().to_string();
+    let words = terms["latest_body_md"].as_str().unwrap().to_string();
+    assert!(words.len() > 500);
+    assert!(terms["file_text"].is_null(), "it came from the repository");
+    let versions = || {
+        count(
+            &app,
+            "select count(*) from legal_documents where kind = 'terms'",
+        )
+    };
+
+    // Publishing is sensitive: neither a read nor a review token may.
+    let new_terms = json!({ "kind": "terms", "summary": "Adds one line.",
+                            "body_md": format!("{words}\n\nOne more line.") });
+    for token in [&read, &review] {
+        let (failed, text) =
+            admin_tool(&app, token, "publish_legal_document", new_terms.clone()).await;
+        assert!(failed && text.contains("forbidden"), "{text}");
+    }
+    assert_eq!(versions().await, 1);
+
+    // More than one request may carry (the API takes up to 64 KiB): refused, nothing stored.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/mcp")
+                .header("authorization", moderate.clone())
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                    "name": "publish_legal_document",
+                    "arguments": { "kind": "terms", "summary": "Huge.", "body_md": "x".repeat(70 * 1024) } } })),
+        )
+        .await;
+    // (413 when the client sends its length first; otherwise the reading stops at the limit.)
+    if res.status() != StatusCode::PAYLOAD_TOO_LARGE {
+        let reply = body_json(res).await;
+        assert_eq!(reply["error"]["message"], "request too large", "{reply}");
+    }
+    assert_eq!(versions().await, 1);
+    // An unknown document, a summary over one line, the text already in effect.
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "publish_legal_document",
+        json!({ "kind": "cookies", "summary": "x", "body_md": "y" }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "publish_legal_document",
+        json!({ "kind": "terms", "summary": "Two\nlines", "body_md": "y" }),
+    )
+    .await;
+    assert!(failed && text.contains("one line"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "publish_legal_document",
+        json!({ "kind": "terms", "summary": "Nothing.", "body_md": words }),
+    )
+    .await;
+    assert!(failed && text.contains("already published"), "{text}");
+    assert_eq!(versions().await, 1);
+
+    // A moderate token publishes a text just under the limit: in effect 15 days from now.
+    let mut big = format!("{words}\n\n");
+    while big.len() < 60 * 1024 {
+        big.push_str("A long new clause about nothing in particular.\n");
+    }
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "publish_legal_document",
+        json!({ "kind": "terms", "summary": "A much longer text.", "body_md": big }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let published = parsed(&text);
+    let version = published["version"].as_str().unwrap().to_string();
+    assert_eq!(version, OffsetDateTime::now_utc().date().to_string());
+    let days = (published["effective_at"].as_i64().unwrap()
+        - OffsetDateTime::now_utc().unix_timestamp()) as f64
+        / 86_400.0;
+    assert!((14.99..=15.0).contains(&days), "{days}");
+    let (body, by): (String, String) = sqlx::query_as(
+        "select body_md, published_by from legal_documents where kind = 'terms' and version = $1",
+    )
+    .bind(&version)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(body.trim_end(), big.trim_end());
+    assert!(by.starts_with("AI reviewer \"Claude moderate\""), "{by}");
+    // Everyone is told: players see it in their legal notices, with its one-line summary.
+    let notices = body_json(
+        app.send(req(Method::GET, "/v1/me/legal").cookie(&player))
+            .await,
+    )
+    .await;
+    let notice = notices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|n| n["kind"] == "terms" && n["version"] == version.as_str())
+        .unwrap_or_else(|| panic!("{notices}"))
+        .clone();
+    assert_eq!(notice["summary"], "A much longer text.");
+    assert_eq!(notice["in_effect"], false);
+    assert_eq!(notice["action"], "accept");
+    // One announced change at a time.
+    let (failed, text) =
+        admin_tool(&app, &moderate, "publish_legal_document", new_terms.clone()).await;
+    assert!(failed && text.contains("already announced"), "{text}");
+
+    // Withdrawing: never the version in effect, never by a review token, always with a reason.
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "withdraw_legal_document",
+        json!({ "kind": "terms", "version": in_effect, "reason": "Trying." }),
+    )
+    .await;
+    assert!(failed && text.contains("already in effect"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &review,
+        "withdraw_legal_document",
+        json!({ "kind": "terms", "version": version, "reason": "Trying." }),
+    )
+    .await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "withdraw_legal_document",
+        json!({ "kind": "terms", "version": version, "reason": "  " }),
+    )
+    .await;
+    assert!(failed && text.contains("reason"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "withdraw_legal_document",
+        json!({ "kind": "terms", "version": "2001-01-01", "reason": "Not there." }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    assert_eq!(versions().await, 2);
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "withdraw_legal_document",
+        json!({ "kind": "terms", "version": version, "reason": "Published by mistake." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(versions().await, 1);
+    let kept: Value =
+        sqlx::query_scalar("select detail from audit_log where action = 'legal.withdrawn'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(kept["reason"], "Published by mistake.");
+    assert_eq!(kept["body_md"].as_str().unwrap().trim_end(), big.trim_end());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_agents_legal_change_waits_for_a_second_person(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (ben_id, ben) = make_admin(&app, "Ben Owner").await;
+    let moderate = admin_token(&app, &ada, "moderate").await;
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "publish_legal_document",
+        json!({ "kind": "privacy", "summary": "Shorter.", "body_md": "We keep almost nothing." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let pending = parsed(&text);
+    assert_eq!(pending["approvals_still_needed"], 1);
+    let action = pending["pending_action"].as_str().unwrap().to_string();
+    let privacy = || {
+        count(
+            &app,
+            "select count(*) from legal_documents where kind = 'privacy'",
+        )
+    };
+    assert_eq!(privacy().await, 1, "nothing published yet");
+    assert!(
+        notification_titles(&app, ben_id)
+            .await
+            .contains(&"A second approval is needed".to_string())
+    );
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{action}/approve")).cookie(&ben))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(privacy().await, 2);
+    let by: String = sqlx::query_scalar(
+        "select published_by from legal_documents where kind = 'privacy' and published_by is not null",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(by.contains("approved by Ben Owner"), "{by}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_list_staff_and_only_ask_for_role_changes(db: PgPool) {
+    let app = test_app(db).await;
+    let (owner_id, owner) = make_admin(&app, "Olive Owner").await;
+    let (sec_id, sec) = make_staff(&app, "Sam Security", &["security"]).await;
+    let (moderator_id, _) = make_staff(&app, "Mo Moderator", &["moderator"]).await;
+    let (helper_id, _) = app.user("Hal Helper", "US").await;
+
+    // Any token reads the staff list.
+    let read = admin_token(&app, &owner, "read").await;
+    let (failed, text) = admin_tool(&app, &read, "staff", json!({})).await;
+    assert!(!failed, "{text}");
+    let staff = parsed(&text);
+    let names: Vec<&str> = staff["staff"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s["display_name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Mo Moderator", "Olive Owner", "Sam Security"]);
+    assert_eq!(staff["my_roles"], json!(["owner"]));
+    assert_eq!(staff["approvals_required"], 1);
+
+    // Read and review tokens can't ask; a moderate token can, and it waits for a person.
+    let ask = json!({ "user_id": helper_id, "role": "reviewer", "grant": true });
+    for scope in ["read", "review"] {
+        let token = admin_token(&app, &owner, scope).await;
+        let (failed, text) = admin_tool(&app, &token, "change_staff_role", ask.clone()).await;
+        assert!(failed && text.contains("forbidden"), "{scope}: {text}");
+    }
+    let moderate = admin_token(&app, &owner, "moderate").await;
+    let (failed, text) = admin_tool(&app, &moderate, "change_staff_role", ask.clone()).await;
+    assert!(!failed, "{text}");
+    let pending = parsed(&text);
+    assert_eq!(pending["approvals_still_needed"], 1);
+    let action = pending["pending_action"].as_str().unwrap().to_string();
+    assert!(!is_staff(&app, helper_id).await);
+    // The owner and security staff are told; the moderator, who can't approve it, isn't.
+    let asked = "An AI agent asked for a staff change".to_string();
+    assert!(notification_titles(&app, owner_id).await.contains(&asked));
+    assert!(notification_titles(&app, sec_id).await.contains(&asked));
+    assert!(
+        !notification_titles(&app, moderator_id)
+            .await
+            .contains(&asked)
+    );
+    let audit: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'staff_action.request' and subject = $1",
+    )
+    .bind(&action)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(audit["needs_a_person"], true);
+    // Its own admin approves it, signed in.
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{action}/approve")).cookie(&owner))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(is_staff(&app, helper_id).await);
+
+    // A moderator's moderate token can't: staff changes need the security role.
+    let mod_token = admin_token(&app, &owner, "moderate").await;
+    give_token(&app, &mod_token, moderator_id).await;
+    let (failed, text) = admin_tool(&app, &mod_token, "staff", json!({})).await;
+    assert!(!failed);
+    assert_eq!(parsed(&text)["my_roles"], json!(["moderator"]));
+    let (failed, text) = admin_tool(
+        &app,
+        &mod_token,
+        "change_staff_role",
+        json!({ "user_id": helper_id, "role": "support", "grant": true }),
+    )
+    .await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+
+    // Security staff's agent asks for ordinary roles, but only an owner gives the owner role.
+    let sec_token = admin_token(&app, &sec, "moderate").await;
+    let (failed, text) = admin_tool(
+        &app,
+        &sec_token,
+        "change_staff_role",
+        json!({ "user_id": helper_id, "role": "owner", "grant": true }),
+    )
+    .await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &sec_token,
+        "change_staff_role",
+        json!({ "user_id": helper_id, "role": "support", "grant": true }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from staff_actions where status = 'pending'"
+        )
+        .await,
+        1
+    );
+    // Bad input: an unknown role or account.
+    let (failed, _) = admin_tool(
+        &app,
+        &sec_token,
+        "change_staff_role",
+        json!({ "user_id": helper_id, "role": "wizard", "grant": true }),
+    )
+    .await;
+    assert!(failed);
+    let (failed, text) = admin_tool(
+        &app,
+        &sec_token,
+        "change_staff_role",
+        json!({ "user_id": Uuid::now_v7(), "role": "support", "grant": true }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_agent_asks_to_remove_staff_and_a_person_decides(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, sec) = make_staff(&app, "Sam Security", &["security"]).await;
+    let (other_owner_id, _) = make_admin(&app, "Otto Owner").await;
+    let (rev_id, _) = make_staff(&app, "Rita Reviewer", &["reviewer"]).await;
+    // Only security staff make tokens: Rita's is made by the owner and handed over.
+    let rita_token = admin_token(&app, &owner, "review").await;
+    give_token(&app, &rita_token, rev_id).await;
+    let (failed, _) = admin_tool(&app, &rita_token, "staff", json!({})).await;
+    assert!(!failed, "her token works");
+
+    let moderate = admin_token(&app, &owner, "moderate").await;
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "remove_from_staff",
+        json!({ "user_id": rev_id, "reason": "short" }),
+    )
+    .await;
+    assert!(failed && text.contains("reason"), "{text}");
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "remove_from_staff",
+        json!({ "user_id": rev_id, "reason": "No longer reviewing for Slop." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let action = parsed(&text)["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    // Pending: still staff, her token still works, and the agent can't approve it.
+    assert!(is_staff(&app, rev_id).await);
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/actions/{action}/approve"))
+                .header("authorization", moderate.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert!(is_staff(&app, rev_id).await);
+    let (failed, _) = admin_tool(&app, &rita_token, "staff", json!({})).await;
+    assert!(!failed);
+    // A person approves: every role goes, and every token she made is revoked.
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{action}/approve")).cookie(&owner))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert!(!is_staff(&app, rev_id).await);
+    assert_eq!(
+        count_for(
+            &app,
+            "select count(*) from staff_roles where user_id = $1",
+            rev_id
+        )
+        .await,
+        0
+    );
+    assert_eq!(
+        count_for(
+            &app,
+            "select count(*) from admin_tokens where user_id = $1 and revoked_at is null",
+            rev_id
+        )
+        .await,
+        0
+    );
+    let res = app
+        .send(req(Method::GET, "/v1/admin/review").header("authorization", rita_token))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+
+    // Only an owner removes an owner, even with a moderate token of security staff.
+    let sec_token = admin_token(&app, &sec, "moderate").await;
+    let remove_owner = json!({ "user_id": other_owner_id, "reason": "Trying to remove an owner." });
+    let (failed, text) =
+        admin_tool(&app, &sec_token, "remove_from_staff", remove_owner.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    // A review token can't ask at all; an account that isn't staff is a conflict.
+    let review = admin_token(&app, &owner, "review").await;
+    let (failed, text) = admin_tool(&app, &review, "remove_from_staff", remove_owner).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    assert!(is_staff(&app, other_owner_id).await);
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "remove_from_staff",
+        json!({ "user_id": rev_id, "reason": "She isn't staff any more." }),
+    )
+    .await;
+    assert!(failed && text.contains("isn't staff"), "{text}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_agent_cancels_its_own_pending_requests_only(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, ada) = make_admin(&app, "Ada Owner").await;
+    let (_, ben) = make_admin(&app, "Ben Owner").await;
+    let (cleo_id, _) = app.user("Cleo", "US").await;
+    let ada_moderate = admin_token(&app, &ada, "moderate").await;
+    let ada_review = admin_token(&app, &ada, "review").await;
+    let status_of = |id: String| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("select status from staff_actions where id = $1::uuid")
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Ada's agent asks to suspend Cleo, then thinks better of it.
+    let (failed, text) = admin_tool(
+        &app,
+        &ada_moderate,
+        "moderate_user",
+        json!({ "id": cleo_id, "action": "suspend_account", "rule": "harassment", "facts": "Test." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let own = parsed(&text)["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let (failed, text) = admin_tool(
+        &app,
+        &ada_moderate,
+        "cancel_pending_action",
+        json!({ "id": own }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(status_of(own.clone()).await, "cancelled");
+    let result: String = sqlx::query_scalar("select result from staff_actions where id = $1::uuid")
+        .bind(&own)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(
+        result.contains("AI reviewer \"Claude moderate\""),
+        "{result}"
+    );
+    // Twice: it's no longer pending. A made-up ID isn't one.
+    let (failed, text) = admin_tool(
+        &app,
+        &ada_moderate,
+        "cancel_pending_action",
+        json!({ "id": own }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, _) = admin_tool(
+        &app,
+        &ada_moderate,
+        "cancel_pending_action",
+        json!({ "id": "not-an-id" }),
+    )
+    .await;
+    assert!(failed);
+
+    // Ben asks for one himself: Ada's agents can't turn it down, only a person can.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/users/{cleo_id}/decide"))
+                .cookie(&ben)
+                .json(
+                    json!({ "action": "suspend_account", "rule": "harassment", "facts": "Again." }),
+                ),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let bens = body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    for token in [&ada_review, &ada_moderate] {
+        let (failed, text) =
+            admin_tool(&app, token, "cancel_pending_action", json!({ "id": bens })).await;
+        assert!(failed && text.contains("forbidden"), "{text}");
+    }
+    assert_eq!(status_of(bens.clone()).await, "pending");
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{bens}/cancel")).cookie(&ada))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(status_of(bens).await, "cancelled");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker agent tokens
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn maker_tokens_are_checked_when_made(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let make = |body: Value| {
+        req(Method::POST, "/v1/me/maker-tokens")
+            .cookie(&maker)
+            .json(body)
+    };
+    let refused = |body: Value| {
+        let r = make(body);
+        async {
+            let res = app.send(r).await;
+            let status = res.status();
+            (status, body_json(res).await)
+        }
+    };
+
+    // Signed out: no.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens").json(json!({ "name": "A", "scope": "read" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    // Bad input.
+    for (body, field) in [
+        (json!({ "name": "  ", "scope": "read" }), "name"),
+        (json!({ "name": "x".repeat(61), "scope": "read" }), "name"),
+        (json!({ "name": "A", "scope": "admin" }), "scope"),
+        (json!({ "name": "A", "scope": "read", "days": 0 }), "days"),
+        (json!({ "name": "A", "scope": "read", "days": 31 }), "days"),
+    ] {
+        let (status, err) = refused(body.clone()).await;
+        assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(err["error"]["field"], field, "{body}: {err}");
+    }
+    let (status, _) = refused(json!({ "name": "A", "scope": "read", "admin": true })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "unknown fields");
+    assert_eq!(
+        count(&app, "select count(*) from maker_tokens").await,
+        0,
+        "nothing was made"
+    );
+
+    // 60 characters is fine; days default to 30; the MCP address is the public site's.
+    let name = "é".repeat(60);
+    let res = app
+        .send(make(json!({ "name": name, "scope": "read" })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let created = body_json(res).await;
+    assert_eq!(created["name"], name.as_str());
+    assert_eq!(created["mcp_url"], "http://localhost:8080/v1/maker/mcp");
+    assert_eq!(created["apps"], json!([]));
+    assert_eq!(created["people"], false);
+    assert_eq!(created["passkey_proved"], false);
+    let lifetime = OffsetDateTime::parse(created["expires_at"].as_str().unwrap(), &Rfc3339)
+        .unwrap()
+        - OffsetDateTime::parse(created["created_at"].as_str().unwrap(), &Rfc3339).unwrap();
+    assert!(
+        (lifetime - time::Duration::days(30)).abs() < time::Duration::minutes(1),
+        "{lifetime}"
+    );
+    let (kind, agent, hash): (String, String, Vec<u8>) =
+        sqlx::query_as("select kind, user_agent, token_hash from sessions where id = $1::uuid")
+            .bind(created["id"].as_str().unwrap())
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(kind, "agent");
+    assert_eq!(agent, format!("AI agent: {name}"));
+    assert_eq!(
+        hash,
+        slop_api::tokens::hash_token(created["secret"].as_str().unwrap()),
+        "only the hash is kept"
+    );
+    let res = app
+        .send(make(
+            json!({ "name": "Week", "scope": "publish", "days": 7, "apps": ["game"] }),
+        ))
+        .await;
+    let week = body_json(res).await;
+    assert_eq!(week["apps"], json!(["game"]));
+    let lifetime = OffsetDateTime::parse(week["expires_at"].as_str().unwrap(), &Rfc3339).unwrap()
+        - OffsetDateTime::now_utc();
+    assert!((lifetime - time::Duration::days(7)).abs() < time::Duration::minutes(1));
+
+    // Ten live tokens at most; revoked and expired ones don't count.
+    for n in 2..10 {
+        maker_token(
+            &app,
+            &maker,
+            json!({ "name": format!("T{n}"), "scope": "read" }),
+        )
+        .await;
+    }
+    let (status, err) = refused(json!({ "name": "Eleventh", "scope": "read" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "{err}");
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "select id from sessions where user_id = $1 and kind = 'agent' order by created_at limit 2",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update sessions set revoked_at = now() where id = $1")
+        .bind(ids[0])
+        .execute(&app.db)
+        .await
+        .unwrap();
+    maker_token(
+        &app,
+        &maker,
+        json!({ "name": "After a revoke", "scope": "read" }),
+    )
+    .await;
+    let (status, _) = refused(json!({ "name": "Twelfth", "scope": "read" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    sqlx::query("update sessions set expires_at = now() - interval '1 second' where id = $1")
+        .bind(ids[1])
+        .execute(&app.db)
+        .await
+        .unwrap();
+    maker_token(
+        &app,
+        &maker,
+        json!({ "name": "After an expiry", "scope": "read" }),
+    )
+    .await;
+
+    // An agent can't make tokens, even a publish one.
+    let (status, _) = refused(json!({ "name": "x", "scope": "read" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    sqlx::query("update sessions set revoked_at = now() where user_id = $1 and kind = 'agent'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (agent, _) =
+        maker_token(&app, &maker, json!({ "name": "Agent", "scope": "publish" })).await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .header("authorization", agent)
+                .json(json!({ "name": "Child", "scope": "publish" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+
+    // An old session must sign in again (or confirm) first.
+    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1 and kind = 'web'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (status, err) = refused(json!({ "name": "Late", "scope": "read" })).await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+    assert_eq!(err["error"]["code"], "step_up_required");
+    sqlx::query("update sessions set stepped_up_at = now() where user_id = $1 and kind = 'web'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (status, _) = refused(json!({ "name": "Confirmed", "scope": "read" })).await;
+    assert_eq!(status, StatusCode::CREATED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_recent_passkey_confirmation_carries_over_to_a_maker_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let set_passkey_at = |sql: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sql).bind(maker_id).execute(&db).await.unwrap();
+        }
+    };
+    // A passkey, and the deadline to use one is past.
+    sqlx::query(
+        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    set_passkey_at(
+        "update sessions set passkey_at = now() - interval '13 hours' where user_id = $1 and kind = 'web'",
+    )
+    .await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&maker)
+                .json(json!({ "name": "Old", "scope": "publish" })),
+        )
+        .await;
+    let old = body_json(res).await;
+    assert_eq!(old["passkey_proved"], false);
+    set_passkey_at(
+        "update sessions set passkey_at = now() - interval '11 hours' where user_id = $1 and kind = 'web'",
+    )
+    .await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&maker)
+                .json(json!({ "name": "Fresh", "scope": "publish" })),
+        )
+        .await;
+    let fresh = body_json(res).await;
+    assert_eq!(fresh["passkey_proved"], true);
+    let at: Option<OffsetDateTime> =
+        sqlx::query_scalar("select passkey_at from sessions where id = $1::uuid")
+            .bind(fresh["id"].as_str().unwrap())
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(at.is_some());
+
+    // Through the agent: the proven token publishes, even after the 12 hours; the other can't.
+    let bearer = |t: &Value| format!("Bearer {}", t["secret"].as_str().unwrap());
+    sqlx::query("update sessions set passkey_at = passkey_at - interval '2 days' where kind = 'agent' and passkey_at is not null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (failed, text) = maker_tool(
+        &app,
+        &bearer(&old),
+        "create_store_page",
+        new_app("unproved"),
+    )
+    .await;
+    assert!(failed && text.contains("passkey_required"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &bearer(&fresh),
+        "create_store_page",
+        new_app("proved"),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["slug"], "proved");
+    // Listing shows which is which.
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
+            .await,
+    )
+    .await;
+    let proved: Vec<(String, bool)> = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| {
+            (
+                t["name"].as_str().unwrap().to_string(),
+                t["passkey_proved"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        proved,
+        [("Fresh".to_string(), true), ("Old".to_string(), false)]
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_list_and_revoke_only_their_own_live_tokens(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    listed_with(&app, maker_id, "beta-app", "beta", "").await;
+    let (_, other) = app.user("Otto Other", "US").await;
+    let (people, people_id) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "People", "scope": "publish", "people": true, "apps": ["game", "beta-app"] }),
+    )
+    .await;
+    let (_, expired_id) =
+        maker_token(&app, &maker, json!({ "name": "Expired", "scope": "read" })).await;
+    let (_, revoked_id) =
+        maker_token(&app, &maker, json!({ "name": "Revoked", "scope": "read" })).await;
+    let (others, others_id) =
+        maker_token(&app, &other, json!({ "name": "Otto's", "scope": "read" })).await;
+    sqlx::query("update sessions set expires_at = now() - interval '1 second' where id = $1::uuid")
+        .bind(&expired_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::DELETE, format!("/v1/me/maker-tokens/{revoked_id}")).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/maker-tokens"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
+            .await,
+    )
+    .await;
+    let list = list.as_array().unwrap();
+    assert_eq!(list.len(), 1, "{list:?}");
+    assert_eq!(list[0]["id"], people_id.as_str());
+    assert_eq!(list[0]["scope"], "publish");
+    assert_eq!(list[0]["apps"], json!(["beta-app", "game"]));
+    assert_eq!(list[0]["people"], true);
+    assert_eq!(list[0]["passkey_proved"], false);
+    assert!(list[0]["last_used_at"].is_string());
+    assert!(list[0].get("secret").is_none(), "the secret is shown once");
+    let theirs = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&other))
+            .await,
+    )
+    .await;
+    assert_eq!(theirs.as_array().unwrap().len(), 1);
+    assert_eq!(theirs[0]["id"], others_id.as_str());
+
+    // Revoking: another maker's token, a revoked one, a web session, or by an agent: no.
+    let revoke = |id: &str, cookie: &str| {
+        req(Method::DELETE, format!("/v1/me/maker-tokens/{id}")).cookie(cookie)
+    };
+    assert_eq!(
+        app.send(revoke(&others_id, &maker)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me").header("authorization", others.clone()))
+            .await
+            .status(),
+        StatusCode::OK,
+        "still live"
+    );
+    assert_eq!(
+        app.send(revoke(&revoked_id, &maker)).await.status(),
+        StatusCode::NOT_FOUND,
+        "twice"
+    );
+    let web: Uuid =
+        sqlx::query_scalar("select id from sessions where user_id = $1 and kind = 'web'")
+            .bind(maker_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        app.send(revoke(&web.to_string(), &maker)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(
+            req(Method::DELETE, format!("/v1/me/maker-tokens/{people_id}"))
+                .header("authorization", people.clone())
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(req(
+            Method::DELETE,
+            format!("/v1/me/maker-tokens/{people_id}")
+        ))
+        .await
+        .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(revoke(&people_id, &maker)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me").header("authorization", people))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn maker_tokens_sign_in_only_while_live(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (agent, id) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Claude", "scope": "publish" }),
+    )
+    .await;
+    let me = || req(Method::GET, "/v1/me/apps").header("authorization", agent.clone());
+    let set = |sql: &'static str| {
+        let db = app.db.clone();
+        let id = id.clone();
+        async move {
+            sqlx::query(sql).bind(id).execute(&db).await.unwrap();
+        }
+    };
+    let last_seen = || {
+        let db = app.db.clone();
+        let id = id.clone();
+        async move {
+            sqlx::query_scalar::<_, OffsetDateTime>(
+                "select last_seen_at from sessions where id = $1::uuid",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(app.send(me()).await.status(), StatusCode::OK);
+
+    // Seen: touched at most every 5 minutes.
+    set("update sessions set last_seen_at = now() - interval '2 minutes' where id = $1::uuid")
+        .await;
+    let before = last_seen().await;
+    app.send(me()).await;
+    assert_eq!(last_seen().await, before, "not touched within 5 minutes");
+    set("update sessions set last_seen_at = now() - interval '6 minutes' where id = $1::uuid")
+        .await;
+    app.send(me()).await;
+    assert!(OffsetDateTime::now_utc() - last_seen().await < time::Duration::minutes(1));
+
+    // Idle: agents get the desktop's 30 days, not the website's 7.
+    set("update sessions set last_seen_at = now() - interval '20 days' where id = $1::uuid").await;
+    assert_eq!(app.send(me()).await.status(), StatusCode::OK);
+    set("update sessions set last_seen_at = now() - interval '31 days' where id = $1::uuid").await;
+    assert_eq!(app.send(me()).await.status(), StatusCode::UNAUTHORIZED);
+    set("update sessions set last_seen_at = now() where id = $1::uuid").await;
+    assert_eq!(app.send(me()).await.status(), StatusCode::OK);
+
+    // Expired.
+    set("update sessions set expires_at = now() - interval '1 second' where id = $1::uuid").await;
+    assert_eq!(app.send(me()).await.status(), StatusCode::UNAUTHORIZED);
+    set("update sessions set expires_at = now() + interval '1 day' where id = $1::uuid").await;
+
+    // Suspended: the agent may only look.
+    sqlx::query("update users set suspended_at = now() where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(app.send(me()).await.status(), StatusCode::OK);
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/game")
+                .header("authorization", agent.clone())
+                .json(json!({ "summary": "Changed while suspended." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"]["code"], "suspended");
+    // The MCP endpoint is a POST, so a suspended maker's agent can't use it at all.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/maker/mcp")
+                .header("authorization", agent.clone())
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
+                    "name": "update_store_page", "arguments": { "slug": "game", "summary": "Changed while suspended." } } })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], "suspended");
+    let summary: String = sqlx::query_scalar("select summary from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(summary, "A game");
+
+    // Closed: signed out.
+    sqlx::query("update users set suspended_at = null, closed_at = now() where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(app.send(me()).await.status(), StatusCode::UNAUTHORIZED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_maker_token_is_only_ever_a_bearer_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let (agent, _) = maker_token(&app, &maker, json!({ "name": "Claude", "scope": "read" })).await;
+    let secret = agent.trim_start_matches("Bearer ").to_string();
+    let cookie_name = maker.split('=').next().unwrap();
+
+    // As the website's cookie, it's nobody.
+    let res = app
+        .send(req(Method::GET, "/v1/me").cookie(format!("{cookie_name}={secret}")))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    // An unknown slopmk_ token is refused even next to a good cookie: no falling back.
+    let res = app
+        .send(
+            req(Method::GET, "/v1/me")
+                .cookie(&maker)
+                .header("authorization", "Bearer slopmk_not-a-real-token"),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    // A real one next to the cookie is the agent, with the agent's limits.
+    let res = app
+        .send(
+            req(Method::GET, "/v1/me/export")
+                .cookie(&maker)
+                .header("authorization", agent.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // On public pages too, an unknown token is no one rather than an error.
+    let res = app
+        .send(req(Method::GET, "/v1/apps").header("authorization", "Bearer slopmk_nope"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    // A real one there is refused: the store's list isn't maker work.
+    let res = app
+        .send(req(Method::GET, "/v1/apps").header("authorization", agent))
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The maker agent allow-list and what agents see elsewhere
+
+/// A listed app with an approved 1.0.0 and a player's bug report on it. Returns the report's ID
+/// and the player's.
+async fn app_with_bug_report(app: &TestApp, maker: Uuid, slug: &str) -> (String, Uuid, String) {
+    listed_with(app, maker, slug, "released", "").await;
+    approved_release(app, slug, maker).await;
+    let (player_id, player) = app.user("Pat Player", "US").await;
+    app.send(req(Method::POST, format!("/v1/apps/{slug}/launch")).cookie(&player))
+        .await;
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/apps/{slug}/bug-reports"))
+                .cookie(&player)
+                .json(json!({
+                    "title": "Crash when the wave starts", "body": "Wave 3 always crashes.",
+                    "version": "1.0.0", "platform": "windows", "log": "panic at wave.rs:12 for pat@example.com"
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    (
+        body_json(res).await["id"].as_str().unwrap().to_string(),
+        player_id,
+        player,
+    )
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn app_limited_tokens_stay_on_their_apps(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (report, _, _) = app_with_bug_report(&app, maker_id, "tower").await;
+    let (limited, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Game only", "scope": "publish", "apps": ["game"] }),
+    )
+    .await;
+    let (all, _) = maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let app = &app;
+    let send = |auth: &str, m: Method, path: &str, body: Option<Value>| {
+        let mut r = req(m, path).header("authorization", auth.to_string());
+        if let Some(b) = body {
+            r = r.json(b);
+        }
+        async move { app.send(r).await.status() }
+    };
+
+    // Its own app, yes; the maker's other app is as if it weren't there.
+    assert_eq!(
+        send(&limited, Method::GET, "/v1/apps/game/releases", None).await,
+        StatusCode::OK
+    );
+    for (m, path, body) in [
+        (Method::GET, "/v1/apps/tower/releases", None),
+        (Method::GET, "/v1/apps/tower/manage", None),
+        (Method::GET, "/v1/apps/tower/bug-reports", None),
+        (
+            Method::PATCH,
+            "/v1/apps/tower",
+            Some(json!({ "summary": "Changed by the wrong agent." })),
+        ),
+        (Method::GET, "/v1/apps/no-such-app/releases", None),
+    ] {
+        assert_eq!(
+            send(&limited, m.clone(), path, body.clone()).await,
+            StatusCode::NOT_FOUND,
+            "{m} {path}"
+        );
+    }
+    // A report on the other app is hidden too, though its route has no app in it.
+    assert_eq!(
+        send(
+            &limited,
+            Method::GET,
+            &format!("/v1/bug-reports/{report}"),
+            None
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send(
+            &all,
+            Method::GET,
+            &format!("/v1/bug-reports/{report}"),
+            None
+        )
+        .await,
+        StatusCode::OK
+    );
+    // Public pages of any app, yes.
+    assert_eq!(
+        send(&limited, Method::GET, "/v1/apps/tower", None).await,
+        StatusCode::OK
+    );
+
+    // Nothing new: no new apps, community builds, bug report answers or bounty claims, which
+    // aren't tied to one of its apps.
+    let fake = Uuid::now_v7();
+    for (m, path, body) in [
+        (
+            Method::POST,
+            "/v1/apps".to_string(),
+            Some(new_app("new-one")),
+        ),
+        (
+            Method::POST,
+            "/v1/apps/tower/branches".to_string(),
+            Some(json!({})),
+        ),
+        (
+            Method::POST,
+            "/v1/apps/game/branches".to_string(),
+            Some(json!({})),
+        ),
+        (
+            Method::PATCH,
+            format!("/v1/bug-reports/{report}"),
+            Some(json!({ "status": "fixed" })),
+        ),
+        (
+            Method::POST,
+            format!("/v1/bounties/{fake}/claims"),
+            Some(json!({})),
+        ),
+    ] {
+        assert_eq!(
+            send(&limited, m.clone(), &path, body).await,
+            StatusCode::FORBIDDEN,
+            "{m} {path}"
+        );
+    }
+    let summary: String = sqlx::query_scalar("select summary from apps where slug = 'tower'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(summary, "An app about tower");
+    assert_eq!(
+        count(&app, "select count(*) from apps").await,
+        2,
+        "no new app"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn maker_agents_never_reach_money_chat_friends_or_sign_ins(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (agent, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Everything", "scope": "publish", "people": true }),
+    )
+    .await;
+    let (read_people, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Reader", "scope": "read", "people": true }),
+    )
+    .await;
+    let fake = Uuid::now_v7();
+    let app = &app;
+    let status = |auth: &str, m: Method, path: String| {
+        let r = req(m, path)
+            .header("authorization", auth.to_string())
+            .json(json!({}));
+        async move { app.send(r).await.status() }
+    };
+    for (m, path) in [
+        (Method::POST, "/v1/apps/tower/donate".to_string()),
+        (Method::GET, "/v1/apps/tower/donate".to_string()),
+        (Method::POST, format!("/v1/bounties/{fake}/pledge")),
+        (Method::POST, "/v1/apps/tower/bounties".to_string()),
+        (Method::GET, "/v1/me/donation-account".to_string()),
+        (Method::POST, "/v1/me/donation-account/change".to_string()),
+        (Method::POST, "/v1/me/creative/stripe".to_string()),
+        (Method::GET, "/v1/chat/conversations".to_string()),
+        (Method::GET, "/v1/chat/devices".to_string()),
+        (Method::GET, "/v1/me/friends".to_string()),
+        (Method::POST, "/v1/me/friends".to_string()),
+        (Method::GET, "/v1/me/sessions".to_string()),
+        (Method::DELETE, format!("/v1/me/sessions/{fake}")),
+        (Method::PUT, "/v1/me/creative".to_string()),
+        (Method::POST, format!("/v1/jobs/{fake}/accept")),
+        (Method::POST, format!("/v1/jobs/{fake}/pay")),
+        (Method::POST, format!("/v1/jobs/{fake}/change/accept")),
+        (Method::POST, format!("/v1/jobs/{fake}/accept-delivery")),
+        (Method::POST, "/v1/people/vera/hire".to_string()),
+        (Method::POST, "/v1/apps/tower/vote".to_string()),
+        (Method::POST, "/v1/me/legal/accept".to_string()),
+        // The store's own lists are for people: only the pages of single apps are maker work.
+        (Method::GET, "/v1/apps".to_string()),
+        (Method::GET, "/v1/me/library".to_string()),
+    ] {
+        assert_eq!(
+            status(&agent, m.clone(), path.clone()).await,
+            StatusCode::FORBIDDEN,
+            "{m} {path}"
+        );
+    }
+    // Only the methods listed: HEAD and OPTIONS aren't GET.
+    let head = app
+        .send(req(Method::HEAD, "/v1/me/apps").header("authorization", agent.clone()))
+        .await;
+    assert_eq!(head.status(), StatusCode::FORBIDDEN);
+    let options = app
+        .send(req(Method::OPTIONS, "/v1/me/apps").header("authorization", agent.clone()))
+        .await;
+    assert!(!options.status().is_success(), "{}", options.status());
+
+    // People work with People access: reading with a read token, answering only with publish.
+    assert_eq!(
+        status(&read_people, Method::GET, "/v1/me/jobs".into()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(&read_people, Method::GET, "/v1/people/skills".into()).await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status(&read_people, Method::GET, format!("/v1/jobs/{fake}")).await,
+        StatusCode::NOT_FOUND,
+        "allowed, but no such job"
+    );
+    for path in ["offer", "decline", "messages", "conversation/open"] {
+        assert_eq!(
+            status(
+                &read_people,
+                Method::POST,
+                format!("/v1/jobs/{fake}/{path}")
+            )
+            .await,
+            StatusCode::FORBIDDEN,
+            "{path}"
+        );
+        // Past the allow-list: the job (or the body) is what's wrong.
+        let past = status(&agent, Method::POST, format!("/v1/jobs/{fake}/{path}")).await;
+        assert!(
+            past == StatusCode::NOT_FOUND || past == StatusCode::UNPROCESSABLE_ENTITY,
+            "{path}: {past}"
+        );
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_see_only_maker_notifications(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    for (category, title) in [
+        ("apps", "Release 1.0.0 approved"),
+        ("jobs", "A new job request"),
+        ("chat", "New message from Sam"),
+        ("friends", "Sam wants to be friends"),
+        ("security", "A new sign-in from Firefox"),
+    ] {
+        sqlx::query(
+            "insert into notifications (id, user_id, category, title, link) values ($1, $2, $3, $4, '/')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(maker_id)
+        .bind(category)
+        .bind(title)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let (people, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "People", "scope": "read", "people": true }),
+    )
+    .await;
+    let (plain, _) = maker_token(&app, &maker, json!({ "name": "Plain", "scope": "read" })).await;
+    let titles = |inbox: &Value| -> Vec<String> {
+        let mut t: Vec<String> = inbox["items"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["title"].as_str().unwrap().to_string())
+            .collect();
+        t.sort();
+        t
+    };
+
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(titles(&mine).len(), 5);
+    assert_eq!(mine["unread"], 5);
+
+    // REST and the whats_new tool agree.
+    for (auth, want) in [
+        (&people, vec!["A new job request", "Release 1.0.0 approved"]),
+        (&plain, vec!["Release 1.0.0 approved"]),
+    ] {
+        let inbox = body_json(
+            app.send(
+                req(Method::GET, "/v1/me/notifications").header("authorization", auth.clone()),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(titles(&inbox), want);
+        let (failed, text) = maker_tool(&app, auth, "whats_new", json!({})).await;
+        assert!(!failed, "{text}");
+        let inbox = parsed(&text);
+        assert_eq!(titles(&inbox), want);
+        // Not even how many there are of the hidden kinds, here or on its account.
+        assert_eq!(inbox["unread"], want.len(), "{inbox}");
+        let me = body_json(
+            app.send(req(Method::GET, "/v1/me").header("authorization", auth.clone()))
+                .await,
+        )
+        .await;
+        assert_eq!(me["unread_notifications"], want.len(), "{me}");
+    }
+    let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&maker)).await).await;
+    assert_eq!(me["unread_notifications"], 5);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Guides and the maker MCP endpoint
+
+async fn text_of(res: Response) -> (StatusCode, String, String) {
+    let status = res.status();
+    let kind = res
+        .headers()
+        .get(header::CONTENT_TYPE)
+        .map(|v| v.to_str().unwrap().to_string())
+        .unwrap_or_default();
+    let bytes = res.into_body().collect().await.unwrap().to_bytes();
+    (status, kind, String::from_utf8(bytes.to_vec()).unwrap())
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_maker_guides_are_for_signed_in_makers_and_agents(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = app.user("Mia Maker", "US").await;
+    let (agent, _) = maker_token(&app, &maker, json!({ "name": "Claude", "scope": "read" })).await;
+
+    for path in [
+        "/v1/maker/guide",
+        "/v1/maker/publishing-guide",
+        "/v1/maker/publishing-guide/Saves%20and%20sandbox%20mode",
+    ] {
+        assert_eq!(
+            app.send(req(Method::GET, path)).await.status(),
+            StatusCode::UNAUTHORIZED,
+            "{path}"
+        );
+    }
+
+    // The short guide, for a person or their agent.
+    let (status, kind, guide) = text_of(
+        app.send(req(Method::GET, "/v1/maker/guide").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kind, "text/markdown; charset=utf-8");
+    assert!(guide.starts_with("# Slop for makers' AI agents"), "{guide}");
+    let (failed, text) = maker_tool(&app, &agent, "maker_guide", json!({})).await;
+    assert!(!failed);
+    assert_eq!(text, guide);
+
+    // The publishing guide's sections, then one, by any capitalisation and with spaces around.
+    let list = body_json(
+        app.send(
+            req(Method::GET, "/v1/maker/publishing-guide").header("authorization", agent.clone()),
+        )
+        .await,
+    )
+    .await;
+    let sections: Vec<&str> = list["sections"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| s.as_str().unwrap())
+        .collect();
+    for want in [
+        "Saves and sandbox mode",
+        "Publishing a mod",
+        "Checklist for agents",
+    ] {
+        assert!(sections.contains(&want), "{want}: {sections:?}");
+    }
+    assert!(
+        list["read_one"]
+            .as_str()
+            .unwrap()
+            .contains("/v1/maker/publishing-guide/{section}")
+    );
+    let (failed, text) = maker_tool(&app, &agent, "list_guide_sections", json!({})).await;
+    assert!(!failed);
+    assert_eq!(parsed(&text), list);
+
+    let (status, kind, exact) = text_of(
+        app.send(
+            req(
+                Method::GET,
+                "/v1/maker/publishing-guide/Saves%20and%20sandbox%20mode",
+            )
+            .cookie(&maker),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(kind, "text/markdown; charset=utf-8");
+    assert!(exact.starts_with("## Saves and sandbox mode") && exact.contains("SLOP_SAVE_DIR"));
+    let (status, _, loose) = text_of(
+        app.send(
+            req(
+                Method::GET,
+                "/v1/maker/publishing-guide/%20%20sAVES%20AND%20sandbox%20MODE%20",
+            )
+            .header("authorization", agent.clone()),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(loose, exact);
+    assert_eq!(
+        app.send(
+            req(
+                Method::GET,
+                "/v1/maker/publishing-guide/How%20to%20get%20rich"
+            )
+            .cookie(&maker)
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let (failed, text) = maker_tool(
+        &app,
+        &agent,
+        "publishing_guide",
+        json!({ "section": "saves and sandbox mode" }),
+    )
+    .await;
+    assert!(!failed);
+    assert_eq!(text, exact);
+    let (failed, text) = maker_tool(
+        &app,
+        &agent,
+        "publishing_guide",
+        json!({ "section": "How to get rich" }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (other_id, _) = app.user("Otto Other", "US").await;
+    listed_with(&app, other_id, "ottos-game", "released", "").await;
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (limited, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Game only", "scope": "publish", "apps": ["game"] }),
+    )
+    .await;
+    let (all, _) = maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let endpoint = "/v1/maker/mcp";
+
+    // Anonymous: no. GET is for a server stream this server never sends.
+    let res = app
+        .send(
+            req(Method::POST, endpoint)
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "initialize" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    assert_eq!(
+        app.send(req(Method::GET, endpoint)).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(req(Method::GET, endpoint).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        app.send(req(Method::GET, endpoint).header("authorization", read.clone()))
+            .await
+            .status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+
+    let hello = rpc(&app, endpoint, &read, "initialize", json!({})).await;
+    assert_eq!(hello["id"], 1);
+    assert_eq!(hello["result"]["serverInfo"]["name"], "slop-maker");
+    assert!(hello["result"]["protocolVersion"].is_string());
+    assert!(
+        hello["result"]["instructions"]
+            .as_str()
+            .unwrap()
+            .contains("maker_guide")
+    );
+    assert_eq!(
+        rpc(&app, endpoint, &read, "ping", json!({})).await["result"],
+        json!({})
+    );
+    let unknown = rpc(&app, endpoint, &read, "resources/list", json!({})).await;
+    assert_eq!(unknown["error"]["code"], -32601);
+    let unknown = rpc(
+        &app,
+        endpoint,
+        &read,
+        "tools/call",
+        json!({ "name": "delete_everything" }),
+    )
+    .await;
+    assert_eq!(unknown["error"]["code"], -32602);
+    // A notification gets no answer; something that isn't JSON-RPC is a parse error.
+    let res = app
+        .send(
+            req(Method::POST, endpoint)
+                .header("authorization", read.clone())
+                .json(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let res = app
+        .send(
+            req(Method::POST, endpoint)
+                .header("authorization", read.clone())
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "params": {} })),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], -32700);
+    // The tool list is the same for every token: what each may do is checked when it's called.
+    let tools = rpc(&app, endpoint, &read, "tools/list", json!({})).await;
+    let tools = tools["result"]["tools"].as_array().unwrap();
+    assert!(tools.len() >= 45);
+    let schema = &tools
+        .iter()
+        .find(|t| t["name"] == "update_store_page")
+        .unwrap()["inputSchema"];
+    assert_eq!(schema["required"], json!(["slug"]));
+    assert!(schema["properties"]["summary"].is_object());
+
+    // Missing arguments.
+    let (failed, text) = maker_tool(&app, &read, "list_releases", json!({})).await;
+    assert!(failed && text.contains("missing argument: slug"), "{text}");
+    // A read token can't change anything.
+    let (failed, text) = maker_tool(
+        &app,
+        &read,
+        "update_store_page",
+        json!({ "slug": "game", "summary": "Read tokens can't." }),
+    )
+    .await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    // Without People access, no jobs.
+    let (failed, text) = maker_tool(&app, &all, "my_jobs", json!({})).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    // A token for some apps: the others aren't there, and neither are other makers' apps.
+    for (token, slug) in [
+        (&limited, "tower"),
+        (&all, "ottos-game"),
+        (&limited, "ottos-game"),
+    ] {
+        let (failed, text) = maker_tool(&app, token, "app_overview", json!({ "slug": slug })).await;
+        assert!(failed && text.contains("not_found"), "{slug}: {text}");
+    }
+    let (failed, text) = maker_tool(
+        &app,
+        &all,
+        "update_store_page",
+        json!({ "slug": "ottos-game", "summary": "Not mine." }),
+    )
+    .await;
+    assert!(failed, "{text}");
+    let (failed, text) =
+        maker_tool(&app, &limited, "app_overview", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    assert_eq!(
+        parsed(&text)["auto_approval_note"],
+        "an app's first release is always reviewed by a person",
+        "{text}"
+    );
+
+    // my_apps: every app for an all-apps token, only its own for one limited to some.
+    let slugs = |text: &str| -> Vec<String> {
+        let mut s: Vec<String> = parsed(text)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["slug"].as_str().unwrap().to_string())
+            .collect();
+        s.sort();
+        s
+    };
+    let (failed, text) = maker_tool(&app, &all, "my_apps", json!({})).await;
+    assert!(!failed);
+    assert_eq!(slugs(&text), ["game", "tower"]);
+    let (_, text) = maker_tool(&app, &limited, "my_apps", json!({})).await;
+    assert_eq!(slugs(&text), ["game"]);
+    let rest = body_json(
+        app.send(req(Method::GET, "/v1/me/apps").header("authorization", limited.clone()))
+            .await,
+    )
+    .await;
+    assert_eq!(rest.as_array().unwrap().len(), 1);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/apps").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine.as_array().unwrap().len(), 2);
+
+    // Categories and runtimes, for any token.
+    let (failed, text) = maker_tool(&app, &read, "list_categories", json!({})).await;
+    assert!(!failed);
+    let categories = parsed(&text);
+    assert!(
+        categories
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|c| c["tags"].is_array()),
+        "{categories}"
+    );
+    let (failed, text) = maker_tool(&app, &read, "list_runtimes", json!({})).await;
+    assert!(!failed);
+    assert!(
+        text.contains("vcredist") || text.contains("Visual C++"),
+        "{text}"
+    );
+}
