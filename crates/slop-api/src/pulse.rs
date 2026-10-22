@@ -88,25 +88,26 @@ async fn launch(
         .bind(user.id)
         .fetch_one(&state.db)
         .await?;
-    if !share {
-        return Ok(Json(Launched {
-            token: None,
-            pulse_url,
-            heartbeat_seconds: HEARTBEAT_SECONDS,
-        }));
-    }
 
-    let token = new_token();
     let mut tx = state.db.begin().await?;
-    sqlx::query(
-        "insert into pulse_sessions (id, token_hash, app_id, user_id) values ($1, $2, $3, $4)",
-    )
-    .bind(Uuid::now_v7())
-    .bind(hash_token(&token))
-    .bind(app_id)
-    .bind(user.id)
-    .execute(&mut *tx)
-    .await?;
+    // Without "Share my playtime" there's no Pulse token (so no playtime), but the launch is
+    // still recorded: it's what lets a player vote, review and report (votes.rs), and their
+    // votes are then weighted by launch days only.
+    let token = if share {
+        let token = new_token();
+        sqlx::query(
+            "insert into pulse_sessions (id, token_hash, app_id, user_id) values ($1, $2, $3, $4)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(hash_token(&token))
+        .bind(app_id)
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
+        Some(token)
+    } else {
+        None
+    };
     // Apps without Pulse are weighted by the days they were launched (METRICS §2).
     sqlx::query(
         "insert into user_app_usage (user_id, app_id, days_launched, last_launch_day, last_platform)
@@ -124,7 +125,7 @@ async fn launch(
     .await?;
     tx.commit().await?;
     Ok(Json(Launched {
-        token: Some(token),
+        token,
         pulse_url,
         heartbeat_seconds: HEARTBEAT_SECONDS,
     }))
