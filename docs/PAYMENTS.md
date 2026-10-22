@@ -89,6 +89,15 @@ Players pledge toward a fix or feature on an app; whoever delivers it in an appr
 - **Expiry:** 180 days without a confirmed delivery ends the bounty and releases the saved cards (detached at Stripe). Staff hiding a bounty (`hide_bounty`) releases them too.
 - **Needs before going live:** Stripe's rules for saving a card for later merchant-initiated charges (the pledge text is the customer's agreement, and it's shown before Checkout), the lawyer's review of that text and of refunds and disputes (the builder handles them, as with donations), and a webhook for **platform** events (`checkout.session.completed`) besides the connected-account one. Pledges also sync when the backer returns from Checkout, so the webhook is a backup.
 
+### 5.5 Donation holds (built 2026-10-22, `donation_holds.rs`)
+
+When a complaint says an app shouldn't be making money (someone else's work or trademark, a law), staff can stop its donations without taking the app out of the store:
+
+- **Paused for review:** quick and reversible while Slop looks into it. A moderator or finance staff member places it alone.
+- **Turned off until fixed:** Slop found a problem the maker has to fix. A sensitive action, so it goes through two-person approval (`staff.rs`) once Slop has a second person.
+
+While held, new donations stop, including the app's share of donations to its community builds. Monthly server donations are paused at Stripe (`pause_collection` with `void`: no charge, not cancelled) and their donors are told. Donors only ever see "Donations to this app are paused". The maker gets the reason (and the ground, if given) as a notification and on the app's Donations page, where they can ask for a review once they've fixed it: one request at a time, and again a day after an answer. Staff lift the hold or keep it with an answer. Lifting restarts the monthly donations from their next date, and every step is in the audit log. Admin panel: the app's page under Apps, and Money.
+
 ## 6. Server donations (recurring)
 
 - **Available only for apps that declare servers.** The publisher ticks "This app runs servers" and writes a short statement ("Pays for 3 game servers and the leaderboard database").

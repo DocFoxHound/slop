@@ -15269,3 +15269,377 @@ async fn new_games_get_a_browser_demo_for_a_while(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::CONFLICT);
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_can_pause_an_apps_donations_and_the_maker_can_ask_for_them_back(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 1000;
+    })
+    .await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (donor_id, donor) = app.user("Dee Donor", "US").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (reviewer_id, reviewer) = app.user("Rex Reviewer", "US").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(reviewer_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into staff_roles (user_id, role, granted_by) values ($1, 'reviewer', 'test')",
+    )
+    .bind(reviewer_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    donations_on(&app, &maker, "arena", true).await;
+    let donate = |body: Value| {
+        req(Method::POST, "/v1/apps/arena/donate")
+            .cookie(&donor)
+            .json(body)
+    };
+    let monthly =
+        json!({ "amount_minor": 500, "monthly": true, "consent": true, "confirm_adult": true });
+    assert_eq!(
+        body_json(app.send(donate(monthly)).await).await["done"],
+        true
+    );
+
+    // Only staff, and only those who look after money or moderation.
+    let hold = |cookie: &str, body: Value| {
+        req(Method::POST, "/v1/admin/apps/arena/donation-hold")
+            .cookie(cookie)
+            .json(body)
+    };
+    let review = json!({ "kind": "review", "reason": "A trademark complaint says the name is theirs.", "ground": "Complaint TM-1" });
+    assert_eq!(
+        app.send(hold(&donor, review.clone())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(hold(&reviewer, review.clone())).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(hold(&owner, json!({ "kind": "review", "reason": " " })))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    assert_eq!(
+        app.send(hold(&owner, review)).await.status(),
+        StatusCode::OK
+    );
+
+    // Donors can't donate and see only that it's paused; the app stays in the store.
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donate").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(info["on"], false);
+    assert_eq!(info["off_reason"], "Donations to this app are paused.");
+    assert!(!info.to_string().contains("trademark"));
+    assert_eq!(
+        app.send(donate(
+            json!({ "amount_minor": 300, "confirm_adult": true })
+        ))
+        .await
+        .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/arena")).await.status(),
+        StatusCode::OK
+    );
+
+    // The monthly donor isn't charged while it's paused.
+    sqlx::query("update server_donations set next_charge_at = now() - interval '1 day'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::donations::hourly(&app.state).await.unwrap();
+    let charges: i64 = sqlx::query_scalar("select count(*) from payments")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(charges, 1, "only the first month");
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like '%is paused'",
+    )
+    .bind(donor_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+
+    // The maker is told why and asks for a review once they've fixed it; one at a time.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donations/hold").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["open"]["kind"], "review");
+    assert_eq!(
+        mine["open"]["reason"],
+        "A trademark complaint says the name is theirs."
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/arena/donations/hold").cookie(&donor))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let ask = |message: &str| {
+        req(Method::POST, "/v1/apps/arena/donations/hold/request")
+            .cookie(&maker)
+            .json(json!({ "message": message }))
+    };
+    assert_eq!(
+        app.send(ask("Renamed it to Brawl Pit.")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(app.send(ask("Again?")).await.status(), StatusCode::CONFLICT);
+
+    // Staff turn it off instead (a sensitive action), keep it with an answer…
+    assert_eq!(
+        app.send(hold(
+            &owner,
+            json!({ "kind": "off", "reason": "The old name is still in the window title." })
+        ))
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    let holds = body_json(
+        app.send(req(Method::GET, "/v1/admin/donation-holds").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(holds.as_array().unwrap().len(), 1);
+    assert_eq!(holds[0]["kind"], "off");
+    let request_id = holds[0]["requests"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        app.send(
+            req(
+                Method::POST,
+                format!("/v1/admin/donation-hold-requests/{request_id}/answer")
+            )
+            .cookie(&owner)
+            .json(json!({ "lift": false, "answer": "The window title still says Arena." }))
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donations/hold").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["open"]["requests"][0]["outcome"], "kept");
+    assert!(mine["can_ask_at"].is_string(), "a day before asking again");
+
+    // …then lift it: donations are back, and the monthly donor's next charge is a month on.
+    let hold_id = holds[0]["id"].as_str().unwrap().to_string();
+    assert_eq!(
+        app.send(
+            req(
+                Method::POST,
+                format!("/v1/admin/donation-holds/{hold_id}/lift")
+            )
+            .cookie(&reviewer)
+            .json(json!({ "note": "Fixed." }))
+        )
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(
+            req(
+                Method::POST,
+                format!("/v1/admin/donation-holds/{hold_id}/lift")
+            )
+            .cookie(&owner)
+            .json(json!({ "note": "Renamed everywhere now. Thanks!" }))
+        )
+        .await
+        .status(),
+        StatusCode::NO_CONTENT
+    );
+    let info = body_json(
+        app.send(req(Method::GET, "/v1/apps/arena/donate").cookie(&donor))
+            .await,
+    )
+    .await;
+    assert_eq!(info["on"], true);
+    let later: bool = sqlx::query_scalar(
+        "select next_charge_at > now() + interval '29 days' from server_donations",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(later);
+    let actions: Vec<String> = sqlx::query_scalar(
+        "select action from audit_log where action like 'donations.hold%' order by id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        actions,
+        [
+            "donations.hold_placed",
+            "donations.hold_review_asked",
+            "donations.hold_changed",
+            "donations.hold_kept",
+            "donations.hold_lifted"
+        ]
+    );
+    let export = body_json(
+        app.send(req(Method::GET, "/v1/me/export").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        export["donation_holds"][0]["requests"][0]["outcome"],
+        "kept"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_see_an_apps_whole_record_and_can_fix_its_store_page(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (reviewer_id, reviewer) = app.user("Rex Reviewer", "US").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(reviewer_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into staff_roles (user_id, role, granted_by) values ($1, 'reviewer', 'test')",
+    )
+    .bind(reviewer_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    listed_with(&app, maker_id, "arena", "released", "").await;
+
+    // Search finds it by title, address or maker.
+    for q in ["aren", "Mia"] {
+        let found = body_json(
+            app.send(req(Method::GET, format!("/v1/admin/apps?q={q}")).cookie(&owner))
+                .await,
+        )
+        .await;
+        assert_eq!(found[0]["slug"], "arena", "{q}");
+    }
+    let none = body_json(
+        app.send(req(Method::GET, "/v1/admin/apps?q=zzz").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(none.as_array().unwrap().len(), 0);
+
+    let record = body_json(
+        app.send(req(Method::GET, "/v1/admin/apps/arena/record").cookie(&reviewer))
+            .await,
+    )
+    .await;
+    assert_eq!(record["app"]["maker"], "Mia Maker");
+    assert!(record["releases"].is_array());
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/apps/arena/record").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // Editing needs moderation rights and a reason; the maker is told.
+    let edit = |cookie: &str, body: Value| {
+        req(Method::PATCH, "/v1/admin/apps/arena/listing")
+            .cookie(cookie)
+            .json(body)
+    };
+    assert_eq!(
+        app.send(edit(&reviewer, json!({ "title": "Arena!", "reason": "x" })))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(edit(&owner, json!({ "title": "Arena!", "reason": "" })))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = body_json(
+        app.send(edit(
+            &owner,
+            json!({ "title": "Brawl Pit", "min_age": 12, "reason": "The old name is someone else's trademark." }),
+        ))
+        .await,
+    )
+    .await;
+    assert_eq!(res["changed"], json!(["title", "age rating"]));
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/arena")).await).await;
+    assert_eq!(page["title"], "Brawl Pit");
+    let told: String = sqlx::query_scalar(
+        "select body from notifications where user_id = $1 and title like 'Slop changed%'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(told.contains("someone else's trademark"));
+    let record = body_json(
+        app.send(req(Method::GET, "/v1/admin/apps/arena/record").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(record["audit"][0]["action"], "app.listing_edited");
+    assert_eq!(
+        record["audit"][0]["detail"]["changed"]["title"]["from"],
+        "arena"
+    );
+
+    // The audit log searches and pages.
+    let found = body_json(
+        app.send(req(Method::GET, "/v1/admin/audit?q=listing_edited").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(found.as_array().unwrap().len(), 1);
+    let first = found[0]["id"].as_i64().unwrap();
+    let older = body_json(
+        app.send(
+            req(
+                Method::GET,
+                format!("/v1/admin/audit?q=listing_edited&before={first}"),
+            )
+            .cookie(&owner),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(older.as_array().unwrap().len(), 0);
+
+    // Money is for finance (an owner has every role); a reviewer can't see it.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/money").cookie(&reviewer))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let money = body_json(
+        app.send(req(Method::GET, "/v1/admin/money").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(money["open_holds"], 0);
+}

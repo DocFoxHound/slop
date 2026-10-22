@@ -30,5 +30,7 @@ test("a player reports a game, and it reaches staff", async ({ browser }) => {
   const admin = await browser.newPage();
   await signIn(admin, "admin");
   await admin.goto("/admin");
+  // Home lists what's waiting; each links to the queue.
+  await admin.getByRole("link", { name: /Reports$/ }).click();
   await expect(admin.getByText("The browser tests saw something odd here.").first()).toBeVisible();
 });

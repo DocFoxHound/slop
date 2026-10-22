@@ -4,6 +4,7 @@
 pub mod abuse;
 pub mod account;
 pub mod admin;
+pub mod admin_console;
 pub mod admin_web;
 pub mod agent;
 pub mod auth;
@@ -19,6 +20,7 @@ pub mod config;
 pub mod demos;
 pub mod dep_watch;
 pub mod desktop_updates;
+pub mod donation_holds;
 pub mod donations;
 pub mod error;
 pub mod featured;
@@ -171,6 +173,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(media::routes())
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
+        .merge(admin_console::routes())
         .merge(agent::routes())
         .merge(maker_agents::routes())
         .merge(fixes::routes())
@@ -194,6 +197,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(passkeys::routes())
         .merge(ops::routes())
         .merge(donations::routes())
+        .merge(donation_holds::routes())
         .merge(reviews::routes())
         .merge(branches::routes())
         .merge(private::routes())

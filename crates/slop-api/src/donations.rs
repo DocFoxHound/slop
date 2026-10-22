@@ -227,6 +227,8 @@ struct Target {
     account: Option<(String, String)>,
     /// For a community build or mod: the original app.
     parent: Option<Uuid>,
+    /// Staff have paused donations ('review') or turned them off ('off'): donation_holds.rs.
+    held: Option<String>,
 }
 
 impl Target {
@@ -234,6 +236,7 @@ impl Target {
     fn taking(&self, mode: &Mode) -> bool {
         !matches!(mode, Mode::Off)
             && self.on
+            && self.held.is_none()
             && self.account.as_ref().is_some_and(|(_, s)| s == "active")
     }
 }
@@ -283,11 +286,12 @@ async fn target_by_slug(state: &AppState, slug: &str) -> ApiResult<Target> {
 
 async fn load_target(state: &AppState, app_id: Uuid) -> ApiResult<Target> {
     #[allow(clippy::type_complexity)]
-    let row: (String, String, Uuid, String, bool, i32, String, bool, Option<String>, bool, Option<String>, Option<String>, Option<Uuid>) =
+    let row: (String, String, Uuid, String, bool, i32, String, bool, Option<String>, bool, Option<String>, Option<String>, Option<Uuid>, Option<String>) =
         sqlx::query_as(
             "select a.slug, a.title, a.maker_id, u.display_name, a.donations_on, a.donation_suggested_minor,
                     a.donation_currency, a.runs_servers, a.servers_statement, a.servers_shut_down_at is not null,
-                    d.stripe_account_id, d.stripe_status, a.parent_app_id
+                    d.stripe_account_id, d.stripe_status, a.parent_app_id,
+                    (select h.kind from donation_holds h where h.app_id = a.id and h.lifted_at is null)
              from apps a join users u on u.id = a.maker_id left join donation_accounts d on d.user_id = a.maker_id
              where a.id = $1 and a.visibility = 'public'",
         )
@@ -309,6 +313,7 @@ async fn load_target(state: &AppState, app_id: Uuid) -> ApiResult<Target> {
         servers_shut_down: row.9,
         account: row.10.zip(row.11),
         parent: row.12,
+        held: row.13,
     })
 }
 
@@ -358,6 +363,8 @@ async fn info(
     let mode = stripe::mode(&state);
     let off_reason = if matches!(mode, Mode::Off) {
         Some("Donations aren't switched on on this server yet.")
+    } else if t.held.is_some() {
+        Some("Donations to this app are paused.")
     } else if !t.on {
         Some("The maker hasn't turned on donations.")
     } else if t.account.as_ref().is_none_or(|(_, s)| s != "active") {
@@ -532,7 +539,7 @@ async fn start(
                 "donations aren't switched on on this server",
             ));
         }
-        (_, Some((acct, status))) if t.on && status == "active" => acct.clone(),
+        (_, Some((acct, status))) if t.on && t.held.is_none() && status == "active" => acct.clone(),
         _ => return Err(ApiError::Conflict("this app isn't taking donations".into())),
     };
     if !(MIN_MINOR..=MAX_MINOR).contains(&b.amount_minor) {
@@ -1472,7 +1479,11 @@ async fn end_server_donations(
 // ---------------------------------------------------------------------------------------------
 // The maker's side
 
-async fn my_app(state: &AppState, user: &CurrentUser, slug: &str) -> ApiResult<(Uuid, String)> {
+pub(crate) async fn my_app(
+    state: &AppState,
+    user: &CurrentUser,
+    slug: &str,
+) -> ApiResult<(Uuid, String)> {
     let row: Option<(Uuid, Uuid, String)> =
         sqlx::query_as("select id, maker_id, title from apps where slug = $1")
             .bind(slug)
@@ -2600,7 +2611,9 @@ pub async fn hourly(state: &AppState) -> anyhow::Result<()> {
     }
     // Simulated subscriptions renew here; real ones by Stripe's invoices.
     let renew: Vec<(Uuid, OffsetDateTime)> = sqlx::query_as(
-        "select id, next_charge_at from server_donations where simulated and status = 'active' and next_charge_at <= now()",
+        "select s.id, s.next_charge_at from server_donations s
+         where s.simulated and s.status = 'active' and s.next_charge_at <= now()
+           and not exists (select 1 from donation_holds h where h.app_id = s.app_id and h.lifted_at is null)",
     )
     .fetch_all(&mut *tx)
     .await?;

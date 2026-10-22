@@ -385,6 +385,18 @@ struct ModeratedApp {
 #[derive(Deserialize)]
 struct AppsQuery {
     status: Option<AppStatus>,
+    /// Part of the title, address or maker's name.
+    q: Option<String>,
+}
+
+/// `text` as an ILIKE pattern that matches it anywhere, literally.
+pub(crate) fn contains_pattern(text: &str) -> String {
+    format!(
+        "%{}%",
+        text.replace('\\', "\\\\")
+            .replace('%', "\\%")
+            .replace('_', "\\_")
+    )
 }
 
 /// Every app (optionally by status), for listing, delisting, stages and withdrawals.
@@ -399,9 +411,16 @@ async fn apps(
     >(sqlx::AssertSqlSafe(format!(
         "select a.id, {APP_COLUMNS} from apps a join users u on u.id = a.maker_id
              where ($1::app_status is null or a.status = $1)
+               and ($2::text is null or a.title ilike $2 or a.slug ilike $2 or u.display_name ilike $2)
              order by a.updated_at desc limit 200"
     )))
     .bind(q.status)
+    .bind(
+        q.q.as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(contains_pattern),
+    )
     .fetch_all(&state.db)
     .await?
     .into_iter()
@@ -455,14 +474,36 @@ struct AuditEntry {
     detail: serde_json::Value,
 }
 
+#[derive(Deserialize)]
+struct AuditQuery {
+    /// Part of who did it, what, or to what.
+    q: Option<String>,
+    /// Entries older than this one (the last `id` of the previous page).
+    before: Option<i64>,
+}
+
+/// The audit log, newest first, 100 at a time.
 async fn audit_log(
     State(state): State<AppState>,
     _admin: AdminUser,
+    Query(q): Query<AuditQuery>,
 ) -> ApiResult<Json<Vec<AuditEntry>>> {
+    let pattern =
+        q.q.as_deref()
+            .map(str::trim)
+            .filter(|t| !t.is_empty())
+            .map(contains_pattern);
     Ok(Json(
-        sqlx::query_as("select id, at, actor, action, subject, detail from audit_log order by id desc limit 200")
-            .fetch_all(&state.db)
-            .await?,
+        sqlx::query_as(
+            "select id, at, actor, action, subject, detail from audit_log
+             where ($1::bigint is null or id < $1)
+               and ($2::text is null or actor ilike $2 or action ilike $2 or subject ilike $2)
+             order by id desc limit 100",
+        )
+        .bind(q.before)
+        .bind(pattern)
+        .fetch_all(&state.db)
+        .await?,
     ))
 }
 

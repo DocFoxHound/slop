@@ -918,3 +918,10 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .tone-note .label-mark { color: var(--warn); }
 .tone-info .label-mark { color: var(--info); }
 .label-notes ul { margin: 4px 0 4px 18px; padding: 0; }
+.pre-wrap { white-space: pre-wrap; overflow-wrap: anywhere; }
+.admin-todo { list-style: none; padding: 0; margin: 0 0 12px; display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 10px; }
+.admin-todo a { display: flex; align-items: center; gap: 10px; color: var(--text); text-decoration: none; }
+.admin-count { font-size: 22px; font-weight: 800; color: var(--slime); min-width: 2ch; }
+.admin-record section { margin-bottom: 14px; }
+.admin-record h3 { margin-top: 0; }
+.admin .seg { flex-wrap: wrap; }

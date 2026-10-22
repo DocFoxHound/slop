@@ -16,6 +16,7 @@ import {
   type StaffRole,
   type AdminQueue,
   type AdminToken,
+  type AuditEntry,
   type AppStage,
   type AppStatus,
   type MediaSet,
@@ -38,14 +39,19 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { NotFound } from "./Listing";
 import { LegalRequestsTab } from "../components/LegalRequests";
+import { AppRecord, AuditRows } from "./admin/AppRecord";
+import { AdminHome } from "./admin/Home";
+import { MoneyTab } from "./admin/Money";
+import { DelistButton, ReasonButton, RuleSelect, useAction } from "./admin/shared";
+import { UsersTab } from "./admin/Users";
 
-type Tab = "queue" | "apps" | "audit" | "ai" | "staff" | "legal";
+type Tab = "home" | "queue" | "apps" | "users" | "money" | "audit" | "ai" | "staff" | "legal";
 
 export function Admin() {
   useDocumentTitle("Admin");
   const { me } = useSession();
   const [params, setParams] = useSearchParams();
-  const tab = (params.get("tab") as Tab | null) ?? "queue";
+  const tab = (params.get("tab") as Tab | null) ?? "home";
 
   if (me === undefined) return <Loading />;
   if (!me?.is_admin) return <NotFound />;
@@ -56,8 +62,11 @@ export function Admin() {
       <div className="seg" role="tablist">
         {(
           [
+            ["home", "Home"],
             ["queue", "Review queue"],
             ["apps", "Apps"],
+            ["users", "Accounts"],
+            ["money", "Money"],
             ["audit", "Audit log"],
             ["ai", "AI reviewers"],
             ["staff", "Staff"],
@@ -75,101 +84,16 @@ export function Admin() {
           </button>
         ))}
       </div>
+      {tab === "home" && <AdminHome />}
       {tab === "queue" && <QueueTab />}
-      {tab === "apps" && <AppsTab />}
+      {tab === "apps" && (params.get("app") ? <AppRecord slug={params.get("app")!} /> : <AppsTab />)}
+      {tab === "users" && <UsersTab />}
+      {tab === "money" && <MoneyTab />}
       {tab === "audit" && <AuditTab />}
       {tab === "ai" && <TokensTab />}
       {tab === "staff" && <StaffTab />}
       {tab === "legal" && <LegalRequestsTab />}
     </div>
-  );
-}
-
-/** Runs an admin action, showing its error (e.g. "approve a release first") if refused. */
-function useAction(onDone: () => void) {
-  const [busy, setBusy] = useState<string>();
-  const [error, setError] = useState<string>();
-  const [notice, setNotice] = useState<string>();
-  const [stepUp, setStepUp] = useState(false);
-  const run = async (key: string, action: () => Promise<unknown>) => {
-    setBusy(key);
-    setError(undefined);
-    setNotice(undefined);
-    setStepUp(false);
-    try {
-      const result = await action();
-      // Sensitive actions may wait for another staff member (staff.rs).
-      if (result && typeof result === "object" && "pending_action" in result) {
-        setNotice(
-          "Recorded. It happens once another staff member approves it under Waiting for approval.",
-        );
-      }
-      onDone();
-    } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
-      setStepUp(err instanceof ApiError && err.code === "step_up_required");
-    } finally {
-      setBusy(undefined);
-    }
-  };
-  return { busy, error, notice, stepUp, run };
-}
-
-function ReasonButton({
-  label,
-  placeholder,
-  danger,
-  disabled,
-  onSubmit,
-}: {
-  label: string;
-  placeholder: string;
-  danger?: boolean;
-  disabled?: boolean;
-  onSubmit: (reason: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [reason, setReason] = useState("");
-  if (!open) {
-    return (
-      <button
-        className={`btn small ${danger ? "ghost danger" : ""}`}
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-      >
-        {label}
-      </button>
-    );
-  }
-  return (
-    <form
-      className="reason-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        if (reason.trim()) onSubmit(reason.trim());
-      }}
-    >
-      <input
-        aria-label={`${label}: reason`}
-        autoFocus
-        value={reason}
-        placeholder={placeholder}
-        onChange={(e) => setReason(e.target.value)}
-      />
-      <button
-        className={`btn small ${danger ? "danger" : ""}`}
-        disabled={disabled || !reason.trim()}
-      >
-        {label}
-      </button>
-      <button
-        type="button"
-        className="btn small ghost"
-        onClick={() => setOpen(false)}
-      >
-        Cancel
-      </button>
-    </form>
   );
 }
 
@@ -1343,16 +1267,30 @@ function FeaturedEditor() {
 }
 
 function AppsTab() {
+  const [params, setParams] = useSearchParams();
+  const q = params.get("q") ?? "";
+  const [text, setText] = useState(q);
   const [status, setStatus] = useState<AppStatus | "">("");
-  const apps = useLoad(() => api.admin.apps(status || undefined), [status]);
+  const apps = useLoad(() => api.admin.apps(status || undefined, q), [status, q]);
   // The Content Policy rules, for the statement of reasons when taking an app out.
   const rules = useLoad(() => api.admin.queue().then((q) => q.rules), []);
   const { busy, error, notice, run } = useAction(apps.reload);
 
   return (
     <>
-      <FeaturedEditor />
-      <div className="filters">
+      <form
+        className="filters"
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setParams({ tab: "apps", q: text.trim() }, { replace: true });
+        }}
+      >
+        <label>
+          Find{" "}
+          <input value={text} placeholder="Title, address or maker" onChange={(e) => setText(e.target.value)} />
+        </label>
+        <button className="btn small">Search</button>
         <label>
           Show{" "}
           <select
@@ -1366,7 +1304,7 @@ function AppsTab() {
             ))}
           </select>
         </label>
-      </div>
+      </form>
       {notice && (
         <p className="notice" role="status">
           {notice}
@@ -1385,10 +1323,13 @@ function AppsTab() {
           <li key={a.slug} className="panel panel-pad">
             <div className="title-row spread">
               <div className="title-row">
-                <Link to={`/app/${a.slug}`}>
+                <Link to={`/admin?tab=apps&app=${encodeURIComponent(a.slug)}`}>
                   <b>{a.title}</b>
                 </Link>
                 <span className="muted">by {a.maker}</span>
+                <Link className="small" to={`/app/${a.slug}`}>
+                  store page
+                </Link>
                 <span
                   className={`badge ${a.status === "listed" ? "official" : a.status === "delisted" ? "bad" : "neutral"}`}
                 >
@@ -1454,46 +1395,55 @@ function AppsTab() {
           </li>
         ))}
       </ul>
+      <FeaturedEditor />
     </>
   );
 }
 
 function AuditTab() {
-  const log = useLoad(() => api.admin.audit(), []);
-  if (log.error) return <ErrorState error={log.error} onRetry={log.reload} />;
-  if (!log.data) return <Loading />;
-  if (log.data.length === 0)
-    return <div className="empty-state">Nothing recorded yet.</div>;
+  const [text, setText] = useState("");
+  const [q, setQ] = useState("");
+  const [pages, setPages] = useState<AuditEntry[][]>([]);
+  const first = useLoad(() => api.admin.audit(q), [q]);
+  const [more, setMore] = useState<"loading" | "done" | undefined>();
+  if (first.error) return <ErrorState error={first.error} onRetry={first.reload} />;
+  if (!first.data) return <Loading />;
+  const rows = [first.data, ...pages].flat();
+  const older = async () => {
+    setMore("loading");
+    const page = await api.admin.audit(q, rows[rows.length - 1]?.id);
+    setPages((p) => [...p, page]);
+    setMore(page.length < 100 ? "done" : undefined);
+  };
   return (
-    <table className="audit">
-      <thead>
-        <tr>
-          <th>When</th>
-          <th>Who</th>
-          <th>What</th>
-          <th>Details</th>
-        </tr>
-      </thead>
-      <tbody>
-        {log.data.map((e) => (
-          <tr key={e.id}>
-            <td>{new Date(e.at).toLocaleString()}</td>
-            <td>{e.actor}</td>
-            <td>
-              <code>{e.action}</code> {e.subject}
-            </td>
-            <td className="muted small">
-              {Object.entries(e.detail)
-                .map(
-                  ([k, v]) =>
-                    `${k}: ${typeof v === "string" ? v : JSON.stringify(v)}`,
-                )
-                .join(" · ")}
-            </td>
-          </tr>
-        ))}
-      </tbody>
-    </table>
+    <>
+      <form
+        className="filters"
+        role="search"
+        onSubmit={(e) => {
+          e.preventDefault();
+          setPages([]);
+          setMore(undefined);
+          setQ(text.trim());
+        }}
+      >
+        <label>
+          Find{" "}
+          <input value={text} placeholder="Who, what (e.g. donations.hold) or an app's address" onChange={(e) => setText(e.target.value)} />
+        </label>
+        <button className="btn small">Search</button>
+      </form>
+      {rows.length === 0 ? (
+        <div className="empty-state">Nothing recorded{q && " that matches"}.</div>
+      ) : (
+        <AuditRows rows={rows} />
+      )}
+      {first.data.length === 100 && more !== "done" && (
+        <button className="btn small ghost" disabled={more === "loading"} onClick={() => void older()}>
+          Older entries
+        </button>
+      )}
+    </>
   );
 }
 
@@ -1858,94 +1808,6 @@ const ACTION_LABEL: Record<ModerationDecision["action"], string> = {
 };
 
 const PRIORITY_LABEL = ["URGENT", "SERIOUS", "NORMAL"] as const;
-
-/** Picks a Content Policy rule for a decision. */
-function RuleSelect({
-  rules,
-  value,
-  onChange,
-}: {
-  rules: Array<[string, string]>;
-  value: string;
-  onChange: (v: string) => void;
-}) {
-  return (
-    <label>
-      The rule it breaks
-      <select value={value} required onChange={(e) => onChange(e.target.value)}>
-        <option value="" disabled>
-          Choose a Content Policy rule
-        </option>
-        {rules.map(([code, title]) => (
-          <option key={code} value={code}>
-            {title}
-          </option>
-        ))}
-      </select>
-    </label>
-  );
-}
-
-/** Taking an app out of the store from the Apps tab: the maker gets a statement of reasons. */
-function DelistButton({
-  rules,
-  disabled,
-  onSubmit,
-}: {
-  rules: Array<[string, string]>;
-  disabled: boolean;
-  onSubmit: (rule: string, reason: string) => void;
-}) {
-  const [open, setOpen] = useState(false);
-  const [rule, setRule] = useState("");
-  const [reason, setReason] = useState("");
-  if (!open) {
-    return (
-      <button
-        className="btn small ghost danger"
-        disabled={disabled}
-        onClick={() => setOpen(true)}
-      >
-        Take out of the store
-      </button>
-    );
-  }
-  return (
-    <form
-      className="form decide-form"
-      onSubmit={(e) => {
-        e.preventDefault();
-        onSubmit(rule, reason.trim());
-      }}
-    >
-      <RuleSelect rules={rules} value={rule} onChange={setRule} />
-      <label>
-        The facts, as the maker will read them
-        <textarea
-          value={reason}
-          rows={2}
-          required
-          onChange={(e) => setReason(e.target.value)}
-        />
-      </label>
-      <div className="row-actions">
-        <button
-          className="btn small danger"
-          disabled={disabled || !rule || !reason.trim()}
-        >
-          Take out of the store
-        </button>
-        <button
-          type="button"
-          className="btn small ghost"
-          onClick={() => setOpen(false)}
-        >
-          Cancel
-        </button>
-      </div>
-    </form>
-  );
-}
 
 function ReportsSection({ q, onDone }: { q: AdminQueue; onDone: () => void }) {
   const overdue = q.reports.filter((r) => r.overdue).length;

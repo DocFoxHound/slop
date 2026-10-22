@@ -170,6 +170,37 @@ export interface MyServerDonation {
   cancelled_by: "donor" | "servers_shut_down" | "stripe" | null;
 }
 
+/** A maker's request to lift a donation hold, and staff's answer (donation_holds.rs). */
+export interface DonationHoldRequest {
+  id: string;
+  message: string;
+  created_at: string;
+  outcome: "lifted" | "kept" | null;
+  answer: string | null;
+  answered_at: string | null;
+}
+
+/** Staff stopped donations to an app: paused for review, or turned off until fixed. */
+export interface DonationHold {
+  id: string;
+  kind: "review" | "off";
+  reason: string;
+  ground: string | null;
+  placed_at: string;
+  lifted_at: string | null;
+  lift_note: string | null;
+  requests: DonationHoldRequest[];
+}
+
+export interface AdminDonationHold extends DonationHold {
+  slug: string;
+  title: string;
+  maker: string;
+  placed_by: string;
+  lifted_by: string | null;
+  active_server_donations: number;
+}
+
 export interface DonationSettings {
   donations_on: boolean;
   donation_suggested_minor: number;
@@ -1476,6 +1507,102 @@ export interface AdminApp extends AdminAppRef {
   pending_releases: number;
 }
 
+export interface ListingEdit {
+  title?: string;
+  summary?: string;
+  description_md?: string;
+  min_age?: number;
+  content_labels?: string[];
+  reason: string;
+}
+
+export interface AdminAppRecord {
+  app: {
+    id: string;
+    slug: string;
+    title: string;
+    summary: string;
+    description_md: string;
+    status: AppStatus;
+    stage: AppStage;
+    visibility: string;
+    repo_url: string;
+    license_spdx: string;
+    min_age: number;
+    content_labels: string[];
+    platforms: string[];
+    maker_id: string;
+    maker: string;
+    parent: string | null;
+    frozen_at: string | null;
+    donations_on: boolean;
+    donation_account: string | null;
+    created_at: string;
+    updated_at: string;
+  };
+  releases: Array<{ id: string; version: string; status: string; created_at: string; reviewed_at: string | null }>;
+  donations: Array<{ currency: string; donations: number; donated_minor: number; slop_fee_minor: number; refunded_minor: number }>;
+  active_server_donations: number;
+  reports: Array<{ id: string; reference: string; reason: string; details: string; status: string; created_at: string }>;
+  decisions: Array<{
+    id: string;
+    reference: string;
+    action: string;
+    rule: string;
+    facts: string;
+    decided_by: string;
+    appeal_status: string | null;
+    created_at: string;
+    reversed_at: string | null;
+  }>;
+  audit: Array<{ id: number; at: string; actor: string; action: string; detail: Record<string, unknown> }>;
+}
+
+export interface AdminMoney {
+  months: Array<{ month: string; kind: string; currency: string; payments: number; amount_minor: number; slop_fee_minor: number }>;
+  recent: Array<{
+    id: string;
+    kind: string;
+    amount_minor: number;
+    slop_fee_minor: number;
+    currency: string;
+    stripe_account_id: string | null;
+    stripe_object_id: string | null;
+    simulated: boolean;
+    created_at: string;
+  }>;
+  active_server_donations: number;
+  open_holds: number;
+  hold_requests_waiting: number;
+  stripe_events_today: number;
+  payments: "stripe" | "simulated" | "off";
+}
+
+export interface AdminFoundUser {
+  id: string;
+  display_name: string;
+  handle: string | null;
+  created_at: string;
+  suspended: boolean;
+  closed: boolean;
+  is_admin: boolean;
+}
+
+export interface AdminUserDetails {
+  id: string;
+  display_name: string;
+  country_code: string | null;
+  created_at: string;
+  suspended_at: string | null;
+  closed_at: string | null;
+  is_admin: boolean;
+  sign_ins: string[];
+  apps: Array<{ slug: string; title: string; status: string; visibility: string }>;
+  /** `at` is a Unix time in seconds. */
+  reports_about: Array<{ reference: string; about: string; reason: string; status: string; at: number }>;
+  decisions: Array<{ id: string; reference: string; action: string; rule: string; about: string; at: number; reversed: boolean }>;
+}
+
 export interface AuditEntry {
   id: number;
   at: string;
@@ -2393,9 +2520,26 @@ export const api = {
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
       request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),
-    apps: (status?: AppStatus) =>
-      request<AdminApp[]>("GET", `/v1/admin/apps${query({ status })}`),
-    audit: () => request<AuditEntry[]>("GET", "/v1/admin/audit"),
+    apps: (status?: AppStatus, q?: string) =>
+      request<AdminApp[]>("GET", `/v1/admin/apps${query({ status, q: q || undefined })}`),
+    /** Everything about one app: listing, releases, money, reports, decisions, history. */
+    appRecord: (slug: string) =>
+      request<AdminAppRecord>("GET", `/v1/admin/apps/${encodeURIComponent(slug)}/record`),
+    /** Staff fix a store page directly; the maker is told what changed and why. */
+    editListing: (slug: string, body: ListingEdit) =>
+      request<{ changed: string[] }>("PATCH", `/v1/admin/apps/${encodeURIComponent(slug)}/listing`, body),
+    audit: (q?: string, before?: number) =>
+      request<AuditEntry[]>("GET", `/v1/admin/audit${query({ q: q || undefined, before })}`),
+    money: () => request<AdminMoney>("GET", "/v1/admin/money"),
+    findUsers: (q: string) => request<AdminFoundUser[]>("GET", `/v1/admin/users${query({ q })}`),
+    /** Looking is written to the audit log. */
+    user: (id: string) => request<AdminUserDetails>("GET", `/v1/admin/users/${encodeURIComponent(id)}`),
+    decideUser: (id: string, body: { action: "warn" | "suspend_account"; rule: string; facts: string; law?: string }) =>
+      request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/decide`, body),
+    liftSuspension: (id: string, reason: string) =>
+      request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/lift-suspension`, { reason }),
+    passkeyGrace: (id: string, reason: string) =>
+      request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/passkey-grace`, { reason }),
     approve: (id: string) =>
       request<void>("POST", `/v1/admin/releases/${id}/approve`),
     reject: (id: string, reason: string) =>
@@ -2457,6 +2601,23 @@ export const api = {
       request<void>("POST", `/v1/admin/releases/${id}/revoke`, { reason }),
     list: (slug: string) =>
       request<void>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/list`),
+    donationHolds: (show: "open" | "all" = "open") =>
+      request<AdminDonationHold[]>("GET", `/v1/admin/donation-holds?show=${show}`),
+    /** "off" is a sensitive action: it may wait for a second approval. */
+    holdDonations: (slug: string, body: { kind: "review" | "off"; reason: string; ground?: string }) =>
+      request<{ hold?: string; pending_action?: string } | undefined>(
+        "POST",
+        `/v1/admin/apps/${encodeURIComponent(slug)}/donation-hold`,
+        body,
+      ),
+    liftDonationHold: (id: string, note: string) =>
+      request<void>("POST", `/v1/admin/donation-holds/${encodeURIComponent(id)}/lift`, { note }),
+    answerDonationHoldRequest: (id: string, lift: boolean, answer: string) =>
+      request<void>(
+        "POST",
+        `/v1/admin/donation-hold-requests/${encodeURIComponent(id)}/answer`,
+        { lift, answer },
+      ),
     delist: (slug: string, rule: string, reason: string) =>
       request<void>(
         "POST",
@@ -3050,6 +3211,18 @@ export const api = {
         "PUT",
         `/v1/apps/${encodeURIComponent(slug)}/donations/settings`,
         body,
+      ),
+    /** A hold staff placed on this app's donations, for its maker. */
+    hold: (slug: string) =>
+      request<{ open: DonationHold | null; can_ask_at: string | null }>(
+        "GET",
+        `/v1/apps/${encodeURIComponent(slug)}/donations/hold`,
+      ),
+    askToLift: (slug: string, message: string) =>
+      request<void>(
+        "POST",
+        `/v1/apps/${encodeURIComponent(slug)}/donations/hold/request`,
+        { message },
       ),
     serversShutDown: (slug: string) =>
       request<{ cancelled: number }>(
