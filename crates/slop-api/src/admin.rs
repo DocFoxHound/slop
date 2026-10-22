@@ -372,17 +372,15 @@ pub async fn reject(
     reason: &str,
 ) -> anyhow::Result<()> {
     check_reviewer(reviewer)?;
-    ensure!(
-        !reason.trim().is_empty(),
-        "give the maker a reason with --reason"
-    );
+    let reason = reason.trim();
+    ensure!(!reason.is_empty(), "give the maker a reason with --reason");
     let mut tx = db.begin().await?;
     let updated = sqlx::query(
         "update releases set status = 'rejected', status_reason = $2, reviewed_at = now(), reviewed_by = $3
          where id = $1 and status in ('awaiting_review', 'fetching', 'failed')",
     )
     .bind(release_id)
-    .bind(reason.trim())
+    .bind(reason)
     .bind(reviewer)
     .execute(&mut *tx)
     .await?
