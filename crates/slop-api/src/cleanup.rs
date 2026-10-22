@@ -45,7 +45,7 @@ pub async fn run_once(db: &PgPool) -> anyhow::Result<Deleted> {
         "delete from sessions
          where revoked_at < now() - $1
             or expires_at < now() - $1
-            or last_seen_at < now() - (case kind when 'desktop' then $3 else $2 end) - $1",
+            or last_seen_at < now() - (case when kind in ('desktop', 'agent') then $3 else $2 end) - $1",
     )
     .bind(ENDED_SESSION_RETENTION)
     .bind(session::IDLE_TIMEOUT)
