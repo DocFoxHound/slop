@@ -3872,16 +3872,20 @@ async fn messages_are_checked_for_size_tag_budget_and_pace(db: PgPool) {
     let res = app.send(send(&ann, conv, message(0, "41"))).await;
     assert_eq!(res.status(), StatusCode::CONFLICT);
     // Messages and commits share the account's chat limit (60 a minute): when it's spent, 429.
-    while app
-        .state
-        .account_limiter
-        .take(
-            ann_id,
-            slop_api::limits::Action::ChatMessage,
-            std::time::Instant::now(),
-        )
-        .is_ok()
-    {}
+    // (It refills one a second, so spend it again right before each request.)
+    let spend = || {
+        while app
+            .state
+            .account_limiter
+            .take(
+                ann_id,
+                slop_api::limits::Action::ChatMessage,
+                std::time::Instant::now(),
+            )
+            .is_ok()
+        {}
+    };
+    spend();
     let res = app
         .send(
             ann.call(
@@ -3892,6 +3896,7 @@ async fn messages_are_checked_for_size_tag_budget_and_pace(db: PgPool) {
         )
         .await;
     assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    spend();
     let res = app.send(send(&ann, conv, message(0, "later"))).await;
     assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
 }
@@ -4427,5 +4432,1478 @@ async fn chat_cleanup_deletes_only_what_is_over_thirty_days_and_expires_waiting_
             (bob_waiting.id, "revoked".to_string()),
             (bob_new.id, "revoked".to_string())
         ]
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The Slop app's chat library (slop-client), against the API
+
+/// Like `chat_app`, with the data folder and secure store given, to reopen or lose them.
+async fn chat_in(
+    app: &TestApp,
+    base: &str,
+    user: Uuid,
+    cookie: &str,
+    dir: &std::path::Path,
+    secrets: &MemorySecrets,
+) -> slop_client::Result<Chat> {
+    let tokens = desktop_sign_in(app, cookie).await;
+    let store = slop_client::api::MemoryTokenStore::default();
+    use slop_client::api::TokenStore;
+    store.save(tokens["refresh_token"].as_str().unwrap());
+    let api = slop_client::api::ApiClient::new(base.parse().unwrap(), std::sync::Arc::new(store))
+        .unwrap();
+    Chat::open(api, dir.to_path_buf(), secrets, user)
+}
+
+fn temp_dir() -> std::path::PathBuf {
+    std::env::temp_dir().join(format!("slop-chat-test-{}", Uuid::now_v7()))
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_chat_library_backs_up_and_restores_after_starting_over(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let base = serve(&app).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let (dir, secrets) = (temp_dir(), MemorySecrets::default());
+    let ann = chat_in(&app, &base, ann_id, &ann_web, &dir, &secrets)
+        .await
+        .unwrap();
+    let bob = chat_app(&app, &base, bob_id, &bob_web).await;
+    ann.setup("Ann's PC").await.unwrap();
+    bob.setup("Bob's PC").await.unwrap();
+    let conv = ann.start_direct(&bob_id.to_string()).await.unwrap();
+    bob.sync(0).await.unwrap();
+    ann.send(conv, "the secret plan", None, vec![], false)
+        .await
+        .unwrap();
+    bob.sync(0).await.unwrap();
+    bob.send(conv, "sounds good", None, vec![], false)
+        .await
+        .unwrap();
+    ann.sync(0).await.unwrap();
+
+    // The backup is sealed with the recovery code: Slop can't read it.
+    let code = ann.set_backups(true).await.unwrap().unwrap();
+    assert!(ann.status().await.unwrap().backups);
+    let sealed: Vec<u8> = sqlx::query_scalar("select body from chat_backups where user_id = $1")
+        .bind(ann_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(!sealed.windows(6).any(|w| w == b"secret" || w == b"sounds"));
+
+    // The app's own copy on disk is sealed with a key from the system's secure store.
+    let file = std::fs::read(dir.join(format!("chat-{ann_id}.bin"))).unwrap();
+    assert!(!file.windows(6).any(|w| w == b"secret" || w == b"sounds"));
+    drop(ann);
+    let reopened = chat_in(&app, &base, ann_id, &ann_web, &dir, &secrets)
+        .await
+        .unwrap();
+    assert!(
+        reopened
+            .messages(conv, None, 10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "the secret plan")
+    );
+    drop(reopened);
+    assert!(
+        chat_in(
+            &app,
+            &base,
+            ann_id,
+            &ann_web,
+            &dir,
+            &MemorySecrets::default()
+        )
+        .await
+        .is_err(),
+        "without the stored key the file can't be opened"
+    );
+
+    // Every device lost: a new one starts over (fresh sign-in), then restores with the code.
+    let ann2 = chat_in(
+        &app,
+        &base,
+        ann_id,
+        &ann_web,
+        &temp_dir(),
+        &MemorySecrets::default(),
+    )
+    .await
+    .unwrap();
+    assert_eq!(ann2.setup("Ann's new PC").await.unwrap().state, "pending");
+    ann2.start_over().await.unwrap();
+    let status = ann2.status().await.unwrap();
+    assert_eq!(status.state, "active");
+    assert_eq!(status.devices.len(), 1, "the lost device is gone");
+    assert!(ann2.messages(conv, None, 10).await.unwrap().is_empty());
+    assert!(ann2.restore_backup("WRONG-CODE-0000").await.is_err());
+    let restored = ann2.restore_backup(&code).await.unwrap();
+    assert!(restored >= 2, "{restored}");
+    let texts: Vec<String> = ann2
+        .messages(conv, None, 10)
+        .await
+        .unwrap()
+        .into_iter()
+        .map(|m| m.text)
+        .collect();
+    assert!(
+        texts.contains(&"the secret plan".to_string())
+            && texts.contains(&"sounds good".to_string()),
+        "{texts:?}"
+    );
+
+    // Turning backups off deletes the copy at Slop.
+    ann2.set_backups(false).await.unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/chat/backup").cookie(&ann_web))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(!ann2.status().await.unwrap().backups);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_chat_library_renames_adds_leaves_hides_mutes_and_starts_team_chats(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let base = serve(&app).await;
+    let mut people = Vec::new();
+    for name in ["Ann", "Bob", "Cara"] {
+        people.push(app.user(name, "US").await);
+    }
+    let (ann_id, bob_id, cara_id) = (people[0].0, people[1].0, people[2].0);
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, cara_id).await;
+    let mut apps = Vec::new();
+    for (id, web) in &people {
+        let chat = chat_app(&app, &base, *id, web).await;
+        chat.setup("PC").await.unwrap();
+        apps.push(chat);
+    }
+    let (ann, bob, cara) = (&apps[0], &apps[1], &apps[2]);
+    let sync_all = || async {
+        for _ in 0..2 {
+            for a in &apps {
+                a.sync(0).await.unwrap();
+            }
+        }
+    };
+    let titles = |list: Vec<slop_client::chat::ConversationView>| -> Vec<(Uuid, String)> {
+        list.into_iter().map(|c| (c.id, c.title)).collect()
+    };
+
+    // The name of a group travels encrypted.
+    let group = ann
+        .start_group(&[bob_id.to_string()], Some("Raid night"))
+        .await
+        .unwrap();
+    sync_all().await;
+    ann.rename(group, "Raid night 2").await.unwrap();
+    assert!(ann.rename(group, "  ").await.is_err());
+    sync_all().await;
+    assert_eq!(
+        titles(bob.conversations().await.unwrap()),
+        [(group, "Raid night 2".to_string())]
+    );
+    let stored: Vec<Vec<u8>> = sqlx::query_scalar("select body from chat_messages")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert!(
+        stored
+            .iter()
+            .all(|b| !b.windows(10).any(|w| w == b"Raid night"))
+    );
+
+    // Adding someone: they read what's said after.
+    ann.add_people(group, &[cara_id.to_string()]).await.unwrap();
+    sync_all().await;
+    ann.send(group, "welcome cara", None, vec![], false)
+        .await
+        .unwrap();
+    sync_all().await;
+    assert!(
+        cara.messages(group, None, 10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "welcome cara")
+    );
+
+    // Leaving: gone from Bob's list and the members.
+    bob.leave(group).await.unwrap();
+    assert!(
+        bob.conversations()
+            .await
+            .unwrap()
+            .iter()
+            .all(|c| c.id != group)
+    );
+    let members: Vec<Uuid> = sqlx::query_scalar(
+        "select user_id from chat_members where conversation_id = $1 order by joined_at",
+    )
+    .bind(group)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(members, [ann_id, cara_id]);
+
+    // Hiding until the next message; muting.
+    cara.hide(group).await.unwrap();
+    assert!(
+        cara.conversations()
+            .await
+            .unwrap()
+            .iter()
+            .all(|c| c.id != group)
+    );
+    cara.set_muted(group, true).await.unwrap();
+    sync_all().await;
+    ann.send(group, "back again", None, vec![], false)
+        .await
+        .unwrap();
+    let list = cara.conversations().await.unwrap();
+    let g = list.iter().find(|c| c.id == group).unwrap();
+    assert!(g.muted);
+
+    // A team chat: everyone in the team.
+    make_team(
+        &app,
+        &people[0].1,
+        "night-owls",
+        json!({ "name": "Night Owls" }),
+    )
+    .await;
+    add_to_team(&app, "night-owls", bob_id, "member").await;
+    let team = ann.start_team("night-owls").await.unwrap();
+    sync_all().await;
+    ann.send(team, "game tonight?", None, vec![], false)
+        .await
+        .unwrap();
+    sync_all().await;
+    let bobs = bob.conversations().await.unwrap();
+    let t = bobs.iter().find(|c| c.id == team).unwrap();
+    assert_eq!((t.kind.as_str(), t.title.as_str()), ("team", "Night Owls"));
+    assert!(
+        bob.messages(team, None, 10)
+            .await
+            .unwrap()
+            .iter()
+            .any(|m| m.text == "game tonight?")
+    );
+    assert!(cara.start_team("night-owls").await.is_err(), "not in it");
+
+    // Removing one of your devices.
+    let ann_laptop = chat_app(&app, &base, ann_id, &people[0].1).await;
+    let pending = ann_laptop.setup("Laptop").await.unwrap();
+    ann.remove_device(pending.device_id.unwrap()).await.unwrap();
+    assert_eq!(ann_laptop.status().await.unwrap().state, "revoked");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_chat_library_tops_up_key_packages_below_half(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let base = serve(&app).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let ann = chat_app(&app, &base, ann_id, &ann_web).await;
+    let ann_device = ann.setup("PC").await.unwrap().device_id.unwrap();
+    let bob = first_device(&app, &bob_web).await;
+    let conv = chat_id(&app, &bob, json!({ "kind": "direct", "user": ann_id })).await;
+    let left = || {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "select count(*) from chat_key_packages where device_id = $1 and not last_resort",
+            )
+            .bind(ann_device)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(left().await, 20);
+    // Others add Ann's device to chats: ten left is still half.
+    for _ in 0..10 {
+        app.send(
+            bob.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/key-packages"),
+            )
+            .json(json!({ "devices": [ann_device] })),
+        )
+        .await;
+    }
+    ann.sync(0).await.unwrap();
+    assert_eq!(left().await, 10, "not below half: no top-up");
+    app.send(
+        bob.call(
+            Method::POST,
+            format!("/v1/chat/conversations/{conv}/key-packages"),
+        )
+        .json(json!({ "devices": [ann_device] })),
+    )
+    .await;
+    ann.sync(0).await.unwrap();
+    assert_eq!(left().await, 29, "nine left, topped up by twenty");
+}
+
+#[test]
+fn payment_warnings_catch_every_off_platform_payment_phrase() {
+    use slop_client::chat::payment_warning;
+    for phrase in [
+        "PayPal",
+        "venmo",
+        "Cash App",
+        "cashapp",
+        "zelle",
+        "a gift card",
+        "giftcard",
+        "Bitcoin",
+        "my crypto wallet",
+        "USDT",
+        "wire transfer",
+        "Western Union",
+        "moneygram",
+        "IBAN",
+        "bank details",
+        "send money",
+        "pay me first",
+    ] {
+        let text = format!("hey, about the sprites: {phrase} ok?");
+        let warning = payment_warning(&text).unwrap_or_else(|| panic!("{phrase}"));
+        assert!(warning.contains("outside Slop"), "{warning}");
+    }
+    for fine in [
+        "see you at game night",
+        "payment through Slop is fine",
+        "the bank in the game",
+    ] {
+        assert_eq!(payment_warning(fine), None, "{fine}");
+    }
+}
+
+// ---------------------------------------------------------------------------------------------
+// Bug reports
+
+/// Records that a user played an app (as a launch through the Slop app would).
+async fn played(app: &TestApp, user: Uuid, slug: &str) {
+    sqlx::query(
+        "insert into user_app_usage (user_id, app_id, days_launched) select $1, id, 1 from apps where slug = $2",
+    )
+    .bind(user)
+    .bind(slug)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+/// Files a bug report through the API; returns its ID.
+async fn file_bug(app: &TestApp, cookie: &str, slug: &str, title: &str) -> String {
+    let res = app
+        .send(post(
+            format!("/v1/apps/{slug}/bug-reports"),
+            cookie,
+            json!({ "title": title, "body": "It breaks.", "version": "1.0.0", "platform": "linux",
+                    "log": "panic at main.rs:1" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    body_json(res).await["id"].as_str().unwrap().to_string()
+}
+
+fn report_titles(list: &Value) -> Vec<String> {
+    let mut t: Vec<String> = list["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| r["title"].as_str().unwrap().to_string())
+        .collect();
+    t.sort();
+    t
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bug_report_lists_filter_by_status_and_show_players_only_open_ones_and_their_own(
+    db: PgPool,
+) {
+    let app = test_app_with(db, chat_limits).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (pat_id, pat) = app.user("Pat Player", "US").await;
+    let (sam_id, sam) = app.user("Sam Player", "US").await;
+    let (_, never) = app.user("Nev Never", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    approved_release(&app, "tower", maker_id).await;
+    played(&app, pat_id, "tower").await;
+    played(&app, sam_id, "tower").await;
+    let pats_fixed = file_bug(&app, &pat, "tower", "Pat: fixed one").await;
+    file_bug(&app, &pat, "tower", "Pat: open one").await;
+    let sams_wontfix = file_bug(&app, &sam, "tower", "Sam: won't fix").await;
+    let sams_dupe = file_bug(&app, &sam, "tower", "Sam: duplicate").await;
+    for (id, status) in [
+        (&pats_fixed, "fixed"),
+        (&sams_wontfix, "wont_fix"),
+        (&sams_dupe, "duplicate"),
+    ] {
+        let res = app
+            .send(
+                req(Method::PATCH, format!("/v1/bug-reports/{id}"))
+                    .cookie(&maker)
+                    .json(json!({ "status": status })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+    let list = |cookie: &str, q: &str| {
+        let r = req(Method::GET, format!("/v1/apps/tower/bug-reports{q}")).cookie(cookie);
+        let app = &app;
+        async move {
+            let res = app.send(r).await;
+            (res.status(), body_json(res).await)
+        }
+    };
+
+    assert_eq!(
+        list(&never, "").await.0,
+        StatusCode::NOT_FOUND,
+        "never played"
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/tower/bug-reports"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let (status, err) = list(&maker, "?status=closed").await;
+    assert_eq!(
+        (status, err["error"]["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("status"))
+    );
+
+    // The maker: each status, or all.
+    for (q, want) in [
+        ("", vec!["Pat: open one"]),
+        ("?status=open", vec!["Pat: open one"]),
+        ("?status=fixed", vec!["Pat: fixed one"]),
+        ("?status=wont_fix", vec!["Sam: won't fix"]),
+        ("?status=duplicate", vec!["Sam: duplicate"]),
+        (
+            "?status=all",
+            vec![
+                "Pat: fixed one",
+                "Pat: open one",
+                "Sam: duplicate",
+                "Sam: won't fix",
+            ],
+        ),
+    ] {
+        let (status, l) = list(&maker, q).await;
+        assert_eq!(status, StatusCode::OK);
+        assert_eq!(report_titles(&l), want, "{q}");
+        assert_eq!(l["is_maker"], true);
+    }
+    // A player: open reports, and their own closed ones; never someone else's closed ones.
+    let (_, l) = list(&sam, "?status=all").await;
+    assert_eq!(
+        report_titles(&l),
+        ["Pat: open one", "Sam: duplicate", "Sam: won't fix"]
+    );
+    assert_eq!(
+        (l["is_maker"].as_bool(), l["can_report"].as_bool()),
+        (Some(false), Some(true))
+    );
+    let (_, l) = list(&sam, "?status=fixed").await;
+    assert!(report_titles(&l).is_empty(), "Pat's fixed report is Pat's");
+    let (_, l) = list(&pat, "?status=fixed").await;
+    assert_eq!(report_titles(&l), ["Pat: fixed one"]);
+    let mine = &l["reports"][0];
+    assert_eq!(mine["mine"], true);
+    assert_eq!(mine["log"], "panic at main.rs:1", "their own in full");
+
+    // Private Slop: players it's shared with, while it's shared.
+    let (_, olive) = (maker_id, maker.clone());
+    private_app(&app, maker_id, &olive, "secret-tool").await;
+    let (finn_id, finn) = app.user("Finn Friend", "US").await;
+    let (tia_id, tia) = app.user("Tia Teammate", "US").await;
+    make_team(&app, &maker, "testers", json!({})).await;
+    add_to_team(&app, "testers", tia_id, "member").await;
+    app.send(post(
+        "/v1/apps/secret-tool/shares",
+        &maker,
+        json!({ "user": finn_id.to_string() }),
+    ))
+    .await;
+    app.send(post(
+        "/v1/apps/secret-tool/shares",
+        &maker,
+        json!({ "team": "testers" }),
+    ))
+    .await;
+    for (id, _) in [(finn_id, &finn), (tia_id, &tia)] {
+        played(&app, id, "secret-tool").await;
+    }
+    file_bug(&app, &finn, "secret-tool", "Private crash").await;
+    for c in [&finn, &tia] {
+        let r = app
+            .send(req(Method::GET, "/v1/apps/secret-tool/bug-reports").cookie(c))
+            .await;
+        assert_eq!(r.status(), StatusCode::OK);
+    }
+    app.send(
+        req(
+            Method::DELETE,
+            format!("/v1/apps/secret-tool/shares/{finn_id}"),
+        )
+        .cookie(&maker),
+    )
+    .await;
+    app.send(req(Method::DELETE, "/v1/apps/secret-tool/team-shares/testers").cookie(&maker))
+        .await;
+    for c in [&finn, &tia] {
+        let r = app
+            .send(req(Method::GET, "/v1/apps/secret-tool/bug-reports").cookie(c))
+            .await;
+        assert_eq!(r.status(), StatusCode::NOT_FOUND, "no longer shared");
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_update_bug_reports_and_the_right_players_are_told(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (pat_id, pat) = app.user("Pat Player", "US").await;
+    let (sam_id, sam) = app.user("Sam Player", "US").await;
+    let (_, other_maker) = app.user("Other Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    approved_release(&app, "tower", maker_id).await;
+    played(&app, pat_id, "tower").await;
+    played(&app, sam_id, "tower").await;
+    let id = file_bug(&app, &pat, "tower", "Crash on wave 3").await;
+    app.send(req(Method::POST, format!("/v1/bug-reports/{id}/me-too")).cookie(&sam))
+        .await;
+    let update = |cookie: &str, body: Value| {
+        req(Method::PATCH, format!("/v1/bug-reports/{id}"))
+            .cookie(cookie)
+            .json(body)
+    };
+    let told = |user: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (String, String)>(
+                "select title, body from notifications where user_id = $1 and title like 'Your bug report%'
+                 order by created_at",
+            )
+            .bind(user)
+            .fetch_all(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    // The maker sees it in full.
+    let full = body_json(
+        app.send(req(Method::GET, format!("/v1/bug-reports/{id}")).cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            full["reporter"].as_str(),
+            full["log"].as_str(),
+            full["me_too"].as_i64()
+        ),
+        (Some("Pat Player"), Some("panic at main.rs:1"), Some(1))
+    );
+    assert_eq!(
+        app.send(req(Method::GET, format!("/v1/bug-reports/{id}")).cookie(&other_maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(update(&other_maker, json!({ "status": "fixed" })))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(update(&maker, json!({ "status": "closed" })))
+        .await;
+    assert_eq!(field_of(res).await, "status");
+    let res = app
+        .send(update(&maker, json!({ "maker_note": "x".repeat(2001) })))
+        .await;
+    assert_eq!(field_of(res).await, "maker_note");
+
+    // Won't fix: the reporter is told with the note; me-too players only hear about fixes.
+    let res = app
+        .send(update(
+            &maker,
+            json!({ "status": "wont_fix", "maker_note": "Works as designed." }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let r = body_json(res).await;
+    assert_eq!(
+        (r["status"].as_str(), r["maker_note"].as_str()),
+        (Some("wont_fix"), Some("Works as designed."))
+    );
+    assert_eq!(
+        told(pat_id).await,
+        [(
+            "Your bug report won't be fixed".to_string(),
+            "\"Crash on wave 3\": Works as designed.".to_string()
+        )]
+    );
+    assert!(told(sam_id).await.is_empty());
+    // The same status again tells nobody; an empty note clears it.
+    let res = app
+        .send(update(
+            &maker,
+            json!({ "status": "wont_fix", "maker_note": "" }),
+        ))
+        .await;
+    assert!(body_json(res).await["maker_note"].is_null());
+    assert_eq!(told(pat_id).await.len(), 1);
+    // Leaving the note out keeps it.
+    app.send(update(&maker, json!({ "maker_note": "Kept." })))
+        .await;
+    let res = app
+        .send(update(&maker, json!({ "status": "duplicate" })))
+        .await;
+    assert_eq!(body_json(res).await["maker_note"], "Kept.");
+    let res = app.send(update(&maker, json!({ "status": "open" }))).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    // Unread notices about one report merge into one, saying what happened last.
+    assert_eq!(
+        notifications(&app, pat_id).await,
+        [("Your bug report is open again".to_string(), 3)]
+    );
+    assert!(told(sam_id).await.is_empty());
+    // Once read, the next change is a new notice; fixed tells the me-too players too.
+    sqlx::query("update notifications set read_at = now()")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    app.send(update(&maker, json!({ "status": "fixed" }))).await;
+    for user in [pat_id, sam_id] {
+        let titles: Vec<String> = told(user).await.into_iter().map(|t| t.0).collect();
+        assert_eq!(
+            titles.last().unwrap(),
+            "Your bug report was fixed",
+            "{titles:?}"
+        );
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn me_too_is_for_players_of_open_reports_once_and_can_be_taken_back(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (pat_id, pat) = app.user("Pat Player", "US").await;
+    let (sam_id, sam) = app.user("Sam Player", "US").await;
+    let (_, never) = app.user("Nev Never", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    played(&app, pat_id, "tower").await;
+    played(&app, sam_id, "tower").await;
+    let id = file_bug(&app, &pat, "tower", "Crash").await;
+    let me_too = |cookie: &str, id: &str, m: Method| {
+        req(m, format!("/v1/bug-reports/{id}/me-too")).cookie(cookie)
+    };
+    let count = || {
+        let db = app.db.clone();
+        let id: Uuid = id.parse().unwrap();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "select count(*) from bug_report_votes where report_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    assert_eq!(
+        app.send(me_too(&never, &id, Method::POST)).await.status(),
+        StatusCode::NOT_FOUND,
+        "never played"
+    );
+    assert_eq!(
+        app.send(me_too(&sam, &Uuid::now_v7().to_string(), Method::POST))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    for _ in 0..2 {
+        assert_eq!(
+            app.send(me_too(&sam, &id, Method::POST)).await.status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    assert_eq!(count().await, 1, "once");
+    let l = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/bug-reports").cookie(&sam))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (
+            l["reports"][0]["me_too"].as_i64(),
+            l["reports"][0]["i_have_it_too"].as_bool()
+        ),
+        (Some(1), Some(true))
+    );
+
+    // Taking it back; again is nothing; so is a report that doesn't exist.
+    for _ in 0..2 {
+        assert_eq!(
+            app.send(me_too(&sam, &id, Method::DELETE)).await.status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    assert_eq!(count().await, 0);
+    assert_eq!(
+        app.send(me_too(&sam, &Uuid::now_v7().to_string(), Method::DELETE))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(me_too(&pat, &id, Method::DELETE)).await.status(),
+        StatusCode::NO_CONTENT,
+        "not voted: nothing to undo"
+    );
+
+    // Closed: no more me-toos.
+    app.send(
+        req(Method::PATCH, format!("/v1/bug-reports/{id}"))
+            .cookie(&maker)
+            .json(json!({ "status": "fixed" })),
+    )
+    .await;
+    assert_eq!(
+        app.send(me_too(&sam, &id, Method::POST)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(count().await, 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Makers' AI agents: People and bug-report tools
+
+/// A maker token's `Authorization` header.
+async fn maker_token(app: &TestApp, cookie: &str, body: Value) -> String {
+    let res = app.send(post("/v1/me/maker-tokens", cookie, body)).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    )
+}
+
+/// Calls an MCP tool: (ok, the API's answer as text).
+async fn tool(
+    app: &TestApp,
+    bearer: &str,
+    endpoint: &str,
+    name: &str,
+    args: Value,
+) -> (bool, String) {
+    let res = app
+        .send(
+            req(Method::POST, endpoint)
+                .header("authorization", bearer.to_string())
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                              "params": { "name": name, "arguments": args } })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let body = body_json(res).await;
+    (
+        body["result"]["isError"] == false,
+        body["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or("")
+            .to_string(),
+    )
+}
+
+/// A job request from `client` to the creative `handle`, for `slug`; returns its ID.
+async fn hire(app: &TestApp, client: &str, handle: &str, slug: &str) -> String {
+    let res = app
+        .send(post(
+            format!("/v1/people/{handle}/hire"),
+            client,
+            json!({ "app_slug": slug, "skill": "pixel-art", "request_md": "A knight.",
+                    "confirm_adult": true, "exact_wording_ack": true }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "hire");
+    body_json(res).await["id"].as_str().unwrap().to_string()
+}
+
+async fn job_status(app: &TestApp, id: &str) -> String {
+    sqlx::query_scalar("select status from jobs where id = $1::uuid")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_makers_agent_with_people_access_answers_jobs_but_never_agrees_pays_or_delivers(
+    db: PgPool,
+) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        chat_limits(c);
+    })
+    .await;
+    let (_, vera) = live_creative(&app, "vera", "US", false).await;
+    let (tom_id, tom) = app.user("Tom Client", "US").await;
+    listed_with(&app, tom_id, "toms-game", "released", "").await;
+    let mcp = "/v1/maker/mcp";
+    let agent = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "Claude", "scope": "publish", "people": true }),
+    )
+    .await;
+    let toms_agent = maker_token(
+        &app,
+        &tom,
+        json!({ "name": "Claude", "scope": "publish", "people": true }),
+    )
+    .await;
+    let no_people = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "No people", "scope": "publish" }),
+    )
+    .await;
+    let reader = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "Reader", "scope": "read", "people": true }),
+    )
+    .await;
+    let job = hire(&app, &tom, "vera", "toms-game").await;
+    let other = hire(&app, &tom, "vera", "toms-game").await;
+
+    // Reading: the jobs, one job.
+    let (ok, text) = tool(&app, &agent, mcp, "my_jobs", json!({})).await;
+    assert!(ok && text.contains(&job), "{text}");
+    let (ok, text) = tool(&app, &agent, mcp, "get_job", json!({ "id": job })).await;
+    assert!(ok && text.contains("requested"), "{text}");
+
+    // Without People access, or read-only, no People work.
+    let (ok, _) = tool(&app, &no_people, mcp, "my_jobs", json!({})).await;
+    assert!(!ok);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/jobs").header("authorization", no_people.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let (ok, _) = tool(&app, &reader, mcp, "my_jobs", json!({})).await;
+    assert!(ok, "reading is fine");
+    let mut quote = sprite_offer("upfront");
+    quote["id"] = json!(job);
+    let (ok, _) = tool(&app, &reader, mcp, "send_quote", quote.clone()).await;
+    assert!(!ok, "a read token sends nothing");
+    assert_eq!(job_status(&app, &job).await, "requested");
+
+    // A quote; declining another request.
+    let (ok, text) = tool(&app, &agent, mcp, "send_quote", quote).await;
+    assert!(ok, "{text}");
+    assert_eq!(job_status(&app, &job).await, "offered");
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "decline_job",
+        json!({ "id": other, "note": "Booked up this month." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    assert_eq!(job_status(&app, &other).await, "declined");
+
+    // Agreeing, paying, delivering and the like stay with the person.
+    let as_agent = |bearer: &str, path: String, body: Value| {
+        req(Method::POST, path)
+            .header("authorization", bearer.to_string())
+            .json(body)
+    };
+    assert_eq!(
+        app.send(as_agent(
+            &toms_agent,
+            format!("/v1/jobs/{job}/accept"),
+            json!({ "offer_count": 1, "exact_terms_ack": true, "start_now": true })
+        ))
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(job_status(&app, &job).await, "offered");
+    app.send(post(
+        format!("/v1/jobs/{job}/accept"),
+        &tom,
+        json!({ "offer_count": 1, "exact_terms_ack": true, "start_now": true }),
+    ))
+    .await;
+    for (bearer, step) in [
+        (&toms_agent, "pay"),
+        (&toms_agent, "payment/check"),
+        (&toms_agent, "withdraw"),
+        (&toms_agent, "cancel"),
+        (&agent, "cancel"),
+        (&agent, "deliver"),
+        (&agent, "sign-off/send"),
+        (&toms_agent, "sign-off"),
+        (&toms_agent, "accept-delivery"),
+        (&agent, "final-files"),
+        (&toms_agent, "change/accept"),
+        (&toms_agent, "problem"),
+    ] {
+        assert_eq!(
+            app.send(as_agent(
+                bearer,
+                format!("/v1/jobs/{job}/{step}"),
+                json!({})
+            ))
+            .await
+            .status(),
+            StatusCode::FORBIDDEN,
+            "{step}"
+        );
+    }
+    assert_eq!(job_status(&app, &job).await, "awaiting_payment");
+    app.send(post(format!("/v1/jobs/{job}/pay"), &tom, json!({})))
+        .await;
+    assert_eq!(job_status(&app, &job).await, "in_progress");
+
+    // Changes: the client's agent asks; the creative's declines it, then offers one.
+    let (ok, text) = tool(
+        &app,
+        &toms_agent,
+        mcp,
+        "request_change",
+        json!({ "id": job, "note": "Could he also jump?" }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "decline_change",
+        json!({ "id": job, "note": "Out of scope." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let due = (OffsetDateTime::now_utc().date() + time::Duration::days(30)).to_string();
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "propose_change",
+        json!({ "id": job, "title": "Jumping", "scope_md": "8 frames.", "extra_price_minor": 3000, "new_due_date": due }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let changes: Vec<String> = sqlx::query_scalar(
+        "select status from job_changes where job_id = $1::uuid order by number",
+    )
+    .bind(&job)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(changes, ["declined", "offered"]);
+
+    // The job conversation: asked for, opened, written in, read, closed.
+    let (ok, text) = tool(
+        &app,
+        &toms_agent,
+        mcp,
+        "ask_for_job_conversation",
+        json!({ "id": job, "note": "About the colours." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "open_job_conversation",
+        json!({ "id": job }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "send_job_message",
+        json!({ "id": job, "body": "I'm Vera's assistant: which palette?", "recording_ack": true }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let (ok, text) = tool(
+        &app,
+        &toms_agent,
+        mcp,
+        "read_job_conversation",
+        json!({ "id": job }),
+    )
+    .await;
+    assert!(ok && text.contains("which palette?"), "{text}");
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "close_job_conversation",
+        json!({ "id": job }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let (open, closed): (bool, bool) = sqlx::query_as(
+        "select conversation_open, conversation_closed_at is not null from jobs where id = $1::uuid",
+    )
+    .bind(&job)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((open, closed), (false, true));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_makers_agent_reads_and_updates_bug_reports_only_on_its_own_apps(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (rival_id, _) = app.user("Rival Maker", "US").await;
+    let (pat_id, pat) = app.user("Pat Player", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    listed_with(&app, maker_id, "castle", "released", "").await;
+    listed_with(&app, rival_id, "rivals", "released", "").await;
+    for slug in ["tower", "castle", "rivals"] {
+        played(&app, pat_id, slug).await;
+    }
+    let mine = file_bug(&app, &pat, "tower", "Tower crash").await;
+    let castle = file_bug(&app, &pat, "castle", "Castle crash").await;
+    let theirs = file_bug(&app, &pat, "rivals", "Rival crash").await;
+    let mcp = "/v1/maker/mcp";
+    let agent = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Claude", "scope": "publish" }),
+    )
+    .await;
+    let tower_only = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Tower", "scope": "publish", "apps": ["tower"] }),
+    )
+    .await;
+    let reader = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "list_bug_reports",
+        json!({ "slug": "tower" }),
+    )
+    .await;
+    assert!(ok && text.contains("panic at main.rs:1"), "{text}");
+    let (ok, _) = tool(
+        &app,
+        &agent,
+        mcp,
+        "list_bug_reports",
+        json!({ "slug": "rivals" }),
+    )
+    .await;
+    assert!(!ok, "another maker's app");
+    let (ok, _) = tool(
+        &app,
+        &agent,
+        mcp,
+        "update_bug_report",
+        json!({ "id": theirs, "status": "wont_fix" }),
+    )
+    .await;
+    assert!(!ok);
+    let (ok, _) = tool(
+        &app,
+        &reader,
+        mcp,
+        "update_bug_report",
+        json!({ "id": mine, "status": "fixed" }),
+    )
+    .await;
+    assert!(!ok, "a read token changes nothing");
+    let (ok, text) = tool(
+        &app,
+        &reader,
+        mcp,
+        "release_feedback",
+        json!({ "slug": "tower" }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let (ok, text) = tool(
+        &app,
+        &agent,
+        mcp,
+        "update_bug_report",
+        json!({ "id": mine, "status": "fixed", "maker_note": "Fixed in 1.0.1." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+
+    // A token for the tower only: its reports, not the castle's.
+    let get = |bearer: &str, id: &str| {
+        req(Method::GET, format!("/v1/bug-reports/{id}"))
+            .header("authorization", bearer.to_string())
+    };
+    assert_eq!(
+        app.send(get(&tower_only, &mine)).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(get(&tower_only, &castle)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let (ok, _) = tool(
+        &app,
+        &tower_only,
+        mcp,
+        "list_bug_reports",
+        json!({ "slug": "castle" }),
+    )
+    .await;
+    assert!(!ok);
+    let (ok, _) = tool(
+        &app,
+        &tower_only,
+        mcp,
+        "update_bug_report",
+        json!({ "id": castle, "status": "fixed" }),
+    )
+    .await;
+    assert!(!ok);
+    let statuses: Vec<String> = sqlx::query_scalar("select status from bug_reports order by title")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(statuses, ["open", "open", "fixed"], "Castle, Rival, Tower");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_token_for_some_apps_updates_bug_reports_on_those_apps(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (pat_id, pat) = app.user("Pat Player", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    played(&app, pat_id, "tower").await;
+    let id = file_bug(&app, &pat, "tower", "Tower crash").await;
+    let tower_only = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Tower", "scope": "publish", "apps": ["tower"] }),
+    )
+    .await;
+    let (ok, text) = tool(
+        &app,
+        &tower_only,
+        "/v1/maker/mcp",
+        "update_bug_report",
+        json!({ "id": id, "status": "fixed", "maker_note": "Fixed in 1.0.1." }),
+    )
+    .await;
+    assert!(ok, "the token's own app: {text}");
+    let status: String = sqlx::query_scalar("select status from bug_reports")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "fixed");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Admin agents: People tools
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn admin_agents_decide_portfolios_and_fix_profiles_and_teams_within_their_tokens(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        chat_limits(c);
+    })
+    .await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff_with_role(&app, "Rex Reviewer", "reviewer").await;
+    let (mia_id, mia) = app.user("Mia Maker", "US").await;
+    sqlx::query(
+        "insert into creatives (user_id, handle, name, headline, ai_use, trader)
+         values ($1, 'mia', 'Mia', 'The real Studio Ghibli', 'none', false)",
+    )
+    .bind(mia_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let pending_set = || {
+        let db = app.db.clone();
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(
+                "insert into portfolio_sets (id, creative_id, repo_url, commit_sha, works, fingerprint, status, source)
+                 values ($1, $2, 'https://github.com/x/y', repeat('c', 40), '[]', $3, 'pending', 'sim')",
+            )
+            .bind(id)
+            .bind(mia_id)
+            .bind(id.to_string())
+            .execute(&db)
+            .await
+            .unwrap();
+            id
+        }
+    };
+    make_team(
+        &app,
+        &mia,
+        "mias-crew",
+        json!({ "name": "Official Valve Team" }),
+    )
+    .await;
+    let mut tokens = std::collections::HashMap::new();
+    for scope in ["read", "review", "moderate"] {
+        let res = app
+            .send(post(
+                "/v1/admin/tokens",
+                &owner,
+                json!({ "name": format!("Claude {scope}"), "scope": scope, "days": 7 }),
+            ))
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        tokens.insert(
+            scope,
+            format!("Bearer {}", body_json(res).await["token"].as_str().unwrap()),
+        );
+    }
+    // Rex reviews, and may make tokens (security), but doesn't moderate.
+    sqlx::query("insert into staff_roles (user_id, role, granted_by) select user_id, 'security', 'test' from staff_roles where role = 'reviewer'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(post(
+            "/v1/admin/tokens",
+            &reviewer,
+            json!({ "name": "Rex's agent", "scope": "moderate", "days": 7 }),
+        ))
+        .await;
+    let rex = format!("Bearer {}", body_json(res).await["token"].as_str().unwrap());
+    let mcp = "/v1/admin/mcp";
+
+    // Portfolios: the queue shows it; a review token decides; a read token can't.
+    let first = pending_set().await;
+    let (ok, text) = tool(
+        &app,
+        &tokens["read"],
+        mcp,
+        "review_queue",
+        json!({ "kind": "portfolio" }),
+    )
+    .await;
+    assert!(ok && text.contains(&first.to_string()), "{text}");
+    let (ok, _) = tool(
+        &app,
+        &tokens["read"],
+        mcp,
+        "decide_portfolio",
+        json!({ "id": first, "decision": "approve" }),
+    )
+    .await;
+    assert!(!ok);
+    let (ok, _) = tool(
+        &app,
+        &tokens["review"],
+        mcp,
+        "decide_portfolio",
+        json!({ "id": first, "decision": "reject" }),
+    )
+    .await;
+    assert!(!ok, "turning one down needs a reason");
+    let (ok, text) = tool(
+        &app,
+        &tokens["review"],
+        mcp,
+        "decide_portfolio",
+        json!({ "id": first, "decision": "reject", "reason": "These works aren't in the repository." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let second = pending_set().await;
+    let (ok, text) = tool(
+        &app,
+        &tokens["review"],
+        mcp,
+        "decide_portfolio",
+        json!({ "id": second, "decision": "approve" }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let sets: Vec<(Uuid, String, Option<String>)> = sqlx::query_as(
+        "select id, status, reviewed_by from portfolio_sets where creative_id = $1 order by id",
+    )
+    .bind(mia_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(sets[0].1, "rejected");
+    assert_eq!(sets[1].1, "approved");
+    assert!(
+        sets[1].2.as_deref().unwrap().contains("Claude review"),
+        "{:?}",
+        sets[1].2
+    );
+    let live: Option<Uuid> =
+        sqlx::query_scalar("select portfolio_set_id from creatives where user_id = $1")
+            .bind(mia_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(live, Some(second));
+
+    // Profiles and teams: a review or moderate token may fix; a read token may not look.
+    let (ok, _) = tool(
+        &app,
+        &tokens["read"],
+        mcp,
+        "user_profile",
+        json!({ "id": mia_id }),
+    )
+    .await;
+    assert!(!ok, "reading an account's details is moderation");
+    let (ok, text) = tool(
+        &app,
+        &tokens["review"],
+        mcp,
+        "user_profile",
+        json!({ "id": mia_id }),
+    )
+    .await;
+    assert!(ok && text.contains("The real Studio Ghibli"), "{text}");
+    let fix = json!({ "id": mia_id, "creative": { "headline": "Pixel artist" }, "reason": "Impersonation." });
+    let (ok, _) = tool(&app, &tokens["read"], mcp, "edit_profile", fix.clone()).await;
+    assert!(!ok);
+    let (ok, _) = tool(&app, &rex, mcp, "edit_profile", fix.clone()).await;
+    assert!(!ok, "a reviewer's token is capped by the reviewer's role");
+    let (ok, text) = tool(&app, &tokens["review"], mcp, "edit_profile", fix).await;
+    assert!(ok, "{text}");
+    let team_fix = json!({ "slug": "mias-crew", "name": "Mia's Crew", "reason": "Not Valve." });
+    let (ok, _) = tool(&app, &tokens["read"], mcp, "edit_team", team_fix.clone()).await;
+    assert!(!ok);
+    let (ok, text) = tool(&app, &tokens["moderate"], mcp, "edit_team", team_fix).await;
+    assert!(ok, "{text}");
+    let (headline, team): (String, String) = sqlx::query_as(
+        "select (select headline from creatives where user_id = $1), (select name from teams where slug = 'mias-crew')",
+    )
+    .bind(mia_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (headline.as_str(), team.as_str()),
+        ("Pixel artist", "Mia's Crew")
+    );
+    let actors: Vec<String> = sqlx::query_scalar(
+        "select actor from audit_log where action in ('user.profile_edited', 'team.edited') order by id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(actors.len(), 2);
+    assert!(
+        actors[0].contains("Claude review") && actors[1].contains("Claude moderate"),
+        "{actors:?}"
+    );
+
+    // Notes on a People problem, for a person to decide.
+    let (_, vera) = live_creative(&app, "vera", "US", false).await;
+    let (tom_id, tom) = app.user("Tom Client", "US").await;
+    listed_with(&app, tom_id, "toms-game", "released", "").await;
+    let job = hire(&app, &tom, "vera", "toms-game").await;
+    app.send(post(
+        format!("/v1/jobs/{job}/offer"),
+        &vera,
+        sprite_offer("upfront"),
+    ))
+    .await;
+    app.send(post(
+        format!("/v1/jobs/{job}/accept"),
+        &tom,
+        json!({ "offer_count": 1, "exact_terms_ack": true, "start_now": true }),
+    ))
+    .await;
+    app.send(post(format!("/v1/jobs/{job}/pay"), &tom, json!({})))
+        .await;
+    let res = app
+        .send(post(
+            format!("/v1/jobs/{job}/problem"),
+            &tom,
+            json!({ "statement": "Nothing delivered after the due date." }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let problem: Uuid = sqlx::query_scalar("select id from job_problems")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let (ok, text) = tool(
+        &app,
+        &tokens["read"],
+        mcp,
+        "add_note",
+        json!({ "kind": "problem", "id": problem, "verdict": "concern", "note": "The record shows no delivery." }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    let (ok, _) = tool(
+        &app,
+        &tokens["read"],
+        mcp,
+        "add_note",
+        json!({ "kind": "problem", "id": Uuid::now_v7(), "note": "Nothing there." }),
+    )
+    .await;
+    assert!(!ok);
+    let (ok, _) = tool(
+        &app,
+        &tokens["read"],
+        mcp,
+        "add_note",
+        json!({ "kind": "problem", "id": problem, "verdict": "guilty", "note": "x" }),
+    )
+    .await;
+    assert!(!ok, "pass, concern or unsure");
+    let notes: Vec<(String, Option<String>, String)> = sqlx::query_as(
+        "select subject_kind, verdict, author from review_notes where subject_id = $1",
+    )
+    .bind(problem)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notes.len(), 1);
+    assert_eq!(
+        (notes[0].0.as_str(), notes[0].1.as_deref()),
+        ("problem", Some("concern"))
     );
 }

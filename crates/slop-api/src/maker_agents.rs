@@ -72,6 +72,10 @@ enum Slug {
     /// People work (`*` is a job): only with a token allowed to handle People jobs. Each route
     /// checks the user is a side of the job.
     People,
+    /// Something on one of the maker's apps found by its own ID (`*` is a bug report): the route
+    /// checks the app is one of the token's (bug_reports.rs `load`), so a token for some apps
+    /// works on those apps' reports.
+    Checked,
 }
 
 /// (method, path after `/v1`, needs `publish`, what `{slug}` is). `*` is any one segment.
@@ -115,9 +119,9 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("GET", "/apps/{slug}/demo", false, Slug::Own),
     ("POST", "/apps/{slug}/demo", true, Slug::Own),
     ("DELETE", "/apps/{slug}/demo", true, Slug::Own),
-    ("GET", "/bug-reports/*", false, Slug::Any),
-    // Each route checks the report is on the user's own app.
-    ("PATCH", "/bug-reports/*", true, Slug::Any),
+    // Each route checks the report is on the user's own app, and one of the token's apps.
+    ("GET", "/bug-reports/*", false, Slug::Checked),
+    ("PATCH", "/bug-reports/*", true, Slug::Checked),
     ("GET", "/bounties", false, Slug::Any),
     ("GET", "/bounties/*", false, Slug::Any),
     // Claiming pays the maker; it's checked by the app's maker or the backers.
@@ -192,7 +196,7 @@ impl AgentToken {
         match (kind, slug) {
             // A token for some apps only can't make new ones.
             (Slug::Any, _) if publish => Err(ApiError::Forbidden),
-            (Slug::Any | Slug::People, _) | (Slug::Own, None) => Ok(()),
+            (Slug::Any | Slug::People | Slug::Checked, _) | (Slug::Own, None) => Ok(()),
             (Slug::Own, Some(slug)) => {
                 let id: Option<Uuid> = sqlx::query_scalar("select id from apps where slug = $1")
                     .bind(slug)
