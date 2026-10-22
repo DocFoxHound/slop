@@ -2710,25 +2710,22 @@ async fn the_command_line_moves_and_delists_apps(db: PgPool) {
     assert_eq!(audit_count(&app, "app.stage").await, 1);
 
     // Delisting: a Content Policy rule, the facts, and only an app in the store.
-    let delist = |slug: &'static str, rule: &'static str, reason: &'static str| {
-        let env = env;
-        async move {
-            cli(
-                &[
-                    "review",
-                    "delist",
-                    slug,
-                    "--reviewer",
-                    "ops",
-                    "--rule",
-                    rule,
-                    "--reason",
-                    reason,
-                ],
-                &env,
-            )
-            .await
-        }
+    let delist = |slug: &'static str, rule: &'static str, reason: &'static str| async move {
+        cli(
+            &[
+                "review",
+                "delist",
+                slug,
+                "--reviewer",
+                "ops",
+                "--rule",
+                rule,
+                "--reason",
+                reason,
+            ],
+            &env,
+        )
+        .await
     };
     let run = delist("listed-one", "ugly", "Copies another game's art.").await;
     assert!(
@@ -3293,4 +3290,815 @@ async fn settings_that_cant_be_right_stop_the_server_before_it_starts() {
         "{}",
         run.err
     );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Background jobs
+
+/// Waits up to `secs` seconds for a condition read from the database.
+async fn eventually<F, Fut>(secs: u64, what: &str, mut check: F)
+where
+    F: FnMut() -> Fut,
+    Fut: std::future::Future<Output = bool>,
+{
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(secs);
+    while !check().await {
+        assert!(std::time::Instant::now() < deadline, "timed out: {what}");
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn release_state(app: &TestApp, id: &str) -> String {
+    sqlx::query_scalar("select status::text from releases where id = $1::uuid")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_fetcher_wakes_for_new_releases_and_retakes_abandoned_ones(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let submit = |version: &str| {
+        req(Method::POST, "/v1/apps/game/releases")
+            .cookie(&maker)
+            .json(release_body(&app, version, "game-windows.zip"))
+    };
+
+    // Another fetcher took it 10 minutes ago: still its lease, so it's left alone.
+    let res = app.send(submit("1.0.0")).await;
+    let first = body_json(res).await["id"].as_str().unwrap().to_string();
+    sqlx::query("update releases set fetch_started_at = now() - interval '10 minutes'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert!(!releases::fetch_next(&app.state).await.unwrap());
+    assert_eq!(release_state(&app, &first).await, "fetching");
+    // That fetcher died: after 30 minutes the release is taken again.
+    sqlx::query("update releases set fetch_started_at = now() - interval '31 minutes'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    assert_eq!(release_state(&app, &first).await, "awaiting_review");
+    assert!(
+        !releases::fetch_next(&app.state).await.unwrap(),
+        "nothing left"
+    );
+
+    // The running fetcher, idle (it would next look in 30 seconds), wakes for a new release.
+    let fetcher = tokio::spawn(releases::run_fetcher(app.state.clone()));
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    let res = app.send(submit("1.1.0")).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let second = body_json(res).await["id"].as_str().unwrap().to_string();
+    eventually(10, "the woken fetcher fetched it", || async {
+        release_state(&app, &second).await == "awaiting_review"
+    })
+    .await;
+    fetcher.abort();
+}
+
+/// A bounty on the maker's app with two backers' saved (simulated) cards, delivered four days
+/// ago: the bigger backer voted to accept, the other didn't vote. Returns (bounty, claim, builder).
+async fn delivered_bounty(app: &TestApp) -> (Uuid, Uuid, Uuid) {
+    let (_, maker) = maker_with_app(app, "released").await;
+    let release = submit_and_fetch(app, &maker, "1.0.0").await;
+    let (builder, _) = app.user("Bo Builder", "US").await;
+    let (big, _) = app.user("Big Backer", "US").await;
+    let (small, _) = app.user("Small Backer", "US").await;
+    let (bounty, claim) = (Uuid::now_v7(), Uuid::now_v7());
+    sqlx::query(
+        "insert into bounties (id, app_id, created_by, title, body, currency, status, created_at)
+         values ($1, $2, $3, 'Gamepad support', 'Please.', 'usd', 'claimed', now() - interval '10 days')",
+    )
+    .bind(bounty)
+    .bind(app_id(app, "game").await)
+    .bind(big)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    for (backer, amount) in [(big, 3000), (small, 1000)] {
+        sqlx::query(
+            "insert into bounty_pledges (id, bounty_id, user_id, amount_minor, status, simulated, created_at)
+             values ($1, $2, $3, $4, 'active', true, now() - interval '5 days')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(bounty)
+        .bind(backer)
+        .bind(amount)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    sqlx::query(
+        "insert into bounty_claims (id, bounty_id, claimed_by, app_id, release_id, stripe_account_id, note, created_at)
+         values ($1, $2, $3, $4, $5::uuid, 'acct_builder', 'Done.', now() - interval '4 days')",
+    )
+    .bind(claim)
+    .bind(bounty)
+    .bind(builder)
+    .bind(app_id(app, "game").await)
+    .bind(&release)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("insert into bounty_votes (claim_id, user_id, accept) values ($1, $2, true)")
+        .bind(claim)
+        .bind(big)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    (bounty, claim, builder)
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_charger_settles_votes_after_the_window_and_runs_one_at_a_time(db: PgPool) {
+    let app = test_app(db).await;
+    let (bounty, claim, builder) = delivered_bounty(&app).await;
+    let pledges = || async {
+        sqlx::query_scalar::<_, String>(
+            "select string_agg(status, ',' order by amount_minor desc) from bounty_pledges",
+        )
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+
+    // Another copy of the API holds the charger's lock (a deploy overlapping the old one).
+    let mut other = app.db.acquire().await.unwrap();
+    sqlx::query("select pg_advisory_lock(7341001)")
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    let charger = tokio::spawn(slop_api::bounties::run_charger(app.state.clone()));
+    let claim_status = || async {
+        sqlx::query_scalar::<_, String>("select status from bounty_claims where id = $1")
+            .bind(claim)
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    // Four days after the delivery the voting window has passed, but the maker has two weeks to
+    // answer before the backers decide.
+    tokio::time::sleep(std::time::Duration::from_millis(700)).await;
+    assert_eq!(claim_status().await, "pending");
+    sqlx::query("update bounty_claims set created_at = now() - interval '15 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update bounty_pledges set created_at = now() - interval '16 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    app.state.bounty_wakeup.notify_one();
+    // The vote is settled (more than half the pledged money said yes, the window passed)...
+    eventually(10, "the claim was accepted", || async {
+        claim_status().await == "accepted"
+    })
+    .await;
+    let decided_by: String =
+        sqlx::query_scalar("select decided_by from bounty_claims where id = $1")
+            .bind(claim)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(decided_by, "backers");
+    assert_eq!(
+        notices(
+            &app,
+            builder,
+            "Your delivery for \"Gamepad support\" was accepted"
+        )
+        .await,
+        1
+    );
+    // ...but nothing is charged while the other copy holds the lock.
+    tokio::time::sleep(std::time::Duration::from_millis(500)).await;
+    assert_eq!(pledges().await, "due,due");
+    assert_eq!(slop_api::bounties::charge_due(&app.state).await.unwrap(), 0);
+    assert_eq!(pledges().await, "due,due");
+
+    // Released: the next run charges each pledge once.
+    sqlx::query("select pg_advisory_unlock(7341001)")
+        .execute(&mut *other)
+        .await
+        .unwrap();
+    drop(other);
+    app.state.bounty_wakeup.notify_one();
+    eventually(10, "the bounty was paid", || async {
+        sqlx::query_scalar::<_, String>("select status from bounties where id = $1")
+            .bind(bounty)
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+            == "paid"
+    })
+    .await;
+    charger.abort();
+    assert_eq!(pledges().await, "paid,paid");
+    let paid: Vec<(i32, i32, String)> = sqlx::query_as(
+        "select amount_minor, slop_fee_minor, stripe_account_id from payments where kind = 'bounty' order by amount_minor",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(paid.len(), 2, "{paid:?}");
+    assert!(paid.iter().all(|(_, _, acct)| acct == "acct_builder"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_fill_job_records_repository_ids_for_apps_linked_before(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "old-game",
+        "released",
+        "repo_url = 'https://github.com/octo/game'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "gone-game",
+        "released",
+        "repo_url = 'https://github.com/octo/gone-game'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "lab-game",
+        "released",
+        "repo_url = 'https://gitlab.com/octo/game'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "known-game",
+        "released",
+        "repo_url = 'https://github.com/octo/known', github_repo_id = 7, github_owner_id = 8",
+    )
+    .await;
+    let ids = |slug: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (Option<i64>, Option<i64>)>(
+                "select github_repo_id, github_owner_id from apps where slug = $1",
+            )
+            .bind(slug)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    // Its first pass runs at once, then hourly.
+    let fill = tokio::spawn(slop_api::repo_identity::run_fill(app.state.clone()));
+    eventually(10, "old-game's IDs", || async {
+        ids("old-game").await.0.is_some()
+    })
+    .await;
+    fill.abort();
+    assert_eq!(ids("old-game").await, (Some(1001), Some(42)));
+    // A repository GitHub doesn't have, and one that isn't on GitHub: left empty, no error.
+    assert_eq!(ids("gone-game").await, (None, None));
+    assert_eq!(ids("lab-game").await, (None, None));
+    // Recorded ones never change.
+    assert_eq!(ids("known-game").await, (Some(7), Some(8)));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_pulse_sampler_counts_live_players_when_it_starts(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker, "live", "released", "").await;
+    let live = app_id(&app, "live").await;
+    for (i, beat) in ["now()", "now()", "now() - interval '2 hours'"]
+        .iter()
+        .enumerate()
+    {
+        let (player, _) = app.user(&format!("Player {i}"), "US").await;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "insert into pulse_sessions (id, token_hash, app_id, user_id, started_at, last_beat_at)
+             values ($1, $2, $3, $4, now() - interval '3 hours', {beat})"
+        )))
+        .bind(Uuid::now_v7())
+        .bind(format!("token-{i}").into_bytes())
+        .bind(live)
+        .bind(player)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let sampler = tokio::spawn(slop_api::pulse::run_sampler(app.state.clone()));
+    eventually(10, "a count", || async {
+        sqlx::query_scalar::<_, i64>("select count(*) from pulse_counts")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+            > 0
+    })
+    .await;
+    sampler.abort();
+    let players: i32 = sqlx::query_scalar("select players from pulse_counts where app_id = $1")
+        .bind(live)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(players, 2, "the quiet session isn't live");
+}
+
+/// A fake SMTP server: takes mail for anyone but refused@…, and keeps every line it was sent.
+async fn fake_smtp() -> (u16, std::sync::Arc<std::sync::Mutex<Vec<String>>>) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt};
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let seen = std::sync::Arc::new(std::sync::Mutex::new(Vec::<String>::new()));
+    let log = seen.clone();
+    tokio::spawn(async move {
+        loop {
+            let (stream, _) = listener.accept().await.unwrap();
+            let log = log.clone();
+            tokio::spawn(async move {
+                let (read, mut write) = stream.into_split();
+                let mut lines = tokio::io::BufReader::new(read).lines();
+                write.write_all(b"220 fake ESMTP\r\n").await.unwrap();
+                let mut data = false;
+                while let Ok(Some(line)) = lines.next_line().await {
+                    log.lock().unwrap().push(line.clone());
+                    let upper = line.to_ascii_uppercase();
+                    let reply: &[u8] = if data {
+                        if line != "." {
+                            continue;
+                        }
+                        data = false;
+                        b"250 queued\r\n"
+                    } else if upper.starts_with("EHLO") {
+                        b"250-fake\r\n250-AUTH PLAIN LOGIN\r\n250 8BITMIME\r\n"
+                    } else if upper.starts_with("AUTH") {
+                        b"235 accepted\r\n"
+                    } else if upper.starts_with("RCPT") && upper.contains("REFUSED@") {
+                        b"550 no such mailbox\r\n"
+                    } else if upper.starts_with("DATA") {
+                        data = true;
+                        b"354 go on\r\n"
+                    } else if upper.starts_with("QUIT") {
+                        let _ = write.write_all(b"221 bye\r\n").await;
+                        break;
+                    } else {
+                        b"250 ok\r\n"
+                    };
+                    if write.write_all(reply).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    (port, seen)
+}
+
+/// A user with an email address and one notification waiting to be emailed.
+async fn notified(app: &TestApp, name: &str, email: Option<&str>, prefs: &str) -> Uuid {
+    let (id, _) = app.user(name, "US").await;
+    sqlx::query("update users set email = $2, email_prefs = $3::jsonb where id = $1")
+        .bind(id)
+        .bind(email)
+        .bind(prefs)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into notifications (id, user_id, category, title, body, link) values ($1, $2, 'moderation', $3, 'Details.', '/account#decisions')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(format!("News for {name}"))
+    .execute(&app.db)
+    .await
+    .unwrap();
+    id
+}
+
+/// (attempts, sent, given up, last error) of the email to this address; none yet is (0, …).
+async fn outbox(app: &TestApp, to: &str) -> (i32, bool, bool, Option<String>) {
+    sqlx::query_as(
+        "select attempts, sent_at is not null, failed_at is not null, last_error from email_outbox where to_address = $1",
+    )
+    .bind(to)
+    .fetch_optional(&app.db)
+    .await
+    .unwrap()
+    .unwrap_or((0, false, false, None))
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn notification_emails_are_sent_retried_and_given_up(db: PgPool) {
+    let (port, seen) = fake_smtp().await;
+    let app = test_app_with(db, |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: format!("smtp://127.0.0.1:{port}"),
+            from: "Slop <notifications@slop.example>".into(),
+        })
+    })
+    .await;
+    let gwen = notified(&app, "Gwen", Some("gwen@example.com"), "{}").await;
+    notified(&app, "Ray", Some("refused@example.com"), "{}").await;
+    let quiet = notified(&app, "Quinn", None, "{}").await;
+    let opted_out = notified(
+        &app,
+        "Otto",
+        Some("otto@example.com"),
+        r#"{"moderation": false}"#,
+    )
+    .await;
+    // One that has failed four times already: this is its last try.
+    sqlx::query(
+        "insert into email_outbox (id, to_address, subject, body, attempts) values ($1, 'refused@old.example', 'Old', 'Old.', 4)",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    let job = tokio::spawn(slop_api::notify::run_email(app.state.clone()));
+    eventually(15, "Gwen's email was sent", || async {
+        outbox(&app, "gwen@example.com").await.1
+    })
+    .await;
+    eventually(5, "the old one was tried", || async {
+        outbox(&app, "refused@old.example").await.0 == 5
+    })
+    .await;
+    job.abort();
+
+    assert_eq!(
+        outbox(&app, "gwen@example.com").await,
+        (1, true, false, None)
+    );
+    let (attempts, sent, failed, error) = outbox(&app, "refused@example.com").await;
+    assert_eq!(
+        (attempts, sent, failed),
+        (1, false, false),
+        "tried again later"
+    );
+    assert!(error.unwrap().contains("no such mailbox"));
+    let (attempts, sent, failed, _) = outbox(&app, "refused@old.example").await;
+    assert_eq!(
+        (attempts, sent, failed),
+        (5, false, true),
+        "given up after five"
+    );
+    let status = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select email_status from notifications where user_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(status(gwen).await, "queued");
+    assert_eq!(status(quiet).await, "skipped", "no address");
+    assert_eq!(status(opted_out).await, "skipped", "switched off");
+    let lines = seen.lock().unwrap().join("\n");
+    assert!(lines.contains("RCPT TO:<gwen@example.com>"), "{lines}");
+    assert!(lines.contains("Subject: News for Gwen"), "{lines}");
+    assert!(lines.contains("Hi Gwen,"), "{lines}");
+    assert!(
+        lines.contains("Open it: http://localhost:8080/account#decisions"),
+        "{lines}"
+    );
+    assert!(
+        lines.contains("From: Slop <notifications@slop.example>"),
+        "{lines}"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn email_stays_off_without_a_usable_smtp_address(db: PgPool) {
+    for url in [None, Some("ftp://mail.example"), Some("not a url")] {
+        let app = test_app_with(db.clone(), |c| {
+            c.email = url.map(|u| slop_api::config::EmailConfig {
+                smtp_url: u.into(),
+                from: "Slop <notifications@slop.example>".into(),
+            })
+        })
+        .await;
+        let job = tokio::spawn(slop_api::notify::run_email(app.state.clone()));
+        tokio::time::timeout(std::time::Duration::from_secs(5), job)
+            .await
+            .expect("it stops at once")
+            .unwrap();
+    }
+    let app = test_app(db).await;
+    let id = notified(&app, "Gwen", Some("gwen@example.com"), "{}").await;
+    let status: String =
+        sqlx::query_scalar("select email_status from notifications where user_id = $1")
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "pending");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_smtp_password_never_crosses_the_network_in_the_clear(db: PgPool) {
+    // smtp://user:password@host:587 is offered next to smtps:// (.env.example), and its doc
+    // comment says STARTTLS: the password must not be sent to a server that can't do TLS.
+    let (port, seen) = fake_smtp().await;
+    let app = test_app_with(db, |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: format!("smtp://slop:hunter2@127.0.0.1:{port}"),
+            from: "Slop <notifications@slop.example>".into(),
+        })
+    })
+    .await;
+    notified(&app, "Gwen", Some("gwen@example.com"), "{}").await;
+    let job = tokio::spawn(slop_api::notify::run_email(app.state.clone()));
+    eventually(15, "a try", || async {
+        sqlx::query_scalar::<_, i32>("select coalesce(max(attempts), 0) from email_outbox")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+            > 0
+    })
+    .await;
+    job.abort();
+    let lines = seen.lock().unwrap().clone();
+    assert!(!lines.is_empty(), "it connected");
+    assert!(
+        !lines
+            .iter()
+            .any(|l| l.to_ascii_uppercase().starts_with("AUTH")),
+        "{lines:?}"
+    );
+    let (_, sent, _, error) = outbox(&app, "gwen@example.com").await;
+    assert!(!sent, "nothing goes out without TLS");
+    assert!(error.is_some());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn vat_numbers_stored_before_the_key_are_sealed_once(db: PgPool) {
+    let key = [11u8; 32];
+    let plain_app = test_app_with(db.clone(), |c| c.field_key = None).await;
+    let mut users = vec![];
+    for (name, vat) in [("Anna", "DE123456789"), ("Bert", "GB123456789")] {
+        let (id, _) = plain_app.user(name, "DE").await;
+        sqlx::query("update users set vat_number = $2 where id = $1")
+            .bind(id)
+            .bind(vat)
+            .execute(&plain_app.db)
+            .await
+            .unwrap();
+        users.push((id, vat));
+    }
+    let (sealed_id, _) = plain_app.user("Cleo", "DE").await;
+    let already = slop_api::fields::seal(Some(&key), "users.vat_number", "FR12345678901").unwrap();
+    sqlx::query("update users set vat_number = $2 where id = $1")
+        .bind(sealed_id)
+        .bind(&already)
+        .execute(&plain_app.db)
+        .await
+        .unwrap();
+    // Without the key there's nothing to do.
+    assert_eq!(
+        slop_api::fields::seal_existing(&plain_app.state)
+            .await
+            .unwrap(),
+        0
+    );
+
+    let app = test_app(db).await;
+    assert_eq!(app.config.field_key, Some(key));
+    assert_eq!(
+        slop_api::fields::seal_existing(&app.state).await.unwrap(),
+        2
+    );
+    for (id, vat) in &users {
+        let stored: String = sqlx::query_scalar("select vat_number from users where id = $1")
+            .bind(id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert!(
+            stored.starts_with("enc1:") && !stored.contains(&vat[2..]),
+            "{stored}"
+        );
+        assert_eq!(
+            slop_api::fields::open(Some(&key), "users.vat_number", &stored).unwrap(),
+            *vat
+        );
+    }
+    let untouched: String = sqlx::query_scalar("select vat_number from users where id = $1")
+        .bind(sealed_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(untouched, already);
+    assert_eq!(
+        slop_api::fields::seal_existing(&app.state).await.unwrap(),
+        0,
+        "once"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_push_job_does_nothing_without_a_push_key(db: PgPool) {
+    let app = test_app(db).await;
+    assert!(app.config.push.is_none());
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        tokio::spawn(slop_api::push::run(app.state.clone())),
+    )
+    .await
+    .expect("it stops at once")
+    .unwrap();
+}
+
+/// A fake Stripe that lists yesterday's application fees, two to a page.
+async fn fake_fee_list() -> String {
+    let fees = |axum::extract::Query(q): axum::extract::Query<
+        std::collections::HashMap<String, String>,
+    >| async move {
+        let day = OffsetDateTime::now_utc().replace_time(time::Time::MIDNIGHT);
+        assert_eq!(
+            q["created[gte]"],
+            (day - time::Duration::days(1)).unix_timestamp().to_string()
+        );
+        assert_eq!(q["created[lt]"], day.unix_timestamp().to_string());
+        match q.get("starting_after").map(String::as_str) {
+            None => axum::Json(json!({ "has_more": true, "data": [
+                { "id": "fee_1", "account": "acct_a", "amount": 50, "amount_refunded": 0 },
+                { "id": "fee_2", "account": "acct_b", "amount": 40, "amount_refunded": 10 }
+            ] })),
+            Some("fee_2") => axum::Json(json!({ "has_more": false, "data": [
+                { "id": "fee_3", "account": "acct_c", "amount": 20, "amount_refunded": 0 }
+            ] })),
+            Some(other) => panic!("starting_after={other}"),
+        }
+    };
+    let app = Router::new().route("/v1/application_fees", get(fees));
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let addr = listener.local_addr().unwrap();
+    tokio::spawn(async move { axum::serve(listener, app).await.unwrap() });
+    format!("http://{addr}/")
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn daily_reconciliation_flags_accounts_whose_fees_dont_match_the_records(db: PgPool) {
+    // Without Stripe there's nothing to compare.
+    let plain = test_app(db.clone()).await;
+    assert_eq!(
+        slop_api::donations::reconcile(&plain.state).await.unwrap(),
+        0
+    );
+
+    let stripe = fake_fee_list().await;
+    let app = test_app_with(db, |c| {
+        c.payments.stripe = Some(slop_api::config::StripeConfig {
+            secret_key: "sk_test_slop".into(),
+            webhook_secret: "whsec_test".into(),
+            api_base: stripe.parse().unwrap(),
+        })
+    })
+    .await;
+    // Yesterday's records: a matches Stripe; b has less than Stripe kept; c has none. A
+    // simulated payment and one from today don't count.
+    for (acct, fee, simulated, when) in [
+        ("acct_a", 50, false, "now()::date - interval '12 hours'"),
+        ("acct_b", 20, false, "now()::date - interval '1 hour'"),
+        ("acct_d", 15, true, "now()::date - interval '2 hours'"),
+        ("acct_a", 99, false, "now()::date + interval '1 minute'"),
+    ] {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "insert into payments (id, kind, stripe_account_id, amount_minor, slop_fee_minor, currency, simulated, created_at)
+             values ($1, 'donation', $2, 1000, $3, 'usd', $4, {when})"
+        )))
+        .bind(Uuid::now_v7())
+        .bind(acct)
+        .bind(fee)
+        .bind(simulated)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    assert_eq!(slop_api::donations::reconcile(&app.state).await.unwrap(), 2);
+    let (actor, subject, detail): (String, String, Value) = sqlx::query_as(
+        "select actor, subject, detail from audit_log where action = 'payments.mismatch'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(actor, "reconciliation");
+    let yesterday = (OffsetDateTime::now_utc() - time::Duration::days(1))
+        .date()
+        .to_string();
+    assert_eq!(subject, yesterday);
+    let mut accounts: Vec<Value> = detail["accounts"].as_array().unwrap().clone();
+    accounts.sort_by_key(|a| a[0].as_str().unwrap().to_string());
+    assert_eq!(
+        accounts,
+        [json!(["acct_b", 30, 20]), json!(["acct_c", 20, 0])]
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn official_badges_are_rechecked_daily_and_removed_when_a_check_fails(db: PgPool) {
+    let app = test_app_with(db, |config| {
+        config.releases.github_app = Some(slop_api::config::GithubAppConfig {
+            app_id: "123".into(),
+            slug: "slop-test".into(),
+            private_key: jsonwebtoken::EncodingKey::from_rsa_pem(include_bytes!(
+                "../../fixtures/github-app-test-key.pem"
+            ))
+            .unwrap(),
+            webhook_secret: "hook-secret".into(),
+        });
+    })
+    .await;
+    let (owner_id, owner) = app.user("Ada Acme", "US").await;
+    sqlx::query(
+        "insert into identities (provider, provider_subject, user_id) values ('github', '42', $1)",
+    )
+    .bind(owner_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(req(Method::POST, "/v1/teams").cookie(&owner).json(json!({ "slug": "acme", "name": "Acme Games", "kind": "official", "github_org": "acme" })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    // Verified ten days ago, last checked two days ago. Its domain no longer checks out.
+    sqlx::query(
+        "update teams set verified_at = now() - interval '10 days', checked_at = now() - interval '2 days' where slug = 'acme'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    // Another official team, checked an hour ago: not due.
+    let (other_owner, _) = app.user("Bea Beta", "US").await;
+    let other = Uuid::now_v7();
+    sqlx::query(
+        "insert into teams (id, slug, name, kind, created_by, github_org, verified_at, checked_at)
+         values ($1, 'beta-studio', 'Beta Studio', 'official', $2, 'globex', now() - interval '3 days', now() - interval '1 hour')",
+    )
+    .bind(other)
+    .bind(other_owner)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("insert into team_members (team_id, user_id, role) values ($1, $2, 'owner')")
+        .bind(other)
+        .bind(other_owner)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    let job = tokio::spawn(slop_api::teams::run(app.state.clone()));
+    eventually(15, "acme was checked", || async {
+        sqlx::query_scalar::<_, bool>(
+            "select checked_at > now() - interval '1 minute' from teams where slug = 'acme'",
+        )
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    })
+    .await;
+    job.abort();
+    let (verified, checks): (bool, Value) =
+        sqlx::query_as("select verified_at is not null, checks from teams where slug = 'acme'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(!verified, "{checks}");
+    let domain = checks
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["check"] == "domain")
+        .unwrap()
+        .clone();
+    assert_eq!(domain["ok"], false);
+    assert_eq!(
+        notices(&app, owner_id, "Your team's official badge was removed").await,
+        1
+    );
+    let (verified, recent): (bool, bool) = sqlx::query_as(
+        "select verified_at is not null, checked_at < now() - interval '50 minutes' from teams where id = $1",
+    )
+    .bind(other)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(verified && recent, "not due, not checked");
+    assert_eq!(notices(&app, other_owner, "%badge%").await, 0);
 }
