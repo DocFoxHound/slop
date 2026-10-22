@@ -2045,3 +2045,849 @@ async fn mediators_suggest_close_and_decide_disputes_on_the_record(db: PgPool) {
     .unwrap();
     assert_eq!(outcomes, [json!("noted"), json!("kept")]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The router: health, security.txt and the layers every request passes
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_health_check_says_when_the_database_is_unreachable(db: PgPool) {
+    let app = test_app(db).await;
+    let res = app.send(req(Method::GET, "/healthz")).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    let unreachable = sqlx::postgres::PgPoolOptions::new()
+        .acquire_timeout(std::time::Duration::from_millis(500))
+        .connect_lazy("postgres://slop@127.0.0.1:1/nowhere")
+        .unwrap();
+    let state = AppState::new(unreachable, app.config.clone()).unwrap();
+    let res = router(state)
+        .unwrap()
+        .oneshot(
+            Request::builder()
+                .uri("/healthz")
+                .header(header::HOST, "localhost:8080")
+                .body(Body::empty())
+                .unwrap(),
+        )
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn security_txt_is_served_only_with_a_contact(db: PgPool) {
+    let app = test_app(db.clone()).await;
+    let res = app
+        .send(req(Method::GET, "/.well-known/security.txt"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(res.headers()["content-type"], "text/plain; charset=utf-8");
+    let text =
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    let line = |name: &str| {
+        text.lines()
+            .find_map(|l| l.strip_prefix(&format!("{name}: ")))
+            .unwrap_or_else(|| panic!("{name}: {text}"))
+            .to_string()
+    };
+    assert_eq!(line("Contact"), "mailto:security@slop.example");
+    assert_eq!(
+        line("Canonical"),
+        "http://localhost:8080/.well-known/security.txt"
+    );
+    assert_eq!(line("Preferred-Languages"), "en");
+    let expires = OffsetDateTime::parse(&line("Expires"), &Rfc3339).unwrap();
+    let left = expires - OffsetDateTime::now_utc();
+    assert!(
+        left > time::Duration::days(179) && left <= time::Duration::days(180),
+        "{left}"
+    );
+
+    let none = test_app_with(db, |c| c.security_contact = None).await;
+    let res = none
+        .send(req(Method::GET, "/.well-known/security.txt"))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn every_response_carries_the_browser_policies_and_https_adds_hsts(db: PgPool) {
+    let app = test_app(db.clone()).await;
+    for path in ["/v1/categories", "/v1/nope", "/healthz"] {
+        let res = app.send(req(Method::GET, path)).await;
+        let h = res.headers();
+        assert_eq!(h["cross-origin-opener-policy"], "same-origin", "{path}");
+        assert!(
+            h["permissions-policy"]
+                .to_str()
+                .unwrap()
+                .contains("camera=()"),
+            "{path}"
+        );
+        assert_eq!(h["cache-control"], "no-store", "{path}");
+        assert_eq!(h["referrer-policy"], "strict-origin-when-cross-origin");
+        assert!(
+            h.get("strict-transport-security").is_none(),
+            "plain http: {path}"
+        );
+    }
+    let secure = test_app_with(db, |c| {
+        c.public_url = "https://slop.example".parse().unwrap()
+    })
+    .await;
+    let res = secure.send(req(Method::GET, "/v1/categories")).await;
+    assert_eq!(
+        res.headers()["strict-transport-security"],
+        "max-age=63072000; includeSubDomains; preload"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ordinary_routes_take_small_bodies_and_trusted_origins_may_write(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.trusted_origins = vec!["https://partner.example".into()]
+    })
+    .await;
+    let (_, maker) = app.user("Mia Maker", "US").await;
+    let mut big = new_app("big-page");
+    big["description_md"] = json!("x".repeat(64 * 1024));
+    let res = app
+        .send(req(Method::POST, "/v1/apps").cookie(&maker).json(big))
+        .await;
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    let apps: i64 = sqlx::query_scalar("select count(*) from apps")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(apps, 0);
+
+    // A cross-site write from the allow-listed origin goes through; from anywhere else it doesn't.
+    let write = |origin: &str, slug: &str| {
+        req(Method::POST, "/v1/apps")
+            .cookie(&maker)
+            .header("sec-fetch-site", "cross-site")
+            .header("origin", origin.to_string())
+            .json(new_app(slug))
+    };
+    assert_eq!(
+        app.send(write("https://evil.example", "from-evil"))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(write(
+            "https://partner.example.evil.example",
+            "from-lookalike"
+        ))
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(write("https://partner.example", "from-partner"))
+            .await
+            .status(),
+        StatusCode::CREATED
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// The command line (the slop-api binary, run with only the environment each test gives it)
+
+struct Cli {
+    ok: bool,
+    /// What it printed, and its log (tracing writes to standard output).
+    out: String,
+    /// The error it ended with, if any.
+    err: String,
+}
+
+async fn cli(args: &[&str], env: &[(&str, &str)]) -> Cli {
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_slop-api"));
+    cmd.args(args)
+        .env_clear()
+        .env("RUST_LOG", "slop_api=info")
+        .env("NO_COLOR", "1");
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let out = tokio::time::timeout(std::time::Duration::from_secs(300), cmd.output())
+        .await
+        .expect("the command finished")
+        .unwrap();
+    Cli {
+        ok: out.status.success(),
+        out: String::from_utf8_lossy(&out.stdout).into_owned(),
+        err: String::from_utf8_lossy(&out.stderr).into_owned(),
+    }
+}
+
+/// The first JSON value in a command's output, after any log lines.
+fn json_in(out: &str) -> Value {
+    let start = out.find("\n{").map_or(0, |i| i + 1);
+    serde_json::Deserializer::from_str(&out[start..])
+        .into_iter::<Value>()
+        .next()
+        .unwrap_or_else(|| panic!("no JSON in {out}"))
+        .unwrap()
+}
+
+fn strs(v: &[String]) -> Vec<&str> {
+    v.iter().map(String::as_str).collect()
+}
+
+/// `KEY=value` from a command's output.
+fn printed(out: &str, key: &str) -> String {
+    out.lines()
+        .find_map(|l| l.strip_prefix(&format!("{key}=")))
+        .unwrap_or_else(|| panic!("{key} in {out}"))
+        .to_string()
+}
+
+#[tokio::test]
+async fn generated_keys_round_trip_through_the_settings_that_use_them() {
+    let first = cli(&["keys", "generate"], &[]).await;
+    assert!(first.ok, "{}", first.err);
+    let secret = printed(&first.out, "SLOP_SIGNING_KEY");
+    let key = slop_manifest::signing_key_from_base64(&secret).unwrap();
+    assert_eq!(
+        printed(&first.out, "SLOP_TRUSTED_KEYS"),
+        slop_manifest::verifying_key_to_base64(&key.verifying_key())
+    );
+    assert!(
+        first.out.contains(&format!(
+            "key id: {}",
+            slop_manifest::key_id(&key.verifying_key())
+        )),
+        "{}",
+        first.out
+    );
+    assert!(first.err.contains("Keep SLOP_SIGNING_KEY secret"));
+    let second = cli(&["keys", "generate"], &[]).await;
+    assert_ne!(
+        printed(&second.out, "SLOP_SIGNING_KEY"),
+        secret,
+        "a new key each time"
+    );
+
+    let updater = cli(&["keys", "generate-updater"], &[]).await;
+    assert!(updater.ok, "{}", updater.err);
+    slop_api::desktop_updates::updater_key_from_base64(&printed(&updater.out, "SLOP_UPDATER_KEY"))
+        .unwrap();
+    assert!(updater.out.contains("updater pubkey: "));
+    let vapid = cli(&["keys", "generate-vapid"], &[]).await;
+    assert!(vapid.ok, "{}", vapid.err);
+    slop_api::push::parse_key(&printed(&vapid.out, "SLOP_VAPID_PRIVATE_KEY")).unwrap();
+    assert!(vapid.out.contains("public key: "));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_command_line_grants_admin_rights_by_id_and_takes_them_by_any_name(db: PgPool) {
+    let app = test_app(db).await;
+    let url = own_database_url(&app.db).await;
+    let env = [("DATABASE_URL", url.as_str())];
+    let (ada, _) = app.user("Ada", "US").await;
+    let (sam1, _) = app.user("Sam", "US").await;
+    let (sam2, _) = app.user("Sam", "GB").await;
+    let ada_id = ada.to_string();
+
+    // Granting takes the account ID: anyone can sign up under a display name.
+    let run = cli(&["admin", "grant", "Ada", "--reviewer", "ops"], &env).await;
+    assert!(
+        !run.ok && run.err.contains("give the account's ID"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &[
+            "admin",
+            "grant",
+            &Uuid::now_v7().to_string(),
+            "--reviewer",
+            "ops",
+        ],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("no account matches"),
+        "{}",
+        run.err
+    );
+    let run = cli(&["admin", "grant", &ada_id, "--reviewer", "  "], &env).await;
+    assert!(
+        !run.ok && run.err.contains("say who you are"),
+        "{}",
+        run.err
+    );
+    let run = cli(&["admin", "grant", &ada_id], &env).await;
+    assert!(!run.ok && run.err.contains("--reviewer"), "{}", run.err);
+    assert_eq!(audit_count(&app, "admin.grant").await, 0);
+
+    let run = cli(
+        &[
+            "admin",
+            "grant",
+            &format!(" {ada_id} "),
+            "--reviewer",
+            "ops",
+        ],
+        &env,
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    assert!(run.out.contains("Ada is now an admin."), "{}", run.out);
+    let (is_admin, roles): (bool, Vec<String>) = sqlx::query_as(
+        "select is_admin, array(select role from staff_roles where user_id = $1) from users where id = $1",
+    )
+    .bind(ada)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(is_admin);
+    assert_eq!(roles, ["owner"]);
+    let (actor, subject, detail): (String, String, Value) =
+        sqlx::query_as("select actor, subject, detail from audit_log where action = 'admin.grant'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((actor.as_str(), subject.as_str()), ("ops", ada_id.as_str()));
+    assert_eq!(detail["name"], "Ada");
+    // Again: still one owner role.
+    assert!(
+        cli(&["admin", "grant", &ada_id, "--reviewer", "ops"], &env)
+            .await
+            .ok
+    );
+    let owners: i64 = sqlx::query_scalar("select count(*) from staff_roles where user_id = $1")
+        .bind(ada)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(owners, 1);
+
+    // Taking them away: by ID, email or exact name, but never a guess between two.
+    for id in [sam1, sam2] {
+        admin::set_admin(&app.db, &id.to_string(), true, "test")
+            .await
+            .unwrap();
+    }
+    let run = cli(&["admin", "revoke", "Sam", "--reviewer", "ops"], &env).await;
+    assert!(!run.ok, "{}", run.out);
+    assert!(
+        run.err.contains("2 accounts match")
+            && run.err.contains(&sam1.to_string())
+            && run.err.contains(&sam2.to_string()),
+        "{}",
+        run.err
+    );
+    let run = cli(&["admin", "revoke", "Nobody", "--reviewer", "ops"], &env).await;
+    assert!(
+        !run.ok && run.err.contains("no account matches"),
+        "{}",
+        run.err
+    );
+    sqlx::query("update users set email = 'Ada@Example.com' where id = $1")
+        .bind(ada)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into staff_roles (user_id, role, granted_by) values ($1, 'security', 'test')",
+    )
+    .bind(ada)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let run = cli(
+        &["admin", "revoke", "ada@example.com", "--reviewer", "ops"],
+        &env,
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    assert!(
+        run.out.contains("Ada is no longer an admin."),
+        "{}",
+        run.out
+    );
+    let (is_admin, roles): (bool, i64) = sqlx::query_as(
+        "select is_admin, (select count(*) from staff_roles where user_id = $1) from users where id = $1",
+    )
+    .bind(ada)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((is_admin, roles), (false, 0), "every role goes");
+    assert_eq!(audit_count(&app, "admin.revoke").await, 1);
+    let run = cli(
+        &["admin", "revoke", &sam2.to_string(), "--reviewer", "ops"],
+        &env,
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    let still: bool = sqlx::query_scalar("select is_admin from users where id = $1")
+        .bind(sam1)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(still, "only the one named");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_command_line_reviews_rejects_and_withdraws_releases(db: PgPool) {
+    let app = test_app(db).await;
+    let url = own_database_url(&app.db).await;
+    let env = [("DATABASE_URL", url.as_str())];
+
+    let run = cli(&["review", "pending"], &env).await;
+    assert!(run.ok, "{}", run.err);
+    assert!(
+        run.out.contains("Nothing waiting for review."),
+        "{}",
+        run.out
+    );
+    assert!(
+        run.out
+            .contains("Note: scanning is off on this server; files are NOT scanned.")
+    );
+
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    sqlx::query("update releases set commit_verified = true where id = $1::uuid")
+        .bind(&second)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let run = cli(&["review", "pending"], &env).await;
+    let lines: Vec<&str> = run.out.lines().filter(|l| l.contains(" game ")).collect();
+    let repo = format!("{}octo/game", app.fake_base);
+    assert_eq!(
+        lines,
+        [
+            format!("{first}  game 1.0.0  commit aaaaaaaaaaaa (NOT checked)  {repo}"),
+            format!("{second}  game 1.1.0  commit aaaaaaaaaaaa (found in repo)  {repo}"),
+        ],
+        "{}",
+        run.out
+    );
+    assert!(!run.out.contains("Nothing waiting"));
+
+    // Rejecting takes a reviewer and a reason for the maker.
+    let run = cli(
+        &[
+            "review",
+            "reject",
+            &first,
+            "--reviewer",
+            "ops",
+            "--reason",
+            "  ",
+        ],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("give the maker a reason"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &[
+            "review",
+            "reject",
+            &first,
+            "--reviewer",
+            "",
+            "--reason",
+            "Crashes.",
+        ],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("say who you are"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &[
+            "review",
+            "reject",
+            &first,
+            "--reviewer",
+            "ops",
+            "--reason",
+            " Crashes at start. ",
+        ],
+        &env,
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    assert!(run.out.contains(&format!("Rejected {first}.")));
+    let (status, reason, by): (String, String, String) = sqlx::query_as(
+        "select status::text, status_reason, reviewed_by from releases where id = $1::uuid",
+    )
+    .bind(&first)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (status.as_str(), reason.as_str(), by.as_str()),
+        ("rejected", "Crashes at start.", "ops")
+    );
+    assert_eq!(audit_count(&app, "release.reject").await, 1);
+    assert!(notices(&app, maker_id, "%1.0.0%").await >= 1);
+    let run = cli(
+        &[
+            "review",
+            "reject",
+            &first,
+            "--reviewer",
+            "ops",
+            "--reason",
+            "Again.",
+        ],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("no release waiting for review"),
+        "{}",
+        run.err
+    );
+
+    // Withdrawing: only an approved release, with a reason players see; a pin to it goes.
+    let run = cli(
+        &["revoke", &second, "--reviewer", "ops", "--reason", "Miner."],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("no approved release with that ID"),
+        "{}",
+        run.err
+    );
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        second.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    sqlx::query("update apps set pinned_release_id = $1::uuid where slug = 'game'")
+        .bind(&second)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let run = cli(
+        &["revoke", &second, "--reviewer", "ops", "--reason", " "],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("say why with --reason"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &[
+            "revoke",
+            &second,
+            "--reviewer",
+            "ops",
+            "--reason",
+            "Ships a miner.",
+        ],
+        &env,
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    assert!(run.out.contains("Clients stop launching it"), "{}", run.out);
+    let (status, pinned): (String, Option<Uuid>) = sqlx::query_as(
+        "select r.status::text, a.pinned_release_id from releases r join apps a on a.id = r.app_id where r.id = $1::uuid",
+    )
+    .bind(&second)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((status.as_str(), pinned), ("revoked", None));
+    let (actor, detail): (String, Value) =
+        sqlx::query_as("select actor, detail from audit_log where action = 'release.revoke'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(actor, "ops");
+    assert_eq!(detail["reason"], "Ships a miner.");
+    let run = cli(
+        &["revoke", &second, "--reviewer", "ops", "--reason", "Again."],
+        &env,
+    )
+    .await;
+    assert!(!run.ok, "once");
+    let run = cli(
+        &["revoke", "not-an-id", "--reviewer", "ops", "--reason", "x"],
+        &env,
+    )
+    .await;
+    assert!(!run.ok && run.err.contains("invalid value"), "{}", run.err);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_command_line_moves_and_delists_apps(db: PgPool) {
+    let app = test_app(db).await;
+    let url = own_database_url(&app.db).await;
+    let env = [("DATABASE_URL", url.as_str())];
+    let (maker_id, _) = maker_with_app(&app, "beta").await;
+    listed_with(&app, maker_id, "listed-one", "released", "").await;
+
+    // Stages by their command-line names.
+    let run = cli(
+        &["review", "stage", "game", "alpha", "--reviewer", "ops"],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("use coming-soon, beta or released"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &["review", "stage", "game", "released", "--reviewer", "ops"],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("approve a release first"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &[
+            "review",
+            "stage",
+            "game",
+            "coming-soon",
+            "--reviewer",
+            "ops",
+        ],
+        &env,
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    assert!(run.out.contains("game moved to ComingSoon."), "{}", run.out);
+    let run = cli(
+        &[
+            "review",
+            "stage",
+            "game",
+            "coming_soon",
+            "--reviewer",
+            "ops",
+        ],
+        &env,
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("already in that stage"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &["review", "stage", "nope", "beta", "--reviewer", "ops"],
+        &env,
+    )
+    .await;
+    assert!(!run.ok && run.err.contains("no such app"), "{}", run.err);
+    let stage: String = sqlx::query_scalar("select stage::text from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(stage, "coming_soon");
+    assert_eq!(audit_count(&app, "app.stage").await, 1);
+
+    // Delisting: a Content Policy rule, the facts, and only an app in the store.
+    let delist = |slug: &'static str, rule: &'static str, reason: &'static str| {
+        let env = env;
+        async move {
+            cli(
+                &[
+                    "review",
+                    "delist",
+                    slug,
+                    "--reviewer",
+                    "ops",
+                    "--rule",
+                    rule,
+                    "--reason",
+                    reason,
+                ],
+                &env,
+            )
+            .await
+        }
+    };
+    let run = delist("listed-one", "ugly", "Copies another game's art.").await;
+    assert!(
+        !run.ok && run.err.contains("choose the rule it breaks"),
+        "{}",
+        run.err
+    );
+    let run = delist("listed-one", "copyright", " ").await;
+    assert!(
+        !run.ok && run.err.contains("say why with --reason"),
+        "{}",
+        run.err
+    );
+    let run = delist("game", "copyright", "Copies another game's art.").await;
+    assert!(
+        !run.ok && run.err.contains("no listed app with that address"),
+        "{}",
+        run.err
+    );
+    assert_eq!(audit_count(&app, "app.delist").await, 0);
+    let run = delist("listed-one", "copyright", "Copies another game's art.").await;
+    assert!(run.ok, "{}", run.err);
+    assert!(run.out.contains("listed-one is out of the store."));
+    let (status, action, rule, by): (String, String, String, String) = sqlx::query_as(
+        "select a.status::text, d.action, d.rule, d.decided_by from apps a
+         join moderation_decisions d on d.subject_id = a.id where a.slug = 'listed-one'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (status.as_str(), action.as_str(), rule.as_str(), by.as_str()),
+        ("delisted", "delist_app", "copyright", "ops")
+    );
+    assert_eq!(audit_count(&app, "app.delist").await, 1);
+    assert_eq!(notices(&app, maker_id, "%listed-one%").await, 1);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_builds_are_published_from_the_command_line_only_when_set_up(db: PgPool) {
+    let app = test_app(db).await;
+    let url = own_database_url(&app.db).await;
+    let key = printed(
+        &cli(&["keys", "generate-updater"], &[]).await.out,
+        "SLOP_UPDATER_KEY",
+    );
+    let dir = temp_folder("desktop");
+    let file = dir.join("upload.deb");
+    std::fs::write(&file, b"a desktop build").unwrap();
+    let out_dir = dir.join("published");
+    let commit = "c".repeat(40);
+    let publish = |version: &str| {
+        vec![
+            "desktop".to_string(),
+            "publish".into(),
+            "--platform".into(),
+            "linux-deb".into(),
+            "--version".into(),
+            version.into(),
+            "--commit".into(),
+            commit.clone(),
+            file.to_string_lossy().into_owned(),
+        ]
+    };
+
+    let p = publish("1.2.0");
+    let run = cli(&strs(&p), &[("DATABASE_URL", &url)]).await;
+    assert!(
+        !run.ok
+            && run
+                .err
+                .contains("set SLOP_DESKTOP_DIR and SLOP_UPDATER_KEY first"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &strs(&p),
+        &[
+            ("DATABASE_URL", &url),
+            ("SLOP_DESKTOP_DIR", out_dir.to_str().unwrap()),
+        ],
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("set SLOP_DESKTOP_DIR"),
+        "{}",
+        run.err
+    );
+    let env = [
+        ("DATABASE_URL", url.as_str()),
+        ("SLOP_DESKTOP_DIR", out_dir.to_str().unwrap()),
+        ("SLOP_UPDATER_KEY", key.as_str()),
+    ];
+    let bad = publish("1.x");
+    let run = cli(&strs(&bad), &env).await;
+    assert!(
+        !run.ok && run.err.contains("unexpected character"),
+        "{}",
+        run.err
+    );
+    let run = cli(&strs(&p), &env).await;
+    assert!(run.ok, "{}", run.err);
+    assert!(run.out.contains("Published linux-deb 1.2.0"), "{}", run.out);
+    let (version, size): (String, i64) = sqlx::query_as(
+        "select version, size_bytes from desktop_builds where platform = 'linux-deb'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((version.as_str(), size), ("1.2.0", 15));
+    assert_eq!(std::fs::read_dir(&out_dir).unwrap().count(), 1);
+    std::fs::remove_dir_all(dir).unwrap();
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn migrations_run_as_the_owner_and_a_stale_schema_is_refused(db: PgPool) {
+    let url = own_database_url(&db).await;
+    let run = cli(&["migrate"], &[("DATABASE_URL", &url)]).await;
+    assert!(
+        !run.ok
+            && run
+                .err
+                .contains("SLOP_MIGRATE_DATABASE_URL (the tables' owner) isn't set"),
+        "{}",
+        run.err
+    );
+    let run = cli(
+        &["migrate"],
+        &[
+            ("SLOP_MIGRATE_DATABASE_URL", &url),
+            ("SLOP_APP_ROLE", "slop_admin2_no_such_role"),
+        ],
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    assert!(
+        run.out.contains("the API's role doesn't exist yet"),
+        "{}",
+        run.out
+    );
+    assert!(run.out.contains("migrations are up to date"));
+
+    // Migrations that ran as their own step are only checked.
+    let external = [
+        ("DATABASE_URL", url.as_str()),
+        ("SLOP_MIGRATIONS", "external"),
+    ];
+    let run = cli(&["review", "pending"], &external).await;
+    assert!(run.ok, "{}", run.err);
+    let newest: i64 = sqlx::query_scalar("delete from _sqlx_migrations where version = (select max(version) from _sqlx_migrations) returning version")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    let run = cli(&["review", "pending"], &external).await;
+    assert!(!run.ok, "{}", run.out);
+    assert!(
+        run.err
+            .contains(&format!("needs {newest}: run `slop-api migrate`")),
+        "{}",
+        run.err
+    );
+}
