@@ -3633,3 +3633,598 @@ async fn two_approvers_at_once_carry_out_an_action_once(db: PgPool) {
     .unwrap();
     assert_eq!((status.as_str(), approvals), ("done", 2));
 }
+
+// ---------------------------------------------------------------------------------------------
+// Legal documents
+
+/// Adds a version of a legal document, published `published` ago and in effect from
+/// `effective` (both SQL intervals, e.g. '-1 day' or '15 days'), from the repository (no
+/// publisher) unless `by` is given.
+async fn legal_version(
+    app: &TestApp,
+    kind: &str,
+    version: &str,
+    published: &str,
+    effective: &str,
+    by: Option<&str>,
+) {
+    sqlx::query(
+        "insert into legal_documents (kind, version, title, summary, body_md, sha256, published_at, effective_at, published_by)
+         values ($1, $2, 'Doc', 'Changes ' || $2, 'Words of ' || $2, md5($2), now() + $3::interval, now() + $4::interval, $5)",
+    )
+    .bind(kind)
+    .bind(version)
+    .bind(published)
+    .bind(effective)
+    .bind(by)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+fn entry<'a>(list: &'a Value, kind: &str) -> &'a Value {
+    list.as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["kind"] == kind)
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_legal_index_splits_what_is_in_effect_from_what_is_announced(db: PgPool) {
+    let app = test_app(db).await;
+    legal_version(&app, "privacy", "2099-01-01", "0 days", "15 days", None).await;
+    legal_version(
+        &app,
+        "privacy",
+        "2026-01-01",
+        "-300 days",
+        "-280 days",
+        None,
+    )
+    .await;
+    let index = body_json(app.send(req(Method::GET, "/v1/legal")).await).await;
+    let kinds: Vec<(&str, &str, bool)> = index
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["kind"].as_str().unwrap(),
+                d["title"].as_str().unwrap(),
+                d["accepted"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        kinds,
+        [
+            ("terms", "Terms of Service", true),
+            ("privacy", "Privacy Policy", false),
+            ("content", "Content Policy", false),
+            ("publisher", "Publisher Agreement", true),
+            ("people", "People Terms", true),
+        ]
+    );
+    for d in index.as_array().unwrap() {
+        assert!(d["current"]["version"].is_string(), "{d}");
+    }
+    let privacy = entry(&index, "privacy");
+    assert_eq!(privacy["current"]["version"], "2026-10-20");
+    assert_eq!(privacy["upcoming"]["version"], "2099-01-01");
+    assert_eq!(privacy["upcoming"]["summary"], "Changes 2099-01-01");
+    assert!(entry(&index, "terms")["upcoming"].is_null());
+
+    // One document: in effect now by default, or a named version from the past or the future.
+    let doc = |q: &str| app.send(req(Method::GET, format!("/v1/legal/{q}")));
+    let now = body_json(doc("privacy").await).await;
+    assert_eq!(now["version"], "2026-10-20");
+    assert_eq!(now["in_effect"], true);
+    assert_eq!(now["title"], "Privacy Policy");
+    let versions: Vec<&str> = now["versions"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|v| v["version"].as_str().unwrap())
+        .collect();
+    assert_eq!(versions, ["2099-01-01", "2026-10-20", "2026-01-01"]);
+    let future = body_json(doc("privacy?version=2099-01-01").await).await;
+    assert_eq!(future["in_effect"], false);
+    assert_eq!(future["body_md"], "Words of 2099-01-01");
+    let past = body_json(doc("privacy?version=2026-01-01").await).await;
+    assert_eq!(past["in_effect"], true);
+    assert_eq!(past["summary"], "Changes 2026-01-01");
+    for q in [
+        "weather",
+        "privacy?version=2026-02-02",
+        "privacy?version=nonsense",
+    ] {
+        assert_eq!(doc(q).await.status(), StatusCode::NOT_FOUND, "{q}");
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn people_are_told_about_agreements_they_are_party_to_and_new_policies(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, newcomer) = app.user("Nell Newcomer", "US").await;
+    let (old_id, old) = app.user("Olga Oldtimer", "US").await;
+    sqlx::query("update users set created_at = now() - interval '60 days' where id = $1")
+        .bind(old_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (player_id, player) = app.user("Pat Player", "US").await;
+    sqlx::query(
+        "delete from legal_acceptances where user_id = $1 and kind in ('publisher', 'people')",
+    )
+    .bind(player_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let notices = |cookie: &str| {
+        let r = req(Method::GET, "/v1/me/legal").cookie(cookie);
+        let app = &app;
+        async move {
+            let res = app.send(r).await;
+            assert_eq!(res.status(), StatusCode::OK);
+            body_json(res).await
+        }
+    };
+    let kinds = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|n| n["kind"].as_str().unwrap().to_string())
+            .collect()
+    };
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/legal")).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // Someone who joined after everything was published, and accepted it all: nothing to say.
+    assert_eq!(notices(&newcomer).await, json!([]));
+    // Someone who joined before the policies were published hears about them, as new documents.
+    let olga = notices(&old).await;
+    assert_eq!(kinds(&olga), ["privacy", "content"]);
+    assert_eq!(olga[0]["action"], "read");
+    assert_eq!(olga[0]["first"], true);
+    assert_eq!(olga[0]["in_effect"], true);
+    // A policy change in effect for more than 30 days is old news.
+    sqlx::query(
+        "update legal_documents set published_at = now() - interval '40 days', effective_at = now() - interval '31 days'
+         where kind = 'privacy'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(kinds(&notices(&old).await), ["content"]);
+
+    // A new version of the Terms is announced: everyone is party to them.
+    legal_version(&app, "terms", "2099-01-01", "0 days", "15 days", None).await;
+    let nell = notices(&newcomer).await;
+    assert_eq!(kinds(&nell), ["terms"]);
+    assert_eq!(nell[0]["action"], "accept");
+    assert_eq!(nell[0]["in_effect"], false);
+    assert_eq!(nell[0]["first"], false);
+    assert_eq!(nell[0]["version"], "2099-01-01");
+    // A new Publisher Agreement: only for people who accepted one before.
+    legal_version(&app, "publisher", "2099-01-01", "0 days", "15 days", None).await;
+    assert_eq!(kinds(&notices(&newcomer).await), ["terms", "publisher"]);
+    assert_eq!(kinds(&notices(&player).await), ["terms"]);
+    // Accepting the announced version ends the notice.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/legal/accept")
+                .cookie(&newcomer)
+                .json(json!({ "kind": "terms", "version": "2099-01-01" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(kinds(&notices(&newcomer).await), ["publisher"]);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn actions_wait_for_the_agreement_in_effect(db: PgPool) {
+    let app = test_app(db).await;
+    let (user_id, cookie) = app.user("Cass Creative", "US").await;
+    assert!(
+        slop_api::legal::require(&app.db, user_id, "people")
+            .await
+            .is_ok()
+    );
+    // A kind with no document at all asks nothing.
+    sqlx::query("delete from legal_acceptances where kind = 'people'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("delete from legal_documents where kind = 'people'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert!(
+        slop_api::legal::require(&app.db, user_id, "people")
+            .await
+            .is_ok()
+    );
+    // A version in effect that they haven't accepted: People actions wait.
+    legal_version(&app, "people", "2026-10-01", "-20 days", "-1 day", None).await;
+    assert!(matches!(
+        slop_api::legal::require(&app.db, user_id, "people").await,
+        Err(slop_api::error::ApiError::TermsRequired("people"))
+    ));
+    let mut body = profile("cass", false);
+    body["confirm_adult"] = json!(true);
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/creative")
+                .cookie(&cookie)
+                .json(body.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let err = body_json(res).await;
+    assert_eq!(err["error"]["code"], "terms_required");
+    assert_eq!(err["error"]["field"], "people");
+    // An announced one doesn't count until it's in effect.
+    legal_version(&app, "people", "2099-01-01", "0 days", "15 days", None).await;
+    app.send(
+        req(Method::POST, "/v1/me/legal/accept")
+            .cookie(&cookie)
+            .json(json!({ "kind": "people", "version": "2026-10-01" })),
+    )
+    .await;
+    assert!(
+        slop_api::legal::require(&app.db, user_id, "people")
+            .await
+            .is_ok()
+    );
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/creative")
+                .cookie(&cookie)
+                .json(body),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn start_up_publishes_new_versions_and_never_changes_a_published_one(db: PgPool) {
+    let app = test_app(db).await;
+    let rows = || async {
+        sqlx::query_as::<_, (String, String, bool, bool)>(
+            "select kind, version, effective_at <= now(), effective_at > now() + interval '14 days'
+             from legal_documents order by kind, version",
+        )
+        .fetch_all(&app.db)
+        .await
+        .unwrap()
+    };
+    // Every document's first version is in effect at once.
+    let first = rows().await;
+    assert_eq!(first.len(), 5);
+    assert!(first.iter().all(|r| r.2), "{first:?}");
+
+    // Published words never change under people who accepted them, even if the file is edited.
+    sqlx::query(
+        "update legal_documents set body_md = 'The words people accepted.', sha256 = 'accepted' where kind = 'terms'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    slop_api::legal::sync(&app.db).await.unwrap();
+    let body: String =
+        sqlx::query_scalar("select body_md from legal_documents where kind = 'terms'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(body, "The words people accepted.");
+    assert_eq!(rows().await, first);
+
+    // A version from the file that's new to a document already published waits 15 days.
+    sqlx::query("delete from legal_documents where kind = 'privacy'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    legal_version(
+        &app,
+        "privacy",
+        "2026-01-01",
+        "-300 days",
+        "-300 days",
+        None,
+    )
+    .await;
+    slop_api::legal::sync(&app.db).await.unwrap();
+    let privacy: Vec<(String, String, bool, bool)> = rows()
+        .await
+        .into_iter()
+        .filter(|r| r.0 == "privacy")
+        .collect();
+    assert_eq!(
+        privacy,
+        [
+            ("privacy".into(), "2026-01-01".into(), true, false),
+            ("privacy".into(), "2026-10-20".into(), false, true),
+        ]
+    );
+    // Nothing new: nothing changes.
+    let before = rows().await;
+    slop_api::legal::sync(&app.db).await.unwrap();
+    assert_eq!(rows().await, before);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_publish_a_new_legal_version_with_notice(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, player) = app.user("Pat Player", "US").await;
+    let publish = |kind: &str, who: &str, body: Value| {
+        as_who(Method::POST, format!("/v1/admin/legal/{kind}"), who).json(body)
+    };
+    let change = json!({ "summary": "Explains chat reports.", "body_md": "New privacy words." });
+
+    // The overview: repository versions have no file text to copy.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/legal").cookie(&player))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let read = token(&app, &owner, "read").await;
+    let docs = body_json(
+        app.send(as_who(Method::GET, "/v1/admin/legal".into(), &read))
+            .await,
+    )
+    .await;
+    assert_eq!(docs.as_array().unwrap().len(), 5);
+    let privacy = entry(&docs, "privacy");
+    assert!(privacy["file_text"].is_null());
+    assert_eq!(privacy["latest_version"], "2026-10-20");
+    assert_eq!(privacy["accepted"], false);
+    assert!(privacy["versions"][0]["published_by"].is_null());
+    assert!(!privacy["latest_body_md"].as_str().unwrap().is_empty());
+
+    // Who may, and what's refused.
+    assert_eq!(
+        app.send(publish("privacy", &reviewer, change.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let review = token(&app, &owner, "review").await;
+    assert_eq!(
+        app.send(publish("privacy", &review, change.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(publish("weather", &owner, change.clone()))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    for (body, field) in [
+        (
+            json!({ "summary": "Two\nlines", "body_md": "x" }),
+            "summary",
+        ),
+        (json!({ "summary": "", "body_md": "x" }), "summary"),
+        (
+            json!({ "summary": "Same", "body_md": privacy["latest_body_md"] }),
+            "body_md",
+        ),
+    ] {
+        let res = app.send(publish("privacy", &owner, body)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{field}");
+        assert_eq!(body_json(res).await["error"]["field"], field);
+    }
+
+    // Published (an agent with a moderate token may): dated today, in effect in 15 days.
+    let agent = token(&app, &owner, "moderate").await;
+    let res = app.send(publish("privacy", &agent, change.clone())).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let published = body_json(res).await;
+    let today = OffsetDateTime::now_utc().date().to_string();
+    assert_eq!(published["version"], today.as_str());
+    let in_days = (published["effective_at"].as_i64().unwrap()
+        - OffsetDateTime::now_utc().unix_timestamp()) as f64
+        / 86_400.0;
+    assert!((14.99..15.01).contains(&in_days), "{in_days}");
+    let docs = body_json(
+        app.send(req(Method::GET, "/v1/admin/legal").cookie(&owner))
+            .await,
+    )
+    .await;
+    let privacy = entry(&docs, "privacy");
+    let file = privacy["file_text"].as_str().unwrap();
+    let parsed = slop_api::legal::parse(file).unwrap();
+    assert_eq!(
+        (parsed.version, parsed.summary, parsed.body),
+        (
+            today.as_str(),
+            "Explains chat reports.",
+            "New privacy words."
+        )
+    );
+    assert!(
+        privacy["versions"][0]["published_by"]
+            .as_str()
+            .unwrap()
+            .starts_with("AI reviewer")
+    );
+    let subject: String =
+        sqlx::query_scalar("select subject from audit_log where action = 'legal.published'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(subject, format!("privacy {today}"));
+
+    // A second version the same day, once the first is in effect, gets a letter.
+    sqlx::query("update legal_documents set effective_at = now() - interval '1 second' where kind = 'privacy' and version = $1")
+        .bind(&today)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(publish(
+            "privacy",
+            &owner,
+            json!({ "summary": "Fixes a typo.", "body_md": "New privacy words, fixed." }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["version"], format!("{today}b"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn publishing_a_legal_version_waits_for_a_second_person(db: PgPool) {
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, second) = make_admin(&app, "Sid Second").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/legal/content")
+                .cookie(&owner)
+                .json(json!({ "summary": "Bans loot boxes.", "body_md": "No loot boxes." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let action = body_json(res).await["pending_action"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let versions = || async {
+        sqlx::query_scalar::<_, i64>("select count(*) from legal_documents where kind = 'content'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    assert_eq!(versions().await, 1);
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{action}/approve")).cookie(&second))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(versions().await, 2);
+    let by: String = sqlx::query_scalar(
+        "select published_by from legal_documents where kind = 'content' and published_by is not null",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(
+        by.contains("Olive Owner") && by.contains("approved by Sid Second"),
+        "{by}"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_announced_version_can_be_withdrawn_before_it_takes_effect(db: PgPool) {
+    // One person is enough to withdraw, even when publishing needs two.
+    let app = test_app_with(db, |c| c.approvals_required = 2).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (pat_id, pat) = app.user("Pat Player", "US").await;
+    legal_version(
+        &app,
+        "terms",
+        "2099-01-01",
+        "0 days",
+        "15 days",
+        Some("Olive Owner"),
+    )
+    .await;
+    legal_version(&app, "people", "2099-01-01", "0 days", "15 days", None).await;
+    legal_version(
+        &app,
+        "content",
+        "2026-10-21",
+        "-5 days",
+        "-1 day",
+        Some("Olive Owner"),
+    )
+    .await;
+    // Pat already accepted the announced Terms.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/legal/accept")
+                .cookie(&pat)
+                .json(json!({ "kind": "terms", "version": "2099-01-01" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let withdraw = |path: &str, who: &str, reason: &str| {
+        as_who(
+            Method::POST,
+            format!("/v1/admin/legal/{path}/withdraw"),
+            who,
+        )
+        .json(json!({ "reason": reason }))
+    };
+    let why = "Published by mistake.";
+
+    assert_eq!(
+        app.send(withdraw("terms/2099-01-01", &reviewer, why))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    for bad in ["", "  ", &"x".repeat(2001)] {
+        let res = app.send(withdraw("terms/2099-01-01", &owner, bad)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(res).await["error"]["field"], "reason");
+    }
+    for (path, status) in [
+        ("terms/2098-01-01", StatusCode::NOT_FOUND),
+        ("weather/2099-01-01", StatusCode::NOT_FOUND),
+        // In effect already, or from the repository's file: not from here.
+        ("content/2026-10-21", StatusCode::CONFLICT),
+        ("people/2099-01-01", StatusCode::CONFLICT),
+    ] {
+        assert_eq!(
+            app.send(withdraw(path, &owner, why)).await.status(),
+            status,
+            "{path}"
+        );
+    }
+
+    let agent = token(&app, &owner, "moderate").await;
+    assert_eq!(
+        app.send(withdraw("terms/2099-01-01", &agent, why))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let (left, accepted): (i64, i64) = sqlx::query_as(
+        "select (select count(*) from legal_documents where kind = 'terms' and version = '2099-01-01'),
+                (select count(*) from legal_acceptances where kind = 'terms' and version = '2099-01-01')",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((left, accepted), (0, 0));
+    let still: i64 = sqlx::query_scalar(
+        "select count(*) from legal_acceptances where user_id = $1 and kind = 'terms'",
+    )
+    .bind(pat_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(still, 1, "the acceptance of the version before stays");
+    let detail: Value =
+        sqlx::query_scalar("select detail from audit_log where action = 'legal.withdrawn'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(detail["reason"], why);
+    assert_eq!(detail["acceptances_removed"], 1);
+    assert_eq!(detail["body_md"], "Words of 2099-01-01");
+    assert_eq!(
+        app.send(withdraw("terms/2099-01-01", &owner, why))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
