@@ -1348,7 +1348,7 @@ export interface ManageOverview {
   auto_approval_note: string | null;
   changes: AppChange[];
   /** Slop can't read the repository: no new releases until it can (SECURITY §12.2). */
-  frozen: { reason: string; since: string; until: string } | null;
+  frozen: Frozen | null;
   /** Private Slop waiting for a reviewer to make it public. */
   public_requested: boolean;
   /** Community builds of Pulse games: null if not needed, else whether the handshake arrived. */
@@ -1535,6 +1535,9 @@ export interface AdminAppRecord {
     maker: string;
     parent: string | null;
     frozen_at: string | null;
+    frozen_reason: string | null;
+    /** Set when staff froze it by hand. */
+    frozen_by: string | null;
     donations_on: boolean;
     donation_account: string | null;
     created_at: string;
@@ -1601,6 +1604,73 @@ export interface AdminUserDetails {
   /** `at` is a Unix time in seconds. */
   reports_about: Array<{ reference: string; about: string; reason: string; status: string; at: number }>;
   decisions: Array<{ id: string; reference: string; action: string; rule: string; about: string; at: number; reversed: boolean }>;
+}
+
+/** No new releases (frozen.rs): Slop lost the repository, or staff froze it by hand. */
+export interface Frozen {
+  reason: string;
+  since: string;
+  /** When an automatic freeze takes it out of the store; staff freezes never do. */
+  until: string;
+  by_staff: boolean;
+}
+
+/** What staff can fix about an account (admin_tools.rs). */
+export interface AdminProfile {
+  display_name: string;
+  creative: {
+    handle: string;
+    name: string;
+    headline: string;
+    about_md: string;
+    location: string;
+    links: Array<{ label: string; url: string }>;
+    hidden_reason: string | null;
+  } | null;
+  teams: Array<{ slug: string; name: string; kind: string; about: string; role: string; hidden_reason: string | null }>;
+}
+
+export interface ProfileEdit {
+  display_name?: string;
+  creative?: { name?: string; headline?: string; about_md?: string; location?: string; remove_links?: boolean };
+  reason: string;
+}
+
+/** Staff-made shelves and the automatic ones (shelves.rs). */
+export interface AdminShelves {
+  shelves: Array<{
+    slug: string;
+    title: string;
+    blurb: string;
+    on_front: boolean;
+    apps: Array<{ slug: string; title: string; listed: boolean }>;
+  }>;
+  built_in: Array<{ key: string; title: string; hidden: boolean }>;
+}
+
+export interface StoreShelf {
+  slug: string;
+  title: string;
+  blurb: string;
+  apps: AppSummary[];
+}
+
+/** A legal document's versions, for staff (legal.rs). */
+export interface AdminLegalDocument {
+  kind: "terms" | "privacy" | "content" | "publisher" | "people";
+  title: string;
+  accepted: boolean;
+  latest_body_md: string;
+  latest_version: string | null;
+  /** The newest version as a file for crates/slop-api/legal/, when it came from the panel. */
+  file_text: string | null;
+  versions: Array<{
+    version: string;
+    summary: string;
+    published_at: string;
+    effective_at: string;
+    published_by: string | null;
+  }>;
 }
 
 export interface AuditEntry {
@@ -2311,6 +2381,9 @@ export const api = {
     withdrawClaim: (id: string, claim: string) =>
       request<void>("POST", `/v1/bounties/${encodeURIComponent(id)}/claims/${encodeURIComponent(claim)}/withdraw`),
   },
+  /** Staff-made front-page shelves, and the automatic ones staff hid. */
+  shelves: () => request<{ shelves: StoreShelf[]; hidden: string[] }>("GET", "/v1/shelves"),
+  shelf: (slug: string) => request<StoreShelf>("GET", `/v1/shelves/staff/${encodeURIComponent(slug)}`),
   glowUps: () => request<Array<AppSummary & { before: number; after: number }>>("GET", "/v1/shelves/glow-ups"),
   app: (slug: string) =>
     request<AppDetail>("GET", `/v1/apps/${encodeURIComponent(slug)}`),
@@ -2516,6 +2589,39 @@ export const api = {
         "POST",
         `/v1/admin/staff/${encodeURIComponent(userId)}/roles`,
         { role, grant },
+      ),
+    removeStaff: (userId: string, reason: string) =>
+      request<unknown>("POST", `/v1/admin/staff/${encodeURIComponent(userId)}/remove`, { reason }),
+    /** What staff can fix about an account, and the fix (the person is told why). */
+    profile: (id: string) => request<AdminProfile>("GET", `/v1/admin/users/${encodeURIComponent(id)}/profile`),
+    editProfile: (id: string, body: ProfileEdit) =>
+      request<{ changed: string[] }>("PATCH", `/v1/admin/users/${encodeURIComponent(id)}/profile`, body),
+    editTeam: (slug: string, body: { name?: string; about?: string; reason: string }) =>
+      request<{ changed: string[] }>("PATCH", `/v1/admin/teams/${encodeURIComponent(slug)}`, body),
+    /** No new releases until staff lift it; the app stays in the store. */
+    freeze: (slug: string, reason: string) =>
+      request<Frozen | null>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/freeze`, { reason }),
+    /** Lifts a staff freeze, or checks the repository again for an automatic one. */
+    unfreeze: (slug: string, note: string) =>
+      request<Frozen | null>("POST", `/v1/admin/apps/${encodeURIComponent(slug)}/unfreeze`, { note }),
+    shelves: () => request<AdminShelves>("GET", "/v1/admin/shelves"),
+    createShelf: (b: { slug: string; title: string; blurb: string; on_front: boolean; apps: string[] }) =>
+      request<AdminShelves>("POST", "/v1/admin/shelves", b),
+    updateShelf: (slug: string, b: { title: string; blurb: string; on_front: boolean; apps: string[] }) =>
+      request<AdminShelves>("PUT", `/v1/admin/shelves/${encodeURIComponent(slug)}`, b),
+    deleteShelf: (slug: string) => request<void>("DELETE", `/v1/admin/shelves/${encodeURIComponent(slug)}`),
+    orderShelves: (slugs: string[]) => request<AdminShelves>("PUT", "/v1/admin/shelves/order", { slugs }),
+    hideFrontShelf: (key: string, hidden: boolean) =>
+      request<AdminShelves>("POST", `/v1/admin/front-shelves/${encodeURIComponent(key)}`, { hidden }),
+    legalDocuments: () => request<AdminLegalDocument[]>("GET", "/v1/admin/legal"),
+    /** A sensitive action: may wait for a second person (202). */
+    publishLegal: (kind: string, summary: string, body_md: string) =>
+      request<unknown>("POST", `/v1/admin/legal/${encodeURIComponent(kind)}`, { summary, body_md }),
+    withdrawLegal: (kind: string, version: string, reason: string) =>
+      request<void>(
+        "POST",
+        `/v1/admin/legal/${encodeURIComponent(kind)}/${encodeURIComponent(version)}/withdraw`,
+        { reason },
       ),
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>

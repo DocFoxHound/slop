@@ -128,6 +128,16 @@ function Frozen({
       setBusy(false);
     }
   };
+  if (frozen.by_staff)
+    return (
+      <section className="panel panel-pad notice-panel" role="status">
+        <h2>Frozen by Slop</h2>
+        <p>
+          Since {formatDate(frozen.since)}, this app takes no new releases: {frozen.reason}
+        </p>
+        <p>It stays in the store and copies people installed keep working. Slop lifts the freeze once it's dealt with.</p>
+      </section>
+    );
   const past = new Date(frozen.until).getTime() < Date.now();
   return (
     <section className="panel panel-pad notice-panel" role="status">

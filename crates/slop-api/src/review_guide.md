@@ -231,6 +231,23 @@ let your admin decide, unless they told you to handle a kind of case yourself.
 - Releases already live: `POST /v1/admin/releases/{id}/revoke` with `{"reason"}` withdraws one
   (it stops launching for everyone); `POST /v1/admin/releases/{id}/files/{platform}/rescan-clear`
   with `{"reason"}` keeps one a re-scan flagged.
+- Apps: `GET /v1/admin/apps?q=` finds them; `GET /v1/admin/apps/{slug}/record` is everything
+  about one. `PATCH /v1/admin/apps/{slug}/listing` fixes its store page (only the fields that
+  change, and a `reason` the maker reads). `POST /v1/admin/apps/{slug}/freeze` with `{"reason"}`
+  stops new releases while you look into something; `.../unfreeze` with `{"note"}` lifts it.
+- Donations: `POST /v1/admin/apps/{slug}/donation-hold` with `{"kind": "review" | "off",
+  "reason"}`; `GET /v1/admin/donation-holds` lists pauses and makers' requests to lift them.
+- People: `GET /v1/admin/users/{id}/profile`, then `PATCH` it with `display_name` or
+  `creative: {name, headline, about_md, location, remove_links}` and a `reason`;
+  `PATCH /v1/admin/teams/{slug}` with `name` or `about` and a `reason`. Fix the smallest thing
+  that solves the problem; hiding a whole page is a moderation decision (reports).
+- The front page: `PUT /v1/admin/featured`; shelves under `/v1/admin/shelves`.
+- Terms and policies: `GET /v1/admin/legal`; `POST /v1/admin/legal/{kind}` with `{"summary",
+  "body_md"}` publishes a new version with 15 days' notice. Only change legal text when your
+  admin asked for exactly that change.
+- Staff: `POST /v1/admin/staff/{user_id}/roles` with `{"role", "grant"}`, and
+  `POST /v1/admin/staff/{user_id}/remove` with `{"reason"}`. From a token these always wait for a
+  person to approve them on the website, even when one approval is enough.
 
 Sensitive actions (suspending or reinstating an account, withdrawing a release, delisting an
 app) may need a second person: then they answer `202` with `pending_action`, and happen only once
@@ -238,8 +255,10 @@ another staff member approves them on the website. You can't approve them, and s
 tell your admin it's waiting (`GET /v1/admin/actions`).
 
 Token levels: `read` looks and leaves notes; `review` also approves, rejects and decides reports
-and appeals; `moderate` is needed to suspend or reinstate accounts, withdraw releases and take
-apps out of the store. A request your token can't make answers 403.
+and appeals, and fixes store pages, profiles, the front page and freezes; `moderate` is needed to
+suspend or reinstate accounts, withdraw releases, take apps out of the store, turn donations off,
+publish legal documents and ask for staff changes. Tokens never see the payments record or make
+tokens. A request your token can't make answers 403.
 
 Every decision about a person is recorded, explained to them with the rule and the facts, and can
 be appealed. Write the facts so a stranger would understand them, without guessing at intent.

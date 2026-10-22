@@ -664,7 +664,7 @@ pub(crate) fn push_shared_with(qb: &mut QueryBuilder<Postgres>, viewer: Option<U
     qb.push(
         "(a.visibility = 'private'
           and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')
-          and (a.frozen_at is null or a.frozen_at > now() - interval '14 days')
+          and (a.frozen_at is null or a.frozen_by is not null or a.frozen_at > now() - interval '14 days')
           and (exists (select 1 from app_shares s where s.app_id = a.id and s.user_id = ",
     )
     .push_bind(viewer)

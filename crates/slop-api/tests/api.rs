@@ -15643,3 +15643,400 @@ async fn staff_see_an_apps_whole_record_and_can_fix_its_store_page(db: PgPool) {
     .await;
     assert_eq!(money["open_holds"], 0);
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_fix_profiles_and_teams_and_freeze_apps_by_hand(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    sqlx::query(
+        "insert into creatives (user_id, handle, name, headline, ai_use, trader, links)
+         values ($1, 'mia', 'Mia', 'Totally the real Studio Ghibli', 'none', false,
+                 '[{\"label\": \"Free gems\", \"url\": \"https://scam.example\"}]')",
+    )
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/teams").cookie(&maker).json(
+                json!({ "slug": "mias-crew", "name": "Official Valve Team", "kind": "player" }),
+            ),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+
+    // What can be fixed, then the fix: only what changed, the person told why.
+    let profile = body_json(
+        app.send(req(Method::GET, format!("/v1/admin/users/{maker_id}/profile")).cookie(&owner))
+            .await,
+    )
+    .await;
+    assert_eq!(profile["creative"]["handle"], "mia");
+    assert_eq!(profile["teams"][0]["slug"], "mias-crew");
+    assert_eq!(
+        app.send(req(Method::GET, format!("/v1/admin/users/{maker_id}/profile")).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = body_json(
+        app.send(
+            req(Method::PATCH, format!("/v1/admin/users/{maker_id}/profile"))
+                .cookie(&owner)
+                .json(json!({
+                    "display_name": "Mia Maker",
+                    "creative": { "headline": "Pixel artist", "remove_links": true },
+                    "reason": "Claiming to be a studio you aren't is impersonation, and the link was a scam."
+                })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(res["changed"], json!(["headline", "links"]));
+    let (headline, links): (String, Value) =
+        sqlx::query_as("select headline, links from creatives where user_id = $1")
+            .bind(maker_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((headline.as_str(), links), ("Pixel artist", json!([])));
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/admin/teams/mias-crew")
+                .cookie(&owner)
+                .json(json!({ "name": "Mia's Crew", "reason": "Not affiliated with Valve." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let told: Vec<String> = sqlx::query_scalar(
+        "select title from notifications where user_id = $1 order by created_at",
+    )
+    .bind(maker_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert!(
+        told.contains(&"Slop changed your profile".to_string()),
+        "{told:?}"
+    );
+    assert!(
+        told.contains(&"Slop changed your team's page".to_string()),
+        "{told:?}"
+    );
+
+    // A hand freeze: no new releases, still in the store, and the daily check leaves it.
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    let frozen = body_json(
+        app.send(
+            req(Method::POST, "/v1/admin/apps/arena/freeze")
+                .cookie(&owner)
+                .json(json!({ "reason": "A player reported the last build steals passwords; we're checking." })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(frozen["by_staff"], true);
+    let id = app_id(&app, "arena").await;
+    let state = app.state.clone();
+    slop_api::frozen::apply(&state, id, slop_api::frozen::Access::Readable)
+        .await
+        .unwrap();
+    assert!(
+        slop_api::frozen::frozen_reason(&app.db, id)
+            .await
+            .unwrap()
+            .is_some(),
+        "the repository check doesn't lift a staff freeze"
+    );
+    sqlx::query("update apps set frozen_at = now() - interval '30 days' where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::frozen::end_grace(&state).await.unwrap();
+    let status: String = sqlx::query_scalar("select status::text from apps where id = $1")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "listed", "a staff freeze never delists on its own");
+    let res = body_json(
+        app.send(
+            req(Method::POST, "/v1/admin/apps/arena/unfreeze")
+                .cookie(&owner)
+                .json(json!({ "note": "Checked the build: it was a false report." })),
+        )
+        .await,
+    )
+    .await;
+    assert!(res.is_null(), "{res}");
+    let audit: Vec<String> =
+        sqlx::query_scalar("select action from audit_log where subject = 'arena' order by id")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(audit, ["app.frozen", "app.unfrozen"]);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_make_shelves_and_hide_automatic_ones(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    for slug in ["cozy-farm", "tea-shop", "dark-dungeon"] {
+        listed_with(&app, maker_id, slug, "released", "").await;
+    }
+    let shelf = json!({ "slug": "cozy", "title": "Cozy games", "blurb": "Slow, kind, warm.",
+                        "apps": ["tea-shop", "cozy-farm"] });
+    assert_eq!(
+        app.send(
+            req(Method::POST, "/v1/admin/shelves")
+                .cookie(&maker)
+                .json(shelf.clone())
+        )
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/shelves")
+                .cookie(&owner)
+                .json(shelf),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/shelves")
+                .cookie(&owner)
+                .json(json!({ "slug": "Bad Slug", "title": "x", "apps": [] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/front-shelves/fresh_slop")
+                .cookie(&owner)
+                .json(json!({ "hidden": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let front = body_json(app.send(req(Method::GET, "/v1/shelves")).await).await;
+    assert_eq!(front["hidden"], json!(["fresh_slop"]));
+    assert_eq!(front["shelves"][0]["title"], "Cozy games");
+    let order: Vec<&str> = front["shelves"][0]["apps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(order, ["tea-shop", "cozy-farm"]);
+
+    // Off the front page, it keeps its own page.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/admin/shelves/cozy")
+                .cookie(&owner)
+                .json(json!({ "title": "Cozy games", "on_front": false, "apps": ["cozy-farm"] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let front = body_json(app.send(req(Method::GET, "/v1/shelves")).await).await;
+    assert_eq!(front["shelves"], json!([]));
+    let page = body_json(app.send(req(Method::GET, "/v1/shelves/staff/cozy")).await).await;
+    assert_eq!(page["apps"][0]["slug"], "cozy-farm");
+    let res = app
+        .send(req(Method::DELETE, "/v1/admin/shelves/cozy").cookie(&owner))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/shelves/staff/cozy"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_publish_legal_changes_and_agents_only_ask_for_staff_changes(db: PgPool) {
+    let app = test_app(db).await;
+    let (owner_id, owner) = make_admin(&app, "Olive Owner").await;
+    let (helper_id, _) = app.user("Hal Helper", "US").await;
+
+    // A new Terms version from the panel: announced, in effect 15 days later, withdrawable.
+    let docs = body_json(
+        app.send(req(Method::GET, "/v1/admin/legal").cookie(&owner))
+            .await,
+    )
+    .await;
+    let terms = docs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["kind"] == "terms")
+        .unwrap()
+        .clone();
+    let body = format!(
+        "{}\n\nOne more line.",
+        terms["latest_body_md"].as_str().unwrap()
+    );
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/legal/terms")
+                .cookie(&owner)
+                .json(json!({ "summary": "Adds one line.", "body_md": body })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let published = body_json(res).await;
+    let version = published["version"].as_str().unwrap().to_string();
+    let index = body_json(app.send(req(Method::GET, "/v1/legal")).await).await;
+    let terms = index
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["kind"] == "terms")
+        .unwrap()
+        .clone();
+    assert_eq!(terms["upcoming"]["version"], version.as_str());
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/legal/terms")
+                .cookie(&owner)
+                .json(json!({ "summary": "Again", "body_md": "Different words." })),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::CONFLICT,
+        "one announced change at a time"
+    );
+    let docs = body_json(
+        app.send(req(Method::GET, "/v1/admin/legal").cookie(&owner))
+            .await,
+    )
+    .await;
+    let file = docs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["kind"] == "terms")
+        .unwrap()["file_text"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(slop_api::legal::parse(&file).is_ok(), "{file}");
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/legal/terms/{version}/withdraw"),
+            )
+            .cookie(&owner)
+            .json(json!({ "reason": "Published by mistake." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let index = body_json(app.send(req(Method::GET, "/v1/legal")).await).await;
+    assert!(index[0]["upcoming"].is_null());
+
+    // An agent asks to make someone staff; it waits for a person, even with one approval enough.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/tokens")
+                .cookie(&owner)
+                .json(json!({ "name": "Phone Claude", "scope": "moderate", "days": 7 })),
+        )
+        .await;
+    let token = format!("Bearer {}", body_json(res).await["token"].as_str().unwrap());
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/staff/{helper_id}/roles"))
+                .header("authorization", token.clone())
+                .json(json!({ "role": "reviewer", "grant": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    let pending = body_json(res).await;
+    let action = pending["pending_action"].as_str().unwrap().to_string();
+    let is_staff = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, bool>("select is_admin from users where id = $1")
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    assert!(!is_staff(helper_id).await);
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/actions/{action}/approve"))
+                .header("authorization", token.clone()),
+        )
+        .await;
+    assert_eq!(
+        res.status(),
+        StatusCode::FORBIDDEN,
+        "a token never approves"
+    );
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/actions/{action}/approve")).cookie(&owner))
+        .await;
+    assert!(res.status().is_success(), "{}", res.status());
+    assert!(is_staff(helper_id).await);
+
+    // Removing them: every role and token goes. The last owner can't be removed.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/staff/{owner_id}/remove"))
+                .cookie(&owner)
+                .json(json!({ "reason": "Testing the last-owner rule." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/staff/{helper_id}/remove"))
+                .cookie(&owner)
+                .json(json!({ "reason": "Only needed for the launch week." })),
+        )
+        .await;
+    assert!(res.status().is_success(), "{}", res.status());
+    assert!(!is_staff(helper_id).await);
+
+    // The tools are there over MCP.
+    let tools = body_json(
+        app.send(
+            req(Method::POST, "/v1/admin/mcp")
+                .header("authorization", token)
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })),
+        )
+        .await,
+    )
+    .await;
+    let names: Vec<&str> = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["name"].as_str().unwrap())
+        .collect();
+    for want in [
+        "freeze_app",
+        "edit_profile",
+        "edit_team",
+        "create_shelf",
+        "publish_legal_document",
+        "change_staff_role",
+        "remove_from_staff",
+        "pause_donations",
+        "app_record",
+    ] {
+        assert!(names.contains(&want), "{want}");
+    }
+}

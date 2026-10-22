@@ -59,6 +59,9 @@ export function Store() {
   const community = useLoad(() => api.apps({ community: true, sort: "rating", limit: 4 }).then((p) => p.apps), []);
   const server = useLoad(() => api.server(), []);
   const featured = useLoad(() => api.featured(), []);
+  // Staff-made shelves, and the automatic ones staff hid (shelves.rs).
+  const shelves = useLoad(() => api.shelves(), []);
+  const show = (key: string) => !shelves.data?.hidden.includes(key);
   const popular = useLoad(
     () =>
       api
@@ -117,6 +120,19 @@ export function Store() {
 
           {me && <ForYouShelf />}
 
+          {shelves.data?.shelves.map((s) => (
+            <section key={s.slug} aria-label={s.title}>
+              <SectionHeader title={s.title} sub={s.blurb || undefined}>
+                <Link to={`/shelf/${s.slug}`} className="sub">
+                  See all →
+                </Link>
+              </SectionHeader>
+              <Shelf apps={s.apps.slice(0, 8)} empty="" />
+            </section>
+          ))}
+
+          {show("popular") && (
+          <>
           <SectionHeader title="Popular this month" sub="Most added to libraries this month">
             <Link to="/search?sort=popular" className="sub">
               See all →
@@ -127,14 +143,22 @@ export function Store() {
           ) : (
             <Shelf apps={popular.data} empty="Nothing to play yet." />
           )}
+          </>
+          )}
 
+          {show("upcoming") && (
+          <>
           <SectionHeader title="Coming soon & in beta" sub="Projects on their way to release">
             <Link to="/upcoming" className="sub">
               See all →
             </Link>
           </SectionHeader>
           <UpcomingShelf />
+          </>
+          )}
 
+          {show("categories") && (
+          <>
           <SectionHeader title="Browse by category">
             <Link to="/browse" className="sub">
               All tags →
@@ -148,28 +172,36 @@ export function Store() {
               </Link>
             ))}
           </div>
+          </>
+          )}
 
+          {show("not_slop") && (
+          <>
           <SectionHeader title="Most Not Slop right now" sub="Best rated by votes from the last 30 days" />
           {notSlop.error ? (
             <ErrorState error={notSlop.error} onRetry={notSlop.reload} />
           ) : (
             <Shelf apps={notSlop.data} empty="Not enough recent votes yet." />
           )}
+          </>
+          )}
 
-          {barelySeen.data && barelySeen.data.length > 0 && (
+          {show("barely_seen") && barelySeen.data && barelySeen.data.length > 0 && (
             <>
               <SectionHeader title="New and barely seen" sub="Released lately, in few libraries yet. A different pick every day." />
               <Shelf apps={barelySeen.data} empty="" />
             </>
           )}
 
-          {glowUps.data && glowUps.data.length > 0 && (
+          {show("glow_ups") && glowUps.data && glowUps.data.length > 0 && (
             <>
               <SectionHeader title="Glow-ups" sub="Updates turned these from Slop toward Not Slop in the last 60 days" />
               <Shelf apps={glowUps.data} empty="" />
             </>
           )}
 
+          {show("community") && (
+          <>
           <SectionHeader title="Community branches worth installing" sub="Mods, fixes, translations and ports from forks">
             <Link to="/community" className="sub">
               See all →
@@ -180,7 +212,11 @@ export function Store() {
           ) : (
             <Shelf apps={community.data} empty="No community builds yet." />
           )}
+          </>
+          )}
 
+          {show("fresh") && (
+          <>
           <SectionHeader title="New & updated" />
           {fresh.error ? (
             <ErrorState error={fresh.error} onRetry={fresh.reload} />
@@ -195,7 +231,10 @@ export function Store() {
             />
           )}
 
-          {freshSlop.data && freshSlop.data.length > 0 && (
+          </>
+          )}
+
+          {show("fresh_slop") && freshSlop.data && freshSlop.data.length > 0 && (
             <>
               <SectionHeader title="Fresh slop" sub="The most 👎 Slop votes this month. For fun: be kind in reviews." />
               <Shelf apps={freshSlop.data} empty="" />

@@ -20,6 +20,8 @@ const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/admin", "admin"],
   ["/admin?tab=apps&app=castle-rock", "admin"],
   ["/admin?tab=money", "admin"],
+  ["/admin?tab=store", "admin"],
+  ["/admin?tab=docs", "admin"],
 ];
 
 for (const [path, who] of pages) {

@@ -59,6 +59,9 @@ struct AppRow {
     parent: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
     frozen_at: Option<OffsetDateTime>,
+    frozen_reason: Option<String>,
+    /// Set when staff froze it by hand (admin_tools.rs).
+    frozen_by: Option<String>,
     donations_on: bool,
     donation_account: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -146,7 +149,7 @@ async fn record(
     let app: AppRow = sqlx::query_as(
         "select a.id, a.slug, a.title, a.summary, a.description_md, a.status::text as status, a.stage::text as stage,
                 a.visibility, a.repo_url, a.license_spdx, a.min_age, a.content_labels, a.platforms,
-                a.maker_id, u.display_name as maker, p.slug as parent, a.frozen_at, a.donations_on,
+                a.maker_id, u.display_name as maker, p.slug as parent, a.frozen_at, a.frozen_reason, a.frozen_by, a.donations_on,
                 d.stripe_status as donation_account, a.created_at, a.updated_at
          from apps a join users u on u.id = a.maker_id
          left join apps p on p.id = a.parent_app_id

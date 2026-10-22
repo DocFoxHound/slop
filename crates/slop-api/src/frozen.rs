@@ -149,10 +149,11 @@ pub async fn check(state: &AppState, repo_url: &str, public: bool) -> Access {
 /// Records one check's result: freezes, unfreezes, and tells the owner.
 pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Result<()> {
     let mut tx = state.db.begin().await?;
+    // A freeze staff placed by hand (admin_tools.rs) is theirs to lift: the check leaves it.
     let (maker, slug, title, frozen, frozen_delisted): (Uuid, String, String, bool, bool) =
         sqlx::query_as(
             "update apps set repo_checked_at = now() where id = $1
-             returning maker_id, slug, title, frozen_at is not null, frozen_delisted",
+             returning maker_id, slug, title, frozen_at is not null and frozen_by is null, frozen_delisted",
         )
         .bind(app_id)
         .fetch_one(&mut *tx)
@@ -160,11 +161,19 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
     match access {
         Access::Unknown => {}
         Access::Lost(reason) if !frozen => {
-            sqlx::query("update apps set frozen_at = now(), frozen_reason = $2 where id = $1")
-                .bind(app_id)
-                .bind(&reason)
-                .execute(&mut *tx)
-                .await?;
+            let frozen_now = sqlx::query(
+                "update apps set frozen_at = now(), frozen_reason = $2 where id = $1 and frozen_at is null",
+            )
+            .bind(app_id)
+            .bind(&reason)
+            .execute(&mut *tx)
+            .await?
+            .rows_affected();
+            // Already frozen by staff: the maker heard from them.
+            if frozen_now == 0 {
+                tx.commit().await?;
+                return Ok(());
+            }
             notify::send(
                 &mut tx,
                 Notice {
@@ -226,7 +235,7 @@ pub async fn end_grace(state: &AppState) -> anyhow::Result<usize> {
     let mut tx = state.db.begin().await?;
     let gone: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
         "update apps set status = 'delisted', frozen_delisted = true, updated_at = now()
-         where frozen_at < now() - $1 and status = 'listed' and visibility = 'public'
+         where frozen_at < now() - $1 and frozen_by is null and status = 'listed' and visibility = 'public'
          returning id, maker_id, slug, title",
     )
     .bind(GRACE)
@@ -303,6 +312,17 @@ pub async fn frozen_reason<'c>(
     .await
 }
 
+/// Whether the freeze is one staff placed by hand (admin_tools.rs).
+pub async fn by_staff<'c>(db: impl sqlx::PgExecutor<'c>, app_id: Uuid) -> sqlx::Result<bool> {
+    Ok(
+        sqlx::query_scalar::<_, bool>("select frozen_by is not null from apps where id = $1")
+            .bind(app_id)
+            .fetch_optional(db)
+            .await?
+            .unwrap_or(false),
+    )
+}
+
 /// What the owner sees on the Manage page.
 #[derive(Serialize)]
 pub struct Frozen {
@@ -312,19 +332,23 @@ pub struct Frozen {
     /// When it leaves the store or stops being shared, if access isn't back by then.
     #[serde(with = "time::serde::rfc3339")]
     pub until: OffsetDateTime,
+    /// Staff froze it by hand (admin_tools.rs): it stays in the store, and staff lift it.
+    pub by_staff: bool,
 }
 
 pub async fn status(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Option<Frozen>> {
-    let row: Option<(String, OffsetDateTime)> = sqlx::query_as(
-        "select coalesce(frozen_reason, ''), frozen_at from apps where id = $1 and frozen_at is not null",
+    let row: Option<(String, OffsetDateTime, bool)> = sqlx::query_as(
+        "select coalesce(frozen_reason, ''), frozen_at, frozen_by is not null from apps
+         where id = $1 and frozen_at is not null",
     )
     .bind(app_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(|(reason, since)| Frozen {
+    Ok(row.map(|(reason, since, by_staff)| Frozen {
         reason,
         since,
         until: since + GRACE,
+        by_staff,
     }))
 }
 

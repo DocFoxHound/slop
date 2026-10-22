@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Finding an account and acting on it (crates/slop-api/src/agent.rs): its apps, reports and
-// decisions, and warning, suspending, reinstating or giving passkey grace. Opening an account is
-// written to the audit log.
+// decisions, and warning, suspending, reinstating or giving passkey grace; fixing its profile and
+// teams, and making it staff (ProfileFix.tsx). Opening an account is written to the audit log.
 
 import { useState, type FormEvent } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -10,6 +10,7 @@ import { api } from "../../api";
 import { ErrorState, Loading } from "../../components/ui";
 import { formatDate } from "../../format";
 import { useLoad } from "../../hooks";
+import { ProfileFix, StaffControls } from "./ProfileFix";
 import { ActionMessages, ReasonButton, RuleSelect, useAction } from "./shared";
 
 export function UsersTab() {
@@ -129,6 +130,9 @@ function UserRecord({ id }: { id: string }) {
           <ActionMessages {...action} />
         </section>
       )}
+
+      {!u.closed_at && <ProfileFix id={u.id} />}
+      {!u.closed_at && <StaffControls id={u.id} name={u.display_name} isStaff={u.is_admin} onDone={user.reload} />}
 
       <section className="panel panel-pad">
         <h3>Apps ({u.apps.length})</h3>
