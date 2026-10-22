@@ -4983,3 +4983,562 @@ async fn ownership_checks_refuse_private_network_hosts(db: PgPool) {
         "plain http isn't accepted"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Desktop app builds (desktop_updates.rs)
+
+/// A test app that keeps desktop builds in a fresh folder on disk (under target/tmp, not a
+/// RAM-backed /tmp), signing them with a new updater key, for uploads from octo/slop's CI.
+async fn desktop_app(db: PgPool) -> (TestApp, std::path::PathBuf, String) {
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("slop-desktop-{}", Uuid::now_v7()));
+    let (secret, public) = slop_api::desktop_updates::generate_updater_key().unwrap();
+    let key_dir = dir.clone();
+    let app = test_app_with(db, move |c| {
+        c.desktop = slop_api::config::DesktopConfig {
+            dir: Some(key_dir),
+            updater_key: Some(slop_api::desktop_updates::updater_key_from_base64(&secret).unwrap()),
+            repo: Some("octo/slop".into()),
+        };
+    })
+    .await;
+    (app, dir, public)
+}
+
+fn desktop_ci(app: &TestApp, overrides: Value) -> String {
+    let mut claims = json!({
+        "repository": "octo/slop",
+        "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/heads/main",
+        "sha": BUILD_COMMIT,
+    });
+    for (k, v) in overrides.as_object().unwrap() {
+        claims[k] = v.clone();
+    }
+    github_token(app, claims)
+}
+
+async fn upload_build(app: &TestApp, token: Option<&str>, query: &str, body: Body) -> Response {
+    let mut request = Request::builder()
+        .method(Method::POST)
+        .uri(format!("/v1/desktop/builds?{query}"))
+        .header(header::HOST, "localhost:8080")
+        .header("content-type", "application/octet-stream");
+    if let Some(t) = token {
+        request = request.header("authorization", format!("Bearer {t}"));
+    }
+    app.router
+        .clone()
+        .oneshot(request.body(body).unwrap())
+        .await
+        .unwrap()
+}
+
+/// Uploads are checked before anything is kept: the run's token, the commit, platform and
+/// version, and the size; a refused upload leaves no file behind.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_uploads_are_checked_and_leave_nothing_when_refused(db: PgPool) {
+    let (app, dir, _) = desktop_app(db.clone()).await;
+    let token = desktop_ci(&app, json!({}));
+    let query = |platform: &str, version: &str, commit: &str| {
+        format!("platform={platform}&version={version}&commit={commit}")
+    };
+    let ok = query("windows", "0.2.0", BUILD_COMMIT);
+
+    assert_eq!(
+        upload_build(&app, None, &ok, Body::from("x"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        upload_build(&app, Some("not-a-jwt"), &ok, Body::from("x"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let expired = desktop_ci(
+        &app,
+        json!({ "exp": OffsetDateTime::now_utc().unix_timestamp() - 600 }),
+    );
+    assert_eq!(
+        upload_build(&app, Some(&expired), &ok, Body::from("x"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for (q, field) in [
+        (query("windows", "0.2.0", &"2".repeat(40)), "commit"),
+        (query("amiga", "0.2.0", BUILD_COMMIT), "platform"),
+        (query("linux", "0.2.0", BUILD_COMMIT), "platform"),
+        (query("windows", "latest", BUILD_COMMIT), "version"),
+        (query("windows", "0.2", BUILD_COMMIT), "version"),
+    ] {
+        assert_eq!(
+            error_field(upload_build(&app, Some(&token), &q, Body::from("x")).await).await,
+            field,
+            "{q}"
+        );
+    }
+    assert_eq!(
+        error_field(upload_build(&app, Some(&token), &ok, Body::empty()).await).await,
+        "body"
+    );
+
+    // One byte over the limit, streamed: refused and its temporary file removed.
+    static MIB: [u8; 1 << 20] = [0; 1 << 20];
+    let chunks = slop_api::desktop_updates::MAX_BUILD_BYTES / MIB.len() + 1;
+    let stream = futures_util::stream::iter(
+        (0..chunks).map(|_| Ok::<_, std::io::Error>(axum::body::Bytes::from_static(&MIB))),
+    );
+    let res = upload_build(&app, Some(&token), &ok, Body::from_stream(stream)).await;
+    assert_eq!(error_field(res).await, "body");
+    let left: Vec<_> = std::fs::read_dir(&dir)
+        .unwrap()
+        .flatten()
+        .map(|e| e.file_name())
+        .collect();
+    assert!(left.is_empty(), "{left:?}");
+    assert_eq!(count(&app, "select count(*) from desktop_builds").await, 0);
+
+    // A server without desktop updates set up.
+    let off = test_app(db).await;
+    let res = upload_build(
+        &off,
+        Some(&desktop_ci(&off, json!({}))),
+        &ok,
+        Body::from("x"),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The download button offers the highest version, not the latest upload; files are served
+/// for good with their name, or not at all.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_downloads_offer_the_highest_version_and_cache_for_good(db: PgPool) {
+    let (app, dir, _) = desktop_app(db.clone()).await;
+    assert_eq!(
+        status_of(&app, req(Method::GET, "/v1/desktop/latest/windows")).await,
+        StatusCode::NOT_FOUND
+    );
+    let token = desktop_ci(&app, json!({}));
+    for version in ["0.2.0", "0.10.0"] {
+        let res = upload_build(
+            &app,
+            Some(&token),
+            &format!("platform=windows&version={version}&commit={BUILD_COMMIT}"),
+            Body::from(format!("installer {version}")),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+    // A lower version recorded afterwards (as by hand) doesn't win either.
+    sqlx::query(
+        "insert into desktop_builds (platform, version, file_name, sha256, size_bytes, signature, commit_sha)
+         values ('windows', '0.9.0', 'Slop_0.9.0_x64-setup.exe', repeat('0', 64), 1, 'sig', repeat('1', 40))",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let latest = body_json(
+        app.send(req(Method::GET, "/v1/desktop/latest/windows"))
+            .await,
+    )
+    .await;
+    assert_eq!(latest["version"], "0.10.0");
+    assert_eq!(
+        latest["url"],
+        "http://localhost:8080/v1/desktop/files/Slop_0.10.0_x64-setup.exe"
+    );
+    assert_eq!(
+        status_of(&app, req(Method::GET, "/v1/desktop/latest/mac")).await,
+        StatusCode::NOT_FOUND
+    );
+
+    let res = app
+        .send(req(
+            Method::GET,
+            "/v1/desktop/files/Slop_0.10.0_x64-setup.exe",
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()["content-disposition"],
+        "attachment; filename=\"Slop_0.10.0_x64-setup.exe\""
+    );
+    assert_eq!(
+        res.headers()["cache-control"],
+        "public, max-age=31536000, immutable"
+    );
+    assert_eq!(res.headers()["content-type"], "application/octet-stream");
+    assert_eq!(res.headers()["content-length"], "16");
+    // Recorded but not on disk; on disk but not recorded.
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::GET, "/v1/desktop/files/Slop_0.9.0_x64-setup.exe")
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+    std::fs::write(dir.join("stray.exe"), "x").unwrap();
+    assert_eq!(
+        status_of(&app, req(Method::GET, "/v1/desktop/files/stray.exe")).await,
+        StatusCode::NOT_FOUND
+    );
+
+    // No builds folder on this server.
+    let off = test_app(db).await;
+    assert_eq!(
+        status_of(
+            &off,
+            req(Method::GET, "/v1/desktop/files/Slop_0.10.0_x64-setup.exe")
+        )
+        .await,
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------------------------
+// The server operator's commands (src/main.rs), run as the real binary against the test's
+// database
+
+/// Runs `slop-api` with only these environment variables (and the test database).
+async fn cli(app: &TestApp, args: &[&str], env: &[(&str, &str)]) -> (bool, i32, String, String) {
+    let name: String = sqlx::query_scalar("select current_database()::text")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let mut url: url::Url = std::env::var("DATABASE_URL").unwrap().parse().unwrap();
+    url.set_path(&name);
+    let out = tokio::process::Command::new(env!("CARGO_BIN_EXE_slop-api"))
+        .args(args)
+        .env_clear()
+        .env("PATH", std::env::var("PATH").unwrap_or_default())
+        .env("DATABASE_URL", url.as_str())
+        .env("RUST_LOG", "off")
+        .envs(env.iter().copied())
+        .output()
+        .await
+        .unwrap();
+    (
+        out.status.success(),
+        out.status.code().unwrap_or(-1),
+        String::from_utf8_lossy(&out.stdout).to_string(),
+        String::from_utf8_lossy(&out.stderr).to_string(),
+    )
+}
+
+/// `slop-api review …` and `slop-api revoke`: what they print, what they change, and their
+/// refusals (exit code 1 for a refused action, 2 for wrong arguments).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_review_commands_decide_releases_and_listings(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let signing = slop_manifest::signing_key_to_base64(&app.signing_key);
+    let key = [
+        ("SLOP_SIGNING_KEY", signing.as_str()),
+        ("SLOP_REQUIRE_MAKER_SIGNATURE", "false"),
+    ];
+
+    let (ok, _, out, _) = cli(&app, &["review", "pending"], &[]).await;
+    assert!(ok);
+    assert!(out.contains("Nothing waiting for review."), "{out}");
+    assert!(out.contains("files are NOT scanned"), "{out}");
+
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let second = submit_and_fetch(&app, &maker, "1.1.0").await;
+    let (ok, _, out, _) = cli(&app, &["review", "pending"], &[]).await;
+    assert!(ok);
+    assert!(
+        out.contains(&first) && out.contains("game 1.0.0") && out.contains("(NOT checked)"),
+        "{out}"
+    );
+
+    // Reject: a reason is needed.
+    let (ok, code, _, err) = cli(
+        &app,
+        &[
+            "review",
+            "reject",
+            &second,
+            "--reviewer",
+            "rev",
+            "--reason",
+            " ",
+        ],
+        &[],
+    )
+    .await;
+    assert!(!ok && code == 1, "{code}");
+    assert!(err.contains("give the maker a reason"), "{err}");
+    let (ok, _, out, _) = cli(
+        &app,
+        &[
+            "review",
+            "reject",
+            &second,
+            "--reviewer",
+            "rev",
+            "--reason",
+            "Crashes on start.",
+        ],
+        &[],
+    )
+    .await;
+    assert!(ok);
+    assert_eq!(out.trim(), format!("Rejected {second}."));
+    assert_eq!(
+        release_status(&app, &second).await,
+        (
+            "rejected".into(),
+            Some("Crashes on start.".into()),
+            Some("rev".into())
+        )
+    );
+    let (ok, _, _, err) = cli(
+        &app,
+        &[
+            "review",
+            "reject",
+            &second,
+            "--reviewer",
+            "rev",
+            "--reason",
+            "Again.",
+        ],
+        &[],
+    )
+    .await;
+    assert!(!ok);
+    assert!(err.contains("no release waiting for review"), "{err}");
+
+    // Approve (signing with the server's key): refused while maker signatures are required
+    // (the default), then with them off; list, stage, delist.
+    let (ok, code, _, err) = cli(
+        &app,
+        &["review", "approve", &first, "--reviewer", "rev"],
+        &key[..1],
+    )
+    .await;
+    assert!(!ok && code == 1);
+    assert!(err.contains("no verified maker signature"), "{err}");
+    let (ok, _, out, err) = cli(
+        &app,
+        &["review", "approve", &first, "--reviewer", "rev"],
+        &key,
+    )
+    .await;
+    assert!(ok, "{err}");
+    assert_eq!(out.trim(), format!("Approved and signed {first}."));
+    assert_eq!(release_status(&app, &first).await.0, "approved");
+    let (ok, _, out, _) = cli(&app, &["review", "list", "game", "--reviewer", "rev"], &[]).await;
+    assert!(ok);
+    assert_eq!(out.trim(), "game is in the store.");
+    let (ok, _, out, _) = cli(
+        &app,
+        &["review", "stage", "game", "beta", "--reviewer", "rev"],
+        &[],
+    )
+    .await;
+    assert!(ok);
+    assert_eq!(out.trim(), "game moved to Beta.");
+    let (ok, code, _, err) = cli(
+        &app,
+        &["review", "stage", "game", "finished", "--reviewer", "rev"],
+        &[],
+    )
+    .await;
+    assert!(!ok && code == 2, "{err}");
+    assert!(err.contains("use coming-soon, beta or released"));
+    let (ok, _, out, err) = cli(
+        &app,
+        &[
+            "review",
+            "delist",
+            "game",
+            "--reviewer",
+            "rev",
+            "--rule",
+            "malware",
+            "--reason",
+            "It installs a miner.",
+        ],
+        &[],
+    )
+    .await;
+    assert!(ok, "{err}");
+    assert_eq!(out.trim(), "game is out of the store.");
+    let (status, stage): (String, String) =
+        sqlx::query_as("select status::text, stage::text from apps")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), stage.as_str()), ("delisted", "beta"));
+    for action in ["release.reject", "release.approve", "app.list"] {
+        let n: i64 = sqlx::query_scalar(
+            "select count(*) from audit_log where action = $1 and actor = 'rev'",
+        )
+        .bind(action)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+        assert_eq!(n, 1, "{action}");
+    }
+
+    // Revoke: a reason players see is needed.
+    let (ok, code, _, err) = cli(
+        &app,
+        &["revoke", &first, "--reviewer", "rev", "--reason", ""],
+        &[],
+    )
+    .await;
+    assert!(!ok && code == 1);
+    assert!(err.contains("say why with --reason"), "{err}");
+    assert_eq!(release_status(&app, &first).await.0, "approved");
+    let (ok, _, out, _) = cli(
+        &app,
+        &[
+            "revoke",
+            &first,
+            "--reviewer",
+            "rev",
+            "--reason",
+            "Malware.",
+        ],
+        &[],
+    )
+    .await;
+    assert!(ok);
+    assert!(out.starts_with(&format!("Revoked {first}.")), "{out}");
+    assert_eq!(release_status(&app, &first).await.0, "revoked");
+
+    // Wrong arguments.
+    for args in [
+        vec!["review", "approve", "not-a-uuid", "--reviewer", "rev"],
+        vec!["review", "reject", first.as_str(), "--reason", "x"],
+        vec!["revoke", first.as_str(), "--reviewer", "rev"],
+        vec!["review", "nonsense"],
+    ] {
+        let (ok, code, _, _) = cli(&app, &args, &[]).await;
+        assert!(!ok && code == 2, "{args:?}");
+    }
+    let _ = maker_id;
+}
+
+/// `slop-api desktop publish` signs and publishes a build made on the server, refusing bad
+/// input; `slop-api keys …` prints keys the server accepts.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_desktop_and_key_commands_print_and_publish(db: PgPool) {
+    let app = test_app(db).await;
+    let (ok, _, out, err) = cli(&app, &["keys", "generate"], &[]).await;
+    assert!(ok, "{err}");
+    let field = |out: &str, prefix: &str| {
+        out.lines()
+            .find_map(|l| l.strip_prefix(prefix))
+            .unwrap_or_else(|| panic!("{prefix} in {out}"))
+            .to_string()
+    };
+    let secret = field(&out, "SLOP_SIGNING_KEY=");
+    let public = field(&out, "SLOP_TRUSTED_KEYS=");
+    let key_id = field(&out, "key id: ");
+    let key = slop_manifest::verifying_key_from_base64(&public).unwrap();
+    assert_eq!(slop_manifest::key_id(&key), key_id);
+    use base64::Engine;
+    let bytes: [u8; 32] = base64::engine::general_purpose::STANDARD
+        .decode(&secret)
+        .unwrap()
+        .try_into()
+        .unwrap();
+    assert_eq!(
+        slop_manifest::ed25519_dalek::SigningKey::from_bytes(&bytes).verifying_key(),
+        key
+    );
+    assert!(err.contains("Keep SLOP_SIGNING_KEY secret"));
+
+    let (ok, _, out, _) = cli(&app, &["keys", "generate-updater"], &[]).await;
+    assert!(ok);
+    let updater = field(&out, "SLOP_UPDATER_KEY=");
+    assert!(slop_api::desktop_updates::updater_key_from_base64(&updater).is_ok());
+    assert!(out.contains("updater pubkey: "));
+
+    // Publishing a build.
+    let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
+        .join(format!("slop-cli-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let file = dir.join("installer.exe");
+    std::fs::write(&file, b"pretend installer").unwrap();
+    let builds = dir.join("builds");
+    let env = [
+        ("SLOP_DESKTOP_DIR", builds.to_str().unwrap()),
+        ("SLOP_UPDATER_KEY", updater.as_str()),
+    ];
+    let commit = "c".repeat(40);
+    let publish = |version: &str, commit: &str| {
+        vec![
+            "desktop".to_string(),
+            "publish".into(),
+            "--platform".into(),
+            "windows".into(),
+            "--version".into(),
+            version.into(),
+            "--commit".into(),
+            commit.into(),
+            file.to_str().unwrap().into(),
+        ]
+    };
+    let run = |args: Vec<String>, env: &[(&str, &str)]| {
+        let env: Vec<(String, String)> = env
+            .iter()
+            .map(|(k, v)| (k.to_string(), v.to_string()))
+            .collect();
+        let app = &app;
+        async move {
+            let args: Vec<&str> = args.iter().map(String::as_str).collect();
+            let env: Vec<(&str, &str)> =
+                env.iter().map(|(k, v)| (k.as_str(), v.as_str())).collect();
+            cli(app, &args, &env).await
+        }
+    };
+    let (ok, _, _, err) = run(publish("0.3.0", &commit), &[]).await;
+    assert!(!ok);
+    assert!(
+        err.contains("set SLOP_DESKTOP_DIR and SLOP_UPDATER_KEY first"),
+        "{err}"
+    );
+    let (ok, _, out, err) = run(publish("0.3.0", &commit), &env).await;
+    assert!(ok, "{err}");
+    assert_eq!(
+        out.trim(),
+        "Published windows 0.3.0 (Slop_0.3.0_x64-setup.exe)"
+    );
+    assert_eq!(
+        std::fs::read(builds.join("Slop_0.3.0_x64-setup.exe")).unwrap(),
+        b"pretend installer"
+    );
+    for (version, commit, says) in [
+        ("0.2.0", commit.as_str(), "isn't newer"),
+        ("0.3.0", commit.as_str(), "isn't newer"),
+        ("0.4.0", "abc123", "full commit SHA"),
+        ("0.4", commit.as_str(), ""),
+    ] {
+        let (ok, code, _, err) = run(publish(version, commit), &env).await;
+        assert!(!ok && code == 1, "{version} {commit}");
+        assert!(err.contains(says), "{err}");
+    }
+    let (ok, code, _, _) = run(
+        vec![
+            "desktop".into(),
+            "publish".into(),
+            "--platform".into(),
+            "windows".into(),
+        ],
+        &env,
+    )
+    .await;
+    assert!(!ok && code == 2);
+    assert_eq!(count(&app, "select count(*) from desktop_builds").await, 1);
+    let _ = std::fs::remove_dir_all(&dir);
+}
