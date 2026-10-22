@@ -3409,3 +3409,335 @@ async fn the_rating_breakdown_follows_votes_across_releases(db: PgPool) {
         StatusCode::UNAUTHORIZED
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Library, Interested and upcoming (library.rs, interested.rs)
+
+/// Puts `slug` in a user's library or Interested list straight away, `age` ago.
+async fn mark(app: &TestApp, table: &str, user: Uuid, slug: &str, age: &str) {
+    let column = if table == "library_entries" {
+        "added_at"
+    } else {
+        "created_at"
+    };
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "insert into {table} (user_id, app_id, {column}) select $1, id, now() - interval '{age}' from apps where slug = $2"
+    )))
+    .bind(user)
+    .bind(slug)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+/// The library lists newest first and keeps apps that left the store; removing touches only the
+/// caller's own entry and is a no-op for anything else.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_library_keeps_apps_that_left_the_store(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "old-favourite", "released", "").await;
+    listed_with(
+        &app,
+        maker_id,
+        "delisted",
+        "released",
+        "status = 'delisted'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker_id,
+        "past-deadline",
+        "coming_soon",
+        "stage_entered_at = now() - interval '40 days'",
+    )
+    .await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    let (sam_id, sam) = app.user("Sam", "US").await;
+    mark(&app, "library_entries", pat_id, "old-favourite", "3 days").await;
+    mark(&app, "library_entries", pat_id, "delisted", "2 days").await;
+    mark(&app, "library_entries", pat_id, "past-deadline", "1 day").await;
+    mark(&app, "library_entries", sam_id, "old-favourite", "1 day").await;
+
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/library")).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let library = inbox(&app, req(Method::GET, "/v1/me/library").cookie(&pat)).await;
+    assert_eq!(
+        slugs_of(&library),
+        ["past-deadline", "delisted", "old-favourite"]
+    );
+    assert_eq!(
+        library[1]["status"], "delisted",
+        "the tile can say it left the store"
+    );
+
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/library/old-favourite"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/library/no-such-app").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/library/old-favourite").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let library = inbox(&app, req(Method::GET, "/v1/me/library").cookie(&pat)).await;
+    assert_eq!(slugs_of(&library), ["past-deadline", "delisted"]);
+    let theirs = inbox(&app, req(Method::GET, "/v1/me/library").cookie(&sam)).await;
+    assert_eq!(slugs_of(&theirs), ["old-favourite"]);
+}
+
+/// Interested lists newest first, keeps apps that were released or left; removing drops it
+/// from the list and from the public count.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_interested_list_keeps_apps_that_moved_on(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "soon", "coming_soon", "").await;
+    listed_with(&app, maker_id, "out-now", "released", "").await;
+    listed_with(&app, maker_id, "gone", "beta", "status = 'delisted'").await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    let (sam_id, sam) = app.user("Sam", "US").await;
+    mark(&app, "interests", pat_id, "out-now", "3 days").await;
+    mark(&app, "interests", pat_id, "gone", "2 days").await;
+    mark(&app, "interests", pat_id, "soon", "1 day").await;
+    mark(&app, "interests", sam_id, "soon", "1 day").await;
+
+    for (m, path) in [
+        (Method::GET, "/v1/me/interested"),
+        (Method::DELETE, "/v1/me/interested/soon"),
+    ] {
+        assert_eq!(
+            app.send(req(m, path)).await.status(),
+            StatusCode::UNAUTHORIZED
+        );
+    }
+    let list = inbox(&app, req(Method::GET, "/v1/me/interested").cookie(&pat)).await;
+    assert_eq!(slugs_of(&list), ["soon", "gone", "out-now"]);
+    assert!(list[0]["interested_at"].is_string());
+    let page = inbox(&app, req(Method::GET, "/v1/apps/soon").cookie(&pat)).await;
+    assert_eq!(
+        (page["interested"].as_i64(), page["is_interested"].as_bool()),
+        (Some(2), Some(true))
+    );
+
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/interested/no-such-app").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/me/interested/soon").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let list = inbox(&app, req(Method::GET, "/v1/me/interested").cookie(&pat)).await;
+    assert_eq!(slugs_of(&list), ["gone", "out-now"]);
+    let page = inbox(&app, req(Method::GET, "/v1/apps/soon").cookie(&pat)).await;
+    assert_eq!(
+        (page["interested"].as_i64(), page["is_interested"].as_bool()),
+        (Some(1), Some(false))
+    );
+    let theirs = inbox(&app, req(Method::GET, "/v1/me/interested").cookie(&sam)).await;
+    assert_eq!(slugs_of(&theirs), ["soon"]);
+}
+
+/// Moving on: Interested players hear when an app is released; moving back to Coming soon tells
+/// no one, and closed accounts hear nothing.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn interested_players_hear_the_app_is_out(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "soon", "beta", "title = 'Soon Game'").await;
+    approved_release(&app, "soon", maker_id).await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    let (gone_id, _) = app.user("Gone", "US").await;
+    mark(&app, "interests", pat_id, "soon", "1 day").await;
+    mark(&app, "interests", gone_id, "soon", "1 day").await;
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(gone_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    admin::set_stage(
+        &app.db,
+        "soon",
+        slop_api::catalog::AppStage::ComingSoon,
+        "test",
+    )
+    .await
+    .unwrap();
+    assert_eq!(
+        count(&app.db, "select count(*) from notifications").await,
+        0
+    );
+    admin::set_stage(
+        &app.db,
+        "soon",
+        slop_api::catalog::AppStage::Released,
+        "test",
+    )
+    .await
+    .unwrap();
+    let mine = inbox(&app, req(Method::GET, "/v1/me/notifications").cookie(&pat)).await;
+    assert_eq!(titles(&mine), ["Soon Game is out now"]);
+    assert_eq!(mine["items"][0]["link"], "/app/soon");
+    assert_eq!(mine["items"][0]["category"], "interested");
+    assert_eq!(
+        count(&app.db, "select count(*) from notifications").await,
+        1,
+        "not for a closed account"
+    );
+    let detail: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'app.stage' order by id desc limit 1",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(detail["interested_told"], 2, "{detail}");
+}
+
+/// "Coming soon & in beta, for you": signed out or without personal recommendations, the most
+/// anticipated (12 at most, never released or dead ones, by the viewer's age policy); with them,
+/// matched to the viewer's tags, leaving out what they have, marked or made.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn upcoming_for_you_matches_taste_or_falls_back_to_most_anticipated(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (other_maker, _) = app.user("Other Maker", "US").await;
+    for i in 0..14 {
+        listed_with(&app, other_maker, &format!("up-{i:02}"), "beta", "").await;
+    }
+    listed_with(&app, other_maker, "racer", "coming_soon", "").await;
+    listed_with(&app, other_maker, "grown-up", "coming_soon", "min_age = 18").await;
+    listed_with(
+        &app,
+        other_maker,
+        "dead",
+        "beta",
+        "last_commit_at = now() - interval '200 days'",
+    )
+    .await;
+    listed_with(&app, other_maker, "out", "released", "").await;
+    listed_with(&app, maker_id, "my-own", "coming_soon", "").await;
+    listed_with(&app, other_maker, "liked", "released", "").await;
+    tag_app(&app, "racer", &["racing"]).await;
+    tag_app(&app, "liked", &["racing"]).await;
+    tag_app(&app, "up-00", &["racing"]).await;
+    // Demand: grown-up and dead most, then up-00 .. up-13 in order, racer least.
+    let fans: Vec<Uuid> = {
+        let mut v = Vec::new();
+        for i in 0..20 {
+            v.push(app.user(&format!("Fan {i}"), "US").await.0);
+        }
+        v
+    };
+    for (slug, n) in [("grown-up", 20), ("dead", 20), ("out", 20), ("my-own", 19)] {
+        for f in &fans[..n] {
+            mark(&app, "interests", *f, slug, "1 day").await;
+        }
+    }
+    for i in 0..14usize {
+        for f in &fans[..(16 - i)] {
+            mark(&app, "interests", *f, &format!("up-{i:02}"), "1 day").await;
+        }
+    }
+
+    let signed_out = |country: &str| {
+        let app = &app;
+        let country = country.to_string();
+        async move {
+            inbox(
+                app,
+                req(Method::GET, "/v1/upcoming/for-you").header("x-country", country),
+            )
+            .await
+        }
+    };
+    let us = signed_out("US").await;
+    let slugs = slugs_of(&us);
+    assert_eq!(slugs.len(), 12);
+    assert_eq!(&slugs[..3], ["grown-up", "my-own", "up-00"]);
+    assert!(
+        !slugs.iter().any(|s| s == "dead" || s == "out"),
+        "{slugs:?}"
+    );
+    assert_eq!(us[0]["reason"], "20 interested");
+    let gb = slugs_of(&signed_out("GB").await);
+    assert_eq!(&gb[..2], ["my-own", "up-00"], "no 18+ in the under-18 view");
+
+    // Personal: Pat likes racing (a racing game in the library) and is Interested in up-00.
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    mark(&app, "library_entries", pat_id, "liked", "1 day").await;
+    mark(&app, "interests", pat_id, "up-01", "1 day").await;
+    let mine = inbox(&app, req(Method::GET, "/v1/upcoming/for-you").cookie(&pat)).await;
+    let slugs = slugs_of(&mine);
+    assert_eq!(
+        slugs[0], "up-00",
+        "a racing game with demand first: {slugs:?}"
+    );
+    assert_eq!(mine[0]["reason"], "Because you like Racing");
+    assert!(slugs.contains(&"racer".to_string()));
+    assert!(!slugs.contains(&"up-01".to_string()), "already marked");
+    assert!(!slugs.iter().any(|s| s == "dead" || s == "out"));
+    assert!(slugs.len() <= 12);
+
+    // The maker never sees their own app suggested, personal or not.
+    let theirs = slugs_of(
+        &inbox(
+            &app,
+            req(Method::GET, "/v1/upcoming/for-you").cookie(&maker),
+        )
+        .await,
+    );
+    assert!(!theirs.contains(&"my-own".to_string()), "{theirs:?}");
+    sqlx::query("update users set personalize = false where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let theirs = inbox(
+        &app,
+        req(Method::GET, "/v1/upcoming/for-you").cookie(&maker),
+    )
+    .await;
+    assert!(
+        !slugs_of(&theirs).contains(&"my-own".to_string()),
+        "{theirs}"
+    );
+    assert_eq!(theirs[0]["reason"], "20 interested", "not personal");
+}
+
+/// Without personal recommendations, the upcoming list still leaves out what the viewer
+/// already marked Interested or has in their library.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "b15: the non-personal upcoming list shows apps the viewer already marked; needs a decision on whether opted-out viewers' own marks may filter it"]
+async fn upcoming_without_personalization_leaves_out_what_you_marked(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "soon", "coming_soon", "").await;
+    listed_with(&app, maker_id, "later", "coming_soon", "").await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    sqlx::query("update users set personalize = false where id = $1")
+        .bind(pat_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    mark(&app, "interests", pat_id, "soon", "1 day").await;
+    let list = slugs_of(&inbox(&app, req(Method::GET, "/v1/upcoming/for-you").cookie(&pat)).await);
+    assert_eq!(list, ["later"]);
+}
