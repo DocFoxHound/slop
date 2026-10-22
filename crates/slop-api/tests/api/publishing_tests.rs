@@ -1920,7 +1920,7 @@ async fn ownership_codes_are_read_through_gitea_gitlab_and_bitbucket_apis(db: Pg
 // ---------------------------------------------------------------------------------------------
 // Passkeys for what decides where players' downloads come from (bug b23)
 
-/// The user has a passkey and confirmed with it in this session.
+/// The user has a passkey and confirmed with it in their signed-in sessions (not agent tokens).
 async fn passkey_proved(app: &TestApp, user: Uuid) {
     sqlx::query(
         "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, $3, '{}', 'Laptop')",
@@ -1931,7 +1931,7 @@ async fn passkey_proved(app: &TestApp, user: Uuid) {
     .execute(&app.db)
     .await
     .unwrap();
-    sqlx::query("update sessions set passkey_at = now() where user_id = $1")
+    sqlx::query("update sessions set passkey_at = now() where user_id = $1 and kind <> 'agent'")
         .bind(user)
         .execute(&app.db)
         .await
@@ -3354,6 +3354,36 @@ async fn slop_check_reports_are_checked_like_slop_build_runs(db: PgPool) {
     .await;
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(count(&app, "select count(*) from defender_checks").await, 2);
+    // A check for a file Slop already has is attached to it at once.
+    let release = release_with_file(
+        &app,
+        "game",
+        "1.0.0",
+        "awaiting_review",
+        "https://github.com/octo/game/releases/download/v1/game.zip",
+        None,
+    )
+    .await;
+    sqlx::query("update release_files set sha256 = repeat('e', 64) where release_id = $1")
+        .bind(release)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = submit_checks(
+        &app,
+        &check_token(json!({})),
+        body(vec![defender(&"E".repeat(64))]),
+    )
+    .await;
+    assert_eq!(body_json(res).await["matched"], 1);
+    let attached: Value =
+        sqlx::query_scalar("select defender from release_files where release_id = $1")
+            .bind(release)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(attached["engine"], "1.1.24000");
+    assert_eq!(count(&app, "select count(*) from defender_checks").await, 3);
 
     // Refusals record nothing.
     let other_workflow = github_token(
@@ -3430,14 +3460,14 @@ async fn slop_check_reports_are_checked_like_slop_build_runs(db: PgPool) {
         )
         .await;
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
-    assert_eq!(count(&app, "select count(*) from defender_checks").await, 2);
+    assert_eq!(count(&app, "select count(*) from defender_checks").await, 3);
     // Twenty is fine.
     let twenty: Vec<Value> = (0..20).map(|i| defender(&format!("{i:064x}"))).collect();
     let res = submit_checks(&app, &check_token(json!({})), body(twenty)).await;
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(
         count(&app, "select count(*) from defender_checks").await,
-        22
+        23
     );
 
     let off = test_app_with(app.db.clone(), |c| c.releases.slop_build_workflow = None).await;
@@ -5541,4 +5571,492 @@ async fn the_desktop_and_key_commands_print_and_publish(db: PgPool) {
     assert!(!ok && code == 2);
     assert_eq!(count(&app, "select count(*) from desktop_builds").await, 1);
     let _ = std::fs::remove_dir_all(&dir);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Fixes, the Publish dashboard, and makers' agents over MCP (fixes.rs, catalog.rs,
+// maker_agents.rs)
+
+/// Fixes for the newest release: none before a release; a failed or rejected one comes first as
+/// a must; advisories become fixes; only for the maker (or their agent).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn fixes_cover_the_newest_release_and_its_advisories(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let (_, stranger) = app.user("Sam Stranger", "US").await;
+    let fixes = |cookie: &str| req(Method::GET, "/v1/apps/game/fixes").cookie(cookie);
+
+    let res = app.send(fixes(&maker)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let none = body_json(res).await;
+    assert!(none["release"].is_null());
+    assert_eq!(none["fixes"], json!([]));
+    assert!(
+        none["next"]
+            .as_str()
+            .unwrap()
+            .starts_with("Submit a release first")
+    );
+    assert_eq!(
+        status_of(&app, fixes(&stranger)).await,
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        status_of(&app, req(Method::GET, "/v1/apps/game/fixes")).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let older = release_with_file(
+        &app,
+        "game",
+        "1.0.0",
+        "approved",
+        "https://example.com/a.zip",
+        None,
+    )
+    .await;
+    let newest = release_with_file(
+        &app,
+        "game",
+        "1.1.0",
+        "rejected",
+        "https://example.com/b.zip",
+        None,
+    )
+    .await;
+    sqlx::query("update releases set status_reason = 'It crashes on start.' where id = $1")
+        .bind(newest)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for (release, vuln, package, fixed, malicious) in [
+        (newest, "GHSA-1", "lodash", Some("4.17.21"), false),
+        (newest, "MAL-2026-1", "evil-pkg", None, true),
+        (newest, "GHSA-2", "left-pad", None, false),
+        (older, "GHSA-old", "old-pkg", None, false),
+    ] {
+        sqlx::query(
+            "insert into release_advisories (release_id, vuln_id, ecosystem, package, version, summary, fixed, malicious, known_at_build)
+             values ($1, $2, 'npm', $3, '1.0.0', '', $4, $5, false)",
+        )
+        .bind(release)
+        .bind(vuln)
+        .bind(package)
+        .bind(fixed)
+        .bind(malicious)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let got = body_json(app.send(fixes(&maker)).await).await;
+    assert_eq!(got["release"]["version"], "1.1.0");
+    assert_eq!(got["release"]["status"], "rejected");
+    let list = got["fixes"].as_array().unwrap();
+    let kinds: Vec<&str> = list.iter().map(|f| f["kind"].as_str().unwrap()).collect();
+    assert_eq!(
+        kinds,
+        [
+            "release:rejected",
+            "malicious_package",
+            "vulnerable_package",
+            "vulnerable_package"
+        ]
+    );
+    assert_eq!(list[0]["severity"], "must");
+    assert_eq!(
+        list[0]["problem"],
+        "Release 1.1.0 was rejected: It crashes on start."
+    );
+    assert_eq!(list[1]["severity"], "must");
+    assert!(
+        list[1]["instruction"]
+            .as_str()
+            .unwrap()
+            .starts_with("Remove evil-pkg")
+    );
+    assert!(list[2]["problem"].as_str().unwrap().contains("left-pad"));
+    assert!(
+        list[2]["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("No fixed version of left-pad")
+    );
+    assert_eq!(
+        list[3]["instruction"],
+        "Update lodash to 4.17.21 or newer, update the lockfile, and release again."
+    );
+    assert!(
+        !got.to_string().contains("old-pkg"),
+        "only the newest release"
+    );
+
+    // A failed release says so too.
+    sqlx::query("update releases set status = 'failed', status_reason = null where id = $1")
+        .bind(newest)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let got = body_json(app.send(fixes(&maker)).await).await;
+    assert_eq!(
+        got["fixes"][0]["problem"],
+        "Release 1.1.0 was failed: no reason given"
+    );
+}
+
+/// The Publish dashboard lists the maker's own apps, drafts and Private Slop included; an
+/// agent token sees them too (reading is allowed for all the maker's apps).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_publish_dashboard_lists_only_the_makers_own_apps(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (other_id, other) = app.user("Olga Other", "US").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .cookie(&maker)
+                .json(new_app("drafty")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    private_app(&app, maker_id, &maker, "secret-tool", false).await;
+    listed_with(&app, maker_id, "listed-one", "released", "").await;
+    listed_with(&app, other_id, "theirs", "released", "").await;
+    let slugs = |v: Value| {
+        let mut s: Vec<String> = v
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|a| a["slug"].as_str().unwrap().to_string())
+            .collect();
+        s.sort();
+        s
+    };
+    let res = app
+        .send(req(Method::GET, "/v1/me/apps").cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        slugs(body_json(res).await),
+        ["drafty", "listed-one", "secret-tool"]
+    );
+    assert_eq!(
+        slugs(
+            body_json(
+                app.send(req(Method::GET, "/v1/me/apps").cookie(&other))
+                    .await
+            )
+            .await
+        ),
+        ["theirs"]
+    );
+    assert_eq!(
+        status_of(&app, req(Method::GET, "/v1/me/apps")).await,
+        StatusCode::UNAUTHORIZED
+    );
+
+    let scoped = agent_token(&app, &maker, "read", Some(&["drafty"])).await;
+    let res = app
+        .send(req(Method::GET, "/v1/me/apps").header("authorization", scoped.clone()))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        slugs(body_json(res).await),
+        ["drafty", "listed-one", "secret-tool"]
+    );
+    // Its own app's details, yes; another app's maker pages, no.
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::GET, "/v1/apps/drafty/manage").header("authorization", scoped.clone())
+        )
+        .await,
+        StatusCode::OK
+    );
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::GET, "/v1/apps/listed-one/manage").header("authorization", scoped)
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// Calls a maker MCP tool with this agent token; returns (isError, text).
+async fn call_tool(app: &TestApp, bearer: &str, name: &str, arguments: Value) -> (bool, String) {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/maker/mcp")
+                .header("authorization", bearer.to_string())
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                              "params": { "name": name, "arguments": arguments } })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let reply = body_json(res).await;
+    (
+        reply["result"]["isError"].as_bool().unwrap(),
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
+/// The release tools reach their routes: submit_release, set_release_notes, get_fixes and
+/// check_repository with a publish token; a read token can only read.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_submit_releases_and_notes_through_mcp_tools(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let publish = agent_token(&app, &maker, "publish", Some(&["game"])).await;
+    let read = agent_token(&app, &maker, "read", None).await;
+    let mut release = release_body(&app, "1.0.0", "game.zip");
+    release["slug"] = json!("game");
+    release["notes"] = json!("First.");
+
+    let (error, text) = call_tool(&app, &read, "submit_release", release.clone()).await;
+    assert!(error, "{text}");
+    assert!(text.contains("forbidden"), "{text}");
+    assert_eq!(count(&app, "select count(*) from releases").await, 0);
+    let (error, text) = call_tool(&app, &publish, "submit_release", release).await;
+    assert!(!error, "{text}");
+    let made: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(made["version"], "1.0.0");
+    assert_eq!(made["notes"], "First.");
+    let id = made["id"].as_str().unwrap().to_string();
+
+    let (error, text) = call_tool(
+        &app,
+        &read,
+        "set_release_notes",
+        json!({ "slug": "game", "id": id, "notes": "x" }),
+    )
+    .await;
+    assert!(error, "{text}");
+    let (error, text) = call_tool(
+        &app,
+        &publish,
+        "set_release_notes",
+        json!({ "slug": "game", "id": id, "notes": "Fixed the jump." }),
+    )
+    .await;
+    assert!(!error, "{text}");
+    let notes: Option<String> = sqlx::query_scalar("select notes from releases")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(notes.as_deref(), Some("Fixed the jump."));
+
+    let (error, text) = call_tool(&app, &read, "get_fixes", json!({ "slug": "game" })).await;
+    assert!(!error, "{text}");
+    let fixes: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(fixes["release"]["version"], "1.0.0");
+
+    let (error, text) = call_tool(&app, &read, "check_repository", json!({ "slug": "game" })).await;
+    assert!(error, "a read token doesn't press Check now: {text}");
+    let (error, text) = call_tool(
+        &app,
+        &publish,
+        "check_repository",
+        json!({ "slug": "game" }),
+    )
+    .await;
+    assert!(!error, "{text}");
+    assert_eq!(text, "null", "not frozen");
+}
+
+/// A token passes on its maker's passkey confirmation only if made within 12 hours of it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agent_tokens_carry_a_recent_passkey_confirmation(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    passkey_overdue(&app, maker_id).await;
+    let mut release = release_body(&app, "1.0.0", "game.zip");
+    release["slug"] = json!("game");
+
+    // Made before confirming with a passkey: it can't publish.
+    let early = agent_token(&app, &maker, "publish", None).await;
+    let (error, text) = call_tool(&app, &early, "submit_release", release.clone()).await;
+    assert!(error && text.contains("passkey_required"), "{text}");
+
+    // Confirmed 13 hours ago: too long ago to carry over.
+    passkey_proved(&app, maker_id).await;
+    sqlx::query("update sessions set passkey_at = now() - interval '13 hours' where user_id = $1 and kind <> 'agent'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let stale = agent_token(&app, &maker, "publish", None).await;
+    let (error, text) = call_tool(&app, &stale, "submit_release", release.clone()).await;
+    assert!(error && text.contains("passkey_required"), "{text}");
+
+    // Confirmed just now: the token publishes for its lifetime.
+    sqlx::query("update sessions set passkey_at = now() where user_id = $1 and kind <> 'agent'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let fresh = agent_token(&app, &maker, "publish", None).await;
+    let tokens = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
+            .await,
+    )
+    .await;
+    let proved: Vec<bool> = tokens
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["passkey_proved"].as_bool().unwrap())
+        .collect();
+    assert_eq!(proved.iter().filter(|p| **p).count(), 1, "{tokens}");
+    let (error, text) = call_tool(&app, &fresh, "submit_release", release).await;
+    assert!(!error, "{text}");
+}
+
+/// The GitHub and store-page tools reach their routes; making something new needs a publish
+/// token for all the maker's apps.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_reach_the_github_build_and_store_page_tools(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |_| {}).await;
+    let (_, maker) = github_app(&app).await;
+    sqlx::query("update apps set platforms = '{windows}'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    gh.json(
+        "/repos/octo/game",
+        200,
+        json!({ "default_branch": "main", "id": 1001, "owner": { "id": 42 } }),
+    );
+    gh.json(
+        "/repos/octo/game/contents/",
+        200,
+        json!([{ "name": "Cargo.toml" }]),
+    );
+    gh.json(
+        "/repos/octo/game/releases",
+        200,
+        json!([{ "tag_name": "v1.1.0", "draft": false, "html_url": "https://github.com/octo/game/releases/tag/v1.1.0",
+                 "assets": [{ "name": "game.zip", "size": 1 }] }]),
+    );
+    gh.json(
+        "/repos/octo/game/commits/v1.1.0",
+        200,
+        json!({ "sha": "b".repeat(40) }),
+    );
+    gh.json(
+        "/repos/octo/game/releases/tags/v1.1.0",
+        200,
+        json!({ "body": "Spring update." }),
+    );
+    let all = agent_token(&app, &maker, "publish", None).await;
+    let scoped = agent_token(&app, &maker, "publish", Some(&["game"])).await;
+    let read = agent_token(&app, &maker, "read", None).await;
+
+    for (tool, args, wants) in [
+        (
+            "slop_build_setup",
+            json!({ "slug": "game" }),
+            "\"project_type\":\"rust\"",
+        ),
+        (
+            "github_releases",
+            json!({ "slug": "game" }),
+            "\"tag\":\"v1.1.0\"",
+        ),
+        ("list_runtimes", json!({}), "dotnet-desktop-8"),
+        (
+            "app_overview",
+            json!({ "slug": "game" }),
+            "\"repo_url\":\"https://github.com/octo/game\"",
+        ),
+    ] {
+        let (error, text) = call_tool(&app, &read, tool, args).await;
+        assert!(!error, "{tool}: {text}");
+        assert!(text.contains(wants), "{tool}: {text}");
+    }
+
+    // submit_github_release: a read token can't; a publish one does, with GitHub's notes.
+    let pick = json!({
+        "slug": "game", "tag": "v1.1.0",
+        "files": [{ "platform": "windows", "kind": "archive", "exec": "game.exe",
+                    "url": "https://github.com/octo/game/releases/download/v1.1.0/game.zip" }]
+    });
+    let (error, _) = call_tool(&app, &read, "submit_github_release", pick.clone()).await;
+    assert!(error);
+    let (error, text) = call_tool(&app, &scoped, "submit_github_release", pick).await;
+    assert!(!error, "{text}");
+    let made: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(
+        (made["version"].as_str(), made["notes"].as_str()),
+        (Some("1.1.0"), Some("Spring update."))
+    );
+
+    // create_store_page: only a publish token for all apps.
+    let mut page = new_app("agent-made");
+    page["repo_url"] = json!("https://github.com/octo/agent-made");
+    for token in [&read, &scoped] {
+        let (error, text) = call_tool(&app, token, "create_store_page", page.clone()).await;
+        assert!(error, "{text}");
+    }
+    assert_eq!(
+        count(&app, "select count(*) from apps where slug = 'agent-made'").await,
+        0
+    );
+    let (error, text) = call_tool(&app, &all, "create_store_page", page).await;
+    assert!(!error, "{text}");
+    assert_eq!(
+        count(&app, "select count(*) from apps where slug = 'agent-made'").await,
+        1
+    );
+}
+
+/// register_community_build: from the maker's own fork, with a publish token for all their
+/// apps only.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_register_community_builds_with_an_all_apps_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (original_maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        original_maker,
+        "castle",
+        "released",
+        "platforms = '{windows}', repo_url = 'https://github.com/mia/castle'",
+    )
+    .await;
+    let (_, author) = maker_with_app(&app, "beta").await;
+    let all = agent_token(&app, &author, "publish", None).await;
+    let scoped = agent_token(&app, &author, "publish", Some(&["game"])).await;
+    let read = agent_token(&app, &author, "read", None).await;
+    let build = json!({
+        "original": "castle", "slug": "castle-linux", "title": "Castle (Linux port)",
+        "summary": "Runs natively on Linux.", "repo_url": "https://github.com/bo/castle",
+        "license_spdx": "MIT", "kind": "port", "note": "Adds a Linux build.",
+        "platforms": ["linux", "linux-deb"]
+    });
+    for token in [&read, &scoped] {
+        let (error, text) = call_tool(&app, token, "register_community_build", build.clone()).await;
+        assert!(error, "{text}");
+        assert!(text.contains("forbidden"), "{text}");
+    }
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from apps where slug = 'castle-linux'"
+        )
+        .await,
+        0
+    );
+    let (error, text) = call_tool(&app, &all, "register_community_build", build).await;
+    assert!(!error, "{text}");
+    let (parent, kind): (String, String) = sqlx::query_as(
+        "select p.slug, a.branch_kind from apps a join apps p on p.id = a.parent_app_id where a.slug = 'castle-linux'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((parent.as_str(), kind.as_str()), ("castle", "port"));
 }
