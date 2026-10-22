@@ -195,7 +195,7 @@ async fn file(
     Path(slug): Path<String>,
     Json(b): Json<NewReport>,
 ) -> ApiResult<(StatusCode, Json<Report>)> {
-    crate::limits::check(&state, user.id, crate::limits::Action::Review)?;
+    crate::limits::check(&state, user.id, crate::limits::Action::BugReport)?;
     let (app_id, maker, accepting, app_title) = app_of(&state, &slug).await?;
     if !has_played(&state, user.id, app_id).await? {
         return Err(ApiError::Conflict(

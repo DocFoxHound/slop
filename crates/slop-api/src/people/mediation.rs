@@ -253,17 +253,28 @@ async fn propose(
     let text = note("note", &p.note, 1000, true)?;
     let amount = match (p.kind.as_str(), p.amount_minor) {
         ("refund", Some(a)) if a > 0 => {
-            let paid: i64 = sqlx::query_scalar(
-                "select coalesce(sum(p.amount_minor), 0)::int8 from payments p join job_payments jp on jp.id = p.job_payment_id
-                 where jp.job_id = $1 and p.kind = 'people_job'",
+            // What was paid, less what's been refunded already: refunds Stripe reported (stored
+            // as negative amounts), or refunds agreed in earlier problems that the creative may
+            // not have made yet, whichever is more.
+            let left: i64 = sqlx::query_scalar(
+                "select (select coalesce(sum(p.amount_minor), 0) from payments p
+                         join job_payments jp on jp.id = p.job_payment_id
+                         where jp.job_id = $1 and p.kind = 'people_job')
+                      - greatest(
+                          (select coalesce(-sum(r.amount_minor), 0) from payments r
+                           join payments p on p.id = r.refund_of join job_payments jp on jp.id = p.job_payment_id
+                           where jp.job_id = $1 and r.kind = 'refund'),
+                          (select coalesce(sum(pp.amount_minor), 0) from job_problem_proposals pp
+                           join job_problems pr on pr.id = pp.problem_id
+                           where pr.job_id = $1 and pp.kind = 'refund' and pp.status = 'accepted'))",
             )
             .bind(j.id)
             .fetch_one(&state.db)
             .await?;
-            if a > paid {
+            if a > left {
                 return Err(ApiError::invalid(
                     "amount_minor",
-                    "a refund can't be more than what was paid",
+                    "a refund can't be more than what was paid and not yet refunded",
                 ));
             }
             Some(a as i32)
@@ -507,6 +518,7 @@ async fn dispute_review(
         return Err(ApiError::invalid("reason", "pick one of the reasons"));
     }
     let text = note("statement", &body.statement, 2000, true)?;
+    let mut tx = state.db.begin().await?;
     // One dispute per review; a review changed after a decision can be disputed again.
     let done = sqlx::query(
         "insert into review_disputes (job_id, reason, statement) values ($1, $2, $3)
@@ -518,13 +530,36 @@ async fn dispute_review(
     .bind(job_id)
     .bind(&body.reason)
     .bind(&text)
-    .execute(&state.db)
+    .execute(&mut *tx)
     .await?;
     if done.rows_affected() == 0 {
         return Err(ApiError::Conflict(
             "this review has already been disputed; a decided review can be disputed again only if it changes".into(),
         ));
     }
+    // The reviewer hears of it, so they can give their side before a mediator decides.
+    let (client, creative, title): (Uuid, String, String) = sqlx::query_as(
+        "select r.client_id, c.name, coalesce(j.offer->>'title', 'the job for ' || a.title)
+         from creative_reviews r join jobs j on j.id = r.job_id join apps a on a.id = j.app_id
+         join creatives c on c.user_id = r.creative_id where r.job_id = $1",
+    )
+    .bind(job_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    crate::notify::send(
+        &mut tx,
+        crate::notify::Notice {
+            user_id: client,
+            category: "jobs",
+            title: format!("{creative} disputed your review of “{title}”"),
+            body: "A mediator decides whether it breaks the rules. You can give your side on the job page."
+                .into(),
+            link: format!("/jobs/{job_id}"),
+            collapse_key: None,
+        },
+    )
+    .await?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 
