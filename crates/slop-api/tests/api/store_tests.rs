@@ -2948,3 +2948,464 @@ async fn racing_demo_starts_stay_within_the_live_limit(db: PgPool) {
     );
     assert_eq!(count(&app.db, "select count(*) from demos").await, 1);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Playtime sharing (pulse.rs)
+
+/// With "Share my playtime" off, a launch gets no Pulse token and records no playtime, but it
+/// still counts as a launch: the player can vote (weighted by launch days) and review.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn players_who_dont_share_playtime_can_still_vote_and_review(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/me")
+                .cookie(&pat)
+                .json(json!({ "share_playtime": false })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let launched = body_json(
+        app.send(req(Method::POST, "/v1/apps/tower/launch?platform=linux").cookie(&pat))
+            .await,
+    )
+    .await;
+    assert!(launched["token"].is_null());
+    assert_eq!(
+        count(&app.db, "select count(*) from pulse_sessions").await,
+        0
+    );
+    let usage: (i64, i32, Option<String>) = sqlx::query_as(
+        "select playtime_seconds, days_launched, last_platform from user_app_usage where user_id = $1",
+    )
+    .bind(pat_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(usage, (0, 1, Some("linux".to_string())));
+
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/tower/vote")
+                .cookie(&pat)
+                .json(json!({ "vote": "not_slop" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let weight: f32 = sqlx::query_scalar("select weight from votes where user_id = $1")
+        .bind(pat_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(weight, slop_api::votes::vote_weight(0, 1));
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/tower/review")
+                .cookie(&pat)
+                .json(json!({ "body": "Solid little game." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Reviews (reviews.rs)
+
+/// A player who launched `slug`, voted and wrote a review.
+async fn reviewer(app: &TestApp, slug: &str, name: &str, body: &str) -> (Uuid, String) {
+    let (id, cookie) = app.user(name, "US").await;
+    app.send(req(Method::POST, format!("/v1/apps/{slug}/launch")).cookie(&cookie))
+        .await;
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/apps/{slug}/vote"))
+                .cookie(&cookie)
+                .json(json!({ "vote": "not_slop" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .send(
+            req(Method::PUT, format!("/v1/apps/{slug}/review"))
+                .cookie(&cookie)
+                .json(json!({ "body": body })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    (id, cookie)
+}
+
+/// Deleting your review takes it off the app's page and your profile; your vote stays, and
+/// nobody else's review is touched.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn players_delete_their_own_review_only(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let (pat_id, pat) = reviewer(&app, "tower", "Pat", "Great towers.").await;
+    let (_, _sam) = reviewer(&app, "tower", "Sam", "Fun for a while.").await;
+    let reviews = || async {
+        body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|r| r["body"].as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(reviews().await.len(), 2);
+
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/apps/tower/review"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/apps/no-such-app/review").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(reviews().await.len(), 2);
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/apps/tower/review").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(reviews().await, ["Fun for a while."]);
+    let profile = body_json(
+        app.send(req(Method::GET, format!("/v1/users/{pat_id}")).cookie(&pat))
+            .await,
+    )
+    .await;
+    let votes = profile["votes"].as_array().unwrap();
+    assert_eq!(votes.len(), 1, "the vote stays: {profile}");
+    assert!(votes[0]["review"].is_null());
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/ratings").cookie(&pat))
+            .await,
+    )
+    .await;
+    assert_eq!(ratings["mine"]["vote"], "not_slop", "{ratings}");
+    assert!(ratings["mine"]["review"].is_null(), "{ratings}");
+    // Again: nothing to do.
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/apps/tower/review").cookie(&pat))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+/// A maker takes their reply back; there must be one, only the maker can, and a reply staff
+/// removed can't be taken back (or written again).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_remove_their_reply_to_a_review(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    reviewer(&app, "tower", "Pat", "Great towers.").await;
+    reviewer(&app, "tower", "Sam", "Too short.").await;
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    let id_of = |who: &str| {
+        page["reviews"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["body"] == who)
+            .unwrap()["id"]
+            .as_str()
+            .unwrap()
+            .to_string()
+    };
+    let (pat_review, sam_review) = (id_of("Great towers."), id_of("Too short."));
+    let reply_url = |id: &str| format!("/v1/apps/tower/reviews/{id}/reply");
+    for id in [&pat_review, &sam_review] {
+        let res = app
+            .send(
+                req(Method::PUT, reply_url(id))
+                    .cookie(&maker)
+                    .json(json!({ "body": "Thanks!" })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+
+    let (_, stranger) = app.user("Stranger", "US").await;
+    assert_eq!(
+        app.send(req(Method::DELETE, reply_url(&pat_review)).cookie(&stranger))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, reply_url(&Uuid::now_v7().to_string())).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, reply_url(&pat_review)).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let replies: Vec<(String, Option<String>)> =
+        sqlx::query_as("select body, reply from app_reviews order by body")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        replies,
+        [
+            ("Great towers.".to_string(), None),
+            ("Too short.".into(), Some("Thanks!".into()))
+        ]
+    );
+    // No reply left to remove.
+    assert_eq!(
+        app.send(req(Method::DELETE, reply_url(&pat_review)).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // Staff removed Sam's reply: the maker can neither take it back nor write it again.
+    sqlx::query("update app_reviews set reply_hidden_at = now() where body = 'Too short.'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::DELETE, reply_url(&sam_review)).cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(
+            req(Method::PUT, reply_url(&sam_review))
+                .cookie(&maker)
+                .json(json!({ "body": "Again" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+}
+
+/// Makers' agents and reviews: a read token lists them but can't reply; a token for other apps
+/// can't touch this one's; a publish token replies, and errors are tool errors.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn maker_agents_list_and_answer_reviews_within_their_token(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let maker_id: Uuid = sqlx::query_scalar("select maker_id from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update apps set status = 'listed' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    listed_with(&app, maker_id, "other", "released", "").await;
+    let (pat_id, _) = reviewer(&app, "game", "Pat", "Needs a save button.").await;
+    let review: String = sqlx::query_scalar("select id::text from app_reviews")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let read = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let publish = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Claude", "scope": "publish" }),
+    )
+    .await;
+    let other_only = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Other", "scope": "publish", "apps": ["other"] }),
+    )
+    .await;
+    let call = |token: &str, name: &str, args: Value| {
+        let app = &app;
+        let r = req(Method::POST, "/v1/maker/mcp")
+            .header("authorization", token.to_string())
+            .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } }));
+        async move {
+            let out = body_json(app.send(r).await).await;
+            (
+                out["result"]["isError"] == false,
+                out["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        }
+    };
+    let (ok, text) = call(&read, "list_reviews", json!({ "slug": "game" })).await;
+    assert!(ok && text.contains("Needs a save button."), "{text}");
+    let reply = json!({ "slug": "game", "id": review, "body": "Added in 1.1!" });
+    let (ok, _) = call(&read, "reply_to_review", reply.clone()).await;
+    assert!(!ok, "a read token can't reply");
+    let (ok, _) = call(&other_only, "reply_to_review", reply.clone()).await;
+    assert!(!ok, "not one of the token's apps");
+    let (ok, _) = call(&other_only, "list_reviews", json!({ "slug": "game" })).await;
+    assert!(!ok);
+    let replied: Option<String> = sqlx::query_scalar("select reply from app_reviews")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(replied.is_none());
+
+    let (ok, text) = call(&publish, "reply_to_review", reply).await;
+    assert!(ok, "{text}");
+    let replied: Option<String> = sqlx::query_scalar("select reply from app_reviews")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(replied.as_deref(), Some("Added in 1.1!"));
+    assert_eq!(
+        count(
+            &app.db,
+            &format!("select count(*) from notifications where user_id = '{pat_id}'")
+        )
+        .await,
+        1
+    );
+    let (ok, text) = call(
+        &publish,
+        "reply_to_review",
+        json!({ "slug": "game", "id": review, "body": "" }),
+    )
+    .await;
+    assert!(!ok && text.contains("2,000"), "{text}");
+    // The agent can take the reply back through the API too, but a read token can't.
+    let path = format!("/v1/apps/game/reviews/{review}/reply");
+    assert_eq!(
+        app.send(req(Method::DELETE, path.clone()).header("authorization", read.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, path).header("authorization", publish.clone()))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ratings (votes.rs)
+
+/// The maker's breakdown groups each player's current vote by the version it was cast on, and
+/// shows per release how many changed their minds or voted for the first time; withdrawn votes
+/// don't count.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_rating_breakdown_follows_votes_across_releases(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    let release = |version: &str| {
+        let db = app.db.clone();
+        let version = version.to_string();
+        async move {
+            sqlx::query(
+                "insert into releases (id, app_id, version, commit_sha, status, submitted_by, signed_manifest, reviewed_at)
+                 select $1, id, $2, repeat('a', 40), 'approved', $3, '{}'::jsonb, now() from apps where slug = 'tower'",
+            )
+            .bind(Uuid::now_v7())
+            .bind(version)
+            .bind(maker_id)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let mut players = Vec::new();
+    for i in 0..4 {
+        let (_, cookie) = app.user(&format!("Player {i}"), "US").await;
+        app.send(req(Method::POST, "/v1/apps/tower/launch?platform=windows").cookie(&cookie))
+            .await;
+        players.push(cookie);
+    }
+    let vote = |cookie: &str, vote: &str| {
+        req(Method::POST, "/v1/apps/tower/vote")
+            .cookie(cookie)
+            .json(json!({ "vote": vote }))
+    };
+    release("1.0.0").await;
+    for (p, v) in [(0, "slop"), (1, "slop"), (2, "not_slop"), (3, "slop")] {
+        assert_eq!(
+            app.send(vote(&players[p], v)).await.status(),
+            StatusCode::OK
+        );
+    }
+    // 1.1.0 wins two over, one more changes their mind back, one withdraws.
+    tokio::time::sleep(std::time::Duration::from_millis(5)).await;
+    release("1.1.0").await;
+    for (p, v) in [(0, "not_slop"), (1, "not_slop"), (2, "slop")] {
+        assert_eq!(
+            app.send(vote(&players[p], v)).await.status(),
+            StatusCode::OK
+        );
+    }
+    let withdraw = req(Method::POST, "/v1/apps/tower/vote")
+        .cookie(&players[3])
+        .json(json!({ "vote": null }));
+    assert_eq!(app.send(withdraw).await.status(), StatusCode::OK);
+
+    let b = body_json(
+        app.send(req(Method::GET, "/v1/apps/tower/ratings/breakdown").cookie(&maker))
+            .await,
+    )
+    .await;
+    let by_version = b["by_version"].as_array().unwrap();
+    assert_eq!(
+        by_version.len(),
+        1,
+        "only current votes, each on the version it was cast: {b}"
+    );
+    assert_eq!(by_version[0]["key"], "1.1.0");
+    assert_eq!(
+        (
+            by_version[0]["not_slop"].as_i64(),
+            by_version[0]["slop"].as_i64()
+        ),
+        (Some(2), Some(1))
+    );
+    let impact: Vec<(String, i64, i64, i64)> = b["impact"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| {
+            (
+                i["version"].as_str().unwrap().to_string(),
+                i["to_not_slop"].as_i64().unwrap(),
+                i["to_slop"].as_i64().unwrap(),
+                i["new_votes"].as_i64().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        impact,
+        [
+            ("1.1.0".to_string(), 2, 1, 0),
+            ("1.0.0".to_string(), 0, 0, 4)
+        ]
+    );
+    assert_eq!(b["by_platform"][0]["key"], "windows");
+    assert_eq!(
+        b["by_platform"][0]["not_slop"].as_i64().unwrap()
+            + b["by_platform"][0]["slop"].as_i64().unwrap(),
+        3
+    );
+    // Signed out: 401.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/tower/ratings/breakdown"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
