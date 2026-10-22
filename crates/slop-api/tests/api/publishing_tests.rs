@@ -2674,8 +2674,18 @@ async fn fake_gh() -> (String, FakeGh) {
                     .and_then(|v| v.to_str().ok())
                     .unwrap_or("")
                     .to_string();
-                gh.seen.lock().unwrap().push((uri.to_string(), auth));
-                let answer = gh.answers.lock().unwrap().get(uri.path()).cloned();
+                gh.seen
+                    .lock()
+                    .unwrap()
+                    .push((uri.to_string(), auth.clone()));
+                // An answer for this path with this Authorization header, else for anyone.
+                let answer = {
+                    let answers = gh.answers.lock().unwrap();
+                    answers
+                        .get(&format!("{} {auth}", uri.path()))
+                        .or_else(|| answers.get(uri.path()))
+                        .cloned()
+                };
                 match answer {
                     Some(a) => {
                         let mut res = axum::response::Response::new(Body::from(a.body));
@@ -4353,4 +4363,623 @@ async fn the_dependency_watch_batches_retries_and_summarises(db: PgPool) {
 
     // Not due again for a day.
     assert_eq!(slop_api::dep_watch::run_once(&app.state).await.unwrap(), 0);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Licence detection and repository ownership (catalog.rs, repo_owner.rs)
+
+async fn link_identity(app: &TestApp, user: Uuid, provider: &str, subject: &str) {
+    sqlx::query("insert into identities (provider, provider_subject, user_id) values ($1, $2, $3)")
+        .bind(provider)
+        .bind(subject)
+        .bind(user)
+        .execute(&app.db)
+        .await
+        .unwrap();
+}
+
+fn detect(url: &str) -> Req {
+    req(
+        Method::GET,
+        format!(
+            "/v1/repos/license?url={}",
+            url::form_urlencoded::byte_serialize(url.as_bytes()).collect::<String>()
+        ),
+    )
+}
+
+/// A private repository Slop's App can read: its owner learns the licence, nobody else learns
+/// anything, and the owner's answer isn't cached for others. Public answers are cached for a
+/// day; uncached lookups are rate limited per account.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn licence_lookups_reveal_private_repositories_only_to_their_owner(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |c| {
+        c.releases.github_app = Some(github_app_config())
+    })
+    .await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (_, bob) = app.user("Bob", "US").await;
+    link_identity(&app, ann_id, "github", "42").await;
+    sqlx::query(
+        "insert into github_installations (repo_path, installation_id) values ('octo/secret', 77)",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    gh.json(
+        "/app/installations/77/access_tokens",
+        201,
+        json!({ "token": "ghs_77", "expires_at": "2099-01-01T00:00:00Z" }),
+    );
+    gh.json(
+        "/repos/octo/secret",
+        200,
+        json!({ "private": true, "id": 5042, "owner": { "login": "octo", "id": 42, "type": "User" } }),
+    );
+    gh.json(
+        "/repos/octo/secret/license Bearer ghs_77",
+        200,
+        json!({ "license": { "spdx_id": "MIT", "name": "MIT License" } }),
+    );
+
+    assert_eq!(
+        status_of(&app, detect("https://github.com/octo/secret")).await,
+        StatusCode::UNAUTHORIZED
+    );
+    let mine = body_json(
+        app.send(detect("https://github.com/octo/secret").cookie(&ann))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["spdx"], "MIT");
+    let theirs = body_json(
+        app.send(detect("https://github.com/octo/secret").cookie(&bob))
+            .await,
+    )
+    .await;
+    assert!(
+        theirs["spdx"].is_null() && theirs["name"].is_null(),
+        "{theirs}"
+    );
+    assert!(
+        theirs["note"]
+            .as_str()
+            .unwrap()
+            .contains("isn't visible to Slop")
+    );
+    assert_eq!(
+        gh.auths("/repos/octo/secret/license"),
+        ["Bearer ghs_77", ""],
+        "Bob asked as nobody"
+    );
+
+    // A public repository: asked once a day, whoever asks.
+    gh.json(
+        "/repos/octo/open/license",
+        200,
+        json!({ "license": { "spdx_id": "Apache-2.0", "name": "Apache License 2.0" } }),
+    );
+    for (cookie, url) in [
+        (&bob, "https://github.com/octo/open"),
+        (&ann, "https://github.com/Octo/Open"),
+        (&bob, "https://github.com/octo/open.git"),
+    ] {
+        let found = body_json(app.send(detect(url).cookie(cookie)).await).await;
+        assert_eq!(found["spdx"], "Apache-2.0");
+    }
+    assert_eq!(gh.hits("/repos/octo/open/license"), 1);
+    // GitHub failing is said, not cached.
+    gh.json("/repos/octo/flaky/license", 502, json!({}));
+    let found = body_json(
+        app.send(detect("https://github.com/octo/flaky").cookie(&bob))
+            .await,
+    )
+    .await;
+    assert!(
+        found["note"]
+            .as_str()
+            .unwrap()
+            .contains("GitHub answered 502")
+    );
+
+    // Too many uncached lookups; the cache still answers.
+    let (carl_id, carl) = app.user("Carl", "US").await;
+    exhaust(&app, carl_id, slop_api::limits::Action::Lookup);
+    let res = app
+        .send(detect("https://github.com/octo/another").cookie(&carl))
+        .await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    assert_eq!(gh.hits("/repos/octo/another/license"), 0);
+    let res = app
+        .send(detect("https://github.com/octo/open").cookie(&carl))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+}
+
+fn ownership(cookie: &str, repo: &str) -> Req {
+    req(Method::POST, "/v1/repos/ownership")
+        .cookie(cookie)
+        .json(json!({ "repo_url": repo }))
+}
+
+/// GitHub ownership through the endpoint: the owner, an organization's owner (through the App
+/// on the organization), but not a collaborator, a member, or an organization without the App;
+/// GitHub limiting or failing is "try again", not "no".
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn github_ownership_is_proved_by_a_linked_owner_account(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let app = app_on(db, &gh_base, |c| {
+        c.releases.require_repo_owner = true;
+        c.releases.github_app = Some(github_app_config());
+    })
+    .await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (_, newbie) = app.user("Nell", "US").await;
+    link_identity(&app, ann_id, "github", "42").await;
+    let repo = |path: &str, login: &str, id: i64, kind: &str| {
+        gh.json(
+            &format!("/repos/{path}"),
+            200,
+            json!({ "private": false, "id": 9000 + id, "owner": { "login": login, "id": id, "type": kind } }),
+        )
+    };
+    repo("octo/game", "octo", 42, "User");
+    repo("bob/game", "bob", 43, "User");
+    repo("acme/game", "acme", 900, "Organization");
+    repo("globex/game", "globex", 901, "Organization");
+    repo("initech/game", "initech", 902, "Organization");
+    gh.json("/orgs/acme/installation", 200, json!({ "id": 77 }));
+    gh.json("/orgs/initech/installation", 200, json!({ "id": 78 }));
+    for id in [77, 78] {
+        gh.json(
+            &format!("/app/installations/{id}/access_tokens"),
+            201,
+            json!({ "token": format!("ghs_{id}"), "expires_at": "2099-01-01T00:00:00Z" }),
+        );
+    }
+    gh.json("/user/42", 200, json!({ "id": 42, "login": "octo" }));
+    gh.json(
+        "/orgs/acme/memberships/octo",
+        200,
+        json!({ "role": "admin", "state": "active" }),
+    );
+    gh.json(
+        "/orgs/initech/memberships/octo",
+        200,
+        json!({ "role": "member", "state": "active" }),
+    );
+    let ask = |cookie: &str, repo: &str| {
+        let r = ownership(cookie, &format!("https://github.com/{repo}"));
+        async { body_json(app.send(r).await).await }
+    };
+
+    let a = ask(&ann, "octo/game").await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["method"].as_str()),
+        (Some(true), Some("account")),
+        "{a}"
+    );
+    let a = ask(&ann, "acme/game").await;
+    assert_eq!(a["ok"], true, "an owner of the organization: {a}");
+    let a = ask(&ann, "bob/game").await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["link"].as_str()),
+        (Some(false), Some("github"))
+    );
+    assert!(
+        a["message"].as_str().unwrap().contains("bob owns this one"),
+        "{a}"
+    );
+    let a = ask(&ann, "initech/game").await;
+    assert_eq!(a["ok"], false);
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("only owners of the initech organization"),
+        "{a}"
+    );
+    let a = ask(&ann, "globex/game").await;
+    assert_eq!(a["ok"], false);
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("install Slop's GitHub App on it"),
+        "{a}"
+    );
+    let a = ask(&newbie, "octo/game").await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["link"].as_str()),
+        (Some(false), Some("github"))
+    );
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("link the GitHub account that owns this repository (octo)")
+    );
+    let a = ask(&ann, "octo/missing").await;
+    assert_eq!(a["ok"], false);
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("install Slop's GitHub App on it first"),
+        "{a}"
+    );
+
+    // GitHub limiting or failing: try again later.
+    for (code, says) in [(403, "limiting"), (429, "limiting"), (500, "didn't answer")] {
+        gh.json("/repos/octo/game", code, json!({}));
+        let res = app
+            .send(ownership(&ann, "https://github.com/octo/game"))
+            .await;
+        assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE, "{code}");
+        assert!(error_message(res).await.contains(says), "{code}");
+    }
+
+    // Signed out; not an address.
+    assert_eq!(
+        status_of(
+            &app,
+            req(Method::POST, "/v1/repos/ownership")
+                .json(json!({ "repo_url": "https://github.com/octo/game" }))
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        error_field(
+            app.send(ownership(&ann, "ftp://github.com/octo/game"))
+                .await
+        )
+        .await,
+        "repo_url"
+    );
+}
+
+/// A repository already on Slop is refused, naming only an app in the store; on a server that
+/// doesn't require ownership, anything else is fine.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ownership_names_a_taken_repositorys_app_only_when_its_public(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, other) = app.user("Olga", "US").await;
+    let a = body_json(
+        app.send(ownership(&other, "https://github.com/someone/anything"))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["method"].as_str()),
+        (Some(true), Some("account"))
+    );
+
+    for (slug, repo) in [
+        ("listed", "octo/listed"),
+        ("drafty", "octo/drafty"),
+        ("hidden", "octo/hidden"),
+    ] {
+        let mut body = new_app(slug);
+        body["repo_url"] = json!(format!("https://github.com/{repo}"));
+        if slug == "hidden" {
+            body["visibility"] = json!("private");
+        }
+        assert_eq!(
+            status_of(
+                &app,
+                req(Method::POST, "/v1/apps").cookie(&maker).json(body)
+            )
+            .await,
+            StatusCode::CREATED
+        );
+    }
+    approved_release(&app, "listed", maker_id).await;
+    admin::list_app(&app.db, "listed", "rev").await.unwrap();
+    let a = body_json(
+        app.send(ownership(&other, "https://github.com/Octo/Listed.git/"))
+            .await,
+    )
+    .await;
+    assert_eq!(a["ok"], false);
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("already on Slop as Pixel Dungeon Delver"),
+        "{a}"
+    );
+    for repo in ["octo/drafty", "octo/hidden"] {
+        let a = body_json(
+            app.send(ownership(&other, &format!("https://github.com/{repo}")))
+                .await,
+        )
+        .await;
+        assert_eq!(a["ok"], false);
+        let message = a["message"].as_str().unwrap();
+        assert!(
+            message.contains("already linked to an app on Slop"),
+            "{message}"
+        );
+        assert!(!message.contains("Pixel"), "{message}");
+    }
+}
+
+/// Bitbucket Cloud: a personal repository's owner by their linked account; a workspace's by a
+/// code; a token that doesn't work is refused.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bitbucket_ownership_by_account_or_code(db: PgPool) {
+    let (gh_base, gh) = fake_gh().await;
+    let (forge, _) = fake_forge().await;
+    let app = app_on(db, &gh_base, |c| {
+        c.releases.require_repo_owner = true;
+        let base: url::Url = gh_base.parse().unwrap();
+        c.bitbucket = Some(slop_api::config::OAuthConfig {
+            client_id: "bb".into(),
+            client_secret: "secret".into(),
+            authorize_url: base.join("bb/auth").unwrap(),
+            token_url: base.join("bb/token").unwrap(),
+            api_base: base.join("bb/").unwrap(),
+        });
+    })
+    .await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (_, bob) = app.user("Bob", "US").await;
+    link_identity(&app, ann_id, "bitbucket", "{ann-uuid}").await;
+    gh.json(
+        "/bb/repositories/ann/game",
+        200,
+        json!({ "owner": { "type": "user", "uuid": "{ann-uuid}", "display_name": "Ann A" } }),
+    );
+    gh.json(
+        "/bb/repositories/studio/game",
+        200,
+        json!({ "owner": { "type": "team", "uuid": "{studio}", "display_name": "Studio" } }),
+    );
+    let a = body_json(
+        app.send(ownership(&ann, "https://bitbucket.org/ann/game"))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["method"].as_str()),
+        (Some(true), Some("account")),
+        "{a}"
+    );
+    let a = body_json(
+        app.send(ownership(&bob, "https://bitbucket.org/ann/game"))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["link"].as_str()),
+        (Some(false), Some("bitbucket"))
+    );
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("Ann A owns this one")
+    );
+    let a = body_json(
+        app.send(ownership(&ann, "https://bitbucket.org/studio/game"))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["method"].as_str()),
+        (Some(false), Some("code")),
+        "{a}"
+    );
+    assert!(a["code"].as_str().unwrap().starts_with("slop-verify-"));
+    let a = body_json(
+        app.send(ownership(&ann, "https://bitbucket.org/ann/nothing"))
+            .await,
+    )
+    .await;
+    assert_eq!(a["ok"], false);
+    assert!(
+        a["message"]
+            .as_str()
+            .unwrap()
+            .contains("Bitbucket says there's no public repository")
+    );
+
+    // A private repository's token that doesn't read it (here on a GitLab-style host).
+    let res = app
+        .send(
+            req(Method::POST, "/v1/repos/ownership")
+                .cookie(&ann)
+                .json(json!({ "repo_url": format!("{forge}ann/game"), "repo_token": { "kind": "gitlab", "token": "nope" } })),
+        )
+        .await;
+    assert_eq!(error_field(res).await, "repo_token");
+}
+
+/// Git repositories served the way plain web servers serve them ("dumb" HTTP), from a temporary
+/// folder. Returns the folder and the server's base URL.
+async fn git_host() -> (std::path::PathBuf, String) {
+    let root = std::env::temp_dir().join(format!("slop-git-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&root).unwrap();
+    let router = Router::new().fallback_service(tower_http::services::ServeDir::new(root.clone()));
+    (root, serve_fake(router).await)
+}
+
+/// Publishes `name.git` under `root` with these files on its default branch.
+fn publish_git(root: &std::path::Path, name: &str, files: &[(&str, &str)]) {
+    let git = |args: &[&str], dir: &std::path::Path| {
+        let out = std::process::Command::new("git")
+            .args([
+                "-c",
+                "user.name=Ann",
+                "-c",
+                "user.email=ann@example.com",
+                "-c",
+                "init.defaultBranch=main",
+            ])
+            .args(args)
+            .current_dir(dir)
+            .output()
+            .unwrap();
+        assert!(
+            out.status.success(),
+            "{}",
+            String::from_utf8_lossy(&out.stderr)
+        );
+    };
+    let work = root.join(format!("{name}-work-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&work).unwrap();
+    git(&["init", "-q"], &work);
+    for (file, text) in files {
+        std::fs::write(work.join(file), text).unwrap();
+    }
+    git(&["add", "."], &work);
+    git(&["commit", "-qm", "files"], &work);
+    let bare = root.join(format!("{name}.git"));
+    let _ = std::fs::remove_dir_all(&bare);
+    git(
+        &[
+            "clone",
+            "-q",
+            "--bare",
+            work.to_str().unwrap(),
+            bare.to_str().unwrap(),
+        ],
+        root,
+    );
+    git(&["update-server-info"], &bare);
+}
+
+fn check_code(cookie: &str, repo: &str) -> Req {
+    req(Method::POST, "/v1/repos/ownership/check")
+        .cookie(cookie)
+        .json(json!({ "repo_url": repo }))
+}
+
+/// The code method: a code is asked for first; it's found in slop-verify.txt as well as the
+/// README; it's the asker's own; it lasts 30 days; an unreadable repository is explained.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ownership_codes_are_personal_found_in_either_file_and_expire(db: PgPool) {
+    let app = test_app_with(db, |c| c.releases.require_repo_owner = true).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let (root, base) = git_host().await;
+    let repo = format!("{base}game.git");
+
+    let res = app.send(check_code(&ann, &repo)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(error_message(res).await.contains("ask for a code first"));
+
+    let code_for = |cookie: &str| {
+        let r = ownership(cookie, &repo);
+        async {
+            body_json(app.send(r).await).await["code"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    };
+    let ann_code = code_for(&ann).await;
+    let bob_code = code_for(&bob).await;
+    assert_ne!(ann_code, bob_code);
+    assert_eq!(code_for(&ann).await, ann_code, "the same code each time");
+
+    // Bob's code in the README proves nothing for Ann.
+    publish_git(
+        &root,
+        "game",
+        &[("README.md", &format!("# Game\n{bob_code}\n"))],
+    );
+    let a = body_json(app.send(check_code(&ann, &repo)).await).await;
+    assert_eq!(a["ok"], false);
+    assert!(a["message"].as_str().unwrap().contains("didn't find"));
+    let a = body_json(app.send(check_code(&bob, &repo)).await).await;
+    assert_eq!(a["ok"], true, "{a}");
+
+    // Ann's in slop-verify.txt (no README at all).
+    publish_git(
+        &root,
+        "game",
+        &[("slop-verify.txt", &ann_code), ("main.rs", "fn main() {}")],
+    );
+    let a = body_json(app.send(check_code(&ann, &repo)).await).await;
+    assert_eq!(a["ok"], true, "{a}");
+    let a = body_json(app.send(ownership(&ann, &repo)).await).await;
+    assert_eq!(
+        (a["ok"].as_bool(), a["method"].as_str()),
+        (Some(true), Some("code"))
+    );
+
+    // 30 days later the proof has lapsed.
+    sqlx::query(
+        "update repo_claims set verified_at = now() - interval '31 days' where user_id = $1",
+    )
+    .bind(ann_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let a = body_json(app.send(ownership(&ann, &repo)).await).await;
+    assert_eq!(a["ok"], false);
+    assert_eq!(a["code"], ann_code.as_str());
+
+    // A repository Slop can't read.
+    let missing = format!("{base}nothing.git");
+    let _ = code_for_repo(&app, &ann, &missing).await;
+    let res = app.send(check_code(&ann, &missing)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        error_message(res)
+            .await
+            .contains("Slop couldn't read the repository")
+    );
+
+    // Checking too often.
+    exhaust(&app, bob_id, slop_api::limits::Action::Lookup);
+    assert_eq!(
+        app.send(check_code(&bob, &repo)).await.status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let _ = std::fs::remove_dir_all(&root);
+}
+
+async fn code_for_repo(app: &TestApp, cookie: &str, repo: &str) -> String {
+    body_json(app.send(ownership(cookie, repo)).await).await["code"]
+        .as_str()
+        .unwrap()
+        .to_string()
+}
+
+/// On a real server, Slop never reads a repository on a private network address.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn ownership_checks_refuse_private_network_hosts(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.releases.require_repo_owner = true;
+        c.releases.allow_http_downloads = false;
+    })
+    .await;
+    let (_, ann) = app.user("Ann", "US").await;
+    for repo in [
+        "https://localhost/ann/game.git",
+        "https://127.0.0.1/ann/game.git",
+    ] {
+        let code = code_for_repo(&app, &ann, repo).await;
+        assert!(code.starts_with("slop-verify-"));
+        let res = app.send(check_code(&ann, repo)).await;
+        assert_eq!(res.status(), StatusCode::CONFLICT, "{repo}");
+        assert!(
+            error_message(res).await.contains("private network"),
+            "{repo}"
+        );
+    }
+    assert_eq!(
+        error_field(
+            app.send(ownership(&ann, "http://git.example/ann/game.git"))
+                .await
+        )
+        .await,
+        "repo_url",
+        "plain http isn't accepted"
+    );
 }
