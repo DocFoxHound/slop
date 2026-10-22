@@ -2891,3 +2891,406 @@ async fn migrations_run_as_the_owner_and_a_stale_schema_is_refused(db: PgPool) {
         run.err
     );
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_simulation_commands_print_json_and_refuse_a_real_database(db: PgPool) {
+    let url = own_database_url(&db).await;
+    let run = cli(
+        &[
+            "simulate", "generate", "--apps", "30", "--users", "60", "--days", "20", "--seed", "5",
+        ],
+        &[("DATABASE_URL", &url)],
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    let made = json_in(&run.out);
+    assert_eq!(
+        (made["apps"].as_u64(), made["users"].as_u64()),
+        (Some(30), Some(60)),
+        "{made}"
+    );
+    assert!(made["vote_events"].as_u64().unwrap() > 0, "{made}");
+    let apps: i64 = sqlx::query_scalar("select count(*) from sim_apps")
+        .fetch_one(&db)
+        .await
+        .unwrap();
+    assert_eq!(apps, 30);
+    let run = cli(
+        &["simulate", "report", "--sample", "20", "--seed", "1"],
+        &[("DATABASE_URL", &url)],
+    )
+    .await;
+    assert!(run.ok, "{}", run.err);
+    let report = json_in(&run.out);
+    assert!(report["for_you"]["hit_rate"].is_number(), "{report}");
+    assert_eq!(report["shown_dead"], 0);
+
+    // A database that isn't a sandbox: refused after connecting, before anything is wiped.
+    let name = "slop_admin2_real";
+    let real = scratch_database(&db, name).await;
+    slop_api::MIGRATOR.run(&real).await.unwrap();
+    let (keep,): (Uuid,) = sqlx::query_as(
+        "insert into users (id, display_name, country_code, age_16_confirmed_at) values ($1, 'Real Person', 'US', now()) returning id",
+    )
+    .bind(Uuid::now_v7())
+    .fetch_one(&real)
+    .await
+    .unwrap();
+    let real_url = database_url(name);
+    for args in [
+        &["simulate", "generate", "--apps", "5", "--users", "5"][..],
+        &["simulate", "report"][..],
+    ] {
+        let run = cli(args, &[("DATABASE_URL", &real_url)]).await;
+        assert!(!run.ok, "{args:?}: {}", run.out);
+        assert!(
+            run.err
+                .contains("the simulation only runs on a sandbox database")
+                && run.err.contains(name),
+            "{}",
+            run.err
+        );
+    }
+    let still: bool = sqlx::query_scalar("select exists (select 1 from users where id = $1)")
+        .bind(keep)
+        .fetch_one(&real)
+        .await
+        .unwrap();
+    assert!(still);
+    let refused =
+        serve_until_listening(&[("DATABASE_URL", &real_url), ("SLOP_SIMULATION", "true")])
+            .await
+            .err()
+            .expect("refused");
+    assert!(
+        refused.contains("SLOP_SIMULATION is only allowed on a sandbox database"),
+        "{refused}"
+    );
+    drop_database(&db, real, name).await;
+}
+
+/// A running `slop-api serve`, stopped when dropped.
+struct Server {
+    _child: tokio::process::Child,
+    base: String,
+    log: std::sync::Arc<std::sync::Mutex<String>>,
+}
+
+impl Server {
+    fn log(&self) -> String {
+        self.log.lock().unwrap().clone()
+    }
+}
+
+/// Starts `slop-api serve` on a free port with these settings (and no outside feeds), and waits
+/// for it to listen. Err: what it said when it stopped instead.
+async fn serve_until_listening(env: &[(&str, &str)]) -> Result<Server, String> {
+    use tokio::io::{AsyncBufReadExt, AsyncReadExt};
+    let port = std::net::TcpListener::bind("127.0.0.1:0")
+        .unwrap()
+        .local_addr()
+        .unwrap()
+        .port();
+    let demos = temp_folder("demos");
+    let mut cmd = tokio::process::Command::new(env!("CARGO_BIN_EXE_slop-api"));
+    cmd.arg("serve")
+        .env_clear()
+        .env("RUST_LOG", "slop_api=info")
+        .env("NO_COLOR", "1")
+        .env("SLOP_BIND", format!("127.0.0.1:{port}"))
+        .env("SLOP_BAD_LINK_FEEDS", "off")
+        .env("SLOP_VIES_URL", "off")
+        .env("SLOP_DEMO_DIR", &demos)
+        .stdout(std::process::Stdio::piped())
+        .stderr(std::process::Stdio::piped())
+        .kill_on_drop(true);
+    for (k, v) in env {
+        cmd.env(k, v);
+    }
+    let mut child = cmd.spawn().unwrap();
+    let log = std::sync::Arc::new(std::sync::Mutex::new(String::new()));
+    let mut lines = tokio::io::BufReader::new(child.stdout.take().unwrap()).lines();
+    let sink = log.clone();
+    tokio::spawn(async move {
+        while let Ok(Some(line)) = lines.next_line().await {
+            let mut log = sink.lock().unwrap();
+            log.push_str(&line);
+            log.push('\n');
+        }
+    });
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
+    loop {
+        if log.lock().unwrap().contains("Slop API listening") {
+            return Ok(Server {
+                _child: child,
+                base: format!("http://127.0.0.1:{port}"),
+                log,
+            });
+        }
+        if child.try_wait().unwrap().is_some() {
+            let mut err = String::new();
+            child
+                .stderr
+                .take()
+                .unwrap()
+                .read_to_string(&mut err)
+                .await
+                .unwrap();
+            tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+            return Err(format!("{}{err}", log.lock().unwrap()));
+        }
+        assert!(
+            std::time::Instant::now() < deadline,
+            "{}",
+            log.lock().unwrap()
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(100)).await;
+    }
+}
+
+async fn repo_checked(db: &PgPool) -> bool {
+    sqlx::query_scalar("select repo_checked_at is not null from apps where slug = 'watched'")
+        .fetch_one(db)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_server_checks_its_settings_and_starts_its_jobs(db: PgPool) {
+    let app = test_app(db).await;
+    let url = own_database_url(&app.db).await;
+    let fake = app.fake_base.clone();
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "watched",
+        "released",
+        "repo_url = 'https://github.com/octo/game'",
+    )
+    .await;
+    let (admin_id, _) = make_admin(&app, "Olive Owner").await;
+    let base = [
+        ("DATABASE_URL", url.as_str()),
+        ("GITHUB_API_BASE", fake.as_str()),
+        ("OSV_API_BASE", fake.as_str()),
+    ];
+    let with = |more: &[(&'static str, &'static str)]| -> Vec<(&str, &str)> {
+        base.iter().copied().chain(more.iter().copied()).collect()
+    };
+    let client = reqwest::Client::new();
+
+    // Simulated People payments never on a public (https) site.
+    let refused = serve_until_listening(&with(&[
+        ("SLOP_PUBLIC_URL", "https://slop.example"),
+        ("SLOP_PAYMENTS", "simulated"),
+    ]))
+    .await
+    .err()
+    .expect("refused");
+    assert!(
+        refused.contains("SLOP_PAYMENTS=simulated is only for development servers"),
+        "{refused}"
+    );
+
+    // The sandbox (this test database is one): simulated payments, and no repository checks,
+    // since its repositories are invented.
+    let sim = serve_until_listening(&with(&[
+        ("SLOP_SIMULATION", "true"),
+        ("SLOP_SECURITY_CONTACT", " https://slop.example/security "),
+        ("SLOP_SOURCE_URL", "https://github.com/slop/slop/"),
+    ]))
+    .await
+    .unwrap();
+    let res = client
+        .get(format!("{}/healthz", sim.base))
+        .send()
+        .await
+        .unwrap();
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let txt = client
+        .get(format!("{}/.well-known/security.txt", sim.base))
+        .send()
+        .await
+        .unwrap()
+        .text()
+        .await
+        .unwrap();
+    assert!(
+        txt.contains("Contact: https://slop.example/security\n"),
+        "{txt}"
+    );
+    let source: Value = client
+        .get(format!("{}/v1/source", sim.base))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(source["url"], "https://github.com/slop/slop");
+    tokio::time::sleep(std::time::Duration::from_secs(3)).await;
+    assert!(
+        !repo_checked(&app.db).await,
+        "no repository checks in the sandbox"
+    );
+    let log = sim.log();
+    assert!(log.contains("simulation sandbox"), "{log}");
+    assert!(!log.contains("People payments are off"), "{log}");
+    drop(sim);
+
+    // A public site: the proxy warning, repository checks, and each setting as read.
+    let live = serve_until_listening(&with(&[
+        ("SLOP_PUBLIC_URL", "https://slop.example"),
+        ("SLOP_RATE_AUTH_PER_MIN", "0"),
+        ("SLOP_APPROVALS_REQUIRED", "2"),
+        ("SLOP_SECURITY_CONTACT", "http://slop.example/security"),
+        ("SLOP_SOURCE_URL", "http://github.com/slop/slop"),
+        (
+            "SLOP_SOURCE_HOSTS",
+            " Git.Example = gitea , codeberg.org=gitea",
+        ),
+    ]))
+    .await
+    .unwrap();
+    let log = live.log();
+    assert!(
+        log.contains("Rate limits can't tell visitors apart"),
+        "{log}"
+    );
+    assert!(log.contains("People payments are off"), "{log}");
+    let deadline = std::time::Instant::now() + std::time::Duration::from_secs(30);
+    while !repo_checked(&app.db).await {
+        assert!(
+            std::time::Instant::now() < deadline,
+            "the repository check ran"
+        );
+        tokio::time::sleep(std::time::Duration::from_millis(200)).await;
+    }
+    let get = |path: &str| client.get(format!("{}{path}", live.base)).send();
+    let res = get("/healthz").await.unwrap();
+    assert_eq!(
+        res.headers()["strict-transport-security"],
+        "max-age=63072000; includeSubDomains; preload"
+    );
+    // Only mailto: and https: contacts and https source links are used.
+    assert_eq!(
+        get("/.well-known/security.txt").await.unwrap().status(),
+        StatusCode::NOT_FOUND
+    );
+    let source: Value = get("/v1/source").await.unwrap().json().await.unwrap();
+    assert!(source["url"].is_null(), "{source}");
+    // A rate limit of 0 is taken as 1.
+    assert_ne!(
+        get("/v1/auth/github/start").await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    assert_eq!(
+        get("/v1/auth/github/start").await.unwrap().status(),
+        StatusCode::TOO_MANY_REQUESTS
+    );
+    let mut https = app.config.clone();
+    https.public_url = "https://slop.example".parse().unwrap();
+    let cookie = session::create(&app.db, &https, admin_id, None)
+        .await
+        .unwrap();
+    let actions: Value = client
+        .get(format!("{}/v1/admin/actions", live.base))
+        .header("cookie", format!("{}={}", cookie.name(), cookie.value()))
+        .send()
+        .await
+        .unwrap()
+        .json()
+        .await
+        .unwrap();
+    assert_eq!(actions["approvals_required"], 2, "{actions}");
+}
+
+#[tokio::test]
+async fn settings_that_cant_be_right_stop_the_server_before_it_starts() {
+    let short_key = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8; 16]);
+    let cases: Vec<(Vec<(&str, &str)>, &str)> = vec![
+        (vec![], "DATABASE_URL is required"),
+        (
+            vec![("SLOP_PUBLIC_URL", "https://slop.example/store")],
+            "SLOP_PUBLIC_URL must be an origin with no path",
+        ),
+        (vec![("SLOP_PUBLIC_URL", "not a url")], "SLOP_PUBLIC_URL"),
+        (
+            vec![("SLOP_SIGNING_KEY", "not-a-key")],
+            "SLOP_SIGNING_KEY must be a base64 32-byte Ed25519 key",
+        ),
+        (
+            vec![("SLOP_FIELD_KEY", "%%%")],
+            "SLOP_FIELD_KEY must be base64",
+        ),
+        (
+            vec![("SLOP_FIELD_KEY", &short_key)],
+            "SLOP_FIELD_KEY must be 32 bytes",
+        ),
+        (
+            vec![("SLOP_REPO_TOKEN_KEY", &short_key)],
+            "SLOP_REPO_TOKEN_KEY must be 32 bytes",
+        ),
+        (
+            vec![("SLOP_APPROVALS_REQUIRED", "two")],
+            "SLOP_APPROVALS_REQUIRED",
+        ),
+        (
+            vec![("SLOP_APPROVALS_REQUIRED", "-1")],
+            "SLOP_APPROVALS_REQUIRED",
+        ),
+        (
+            vec![("SLOP_RATE_WRITE_PER_MIN", "lots")],
+            "SLOP_RATE_WRITE_PER_MIN must be a number",
+        ),
+        (
+            vec![("SLOP_SOURCE_HOSTS", "gitlab.example")],
+            "isn't host=kind",
+        ),
+        (
+            vec![("SLOP_SOURCE_HOSTS", "svn.example=svn")],
+            "must be gitlab, gitea or bitbucket",
+        ),
+        (
+            vec![("SLOP_UPDATER_KEY", "nope")],
+            "SLOP_UPDATER_KEY isn't a valid updater key",
+        ),
+        (vec![("SLOP_BIND", "everywhere")], "SLOP_BIND"),
+    ];
+    // Nothing listens on port 1: a run that got past its settings would fail to connect instead.
+    for (env, expected) in cases {
+        let mut all = vec![];
+        if !env.iter().any(|(k, _)| *k == "DATABASE_URL") && !expected.starts_with("DATABASE_URL") {
+            all.push(("DATABASE_URL", "postgres://slop@127.0.0.1:1/nowhere"));
+        }
+        all.extend(env.iter().copied());
+        let run = cli(&["serve"], &all).await;
+        assert!(!run.ok, "{env:?}");
+        assert!(run.err.contains(expected), "{env:?}: {}", run.err);
+        assert!(
+            !run.err.contains("connecting to Postgres"),
+            "{env:?}: {}",
+            run.err
+        );
+    }
+    // And with nothing wrong, it gets as far as the database.
+    let run = cli(
+        &["serve"],
+        &[
+            ("DATABASE_URL", "postgres://slop@127.0.0.1:1/nowhere"),
+            (
+                "SLOP_FIELD_KEY",
+                &base64::Engine::encode(&base64::engine::general_purpose::STANDARD, [1u8; 32]),
+            ),
+            ("SLOP_APPROVALS_REQUIRED", "3"),
+            ("SLOP_SOURCE_HOSTS", ""),
+        ],
+    )
+    .await;
+    assert!(
+        !run.ok && run.err.contains("connecting to Postgres"),
+        "{}",
+        run.err
+    );
+}
