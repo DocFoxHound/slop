@@ -177,18 +177,20 @@ async fn upload(
             "another computer saved since (generation {newest}); keep both and choose"
         )));
     }
+    // Everything kept counts: every app's newest save and the copy before it (security review,
+    // 2026-10-22: counting only the newest let an account keep twice its allowance).
     let others: i64 = sqlx::query_scalar(
-        "select coalesce(sum(size), 0)::int8 from (
-             select distinct on (app_id) length(body) as size from save_blobs
-             where user_id = $1 and app_id <> $2 order by app_id, generation desc) s",
+        "select coalesce(sum(length(body)), 0)::int8 from save_blobs
+         where user_id = $1 and (app_id <> $2 or generation = $3)",
     )
     .bind(user.id)
     .bind(app)
+    .bind(newest)
     .fetch_one(&mut *tx)
     .await?;
     if others + body.len() as i64 > MAX_PLAYER_BYTES {
         return Err(ApiError::Conflict(
-            "your synced saves are over 200 MB: stop syncing an app you don't play to make room"
+            "your synced saves (with the copy kept before each) are over 200 MB: stop syncing an app you don't play to make room"
                 .into(),
         ));
     }

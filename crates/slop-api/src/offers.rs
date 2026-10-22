@@ -102,6 +102,7 @@ async fn offer(
     Path(slug): Path<String>,
     Json(body): Json<NewOffer>,
 ) -> ApiResult<(StatusCode, Json<Offer>)> {
+    crate::limits::check(&state, user.id, crate::limits::Action::Offer)?;
     let (branch_id, _) = crate::updates::owned(&state, &slug, &user).await?;
     let original: Option<(Uuid, Uuid, String, String, String)> = sqlx::query_as(
         "select p.id, p.maker_id, p.repo_url, b.title, p.slug from apps b join apps p on p.id = b.parent_app_id
@@ -161,7 +162,8 @@ async fn offer(
                 message.chars().take(200).collect::<String>()
             ),
             link: format!("/publish/{original_slug}/manage#offers"),
-            collapse_key: None,
+            // One notice per branch until it's read, however many it sends.
+            collapse_key: Some(format!("offer:{branch_id}")),
         },
     )
     .await?;

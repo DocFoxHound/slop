@@ -19,8 +19,9 @@ use crate::{
     error::{ApiError, ApiResult},
 };
 
-/// Leading zero bits needed: about 260,000 hashes on average.
-pub const DIFFICULTY: i16 = 18;
+/// About a million hashes: a second or two in a browser, and enough that testing many cards
+/// costs real time (raised from 18 in the security review, 2026-10-22).
+pub const DIFFICULTY: i16 = 20;
 const LIFETIME: Duration = Duration::minutes(10);
 
 #[derive(Serialize)]

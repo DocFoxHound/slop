@@ -13,6 +13,13 @@ out=/out
 mkdir -p "$HOME"
 fail() { echo "$1" >"$out/failed"; exit 1; }
 
+# A build folder from before the container (built on the host, another system) is cleared once,
+# so nothing compiled outside the container is mixed in.
+if [ -d target ] && [ ! -e target/.built-in-container ]; then
+  rm -rf target
+fi
+mkdir -p target && touch target/.built-in-container
+
 # Only the release build is stamped with the commit (the tests check a plain build has none).
 commit="${SLOP_COMMIT:-}"
 unset SLOP_COMMIT

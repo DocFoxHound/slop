@@ -845,6 +845,21 @@ async fn report_sandbox(
 ) -> ApiResult<StatusCode> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = visible_app(&state, &slug, Some(&user), policy).await?;
+    // Only players who've started it: a few new accounts shouldn't be able to put a warning on
+    // any store page (security review, 2026-10-22).
+    let played: bool = sqlx::query_scalar(
+        "select exists (select 1 from user_app_usage where user_id = $1 and app_id = $2)",
+    )
+    .bind(user.id)
+    .bind(app_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !played {
+        return Err(ApiError::Conflict(
+            "start it from the Slop app first, then tell Slop if it doesn't work in sandbox mode"
+                .into(),
+        ));
+    }
     sqlx::query(
         "insert into sandbox_reports (app_id, user_id) values ($1, $2) on conflict do nothing",
     )
@@ -903,7 +918,7 @@ struct LicenseQuery {
     url: String,
 }
 
-#[derive(Serialize)]
+#[derive(Serialize, Deserialize)]
 struct DetectedLicense {
     /// SPDX ID, when the repository has a licence GitHub recognises.
     spdx: Option<String>,
@@ -935,6 +950,22 @@ async fn detect_license(
             "licences can only be detected for GitHub repositories so far",
         ));
     };
+    // Each repository is asked about at most once a day, and each account only so often: the
+    // lookups share Slop's GitHub allowance with the release watcher (security review,
+    // 2026-10-22).
+    let key = repo.to_ascii_lowercase();
+    if let Some((at, found)) = state
+        .license_cache
+        .lock()
+        .ok()
+        .and_then(|c| c.get(&key).cloned())
+        && at.elapsed() < std::time::Duration::from_secs(86_400)
+    {
+        return Ok(Json(
+            serde_json::from_value(found).map_err(|e| ApiError::Internal(e.into()))?,
+        ));
+    }
+    crate::limits::check(&state, _user.id, crate::limits::Action::Lookup)?;
 
     #[derive(Deserialize)]
     struct GithubLicense {
@@ -951,8 +982,22 @@ async fn detect_license(
         .github_api_base
         .join(&format!("repos/{repo}/license"))
         .map_err(|e| ApiError::Internal(e.into()))?;
-    let res = crate::releases::github_get(&state, url)
+    // With Slop's credentials (its GitHub App, which can read private repositories) only for
+    // the repository's owner; anyone else asks as nobody, so this can't reveal a private
+    // repository Slop can read (security review, 2026-10-22).
+    let owner = crate::repo_owner::assess(&state, _user.id, &repo_url)
         .await
+        .is_ok_and(|a| a.ok);
+    let request = if owner {
+        crate::releases::github_get(&state, url).await
+    } else {
+        state
+            .http
+            .get(url)
+            .header("accept", "application/vnd.github+json")
+            .header("user-agent", "slop-api")
+    };
+    let res = request
         .send()
         .await
         .map_err(|e| ApiError::Internal(e.into()))?;
@@ -980,7 +1025,18 @@ async fn detect_license(
     let note = spdx.is_none().then(|| {
         "there's a licence file, but GitHub couldn't tell which licence it is".to_string()
     });
-    Ok(Json(DetectedLicense { spdx, name, note }))
+    let found = DetectedLicense { spdx, name, note };
+    // Only what anyone could see is cached for anyone.
+    if !owner
+        && let (Ok(mut cache), Ok(value)) =
+            (state.license_cache.lock(), serde_json::to_value(&found))
+    {
+        if cache.len() > 10_000 {
+            cache.clear();
+        }
+        cache.insert(key, (std::time::Instant::now(), value));
+    }
+    Ok(Json(found))
 }
 
 // ---------------------------------------------------------------------------------------------
