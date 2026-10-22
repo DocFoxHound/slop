@@ -77,8 +77,12 @@ pub fn signature_ok(answer: &str, organisation: &str) -> bool {
 #[cfg(windows)]
 pub async fn install(http: &reqwest::Client, r: &Runtime, staging: &Path) -> Result<()> {
     use tokio::io::AsyncWriteExt;
+    // A fresh folder of its own: the installer runs elevated, and Windows loads DLLs from the
+    // installer's folder, so nothing else may be beside it.
+    let dir = staging.join(format!("runtime-{}", crate::random_token()));
     std::fs::create_dir_all(staging)?;
-    let file = staging.join(format!("{}-{}.exe", r.id, crate::random_token()));
+    std::fs::create_dir(&dir)?;
+    let file = dir.join(format!("{}.exe", r.id));
     let mut res = http
         .get(r.url)
         .send()
@@ -100,7 +104,7 @@ pub async fn install(http: &reqwest::Client, r: &Runtime, staging: &Path) -> Res
     {
         size += chunk.len() as u64;
         if size > MAX_BYTES {
-            let _ = std::fs::remove_file(&file);
+            let _ = std::fs::remove_dir_all(&dir);
             return Err(Error::Install(format!(
                 "{} is bigger than expected",
                 r.name
@@ -112,7 +116,7 @@ pub async fn install(http: &reqwest::Client, r: &Runtime, staging: &Path) -> Res
     drop(out);
     let ok = signed_by(&file, r.signer).unwrap_or(false);
     if !ok {
-        let _ = std::fs::remove_file(&file);
+        let _ = std::fs::remove_dir_all(&dir);
         return Err(Error::Verify(format!(
             "the {} download isn't signed by {}, so Slop didn't run it",
             r.name, r.signer
@@ -122,7 +126,7 @@ pub async fn install(http: &reqwest::Client, r: &Runtime, staging: &Path) -> Res
         .args(r.args)
         .status()
         .await?;
-    let _ = std::fs::remove_file(&file);
+    let _ = std::fs::remove_dir_all(&dir);
     // 3010 and 1641: installed, restart needed; 1638: a newer version is already there.
     match status.code() {
         Some(0 | 3010 | 1641 | 1638) => Ok(()),

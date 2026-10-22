@@ -41,6 +41,12 @@ pub struct Provenance {
     pub runner: Option<String>,
     /// The CI run, where the build log can be inspected.
     pub run_url: Option<String>,
+    /// GitHub's numeric repository and owner IDs (certificate extensions .15 and .17), which,
+    /// unlike the name, can't be taken over by another repository.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_repo_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub source_owner_id: Option<String>,
 }
 
 /// What an attestation must match.
@@ -300,6 +306,8 @@ impl ProvenanceVerifier {
             built_by_slop_build,
             runner: claims.runner_environment.clone(),
             run_url: claims.run_invocation_uri.clone(),
+            source_repo_id: claims.source_repository_identifier.clone(),
+            source_owner_id: claims.source_repository_owner_identifier.clone(),
         })
     }
 }

@@ -29,7 +29,14 @@ use crate::{
     tokens::hash_token,
 };
 
-pub const COOKIE: &str = "slop_combine";
+/// The pending combination's cookie: `__Host-` on https (see auth/mod.rs `oauth_cookie`).
+pub fn cookie(config: &crate::config::Config) -> &'static str {
+    if config.secure_cookies() {
+        "__Host-slop_combine"
+    } else {
+        "slop_combine"
+    }
+}
 pub const CONFIRM_WITHIN: Duration = Duration::minutes(15);
 
 pub fn routes() -> Router<AppState> {
@@ -57,7 +64,7 @@ async fn pending(
     jar: &CookieJar,
     user: &CurrentUser,
 ) -> ApiResult<(Uuid, String, String)> {
-    let token = jar.get(COOKIE).ok_or(ApiError::NotFound)?;
+    let token = jar.get(cookie(&state.config)).ok_or(ApiError::NotFound)?;
     let row: Option<(Uuid, Uuid, Uuid, String, String)> = sqlx::query_as(
         "select into_user_id, from_user_id, session_id, provider, provider_subject from pending_merges
          where token_hash = $1 and expires_at > now()",
@@ -148,7 +155,7 @@ async fn cancel(
     State(state): State<AppState>,
     jar: CookieJar,
 ) -> ApiResult<(StatusCode, CookieJar)> {
-    if let Some(token) = jar.get(COOKIE) {
+    if let Some(token) = jar.get(cookie(&state.config)) {
         sqlx::query("delete from pending_merges where token_hash = $1")
             .bind(hash_token(token.value()))
             .execute(&state.db)
@@ -156,7 +163,7 @@ async fn cancel(
     }
     Ok((
         StatusCode::NO_CONTENT,
-        jar.remove(removal_cookie(&state.config, COOKIE)),
+        jar.remove(removal_cookie(&state.config, cookie(&state.config))),
     ))
 }
 
@@ -166,9 +173,23 @@ async fn confirm(
     user: CurrentUser,
 ) -> ApiResult<(StatusCode, CookieJar)> {
     let (from, _, _) = pending(&state, &jar, &user).await?;
+    crate::passkeys::require_passkey_if_any(&state.db, &user).await?;
     let mut tx = state.db.begin().await?;
     if let Some(why) = blocked(&mut tx, user.id, from).await? {
         return Err(ApiError::Conflict(why));
+    }
+    // An account with passkeys can only be combined into another from itself, signed in with
+    // one: otherwise whoever took over one of its sign-ins could move its apps and payouts into
+    // an account of their own (security review, 2026-10-22).
+    let from_has_passkeys: bool =
+        sqlx::query_scalar("select exists (select 1 from passkeys where user_id = $1)")
+            .bind(from)
+            .fetch_one(&mut *tx)
+            .await?;
+    if from_has_passkeys {
+        return Err(ApiError::Conflict(
+            "the other account has passkeys: sign in to it with one, and combine this account into it from there".into(),
+        ));
     }
     combine(&mut tx, user.id, from)
         .await
@@ -188,7 +209,7 @@ async fn confirm(
     tx.commit().await?;
     Ok((
         StatusCode::NO_CONTENT,
-        jar.remove(removal_cookie(&state.config, COOKIE)),
+        jar.remove(removal_cookie(&state.config, cookie(&state.config))),
     ))
 }
 
@@ -288,9 +309,13 @@ pub async fn combine(tx: &mut PgConnection, into: Uuid, from: Uuid) -> anyhow::R
     .bind(from)
     .execute(&mut *tx)
     .await?;
-    // The earlier 18+ confirmation counts for the combined account.
+    // The earlier 18+ confirmation counts for the combined account. So does the earlier passkey
+    // deadline: combining doesn't start a new grace period for publishing without one.
     sqlx::query(
-        "update users set adult_confirmed_at = coalesce(adult_confirmed_at, (select adult_confirmed_at from users where id = $2))
+        "update users set adult_confirmed_at = coalesce(adult_confirmed_at, (select adult_confirmed_at from users where id = $2)),
+                passkey_due_at = case
+                    when passkey_due_at is null then (select passkey_due_at from users where id = $2)
+                    else least(passkey_due_at, coalesce((select passkey_due_at from users where id = $2), passkey_due_at)) end
          where id = $1",
     )
     .bind(into)

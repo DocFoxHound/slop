@@ -84,6 +84,8 @@ export interface InstalledMod {
 export interface SandboxStatus {
   available: boolean;
   reason: string | null;
+  /** What sandbox mode can't protect against on this desktop (X11), to show the player. */
+  limits?: string | null;
   settings: { all: boolean; apps: Record<string, { on: boolean; block_network: boolean }> };
 }
 

@@ -161,6 +161,8 @@ async fn create_token(
 ) -> ApiResult<(StatusCode, Json<CreatedToken>)> {
     admin.signed_in()?;
     admin.need(crate::staff::Perm::Security)?;
+    // A token outlives the session that made it: making one takes a fresh sign-in or passkey.
+    admin.confirm_recent(&state.db).await?;
     let name = body.name.trim();
     if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
         return Err(ApiError::invalid(
@@ -171,9 +173,14 @@ async fn create_token(
     if !matches!(body.scope.as_str(), "read" | "review" | "moderate") {
         return Err(ApiError::invalid("scope", "read, review or moderate"));
     }
+    // The most powerful tokens expire sooner.
+    let max_days = if body.scope == "moderate" { 90 } else { 365 };
     let days = body.days.unwrap_or(90);
-    if !(1..=365).contains(&days) {
-        return Err(ApiError::invalid("days", "between 1 and 365 days"));
+    if !(1..=max_days).contains(&days) {
+        return Err(ApiError::invalid(
+            "days",
+            format!("between 1 and {max_days} days"),
+        ));
     }
     let token = format!("{TOKEN_PREFIX}{}", new_token());
     let id = Uuid::now_v7();

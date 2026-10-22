@@ -102,7 +102,7 @@ enum DesktopCommand {
 
 #[derive(Subcommand)]
 enum AdminCommand {
-    /// Make an account an admin. WHO is its ID, email or exact display name.
+    /// Make an account an admin (owner role). WHO is its account ID (from its profile link).
     Grant {
         who: String,
         #[arg(long)]

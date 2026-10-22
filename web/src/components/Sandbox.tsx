@@ -167,10 +167,11 @@ export function SandboxFailedNotice({
     <div className="notice" role="alert">
       <p>
         <b>{title}</b> closed right after starting in sandbox mode. Some apps don't work in it, often because they save
-        outside their save folder.
+        outside their save folder. Outside the sandbox it can reach your files like any program, so only run it
+        normally if you trust it.
       </p>
       <div className="actions">
-        <button className="btn small slime" onClick={onRunNormally}>
+        <button className="btn small" onClick={onRunNormally}>
           Run normally this time
         </button>
         <button className="btn small" onClick={onTurnOff}>

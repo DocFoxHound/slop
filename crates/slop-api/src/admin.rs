@@ -671,13 +671,25 @@ pub async fn set_stage(
 /// Gives or takes away admin rights. `who` is the account's ID, email or exact display name.
 pub async fn set_admin(db: &PgPool, who: &str, admin: bool, actor: &str) -> anyhow::Result<String> {
     check_reviewer(actor)?;
-    let matches: Vec<(Uuid, String)> = sqlx::query_as(
-        "select id, display_name from users
-         where id::text = $1 or lower(email) = lower($1) or display_name = $1",
-    )
-    .bind(who.trim())
-    .fetch_all(db)
-    .await?;
+    // By account ID only when granting: display names are chosen by anyone, so someone could
+    // sign up under the name an operator is about to grant (security review, 2026-10-22).
+    let matches: Vec<(Uuid, String)> = if admin {
+        let id: Uuid = who.trim().parse().map_err(|_| {
+            anyhow::anyhow!("give the account's ID (from its profile link) to grant admin rights")
+        })?;
+        sqlx::query_as("select id, display_name from users where id = $1")
+            .bind(id)
+            .fetch_all(db)
+            .await?
+    } else {
+        sqlx::query_as(
+            "select id, display_name from users
+             where id::text = $1 or lower(email) = lower($1) or display_name = $1",
+        )
+        .bind(who.trim())
+        .fetch_all(db)
+        .await?
+    };
     let (id, name) = match matches.as_slice() {
         [one] => one.clone(),
         [] => bail!("no account matches {who:?}; sign in on the website first"),
