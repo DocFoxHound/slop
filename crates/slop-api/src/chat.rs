@@ -876,6 +876,19 @@ async fn start(
                     ));
                 }
             }
+            // Not into a chat with each other when one blocked the other, as when adding people.
+            let blocked: bool = sqlx::query_scalar(
+                "select exists (select 1 from user_blocks where user_id = any($1) and blocked_id = any($1))",
+            )
+            .bind(&others)
+            .fetch_one(&mut *tx)
+            .await?;
+            if blocked {
+                return Err(ApiError::invalid(
+                    "users",
+                    "two of the people you're adding have blocked each other",
+                ));
+            }
             sqlx::query(
                 "insert into chat_conversations (id, kind, created_by) values ($1, 'group', $2)",
             )
@@ -994,7 +1007,7 @@ async fn add_members(
     if count + b.users.len() as i64 > MAX_GROUP {
         return Err(ApiError::invalid("users", "50 people at most"));
     }
-    let current = participants(&mut tx, id).await?;
+    let mut current = participants(&mut tx, id).await?;
     for u in &b.users {
         let other = friends::parse_user(u)?;
         if !friends::may_message(&mut tx, user.id, other).await? {
@@ -1013,6 +1026,8 @@ async fn add_members(
             }
         }
         add_member(&mut tx, id, other, "member").await?;
+        // Those added together count too.
+        current.push(other);
     }
     let c = load_conversation(&mut tx, user.id, id).await?;
     let everyone = participants(&mut tx, id).await?;
