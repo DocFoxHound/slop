@@ -2084,3 +2084,867 @@ fn the_vapid_key_command_prints_a_key_the_server_reads() {
     assert_eq!(slop_api::push::public_key(&key), public);
     assert!(String::from_utf8_lossy(&out.stderr).contains("Keep SLOP_VAPID_PRIVATE_KEY secret"));
 }
+
+// ---------------------------------------------------------------------------------------------
+// The front page: Featured and staff shelves (featured.rs, shelves.rs)
+
+/// A staff member with only this role (instead of the owner role make_admin gives).
+async fn staff_with(app: &TestApp, name: &str, role: &str) -> (Uuid, String) {
+    let (id, cookie) = make_admin(app, name).await;
+    sqlx::query("delete from staff_roles where user_id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("insert into staff_roles (user_id, role, granted_by) values ($1, $2, 'test')")
+        .bind(id)
+        .bind(role)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    (id, cookie)
+}
+
+async fn audits(app: &TestApp, action: &str) -> Vec<Value> {
+    sqlx::query_scalar("select detail from audit_log where action = $1 order by id")
+        .bind(action)
+        .fetch_all(&app.db)
+        .await
+        .unwrap()
+}
+
+fn slugs_of(v: &Value) -> Vec<String> {
+    v.as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["slug"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// Setting the carousel: Review permission, at most 8 public apps (no community branches),
+/// duplicates once (and logged once), an empty list clears it; staff see every slide with
+/// whether it's in the store, visitors only what's in the store for them, 8 at most.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_set_the_featured_carousel_within_its_rules(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    for i in 0..10 {
+        listed_with(&app, maker_id, &format!("app-{i}"), "released", "").await;
+    }
+    listed_with(&app, maker_id, "grown-up", "released", "min_age = 18").await;
+    listed_with(
+        &app,
+        maker_id,
+        "secret",
+        "released",
+        "visibility = 'private'",
+    )
+    .await;
+    listed_with(&app, maker_id, "branch", "released", "").await;
+    sqlx::query("update apps set parent_app_id = (select id from apps where slug = 'app-0'), branch_kind = 'fix' where slug = 'branch'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, support) = staff_with(&app, "Sue Support", "support").await;
+    let (_, reviewer) = staff_with(&app, "Rae Reviewer", "reviewer").await;
+    let set = |cookie: &str, apps: Value| {
+        req(Method::PUT, "/v1/admin/featured")
+            .cookie(cookie)
+            .json(json!({ "apps": apps }))
+    };
+
+    // Who may look and who may change it.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/featured").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/featured"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/featured").cookie(&support))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let one = json!([{ "slug": "app-1" }]);
+    assert_eq!(
+        app.send(set(&support, one.clone())).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(set(&maker, one)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(audits(&app, "featured.set").await.is_empty());
+
+    // Too many, or apps that can't be featured.
+    let nine: Vec<Value> = (0..9)
+        .map(|i| json!({ "slug": format!("app-{i}") }))
+        .collect();
+    assert_eq!(
+        app.send(set(&reviewer, json!(nine))).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    for bad in ["no-such-app", "secret", "branch"] {
+        let res = app
+            .send(set(
+                &reviewer,
+                json!([{ "slug": "app-1" }, { "slug": bad }]),
+            ))
+            .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+        let body = body_json(res).await;
+        assert!(
+            body["error"]["message"].as_str().unwrap().contains(bad),
+            "{body}"
+        );
+    }
+    assert_eq!(
+        count(&app.db, "select count(*) from featured_apps").await,
+        0,
+        "all or nothing"
+    );
+
+    // A duplicate shows once and is logged once; staff see the delisted one as not listed.
+    let res = app
+        .send(set(
+            &reviewer,
+            json!([
+                { "slug": "app-2", "blurb": "  Two  " },
+                { "slug": "grown-up" },
+                { "slug": "app-2", "blurb": "again" },
+                { "slug": "app-3" },
+                { "slug": "app-4" }
+            ]),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let staff_view = body_json(res).await;
+    assert_eq!(
+        slugs_of(&staff_view),
+        ["app-2", "grown-up", "app-3", "app-4"]
+    );
+    assert_eq!(staff_view[0]["blurb"], "Two");
+    assert_eq!(
+        audits(&app, "featured.set").await,
+        [json!({ "apps": ["app-2", "grown-up", "app-3", "app-4"] })]
+    );
+    sqlx::query("update apps set status = 'delisted' where slug = 'app-4'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/admin/featured").cookie(&support))
+            .await,
+    )
+    .await;
+    let flags: Vec<(String, bool)> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["slug"].as_str().unwrap().to_string(),
+                s["listed"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(
+        flags,
+        [
+            ("app-2".to_string(), true),
+            ("grown-up".into(), true),
+            ("app-3".into(), true),
+            ("app-4".into(), false)
+        ]
+    );
+
+    // Visitors: 18+ only in an adult's view, delisted never.
+    let shown = |country: &str| {
+        let app = &app;
+        let country = country.to_string();
+        async move {
+            slugs_of(
+                &body_json(
+                    app.send(req(Method::GET, "/v1/featured").header("x-country", country))
+                        .await,
+                )
+                .await,
+            )
+        }
+    };
+    assert_eq!(shown("US").await, ["app-2", "grown-up", "app-3"]);
+    assert_eq!(shown("GB").await, ["app-2", "app-3"]);
+
+    // At most 8 slides show, even if more were stored.
+    sqlx::query(
+        "insert into featured_apps (app_id, position, blurb)
+         select id, 10 + row_number() over (order by slug), '' from apps
+         where slug like 'app-%' and slug not in ('app-2', 'app-3', 'app-4')",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(shown("US").await.len(), 8);
+
+    // An empty list clears it.
+    let res = app.send(set(&owner, json!([]))).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await, json!([]));
+    assert_eq!(shown("US").await, Vec::<String>::new());
+    assert_eq!(
+        audits(&app, "featured.set").await.last().unwrap(),
+        &json!({ "apps": [] })
+    );
+}
+
+/// Creating shelves: Review permission, a unique address, at most 20 shelves of at most 24 public
+/// apps, one-line titles; each one logged.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_shelves_are_checked_when_made(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    for i in 0..25 {
+        listed_with(&app, maker_id, &format!("app-{i}"), "released", "").await;
+    }
+    listed_with(
+        &app,
+        maker_id,
+        "secret",
+        "released",
+        "visibility = 'private'",
+    )
+    .await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, support) = staff_with(&app, "Sue Support", "support").await;
+    let create = |cookie: &str, body: Value| {
+        req(Method::POST, "/v1/admin/shelves")
+            .cookie(cookie)
+            .json(body)
+    };
+    let shelf = |slug: &str| json!({ "slug": slug, "title": "Cozy games", "blurb": "Warm.", "apps": ["app-1", "app-2"] });
+
+    assert_eq!(
+        app.send(create(&maker, shelf("cozy"))).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(create(&support, shelf("cozy"))).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/shelves").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app.send(create(&owner, shelf("cozy"))).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let listed = body_json(res).await;
+    assert_eq!(listed["shelves"][0]["slug"], "cozy");
+    assert_eq!(
+        audits(&app, "shelf.created").await,
+        [json!({ "title": "Cozy games", "on_front": true, "apps": ["app-1", "app-2"] })]
+    );
+
+    let mut bad = vec![
+        ("taken address", shelf("cozy"), "slug"),
+        ("no address", json!({ "title": "x", "apps": [] }), "slug"),
+        (
+            "newline in the title",
+            json!({ "slug": "nl-1", "title": "Two\nlines", "apps": [] }),
+            "title",
+        ),
+        (
+            "newline in the blurb",
+            json!({ "slug": "nl-2", "title": "One", "blurb": "a\nb", "apps": [] }),
+            "title",
+        ),
+        (
+            "unknown app",
+            json!({ "slug": "u-1", "title": "One", "apps": ["app-1", "nope"] }),
+            "apps",
+        ),
+        (
+            "private app",
+            json!({ "slug": "u-2", "title": "One", "apps": ["secret"] }),
+            "apps",
+        ),
+        (
+            "long title",
+            json!({ "slug": "u-3", "title": "t".repeat(61), "apps": [] }),
+            "title",
+        ),
+    ];
+    let many: Vec<String> = (0..25).map(|i| format!("app-{i}")).collect();
+    bad.push((
+        "25 apps",
+        json!({ "slug": "big", "title": "Big", "apps": many }),
+        "apps",
+    ));
+    for (why, body, field) in bad {
+        let res = app.send(create(&owner, body)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{why}");
+        assert_eq!(body_json(res).await["error"]["field"], field, "{why}");
+    }
+    assert_eq!(
+        count(&app.db, "select count(*) from store_shelves").await,
+        1,
+        "nothing half-made"
+    );
+    assert_eq!(audits(&app, "shelf.created").await.len(), 1);
+
+    // A duplicated app is on the shelf (and in the log) once.
+    let res = app
+        .send(create(
+            &owner,
+            json!({ "slug": "dupes", "title": "Dupes", "apps": ["app-3", "app-3", "app-4"] }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let page = body_json(app.send(req(Method::GET, "/v1/shelves/staff/dupes")).await).await;
+    assert_eq!(slugs_of(&page["apps"]), ["app-3", "app-4"]);
+    assert_eq!(
+        audits(&app, "shelf.created").await[1]["apps"],
+        json!(["app-3", "app-4"])
+    );
+
+    // Twenty at most.
+    for i in 2..20 {
+        let res = app.send(create(&owner, shelf(&format!("shelf-{i}")))).await;
+        assert_eq!(res.status(), StatusCode::OK, "{i}");
+    }
+    let res = app.send(create(&owner, shelf("one-too-many"))).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("at most 20")
+    );
+    assert_eq!(
+        count(&app.db, "select count(*) from store_shelves").await,
+        20
+    );
+}
+
+/// Two staff making the 20th shelf at the same moment don't make 21.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn racing_shelf_creations_stay_within_the_limit(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    for i in 0..19 {
+        sqlx::query(
+            "insert into store_shelves (id, slug, title, position) values ($1, $2, 'x', $3)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(format!("shelf-{i}"))
+        .bind(i)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    let create = |slug: &str| {
+        let r = req(Method::POST, "/v1/admin/shelves")
+            .cookie(&owner)
+            .json(json!({ "slug": slug, "title": "Racing", "apps": [] }));
+        let app = &app;
+        async move { app.send(r).await }
+    };
+    let racers: Vec<_> = (0..8)
+        .map(|i| create(&format!("race-{i}")))
+        .collect::<Vec<_>>();
+    let ok = futures_util::future::join_all(racers)
+        .await
+        .iter()
+        .filter(|r| r.status() == StatusCode::OK)
+        .count();
+    assert_eq!(ok, 1);
+    assert_eq!(
+        count(&app.db, "select count(*) from store_shelves").await,
+        20
+    );
+}
+
+/// Editing, removing, ordering and hiding: Review permission, unknown shelves 404, the address
+/// can't change, the order names every shelf once; each change logged.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_edit_order_remove_and_hide_shelves(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    for slug in ["tea-shop", "cozy-farm", "dark-dungeon"] {
+        listed_with(&app, maker_id, slug, "released", "").await;
+    }
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, support) = staff_with(&app, "Sue Support", "support").await;
+    for (slug, apps) in [
+        ("cozy", json!(["tea-shop"])),
+        ("dark", json!(["dark-dungeon"])),
+        ("farm", json!(["cozy-farm"])),
+    ] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/admin/shelves")
+                    .cookie(&owner)
+                    .json(json!({ "slug": slug, "title": slug, "apps": apps })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+    }
+    let front = || async {
+        slugs_of(&body_json(app.send(req(Method::GET, "/v1/shelves")).await).await["shelves"])
+    };
+    assert_eq!(front().await, ["cozy", "dark", "farm"]);
+
+    // Edit.
+    let edit = |cookie: &str, slug: &str, body: Value| {
+        req(Method::PUT, format!("/v1/admin/shelves/{slug}"))
+            .cookie(cookie)
+            .json(body)
+    };
+    let body = json!({ "title": "Cozier", "apps": ["cozy-farm", "tea-shop"] });
+    assert_eq!(
+        app.send(edit(&maker, "cozy", body.clone())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(edit(&support, "cozy", body.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(edit(&owner, "nowhere", body.clone()))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(edit(
+            &owner,
+            "cozy",
+            json!({ "slug": "cozier", "title": "Cozier", "apps": [] }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(body_json(res).await["error"]["field"], "slug");
+    let res = app
+        .send(edit(
+            &owner,
+            "cozy",
+            json!({ "slug": "cozy", "title": "Cozier", "apps": ["cozy-farm", "tea-shop"] }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let page = body_json(app.send(req(Method::GET, "/v1/shelves/staff/cozy")).await).await;
+    assert_eq!(page["title"], "Cozier");
+    assert_eq!(slugs_of(&page["apps"]), ["cozy-farm", "tea-shop"]);
+    assert_eq!(
+        audits(&app, "shelf.changed").await,
+        [json!({ "title": "Cozier", "on_front": true, "apps": ["cozy-farm", "tea-shop"] })]
+    );
+
+    // Order: every shelf, once each.
+    let order = |cookie: &str, slugs: Value| {
+        req(Method::PUT, "/v1/admin/shelves/order")
+            .cookie(cookie)
+            .json(json!({ "slugs": slugs }))
+    };
+    assert_eq!(
+        app.send(order(&maker, json!(["farm", "dark", "cozy"])))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(order(&support, json!(["farm", "dark", "cozy"])))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    for bad in [
+        json!(["farm"]),
+        json!(["farm", "dark", "cozy", "nowhere"]),
+        json!(["farm", "farm", "dark"]),
+        json!(["farm", "farm", "dark", "cozy"]),
+    ] {
+        let res = app.send(order(&owner, bad.clone())).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    assert_eq!(
+        front().await,
+        ["cozy", "dark", "farm"],
+        "a refused order changes nothing"
+    );
+    assert!(audits(&app, "shelf.reordered").await.is_empty());
+    let res = app
+        .send(order(&owner, json!(["farm", "dark", "cozy"])))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        slugs_of(&body_json(res).await["shelves"]),
+        ["farm", "dark", "cozy"]
+    );
+    assert_eq!(front().await, ["farm", "dark", "cozy"]);
+    assert_eq!(
+        audits(&app, "shelf.reordered").await,
+        [json!({ "order": ["farm", "dark", "cozy"] })]
+    );
+
+    // Remove.
+    let remove = |cookie: &str, slug: &str| {
+        req(Method::DELETE, format!("/v1/admin/shelves/{slug}")).cookie(cookie)
+    };
+    assert_eq!(
+        app.send(remove(&maker, "dark")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(remove(&support, "dark")).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(remove(&owner, "nowhere")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert!(audits(&app, "shelf.removed").await.is_empty());
+    assert_eq!(
+        app.send(remove(&owner, "dark")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(front().await, ["farm", "cozy"]);
+    let removed: Vec<String> =
+        sqlx::query_scalar("select subject from audit_log where action = 'shelf.removed'")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(removed, ["shelf dark"]);
+
+    // Hide and show an automatic shelf.
+    let hide = |cookie: &str, key: &str, hidden: bool| {
+        req(Method::POST, format!("/v1/admin/front-shelves/{key}"))
+            .cookie(cookie)
+            .json(json!({ "hidden": hidden }))
+    };
+    assert_eq!(
+        app.send(hide(&maker, "popular", true)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(hide(&support, "popular", true)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(hide(&owner, "not_a_shelf", true)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app.send(hide(&owner, "popular", true)).await;
+    let listed = body_json(res).await;
+    let popular = listed["built_in"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|b| b["key"] == "popular")
+        .unwrap();
+    assert_eq!(popular["hidden"], true);
+    assert_eq!(listed["built_in"].as_array().unwrap().len(), 9);
+    let hidden = || async {
+        body_json(app.send(req(Method::GET, "/v1/shelves")).await).await["hidden"].clone()
+    };
+    assert_eq!(hidden().await, json!(["popular"]));
+    app.send(hide(&owner, "popular", true)).await;
+    assert_eq!(
+        hidden().await,
+        json!(["popular"]),
+        "hiding twice is the same"
+    );
+    assert_eq!(
+        app.send(hide(&owner, "popular", false)).await.status(),
+        StatusCode::OK
+    );
+    assert_eq!(hidden().await, json!([]));
+    let actions: Vec<String> = sqlx::query_scalar(
+        "select action from audit_log where subject = 'shelf popular' order by id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        actions,
+        [
+            "shelf.built_in_hidden",
+            "shelf.built_in_hidden",
+            "shelf.built_in_shown"
+        ]
+    );
+
+    // The staff list: every shelf with its apps and whether each is in the store.
+    sqlx::query("update apps set status = 'delisted' where slug = 'tea-shop'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let listed = body_json(
+        app.send(req(Method::GET, "/v1/admin/shelves").cookie(&support))
+            .await,
+    )
+    .await;
+    assert_eq!(slugs_of(&listed["shelves"]), ["farm", "cozy"]);
+    let cozy = &listed["shelves"][1];
+    assert_eq!(cozy["on_front"], true);
+    assert_eq!(
+        cozy["apps"],
+        json!([
+            { "slug": "cozy-farm", "title": "cozy-farm", "listed": true },
+            { "slug": "tea-shop", "title": "tea-shop", "listed": false }
+        ])
+    );
+}
+
+/// A shelf's own page shows only apps in the store for the viewer; an unknown shelf is 404.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_shelf_page_shows_only_what_the_viewer_may_see(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "for-all", "released", "").await;
+    listed_with(&app, maker_id, "grown-up", "released", "min_age = 18").await;
+    listed_with(&app, maker_id, "gone", "released", "").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let res = app
+        .send(req(Method::POST, "/v1/admin/shelves").cookie(&owner).json(json!({
+            "slug": "mixed", "title": "Mixed", "on_front": false, "apps": ["grown-up", "gone", "for-all"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    sqlx::query("update apps set status = 'delisted' where slug = 'gone'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let page = |country: &str| {
+        req(Method::GET, "/v1/shelves/staff/mixed").header("x-country", country.to_string())
+    };
+    let adult = body_json(app.send(page("US")).await).await;
+    assert_eq!(slugs_of(&adult["apps"]), ["grown-up", "for-all"]);
+    assert_eq!(adult["title"], "Mixed");
+    let young = body_json(app.send(page("GB")).await).await;
+    assert_eq!(slugs_of(&young["apps"]), ["for-all"]);
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/shelves/staff/nowhere"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+/// Staff agents change the front page through MCP with their token's rights: a read token only
+/// looks; a review token sets Featured and edits shelves; errors come back as tool errors.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_agents_edit_the_front_page_with_their_tokens_rights(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = app.user("Maker", "US").await;
+    for slug in ["tea-shop", "cozy-farm"] {
+        listed_with(&app, maker_id, slug, "released", "").await;
+    }
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let token =
+        |scope: &str| {
+            let app = &app;
+            let owner = owner.clone();
+            let scope = scope.to_string();
+            async move {
+                let res = app
+                    .send(req(Method::POST, "/v1/admin/tokens").cookie(&owner).json(
+                        json!({ "name": format!("{scope} agent"), "scope": scope, "days": 7 }),
+                    ))
+                    .await;
+                assert_eq!(res.status(), StatusCode::CREATED);
+                format!("Bearer {}", body_json(res).await["token"].as_str().unwrap())
+            }
+        };
+    let read = token("read").await;
+    let review = token("review").await;
+    let call = |bearer: &str, name: &str, args: Value| {
+        let app = &app;
+        let bearer = bearer.to_string();
+        let name = name.to_string();
+        async move {
+            let res = app
+                .send(
+                    req(Method::POST, "/v1/admin/mcp")
+                        .header("authorization", bearer)
+                        .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": name, "arguments": args } })),
+                )
+                .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let out = body_json(res).await;
+            (
+                out["result"]["isError"] == false,
+                out["result"]["content"][0]["text"]
+                    .as_str()
+                    .unwrap_or_default()
+                    .to_string(),
+            )
+        }
+    };
+
+    // A read token looks but changes nothing.
+    assert!(call(&read, "featured_apps", json!({})).await.0);
+    assert!(call(&read, "store_shelves", json!({})).await.0);
+    for (name, args) in [
+        (
+            "set_featured_apps",
+            json!({ "apps": [{ "slug": "tea-shop" }] }),
+        ),
+        (
+            "create_shelf",
+            json!({ "slug": "cozy", "title": "Cozy", "apps": ["tea-shop"] }),
+        ),
+        (
+            "hide_front_shelf",
+            json!({ "key": "popular", "hidden": true }),
+        ),
+        ("order_shelves", json!({ "slugs": [] })),
+    ] {
+        let (ok, _) = call(&read, name, args).await;
+        assert!(!ok, "{name}");
+    }
+    assert_eq!(
+        count(&app.db, "select count(*) from featured_apps").await,
+        0
+    );
+    assert_eq!(
+        count(&app.db, "select count(*) from store_shelves").await,
+        0
+    );
+    assert_eq!(
+        count(&app.db, "select count(*) from hidden_front_shelves").await,
+        0
+    );
+
+    // A review token does the work, logged under the agent's name.
+    let (ok, text) = call(
+        &review,
+        "set_featured_apps",
+        json!({ "apps": [{ "slug": "cozy-farm", "blurb": "Calm" }] }),
+    )
+    .await;
+    assert!(ok, "{text}");
+    assert!(
+        call(&review, "featured_apps", json!({}))
+            .await
+            .1
+            .contains("cozy-farm")
+    );
+    assert!(
+        call(
+            &review,
+            "create_shelf",
+            json!({ "slug": "cozy", "title": "Cozy", "apps": ["tea-shop"] })
+        )
+        .await
+        .0
+    );
+    assert!(
+        call(
+            &review,
+            "create_shelf",
+            json!({ "slug": "farm", "title": "Farm", "apps": ["cozy-farm"] })
+        )
+        .await
+        .0
+    );
+    assert!(
+        call(
+            &review,
+            "update_shelf",
+            json!({ "slug": "cozy", "title": "Cozier", "apps": ["tea-shop", "cozy-farm"] })
+        )
+        .await
+        .0
+    );
+    assert!(
+        call(
+            &review,
+            "order_shelves",
+            json!({ "slugs": ["farm", "cozy"] })
+        )
+        .await
+        .0
+    );
+    assert!(
+        call(
+            &review,
+            "hide_front_shelf",
+            json!({ "key": "fresh_slop", "hidden": true })
+        )
+        .await
+        .0
+    );
+    let front = body_json(app.send(req(Method::GET, "/v1/shelves")).await).await;
+    assert_eq!(slugs_of(&front["shelves"]), ["farm", "cozy"]);
+    assert_eq!(front["shelves"][1]["title"], "Cozier");
+    assert_eq!(front["hidden"], json!(["fresh_slop"]));
+    assert!(
+        call(&review, "delete_shelf", json!({ "slug": "farm" }))
+            .await
+            .0
+    );
+    let actor: String =
+        sqlx::query_scalar("select actor from audit_log where action = 'shelf.removed'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(actor.contains("review agent"), "{actor}");
+
+    // Refusals come back as tool errors with the reason.
+    let (ok, text) = call(
+        &review,
+        "set_featured_apps",
+        json!({ "apps": [{ "slug": "nowhere" }] }),
+    )
+    .await;
+    assert!(!ok);
+    assert!(text.contains("nowhere"), "{text}");
+    let (ok, _) = call(&review, "delete_shelf", json!({ "slug": "farm" })).await;
+    assert!(!ok, "already gone");
+}
+
+/// Two makers starting demos at the same moment for the last slot: only one gets it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn racing_demo_starts_stay_within_the_live_limit(db: PgPool) {
+    let s = demo_setup(db, 1).await;
+    let app = &s.app;
+    for i in 0..4 {
+        listed_with(app, s.maker_id, &format!("game-{i}"), "released", "").await;
+    }
+    sqlx::query("update apps set stage_entered_at = now(), repo_url = $1 where slug like 'game-%'")
+        .bind(format!("{}octo/game", s.host))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let starts: Vec<_> = ["game", "game-0", "game-1", "game-2", "game-3"]
+        .iter()
+        .map(|slug| {
+            let r = req(Method::POST, format!("/v1/apps/{slug}/demo"))
+                .cookie(&s.maker)
+                .json(json!({ "url": s.file("web.zip") }));
+            async move { app.send(r).await.status() }
+        })
+        .collect();
+    let statuses = futures_util::future::join_all(starts).await;
+    assert_eq!(
+        statuses
+            .iter()
+            .filter(|s| **s == StatusCode::ACCEPTED)
+            .count(),
+        1,
+        "{statuses:?}"
+    );
+    assert_eq!(count(&app.db, "select count(*) from demos").await, 1);
+}
