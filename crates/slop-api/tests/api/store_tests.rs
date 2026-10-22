@@ -1057,3 +1057,816 @@ async fn maker_agents_see_and_host_demos_within_their_token(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Notifications and email (notify.rs)
+
+/// A notification written straight to the database, `age` old (a Postgres interval).
+async fn notice(app: &TestApp, user: Uuid, category: &str, title: &str, age: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "insert into notifications (id, user_id, category, title, link, created_at)
+         values ($1, $2, $3, $4, '/account', now() - interval '{age}')"
+    )))
+    .bind(id)
+    .bind(user)
+    .bind(category)
+    .bind(title)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    id
+}
+
+async fn inbox(app: &TestApp, r: Req) -> Value {
+    let res = app.send(r).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    body_json(res).await
+}
+
+fn titles(inbox: &Value) -> Vec<String> {
+    inbox["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|i| i["title"].as_str().unwrap().to_string())
+        .collect()
+}
+
+/// The bell: newest first, at most 60, with the unread count. A maker's agent sees only maker
+/// work: never chats, friends or account security, and People jobs only when its token may
+/// handle them, and the unread count it sees counts only what it can see.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_bell_lists_newest_first_and_agents_see_only_maker_work(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (other_id, _) = app.user("Other", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/notifications"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    for (i, category) in ["apps", "chat", "friends", "security", "jobs", "moderation"]
+        .iter()
+        .enumerate()
+    {
+        notice(
+            &app,
+            maker_id,
+            category,
+            category,
+            &format!("{} minutes", 10 - i),
+        )
+        .await;
+    }
+    notice(&app, other_id, "apps", "someone else's", "1 minute").await;
+
+    let all = inbox(
+        &app,
+        req(Method::GET, "/v1/me/notifications").cookie(&maker),
+    )
+    .await;
+    assert_eq!(
+        titles(&all),
+        ["moderation", "jobs", "security", "friends", "chat", "apps"]
+    );
+    assert_eq!(all["unread"], 6);
+    assert_eq!(all["items"][0]["read"], false);
+    assert_eq!(all["items"][0]["count"], 1);
+
+    let plain = maker_token(&app, &maker, json!({ "name": "Claude", "scope": "read" })).await;
+    let seen = inbox(
+        &app,
+        req(Method::GET, "/v1/me/notifications").header("authorization", plain.clone()),
+    )
+    .await;
+    assert_eq!(titles(&seen), ["moderation", "apps"]);
+    assert_eq!(
+        seen["unread"], 2,
+        "only what the agent can see counts: {seen}"
+    );
+    let people = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Hirer", "scope": "read", "people": true }),
+    )
+    .await;
+    let seen = inbox(
+        &app,
+        req(Method::GET, "/v1/me/notifications").header("authorization", people),
+    )
+    .await;
+    assert_eq!(titles(&seen), ["moderation", "jobs", "apps"]);
+    assert_eq!(seen["unread"], 3, "{seen}");
+    // The whats_new tool is the same list.
+    let called = body_json(
+        app.send(
+            req(Method::POST, "/v1/maker/mcp")
+                .header("authorization", plain)
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": { "name": "whats_new", "arguments": {} } })),
+        )
+        .await,
+    )
+    .await;
+    let text = called["result"]["content"][0]["text"].as_str().unwrap();
+    assert!(
+        text.contains("moderation") && !text.contains("security"),
+        "{text}"
+    );
+
+    // At most 60, newest first; the count is of all unread.
+    for i in 0..65 {
+        notice(
+            &app,
+            maker_id,
+            "apps",
+            &format!("old {i}"),
+            &format!("{} hours", i + 1),
+        )
+        .await;
+    }
+    let all = inbox(
+        &app,
+        req(Method::GET, "/v1/me/notifications").cookie(&maker),
+    )
+    .await;
+    let t = titles(&all);
+    assert_eq!(t.len(), 60);
+    assert_eq!(&t[..2], ["moderation", "jobs"]);
+    assert_eq!(t[59], "old 53");
+    assert_eq!(all["unread"], 71);
+}
+
+/// Marking read: only the listed ids, never someone else's; no ids marks them all.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn marking_notifications_read_touches_only_the_callers_own(db: PgPool) {
+    let app = test_app(db).await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    let (sam_id, sam) = app.user("Sam", "US").await;
+    let a = notice(&app, pat_id, "apps", "a", "3 minutes").await;
+    let b = notice(&app, pat_id, "apps", "b", "2 minutes").await;
+    let _c = notice(&app, pat_id, "apps", "c", "1 minute").await;
+    let theirs = notice(&app, sam_id, "apps", "theirs", "1 minute").await;
+    let read = |cookie: Option<&str>, body: Value| {
+        let r = req(Method::POST, "/v1/me/notifications/read").json(body);
+        match cookie {
+            Some(c) => r.cookie(c),
+            None => r,
+        }
+    };
+    assert_eq!(
+        app.send(read(None, json!({ "ids": [a] }))).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(read(Some(&pat), json!({ "ids": "all" })))
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = app
+        .send(read(Some(&pat), json!({ "ids": [a, theirs] })))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let mine = inbox(&app, req(Method::GET, "/v1/me/notifications").cookie(&pat)).await;
+    assert_eq!(mine["unread"], 2);
+    let read_ones: Vec<&str> = mine["items"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|i| i["read"] == true)
+        .map(|i| i["title"].as_str().unwrap())
+        .collect();
+    assert_eq!(read_ones, ["a"]);
+    let other = inbox(&app, req(Method::GET, "/v1/me/notifications").cookie(&sam)).await;
+    assert_eq!(other["unread"], 1, "someone else's id is ignored");
+
+    // Already read stays as it was read; no ids reads the rest.
+    let first_read: OffsetDateTime =
+        sqlx::query_scalar("select read_at from notifications where id = $1")
+            .bind(a)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    let res = app.send(read(Some(&pat), json!({}))).await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        inbox(&app, req(Method::GET, "/v1/me/notifications").cookie(&pat)).await["unread"],
+        0
+    );
+    let again: OffsetDateTime =
+        sqlx::query_scalar("select read_at from notifications where id = $1")
+            .bind(a)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(first_read, again);
+    assert_eq!(
+        count(
+            &app.db,
+            &format!("select count(*) from notifications where id = '{b}' and read_at is not null")
+        )
+        .await,
+        1
+    );
+    assert_eq!(
+        inbox(&app, req(Method::GET, "/v1/me/notifications").cookie(&sam)).await["unread"],
+        1
+    );
+}
+
+/// Email choices: every category on by default, whether this Slop sends email and whether the
+/// account has an address; only known categories and true/false, and a change keeps the rest.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn email_preferences_default_on_and_change_one_at_a_time(db: PgPool) {
+    let app = test_app(db.clone()).await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/email-prefs"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(req(Method::PUT, "/v1/me/email-prefs").json(json!({ "jobs": false })))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let prefs = inbox(&app, req(Method::GET, "/v1/me/email-prefs").cookie(&pat)).await;
+    assert_eq!(prefs["email_on"], false, "no SMTP on this server");
+    assert_eq!(prefs["has_email"], false);
+    let cats = prefs["categories"].as_array().unwrap();
+    assert_eq!(cats.len(), 10);
+    assert!(
+        cats.iter()
+            .all(|c| c["email"] == true && c["label"].is_string())
+    );
+
+    for bad in [
+        json!({ "jobs": "no" }),
+        json!({ "jobs": 0 }),
+        json!({ "jobs": null }),
+        json!({ "ops": false }),
+    ] {
+        let res = app
+            .send(
+                req(Method::PUT, "/v1/me/email-prefs")
+                    .cookie(&pat)
+                    .json(bad.clone()),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{bad}");
+    }
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/email-prefs")
+                .cookie(&pat)
+                .json(json!({ "jobs": false, "chat": false })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/email-prefs")
+                .cookie(&pat)
+                .json(json!({ "chat": true })),
+        )
+        .await;
+    let prefs = body_json(res).await;
+    let off: Vec<&str> = prefs["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter(|c| c["email"] == false)
+        .map(|c| c["category"].as_str().unwrap())
+        .collect();
+    assert_eq!(off, ["jobs"], "the earlier change is kept");
+
+    // With SMTP and an address.
+    sqlx::query("update users set email = 'pat@example.com' where id = $1")
+        .bind(pat_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let mailing = test_app_with(db, |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: "smtp://localhost:2525".into(),
+            from: "Slop <n@slop.test>".into(),
+        })
+    })
+    .await;
+    let prefs = inbox(
+        &mailing,
+        req(Method::GET, "/v1/me/email-prefs").cookie(&pat),
+    )
+    .await;
+    assert_eq!(
+        (prefs["email_on"].clone(), prefs["has_email"].clone()),
+        (json!(true), json!(true))
+    );
+}
+
+/// A maker's bug-report answers merge into one unread notification for the player, counted,
+/// and long notes are cut to fit whether the notification is new or merged.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn merged_notifications_are_counted_and_cut_to_fit(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    approved_release(&app, "tower", maker_id).await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    app.send(req(Method::POST, "/v1/apps/tower/launch").cookie(&pat))
+        .await;
+    let res = app
+        .send(req(Method::POST, "/v1/apps/tower/bug-reports").cookie(&pat).json(json!({
+            "title": "Crash", "body": "It crashes.", "version": "1.0.0", "platform": "windows"
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let answer = |status: &str, note: String| {
+        req(Method::PATCH, format!("/v1/bug-reports/{id}"))
+            .cookie(&maker)
+            .json(json!({ "status": status, "maker_note": note }))
+    };
+
+    let res = app.send(answer("wont_fix", "w".repeat(1500))).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = app.send(answer("fixed", "f".repeat(1500))).await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let rows: Vec<(String, String, i32)> =
+        sqlx::query_as("select title, body, count from notifications where user_id = $1")
+            .bind(pat_id)
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(rows.len(), 1, "merged into one");
+    let (title, body, n) = &rows[0];
+    assert_eq!(*n, 2);
+    assert_eq!(title, "Your bug report was fixed");
+    assert_eq!(body.chars().count(), 1000);
+    assert!(
+        body.starts_with("\"Crash\": fff") && body.ends_with('…'),
+        "{body}"
+    );
+
+    // Once read, the next one is a new notification.
+    app.send(
+        req(Method::POST, "/v1/me/notifications/read")
+            .cookie(&pat)
+            .json(json!({})),
+    )
+    .await;
+    let res = app.send(answer("open", "again".into())).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let inbox = inbox(&app, req(Method::GET, "/v1/me/notifications").cookie(&pat)).await;
+    assert_eq!(inbox["items"].as_array().unwrap().len(), 2);
+    assert_eq!(inbox["items"][0]["title"], "Your bug report is open again");
+    assert_eq!(inbox["items"][0]["count"], 1);
+
+    // A closed account gets nothing.
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(pat_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app.send(answer("fixed", "for real".into())).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        count(
+            &app.db,
+            &format!("select count(*) from notifications where user_id = '{pat_id}'")
+        )
+        .await,
+        2
+    );
+}
+
+/// Notifications become emails only while they're news, for accounts with an address that are
+/// open and want that kind; the rest are marked skipped and never looked at again.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn notification_emails_skip_old_news_and_accounts_without_email(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: "smtp://localhost:2525".into(),
+            from: "Slop <n@slop.test>".into(),
+        })
+    })
+    .await;
+    let mut ids = HashMap::new();
+    for (name, email, closed, prefs) in [
+        ("wants", Some("w@example.com"), false, "{}"),
+        ("no-email", None, false, "{}"),
+        ("closed", Some("c@example.com"), true, "{}"),
+        (
+            "not-apps",
+            Some("n@example.com"),
+            false,
+            r#"{"apps": false}"#,
+        ),
+    ] {
+        let (id, _) = app.user(name, "US").await;
+        sqlx::query(
+            "update users set email = $2, closed_at = case when $3 then now() end, email_prefs = $4::jsonb where id = $1",
+        )
+        .bind(id)
+        .bind(email)
+        .bind(closed)
+        .bind(prefs)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        ids.insert(name, id);
+    }
+    let fresh = notice(&app, ids["wants"], "apps", "fresh", "1 hour").await;
+    let stale = notice(&app, ids["wants"], "apps", "stale", "25 hours").await;
+    let other_kind = notice(&app, ids["not-apps"], "moderation", "decided", "1 minute").await;
+    let unwanted = notice(&app, ids["not-apps"], "apps", "unwanted", "1 minute").await;
+    let no_email = notice(&app, ids["no-email"], "apps", "nowhere", "1 minute").await;
+    let closed = notice(&app, ids["closed"], "apps", "gone", "1 minute").await;
+
+    assert_eq!(
+        slop_api::notify::queue_emails(&app.db, &app.config)
+            .await
+            .unwrap(),
+        2
+    );
+    let status = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("select email_status from notifications where id = $1")
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    for (id, want) in [
+        (fresh, "queued"),
+        (stale, "skipped"),
+        (other_kind, "queued"),
+        (unwanted, "skipped"),
+        (no_email, "skipped"),
+        (closed, "skipped"),
+    ] {
+        assert_eq!(status(id).await, want);
+    }
+    let mut to: Vec<(String, String)> =
+        sqlx::query_as("select to_address, subject from email_outbox order by to_address")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    to.sort();
+    assert_eq!(
+        to,
+        [
+            ("n@example.com".to_string(), "decided".to_string()),
+            ("w@example.com".into(), "fresh".into())
+        ]
+    );
+    // Nothing is queued twice.
+    assert_eq!(
+        slop_api::notify::queue_emails(&app.db, &app.config)
+            .await
+            .unwrap(),
+        0
+    );
+    assert_eq!(count(&app.db, "select count(*) from email_outbox").await, 2);
+}
+
+/// A stand-in mail server: takes mail for anyone but addresses containing "bounce", which it
+/// refuses. Records (recipient, message) of what it took.
+async fn fake_smtp() -> (u16, Arc<Mutex<Vec<(String, String)>>>) {
+    use tokio::io::{AsyncBufReadExt, AsyncWriteExt, BufReader};
+    let taken: Arc<Mutex<Vec<(String, String)>>> = Arc::default();
+    let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
+    let port = listener.local_addr().unwrap().port();
+    let record = taken.clone();
+    tokio::spawn(async move {
+        loop {
+            let (socket, _) = listener.accept().await.unwrap();
+            let record = record.clone();
+            tokio::spawn(async move {
+                let (read, mut write) = socket.into_split();
+                let mut lines = BufReader::new(read).lines();
+                write.write_all(b"220 fake ESMTP\r\n").await.unwrap();
+                let mut rcpt = String::new();
+                while let Ok(Some(line)) = lines.next_line().await {
+                    let upper = line.to_ascii_uppercase();
+                    let reply: &[u8] = if upper.starts_with("EHLO") || upper.starts_with("HELO") {
+                        b"250 fake\r\n"
+                    } else if upper.starts_with("RCPT") {
+                        rcpt = line.clone();
+                        if line.contains("bounce") {
+                            b"550 no such user\r\n"
+                        } else {
+                            b"250 ok\r\n"
+                        }
+                    } else if upper.starts_with("DATA") {
+                        write.write_all(b"354 go on\r\n").await.unwrap();
+                        let mut message = String::new();
+                        while let Ok(Some(l)) = lines.next_line().await {
+                            if l == "." {
+                                break;
+                            }
+                            message.push_str(&l);
+                            message.push('\n');
+                        }
+                        record.lock().unwrap().push((rcpt.clone(), message));
+                        b"250 queued\r\n"
+                    } else if upper.starts_with("QUIT") {
+                        let _ = write.write_all(b"221 bye\r\n").await;
+                        break;
+                    } else {
+                        b"250 ok\r\n"
+                    };
+                    if write.write_all(reply).await.is_err() {
+                        break;
+                    }
+                }
+            });
+        }
+    });
+    (port, taken)
+}
+
+async fn outbox_row(app: &TestApp, to: &str, attempts: i32) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into email_outbox (id, to_address, subject, body, attempts) values ($1, $2, 'Hello', 'The body.', $3)",
+    )
+    .bind(id)
+    .bind(to)
+    .bind(attempts)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    id
+}
+
+/// The email worker sends the outbox: sent rows are marked, failures counted and retried, and
+/// given up on at the fifth; an SMTP address that isn't one switches email off.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_email_worker_sends_retries_and_gives_up(db: PgPool) {
+    let (port, taken) = fake_smtp().await;
+    let app = test_app_with(db.clone(), |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: format!("smtp://127.0.0.1:{port}"),
+            from: "Slop <n@slop.test>".into(),
+        })
+    })
+    .await;
+    let (pat_id, _) = app.user("Pat", "US").await;
+    sqlx::query("update users set email = 'pat@example.com' where id = $1")
+        .bind(pat_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    notice(
+        &app,
+        pat_id,
+        "apps",
+        "Your release was approved",
+        "1 minute",
+    )
+    .await;
+    let good = outbox_row(&app, "good@example.com", 0).await;
+    let bounce = outbox_row(&app, "bounce@example.com", 0).await;
+    let last_try = outbox_row(&app, "bounce-again@example.com", 4).await;
+    let junk = outbox_row(&app, "not an address", 0).await;
+
+    let worker = tokio::spawn(slop_api::notify::run_email(app.state.clone()));
+    let mut done = false;
+    for _ in 0..200 {
+        let waiting = count(
+            &app.db,
+            "select count(*) from email_outbox where attempts = 0 or (to_address = 'bounce-again@example.com' and attempts = 4)",
+        )
+        .await;
+        if waiting == 0 {
+            done = true;
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    worker.abort();
+    assert!(done, "the worker went through the outbox");
+
+    let row = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (i32, bool, bool, Option<String>)>(
+                "select attempts, sent_at is not null, failed_at is not null, last_error from email_outbox where id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    let (attempts, sent, failed, error) = row(good).await;
+    assert_eq!((attempts, sent, failed, error), (1, true, false, None));
+    let (attempts, sent, failed, error) = row(bounce).await;
+    assert_eq!(
+        (attempts, sent, failed),
+        (1, false, false),
+        "tried again later"
+    );
+    assert!(error.unwrap().contains("no such user"));
+    let (attempts, sent, failed, _) = row(last_try).await;
+    assert_eq!(
+        (attempts, sent, failed),
+        (5, false, true),
+        "given up after five"
+    );
+    let (attempts, sent, failed, error) = row(junk).await;
+    assert_eq!((attempts, sent, failed), (1, false, false));
+    assert!(error.is_some());
+
+    let taken = taken.lock().unwrap().clone();
+    let to: Vec<&str> = taken.iter().map(|(r, _)| r.as_str()).collect();
+    assert!(to.iter().any(|r| r.contains("good@example.com")), "{to:?}");
+    assert!(
+        to.iter().any(|r| r.contains("pat@example.com")),
+        "the pending notification was queued and sent in the same round: {to:?}"
+    );
+    let (_, message) = taken.iter().find(|(r, _)| r.contains("good@")).unwrap();
+    assert!(
+        message.contains("Subject: Hello") && message.contains("n@slop.test"),
+        "{message}"
+    );
+
+    // A broken SMTP address: the worker stops at once and sends nothing.
+    let broken = test_app_with(db, |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: "carrier-pigeon://coop".into(),
+            from: "Slop <n@slop.test>".into(),
+        })
+    })
+    .await;
+    let before = count(
+        &broken.db,
+        "select count(*) from email_outbox where sent_at is null",
+    )
+    .await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        slop_api::notify::run_email(broken.state.clone()),
+    )
+    .await
+    .expect("returns instead of looping");
+    assert_eq!(
+        count(
+            &broken.db,
+            "select count(*) from email_outbox where sent_at is null"
+        )
+        .await,
+        before
+    );
+    // Without email set up at all, likewise.
+    let off = test_app(broken.db.clone()).await;
+    tokio::time::timeout(
+        std::time::Duration::from_secs(5),
+        slop_api::notify::run_email(off.state.clone()),
+    )
+    .await
+    .expect("returns instead of looping");
+}
+
+/// A signed-out reporter hears the outcome by email, when email is set up and they gave an
+/// address that looks like one.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn signed_out_reporters_get_the_outcome_by_email(db: PgPool) {
+    let app = test_app_with(db.clone(), |c| {
+        c.email = Some(slop_api::config::EmailConfig {
+            smtp_url: "smtp://localhost:2525".into(),
+            from: "Slop <n@slop.test>".into(),
+        })
+    })
+    .await;
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    listed_with(&app, maker_id, "miner", "released", "").await;
+    let report = |name: &str, email: &str| {
+        let mut r = json!({ "kind": "app", "subject": "miner", "reason": "broken", "details": "It doesn't start.", "good_faith": true });
+        r["name"] = json!(name);
+        r["email"] = json!(email);
+        req(Method::POST, "/v1/reports").json(r)
+    };
+    for (name, email) in [("Sam", "sam@example.com"), ("Nobody", "no-at-sign")] {
+        let res = app.send(report(name, email)).await;
+        assert!(
+            res.status() == StatusCode::OK || res.status() == StatusCode::UNPROCESSABLE_ENTITY,
+            "{}",
+            res.status()
+        );
+    }
+    let reports: Vec<(Uuid, String, Option<String>)> =
+        sqlx::query_as("select id, reference, reporter_email from reports order by created_at")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    for (id, _, _) in &reports {
+        let res = app
+            .send(
+                req(Method::POST, format!("/v1/admin/reports/{id}/dismiss"))
+                    .cookie(&admin)
+                    .json(json!({ "outcome": "It works for us." })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+    let mail: Vec<(String, String, String)> =
+        sqlx::query_as("select to_address, subject, body from email_outbox")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(mail.len(), 1, "{mail:?}");
+    let (to, subject, body) = &mail[0];
+    assert_eq!(to, "sam@example.com");
+    assert_eq!(
+        subject,
+        &format!("Your report {} was answered", reports[0].1)
+    );
+    assert!(
+        body.contains("What we decided: It works for us.")
+            && body.contains("because you sent a report"),
+        "{body}"
+    );
+
+    // Without SMTP, nothing is queued.
+    let quiet = test_app(db).await;
+    let res = quiet.send(report("Kim", "kim@example.com")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let id: Uuid =
+        sqlx::query_scalar("select id from reports where reporter_email = 'kim@example.com'")
+            .fetch_one(&quiet.db)
+            .await
+            .unwrap();
+    let res = quiet
+        .send(
+            req(Method::POST, format!("/v1/admin/reports/{id}/dismiss"))
+                .cookie(&admin)
+                .json(json!({ "outcome": "Fine." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        count(&quiet.db, "select count(*) from email_outbox").await,
+        1
+    );
+}
+
+/// The hourly cleanup: read notifications after 180 days, any after a year, sent or failed
+/// emails after 30 days; the rest stays.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn old_notifications_and_sent_emails_are_cleaned_up(db: PgPool) {
+    let app = test_app(db).await;
+    let (pat_id, _) = app.user("Pat", "US").await;
+    let read_old = notice(&app, pat_id, "apps", "read long ago", "200 days").await;
+    let read_recent = notice(&app, pat_id, "apps", "read lately", "200 days").await;
+    let unread_old = notice(&app, pat_id, "apps", "unread, old", "200 days").await;
+    let ancient = notice(&app, pat_id, "apps", "unread, ancient", "400 days").await;
+    sqlx::query("update notifications set read_at = now() - interval '181 days' where id = $1")
+        .bind(read_old)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update notifications set read_at = now() - interval '10 days' where id = $1")
+        .bind(read_recent)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for (to, set) in [
+        ("sent-old", "sent_at = now() - interval '31 days'"),
+        ("failed-old", "failed_at = now() - interval '31 days'"),
+        ("sent-new", "sent_at = now() - interval '29 days'"),
+        ("waiting-old", "created_at = now() - interval '60 days'"),
+    ] {
+        let id = outbox_row(&app, to, 0).await;
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "update email_outbox set {set} where id = $1"
+        )))
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    slop_api::notify::cleanup(&app.db).await.unwrap();
+    let left: Vec<Uuid> = sqlx::query_scalar("select id from notifications order by id")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    let mut want = vec![read_recent, unread_old];
+    want.sort();
+    assert_eq!(left, want);
+    assert!(!left.contains(&ancient));
+    let mut outbox: Vec<String> = sqlx::query_scalar("select to_address from email_outbox")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    outbox.sort();
+    assert_eq!(outbox, ["sent-new", "waiting-old"]);
+}
