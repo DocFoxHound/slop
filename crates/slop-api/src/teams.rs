@@ -1101,6 +1101,26 @@ pub async fn run_checks(state: &AppState, team_id: Uuid) -> anyhow::Result<Vec<C
     .fetch_one(&state.db)
     .await?;
     let mut out = Vec::new();
+    // An organization has one verified team (teams_one_verified_per_org): another team for one
+    // that's taken fails here, rather than on the badge's unique index.
+    let taken: bool = sqlx::query_scalar(
+        "select exists (select 1 from teams where id <> $1 and kind = 'official'
+                          and lower(github_org) = lower($2) and verified_at is not null)",
+    )
+    .bind(team_id)
+    .bind(&org)
+    .fetch_one(&state.db)
+    .await?;
+    if taken {
+        out.push(Check {
+            check: "organization",
+            ok: false,
+            detail: format!(
+                "Another team on Slop is already the verified team for {org}. Ask its owners to add you."
+            ),
+        });
+        return Ok(out);
+    }
     let Some(token) = crate::github_app::org_token(state, &org).await? else {
         out.push(Check {
             check: "app_installed",
