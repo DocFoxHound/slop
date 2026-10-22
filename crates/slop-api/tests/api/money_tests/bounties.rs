@@ -894,7 +894,7 @@ async fn claims_need_an_approved_release_of_the_bounty_app_or_a_build_of_it(db: 
         claim(&app, &forker, &id, "tower-fix").await,
         StatusCode::NO_CONTENT
     );
-    let told = format!("A delivery for \"Fix lost saves\"");
+    let told = "A delivery for \"Fix lost saves\"".to_string();
     for (who, expect) in [
         (ann_id, true),
         (bob_id, true),
@@ -911,7 +911,7 @@ async fn claims_need_an_approved_release_of_the_bounty_app_or_a_build_of_it(db: 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn a_second_delivery_at_the_same_moment_is_a_conflict(db: PgPool) {
     let app = test_app_with(db, simulated).await;
-    let ((maker_id, maker), (forker_id, _)) = tower(&app).await;
+    let ((_, maker), (forker_id, _)) = tower(&app).await;
     let (_, ann) = adult(&app, "Ann Backer", "US").await;
     let id = open_bounty(&app, &ann, "tower", "Fix lost saves").await;
     // The other request's claim is in, its bounty not yet marked claimed.
@@ -930,7 +930,6 @@ async fn a_second_delivery_at_the_same_moment_is_a_conflict(db: PgPool) {
         claim(&app, &maker, &id, "tower").await,
         StatusCode::CONFLICT
     );
-    let _ = maker_id;
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -1459,7 +1458,7 @@ async fn staff_hide_a_bounty_and_can_reverse_it_on_appeal(db: PgPool) {
     let app = test_app_with(db, simulated).await;
     tower(&app).await;
     let (_, admin) = make_admin(&app, "Ada Admin").await;
-    let (ann_id, ann) = adult(&app, "Ann Opener", "US").await;
+    let (_, ann) = adult(&app, "Ann Opener", "US").await;
     let (bob_id, bob) = adult(&app, "Bob Backer", "US").await;
     let id = open_bounty(&app, &ann, "tower", "Fix lost saves").await;
     pledge_ok(&app, &bob, &id, 1000).await;
@@ -1506,7 +1505,6 @@ async fn staff_hide_a_bounty_and_can_reverse_it_on_appeal(db: PgPool) {
             .status(),
         StatusCode::OK
     );
-    let _ = ann_id;
 }
 
 /// b31: hiding a bounty must also forget its saved cards at Stripe and stop any charges still
