@@ -51,6 +51,8 @@ pub const RECORDING_NOTICE: &str = "This conversation is recorded, so you both h
      Slop keeps the text only while the conversation is open and for 30 days after it closes. After that Slop keeps only a \
      fingerprint of each message, which proves a downloaded copy hasn't been changed. Slop staff see the conversation only if \
      one of you submits your copy for a problem or a review dispute.";
+/// The longest conversation copy kept as evidence (job_evidence.transcript).
+const MAX_EVIDENCE_CHARS: usize = 400_000;
 /// How long Slop keeps a closed conversation's text for the two sides to download.
 pub const CONVERSATION_KEPT: Duration = Duration::days(30);
 
@@ -1087,7 +1089,15 @@ fn step_text(kind: &str) -> Option<(&'static str, &'static str)> {
         "change_requested" => ("", "{client} asked for a change to {title}"),
         "change_offered" => ("{creative} offered a Change to Agreement for {title}", ""),
         "change_accepted" => ("", "{client} accepted the Change to Agreement for {title}"),
-        "change_declined" => ("", "{client} declined the Change to Agreement for {title}"),
+        // The creative declines a change the client asked for; the client declines one offered.
+        "change_declined" => (
+            "{creative} declined the change you asked for on {title}",
+            "{client} declined the Change to Agreement for {title}",
+        ),
+        "change_withdrawn" => (
+            "{creative} withdrew the Change to Agreement for {title}",
+            "",
+        ),
         "cancelled" => ("{title} was cancelled", "{title} was cancelled"),
         "withdrawn" => ("", "{client} withdrew from {title}"),
         "refunded" => ("{creative} refunded you for {title}", ""),
@@ -2902,6 +2912,13 @@ async fn submit_evidence(
     }
     let (good, bad) = verify_copy(&state.db, id, &body.copy).await?;
     let transcript = serde_json::to_string(&body.copy).map_err(anyhow::Error::from)?;
+    // What the record keeps (job_evidence.transcript), rather than failing to store it.
+    if transcript.chars().count() > MAX_EVIDENCE_CHARS {
+        return Err(ApiError::invalid(
+            "copy",
+            "that copy is too long to keep with the record; submit the part about the problem",
+        ));
+    }
     let mut tx = state.db.begin().await?;
     sqlx::query(
         "insert into job_evidence (id, job_id, submitted_by, transcript, verified_messages, unverified_messages)

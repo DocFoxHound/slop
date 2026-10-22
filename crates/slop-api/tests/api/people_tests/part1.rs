@@ -3184,3 +3184,1178 @@ async fn accepting_signs_the_agreement_and_sets_up_the_payments(db: PgPool) {
             .unwrap();
     assert!(start_now.is_none());
 }
+
+// ---------------------------------------------------------------------------------------------
+// Sign-off, delivery, final files, cancelling, withdrawing, reviewing (people-024 … people-031)
+
+fn days_ahead(days: i64) -> String {
+    (OffsetDateTime::now_utc().date() + time::Duration::days(days)).to_string()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_direction_is_sent_once_and_signed_off_by_the_client(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let mut o = sprite_offer("upfront");
+    o["sign_off"] = json!(true);
+    let id = h.job_with(o, "in_progress").await;
+    let link = |url: &str| json!({ "links": [url] });
+    // The creative sends it, with files or a note saying where they are.
+    h.refused(
+        &id,
+        &h.tavern,
+        "sign-off/send",
+        link("https://a.example/s.png"),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    for (body, want) in [
+        (json!({}), "links"),
+        (json!({ "note": "   " }), "links"),
+        (link("http://a.example/s.png"), "links"),
+        (link("not a link"), "links"),
+        (
+            json!({ "links": vec!["https://a.example/s.png"; 6] }),
+            "links",
+        ),
+        (json!({ "note": "x".repeat(2001) }), "note"),
+    ] {
+        let (status, err) = h.step(&id, &h.vera, "sign-off/send", body.clone()).await;
+        assert_eq!(
+            (status, field(&err)),
+            (StatusCode::UNPROCESSABLE_ENTITY, want),
+            "{body}"
+        );
+    }
+    // The client can't sign off on what wasn't sent.
+    h.refused(&id, &h.tavern, "sign-off", json!({}), StatusCode::CONFLICT)
+        .await;
+    let job = h
+        .ok(
+            &id,
+            &h.vera,
+            "sign-off/send",
+            json!({ "note": "Sketch in the folder.", "links": vec!["https://a.example/s.png"; 5] }),
+        )
+        .await;
+    assert_eq!(job["status"], "awaiting_sign_off");
+    assert!(notices(&h.app, h.client).await[0].contains("for your sign-off"));
+    // Sent once.
+    h.refused(
+        &id,
+        &h.vera,
+        "sign-off/send",
+        link("https://a.example/t.png"),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    h.refused(&id, &h.vera, "sign-off", json!({}), StatusCode::CONFLICT)
+        .await;
+    let job = h.ok(&id, &h.tavern, "sign-off", json!({})).await;
+    assert_eq!(job["status"], "in_progress");
+    assert!(job["signed_off_at"].is_string());
+    assert!(notices(&h.app, h.creative).await[0].contains("signed off on"));
+    h.refused(&id, &h.tavern, "sign-off", json!({}), StatusCode::CONFLICT)
+        .await;
+    h.refused(
+        &id,
+        &h.vera,
+        "sign-off/send",
+        link("https://a.example/u.png"),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    // An offer without a sign-off has nothing to send.
+    let plain = h.job("upfront", "in_progress").await;
+    h.refused(
+        &plain,
+        &h.vera,
+        "sign-off/send",
+        link("https://a.example/s.png"),
+        StatusCode::CONFLICT,
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn delivering_and_accepting_complete_a_paid_job(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let id = h.job("upfront", "accepted").await;
+    let files = json!({ "links": ["https://drive.example/knight.zip"] });
+    // Not before it's paid for; only by the creative; links checked.
+    h.refused(&id, &h.vera, "deliver", files.clone(), StatusCode::CONFLICT)
+        .await;
+    h.ok(&id, &h.tavern, "pay", json!({})).await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "deliver",
+        files.clone(),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let (status, body) = h
+        .step(
+            &id,
+            &h.vera,
+            "deliver",
+            json!({ "links": ["ftp://x.example/a"] }),
+        )
+        .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "links")
+    );
+    let (status, _) = h.step(&id, &h.vera, "deliver", json!({})).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    // Nothing to accept yet.
+    h.refused(
+        &id,
+        &h.tavern,
+        "accept-delivery",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let job = h.ok(&id, &h.vera, "deliver", files.clone()).await;
+    assert_eq!(job["status"], "delivered");
+    assert_eq!(
+        job["events"].as_array().unwrap().last().unwrap()["kind"],
+        "delivered"
+    );
+    assert!(notices(app, h.client).await[0].contains("delivered"));
+    h.refused(&id, &h.vera, "deliver", files.clone(), StatusCode::CONFLICT)
+        .await;
+    // Only the client accepts; with nothing owed it completes and credits the work.
+    h.refused(
+        &id,
+        &h.vera,
+        "accept-delivery",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let job = h.ok(&id, &h.tavern, "accept-delivery", json!({})).await;
+    assert_eq!(
+        (
+            job["status"].as_str(),
+            job["credited"].as_bool(),
+            job["completed_automatically"].as_bool()
+        ),
+        (Some("completed"), Some(true), Some(false))
+    );
+    assert!(notices(app, h.creative).await[0].contains("is complete"));
+    h.refused(
+        &id,
+        &h.tavern,
+        "accept-delivery",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let page = call(app, req(Method::GET, "/v1/apps/tavern")).await.1;
+    assert_eq!(page["credits"][0]["role"], "Art");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn final_files_follow_the_last_payment_and_credit_only_if_agreed(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let mut o = sprite_offer("on_delivery");
+    o["credit"] = json!(false);
+    let id = h.job_with(o, "delivered").await;
+    let files = json!({ "links": ["https://drive.example/final.zip"] });
+    // Not while the last payment is owed.
+    h.refused(
+        &id,
+        &h.vera,
+        "final-files",
+        files.clone(),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    h.ok(&id, &h.tavern, "pay", json!({})).await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "final-files",
+        files.clone(),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let (status, _) = h
+        .step(&id, &h.vera, "final-files", json!({ "note": "" }))
+        .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let job = h.ok(&id, &h.vera, "final-files", files.clone()).await;
+    assert_eq!(
+        (job["status"].as_str(), job["credited"].as_bool()),
+        (Some("completed"), Some(true))
+    );
+    assert!(job["final_files_at"].is_string());
+    h.refused(&id, &h.vera, "final-files", files, StatusCode::CONFLICT)
+        .await;
+    // Without credit, the project page doesn't name them, nor does "since the new work".
+    let page = call(app, req(Method::GET, "/v1/apps/tavern")).await.1;
+    assert_eq!(page["credits"], json!([]));
+    let (_, ratings) = call(app, req(Method::GET, "/v1/apps/tavern/ratings")).await;
+    assert_eq!(ratings["since_new_work"]["credits"], json!([]));
+    let (_, vera_page) = call(app, req(Method::GET, "/v1/people/vera")).await;
+    assert_eq!(vera_page["worked_on"], json!([]));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn creatives_cancel_with_a_reason_and_clients_only_before_paying(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, stranger) = app.user("Stranger", "US").await;
+
+    // The client backs out before paying anything.
+    let id = h.job("upfront", "accepted").await;
+    h.refused(&id, &stranger, "cancel", json!({}), StatusCode::NOT_FOUND)
+        .await;
+    let job = h.ok(&id, &h.tavern, "cancel", json!({})).await;
+    assert_eq!(job["status"], "cancelled");
+    assert_eq!(
+        job["payments"][0]["status"], "waiting",
+        "nothing is due any more"
+    );
+    assert!(notices(app, h.creative).await[0].contains("was cancelled"));
+
+    // Once something's paid, only the creative can cancel, and must say why.
+    let id = h.job("on_delivery", "delivered").await;
+    h.ok(&id, &h.vera, "conversation/open", json!({})).await;
+    h.ok(
+        &id,
+        &h.tavern,
+        "change/request",
+        json!({ "note": "Add a shield?" }),
+    )
+    .await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "cancel",
+        json!({ "note": "Changed my mind" }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let (status, body) = h
+        .step(&id, &h.vera, "cancel", json!({ "note": "  " }))
+        .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "note")
+    );
+    let job = h
+        .ok(
+            &id,
+            &h.vera,
+            "cancel",
+            json!({ "note": "I'm ill and can't finish." }),
+        )
+        .await;
+    assert_eq!(job["status"], "cancelled");
+    assert_eq!(
+        job["payments"][0]["status"], "waiting",
+        "the delivery payment isn't owed"
+    );
+    assert_eq!(job["changes"][0]["status"], "withdrawn");
+    assert_eq!(job["conversation"]["open"], false);
+    assert!(actions(&job).iter().all(|a| *a != "open_problem"));
+    let ended: (Option<Uuid>, bool) =
+        sqlx::query_as("select ended_by, ended_at is not null from jobs where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(ended, (Some(h.creative), true));
+    // Nothing more owed: hiring again is fine.
+    assert_eq!(h.hire(json!({})).await.0, StatusCode::OK);
+
+    // A client who paid the first half can't cancel when a change's price is due.
+    let id = h.job("split", "in_progress").await;
+    h.ok(
+        &id,
+        &h.vera,
+        "change/offer",
+        json!({ "title": "Shield", "extra_price_minor": 2000, "new_due_date": days_ahead(30) }),
+    )
+    .await;
+    h.ok(
+        &id,
+        &h.tavern,
+        "change/accept",
+        json!({ "number": 1, "exact_terms_ack": true }),
+    )
+    .await;
+    assert_eq!(h.status(&id).await, "awaiting_payment");
+    h.refused(&id, &h.tavern, "cancel", json!({}), StatusCode::CONFLICT)
+        .await;
+
+    // Finished work can't be cancelled.
+    let id = h.job("upfront", "completed").await;
+    h.refused(
+        &id,
+        &h.vera,
+        "cancel",
+        json!({ "note": "Oops" }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    h.refused(&id, &h.tavern, "cancel", json!({}), StatusCode::CONFLICT)
+        .await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn consumers_withdraw_only_within_their_window(db: PgPool) {
+    let h = hiring(db, "GB").await;
+    let app = &h.app;
+    // Paid, then withdrawn: the job ends; the refund is the creative's to make (nothing is moved).
+    let id = h.job("upfront", "in_progress").await;
+    h.refused(&id, &h.vera, "withdraw", json!({}), StatusCode::CONFLICT)
+        .await;
+    let job = h.ok(&id, &h.tavern, "withdraw", json!({})).await;
+    assert_eq!(job["status"], "withdrawn");
+    assert_eq!(
+        job["status_text"],
+        "Withdrawn by the client. Vera Okafor refunds what's owed within 14 days."
+    );
+    assert_eq!(
+        (job["paid_minor"].as_i64(), job["refunded_minor"].as_i64()),
+        (Some(12001), Some(0))
+    );
+    assert!(notices(app, h.creative).await[0].starts_with("Tavern Dev withdrew from"));
+    let withdrawn_at: Option<OffsetDateTime> =
+        sqlx::query_scalar("select withdrawn_at from jobs where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(withdrawn_at.is_some());
+    h.refused(&id, &h.tavern, "withdraw", json!({}), StatusCode::CONFLICT)
+        .await;
+
+    // After the 14 days: gone.
+    let id = h.job("upfront", "in_progress").await;
+    sqlx::query(
+        "update jobs set withdrawal_until = now() - interval '1 minute' where id = $1::uuid",
+    )
+    .bind(&id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let job = h.view(&id, &h.tavern).await;
+    assert_eq!(job["withdrawal"]["open"], false);
+    h.refused(&id, &h.tavern, "withdraw", json!({}), StatusCode::CONFLICT)
+        .await;
+
+    // Hiring as a business, or from someone who isn't a trader: no right to withdraw.
+    let (_, job) = h.hire(json!({ "client_is_business": true })).await;
+    let business = job["id"].as_str().unwrap().to_string();
+    h.ok(&business, &h.vera, "offer", sprite_offer("upfront"))
+        .await;
+    h.ok(
+        &business,
+        &h.tavern,
+        "accept",
+        json!({ "offer_count": 1, "exact_terms_ack": true }),
+    )
+    .await;
+    h.refused(
+        &business,
+        &h.tavern,
+        "withdraw",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    exec(app, "update creatives set trader = false").await;
+    let private = h.job("upfront", "accepted").await;
+    h.refused(
+        &private,
+        &h.tavern,
+        "withdraw",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn only_the_client_reviews_and_only_finished_work(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let review = |id: &str, cookie: &str, body: Value| {
+        call(
+            &h.app,
+            req(Method::PUT, format!("/v1/jobs/{id}/review"))
+                .cookie(cookie)
+                .json(body),
+        )
+    };
+    let id = h.job("upfront", "delivered").await;
+    let (status, _) = review(&id, &h.tavern, json!({ "vote": "not_slop" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "not before it's accepted");
+    // Final files pending counts as accepted (it's been paid in full).
+    let paid = h.job("on_delivery", "delivered").await;
+    h.ok(&paid, &h.tavern, "pay", json!({})).await;
+    assert_eq!(h.status(&paid).await, "final_files");
+    let (status, job) = review(
+        &paid,
+        &h.tavern,
+        json!({ "vote": "not_slop", "body": "Fast." }),
+    )
+    .await;
+    assert_eq!(
+        (status, job["review"]["body"].as_str()),
+        (StatusCode::OK, Some("Fast."))
+    );
+
+    h.ok(&id, &h.tavern, "accept-delivery", json!({})).await;
+    let (status, _) = review(&id, &h.vera, json!({ "vote": "not_slop" })).await;
+    assert_eq!(status, StatusCode::CONFLICT, "not the creative");
+    for (body, want) in [
+        (json!({ "vote": "meh" }), "vote"),
+        (json!({ "vote": "slop", "body": "x".repeat(2001) }), "body"),
+    ] {
+        let (status, err) = review(&id, &h.tavern, body).await;
+        assert_eq!(
+            (status, field(&err)),
+            (StatusCode::UNPROCESSABLE_ENTITY, want)
+        );
+    }
+    let (status, _) = review(&id, &h.tavern, json!({ "vote": "slop", "stars": 1 })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let (status, job) = review(&id, &h.tavern, json!({ "vote": "slop" })).await;
+    assert_eq!(
+        (status, job["review"]["vote"].as_str()),
+        (StatusCode::OK, Some("slop"))
+    );
+    assert_eq!(
+        count(&h.app, "select count(*) from creative_reviews").await,
+        2
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "nb2: withdrawal ignores the start-now acknowledgement and completion (HUM-2, HUM-4): allowed after the work is fully done and paid, refused once auto-completion ends the job inside the 14 days"]
+async fn withdrawing_follows_the_start_now_acknowledgement_not_completion(db: PgPool) {
+    let h = hiring(db, "DE").await;
+    // Asked to start now, then the work was fully done and paid for: the right is gone.
+    let (_, job) = h.hire(json!({})).await;
+    let started = job["id"].as_str().unwrap().to_string();
+    h.ok(&started, &h.vera, "offer", sprite_offer("on_delivery"))
+        .await;
+    h.ok(
+        &started,
+        &h.tavern,
+        "accept",
+        json!({ "offer_count": 1, "exact_terms_ack": true, "start_now": true }),
+    )
+    .await;
+    h.ok(
+        &started,
+        &h.vera,
+        "deliver",
+        json!({ "note": "In the folder." }),
+    )
+    .await;
+    h.ok(&started, &h.tavern, "pay", json!({})).await;
+    h.refused(
+        &started,
+        &h.tavern,
+        "withdraw",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    // Didn't ask to start now: completing automatically after 7 days doesn't shorten the 14.
+    let waiting = h.job("upfront", "delivered").await;
+    slop_api::people::jobs::auto_complete(
+        &h.app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(8),
+    )
+    .await
+    .unwrap();
+    assert_eq!(h.status(&waiting).await, "completed");
+    let job = h.ok(&waiting, &h.tavern, "withdraw", json!({})).await;
+    assert_eq!(job["status"], "withdrawn");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Changes to Agreement (people-032 … people-035)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn clients_ask_for_changes_while_work_is_under_way(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let ask = |note: &str| json!({ "note": note });
+    // Not before work starts, nor after it's done.
+    for step in ["requested", "offered", "accepted"] {
+        let id = h.job("upfront", step).await;
+        h.refused(
+            &id,
+            &h.tavern,
+            "change/request",
+            ask("Bigger?"),
+            StatusCode::CONFLICT,
+        )
+        .await;
+    }
+    let done = h.job("upfront", "completed").await;
+    h.refused(
+        &done,
+        &h.tavern,
+        "change/request",
+        ask("Bigger?"),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let id = h.job("upfront", "in_progress").await;
+    h.refused(
+        &id,
+        &h.vera,
+        "change/request",
+        ask("Bigger?"),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    for (note, want) in [("  ", "note"), (&*"x".repeat(2001), "note")] {
+        let (status, body) = h.step(&id, &h.tavern, "change/request", ask(note)).await;
+        assert_eq!(
+            (status, field(&body)),
+            (StatusCode::UNPROCESSABLE_ENTITY, want)
+        );
+    }
+    let job = h
+        .ok(&id, &h.tavern, "change/request", ask("Could it be bigger?"))
+        .await;
+    assert_eq!(
+        (
+            job["changes"][0]["number"].as_i64(),
+            job["changes"][0]["requested_note"].as_str()
+        ),
+        (Some(1), Some("Could it be bigger?"))
+    );
+    assert!(notices(&h.app, h.creative).await[0].contains("asked for a change"));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn creatives_offer_changes_with_a_price_and_date(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let change = |price: i64, due: String| json!({ "title": "Add a shield", "scope_md": "One shield.", "extra_price_minor": price, "new_due_date": due });
+    let id = h.job("upfront", "in_progress").await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "change/offer",
+        change(2000, days_ahead(30)),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    for (body, want) in [
+        (change(999, days_ahead(30)), "extra_price_minor"),
+        (change(1_000_001, days_ahead(30)), "extra_price_minor"),
+        (change(-5, days_ahead(30)), "extra_price_minor"),
+        (change(2000, days_ahead(-1)), "new_due_date"),
+        (change(2000, "soon".into()), "new_due_date"),
+        (
+            json!({ "title": " ", "extra_price_minor": 0, "new_due_date": days_ahead(3) }),
+            "title",
+        ),
+    ] {
+        let (status, err) = h.step(&id, &h.vera, "change/offer", body.clone()).await;
+        assert_eq!(
+            (status, field(&err)),
+            (StatusCode::UNPROCESSABLE_ENTITY, want),
+            "{body}"
+        );
+    }
+    // Unasked: it becomes its own numbered change.
+    let job = h
+        .ok(&id, &h.vera, "change/offer", change(2000, days_ahead(30)))
+        .await;
+    let c = &job["changes"][0];
+    assert_eq!(
+        (
+            c["number"].as_i64(),
+            c["status"].as_str(),
+            c["requested_note"].clone(),
+            c["extra_price_minor"].as_i64()
+        ),
+        (Some(1), Some("offered"), Value::Null, Some(2000))
+    );
+    assert!(notices(&h.app, h.client).await[0].contains("offered a Change to Agreement"));
+    // One at a time.
+    h.refused(
+        &id,
+        &h.vera,
+        "change/offer",
+        change(0, days_ahead(30)),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "change/request",
+        json!({ "note": "Also a hat" }),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    // Nothing to change on finished work.
+    let done = h.job("upfront", "completed").await;
+    h.refused(
+        &done,
+        &h.vera,
+        "change/offer",
+        change(0, days_ahead(30)),
+        StatusCode::CONFLICT,
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn changes_are_declined_or_withdrawn_by_the_right_side(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let id = h.job("upfront", "in_progress").await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "change/decline",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let offer =
+        json!({ "title": "Shield", "extra_price_minor": 1500, "new_due_date": days_ahead(20) });
+
+    // The client asked; the creative declines (the work stays as agreed); the client is told.
+    h.ok(
+        &id,
+        &h.tavern,
+        "change/request",
+        json!({ "note": "A shield?" }),
+    )
+    .await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "change/decline",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let (status, body) = h
+        .step(
+            &id,
+            &h.vera,
+            "change/decline",
+            json!({ "note": "x".repeat(1001) }),
+        )
+        .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "note")
+    );
+    let job = h
+        .ok(
+            &id,
+            &h.vera,
+            "change/decline",
+            json!({ "note": "Not in scope." }),
+        )
+        .await;
+    assert_eq!(
+        (
+            job["changes"][0]["status"].as_str(),
+            job["changes"][0]["decline_note"].as_str()
+        ),
+        (Some("declined"), Some("Not in scope."))
+    );
+    assert!(
+        notices(app, h.client).await[0].contains("declined"),
+        "{:?}",
+        notices(app, h.client).await
+    );
+
+    // The creative offered; the client declines; the creative is told.
+    h.ok(&id, &h.vera, "change/offer", offer.clone()).await;
+    let job = h.ok(&id, &h.tavern, "change/decline", json!({})).await;
+    assert_eq!(job["changes"][1]["status"], "declined");
+    assert_eq!(job["changes"][1]["decline_note"], Value::Null);
+    assert!(
+        notices(app, h.creative).await[0]
+            .starts_with("Tavern Dev declined the Change to Agreement")
+    );
+
+    // The creative takes back their own offer; the client is told.
+    h.ok(&id, &h.vera, "change/offer", offer).await;
+    let job = h.ok(&id, &h.vera, "change/decline", json!({})).await;
+    assert_eq!(job["changes"][2]["status"], "withdrawn");
+    assert!(
+        notices(app, h.client).await[0].contains("withdrew"),
+        "{:?}",
+        notices(app, h.client).await
+    );
+    assert_eq!(h.status(&id).await, "in_progress");
+    assert!(
+        job["events"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|e| e["kind"] == "change_withdrawn")
+    );
+    // Nothing waiting now.
+    h.refused(
+        &id,
+        &h.vera,
+        "change/decline",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn accepting_a_change_restarts_the_work_on_the_new_terms(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    // Delivered with half still to pay; a free change sends it back to work, nothing due till
+    // the next delivery.
+    let id = h.job("split", "delivered").await;
+    let job = h.view(&id, &h.tavern).await;
+    assert_eq!(job["payments"][1]["status"], "due");
+    let due = days_ahead(40);
+    h.ok(
+        &id,
+        &h.vera,
+        "change/offer",
+        json!({ "title": "Fix the cape", "extra_price_minor": 0, "new_due_date": due }),
+    )
+    .await;
+    let accept = |n: i64| json!({ "number": n, "exact_terms_ack": true });
+    h.refused(
+        &id,
+        &h.vera,
+        "change/accept",
+        accept(1),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "change/accept",
+        accept(2),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let job = h.ok(&id, &h.tavern, "change/accept", accept(1)).await;
+    assert_eq!(job["status"], "in_progress");
+    assert_eq!(job["due_date"], due);
+    assert_eq!(
+        job["payments"].as_array().unwrap().len(),
+        2,
+        "no payment for a free change"
+    );
+    assert_eq!(job["payments"][1]["status"], "waiting");
+    assert!(
+        job["changes"][0]["text"]
+            .as_str()
+            .unwrap()
+            .contains("**Extra price:** none.")
+    );
+    assert_eq!(job["changes"][0]["status"], "accepted");
+    assert!(notices(app, h.creative).await[0].contains("accepted the Change to Agreement"));
+    let delivered_at: Option<OffsetDateTime> =
+        sqlx::query_scalar("select delivered_at from jobs where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(delivered_at.is_none());
+    // Accepted once.
+    h.refused(
+        &id,
+        &h.tavern,
+        "change/accept",
+        accept(1),
+        StatusCode::CONFLICT,
+    )
+    .await;
+
+    // Two presses at once: one acceptance, one payment.
+    h.ok(
+        &id,
+        &h.vera,
+        "change/offer",
+        json!({ "title": "Add a cape", "extra_price_minor": 3000, "new_due_date": days_ahead(50) }),
+    )
+    .await;
+    let press = || h.step(&id, &h.tavern, "change/accept", accept(2));
+    let ((a, _), (b, _)) = tokio::join!(press(), press());
+    let mut statuses = [a, b];
+    statuses.sort();
+    assert_eq!(statuses, [StatusCode::OK, StatusCode::CONFLICT]);
+    assert_eq!(
+        count(
+            app,
+            "select count(*) from job_payments where part = 'change'"
+        )
+        .await,
+        1
+    );
+    assert_eq!(h.status(&id).await, "awaiting_payment");
+}
+
+// ---------------------------------------------------------------------------------------------
+// Job conversations (people-036 … people-041)
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn clients_ask_for_a_conversation_and_creatives_open_and_close_it(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let id = h.job("upfront", "requested").await;
+    h.refused(
+        &id,
+        &h.vera,
+        "conversation/request",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let (status, body) = h
+        .step(
+            &id,
+            &h.tavern,
+            "conversation/request",
+            json!({ "note": "x".repeat(301) }),
+        )
+        .await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "note")
+    );
+    let job = h
+        .ok(
+            &id,
+            &h.tavern,
+            "conversation/request",
+            json!({ "note": "Can we talk about the style?" }),
+        )
+        .await;
+    assert_eq!(
+        job["conversation"]["request_note"],
+        "Can we talk about the style?"
+    );
+    assert!(!actions(&job).contains(&"request_conversation"));
+    assert!(notices(app, h.creative).await[0].contains("asked for a conversation"));
+    h.refused(
+        &id,
+        &h.tavern,
+        "conversation/request",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+
+    // The creative opens it (not the client), once; asking again while it's open is pointless.
+    h.refused(
+        &id,
+        &h.tavern,
+        "conversation/open",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let job = h.ok(&id, &h.vera, "conversation/open", json!({})).await;
+    assert_eq!(
+        (
+            job["conversation"]["open"].as_bool(),
+            job["conversation"]["requested_at"].clone()
+        ),
+        (Some(true), Value::Null)
+    );
+    assert!(notices(app, h.client).await[0].contains("opened the conversation"));
+    h.refused(
+        &id,
+        &h.vera,
+        "conversation/open",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    h.refused(
+        &id,
+        &h.tavern,
+        "conversation/request",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+
+    // The creative closes it; the client can't.
+    h.refused(
+        &id,
+        &h.tavern,
+        "conversation/close",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    let job = h.ok(&id, &h.vera, "conversation/close", json!({})).await;
+    assert_eq!(job["conversation"]["open"], false);
+    h.refused(
+        &id,
+        &h.vera,
+        "conversation/close",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+    // Asked again later, and reopened.
+    h.ok(&id, &h.tavern, "conversation/request", json!({}))
+        .await;
+    h.ok(&id, &h.vera, "conversation/open", json!({})).await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "nb3: a creative can reopen the conversation on a declined, cancelled or withdrawn job, after ending it closed it"]
+async fn conversations_stay_closed_once_a_job_has_ended(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let id = h.job("upfront", "offered").await;
+    h.ok(&id, &h.tavern, "decline", json!({ "note": "No thanks." }))
+        .await;
+    h.refused(
+        &id,
+        &h.vera,
+        "conversation/open",
+        json!({}),
+        StatusCode::CONFLICT,
+    )
+    .await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn job_messages_are_checked_and_rate_limited(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let id = h.job("upfront", "requested").await;
+    h.ok(&id, &h.vera, "conversation/open", json!({})).await;
+    let say = |body: &str| json!({ "body": body, "recording_ack": true });
+    for (body, want) in [(say("   "), "body"), (say(&"x".repeat(4001)), "body")] {
+        let (status, err) = h.step(&id, &h.vera, "messages", body).await;
+        assert_eq!(
+            (status, field(&err)),
+            (StatusCode::UNPROCESSABLE_ENTITY, want)
+        );
+    }
+    let job = h.ok(&id, &h.vera, "messages", say(&"x".repeat(4000))).await;
+    assert_eq!(job["conversation"]["acknowledged"], true);
+    // Sixty a minute, refused ones counted.
+    for _ in 0..59 {
+        h.step(&id, &h.vera, "messages", say("")).await;
+    }
+    let (status, body) = h.step(&id, &h.vera, "messages", say("one more")).await;
+    assert_eq!(
+        (status, body["error"]["code"].as_str()),
+        (StatusCode::TOO_MANY_REQUESTS, Some("rate_limited"))
+    );
+    assert_eq!(count(app, "select count(*) from job_messages").await, 1);
+    // The client has their own allowance.
+    h.ok(&id, &h.tavern, "messages", say("Hello!")).await;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_makers_agent_writes_in_the_job_conversation_for_its_person(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, body) = call(
+        app,
+        post(
+            "/v1/me/maker-tokens",
+            &h.vera,
+            json!({ "name": "Agent", "scope": "publish", "people": true }),
+        ),
+    )
+    .await;
+    let agent = format!("Bearer {}", body["secret"].as_str().unwrap());
+    let as_agent = |path: String, body: Value| {
+        call(
+            app,
+            req(Method::POST, path)
+                .header("authorization", agent.clone())
+                .json(body),
+        )
+    };
+    let (_, job) = h.hire(json!({})).await;
+    let id = job["id"].as_str().unwrap().to_string();
+    // Quoting, opening the conversation and writing: yes. Its ticking the recording box is the
+    // person's acknowledgement.
+    let (status, _) = as_agent(format!("/v1/jobs/{id}/offer"), sprite_offer("upfront")).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, _) = as_agent(format!("/v1/jobs/{id}/conversation/open"), json!({})).await;
+    assert_eq!(status, StatusCode::OK);
+    let (status, err) = as_agent(format!("/v1/jobs/{id}/messages"), json!({ "body": "Hi" })).await;
+    assert_eq!(
+        (status, field(&err)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "recording_ack")
+    );
+    let (status, job) = as_agent(
+        format!("/v1/jobs/{id}/messages"),
+        json!({ "body": "Hi, I'm drafting the quote.", "recording_ack": true }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(job["conversation"]["messages"][0]["author"], "vera");
+    let acked: Option<OffsetDateTime> =
+        sqlx::query_scalar("select creative_recording_ack_at from jobs where id = $1::uuid")
+            .bind(&id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(acked.is_some());
+    // Agreeing to things stays with the person.
+    for step in ["pay", "deliver", "cancel", "withdraw"] {
+        let (status, _) = as_agent(format!("/v1/jobs/{id}/{step}"), json!({})).await;
+        assert_eq!(status, StatusCode::FORBIDDEN, "{step}");
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn each_side_downloads_the_conversation_while_slop_keeps_the_text(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let id = h.job("upfront", "in_progress").await;
+    h.ok(&id, &h.vera, "conversation/open", json!({})).await;
+    h.ok(
+        &id,
+        &h.tavern,
+        "messages",
+        json!({ "body": "Blue, please.", "recording_ack": true }),
+    )
+    .await;
+    assert_eq!(
+        call(app, fetch(format!("/v1/jobs/{id}/conversation"), &stranger))
+            .await
+            .0,
+        StatusCode::NOT_FOUND
+    );
+    // While it's still open.
+    let res = app
+        .send(fetch(format!("/v1/jobs/{id}/conversation"), &h.vera))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        res.headers()[header::CONTENT_DISPOSITION],
+        format!("attachment; filename=\"slop-conversation-{id}.json\"").as_str()
+    );
+    let copy = body_json(res).await;
+    assert_eq!(copy["job_id"], id.as_str());
+    assert_eq!(copy["messages"][0]["body"], "Blue, please.");
+    assert_eq!(copy["messages"][0]["author_id"], h.client.to_string());
+    // Closed less than 30 days ago: still there.
+    h.ok(&id, &h.vera, "conversation/close", json!({})).await;
+    let n = slop_api::people::jobs::forget_conversations(
+        &app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(29),
+    )
+    .await
+    .unwrap();
+    assert_eq!(n, 0);
+    assert_eq!(
+        call(app, fetch(format!("/v1/jobs/{id}/conversation"), &h.tavern))
+            .await
+            .0,
+        StatusCode::OK
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn conversation_copies_are_evidence_only_for_an_open_problem_and_must_match(db: PgPool) {
+    let h = hiring(db, "US").await;
+    let app = &h.app;
+    let id = h.job("upfront", "in_progress").await;
+    h.ok(&id, &h.vera, "conversation/open", json!({})).await;
+    for (who, text) in [(&h.tavern, "One"), (&h.vera, "Two"), (&h.tavern, "Three")] {
+        h.ok(
+            &id,
+            who,
+            "messages",
+            json!({ "body": text, "recording_ack": true }),
+        )
+        .await;
+    }
+    let copy = call(app, fetch(format!("/v1/jobs/{id}/conversation"), &h.tavern))
+        .await
+        .1;
+    let evidence = |copy: Value| h.step(&id, &h.tavern, "evidence", json!({ "copy": copy }));
+    // Only for an open problem or review dispute.
+    let (status, _) = evidence(copy.clone()).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    h.ok(
+        &id,
+        &h.tavern,
+        "problem",
+        json!({ "statement": "Not as agreed." }),
+    )
+    .await;
+    // Another job's copy isn't this job's.
+    let other = h.job("upfront", "in_progress").await;
+    let mut theirs = copy.clone();
+    theirs["job_id"] = json!(other);
+    let (status, body) = evidence(theirs).await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "copy")
+    );
+    // Dropping or reordering messages shows: each fingerprint includes the one before.
+    let mut dropped = copy.clone();
+    dropped["messages"].as_array_mut().unwrap().remove(1);
+    let (_, checked) = evidence(dropped).await;
+    assert_eq!(
+        (
+            checked["verified_messages"].as_i64(),
+            checked["unverified_messages"].as_i64()
+        ),
+        (Some(1), Some(1))
+    );
+    let mut reordered = copy.clone();
+    reordered["messages"].as_array_mut().unwrap().swap(0, 1);
+    let (_, checked) = evidence(reordered).await;
+    assert_eq!(checked["verified_messages"], 0);
+    let (status, checked) = evidence(copy.clone()).await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(
+        (
+            checked["verified_messages"].as_i64(),
+            checked["unverified_messages"].as_i64()
+        ),
+        (Some(3), Some(0))
+    );
+    assert_eq!(count(app, "select count(*) from job_evidence").await, 3);
+    // Copies can be larger than other requests; what the record can keep is 400,000 characters,
+    // and the request itself at most 2 MB.
+    let mut long = copy.clone();
+    long["messages"][0]["body"] = json!("x".repeat(300_000));
+    let (status, checked) = evidence(long).await;
+    assert_eq!(
+        (status, checked["unverified_messages"].as_i64()),
+        (StatusCode::OK, Some(3))
+    );
+    let mut longer = copy.clone();
+    longer["messages"][0]["body"] = json!("x".repeat(500_000));
+    let (status, body) = evidence(longer).await;
+    assert_eq!(
+        (status, field(&body)),
+        (StatusCode::UNPROCESSABLE_ENTITY, "copy"),
+        "{body}"
+    );
+    assert_eq!(count(app, "select count(*) from job_evidence").await, 4);
+    let mut huge = copy;
+    huge["messages"][0]["body"] = json!("x".repeat(2_100_000));
+    let (status, _) = evidence(huge).await;
+    assert_eq!(status, StatusCode::PAYLOAD_TOO_LARGE);
+}
