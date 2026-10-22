@@ -74,7 +74,7 @@ async fn pending(
     .await?;
     match row {
         Some((into, from, session, provider, subject))
-            if into == user.id && session == user.session_id =>
+            if into == user.id && from != into && session == user.session_id =>
         {
             Ok((from, provider, subject))
         }
@@ -191,6 +191,12 @@ async fn confirm(
             "the other account has passkeys: sign in to it with one, and combine this account into it from there".into(),
         ));
     }
+    // Before combining: it moves every row naming `from`, these too, and one left behind would
+    // name this account on both sides (confirming again would close it into itself).
+    sqlx::query("delete from pending_merges where from_user_id = $1 or into_user_id = $1")
+        .bind(from)
+        .execute(&mut *tx)
+        .await?;
     combine(&mut tx, user.id, from)
         .await
         .map_err(ApiError::Internal)?;
@@ -202,10 +208,6 @@ async fn confirm(
         json!({ "from": from }),
     )
     .await?;
-    sqlx::query("delete from pending_merges where from_user_id = $1 or into_user_id = $1")
-        .bind(from)
-        .execute(&mut *tx)
-        .await?;
     tx.commit().await?;
     Ok((
         StatusCode::NO_CONTENT,
