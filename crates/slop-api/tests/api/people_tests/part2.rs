@@ -1847,13 +1847,15 @@ async fn fake_orgs(orgs: Orgs) -> String {
     let app = Router::new()
         .route(
             "/orgs/{org}/installation",
-            get(|State(orgs): State<Orgs>, Path(org): Path<String>| async move {
-                if orgs.lock().unwrap().contains_key(&org) {
-                    axum::Json(json!({ "id": 77 })).into_response()
-                } else {
-                    StatusCode::NOT_FOUND.into_response()
-                }
-            }),
+            get(
+                |State(orgs): State<Orgs>, Path(org): Path<String>| async move {
+                    if orgs.lock().unwrap().contains_key(&org) {
+                        axum::Json(json!({ "id": 77 })).into_response()
+                    } else {
+                        StatusCode::NOT_FOUND.into_response()
+                    }
+                },
+            ),
         )
         .route(
             "/app/installations/{id}/access_tokens",
@@ -1894,17 +1896,19 @@ async fn fake_orgs(orgs: Orgs) -> String {
         )
         .route(
             "/orgs/{org}",
-            get(|State(orgs): State<Orgs>, Path(org): Path<String>| async move {
-                let o = orgs.lock().unwrap().get(&org).cloned().unwrap_or_default();
-                if o.broken {
-                    return StatusCode::INTERNAL_SERVER_ERROR.into_response();
-                }
-                axum::Json(json!({
-                    "login": org, "is_verified": o.verified_domain,
-                    "two_factor_requirement_enabled": o.two_factor,
-                }))
-                .into_response()
-            }),
+            get(
+                |State(orgs): State<Orgs>, Path(org): Path<String>| async move {
+                    let o = orgs.lock().unwrap().get(&org).cloned().unwrap_or_default();
+                    if o.broken {
+                        return StatusCode::INTERNAL_SERVER_ERROR.into_response();
+                    }
+                    axum::Json(json!({
+                        "login": org, "is_verified": o.verified_domain,
+                        "two_factor_requirement_enabled": o.two_factor,
+                    }))
+                    .into_response()
+                },
+            ),
         )
         .route(
             "/dns-query",
@@ -2087,7 +2091,10 @@ async fn official_teams_need_an_organization_owner_two_factor_and_a_verified_dom
     assert_eq!(res["verified"], false);
     let (ok, detail) = check(&res, "owner");
     assert!(!ok);
-    assert!(detail.contains("couldn't find their GitHub account"), "{detail}");
+    assert!(
+        detail.contains("couldn't find their GitHub account"),
+        "{detail}"
+    );
 
     // An organization without Slop's App: nothing can be checked until it's installed.
     make_team(
@@ -2156,7 +2163,10 @@ async fn a_second_team_for_an_already_verified_organization_is_refused_not_an_er
     );
     assert_eq!(body["verified"], false, "{body}");
     let (ok, detail) = check(&body, "organization");
-    assert!(!ok && detail.contains("already the verified team for acme"), "{detail}");
+    assert!(
+        !ok && detail.contains("already the verified team for acme"),
+        "{detail}"
+    );
     let verified: Vec<String> =
         sqlx::query_scalar("select slug from teams where verified_at is not null")
             .fetch_all(&app.db)
@@ -2174,12 +2184,8 @@ async fn the_daily_recheck_drops_badges_that_stopped_passing_and_skips_fresh_one
         owners: vec!["octo"],
         broken: false,
     };
-    orgs.lock()
-        .unwrap()
-        .insert("acme".into(), passing.clone());
-    orgs.lock()
-        .unwrap()
-        .insert("fresh".into(), passing.clone());
+    orgs.lock().unwrap().insert("acme".into(), passing.clone());
+    orgs.lock().unwrap().insert("fresh".into(), passing.clone());
     orgs.lock().unwrap().insert(
         "broken".into(),
         Org {
@@ -2234,14 +2240,16 @@ async fn the_daily_recheck_drops_badges_that_stopped_passing_and_skips_fresh_one
     tokio::time::sleep(std::time::Duration::from_millis(500)).await;
     job.abort();
     assert!(done, "acme was rechecked");
-    assert!(!job.await.unwrap_err().is_panic(), "an error is logged, not fatal");
+    assert!(
+        !job.await.unwrap_err().is_panic(),
+        "an error is logged, not fatal"
+    );
 
-    let after: Vec<(String, OffsetDateTime, bool)> = sqlx::query_as(
-        "select slug, checked_at, verified_at is not null from teams order by slug",
-    )
-    .fetch_all(&app.db)
-    .await
-    .unwrap();
+    let after: Vec<(String, OffsetDateTime, bool)> =
+        sqlx::query_as("select slug, checked_at, verified_at is not null from teams order by slug")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
     let get = |slug: &str| after.iter().find(|t| t.0 == slug).unwrap().clone();
     let before = |slug: &str| checked_before.iter().find(|t| t.0 == slug).unwrap().1;
     assert!(!get("acme").2, "the badge went");
@@ -2255,4 +2263,2169 @@ async fn the_daily_recheck_drops_badges_that_stopped_passing_and_skips_fresh_one
         .map(|n| n.0)
         .collect();
     assert_eq!(titles, ["Your team's official badge was removed"]);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Chat's delivery service, driven like the app would without the encryption: raw devices
+
+fn b64(bytes: &[u8]) -> String {
+    use base64::Engine;
+    base64::engine::general_purpose::STANDARD.encode(bytes)
+}
+
+/// A fresh Ed25519 signing key.
+fn signing_key() -> ed25519_dalek::SigningKey {
+    use sha2::Digest;
+    let seed = sha2::Sha256::digest(Uuid::now_v7().as_bytes());
+    let mut bytes = [0u8; 32];
+    bytes.copy_from_slice(&seed);
+    ed25519_dalek::SigningKey::from_bytes(&bytes)
+}
+
+/// A desktop sign-in's `Authorization` header.
+async fn app_bearer(app: &TestApp, web: &str) -> String {
+    let tokens = desktop_sign_in(app, web).await;
+    format!("Bearer {}", tokens["access_token"].as_str().unwrap())
+}
+
+/// One of a user's chat devices, registered through the API from its own desktop sign-in.
+struct Dev {
+    id: Uuid,
+    bearer: String,
+    key: ed25519_dalek::SigningKey,
+}
+
+impl Dev {
+    /// A request as this device.
+    fn call(&self, method: Method, path: impl Into<String>) -> Req {
+        req(method, path)
+            .header("authorization", self.bearer.clone())
+            .header("x-slop-chat-device", self.id.to_string())
+    }
+    /// A request from this device's sign-in, without naming the device.
+    fn signed_in(&self, method: Method, path: impl Into<String>) -> Req {
+        req(method, path).header("authorization", self.bearer.clone())
+    }
+    fn public(&self) -> [u8; 32] {
+        self.key.verifying_key().to_bytes()
+    }
+}
+
+/// Registers a new chat device for a user, with `packages` key packages. Its status is the
+/// returned device's second value (active for a first device, pending after).
+async fn chat_device(app: &TestApp, web: &str, packages: usize) -> (Dev, String) {
+    let bearer = app_bearer(app, web).await;
+    let key = signing_key();
+    let id = Uuid::now_v7();
+    let kps: Vec<String> = (0..packages)
+        .map(|i| b64(format!("kp-{id}-{i}").as_bytes()))
+        .collect();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/chat/devices")
+                .header("authorization", bearer.clone())
+                .json(json!({
+                    "id": id, "name": "PC", "signature_key": b64(&key.verifying_key().to_bytes()),
+                    "key_packages": kps, "last_resort": b64(format!("lr-{id}").as_bytes()),
+                })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let status = body_json(res).await["status"].as_str().unwrap().to_string();
+    (Dev { id, bearer, key }, status)
+}
+
+/// An active first device.
+async fn first_device(app: &TestApp, web: &str) -> Dev {
+    let (dev, status) = chat_device(app, web, 5).await;
+    assert_eq!(status, "active");
+    dev
+}
+
+/// Starts a chat from a device's sign-in; returns (status, conversation).
+async fn start_chat(app: &TestApp, dev: &Dev, body: Value) -> (StatusCode, Value) {
+    let res = app
+        .send(
+            dev.signed_in(Method::POST, "/v1/chat/conversations")
+                .json(body),
+        )
+        .await;
+    let status = res.status();
+    (status, body_json(res).await)
+}
+
+async fn chat_id(app: &TestApp, dev: &Dev, body: Value) -> Uuid {
+    let (status, c) = start_chat(app, dev, body).await;
+    assert!(status.is_success(), "{status} {c}");
+    c["id"].as_str().unwrap().parse().unwrap()
+}
+
+/// An encrypted message's body as the app sends it (here: opaque bytes).
+fn message(epoch: i64, text: &str) -> Value {
+    json!({ "epoch": epoch, "body": b64(text.as_bytes()), "franking_tag": b64(&[0; 32]) })
+}
+
+async fn send_message(app: &TestApp, dev: &Dev, conv: Uuid, text: &str) -> Response {
+    app.send(
+        dev.call(
+            Method::POST,
+            format!("/v1/chat/conversations/{conv}/messages"),
+        )
+        .json(message(0, text)),
+    )
+    .await
+}
+
+/// A request with a raw body (attachments and backups).
+async fn send_bytes(app: &TestApp, r: Req, body: Vec<u8>) -> Response {
+    let mut builder = Request::builder()
+        .method(r.method)
+        .uri(r.uri)
+        .header(header::HOST, "localhost:8080");
+    if !r.cookies.is_empty() {
+        builder = builder.header(header::COOKIE, r.cookies.join("; "));
+    }
+    for (name, value) in r.headers {
+        builder = builder.header(name, value);
+    }
+    app.router
+        .clone()
+        .oneshot(builder.body(Body::from(body)).unwrap())
+        .await
+        .unwrap()
+}
+
+async fn body_bytes(res: Response) -> Vec<u8> {
+    res.into_body().collect().await.unwrap().to_bytes().to_vec()
+}
+
+/// A device's sync, at once.
+async fn sync_now(app: &TestApp, dev: &Dev) -> Value {
+    let res = app
+        .send(dev.call(Method::GET, "/v1/chat/sync?after=0"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    body_json(res).await
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn chat_devices_are_registered_with_a_name_a_key_and_a_few_packages(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (_, ann_web) = app.user("Ann", "US").await;
+    let bearer = app_bearer(&app, &ann_web).await;
+    let register = |body: Value| {
+        req(Method::POST, "/v1/chat/devices")
+            .header("authorization", bearer.clone())
+            .json(body)
+    };
+    let key = signing_key().verifying_key().to_bytes();
+    let device = |id: Uuid, key: &[u8], name: &str| {
+        json!({ "id": id, "name": name, "signature_key": b64(key),
+                "key_packages": [b64(b"kp1"), b64(b"kp2")], "last_resort": b64(b"lr") })
+    };
+
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/chat/devices").json(device(Uuid::now_v7(), &key, "PC")))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let with = |change: Value| {
+        let mut body = device(Uuid::now_v7(), &key, "PC");
+        for (k, v) in change.as_object().unwrap() {
+            body[k] = v.clone();
+        }
+        body
+    };
+    for (change, field) in [
+        (json!({ "name": "" }), "name"),
+        (json!({ "name": "   " }), "name"),
+        (json!({ "name": "x".repeat(61) }), "name"),
+        (json!({ "signature_key": "not base64!" }), "signature_key"),
+        (json!({ "signature_key": b64(&[1; 31]) }), "signature_key"),
+        (json!({ "signature_key": b64(&[1; 33]) }), "signature_key"),
+        (
+            json!({ "key_packages": vec![b64(b"kp"); 21] }),
+            "key_packages",
+        ),
+        (
+            json!({ "key_packages": [b64(&vec![1; 4097])] }),
+            "key_packages",
+        ),
+        (json!({ "key_packages": ["%%%"] }), "key_packages"),
+        (json!({ "last_resort": b64(&vec![1; 4097]) }), "last_resort"),
+    ] {
+        let res = app.send(register(with(change.clone()))).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{change}");
+        assert_eq!(field_of(res).await, field, "{change}");
+    }
+    let stored: (i64, i64) = sqlx::query_as(
+        "select (select count(*) from chat_devices), (select count(*) from chat_key_packages)",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(stored, (0, 0), "nothing kept from refused registrations");
+
+    // The first: active at once, with the code from its key; 60 characters of name is fine.
+    let first = Uuid::now_v7();
+    let res = app
+        .send(register(device(first, &key, &"x".repeat(60))))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let created = body_json(res).await;
+    assert_eq!(created["status"], "active");
+    assert_eq!(created["code"], slop_api::chat::device_code(&key));
+    let packages: Vec<bool> = sqlx::query_scalar(
+        "select last_resort from chat_key_packages where device_id = $1 order by last_resort",
+    )
+    .bind(first)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(packages, [false, false, true]);
+    // The same device, or the same key under another ID, isn't registered twice.
+    let other_key = signing_key().verifying_key().to_bytes();
+    assert_eq!(
+        app.send(register(device(first, &other_key, "PC")))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(register(device(Uuid::now_v7(), &key, "PC")))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    // Later ones wait for approval; five at most wait at once.
+    let mut pending = Vec::new();
+    for _ in 0..5 {
+        let (dev, status) = chat_device(&app, &ann_web, 1).await;
+        assert_eq!(status, "pending");
+        pending.push(dev);
+    }
+    let res = app
+        .send(register(device(
+            Uuid::now_v7(),
+            &signing_key().verifying_key().to_bytes(),
+            "One too many",
+        )))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+
+    // The list: every device but removed ones, each with its code.
+    let list = |b: String| {
+        let app = &app;
+        async move {
+            body_json(
+                app.send(req(Method::GET, "/v1/chat/devices").header("authorization", b))
+                    .await,
+            )
+            .await
+        }
+    };
+    let devices = list(bearer.clone()).await;
+    assert_eq!(devices.as_array().unwrap().len(), 6);
+    assert_eq!(devices[0]["id"], first.to_string());
+    assert_eq!(devices[0]["status"], "active");
+    assert_eq!(devices[1]["status"], "pending");
+    assert_eq!(
+        devices[1]["code"],
+        slop_api::chat::device_code(&pending[0].public())
+    );
+    let res = app
+        .send(
+            req(
+                Method::DELETE,
+                format!("/v1/chat/devices/{}", pending[0].id),
+            )
+            .header("authorization", bearer.clone()),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let devices = list(bearer.clone()).await;
+    assert_eq!(devices.as_array().unwrap().len(), 5);
+    assert!(
+        devices
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|d| d["id"] != pending[0].id.to_string()),
+        "removed devices aren't listed"
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/chat/devices"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_new_chat_device_is_approved_only_with_an_active_devices_signature(db: PgPool) {
+    use ed25519_dalek::Signer;
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let first = first_device(&app, &ann_web).await;
+    let (laptop, status) = chat_device(&app, &ann_web, 3).await;
+    assert_eq!(status, "pending");
+    let (phone, _) = chat_device(&app, &ann_web, 3).await;
+    let bob_first = first_device(&app, &bob_web).await;
+    let (bob_pending, _) = chat_device(&app, &bob_web, 3).await;
+    let sign = |by: &Dev, user: Uuid, device: &Dev| {
+        b64(&by
+            .key
+            .sign(&slop_api::chat::approval_message(
+                user,
+                device.id,
+                &device.public(),
+            ))
+            .to_bytes())
+    };
+    let approve = |as_dev: &Dev, device: Uuid, by: Uuid, signature: String| {
+        as_dev
+            .signed_in(Method::POST, format!("/v1/chat/devices/{device}/approve"))
+            .json(json!({ "by": by, "signature": signature }))
+    };
+
+    // A forged signature: made with the new device's own key, or over another device.
+    let res = app
+        .send(approve(
+            &first,
+            laptop.id,
+            first.id,
+            sign(&laptop, ann_id, &laptop),
+        ))
+        .await;
+    assert_eq!(field_of(res).await, "signature");
+    let res = app
+        .send(approve(
+            &first,
+            laptop.id,
+            first.id,
+            sign(&first, ann_id, &phone),
+        ))
+        .await;
+    assert_eq!(field_of(res).await, "signature");
+    let res = app
+        .send(approve(&first, laptop.id, first.id, "not base64!".into()))
+        .await;
+    assert_eq!(field_of(res).await, "signature");
+    // Approved by a device that's itself waiting: no.
+    assert_eq!(
+        app.send(approve(
+            &first,
+            laptop.id,
+            phone.id,
+            sign(&phone, ann_id, &laptop)
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    // Someone else's device, either side of it: no.
+    assert_eq!(
+        app.send(approve(
+            &first,
+            bob_pending.id,
+            first.id,
+            sign(&first, bob_id, &bob_pending)
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(approve(
+            &bob_first,
+            laptop.id,
+            bob_first.id,
+            sign(&bob_first, ann_id, &laptop)
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let status: String = sqlx::query_scalar("select status from chat_devices where id = $1")
+        .bind(laptop.id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "pending");
+    // A pending device can't use chat yet.
+    assert_eq!(
+        app.send(laptop.call(Method::GET, "/v1/chat/sync"))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+
+    // The real approval: active, with who approved it and the signature kept for others to check.
+    let signature = sign(&first, ann_id, &laptop);
+    assert_eq!(
+        app.send(approve(&first, laptop.id, first.id, signature.clone()))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let (status, by, sig): (String, Option<Uuid>, Option<Vec<u8>>) =
+        sqlx::query_as("select status, approved_by, approval_sig from chat_devices where id = $1")
+            .bind(laptop.id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), by), ("active", Some(first.id)));
+    assert_eq!(b64(&sig.unwrap()), signature);
+    assert_eq!(
+        app.send(laptop.call(Method::GET, "/v1/chat/sync"))
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert_eq!(
+        app.send(approve(&first, laptop.id, first.id, signature))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND,
+        "only waiting devices are approved"
+    );
+
+    // Waiting more than a day: it expires, and can't be approved any more.
+    sqlx::query("update chat_devices set created_at = now() - interval '25 hours' where id = $1")
+        .bind(phone.id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        slop_api::chat::expire_pending(&app.db).await.unwrap(),
+        1,
+        "only the old one"
+    );
+    assert_eq!(
+        app.send(approve(
+            &first,
+            phone.id,
+            first.id,
+            sign(&first, ann_id, &phone)
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let (bob_status,): (String,) = sqlx::query_as("select status from chat_devices where id = $1")
+        .bind(bob_pending.id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(bob_status, "pending", "a new pending device stays");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn starting_over_needs_a_fresh_sign_in_and_replaces_every_other_device(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let old = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    chat_id(&app, &bob, json!({ "kind": "direct", "user": ann_id })).await;
+    let (new, status) = chat_device(&app, &ann_web, 3).await;
+    assert_eq!(status, "pending");
+    let start_over = |dev: &Dev, id: Uuid| {
+        dev.signed_in(Method::POST, format!("/v1/chat/devices/{id}/start-over"))
+    };
+
+    // Not with a sign-in from yesterday.
+    sqlx::query(
+        "update sessions set created_at = now() - interval '1 day' where user_id = $1 and kind = 'desktop'",
+    )
+    .bind(ann_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app.send(start_over(&new, new.id)).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+
+    // Freshly signed in: only a waiting device of their own.
+    let fresh = Dev {
+        bearer: app_bearer(&app, &ann_web).await,
+        ..new
+    };
+    for id in [old.id, bob.id, Uuid::now_v7()] {
+        assert_eq!(
+            app.send(start_over(&fresh, id)).await.status(),
+            StatusCode::NOT_FOUND,
+            "{id}"
+        );
+    }
+
+    // Bob's app is waiting for news: the change of devices wakes it.
+    let router = app.router.clone();
+    let (bob_bearer, bob_device) = (bob.bearer.clone(), bob.id);
+    let after: i64 = sqlx::query_scalar("select coalesce(max(seq), 0) from chat_messages")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let before = sync_now(&app, &bob).await["roster"].clone();
+    let waiting = tokio::spawn(async move {
+        let started = std::time::Instant::now();
+        let res = router
+            .oneshot(
+                Request::builder()
+                    .uri(format!("/v1/chat/sync?after={after}&wait=20"))
+                    .header(header::HOST, "localhost:8080")
+                    .header("authorization", bob_bearer)
+                    .header("x-slop-chat-device", bob_device.to_string())
+                    .body(Body::empty())
+                    .unwrap(),
+            )
+            .await
+            .unwrap();
+        (started.elapsed(), body_json(res).await)
+    });
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    assert_eq!(
+        app.send(start_over(&fresh, fresh.id)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let (took, woke) = waiting.await.unwrap();
+    assert!(
+        took < std::time::Duration::from_secs(10),
+        "woken, not timed out: {took:?}"
+    );
+    assert_ne!(
+        woke["roster"], before,
+        "Bob's app sees Ann's devices changed"
+    );
+
+    let devices: Vec<(Uuid, String, Option<Uuid>)> = sqlx::query_as(
+        "select id, status, approved_by from chat_devices where user_id = $1 order by created_at",
+    )
+    .bind(ann_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        devices,
+        [
+            (old.id, "revoked".to_string(), None),
+            (fresh.id, "active".to_string(), None)
+        ]
+    );
+    let old_packages: i64 =
+        sqlx::query_scalar("select count(*) from chat_key_packages where device_id = $1")
+            .bind(old.id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(old_packages, 0, "the lost devices' key packages are gone");
+    assert_eq!(
+        app.send(old.call(Method::GET, "/v1/chat/sync"))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn removing_a_chat_device_stops_it_and_deletes_its_keys(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let ann = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    befriend(&app, ann_id, bob_id).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    // A Welcome waiting for Bob's device.
+    let res = app
+        .send(
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/commit"),
+            )
+            .json(json!({ "epoch": 0, "commit": b64(b"commit"),
+                              "welcomes": [{ "device_id": bob.id, "welcome": b64(b"welcome") }] })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let remove =
+        |as_dev: &Dev, id: Uuid| as_dev.signed_in(Method::DELETE, format!("/v1/chat/devices/{id}"));
+
+    assert_eq!(
+        app.send(remove(&ann, bob.id)).await.status(),
+        StatusCode::NOT_FOUND,
+        "not someone else's"
+    );
+    assert_eq!(
+        app.send(remove(&ann, Uuid::now_v7())).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(remove(&bob, bob.id)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let (status, revoked, packages, welcomes): (String, bool, i64, i64) = sqlx::query_as(
+        "select status, revoked_at is not null,
+                (select count(*) from chat_key_packages where device_id = $1),
+                (select count(*) from chat_welcomes where device_id = $1)
+         from chat_devices where id = $1",
+    )
+    .bind(bob.id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (status.as_str(), revoked, packages, welcomes),
+        ("revoked", true, 0, 0)
+    );
+    assert_eq!(
+        app.send(bob.call(Method::GET, "/v1/chat/sync"))
+            .await
+            .status(),
+        StatusCode::CONFLICT,
+        "a removed device can't sync"
+    );
+    assert_eq!(
+        send_message(&app, &bob, conv, "still here").await.status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        app.send(remove(&bob, bob.id)).await.status(),
+        StatusCode::NOT_FOUND,
+        "removed once"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn key_packages_are_topped_up_by_their_own_device_within_a_limit(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (_, ann_web) = app.user("Ann", "US").await;
+    let (_, bob_web) = app.user("Bob", "US").await;
+    let ann = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    let top_up = |as_dev: &Dev, id: Uuid, n: usize, last_resort: Option<&str>| {
+        let mut body = json!({ "key_packages": vec![b64(b"kp"); n] });
+        if let Some(lr) = last_resort {
+            body["last_resort"] = json!(b64(lr.as_bytes()));
+        }
+        as_dev
+            .signed_in(Method::POST, format!("/v1/chat/devices/{id}/key-packages"))
+            .json(body)
+    };
+    let stored = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (i64, i64)>(
+                "select count(*) filter (where not last_resort), count(*) filter (where last_resort)
+                 from chat_key_packages where device_id = $1",
+            )
+            .bind(id)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(stored(ann.id).await, (5, 1));
+
+    assert_eq!(
+        app.send(top_up(&bob, ann.id, 1, None)).await.status(),
+        StatusCode::NOT_FOUND,
+        "not someone else's device"
+    );
+    assert_eq!(
+        app.send(top_up(&ann, ann.id, 15, Some("new last resort")))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(stored(ann.id).await, (20, 1), "one last resort, replaced");
+    let lr: Vec<u8> = sqlx::query_scalar(
+        "select key_package from chat_key_packages where device_id = $1 and last_resort",
+    )
+    .bind(ann.id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(lr, b"new last resort");
+    // At most twice the usual number waiting.
+    let res = app.send(top_up(&ann, ann.id, 21, None)).await;
+    assert_eq!(field_of(res).await, "key_packages");
+    assert_eq!(
+        app.send(top_up(&ann, ann.id, 20, None)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(stored(ann.id).await, (40, 1));
+    let res = app.send(top_up(&ann, ann.id, 1, None)).await;
+    assert_eq!(field_of(res).await, "key_packages");
+    // A removed device takes no more.
+    app.send(bob.signed_in(Method::DELETE, format!("/v1/chat/devices/{}", bob.id)))
+        .await;
+    assert_eq!(
+        app.send(top_up(&bob, bob.id, 1, None)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn starting_chats_reuses_one_per_pair_team_and_self_and_checks_groups(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    let (cara_id, _) = app.user("Cara", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, cara_id).await;
+    let ann = first_device(&app, &ann_web).await;
+
+    // One direct chat per pair, one self chat: asking again returns it.
+    let (status, direct) =
+        start_chat(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, again) = start_chat(
+        &app,
+        &ann,
+        json!({ "kind": "direct", "user": format!("http://localhost:8080/u/{bob_id}") }),
+    )
+    .await;
+    assert_eq!((status, &again["id"]), (StatusCode::OK, &direct["id"]));
+    let (status, me) = start_chat(&app, &ann, json!({ "kind": "self" })).await;
+    assert_eq!(status, StatusCode::CREATED);
+    let (status, me_again) = start_chat(&app, &ann, json!({ "kind": "self" })).await;
+    assert_eq!((status, &me_again["id"]), (StatusCode::OK, &me["id"]));
+
+    // Groups: someone besides you, fewer than fifty, everyone someone you may message.
+    let (status, err) = start_chat(
+        &app,
+        &ann,
+        json!({ "kind": "group", "users": [ann_id.to_string()] }),
+    )
+    .await;
+    assert_eq!(
+        (status, err["error"]["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("users"))
+    );
+    let many: Vec<String> = (0..50).map(|_| Uuid::now_v7().to_string()).collect();
+    let (status, err) = start_chat(&app, &ann, json!({ "kind": "group", "users": many })).await;
+    assert_eq!(
+        (status, err["error"]["field"].as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, Some("users"))
+    );
+    let (status, _) = start_chat(
+        &app,
+        &ann,
+        json!({ "kind": "group", "users": [bob_id, Uuid::now_v7()] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+    let groups: i64 =
+        sqlx::query_scalar("select count(*) from chat_conversations where kind = 'group'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(groups, 0);
+    let (status, group) = start_chat(
+        &app,
+        &ann,
+        json!({ "kind": "group", "users": [bob_id, cara_id, bob_id] }),
+    )
+    .await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(group["members"].as_array().unwrap().len(), 3, "Bob once");
+    let (status, _) = start_chat(&app, &ann, json!({ "kind": "chatroom" })).await;
+    assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Team chats: for members of a visible player team, one per team.
+    make_team(
+        &app,
+        &ann_web,
+        "night-owls",
+        json!({ "name": "Night Owls" }),
+    )
+    .await;
+    add_to_team(&app, "night-owls", bob_id, "member").await;
+    let (status, team) =
+        start_chat(&app, &ann, json!({ "kind": "team", "team": "Night-Owls" })).await;
+    assert_eq!(status, StatusCode::CREATED);
+    assert_eq!(
+        (team["kind"].as_str(), team["team_name"].as_str()),
+        (Some("team"), Some("Night Owls"))
+    );
+    assert_eq!(team["members"].as_array().unwrap().len(), 2);
+    let (status, team_again) =
+        start_chat(&app, &ann, json!({ "kind": "team", "team": "night-owls" })).await;
+    assert_eq!((status, &team_again["id"]), (StatusCode::OK, &team["id"]));
+    make_team(
+        &app,
+        &ann_web,
+        "acme",
+        json!({ "kind": "official", "github_org": "acme" }),
+    )
+    .await;
+    make_team(&app, &stranger_web, "elsewhere", json!({})).await;
+    for slug in ["acme", "elsewhere", "no-such-team"] {
+        let (status, _) = start_chat(&app, &ann, json!({ "kind": "team", "team": slug })).await;
+        assert_eq!(status, StatusCode::NOT_FOUND, "{slug}");
+    }
+    sqlx::query("update teams set hidden_reason = 'Spam' where slug = 'night-owls'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (status, _) = start_chat(&app, &ann, json!({ "kind": "team", "team": "night-owls" })).await;
+    assert_eq!(status, StatusCode::NOT_FOUND, "hidden teams have no chat");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_chat_list_leaves_out_hidden_chats_and_marks_closed_ones(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (dan_id, dan_web) = app.user("Dan", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, dan_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let with_bob = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    let with_dan = chat_id(&app, &ann, json!({ "kind": "direct", "user": dan_id })).await;
+    make_team(
+        &app,
+        &ann_web,
+        "night-owls",
+        json!({ "name": "Night Owls" }),
+    )
+    .await;
+    add_to_team(&app, "night-owls", bob_id, "member").await;
+    let team = chat_id(&app, &ann, json!({ "kind": "team", "team": "night-owls" })).await;
+    let list = |web: &str| {
+        let r = req(Method::GET, "/v1/chat/conversations").cookie(web);
+        let app = &app;
+        async move { body_json(app.send(r).await).await }
+    };
+    let ids = |v: &Value| -> Vec<Uuid> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|c| c["id"].as_str().unwrap().parse().unwrap())
+            .collect()
+    };
+
+    // Team chats are listed for the team's members.
+    let bobs = list(&bob_web).await;
+    assert_eq!(ids(&bobs).len(), 2);
+    let t = bobs
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["kind"] == "team")
+        .unwrap();
+    assert_eq!(
+        (t["team_slug"].as_str(), t["team_name"].as_str()),
+        (Some("night-owls"), Some("Night Owls"))
+    );
+    assert!(ids(&list(&stranger_web).await).is_empty());
+
+    // Hidden: gone from the list until a new message arrives.
+    let hide = |web: &str, id: Uuid| {
+        req(Method::POST, format!("/v1/chat/conversations/{id}/hide")).cookie(web)
+    };
+    assert_eq!(
+        app.send(hide(&stranger_web, team)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(hide(&bob_web, team)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(ids(&list(&bob_web).await), [with_bob]);
+    assert_eq!(
+        send_message(&app, &ann, team, "game tonight?")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    assert!(ids(&list(&bob_web).await).contains(&team));
+
+    // Closed: a direct chat with someone who blocked you, or who closed their account.
+    let anns = list(&ann_web).await;
+    let closed = |v: &Value, id: Uuid| {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .find(|c| c["id"] == id.to_string())
+            .unwrap()["closed"]
+            .as_bool()
+            .unwrap()
+    };
+    assert!(!closed(&anns, with_dan) && !closed(&anns, with_bob));
+    app.send(req(Method::PUT, format!("/v1/me/blocks/{ann_id}")).cookie(&dan_web))
+        .await;
+    sqlx::query("update users set closed_at = now() where id = $1")
+        .bind(bob_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let anns = list(&ann_web).await;
+    assert!(closed(&anns, with_dan), "blocked by Dan");
+    assert!(closed(&anns, with_bob), "Bob closed his account");
+    assert!(!closed(&anns, team), "only direct chats close");
+    assert!(
+        !ids(&list(&dan_web).await).contains(&with_dan),
+        "the blocker doesn't see it"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn chat_details_and_member_devices_are_for_members_only(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    let (bob_pending, _) = chat_device(&app, &bob_web, 1).await;
+    let (bob_old, _) = chat_device(&app, &bob_web, 1).await;
+    sqlx::query("update chat_devices set status = 'revoked' where id = $1")
+        .bind(bob_old.id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let conv = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+
+    let detail = body_json(
+        app.send(req(Method::GET, format!("/v1/chat/conversations/{conv}")).cookie(&bob_web))
+            .await,
+    )
+    .await;
+    assert_eq!(detail["kind"], "direct");
+    let names: Vec<&str> = detail["members"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|m| m["name"].as_str().unwrap())
+        .collect();
+    assert_eq!(names, ["Ann", "Bob"]);
+    assert_eq!(detail["closed"], false);
+    for path in [
+        format!("/v1/chat/conversations/{conv}"),
+        format!("/v1/chat/conversations/{conv}/devices"),
+        format!("/v1/chat/conversations/{}", Uuid::now_v7()),
+    ] {
+        assert_eq!(
+            app.send(req(Method::GET, path.clone()).cookie(&stranger_web))
+                .await
+                .status(),
+            StatusCode::NOT_FOUND,
+            "{path}"
+        );
+    }
+
+    // The devices the encryption should include: active and removed ones (to check approval
+    // chains), never one still waiting.
+    let devices = body_json(
+        app.send(
+            req(
+                Method::GET,
+                format!("/v1/chat/conversations/{conv}/devices"),
+            )
+            .cookie(&ann_web),
+        )
+        .await,
+    )
+    .await;
+    let listed: Vec<(String, String)> = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|d| {
+            (
+                d["id"].as_str().unwrap().to_string(),
+                d["status"].as_str().unwrap().to_string(),
+            )
+        })
+        .collect();
+    assert!(listed.contains(&(ann.id.to_string(), "active".into())));
+    assert!(listed.contains(&(bob.id.to_string(), "active".into())));
+    assert!(listed.contains(&(bob_old.id.to_string(), "revoked".into())));
+    assert!(!listed.iter().any(|d| d.0 == bob_pending.id.to_string()));
+    let bobs = devices
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|d| d["id"] == bob.id.to_string())
+        .unwrap();
+    assert_eq!(bobs["signature_key"], b64(&bob.public()));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn key_packages_are_claimed_only_for_active_devices_in_the_chat(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (_, cara_web) = app.user("Cara", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let (bob, _) = chat_device(&app, &bob_web, 1).await;
+    let (bob_pending, _) = chat_device(&app, &bob_web, 1).await;
+    let cara = first_device(&app, &cara_web).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    let claim = |as_dev: &Dev, conv: Uuid, devices: Vec<Uuid>| {
+        as_dev
+            .call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/key-packages"),
+            )
+            .json(json!({ "devices": devices }))
+    };
+
+    let res = app
+        .send(claim(
+            &ann,
+            conv,
+            (0..201).map(|_| Uuid::now_v7()).collect(),
+        ))
+        .await;
+    assert_eq!(field_of(res).await, "devices");
+    assert_eq!(
+        app.send(claim(&cara, conv, vec![bob.id])).await.status(),
+        StatusCode::NOT_FOUND,
+        "not in the chat"
+    );
+
+    // Bob's one key package, then his last-resort one, which is never used up; never Cara's
+    // (not in the chat) or a device still waiting.
+    let mut got = Vec::new();
+    for _ in 0..3 {
+        let res = app
+            .send(claim(&ann, conv, vec![bob.id, bob_pending.id, cara.id]))
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        let claimed = body_json(res).await;
+        assert_eq!(claimed.as_array().unwrap().len(), 1, "{claimed}");
+        assert_eq!(claimed[0]["device_id"], bob.id.to_string());
+        got.push(claimed[0]["key_package"].as_str().unwrap().to_string());
+    }
+    assert_eq!(got[0], b64(format!("kp-{}-0", bob.id).as_bytes()));
+    assert_eq!(got[1], b64(format!("lr-{}", bob.id).as_bytes()));
+    assert_eq!(got[2], got[1]);
+    let left: Vec<bool> =
+        sqlx::query_scalar("select last_resort from chat_key_packages where device_id = $1")
+            .bind(bob.id)
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(left, [true]);
+    let cara_left: i64 =
+        sqlx::query_scalar("select count(*) from chat_key_packages where device_id = $1")
+            .bind(cara.id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(cara_left, 6);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn group_members_add_people_they_may_message_who_havent_blocked_anyone_there(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (cara_id, _) = app.user("Cara", "US").await;
+    let (dan_id, _) = app.user("Dan", "US").await;
+    let (eve_id, _) = app.user("Eve", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    for friend in [bob_id, cara_id, eve_id] {
+        befriend(&app, ann_id, friend).await;
+    }
+    let ann = first_device(&app, &ann_web).await;
+    let group = chat_id(&app, &ann, json!({ "kind": "group", "users": [bob_id] })).await;
+    let direct = chat_id(&app, &ann, json!({ "kind": "direct", "user": cara_id })).await;
+    make_team(&app, &ann_web, "night-owls", json!({})).await;
+    let team = chat_id(&app, &ann, json!({ "kind": "team", "team": "night-owls" })).await;
+    let add = |web: &str, conv: Uuid, users: Vec<String>| {
+        post(
+            format!("/v1/chat/conversations/{conv}/members"),
+            web,
+            json!({ "users": users }),
+        )
+    };
+    let members = |conv: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, Uuid>(
+                "select user_id from chat_members where conversation_id = $1 order by joined_at",
+            )
+            .bind(conv)
+            .fetch_all(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    assert_eq!(
+        app.send(add(&stranger_web, group, vec![cara_id.to_string()]))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    for conv in [direct, team] {
+        assert_eq!(
+            app.send(add(&ann_web, conv, vec![eve_id.to_string()]))
+                .await
+                .status(),
+            StatusCode::CONFLICT
+        );
+    }
+    let res = app
+        .send(add(&ann_web, group, vec![dan_id.to_string()]))
+        .await;
+    assert_eq!(field_of(res).await, "users", "Ann may not message Dan");
+    // Eve is Ann's friend, but Bob (already in the group) blocked her.
+    app.send(req(Method::PUT, format!("/v1/me/blocks/{eve_id}")).cookie(&bob_web))
+        .await;
+    let res = app
+        .send(add(&ann_web, group, vec![eve_id.to_string()]))
+        .await;
+    assert_eq!(field_of(res).await, "users");
+    let too_many: Vec<String> = (0..49).map(|_| Uuid::now_v7().to_string()).collect();
+    let res = app.send(add(&ann_web, group, too_many)).await;
+    assert_eq!(field_of(res).await, "users", "fifty at most");
+    assert_eq!(members(group).await, [ann_id, bob_id]);
+
+    let res = app
+        .send(add(&ann_web, group, vec![format!("/u/{cara_id}")]))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["members"].as_array().unwrap().len(), 3);
+    assert_eq!(members(group).await, [ann_id, bob_id, cara_id]);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn people_leave_group_chats_and_the_last_one_out_ends_it(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (cara_id, cara_web) = app.user("Cara", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, cara_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let group = chat_id(
+        &app,
+        &ann,
+        json!({ "kind": "group", "users": [bob_id, cara_id] }),
+    )
+    .await;
+    let direct = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    make_team(&app, &ann_web, "night-owls", json!({})).await;
+    let team = chat_id(&app, &ann, json!({ "kind": "team", "team": "night-owls" })).await;
+    let leave = |web: &str, conv: Uuid, who: Uuid| {
+        req(
+            Method::DELETE,
+            format!("/v1/chat/conversations/{conv}/members/{who}"),
+        )
+        .cookie(web)
+    };
+    let roles = |conv: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (Uuid, String)>(
+                "select user_id, role from chat_members where conversation_id = $1 order by joined_at",
+            )
+            .bind(conv)
+            .fetch_all(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    assert_eq!(
+        app.send(leave(&stranger_web, group, bob_id)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    for conv in [direct, team] {
+        assert_eq!(
+            app.send(leave(&ann_web, conv, ann_id)).await.status(),
+            StatusCode::CONFLICT,
+            "direct and team chats are hidden, not left"
+        );
+    }
+    // Anyone leaves by themselves.
+    assert_eq!(
+        app.send(leave(&bob_web, group, bob_id)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(req(Method::GET, format!("/v1/chat/conversations/{group}")).cookie(&bob_web))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // The owner leaving hands the group on to whoever has been in it longest.
+    assert_eq!(
+        app.send(leave(&ann_web, group, ann_id)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(roles(group).await, [(cara_id, "owner".to_string())]);
+    assert_eq!(
+        app.send(leave(&cara_web, group, cara_id)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let left: i64 = sqlx::query_scalar("select count(*) from chat_conversations where id = $1")
+        .bind(group)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(left, 0, "the last one out ends it");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn away_members_get_a_content_free_notice_unless_muted_and_reading_clears_it(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (cara_id, cara_web) = app.user("Cara", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, cara_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    // Bob and Cara have no app online: they're away.
+    let group = chat_id(
+        &app,
+        &ann,
+        json!({ "kind": "group", "users": [bob_id, cara_id] }),
+    )
+    .await;
+    let mute = |web: &str, muted: bool| {
+        req(Method::PUT, format!("/v1/chat/conversations/{group}/mute"))
+            .cookie(web)
+            .json(json!({ "muted": muted }))
+    };
+    assert_eq!(
+        app.send(mute(&stranger_web, true)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(mute(&bob_web, true)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+
+    for text in ["one", "two"] {
+        assert_eq!(
+            send_message(&app, &ann, group, text).await.status(),
+            StatusCode::OK
+        );
+    }
+    let notices = |user: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (String, String, i32, bool)>(
+                "select title, body, count, read_at is not null from notifications
+                 where user_id = $1 and category = 'chat'",
+            )
+            .bind(user)
+            .fetch_all(&db)
+            .await
+            .unwrap()
+        }
+    };
+    let cara = notices(cara_id).await;
+    assert_eq!(cara.len(), 1, "one notice per chat until read");
+    assert_eq!(cara[0].0, "New messages in a group chat from Ann");
+    assert_eq!(cara[0].2, 2);
+    assert!(!cara[0].1.contains("one") && cara[0].1.contains("end-to-end encrypted"));
+    assert!(notices(bob_id).await.is_empty(), "Bob muted it");
+    assert!(notices(ann_id).await.is_empty(), "not for the sender");
+    let muted = body_json(
+        app.send(req(Method::GET, format!("/v1/chat/conversations/{group}")).cookie(&bob_web))
+            .await,
+    )
+    .await;
+    assert_eq!(muted["muted"], true);
+
+    // Unmuted: Bob hears again. Someone with the app open isn't told at all.
+    app.send(mute(&bob_web, false)).await;
+    let bob = first_device(&app, &bob_web).await;
+    send_message(&app, &ann, group, "three").await;
+    assert!(notices(bob_id).await.is_empty(), "Bob's app is online");
+    sqlx::query(
+        "update chat_devices set last_seen_at = now() - interval '10 minutes' where id = $1",
+    )
+    .bind(bob.id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    send_message(&app, &ann, group, "four").await;
+    assert_eq!(notices(bob_id).await.len(), 1);
+
+    // Reading clears the bell's notice; only members mark read.
+    let read = |web: &str, seq: i64| {
+        post(
+            format!("/v1/chat/conversations/{group}/read"),
+            web,
+            json!({ "seq": seq }),
+        )
+    };
+    assert_eq!(
+        app.send(read(&stranger_web, 1)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let last: i64 = sqlx::query_scalar("select max(seq) from chat_messages")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(read(&cara_web, last)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(notices(cara_id).await[0].3, "read");
+    let state = body_json(
+        app.send(req(Method::GET, format!("/v1/chat/conversations/{group}")).cookie(&cara_web))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (state["read_seq"].as_i64(), state["unread"].as_i64()),
+        (Some(last), Some(0))
+    );
+    // Never backwards.
+    app.send(read(&cara_web, 1)).await;
+    let read_seq: i64 = sqlx::query_scalar(
+        "select read_seq from chat_member_state where conversation_id = $1 and user_id = $2",
+    )
+    .bind(group)
+    .bind(cara_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(read_seq, last);
+
+    // A direct chat's notice names the sender; a team chat's says so.
+    let direct = chat_id(&app, &ann, json!({ "kind": "direct", "user": cara_id })).await;
+    send_message(&app, &ann, direct, "hi").await;
+    make_team(&app, &ann_web, "night-owls", json!({})).await;
+    add_to_team(&app, "night-owls", cara_id, "member").await;
+    let team = chat_id(&app, &ann, json!({ "kind": "team", "team": "night-owls" })).await;
+    send_message(&app, &ann, team, "hi team").await;
+    let titles: Vec<String> = notices(cara_id).await.into_iter().map(|n| n.0).collect();
+    assert!(
+        titles.contains(&"New message from Ann".to_string()),
+        "{titles:?}"
+    );
+    assert!(
+        titles.contains(&"New messages in your team chat from Ann".to_string()),
+        "{titles:?}"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn typing_shows_for_a_few_seconds_and_never_in_a_closed_chat(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (cara_id, cara_web) = app.user("Cara", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, cara_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    let cara = first_device(&app, &cara_web).await;
+    let with_bob = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    let with_cara = chat_id(&app, &ann, json!({ "kind": "direct", "user": cara_id })).await;
+    let typing = |dev: &Dev, conv: Uuid| {
+        dev.call(
+            Method::POST,
+            format!("/v1/chat/conversations/{conv}/typing"),
+        )
+        .json(json!({ "typing": true }))
+    };
+
+    assert_eq!(
+        app.send(typing(&cara, with_bob)).await.status(),
+        StatusCode::NOT_FOUND,
+        "not her chat"
+    );
+    assert_eq!(
+        app.send(typing(&ann, with_bob)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        sync_now(&app, &bob).await["typing"]
+            .as_array()
+            .unwrap()
+            .len(),
+        1
+    );
+    // A few seconds after the last signal, it's gone.
+    tokio::time::sleep(slop_api::chat::TYPING_FOR + std::time::Duration::from_millis(300)).await;
+    assert!(
+        sync_now(&app, &bob).await["typing"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Cara blocked Ann: Ann's typing goes nowhere (and doesn't say why).
+    app.send(req(Method::PUT, format!("/v1/me/blocks/{ann_id}")).cookie(&cara_web))
+        .await;
+    assert_eq!(
+        app.send(typing(&ann, with_cara)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert!(
+        sync_now(&app, &cara).await["typing"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn commits_are_refused_in_closed_chats_and_with_welcomes_for_outsiders(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (_, cara_web) = app.user("Cara", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    let cara = first_device(&app, &cara_web).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    let commit = |dev: &Dev, conv: Uuid, body: Value| {
+        dev.call(
+            Method::POST,
+            format!("/v1/chat/conversations/{conv}/commit"),
+        )
+        .json(body)
+    };
+    let state = || {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (i64, i64, i64)>(
+                "select (select epoch from chat_conversations where id = $1),
+                        (select count(*) from chat_messages where conversation_id = $1),
+                        (select count(*) from chat_welcomes where conversation_id = $1)",
+            )
+            .bind(conv)
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    // A Welcome for a device not in the chat: nothing is kept.
+    let res = app
+        .send(commit(
+            &ann,
+            conv,
+            json!({ "epoch": 0, "commit": b64(b"c"),
+                    "welcomes": [{ "device_id": cara.id, "welcome": b64(b"w") }] }),
+        ))
+        .await;
+    assert_eq!(field_of(res).await, "welcomes");
+    assert_eq!(state().await, (0, 0, 0));
+    assert_eq!(
+        app.send(commit(
+            &cara,
+            conv,
+            json!({ "epoch": 0, "commit": b64(b"c") })
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(commit(
+            &ann,
+            Uuid::now_v7(),
+            json!({ "epoch": 0, "commit": b64(b"c") })
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(commit(
+            &ann,
+            conv,
+            json!({ "epoch": 0, "commit": b64(&vec![0; slop_api::chat::MAX_COMMIT_BODY + 1]) }),
+        ))
+        .await;
+    assert_eq!(field_of(res).await, "commit");
+    let res = app
+        .send(commit(
+            &ann,
+            conv,
+            json!({ "epoch": 0, "commit": b64(b"c"),
+                    "welcomes": [{ "device_id": bob.id, "welcome": b64(b"w") }] }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(state().await, (1, 1, 1));
+
+    // Bob blocks Ann: no more changes to the chat from her.
+    app.send(req(Method::PUT, format!("/v1/me/blocks/{ann_id}")).cookie(&bob_web))
+        .await;
+    let res = app
+        .send(commit(
+            &ann,
+            conv,
+            json!({ "epoch": 1, "commit": b64(b"c") }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(state().await, (1, 1, 1));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_large_group_commit_within_the_limit_is_accepted(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (_, ann_web) = app.user("Ann", "US").await;
+    let ann = first_device(&app, &ann_web).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "self" })).await;
+    // Adding many devices at once makes a commit of a few hundred KiB: under MAX_COMMIT_BODY.
+    let big = vec![7u8; 300 * 1024];
+    let res = app
+        .send(
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/commit"),
+            )
+            .json(json!({ "epoch": 0, "commit": b64(&big) })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let stored: i32 = sqlx::query_scalar("select length(body) from chat_messages")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(stored as usize, big.len());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn messages_are_checked_for_size_tag_budget_and_pace(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    let ann = first_device(&app, &ann_web).await;
+    let stranger = first_device(&app, &stranger_web).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "self" })).await;
+    let send = |dev: &Dev, conv: Uuid, body: Value| {
+        dev.call(
+            Method::POST,
+            format!("/v1/chat/conversations/{conv}/messages"),
+        )
+        .json(body)
+    };
+
+    for (body, field) in [
+        (
+            json!({ "epoch": 0, "body": b64(b"x"), "franking_tag": b64(&[0; 31]) }),
+            "franking_tag",
+        ),
+        (
+            json!({ "epoch": 0, "body": b64(b"x"), "franking_tag": b64(&[0; 33]) }),
+            "franking_tag",
+        ),
+        (
+            json!({ "epoch": 0, "body": b64(b"x"), "franking_tag": "nope!" }),
+            "franking_tag",
+        ),
+        (
+            json!({ "epoch": 0, "body": b64(&vec![0; slop_api::chat::MAX_MESSAGE_BYTES + 1]), "franking_tag": b64(&[0; 32]) }),
+            "body",
+        ),
+    ] {
+        let res = app.send(send(&ann, conv, body)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(field_of(res).await, field);
+    }
+    assert_eq!(
+        app.send(send(&stranger, conv, message(0, "hi")))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(send(&ann, Uuid::now_v7(), message(0, "hi")))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(send(
+            &ann,
+            conv,
+            json!({ "epoch": 0, "body": b64(&vec![0; slop_api::chat::MAX_MESSAGE_BYTES]), "franking_tag": b64(&[0; 32]) }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "32 KiB exactly is fine");
+
+    // Forty messages a minute; the forty-first waits.
+    for i in 1..40 {
+        let res = app
+            .send(send(&ann, conv, message(0, &format!("m{i}"))))
+            .await;
+        assert_eq!(res.status(), StatusCode::OK, "{i}");
+    }
+    let res = app.send(send(&ann, conv, message(0, "41"))).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    // Messages and commits share the account's chat limit (60 a minute): when it's spent, 429.
+    while app
+        .state
+        .account_limiter
+        .take(
+            ann_id,
+            slop_api::limits::Action::ChatMessage,
+            std::time::Instant::now(),
+        )
+        .is_ok()
+    {}
+    let res = app
+        .send(
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/commit"),
+            )
+            .json(json!({ "epoch": 0, "commit": b64(b"c") })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+    let res = app.send(send(&ann, conv, message(0, "later"))).await;
+    assert_eq!(res.status(), StatusCode::TOO_MANY_REQUESTS);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_days_chat_budget_stops_messages_commits_and_attachments(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let ann = first_device(&app, &ann_web).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "self" })).await;
+    assert_eq!(
+        send_message(&app, &ann, conv, "before").await.status(),
+        StatusCode::OK
+    );
+    // Today's uploads add up to the whole budget.
+    sqlx::query(
+        "insert into chat_attachments (id, conversation_id, uploader_id, size_bytes, body)
+         values ($1, $2, $3, $4, '\\x00')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(conv)
+    .bind(ann_id)
+    .bind((slop_api::chat::DAILY_BYTES - 10) as i32)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        send_message(&app, &ann, conv, "this is over")
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let res = app
+        .send(
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/commit"),
+            )
+            .json(json!({ "epoch": 0, "commit": b64(b"twelve bytes") })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let res = send_bytes(
+        &app,
+        ann.call(
+            Method::POST,
+            format!("/v1/chat/conversations/{conv}/attachments"),
+        ),
+        vec![1; 100],
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    // Yesterday's don't count.
+    sqlx::query("update chat_attachments set created_at = now() - interval '25 hours'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        send_message(&app, &ann, conv, "a new day").await.status(),
+        StatusCode::OK
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn sync_waits_for_news_and_stops_for_people_who_left(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (cara_id, cara_web) = app.user("Cara", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, cara_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    let cara = first_device(&app, &cara_web).await;
+    let group = chat_id(
+        &app,
+        &ann,
+        json!({ "kind": "group", "users": [bob_id, cara_id] }),
+    )
+    .await;
+    let wait = |dev: &Dev, after: i64, secs: u64| {
+        let router = app.router.clone();
+        let r = Request::builder()
+            .uri(format!("/v1/chat/sync?after={after}&wait={secs}"))
+            .header(header::HOST, "localhost:8080")
+            .header("authorization", dev.bearer.clone())
+            .header("x-slop-chat-device", dev.id.to_string())
+            .body(Body::empty())
+            .unwrap();
+        tokio::spawn(async move {
+            let started = std::time::Instant::now();
+            let res = router.oneshot(r).await.unwrap();
+            (started.elapsed(), body_json(res).await)
+        })
+    };
+
+    // Nothing new: an empty answer when the wait is up.
+    let (took, empty) = wait(&bob, 0, 1).await.unwrap();
+    assert!(took >= std::time::Duration::from_millis(900), "{took:?}");
+    assert!(empty["events"].as_array().unwrap().is_empty());
+    assert_eq!(empty["next"], 0);
+
+    // A message wakes a waiting device at once.
+    let waiting = wait(&bob, 0, 20);
+    tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+    send_message(&app, &ann, group, "hello").await;
+    let (took, woke) = waiting.await.unwrap();
+    assert!(took < std::time::Duration::from_secs(10), "{took:?}");
+    assert_eq!(woke["events"].as_array().unwrap().len(), 1);
+    let next = woke["next"].as_i64().unwrap();
+    assert!(next > 0);
+    // Asking from there: nothing more.
+    let res = app
+        .send(bob.call(Method::GET, format!("/v1/chat/sync?after={next}")))
+        .await;
+    assert!(
+        body_json(res).await["events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+
+    // Cara is removed: what's said after isn't delivered to her.
+    app.send(
+        req(
+            Method::DELETE,
+            format!("/v1/chat/conversations/{group}/members/{cara_id}"),
+        )
+        .cookie(&ann_web),
+    )
+    .await;
+    send_message(&app, &ann, group, "after cara").await;
+    let caras = sync_now(&app, &cara).await;
+    assert_eq!(
+        caras["events"].as_array().unwrap().len(),
+        0,
+        "nothing from a chat she's no longer in: {caras}"
+    );
+    assert_eq!(
+        sync_now(&app, &bob).await["events"]
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn attachments_are_for_the_chats_members_only(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (cara_id, cara_web) = app.user("Cara", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    befriend(&app, ann_id, cara_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let cara = first_device(&app, &cara_web).await;
+    let group = chat_id(
+        &app,
+        &ann,
+        json!({ "kind": "group", "users": [bob_id, cara_id] }),
+    )
+    .await;
+    let upload = |dev: &Dev, conv: Uuid| {
+        dev.call(
+            Method::POST,
+            format!("/v1/chat/conversations/{conv}/attachments"),
+        )
+    };
+
+    assert_eq!(
+        send_bytes(&app, upload(&ann, group), vec![]).await.status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = send_bytes(
+        &app,
+        upload(&ann, group),
+        vec![0; slop_api::chat::MAX_ATTACHMENT_BYTES + 1],
+    )
+    .await;
+    assert!(
+        matches!(
+            res.status(),
+            StatusCode::PAYLOAD_TOO_LARGE | StatusCode::UNPROCESSABLE_ENTITY
+        ),
+        "{}",
+        res.status()
+    );
+    let stranger_chat = {
+        let (_, dan_web) = app.user("Dan", "US").await;
+        let dan = first_device(&app, &dan_web).await;
+        let conv = chat_id(&app, &dan, json!({ "kind": "self" })).await;
+        assert_eq!(
+            send_bytes(&app, upload(&ann, conv), vec![1, 2, 3])
+                .await
+                .status(),
+            StatusCode::NOT_FOUND,
+            "not her chat"
+        );
+        conv
+    };
+    let res = send_bytes(&app, upload(&ann, group), b"encrypted meme".to_vec()).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+
+    // Members download it; anyone else, or someone removed, finds nothing.
+    let get =
+        |web: &str, id: &str| req(Method::GET, format!("/v1/chat/attachments/{id}")).cookie(web);
+    let res = app.send(get(&bob_web, &id)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_bytes(res).await, b"encrypted meme");
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    assert_eq!(
+        app.send(get(&stranger_web, &id)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(get(&bob_web, &Uuid::now_v7().to_string()))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    app.send(
+        req(
+            Method::DELETE,
+            format!("/v1/chat/conversations/{group}/members/{cara_id}"),
+        )
+        .cookie(&ann_web),
+    )
+    .await;
+    assert_eq!(
+        app.send(get(&cara_web, &id)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send_bytes(&app, upload(&cara, group), vec![1])
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+
+    // A direct chat with someone who blocked you takes no more files.
+    let direct = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    app.send(req(Method::PUT, format!("/v1/me/blocks/{ann_id}")).cookie(&bob_web))
+        .await;
+    assert_eq!(
+        send_bytes(&app, upload(&ann, direct), vec![1])
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    let _ = stranger_chat;
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_chat_backup_is_saved_from_a_device_and_read_only_by_its_owner(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (_, ann_web) = app.user("Ann", "US").await;
+    let (_, bob_web) = app.user("Bob", "US").await;
+    let ann = first_device(&app, &ann_web).await;
+    let get = |web: &str| req(Method::GET, "/v1/chat/backup").cookie(web);
+
+    assert_eq!(
+        app.send(get(&ann_web)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        send_bytes(&app, ann.call(Method::PUT, "/v1/chat/backup"), vec![])
+            .await
+            .status(),
+        StatusCode::UNPROCESSABLE_ENTITY
+    );
+    let res = send_bytes(
+        &app,
+        ann.call(Method::PUT, "/v1/chat/backup"),
+        vec![0; slop_api::chat::MAX_ATTACHMENT_BYTES + 1],
+    )
+    .await;
+    assert!(
+        matches!(
+            res.status(),
+            StatusCode::PAYLOAD_TOO_LARGE | StatusCode::UNPROCESSABLE_ENTITY
+        ),
+        "{}",
+        res.status()
+    );
+    // Only from a chat device, not the website.
+    let res = send_bytes(
+        &app,
+        req(Method::PUT, "/v1/chat/backup").cookie(&ann_web),
+        b"sealed".to_vec(),
+    )
+    .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    for body in [b"sealed backup v1".to_vec(), b"sealed backup v2".to_vec()] {
+        assert_eq!(
+            send_bytes(&app, ann.call(Method::PUT, "/v1/chat/backup"), body)
+                .await
+                .status(),
+            StatusCode::NO_CONTENT
+        );
+    }
+    let res = app.send(get(&ann_web)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        body_bytes(res).await,
+        b"sealed backup v2",
+        "the newest replaces"
+    );
+    assert_eq!(
+        app.send(get(&bob_web)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/chat/backup")).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+
+    // Bob deleting "his" backup doesn't touch Ann's; Ann's delete does.
+    app.send(req(Method::DELETE, "/v1/chat/backup").cookie(&bob_web))
+        .await;
+    assert_eq!(app.send(get(&ann_web)).await.status(), StatusCode::OK);
+    assert_eq!(
+        app.send(req(Method::DELETE, "/v1/chat/backup").cookie(&ann_web))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(get(&ann_web)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reported_chat_messages_are_checked_for_who_may_report_and_whether_they_still_exist(
+    db: PgPool,
+) {
+    use hmac::{Hmac, KeyInit, Mac};
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    let (_, stranger_web) = app.user("Sam Stranger", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    let plaintext = r#"{"text":"send me your password"}"#;
+    let key = [9u8; 32];
+    let mut mac = <Hmac<sha2::Sha256> as KeyInit>::new_from_slice(&key).unwrap();
+    mac.update(plaintext.as_bytes());
+    let tag = mac.finalize().into_bytes();
+    let res = app
+        .send(
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/messages"),
+            )
+            .json(json!({ "epoch": 0, "body": b64(b"ciphertext"), "franking_tag": b64(&tag) })),
+        )
+        .await;
+    let seq = body_json(res).await["seq"].as_i64().unwrap();
+    let report = |web: &str, franking_key: String| {
+        post(
+            "/v1/reports",
+            web,
+            json!({
+                "kind": "chat_message", "subject": conv.to_string(), "reason": "harassment",
+                "details": "Phishing.", "good_faith": true,
+                "chat": { "conversation_id": conv, "seq": seq, "plaintext": plaintext, "franking_key": franking_key },
+            }),
+        )
+    };
+
+    let res = app.send(report(&ann_web, b64(&key))).await;
+    assert_eq!(field_of(res).await, "subject", "not your own message");
+    assert_eq!(
+        app.send(report(&stranger_web, b64(&key))).await.status(),
+        StatusCode::NOT_FOUND,
+        "not in the chat"
+    );
+    let res = app.send(report(&bob_web, "not base64!".into())).await;
+    assert_eq!(field_of(res).await, "franking_key");
+    let res = app.send(report(&bob_web, b64(&[8; 32]))).await;
+    assert_eq!(field_of(res).await, "plaintext", "the wrong key");
+    let reports: i64 = sqlx::query_scalar("select count(*) from reports")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(reports, 0);
+
+    // Older than 30 days, it's gone: Slop says so rather than taking it on trust.
+    sqlx::query("update chat_messages set created_at = now() - interval '31 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::chat::cleanup(&app.db).await.unwrap();
+    let res = app.send(report(&bob_web, b64(&key))).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("older than 30 days")
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn chat_cleanup_deletes_only_what_is_over_thirty_days_and_expires_waiting_devices(
+    db: PgPool,
+) {
+    let app = test_app_with(db, chat_limits).await;
+    let (ann_id, ann_web) = app.user("Ann", "US").await;
+    let (bob_id, bob_web) = app.user("Bob", "US").await;
+    befriend(&app, ann_id, bob_id).await;
+    let ann = first_device(&app, &ann_web).await;
+    let bob = first_device(&app, &bob_web).await;
+    let (bob_waiting, _) = chat_device(&app, &bob_web, 1).await;
+    let (bob_new, _) = chat_device(&app, &bob_web, 1).await;
+    let conv = chat_id(&app, &ann, json!({ "kind": "direct", "user": bob_id })).await;
+    for _ in 0..2 {
+        let epoch: i64 = sqlx::query_scalar("select epoch from chat_conversations where id = $1")
+            .bind(conv)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        app.send(
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/commit"),
+            )
+            .json(json!({ "epoch": epoch, "commit": b64(b"c"),
+                          "welcomes": [{ "device_id": bob.id, "welcome": b64(b"w") }] })),
+        )
+        .await;
+        app.send(
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/messages"),
+            )
+            .json(message(epoch + 1, "m")),
+        )
+        .await;
+        send_bytes(
+            &app,
+            ann.call(
+                Method::POST,
+                format!("/v1/chat/conversations/{conv}/attachments"),
+            ),
+            vec![1; 10],
+        )
+        .await;
+    }
+    let counts = || {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (i64, i64, i64)>(
+                "select (select count(*) from chat_messages), (select count(*) from chat_welcomes),
+                        (select count(*) from chat_attachments)",
+            )
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(counts().await, (4, 2, 2));
+    // Half of it is 31 days old; the rest 29.
+    for table in ["chat_messages", "chat_welcomes", "chat_attachments"] {
+        let key = if table == "chat_messages" {
+            "seq"
+        } else {
+            "id"
+        };
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "update {table} set created_at = now() - interval '29 days'"
+        )))
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "update {table} set created_at = now() - interval '31 days'
+             where {key} in (select {key} from {table} order by {key} limit (select count(*) / 2 from {table}))"
+        )))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // Bob removed his phone: its key packages are left over; a device waited more than a day.
+    sqlx::query("update chat_devices set status = 'revoked' where id = $1")
+        .bind(bob_new.id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update chat_devices set created_at = now() - interval '2 days' where id = $1")
+        .bind(bob_waiting.id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    let deleted = slop_api::chat::cleanup(&app.db).await.unwrap();
+    assert_eq!(counts().await, (2, 1, 1), "the newer half is kept");
+    assert_eq!(
+        deleted,
+        4 + 2,
+        "four old rows and the removed device's two packages"
+    );
+    let packages: i64 =
+        sqlx::query_scalar("select count(*) from chat_key_packages where device_id = $1")
+            .bind(bob_new.id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(packages, 0);
+    let ann_packages: i64 =
+        sqlx::query_scalar("select count(*) from chat_key_packages where device_id = $1")
+            .bind(ann.id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(ann_packages, 6, "active devices keep theirs");
+
+    assert_eq!(slop_api::chat::expire_pending(&app.db).await.unwrap(), 1);
+    let statuses: Vec<(Uuid, String)> =
+        sqlx::query_as("select id, status from chat_devices where user_id = $1 order by id")
+            .bind(bob_id)
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        statuses,
+        [
+            (bob.id, "active".to_string()),
+            (bob_waiting.id, "revoked".to_string()),
+            (bob_new.id, "revoked".to_string())
+        ]
+    );
 }
