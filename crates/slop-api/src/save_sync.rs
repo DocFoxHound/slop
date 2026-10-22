@@ -153,7 +153,11 @@ async fn upload(
             "an encrypted save of up to 20 MB",
         ));
     }
-    let app = app_id(&state, &slug).await?;
+    // Only for an app the player can see: a private or hidden one answers like a missing one.
+    let policy =
+        crate::policy::ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers)
+            .await?;
+    let (app, _) = crate::catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     let mut tx = state.db.begin().await?;
     // One upload at a time per player and app.
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text || $2::text, 0))")
@@ -217,7 +221,10 @@ async fn forget(
     user: CurrentUser,
     Path(slug): Path<String>,
 ) -> ApiResult<StatusCode> {
-    let app = app_id(&state, &slug).await?;
+    // Nothing to forget answers the same as forgetting: no hint whether the app exists.
+    let Ok(app) = app_id(&state, &slug).await else {
+        return Ok(StatusCode::NO_CONTENT);
+    };
     sqlx::query("delete from save_blobs where user_id = $1 and app_id = $2")
         .bind(user.id)
         .bind(app)

@@ -96,7 +96,7 @@ When a complaint says an app shouldn't be making money (someone else's work or t
 - **Paused for review:** quick and reversible while Slop looks into it. A moderator or finance staff member places it alone.
 - **Turned off until fixed:** Slop found a problem the maker has to fix. A sensitive action, so it goes through two-person approval (`staff.rs`) once Slop has a second person.
 
-While held, new donations stop, including the app's share of donations to its community builds. Monthly server donations are paused at Stripe (`pause_collection` with `void`: no charge, not cancelled) and their donors are told. Donors only ever see "Donations to this app are paused". The maker gets the reason (and the ground, if given) as a notification and on the app's Donations page, where they can ask for a review once they've fixed it: one request at a time, and again a day after an answer. Staff lift the hold or keep it with an answer. Lifting restarts the monthly donations from their next date, and every step is in the audit log. Admin panel: the app's page under Apps, and Money.
+While held, new donations stop, including the app's share of donations to its community builds. Monthly server donations are paused at Stripe (`pause_collection` with `void`: no charge, not cancelled) and their donors are told. Checkout pages opened before the hold are closed, and bounty payouts to a delivery from the app wait until it's lifted (since 2026-10-22). Donors only ever see "Donations to this app are paused". The maker gets the reason (and the ground, if given) as a notification and on the app's Donations page, where they can ask for a review once they've fixed it: one request at a time, and again a day after an answer. Staff lift the hold or keep it with an answer. Lifting restarts the monthly donations from their next date, and every step is in the audit log. Admin panel: the app's page under Apps, and Money.
 
 ## 6. Server donations (recurring)
 
@@ -159,10 +159,11 @@ payments(id, kind,                  -- donation | server_donation | people_job |
 
 | Threat | Mitigation |
 |---|---|
-| **Card testing** (stolen cards tried with small donations) | Stripe Radar, sign-in required to donate, a $1 minimum, rate limits per account/IP/card, a proof-of-work check after unfinished checkouts (built) |
+| **Card testing** (stolen cards tried with small donations) | Stripe Radar, sign-in required to donate, a $1 minimum, a rate limit per account (per IP for every write), a proof-of-work check after unfinished checkouts, 18+ (built). Bounty pledges, which save a card on Slop's own account, have the same checks since 2026-10-22. Not built: limits per card. |
 | **Cashing out stolen cards through your own app** | Stripe's KYC and risk checks on the maker's account, and payout timing set by Stripe. Slop flags donation spikes from new accounts or many countries and can disable donations on an app. |
 | **Hijacked maker account** | Bank details are managed in the maker's **Stripe** dashboard, not in Slop, so taking over a Slop account doesn't redirect money. Disconnecting or switching the Stripe account requires step-up auth and a 72-hour delay, and an email is sent (`SECURITY.md` §9). |
-| **Self-dealing People jobs** | Client and creative can't share payment methods, devices or Stripe accounts. Checks for money going round in loops. |
+| **Self-dealing People jobs** | Built: client and creative can't be the same account, and a job payment is only recorded for the Checkout session Slop made for it, on the creative's account, for the amount and currency due (a creative can't mark a job paid with a payment to themselves). Not built yet: spotting the same card, device or Stripe account on both sides, or money going round in loops (security fix plan 4.5 and 6.7). |
+| **Buying a bounty's vote** | The deliverer and the app's maker can't vote, and their pledges don't count; only pledges made before the delivery count; no pledges while a delivery waits; backers get three days unless every one of them has voted (built 2026-10-22). |
 
 ## 10. The mockup and what's built
 

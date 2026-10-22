@@ -486,7 +486,7 @@ struct StartBody {
 }
 
 /// Unfinished checkouts in a day after which starting another needs a proof-of-work check.
-const UNFINISHED_BEFORE_CHALLENGE: i64 = 3;
+pub(crate) const UNFINISHED_BEFORE_CHALLENGE: i64 = 3;
 
 #[derive(Serialize)]
 struct Started {
@@ -496,7 +496,11 @@ struct Started {
     done: bool,
 }
 
-async fn require_adult(state: &AppState, user: &CurrentUser, confirm: bool) -> ApiResult<()> {
+pub(crate) async fn require_adult(
+    state: &AppState,
+    user: &CurrentUser,
+    confirm: bool,
+) -> ApiResult<()> {
     let confirmed: bool =
         sqlx::query_scalar("select adult_confirmed_at is not null from users where id = $1")
             .bind(user.id)
@@ -1126,10 +1130,42 @@ pub async fn sync_checkout(
     .await?;
     let now = OffsetDateTime::now_utc();
     let mut tx = state.db.begin().await?;
-    if let Some(id) = s["metadata"]["donation_id"]
-        .as_str()
-        .and_then(|v| v.parse::<Uuid>().ok())
+    // The row Slop made this very session for, on this account, for this amount and currency:
+    // never one named only in metadata, which whoever controls the account can write
+    // (security review, 2026-10-22).
+    let one_off: Option<Uuid> = sqlx::query_scalar(
+        "select id from donations where checkout_session_id = $1 and stripe_account_id = $2
+           and total_minor = $3 and currency = $4",
+    )
+    .bind(session_id)
+    .bind(acct)
+    .bind(s["amount_total"].as_i64().unwrap_or(-1))
+    .bind(s["currency"].as_str().unwrap_or(""))
+    .fetch_optional(&mut *tx)
+    .await?;
+    let monthly: Option<Uuid> = sqlx::query_scalar(
+        "select id from server_donations where checkout_session_id = $1 and stripe_account_id = $2",
+    )
+    .bind(session_id)
+    .bind(acct)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let named = |key: &str| {
+        s["metadata"][key]
+            .as_str()
+            .and_then(|v| v.parse::<Uuid>().ok())
+    };
+    if named("donation_id").is_some() && named("donation_id") != one_off
+        || named("server_donation_id").is_some() && named("server_donation_id") != monthly
     {
+        tracing::warn!(
+            session_id,
+            acct,
+            "a Checkout session that isn't the one Slop made; ignored"
+        );
+        return Ok(());
+    }
+    if let Some(id) = one_off {
         if s["payment_status"] == "paid" {
             let charge = s["payment_intent"]["latest_charge"]
                 .as_str()
@@ -1143,9 +1179,7 @@ pub async fn sync_checkout(
             .execute(&mut *tx)
             .await?;
         }
-    } else if let Some(id) = s["metadata"]["server_donation_id"]
-        .as_str()
-        .and_then(|v| v.parse::<Uuid>().ok())
+    } else if let Some(id) = monthly
         && s["status"] == "complete"
     {
         activate(&mut tx, id, s["subscription"].as_str(), now).await?;
@@ -1197,6 +1231,42 @@ pub async fn sync_invoice(
     let Some(id) = id else {
         return Ok(());
     };
+    // Only invoices of the subscription Slop's own Checkout session started, on this account:
+    // the account's owner could start a subscription of their own naming any donation.
+    let (stored_sub, stored_session): (Option<String>, Option<String>) = sqlx::query_as(
+        "select stripe_subscription_id, checkout_session_id from server_donations
+         where id = $1 and stripe_account_id = $2",
+    )
+    .bind(id)
+    .bind(acct)
+    .fetch_optional(&state.db)
+    .await?
+    .unwrap_or((None, None));
+    let ours = match (&stored_sub, subscription) {
+        (Some(stored), Some(sub)) => stored == sub,
+        // The invoice can arrive before the session's own event: ask Stripe which subscription
+        // that session started.
+        (None, Some(sub)) => match &stored_session {
+            Some(session) => {
+                let s = call(
+                    state,
+                    stripe,
+                    reqwest::Method::GET,
+                    &format!("v1/checkout/sessions/{session}"),
+                    Some(acct),
+                    &[],
+                )
+                .await?;
+                s["subscription"].as_str() == Some(sub)
+            }
+            None => false,
+        },
+        _ => false,
+    };
+    if !ours {
+        tracing::warn!(%id, invoice_id, acct, "an invoice from a subscription Slop didn't start; ignored");
+        return Ok(());
+    }
     let paid_at = inv["status_transitions"]["paid_at"]
         .as_i64()
         .and_then(|t| OffsetDateTime::from_unix_timestamp(t).ok())

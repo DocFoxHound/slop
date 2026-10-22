@@ -54,14 +54,16 @@ pub fn normalized(url: &str) -> String {
         .to_ascii_lowercase()
 }
 
-/// Whether another app (not `except`) already uses this repository.
+/// Whether another app (not `except`) already uses this repository: how to say so. Only an app
+/// in the store is named; a private, draft or delisted one isn't revealed (security review,
+/// 2026-10-22).
 async fn taken(
     state: &AppState,
     repo_url: &str,
     except: Option<Uuid>,
 ) -> sqlx::Result<Option<String>> {
-    sqlx::query_scalar(
-        "select title from apps
+    let found: Option<Option<String>> = sqlx::query_scalar(
+        "select case when status = 'listed' and visibility = 'public' then title end from apps
          where regexp_replace(lower(trim(repo_url)), '(/+|\\.git/*)$', '') = $1
            and ($2::uuid is null or id <> $2)
          limit 1",
@@ -69,7 +71,11 @@ async fn taken(
     .bind(normalized(repo_url))
     .bind(except)
     .fetch_optional(&state.db)
-    .await
+    .await?;
+    Ok(found.map(|title| match title {
+        Some(title) => format!("that repository is already on Slop as {title}"),
+        None => "that repository is already linked to an app on Slop".to_string(),
+    }))
 }
 
 /// How ownership of a repository is (or would be) proved, and whether it is.
@@ -133,9 +139,9 @@ pub async fn check_with(
     except: Option<Uuid>,
     token: Option<&crate::repo_tokens::Given>,
 ) -> ApiResult<()> {
-    if let Some(title) = taken(state, repo_url, except).await? {
+    if let Some(said) = taken(state, repo_url, except).await? {
         return Err(ApiError::Conflict(format!(
-            "that repository is already on Slop as {title}. To build on it, fork it and register a branch"
+            "{said}. To build on it, fork it and register a branch"
         )));
     }
     if !state.config.releases.require_repo_owner {
@@ -501,9 +507,9 @@ async fn ownership(
     Json(b): Json<RepoBody>,
 ) -> ApiResult<Json<Assessment>> {
     let repo_url = crate::catalog::validate_repo_url_in(&state, &b.repo_url)?;
-    if let Some(title) = taken(&state, &repo_url, None).await? {
+    if let Some(said) = taken(&state, &repo_url, None).await? {
         return Ok(Json(Assessment::no(format!(
-            "that repository is already on Slop as {title}. To build on it, fork it and register a branch"
+            "{said}. To build on it, fork it and register a branch"
         ))));
     }
     if !state.config.releases.require_repo_owner {

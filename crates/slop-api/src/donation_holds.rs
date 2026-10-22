@@ -418,7 +418,9 @@ async fn apply(
     .await?;
     // A new hold stops monthly charges at Stripe first; if Stripe refuses, nothing changes here.
     let donors = if existing.is_none() {
-        set_collection(state, app_id, true).await?
+        let donors = set_collection(state, app_id, true).await?;
+        expire_open_checkouts(state, app_id).await;
+        donors
     } else {
         Vec::new()
     };
@@ -695,6 +697,46 @@ async fn answer(
 
 /// Pauses (or resumes) collection of an app's monthly server donations at Stripe, so donors
 /// aren't charged while held. Returns the donors, to tell them.
+/// Closes Checkout pages opened before the hold, so nobody finishes paying into a paused app
+/// (security review, 2026-10-22). Best effort: one that can't be closed is logged, and stays
+/// recorded if paid, for staff to refund.
+async fn expire_open_checkouts(state: &AppState, app_id: Uuid) {
+    let Mode::Stripe(stripe) = stripe::mode(state) else {
+        return;
+    };
+    let open: Vec<(String, String)> = match sqlx::query_as(
+        "select checkout_session_id, stripe_account_id from donations
+         where app_id = $1 and status = 'pending' and checkout_session_id is not null and not simulated
+         union all
+         select checkout_session_id, stripe_account_id from server_donations
+         where app_id = $1 and status = 'pending' and checkout_session_id is not null and not simulated",
+    )
+    .bind(app_id)
+    .fetch_all(&state.db)
+    .await
+    {
+        Ok(rows) => rows,
+        Err(err) => {
+            tracing::error!(error = %err, "open checkouts of a paused app");
+            return;
+        }
+    };
+    for (session, acct) in open {
+        if let Err(err) = call(
+            state,
+            stripe,
+            reqwest::Method::POST,
+            &format!("v1/checkout/sessions/{session}/expire"),
+            Some(&acct),
+            &[],
+        )
+        .await
+        {
+            tracing::warn!(error = %err, %session, "couldn't close a Checkout page of a paused app");
+        }
+    }
+}
+
 async fn set_collection(state: &AppState, app_id: Uuid, pause: bool) -> ApiResult<Vec<Uuid>> {
     let subs: Vec<(Uuid, String, Option<String>, bool)> = sqlx::query_as(
         "select donor_id, stripe_account_id, stripe_subscription_id, simulated from server_donations

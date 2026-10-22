@@ -381,16 +381,21 @@ async fn page(
         return Err(ApiError::NotFound);
     }
     let is_member = t.role.is_some();
-    let show_members = is_member
-        || (t.kind == "official" && verified)
-        || (t.kind == "player" && t.join_policy == "open");
-    let members: Vec<Member> = if show_members {
-        sqlx::query_as(
+    let show_members = is_member || (t.kind == "official" && verified);
+    // An open player team shows strangers only who runs it, never its other members, and never
+    // anyone in the under-18 view: a member list anyone can read is a list of people to approach
+    // (security review, 2026-10-22).
+    let show_runners = !show_members && t.kind == "player" && t.join_policy == "open";
+    let members: Vec<Member> = if show_members || show_runners {
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select m.user_id, u.display_name as name, m.role, m.joined_at from team_members m join users u on u.id = m.user_id
              where m.team_id = $1 and u.closed_at is null
+               and (not $2 or (m.role in ('owner', 'admin') and not {}))
              order by case m.role when 'owner' then 0 when 'admin' then 1 else 2 end, u.display_name",
-        )
+            crate::friends::under18("m.user_id")
+        )))
         .bind(t.id)
+        .bind(show_runners)
         .fetch_all(&state.db)
         .await?
     } else {
@@ -429,6 +434,26 @@ async fn page(
         .bind(viewer)
         .fetch_all(&state.db)
         .await?;
+        // Each member sees a game night's app only if they could see it in the store: never a
+        // private app's or an age-restricted one's title (security review, 2026-10-22).
+        let mut events = events;
+        for e in &mut events {
+            if let Some(slug) = &e.app_slug {
+                let ok = catalog::visible_app(&state, slug, user.as_ref(), policy)
+                    .await
+                    .is_ok();
+                let public: bool =
+                    sqlx::query_scalar("select visibility = 'public' from apps where slug = $1")
+                        .bind(slug)
+                        .fetch_optional(&state.db)
+                        .await?
+                        .unwrap_or(false);
+                if !ok || !public {
+                    e.app_slug = None;
+                    e.app_title = None;
+                }
+            }
+        }
         let mut qb = QueryBuilder::new("");
         catalog::push_summary_columns(&mut qb, &state.config);
         qb.push(" join app_team_shares s on s.app_id = a.id where s.team_id = ")
@@ -535,6 +560,18 @@ async fn update(
             return Err(ApiError::invalid(
                 "join_policy",
                 "player teams: open or invite",
+            ));
+        }
+        // Private Slop shared with the team would be open to anyone who joins.
+        let shared: bool =
+            sqlx::query_scalar("select exists (select 1 from app_team_shares where team_id = $1)")
+                .bind(t.id)
+                .fetch_one(&state.db)
+                .await?;
+        if p == "open" && shared {
+            return Err(ApiError::invalid(
+                "join_policy",
+                "apps are shared privately with this team: stop sharing them before opening it to anyone",
             ));
         }
         sqlx::query("update teams set join_policy = $2 where id = $1")
@@ -655,6 +692,33 @@ async fn invite(
             "no Slop account with that link, or they're already in the team",
         ));
     }
+    // An invite is a message: not to someone who blocked the inviter (or whom they blocked),
+    // and in the under-18 view only from friends (security review, 2026-10-22). Said the same
+    // way as a missing account, so it doesn't reveal the block.
+    let mut conn = state.db.acquire().await?;
+    let minor: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {} or {}",
+        crate::friends::under18("$1"),
+        crate::friends::under18("$2")
+    )))
+    .bind(user.id)
+    .bind(to)
+    .fetch_one(&mut *conn)
+    .await?;
+    let friends: bool = sqlx::query_scalar(
+        "select exists (select 1 from friends where user_a = least($1, $2) and user_b = greatest($1, $2))",
+    )
+    .bind(user.id)
+    .bind(to)
+    .fetch_one(&mut *conn)
+    .await?;
+    if crate::friends::blocked(&mut conn, user.id, to).await? || (minor && !friends) {
+        return Err(ApiError::invalid(
+            "user",
+            "no Slop account with that link, or they're already in the team",
+        ));
+    }
+    drop(conn);
     let mut tx = state.db.begin().await?;
     let added = sqlx::query("insert into team_invites (team_id, user_id, invited_by) values ($1, $2, $3) on conflict do nothing")
         .bind(t.id)
@@ -672,7 +736,8 @@ async fn invite(
                 title: format!("{} invited you to {}", user.display_name, t.name),
                 body: String::new(),
                 link: format!("/teams/{slug}"),
-                collapse_key: None,
+                // Asked again after saying no: still one notification.
+                collapse_key: Some(format!("team-invite:{}", t.id)),
             },
         )
         .await?;
@@ -895,11 +960,19 @@ async fn add_event(
         Some(s) => {
             let policy =
                 ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
-            Some(
-                catalog::visible_app(&state, s, Some(&user), policy)
-                    .await?
-                    .0,
-            )
+            let (id, _) = catalog::visible_app(&state, s, Some(&user), policy).await?;
+            let public: bool =
+                sqlx::query_scalar("select visibility = 'public' from apps where id = $1")
+                    .bind(id)
+                    .fetch_one(&state.db)
+                    .await?;
+            if !public {
+                return Err(ApiError::invalid(
+                    "app_slug",
+                    "pick an app in the store: Private Slop isn't named in game nights",
+                ));
+            }
+            Some(id)
         }
         None => None,
     };

@@ -106,7 +106,7 @@ const EXPORT: &[(&str, &str)] = &[
     ),
     (
         "apps",
-        "select coalesce(jsonb_agg(to_jsonb(a) - 'maker_id' order by a.created_at), '[]')
+        "select coalesce(jsonb_agg(to_jsonb(a) - 'maker_id' - 'frozen_by' order by a.created_at), '[]')
          from apps a where a.maker_id = $1",
     ),
     (
@@ -134,7 +134,7 @@ const EXPORT: &[(&str, &str)] = &[
                                  from job_changes c where c.job_id = j.id),
                      'messages', (select coalesce(jsonb_agg(to_jsonb(m) - 'job_id' order by m.created_at), '[]')
                                   from job_messages m where m.job_id = j.id),
-                     'problems', (select coalesce(jsonb_agg(to_jsonb(p) - 'job_id'
+                     'problems', (select coalesce(jsonb_agg(to_jsonb(p) - 'job_id' - 'suggested_by'
                                      || jsonb_build_object('proposals',
                                           (select coalesce(jsonb_agg(to_jsonb(x) - 'problem_id'), '[]')
                                            from job_problem_proposals x where x.problem_id = p.id))), '[]')
@@ -157,7 +157,7 @@ const EXPORT: &[(&str, &str)] = &[
     (
         "donation_holds",
         "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug,
-                    'requests', (select coalesce(jsonb_agg(to_jsonb(r) - 'hold_id' order by r.created_at), '[]')
+                    'requests', (select coalesce(jsonb_agg(to_jsonb(r) - 'hold_id' - 'answered_by' order by r.created_at), '[]')
                                  from donation_hold_requests r where r.hold_id = h.id))
                     || (to_jsonb(h) - 'app_id' - 'placed_by' - 'lifted_by')
                 order by h.placed_at), '[]')
@@ -457,9 +457,16 @@ pub async fn close_account(
         .execute(&mut *tx)
         .await?;
     }
-    // Private Slop: nothing is shared with them any more, and their own stops being shared.
+    // Private Slop: nothing is shared with them any more, and their own stops being shared, with
+    // people and with teams.
     sqlx::query(
         "delete from app_shares where user_id = $1 or app_id in (select id from apps where maker_id = $1)",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "delete from app_team_shares where app_id in (select id from apps where maker_id = $1)",
     )
     .bind(user_id)
     .execute(&mut *tx)

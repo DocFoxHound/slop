@@ -10,6 +10,7 @@ import { ReportButton } from "../components/Report";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate, money, toMinor } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { solve } from "../pow";
 import { useSession } from "../session";
 
 const STATUS: Record<Bounty["status"], string> = {
@@ -143,6 +144,8 @@ export function BountyPage() {
   const mine = useLoad(() => (me ? api.myApps() : Promise.resolve([])), [me?.id]);
   const [error, setError] = useState<string>();
   const [amount, setAmount] = useState("10");
+  const [adult, setAdult] = useState(false);
+  const [checking, setChecking] = useState(false);
   const [agreed, setAgreed] = useState(false);
   const [claimApp, setClaimApp] = useState("");
   const [note, setNote] = useState("");
@@ -168,13 +171,25 @@ export function BountyPage() {
     const minor = toMinor(amount);
     if (minor === null) return setError("Enter an amount, like 10 or 12.50.");
     await run(async () => {
-      const started = await api.bounties.pledge(id, minor);
+      let started;
+      try {
+        started = await api.bounties.pledge(id, minor, { confirm_adult: adult });
+      } catch (err) {
+        // After a few unfinished pledges, a quick proof of work in the browser (card testing).
+        if (!(err instanceof ApiError) || err.code !== "challenge_required") throw err;
+        setChecking(true);
+        const c = await api.donations.challenge();
+        const nonce = await solve(c.prefix, c.difficulty);
+        setChecking(false);
+        started = await api.bounties.pledge(id, minor, { confirm_adult: adult, challenge: { id: c.id, nonce } });
+      }
       if (started.url) window.location.assign(started.url);
     });
   };
   const pending = b.claims.find((c) => c.status === "pending");
   const deliverable = (mine.data ?? []).filter((a) => a.slug === b.app_slug || a.branch_of === b.app_slug);
-  const takingPledges = b.status === "open" || b.status === "claimed";
+  // Not while a delivery waits for a decision (bounties.rs).
+  const takingPledges = b.status === "open";
   const pledged = b.my_pledge && ["saving", "active"].includes(b.my_pledge.status);
 
   return (
@@ -234,8 +249,11 @@ export function BountyPage() {
               Stripe and charge this amount only if a delivery is confirmed before {formatDate(b.expires_at)}. It's paid
               to whoever delivers it, less Slop's 5%. I can withdraw until then.
             </label>
-            <button className="btn slime" disabled={!agreed}>
-              Pledge
+            <label className="check">
+              <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} /> I'm 18 or older
+            </label>
+            <button className="btn slime" disabled={!agreed || checking}>
+              {checking ? "One moment…" : "Pledge"}
             </button>
           </form>
         )}

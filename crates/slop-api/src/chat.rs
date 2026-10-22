@@ -615,6 +615,13 @@ pub const PARTICIPANTS: &str = "select m.conversation_id, m.user_id from chat_me
      select c.id, tm.user_id from chat_conversations c join team_members tm on tm.team_id = c.team_id
      where c.kind = 'team'";
 
+/// `PARTICIPANTS` with when each joined: new members get nothing from before (who wrote, from
+/// which devices, when), only what was sent since (security review, 2026-10-22).
+const PARTICIPANTS_SINCE: &str = "select m.conversation_id, m.user_id, m.joined_at as since from chat_members m
+     union all
+     select c.id, tm.user_id, tm.joined_at from chat_conversations c join team_members tm on tm.team_id = c.team_id
+     where c.kind = 'team'";
+
 async fn is_member(conn: &mut PgConnection, conversation: Uuid, user: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
         "select exists (select 1 from ({PARTICIPANTS}) p where p.conversation_id = $1 and p.user_id = $2)"
@@ -964,6 +971,7 @@ async fn add_members(
     if count + b.users.len() as i64 > MAX_GROUP {
         return Err(ApiError::invalid("users", "50 people at most"));
     }
+    let current = participants(&mut tx, id).await?;
     for u in &b.users {
         let other = friends::parse_user(u)?;
         if !friends::may_message(&mut tx, user.id, other).await? {
@@ -971,6 +979,15 @@ async fn add_members(
                 "users",
                 "you can only add friends, teammates and People job partners (or people who take messages from anyone)",
             ));
+        }
+        // Not into a chat with someone either of them blocked.
+        for member in &current {
+            if *member != other && friends::blocked(&mut tx, *member, other).await? {
+                return Err(ApiError::invalid(
+                    "users",
+                    "someone in this chat and someone you're adding have blocked each other",
+                ));
+            }
         }
         add_member(&mut tx, id, other, "member").await?;
     }
@@ -1138,6 +1155,25 @@ fn yes() -> bool {
 }
 
 /// "Typing…": shown to the others in the chat for a few seconds. Nothing is stored.
+/// In a direct chat, whether `me` may still reach the other person (not blocked either way, and
+/// allowed to message them): every way of sending checks this, not only messages (security
+/// review, 2026-10-22). Group chats: blocks are checked when people are added.
+async fn direct_closed(conn: &mut sqlx::PgConnection, id: Uuid, me: Uuid) -> ApiResult<bool> {
+    let kind: Option<String> =
+        sqlx::query_scalar("select kind from chat_conversations where id = $1")
+            .bind(id)
+            .fetch_optional(&mut *conn)
+            .await?;
+    if kind.as_deref() != Some("direct") {
+        return Ok(false);
+    }
+    let everyone = participants(&mut *conn, id).await?;
+    match everyone.iter().find(|u| **u != me) {
+        Some(other) => Ok(!friends::may_message(&mut *conn, me, *other).await?),
+        None => Ok(false),
+    }
+}
+
 async fn typing(
     State(state): State<AppState>,
     device: ChatDevice,
@@ -1148,6 +1184,9 @@ async fn typing(
     let everyone = participants(&mut conn, id).await?;
     if !everyone.contains(&device.user.id) {
         return Err(ApiError::NotFound);
+    }
+    if direct_closed(&mut conn, id, device.user.id).await? {
+        return Ok(StatusCode::NO_CONTENT);
     }
     let on = body.map(|b| b.typing).unwrap_or(true);
     state.chat_hub.set_typing(id, device.user.id, on);
@@ -1353,6 +1392,11 @@ async fn commit(
     let epoch = epoch.ok_or(ApiError::NotFound)?;
     if !is_member(&mut tx, id, device.user.id).await? {
         return Err(ApiError::NotFound);
+    }
+    if direct_closed(&mut tx, id, device.user.id).await? {
+        return Err(ApiError::Conflict(
+            "you can't message this person any more".into(),
+        ));
     }
     if epoch != b.epoch {
         return Ok(stale(epoch).into_response());
@@ -1655,7 +1699,9 @@ async fn sync_once(state: &AppState, device: &ChatDevice, after: i64) -> ApiResu
     let events: Vec<Event> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select m.seq, m.conversation_id, m.kind, m.sender_device_id, m.sender_user_id, m.epoch, m.body, m.created_at
          from chat_messages m
-         where m.seq > $2 and m.conversation_id in (select p.conversation_id from ({PARTICIPANTS}) p where p.user_id = $1)
+         where m.seq > $2 and exists (select 1 from ({PARTICIPANTS_SINCE}) p
+                                      where p.conversation_id = m.conversation_id and p.user_id = $1
+                                        and m.created_at >= p.since - interval '1 minute')
          order by m.seq limit 500"
     )))
     .bind(device.user.id)
@@ -1727,6 +1773,11 @@ async fn upload(
     let mut tx = state.db.begin().await?;
     if !is_member(&mut tx, id, device.user.id).await? {
         return Err(ApiError::NotFound);
+    }
+    if direct_closed(&mut tx, id, device.user.id).await? {
+        return Err(ApiError::Conflict(
+            "you can't message this person any more".into(),
+        ));
     }
     let today: i64 = sqlx::query_scalar(
         "select coalesce(sum(size_bytes), 0)::int8 from chat_attachments where uploader_id = $1 and created_at > now() - interval '1 day'",

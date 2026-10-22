@@ -44,6 +44,9 @@ pub const MAX_PLEDGE: i64 = 50_000;
 const MAX_OPEN_PER_USER: i64 = 10;
 /// After this long without the app maker's answer, the backers decide a claim.
 pub const MAKER_ANSWER: Duration = Duration::days(14);
+/// How long backers have to vote before a majority settles a claim (unless every one of them
+/// has voted), so the pledges' owners can look at the delivery first.
+pub const VOTING_WINDOW: Duration = Duration::days(3);
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -322,6 +325,12 @@ async fn open(
 #[serde(deny_unknown_fields)]
 struct NewPledge {
     amount_minor: i64,
+    /// Pledging is for adults, like donating (PAYMENTS §4.4).
+    #[serde(default)]
+    confirm_adult: bool,
+    /// Needed after a few unfinished pledges (challenge.rs), as for donations.
+    #[serde(default)]
+    challenge: Option<crate::challenge::Answer>,
 }
 
 #[derive(Serialize)]
@@ -338,14 +347,31 @@ async fn pledge(
     Path(id): Path<Uuid>,
     Json(b): Json<NewPledge>,
 ) -> ApiResult<Json<PledgeStarted>> {
+    // Saving a card is a way to test stolen ones on Slop's own Stripe account: the same limits
+    // as donations (security review, 2026-10-22).
+    crate::limits::check(&state, user.id, crate::limits::Action::Donation)?;
     let (_, status, _) = load_visible(&state, id, Some(&user), &headers).await?;
-    if status != "open" && status != "claimed" {
-        return Err(ApiError::Conflict(
-            "this bounty isn't taking pledges".into(),
-        ));
+    // Not while a delivery waits for a decision: a pledge made then could buy the vote on it.
+    if status != "open" {
+        return Err(ApiError::Conflict(if status == "claimed" {
+            "a delivery is waiting for a decision: pledge again once it's settled".into()
+        } else {
+            "this bounty isn't taking pledges".into()
+        }));
     }
     if !(MIN_PLEDGE..=MAX_PLEDGE).contains(&b.amount_minor) {
         return Err(ApiError::invalid("amount_minor", "1.00 to 500.00"));
+    }
+    crate::donations::require_adult(&state, &user, b.confirm_adult).await?;
+    let unfinished: i64 = sqlx::query_scalar(
+        "select count(*) from bounty_pledges where user_id = $1
+           and status in ('saving', 'withdrawn', 'released') and created_at > now() - interval '1 day'",
+    )
+    .bind(user.id)
+    .fetch_one(&state.db)
+    .await?;
+    if unfinished >= crate::donations::UNFINISHED_BEFORE_CHALLENGE {
+        crate::challenge::check(&state.db, user.id, b.challenge.as_ref()).await?;
     }
     let mode = stripe::mode(&state);
     if matches!(mode, Mode::Off) {
@@ -768,15 +794,19 @@ async fn vote(
     if !pending {
         return Err(ApiError::NotFound);
     }
-    let backer: bool = sqlx::query_scalar(
-        "select exists (select 1 from bounty_pledges where bounty_id = $1 and user_id = $2 and status = 'active')",
-    )
+    // COUNTED is a constant: nothing from the request is in the SQL.
+    let backer: bool = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select exists (select 1 from bounty_pledges p where p.bounty_id = $1 and p.user_id = $3 and {COUNTED})"
+    )))
     .bind(id)
+    .bind(claim)
     .bind(user.id)
     .fetch_one(&state.db)
     .await?;
     if !backer {
-        return Err(ApiError::Conflict("only backers vote".into()));
+        return Err(ApiError::Conflict(
+            "only backers who pledged before the delivery vote, and never the one who delivered it or the app's maker".into(),
+        ));
     }
     if !backers_decide(&state.db, claim).await? {
         return Err(ApiError::Conflict(
@@ -792,23 +822,64 @@ async fn vote(
     .bind(b.accept)
     .execute(&state.db)
     .await?;
-    let (total, yes, no): (i64, i64, i64) = sqlx::query_as(
-        "select coalesce(sum(p.amount_minor), 0)::int8,
-                coalesce(sum(p.amount_minor) filter (where v.accept), 0)::int8,
-                coalesce(sum(p.amount_minor) filter (where not v.accept), 0)::int8
-         from bounty_pledges p left join bounty_votes v on v.user_id = p.user_id and v.claim_id = $2
-         where p.bounty_id = $1 and p.status = 'active'",
-    )
-    .bind(id)
-    .bind(claim)
-    .fetch_one(&state.db)
-    .await?;
-    if yes * 2 > total {
-        decide(&state, id, claim, true, "backers").await?;
-    } else if no * 2 > total {
-        decide(&state, id, claim, false, "backers").await?;
-    }
+    settle(&state, id, claim).await?;
     Ok(StatusCode::NO_CONTENT)
+}
+
+/// The pledges that count for a claim's vote (bound: $1 bounty, $2 claim): active, made before
+/// the delivery, and not the deliverer's or the app maker's own, so nobody can pledge their way
+/// to approving their own delivery (security review, 2026-10-22).
+const COUNTED: &str = "p.status = 'active'
+    and p.created_at < (select c.created_at from bounty_claims c where c.id = $2)
+    and p.user_id <> (select c.claimed_by from bounty_claims c where c.id = $2)
+    and p.user_id <> (select a.maker_id from bounties b join apps a on a.id = b.app_id where b.id = $1)";
+
+/// Settles a claim the backers decide, once more than half the counted pledges agree, and either
+/// every counted backer has voted or the voting window has passed.
+async fn settle(state: &AppState, id: Uuid, claim: Uuid) -> ApiResult<()> {
+    let (total, yes, no, unvoted, open_for): (i64, i64, i64, i64, Option<f64>) =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select coalesce(sum(p.amount_minor), 0)::int8,
+                    coalesce(sum(p.amount_minor) filter (where v.accept), 0)::int8,
+                    coalesce(sum(p.amount_minor) filter (where not v.accept), 0)::int8,
+                    count(*) filter (where v.user_id is null),
+                    (select extract(epoch from now() - c.created_at)::float8 from bounty_claims c where c.id = $2)
+             from bounty_pledges p left join bounty_votes v on v.user_id = p.user_id and v.claim_id = $2
+             where p.bounty_id = $1 and {COUNTED}"
+        )))
+        .bind(id)
+        .bind(claim)
+        .fetch_one(&state.db)
+        .await?;
+    let window_over = open_for.unwrap_or(0.0) >= VOTING_WINDOW.as_seconds_f64();
+    if total == 0 || (unvoted > 0 && !window_over) {
+        return Ok(());
+    }
+    if yes * 2 > total {
+        decide(state, id, claim, true, "backers").await?;
+    } else if no * 2 > total {
+        decide(state, id, claim, false, "backers").await?;
+    }
+    Ok(())
+}
+
+/// Claims whose voting window has just passed, settled by the charger's loop.
+async fn settle_due(state: &AppState) -> anyhow::Result<()> {
+    let due: Vec<(Uuid, Uuid)> = sqlx::query_as(
+        "select c.bounty_id, c.id from bounty_claims c where c.status = 'pending'
+           and c.created_at < now() - $1",
+    )
+    .bind(VOTING_WINDOW)
+    .fetch_all(&state.db)
+    .await?;
+    for (id, claim) in due {
+        if backers_decide(&state.db, claim).await? {
+            settle(state, id, claim)
+                .await
+                .map_err(|e| anyhow::anyhow!("{e:?}"))?;
+        }
+    }
+    Ok(())
 }
 
 async fn withdraw_claim(
@@ -907,6 +978,9 @@ async fn decide(state: &AppState, id: Uuid, claim: Uuid, accept: bool, by: &str)
 /// Runs forever: charges due pledges and expires old bounties.
 pub async fn run_charger(state: AppState) {
     loop {
+        if let Err(err) = settle_due(&state).await {
+            tracing::error!(error = ?err, "bounty votes");
+        }
         if let Err(err) = charge_due(&state).await {
             tracing::error!(error = ?err, "bounty charger");
         }
@@ -920,6 +994,23 @@ pub async fn run_charger(state: AppState) {
 /// Charges every due pledge once, marks finished bounties paid, and expires old ones. Returns
 /// how many pledges it charged.
 pub async fn charge_due(state: &AppState) -> anyhow::Result<usize> {
+    // One charger at a time, across every running copy of the API (a deploy overlaps the old
+    // and new ones briefly): the lock lives with this connection and ends with it.
+    let mut lock = state.db.acquire().await?;
+    let mine: bool = sqlx::query_scalar("select pg_try_advisory_lock(7341001)")
+        .fetch_one(&mut *lock)
+        .await?;
+    if !mine {
+        return Ok(0);
+    }
+    let result = charge_due_locked(state).await;
+    let _ = sqlx::query("select pg_advisory_unlock(7341001)")
+        .execute(&mut *lock)
+        .await;
+    result
+}
+
+async fn charge_due_locked(state: &AppState) -> anyhow::Result<usize> {
     // (pledge, bounty, backer, amount, currency, card, builder's account, title, simulated)
     type Due = (
         Uuid,
@@ -937,7 +1028,10 @@ pub async fn charge_due(state: &AppState) -> anyhow::Result<usize> {
                 b.title, p.simulated
          from bounty_pledges p join bounties b on b.id = p.bounty_id
          join bounty_claims c on c.bounty_id = b.id and c.status = 'accepted'
-         where p.status = 'due' limit 100",
+         where p.status = 'due'
+           -- Payouts wait while the delivering app's donations are paused (donation_holds.rs).
+           and not exists (select 1 from donation_holds h where h.app_id = c.app_id and h.lifted_at is null)
+         limit 100",
     )
     .fetch_all(&state.db)
     .await?;
@@ -1055,7 +1149,7 @@ async fn charge(
             .bind(backer)
             .fetch_one(&state.db)
             .await?;
-    let clone = call(
+    let clone = stripe::call_once(
         state,
         stripe,
         reqwest::Method::POST,
@@ -1065,12 +1159,13 @@ async fn charge(
             ("customer", customer),
             ("payment_method", payment_method.to_string()),
         ],
+        Some(&format!("bounty-pledge-{pledge}-card")),
     )
     .await?;
     let cloned = clone["id"]
         .as_str()
         .ok_or_else(|| anyhow::anyhow!("Stripe gave no card"))?;
-    let intent = call(
+    let intent = stripe::call_once(
         state,
         stripe,
         reqwest::Method::POST,
@@ -1086,6 +1181,7 @@ async fn charge(
             ("description", format!("Slop bounty: {title}")),
             ("metadata[bounty_pledge_id]", pledge.to_string()),
         ],
+        Some(&format!("bounty-pledge-{pledge}")),
     )
     .await?;
     anyhow::ensure!(

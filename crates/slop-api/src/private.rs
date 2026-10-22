@@ -96,20 +96,27 @@ async fn share_team(
     slug: &str,
     team: &str,
 ) -> ApiResult<()> {
-    let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "select t.id, t.kind, t.name from teams t join team_members m on m.team_id = t.id and m.user_id = $2
+    let row: Option<(Uuid, String, String, String)> = sqlx::query_as(
+        "select t.id, t.kind, t.name, t.join_policy from teams t join team_members m on m.team_id = t.id and m.user_id = $2
          where t.slug = $1",
     )
     .bind(team)
     .bind(user.id)
     .fetch_optional(&state.db)
     .await?;
-    let (team_id, kind, team_name) =
+    let (team_id, kind, team_name, join_policy) =
         row.ok_or_else(|| ApiError::invalid("team", "pick a team you're in"))?;
     if kind != "player" {
         return Err(ApiError::invalid(
             "team",
             "Private Slop is never shared with official teams",
+        ));
+    }
+    // Anyone can join an open team, so sharing with one would be sharing with anyone.
+    if join_policy != "invite" {
+        return Err(ApiError::invalid(
+            "team",
+            "Private Slop is only shared with invite-only teams",
         ));
     }
     let mut tx = state.db.begin().await?;

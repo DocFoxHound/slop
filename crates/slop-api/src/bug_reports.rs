@@ -56,9 +56,16 @@ async fn app_of(state: &AppState, slug: &str) -> ApiResult<(Uuid, Uuid, bool, St
     row.ok_or(ApiError::NotFound)
 }
 
+/// Whether a player may read and file reports: they've played it, and can still get it (it's in
+/// the store, or Private Slop still shared with them). Someone removed from a share, or a player
+/// of a delisted app, can't any more (security review, 2026-10-22).
 async fn has_played(state: &AppState, user: Uuid, app: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
-        "select exists (select 1 from user_app_usage where user_id = $1 and app_id = $2)",
+        "select exists (select 1 from user_app_usage where user_id = $1 and app_id = $2)
+            and (exists (select 1 from apps a where a.id = $2 and a.visibility = 'public' and a.status = 'listed')
+                 or exists (select 1 from app_shares s where s.app_id = $2 and s.user_id = $1)
+                 or exists (select 1 from app_team_shares ts join team_members m on m.team_id = ts.team_id
+                            where ts.app_id = $2 and m.user_id = $1))",
     )
     .bind(user)
     .bind(app)
@@ -287,15 +294,22 @@ async fn load(
     id: Uuid,
     user: &CurrentUser,
 ) -> ApiResult<(Report, Uuid, String, bool)> {
-    let row: Option<(Uuid, Uuid, String)> = sqlx::query_as(
-        "select a.maker_id, r.reporter_id, a.slug from bug_reports r join apps a on a.id = r.app_id where r.id = $1",
+    let row: Option<(Uuid, Uuid, String, Uuid)> = sqlx::query_as(
+        "select a.maker_id, r.reporter_id, a.slug, a.id from bug_reports r join apps a on a.id = r.app_id where r.id = $1",
     )
     .bind(id)
     .fetch_optional(&state.db)
     .await?;
-    let (maker, reporter, slug) = row.ok_or(ApiError::NotFound)?;
+    let (maker, reporter, slug, app_id) = row.ok_or(ApiError::NotFound)?;
     let is_maker = maker == user.id;
     if !is_maker && reporter != user.id {
+        return Err(ApiError::NotFound);
+    }
+    // An AI agent token for some of the maker's apps sees only their reports.
+    if let Some(agent) = &user.agent
+        && !agent.app_ids.is_empty()
+        && !agent.app_ids.contains(&app_id)
+    {
         return Err(ApiError::NotFound);
     }
     let report = sqlx::query_as(sqlx::AssertSqlSafe(format!(

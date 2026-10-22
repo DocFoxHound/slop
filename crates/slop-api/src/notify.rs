@@ -231,11 +231,20 @@ pub async fn unread(db: &PgPool, user_id: Uuid) -> sqlx::Result<i64> {
 }
 
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Inbox>> {
+    // A maker's AI agent reads only what's about maker work: never chats, friends or account
+    // security, and People jobs only with a token allowed to handle them.
+    let hidden: Vec<&str> = match &user.agent {
+        Some(agent) if agent.people => vec!["chat", "friends", "security"],
+        Some(_) => vec!["chat", "friends", "security", "jobs"],
+        None => Vec::new(),
+    };
     let items = sqlx::query_as(
         "select id, category, title, body, link, count, created_at, read_at is not null as read
-         from notifications where user_id = $1 order by created_at desc limit 60",
+         from notifications where user_id = $1 and not (category = any($2))
+         order by created_at desc limit 60",
     )
     .bind(user.id)
+    .bind(&hidden)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Inbox {
