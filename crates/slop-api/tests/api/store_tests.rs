@@ -1870,3 +1870,217 @@ async fn old_notifications_and_sent_emails_are_cleaned_up(db: PgPool) {
     outbox.sort();
     assert_eq!(outbox, ["sent-new", "waiting-old"]);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Push (push.rs)
+
+fn push_on(c: &mut Config) {
+    let (key, _) = slop_api::push::generate();
+    c.push = Some(slop_api::config::PushConfig {
+        key: slop_api::push::parse_key(&key).unwrap(),
+        subject: "mailto:ops@slop.example".into(),
+        extra_hosts: vec!["127.0.0.1".into()],
+        allow_http: false,
+    });
+}
+
+async fn subscriptions(app: &TestApp) -> Vec<(Uuid, String, i32)> {
+    sqlx::query_as(
+        "select user_id, endpoint, failures from push_subscriptions order by created_at, endpoint",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap()
+}
+
+/// Without push set up, the key and subscribing answer 503; signed out, 401.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn push_needs_the_server_to_have_it_on(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, ann) = app.user("Ann", "US").await;
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/push/key")).await.status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    let sub = json!({ "endpoint": "https://fcm.googleapis.com/fcm/send/abc" });
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/me/push").json(sub.clone()))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert_eq!(
+        app.send(req(Method::POST, "/v1/me/push").cookie(&ann).json(sub))
+            .await
+            .status(),
+        StatusCode::SERVICE_UNAVAILABLE
+    );
+    assert!(subscriptions(&app).await.is_empty());
+    assert_eq!(slop_api::push::run_once(&app.state).await.unwrap(), 0);
+}
+
+/// Subscribing: known push services over https only, ten per account (an eleventh replaces the
+/// oldest; posting one already there replaces nothing), and a known endpoint posted again is
+/// fresh (its failures forgotten) and goes with whoever is signed in on that browser now.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn push_subscriptions_are_limited_and_follow_the_browsers_account(db: PgPool) {
+    let app = test_app_with(db, push_on).await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    let subscribe = |cookie: &str, endpoint: &str| {
+        req(Method::POST, "/v1/me/push")
+            .cookie(cookie)
+            .json(json!({ "endpoint": endpoint, "keys": { "p256dh": "x", "auth": "y" } }))
+    };
+    for endpoint in [
+        "http://fcm.googleapis.com/fcm/send/plain",
+        "https://evil.example/push",
+        "https://user:pw@fcm.googleapis.com/fcm/send/x",
+        "not a url",
+        "http://127.0.0.1:9/push",
+    ] {
+        let res = app.send(subscribe(&ann, endpoint)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{endpoint}");
+    }
+    for endpoint in [
+        "https://fcm.googleapis.com/fcm/send/a",
+        "https://eu-1.notify.windows.com/w/?token=b",
+        "https://web.push.apple.com/c",
+    ] {
+        let res = app.send(subscribe(&ann, endpoint)).await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT, "{endpoint}");
+    }
+    for i in 3..10 {
+        let res = app
+            .send(subscribe(
+                &ann,
+                &format!("https://fcm.googleapis.com/fcm/send/{i}"),
+            ))
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        tokio::time::sleep(std::time::Duration::from_millis(2)).await;
+    }
+    assert_eq!(subscriptions(&app).await.len(), 10);
+    // Posting one she already has, at the limit: nothing goes.
+    let res = app
+        .send(subscribe(&ann, "https://web.push.apple.com/c"))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let subs = subscriptions(&app).await;
+    assert_eq!(subs.len(), 10);
+    assert!(
+        subs.iter()
+            .any(|s| s.1 == "https://fcm.googleapis.com/fcm/send/a"),
+        "re-subscribing an existing endpoint doesn't evict the oldest"
+    );
+    // An eleventh: the oldest goes.
+    let res = app
+        .send(subscribe(&ann, "https://fcm.googleapis.com/fcm/send/new"))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let subs = subscriptions(&app).await;
+    assert_eq!(subs.len(), 10);
+    assert!(!subs.iter().any(|s| s.1.ends_with("/send/a")));
+    assert!(subs.iter().any(|s| s.1.ends_with("/send/new")));
+
+    // Failures are forgotten when the browser subscribes again; Bob signing in on that browser
+    // takes it over.
+    sqlx::query("update push_subscriptions set failures = 7 where endpoint like '%/send/new'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(subscribe(&ann, "https://fcm.googleapis.com/fcm/send/new"))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let subs = subscriptions(&app).await;
+    let new = subs.iter().find(|s| s.1.ends_with("/send/new")).unwrap();
+    assert_eq!((new.0, new.2), (ann_id, 0));
+    let res = app
+        .send(subscribe(&bob, "https://fcm.googleapis.com/fcm/send/new"))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let subs = subscriptions(&app).await;
+    assert_eq!(subs.len(), 10);
+    assert_eq!(
+        subs.iter()
+            .filter(|s| s.0 == bob_id)
+            .map(|s| s.1.as_str())
+            .collect::<Vec<_>>(),
+        ["https://fcm.googleapis.com/fcm/send/new"]
+    );
+}
+
+/// Unsubscribing removes only the caller's own endpoint.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn unsubscribing_from_push_removes_only_your_own(db: PgPool) {
+    let app = test_app_with(db, push_on).await;
+    let (_, ann) = app.user("Ann", "US").await;
+    let (bob_id, bob) = app.user("Bob", "US").await;
+    for (cookie, endpoint) in [
+        (&ann, "https://fcm.googleapis.com/fcm/send/ann"),
+        (&bob, "https://fcm.googleapis.com/fcm/send/bob"),
+    ] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/me/push")
+                    .cookie(cookie)
+                    .json(json!({ "endpoint": endpoint })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    }
+    let unsubscribe =
+        |endpoint: &str| req(Method::DELETE, "/v1/me/push").json(json!({ "endpoint": endpoint }));
+    assert_eq!(
+        app.send(unsubscribe("https://fcm.googleapis.com/fcm/send/ann"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // Ann can't remove Bob's.
+    assert_eq!(
+        app.send(unsubscribe("https://fcm.googleapis.com/fcm/send/bob").cookie(&ann))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(subscriptions(&app).await.len(), 2);
+    assert_eq!(
+        app.send(unsubscribe("https://fcm.googleapis.com/fcm/send/ann").cookie(&ann))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let subs = subscriptions(&app).await;
+    assert_eq!(subs.len(), 1);
+    assert_eq!(subs[0].0, bob_id);
+}
+
+/// `slop-api keys generate-vapid` prints a private key the server can read back, and the public
+/// key that goes with it.
+#[test]
+fn the_vapid_key_command_prints_a_key_the_server_reads() {
+    let out = std::process::Command::new(env!("CARGO_BIN_EXE_slop-api"))
+        .args(["keys", "generate-vapid"])
+        .env_remove("DATABASE_URL")
+        .output()
+        .unwrap();
+    assert!(
+        out.status.success(),
+        "{}",
+        String::from_utf8_lossy(&out.stderr)
+    );
+    let stdout = String::from_utf8(out.stdout).unwrap();
+    let private = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("SLOP_VAPID_PRIVATE_KEY="))
+        .expect("a SLOP_VAPID_PRIVATE_KEY= line");
+    let public = stdout
+        .lines()
+        .find_map(|l| l.strip_prefix("public key: "))
+        .expect("the public key");
+    let key = slop_api::push::parse_key(private).unwrap();
+    assert_eq!(slop_api::push::public_key(&key), public);
+    assert!(String::from_utf8_lossy(&out.stderr).contains("Keep SLOP_VAPID_PRIVATE_KEY secret"));
+}
