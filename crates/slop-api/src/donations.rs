@@ -1340,19 +1340,29 @@ pub async fn refund_recorded(db: &PgPool, charge: &str, refunded_total: i64) -> 
     .bind(charge)
     .fetch_optional(&mut *tx)
     .await?;
-    sqlx::query(
-        "insert into payments (id, kind, refund_of, donation_id, stripe_account_id, stripe_object_id, amount_minor, currency)
-         values ($1, 'refund', $2, $3, $4, $5, $6, $7) on conflict (stripe_object_id) do nothing",
+    // Stripe gives the total refunded so far: record only what's new since the last refund.
+    let so_far: i64 = sqlx::query_scalar(
+        "select coalesce(-sum(amount_minor), 0)::int8 from payments where donation_id = $1 and kind = 'refund'",
     )
-    .bind(Uuid::now_v7())
-    .bind(original)
     .bind(id)
-    .bind(account)
-    .bind(format!("{charge}:refunded:{refunded_total}"))
-    .bind(-(refunded_total.min(i64::from(total)) as i32))
-    .bind(currency)
-    .execute(&mut *tx)
+    .fetch_one(&mut *tx)
     .await?;
+    let new = refunded_total.min(i64::from(total)) - so_far;
+    if new > 0 {
+        sqlx::query(
+            "insert into payments (id, kind, refund_of, donation_id, stripe_account_id, stripe_object_id, amount_minor, currency)
+             values ($1, 'refund', $2, $3, $4, $5, $6, $7) on conflict (stripe_object_id) do nothing",
+        )
+        .bind(Uuid::now_v7())
+        .bind(original)
+        .bind(id)
+        .bind(account)
+        .bind(format!("{charge}:refunded:{refunded_total}"))
+        .bind(-(new as i32))
+        .bind(currency)
+        .execute(&mut *tx)
+        .await?;
+    }
     tx.commit().await?;
     Ok(())
 }
@@ -1654,6 +1664,20 @@ async fn save_settings(
             "{} people give monthly for the servers: use \"The servers are shut down\" to end their donations first",
             current.active_server_donations
         )));
+    }
+    // One still at Stripe Checkout starts once it's paid, servers or not. Checkout sessions last
+    // a day, so older ones will never complete.
+    let starting: i64 = sqlx::query_scalar(
+        "select count(*) from server_donations
+         where app_id = $1 and status = 'pending' and created_at > now() - interval '1 day'",
+    )
+    .bind(app_id)
+    .fetch_one(&state.db)
+    .await?;
+    if !b.runs_servers && starting > 0 {
+        return Err(ApiError::Conflict(
+            "someone is starting a monthly server donation right now: use \"The servers are shut down\" to end it, or try again tomorrow".into(),
+        ));
     }
     sqlx::query(
         "update apps set donations_on = $2, donation_suggested_minor = $3, donation_currency = $4, runs_servers = $5,
@@ -2407,7 +2431,7 @@ async fn refresh_account(
 struct Statement {
     month: String,
     currency: String,
-    /// donation or people_job
+    /// donation, people_job or bounty
     kind: String,
     payments: i64,
     received_minor: i64,
@@ -2475,8 +2499,8 @@ async fn vat_treatment(state: &AppState, user: &CurrentUser) -> sqlx::Result<Vat
     })
 }
 
-/// Monthly fee statements (PAYMENTS §8, TAX-4): what Slop's fee came to on the user's donations
-/// and People jobs, and the VAT included in it.
+/// Monthly fee statements (PAYMENTS §8, TAX-4): what Slop's fee came to on the user's donations,
+/// People jobs and bounty payouts, and the VAT included in it.
 async fn fee_statements(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -2487,7 +2511,7 @@ async fn fee_statements(
                     count(*) as payments, sum(p.amount_minor)::int8 as received_minor,
                     sum(p.slop_fee_minor)::int8 as slop_fee_minor, bool_or(p.simulated) as simulated
              from payments p
-             where p.kind in ('donation', 'people_job') and p.stripe_account_id in (
+             where p.kind in ('donation', 'people_job', 'bounty') and p.stripe_account_id in (
                  select stripe_account_id from donation_accounts where user_id = $1
                  union select stripe_account_id from creatives where user_id = $1 and stripe_account_id is not null)
              group by 1, 2, 3 order by 1 desc, 3",
@@ -2546,7 +2570,9 @@ async fn set_vat(
             note: None,
         }));
     };
-    let valid_shape = number.len() >= 4
+    // ASCII first: the slices below are by byte.
+    let valid_shape = number.is_ascii()
+        && number.len() >= 4
         && number.len() <= 15
         && number[..2].chars().all(|c| c.is_ascii_uppercase())
         && number[2..]
@@ -2640,6 +2666,8 @@ pub async fn hourly(state: &AppState) -> anyhow::Result<()> {
         "select s.id, s.donor_id, a.title, s.currency, s.total_minor, s.next_charge_at, s.first_reminder_at is null
          from server_donations s join apps a on a.id = s.app_id
          where s.status = 'active' and s.next_charge_at < now() + interval '7 days'
+           -- Nothing is taken while the app's donations are held (donation_holds.rs).
+           and not exists (select 1 from donation_holds h where h.app_id = s.app_id and h.lifted_at is null)
            and (s.first_reminder_at is null
                 or (s.started_at < now() - interval '358 days'
                     and coalesce(s.last_yearly_reminder_at, s.started_at) < now() - interval '358 days'))",
@@ -2764,7 +2792,7 @@ pub async fn reconcile(state: &AppState) -> anyhow::Result<usize> {
     }
     let ours: Vec<(String, i64)> = sqlx::query_as(
         "select stripe_account_id, slop_fee_minor::int8 from payments
-         where not simulated and kind in ('people_job', 'donation') and created_at >= $1 and created_at < $2
+         where not simulated and kind in ('people_job', 'donation', 'bounty') and created_at >= $1 and created_at < $2
            and stripe_account_id is not null",
     )
     .bind(from)

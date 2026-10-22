@@ -416,6 +416,12 @@ async fn apply(
     .bind(app_id)
     .fetch_optional(&state.db)
     .await?;
+    // Turning donations off took two people; one can't make it a pause they may lift alone.
+    if kind == Kind::Review && existing.as_ref().is_some_and(|(_, k)| k == "off") {
+        return Err(ApiError::Conflict(
+            "donations to this app are turned off: lifting that is a sensitive action".into(),
+        ));
+    }
     // A new hold stops monthly charges at Stripe first; if Stripe refuses, nothing changes here.
     let donors = if existing.is_none() {
         let donors = set_collection(state, app_id, true).await?;
