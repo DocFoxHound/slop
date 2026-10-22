@@ -675,9 +675,13 @@ async fn cancel(
     .fetch_optional(&state.db)
     .await?;
     let (kind, by) = row.ok_or(ApiError::NotFound)?;
-    // The requester can withdraw their own; anyone who could approve it can turn it down.
+    // The requester can withdraw their own; anyone who could approve it can turn it down. That's
+    // a person: a token never approves, so it never turns down someone else's request either.
     if by != Some(admin.user_id) {
         admin.need(perm_for(&kind))?;
+        if admin.token.is_some() {
+            return Err(ApiError::Forbidden);
+        }
     }
     let mut tx = state.db.begin().await?;
     sqlx::query("update staff_actions set status = 'cancelled', decided_at = now(), result = $2 where id = $1")
