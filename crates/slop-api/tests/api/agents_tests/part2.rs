@@ -1947,3 +1947,468 @@ async fn the_maker_mcp_endpoint_speaks_json_rpc_within_the_tokens_limits(db: PgP
         "{text}"
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: players' reviews, bug reports and feedback
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_read_and_answer_reviews_and_bug_reports(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (report, pat_id, pat) = app_with_bug_report(&app, maker_id, "tower").await;
+    app.send(
+        req(Method::POST, "/v1/apps/tower/vote")
+            .cookie(&pat)
+            .json(json!({ "vote": "slop" })),
+    )
+    .await;
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/tower/review")
+                .cookie(&pat)
+                .json(json!({ "body": "Too grindy after level 5." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let (read, _) = maker_token(&app, &maker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (publish, _) = maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let (limited, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Tower only", "scope": "publish", "apps": ["tower"] }),
+    )
+    .await;
+
+    // Reviews: read with any token, answered with a publish token.
+    let (failed, text) = maker_tool(&app, &read, "list_reviews", json!({ "slug": "tower" })).await;
+    assert!(!failed, "{text}");
+    let reviews = parsed(&text);
+    assert_eq!(reviews["reviews"][0]["body"], "Too grindy after level 5.");
+    let review = reviews["reviews"][0]["id"].as_str().unwrap().to_string();
+    let reply = |body: String| json!({ "slug": "tower", "id": review, "body": body });
+    let (failed, text) = maker_tool(&app, &read, "reply_to_review", reply("Thanks!".into())).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) =
+        maker_tool(&app, &publish, "reply_to_review", reply("x".repeat(2001))).await;
+    assert!(failed && text.contains("invalid"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "reply_to_review",
+        reply("Thanks! 1.2 halves the grind.".into()),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    // A second reply replaces the first.
+    let (failed, _) = maker_tool(
+        &app,
+        &limited,
+        "reply_to_review",
+        reply("Thanks! 1.2 halves the grind, and 1.3 adds a skip.".into()),
+    )
+    .await;
+    assert!(!failed);
+    let page = body_json(app.send(req(Method::GET, "/v1/apps/tower/reviews")).await).await;
+    assert_eq!(
+        page["reviews"][0]["reply"],
+        "Thanks! 1.2 halves the grind, and 1.3 adds a skip."
+    );
+    assert!(
+        notification_titles(&app, pat_id)
+            .await
+            .iter()
+            .any(|t| t.ends_with("replied to your review"))
+    );
+
+    // Bug reports: open ones by default, filtered by status.
+    let (failed, text) =
+        maker_tool(&app, &read, "list_bug_reports", json!({ "slug": "tower" })).await;
+    assert!(!failed, "{text}");
+    let open = parsed(&text);
+    let r = &open["reports"][0];
+    assert_eq!(r["id"], report.as_str());
+    assert_eq!(r["log"], "panic at wave.rs:12 for pat@example.com");
+    // Like the maker, the agent sees the player's display name and nothing else about them
+    // (the tool tells it to leave even that out of public issues).
+    assert_eq!(r["reporter"], "Pat Player");
+    let fields: Vec<&String> = r.as_object().unwrap().keys().collect();
+    for private in ["reporter_id", "user_id", "email", "country_code"] {
+        assert!(!fields.iter().any(|f| f.as_str() == private), "{fields:?}");
+    }
+    assert!(!text.contains(&pat_id.to_string()));
+    let (_, text) = maker_tool(
+        &app,
+        &read,
+        "list_bug_reports",
+        json!({ "slug": "tower", "status": "fixed" }),
+    )
+    .await;
+    assert_eq!(parsed(&text)["reports"], json!([]));
+    let (failed, text) = maker_tool(
+        &app,
+        &read,
+        "list_bug_reports",
+        json!({ "slug": "tower", "status": "everything" }),
+    )
+    .await;
+    assert!(failed && text.contains("status"), "{text}");
+
+    // Answering a report: an all-apps publish token only.
+    let fix = json!({ "id": report, "status": "fixed", "maker_note": "Fixed in 1.0.1." });
+    for token in [&read, &limited] {
+        let (failed, text) = maker_tool(&app, token, "update_bug_report", fix.clone()).await;
+        assert!(failed && text.contains("forbidden"), "{text}");
+    }
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "update_bug_report",
+        json!({ "id": report, "status": "solved" }),
+    )
+    .await;
+    assert!(failed && text.contains("status"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "update_bug_report",
+        json!({ "id": report, "maker_note": "x".repeat(2001) }),
+    )
+    .await;
+    assert!(failed && text.contains("maker_note"), "{text}");
+    assert!(
+        !notification_titles(&app, pat_id)
+            .await
+            .contains(&"Your bug report was fixed".to_string())
+    );
+    let (failed, text) = maker_tool(&app, &publish, "update_bug_report", fix).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["status"], "fixed");
+    assert!(
+        notification_titles(&app, pat_id)
+            .await
+            .contains(&"Your bug report was fixed".to_string())
+    );
+    let (_, text) = maker_tool(
+        &app,
+        &read,
+        "list_bug_reports",
+        json!({ "slug": "tower", "status": "fixed" }),
+    )
+    .await;
+    assert_eq!(parsed(&text)["reports"][0]["maker_note"], "Fixed in 1.0.1.");
+
+    // Feedback per release.
+    let (failed, text) =
+        maker_tool(&app, &read, "release_feedback", json!({ "slug": "tower" })).await;
+    assert!(!failed, "{text}");
+    let feedback = parsed(&text);
+    assert_eq!(feedback[0]["version"], "1.0.0");
+    assert_eq!(feedback[0]["bug_reports"], 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: bounties
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_find_bounties_and_claim_them_for_people_to_check(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    listed_with(&app, maker_id, "tower", "released", "").await;
+    approved_release(&app, "tower", maker_id).await;
+    listed_with(&app, maker_id, "farm", "released", "").await;
+    let (forker_id, forker) = app.user("Forker", "US").await;
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, status, maker_id, repo_url, license_spdx,
+                           parent_app_id, branch_kind, branch_note)
+         select $1, 'tower-fix', 'Tower (fixed)', 'Fixed', 'game', 'released', 'listed', $2, 'https://github.com/f/t',
+                'MIT', id, 'fix', 'Fixes saves' from apps where slug = 'tower'",
+    )
+    .bind(Uuid::now_v7())
+    .bind(forker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    approved_release(&app, "tower-fix", forker_id).await;
+    listed_with(&app, forker_id, "forkers-own", "released", "").await;
+    approved_release(&app, "forkers-own", forker_id).await;
+    let (_, ann) = app.user("Ann Backer", "US").await;
+    let mut ids = vec![];
+    for (slug, title, amount) in [("tower", "Fix lost saves", 3000), ("farm", "Add a dog", 1000)] {
+        let res = app
+            .send(
+                req(Method::POST, format!("/v1/apps/{slug}/bounties"))
+                    .cookie(&ann)
+                    .json(json!({ "title": title, "body": "Please.", "currency": "usd" })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+        let id = body_json(res).await["id"].as_str().unwrap().to_string();
+        let res = app
+            .send(
+                req(Method::POST, format!("/v1/bounties/{id}/pledge"))
+                    .cookie(&ann)
+                    .json(json!({ "amount_minor": amount, "confirm_adult": true })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        ids.push(id);
+    }
+    let bounty = ids[0].clone();
+    let (read, _) = maker_token(&app, &forker, json!({ "name": "Reader", "scope": "read" })).await;
+    let (limited, _) = maker_token(
+        &app,
+        &forker,
+        json!({ "name": "Fix only", "scope": "publish", "apps": ["tower-fix"] }),
+    )
+    .await;
+    let (all, _) = maker_token(&app, &forker, json!({ "name": "All", "scope": "publish" })).await;
+
+    // Every open bounty, biggest first, or one app's.
+    let titles = |text: &str| -> Vec<String> {
+        parsed(text)
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|b| b["title"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (failed, text) = maker_tool(&app, &read, "list_bounties", json!({})).await;
+    assert!(!failed, "{text}");
+    assert_eq!(titles(&text), ["Fix lost saves", "Add a dog"]);
+    let (_, text) = maker_tool(&app, &read, "list_bounties", json!({ "slug": "farm" })).await;
+    assert_eq!(titles(&text), ["Add a dog"]);
+    let (failed, text) = maker_tool(&app, &read, "get_bounty", json!({ "id": bounty })).await;
+    assert!(!failed, "{text}");
+    let detail = parsed(&text);
+    assert_eq!(detail["title"], "Fix lost saves");
+    assert_eq!(detail["pledged_minor"], 3000);
+    let (failed, text) =
+        maker_tool(&app, &read, "get_bounty", json!({ "id": Uuid::now_v7() })).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+
+    // Claiming: an all-apps publish token, for the bounty's app or a build of it the maker owns.
+    let claim = |slug: &str| json!({ "id": bounty, "app_slug": slug, "note": "1.0.0 writes saves safely." });
+    for token in [&read, &limited] {
+        let (failed, text) = maker_tool(&app, token, "claim_bounty", claim("tower-fix")).await;
+        assert!(failed && text.contains("forbidden"), "{text}");
+    }
+    let (failed, text) = maker_tool(&app, &all, "claim_bounty", claim("tower")).await;
+    assert!(failed && text.contains("not_found"), "not the forker's: {text}");
+    let (failed, text) = maker_tool(&app, &all, "claim_bounty", claim("forkers-own")).await;
+    assert!(failed && text.contains("app_slug"), "not a build of it: {text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &all,
+        "claim_bounty",
+        json!({ "id": bounty, "app_slug": "tower-fix", "note": " " }),
+    )
+    .await;
+    assert!(failed && text.contains("note"), "{text}");
+    assert_eq!(count(&app, "select count(*) from bounty_claims").await, 0);
+    let (failed, text) = maker_tool(&app, &all, "claim_bounty", claim("tower-fix")).await;
+    assert!(!failed, "{text}");
+
+    // Nothing is charged until the app's maker checks it, which an agent can't do for them.
+    let (_, text) = maker_tool(&app, &read, "get_bounty", json!({ "id": bounty })).await;
+    let detail = parsed(&text);
+    assert_eq!(detail["status"], "claimed");
+    let claim_id = detail["claims"][0]["id"].as_str().unwrap().to_string();
+    assert_eq!(slop_api::bounties::charge_due(&app.state).await.unwrap(), 0);
+    assert_eq!(count(&app, "select count(*) from payments").await, 0);
+    let (makers_agent, _) =
+        maker_token(&app, &maker, json!({ "name": "Maker's", "scope": "publish" })).await;
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/bounties/{bounty}/claims/{claim_id}/answer"),
+            )
+            .header("authorization", makers_agent)
+            .json(json!({ "decision": "accepted" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/bounties/{bounty}/claims/{claim_id}/answer"),
+            )
+            .cookie(&maker)
+            .json(json!({ "decision": "accepted" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(slop_api::bounties::charge_due(&app.state).await.unwrap(), 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: community builds and fixes offered back
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_register_community_builds_and_offer_fixes_back(db: PgPool) {
+    let app = test_app(db).await;
+    let (mia_id, mia) = app.user("Mia Maker", "US").await;
+    let (bo_id, bo) = app.user("Bo Brancher", "US").await;
+    listed_with(
+        &app,
+        mia_id,
+        "castle",
+        "released",
+        "platforms = '{windows}', repo_url = 'https://github.com/mia/castle', min_age = 12",
+    )
+    .await;
+    listed_with(&app, bo_id, "bos-own", "released", "").await;
+    let (bo_read, _) = maker_token(&app, &bo, json!({ "name": "Reader", "scope": "read" })).await;
+    let (bo_limited, _) = maker_token(
+        &app,
+        &bo,
+        json!({ "name": "Own only", "scope": "publish", "apps": ["bos-own"] }),
+    )
+    .await;
+    let (bo_all, _) = maker_token(&app, &bo, json!({ "name": "All", "scope": "publish" })).await;
+    let (mia_read, _) = maker_token(&app, &mia, json!({ "name": "Reader", "scope": "read" })).await;
+    let (mia_all, _) = maker_token(&app, &mia, json!({ "name": "All", "scope": "publish" })).await;
+
+    let port = json!({
+        "original": "castle", "slug": "castle-linux", "title": "Castle (Linux port)",
+        "summary": "Runs natively on Linux.", "repo_url": "https://github.com/bo/castle",
+        "license_spdx": "MIT", "kind": "port", "note": "Adds a Linux build and fixes paths.",
+        "platforms": ["linux", "linux-deb"]
+    });
+    for token in [&bo_read, &bo_limited] {
+        let (failed, text) = maker_tool(&app, token, "register_community_build", port.clone()).await;
+        assert!(failed && text.contains("forbidden"), "{text}");
+    }
+    let mut no_note = port.clone();
+    no_note.as_object_mut().unwrap().remove("note");
+    let (failed, text) = maker_tool(&app, &bo_all, "register_community_build", no_note).await;
+    assert!(failed && text.contains("missing argument: note"), "{text}");
+    let mut unknown = port.clone();
+    unknown["original"] = json!("no-such-castle");
+    let (failed, text) = maker_tool(&app, &bo_all, "register_community_build", unknown).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    assert_eq!(count(&app, "select count(*) from apps where parent_app_id is not null").await, 0);
+    // `original` is the address in the path; the rest is the new app.
+    let (failed, text) = maker_tool(&app, &bo_all, "register_community_build", port).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["slug"], "castle-linux");
+    let (maker, parent, kind, min_age): (Uuid, String, String, i16) = sqlx::query_as(
+        "select b.maker_id, p.slug, b.branch_kind, b.min_age from apps b join apps p on p.id = b.parent_app_id
+         where b.slug = 'castle-linux'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        (maker, parent.as_str(), kind.as_str(), min_age),
+        (bo_id, "castle", "port", 12)
+    );
+
+    // Offering the fix back: publish tokens only, pull requests on the original only.
+    let offer = |pr: &str| {
+        json!({ "slug": "castle-linux", "pull_request_url": pr, "message": "Fixes paths on Linux." })
+    };
+    let (failed, text) = maker_tool(
+        &app,
+        &bo_read,
+        "offer_fix_to_original",
+        offer("https://github.com/mia/castle/pull/7"),
+    )
+    .await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &bo_all,
+        "offer_fix_to_original",
+        offer("https://github.com/evil/castle/pull/7"),
+    )
+    .await;
+    assert!(failed && text.contains("pull_request_url"), "{text}");
+    let mut ids = vec![];
+    for pr in [7, 8] {
+        let (failed, text) = maker_tool(
+            &app,
+            &bo_all,
+            "offer_fix_to_original",
+            offer(&format!("https://github.com/mia/castle/pull/{pr}")),
+        )
+        .await;
+        assert!(!failed, "{text}");
+        ids.push(parsed(&text)["id"].as_str().unwrap().to_string());
+    }
+    assert_eq!(
+        notification_titles(&app, mia_id)
+            .await
+            .iter()
+            .filter(|t| t.ends_with("offered you a fix"))
+            .count(),
+        1,
+        "told once, while unread"
+    );
+
+    // Each side lists them.
+    let (failed, text) = maker_tool(&app, &mia_read, "list_offers", json!({ "slug": "castle" })).await;
+    assert!(!failed, "{text}");
+    let received = parsed(&text);
+    assert_eq!(received.as_array().unwrap().len(), 2);
+    assert_eq!(received[0]["direction"], "received");
+    let (_, text) = maker_tool(&app, &bo_read, "list_offers", json!({ "slug": "castle-linux" })).await;
+    assert_eq!(parsed(&text)[0]["direction"], "sent");
+    let (failed, text) = maker_tool(&app, &bo_read, "list_offers", json!({ "slug": "castle" })).await;
+    assert!(failed && text.contains("not_found"), "not Bo's app: {text}");
+
+    // Answering: the original's maker, with a publish token.
+    let answer = json!({ "slug": "castle", "id": ids[0], "decision": "accepted", "message": "Merged, thanks!" });
+    let (failed, text) = maker_tool(&app, &mia_read, "answer_offer", answer.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let mut on_branch = answer.clone();
+    on_branch["slug"] = json!("castle-linux");
+    let (failed, _) = maker_tool(&app, &bo_all, "answer_offer", on_branch).await;
+    assert!(failed, "Bo can't accept his own offer");
+    let (failed, text) = maker_tool(
+        &app,
+        &mia_all,
+        "answer_offer",
+        json!({ "slug": "castle", "id": ids[0], "decision": "maybe" }),
+    )
+    .await;
+    assert!(failed && text.contains("decision"), "{text}");
+    let (failed, text) = maker_tool(&app, &mia_all, "answer_offer", answer).await;
+    assert!(!failed, "{text}");
+    assert!(
+        notification_titles(&app, bo_id)
+            .await
+            .iter()
+            .any(|t| t.contains("accepted"))
+    );
+
+    // Withdrawing: the build's maker, with a publish token, an offer still open.
+    let withdraw = |slug: &str, id: &str| json!({ "slug": slug, "id": id });
+    let (failed, text) =
+        maker_tool(&app, &bo_read, "withdraw_offer", withdraw("castle-linux", &ids[1])).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    for (token, slug) in [(&mia_all, "castle-linux"), (&mia_all, "castle"), (&bo_all, "bos-own")] {
+        let (failed, text) = maker_tool(&app, token, "withdraw_offer", withdraw(slug, &ids[1])).await;
+        assert!(failed && text.contains("not_found"), "{slug}: {text}");
+    }
+    let (failed, text) =
+        maker_tool(&app, &bo_all, "withdraw_offer", withdraw("castle-linux", &ids[0])).await;
+    assert!(failed && text.contains("not_found"), "already answered: {text}");
+    let (failed, text) =
+        maker_tool(&app, &bo_all, "withdraw_offer", withdraw("castle-linux", &ids[1])).await;
+    assert!(!failed, "{text}");
+    let (_, text) = maker_tool(&app, &bo_read, "list_offers", json!({ "slug": "castle-linux" })).await;
+    let sent = parsed(&text);
+    let mut statuses: Vec<&str> = sent
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|o| o["status"].as_str().unwrap())
+        .collect();
+    statuses.sort();
+    assert_eq!(statuses, ["accepted", "withdrawn"]);
+    let (failed, _) =
+        maker_tool(&app, &bo_all, "withdraw_offer", withdraw("castle-linux", &ids[1])).await;
+    assert!(failed, "twice");
+}
