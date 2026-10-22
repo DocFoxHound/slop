@@ -1764,7 +1764,7 @@ async fn repository_tokens_are_only_sent_to_the_repositorys_own_host(db: PgPool)
     );
     for elsewhere in [
         format!("http://localhost:{port}/ann/game/releases/download/v1/game.zip"),
-        format!("http://127.0.0.1:1/ann/game/releases/download/v1/game.zip"),
+        "http://127.0.0.1:1/ann/game/releases/download/v1/game.zip".to_string(),
         format!("https://127.0.0.1:{port}/ann/game/releases/download/v1/game.zip"),
         "https://evil.example/ann/game".to_string(),
         "not a url".to_string(),
