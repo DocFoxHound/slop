@@ -5345,7 +5345,15 @@ fn sprite_offer(payment: &str) -> Value {
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn creatives_go_live_with_a_reviewed_portfolio(db: PgPool) {
     let app = test_app(db).await;
-    let (_, cookie) = app.user("Composer", "US").await;
+    let (composer_id, cookie) = app.user("Composer", "US").await;
+    // Their GitHub account (42) owns octo/game, the portfolio repository.
+    sqlx::query(
+        "insert into identities (provider, provider_subject, user_id) values ('github', '42', $1)",
+    )
+    .bind(composer_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
     let (_, other) = app.user("Visitor", "US").await;
     let (_, admin_cookie) = make_admin(&app, "Admin").await;
 

@@ -661,6 +661,12 @@ pub async fn check(
                 "use a public GitHub repository link, e.g. https://github.com/you/portfolio",
             ));
         }
+        // Their own work: the repository must belong to their linked GitHub account (or an
+        // organization they own), like an app's (security review, 2026-10-22).
+        let owned = crate::repo_owner::assess(&state, user.id, repo).await?;
+        if !owned.ok {
+            return Err(ApiError::invalid("repo_url", owned.message));
+        }
         sqlx::query(
             "update creatives set portfolio_repo = $2, updated_at = now() where user_id = $1",
         )

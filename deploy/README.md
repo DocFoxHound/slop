@@ -202,8 +202,19 @@ podman exec -i slop-pg pg_restore -U slop --no-owner --role=slop_prod -d slop_re
 
 **These copies are on the same disk.** They cover mistakes, not losing the machine. Set
 `SLOP_BACKUP_OFFSITE` in the backup service's environment to a command that copies its
-arguments somewhere else, encrypted (for example `rclone copy --` to an rclone crypt remote on
-Backblaze B2 or Cloudflare R2, whose free tiers fit).
+arguments somewhere else (for example `rclone copy --` to Backblaze B2 or Cloudflare R2, whose
+free tiers fit).
+
+**Encrypt them to a key that isn't on this machine.** On your own computer:
+`gpg --quick-generate-key "Slop backups" ed25519 encrypt never`, then
+`gpg --armor --export "Slop backups" > slop-backups.pub` and keep the private key (and a copy of
+it) somewhere safe off this server. Here: `gpg --import slop-backups.pub` and set
+`SLOP_BACKUP_GPG_RECIPIENT=<its fingerprint>` in the backup service's environment
+(`systemctl --user edit slop-backup.service`, `[Service]` `Environment=…`). From then on the
+settings-and-keys archive is only stored encrypted (`config-*.tar.gz.gpg`), and everything sent
+off-site is encrypted. The local database dumps stay readable for the weekly restore check.
+Restore the keys with `gpg --decrypt config-<time>.tar.gz.gpg | tar -xz` on a machine that has
+the private key.
 
 ## Staff and approvals
 
