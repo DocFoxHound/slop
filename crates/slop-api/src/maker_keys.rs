@@ -90,10 +90,12 @@ async fn add(
     })?;
     let fingerprint = slop_manifest::sshsig::fingerprint(&key);
     let mut tx = state.db.begin().await?;
+    // Re-adding a key the user already has (to rename it) isn't another key.
     let count: i64 = sqlx::query_scalar(
-        "select count(*) from maker_keys where user_id = $1 and revoked_at is null",
+        "select count(*) from maker_keys where user_id = $1 and revoked_at is null and fingerprint <> $2",
     )
     .bind(user.id)
+    .bind(&fingerprint)
     .fetch_one(&mut *tx)
     .await?;
     if count >= MAX_KEYS {

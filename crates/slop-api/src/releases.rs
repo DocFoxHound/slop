@@ -482,6 +482,10 @@ async fn submit_release(
     crate::limits::check(&state, user.id, crate::limits::Action::Release)?;
     let (app_id, repo_url) = owned_app(&state, &slug, &user).await?;
     crate::passkeys::require(&state, &user).await?;
+    // Checked first, so a refusal doesn't leave the release made without them.
+    if let Some(notes) = &req.notes {
+        check_notes(notes)?;
+    }
     let release = create_release(
         &state,
         app_id,
@@ -508,12 +512,18 @@ async fn submit_release(
 /// Up to this many characters of release notes.
 const MAX_NOTES: usize = 5000;
 
-/// Sets a release's notes: what changed, for players. Empty clears them.
-pub(crate) async fn set_notes(db: &sqlx::PgPool, release_id: Uuid, notes: &str) -> ApiResult<()> {
-    let notes = notes.trim();
-    if notes.chars().count() > MAX_NOTES {
+/// Checks release notes, before a release is made with them.
+pub(crate) fn check_notes(notes: &str) -> ApiResult<()> {
+    if notes.trim().chars().count() > MAX_NOTES {
         return Err(ApiError::invalid("notes", "up to 5,000 characters"));
     }
+    Ok(())
+}
+
+/// Sets a release's notes: what changed, for players. Empty clears them.
+pub(crate) async fn set_notes(db: &sqlx::PgPool, release_id: Uuid, notes: &str) -> ApiResult<()> {
+    check_notes(notes)?;
+    let notes = notes.trim();
     sqlx::query("update releases set notes = $2 where id = $1")
         .bind(release_id)
         .bind((!notes.is_empty()).then_some(notes))
