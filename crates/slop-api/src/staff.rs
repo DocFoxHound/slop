@@ -653,6 +653,10 @@ async fn cancel(
     admin: AdminUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
+    // A read token only looks and leaves notes: turning a request down is a decision.
+    if admin.token.as_ref().is_some_and(|t| !t.can_decide) {
+        return Err(ApiError::Forbidden);
+    }
     let row: Option<(String, Option<Uuid>)> = sqlx::query_as(
         "select kind, requested_by from staff_actions where id = $1 and status = 'pending'",
     )
