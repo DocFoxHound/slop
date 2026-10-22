@@ -198,10 +198,18 @@ async fn record(
     .bind(app.id)
     .fetch_all(db)
     .await?;
+    // Entries name the app by its address, its ID (moderation decisions), or one of its releases
+    // (approvals, rejections, withdrawals; a file of one for re-scan decisions).
     let audit = sqlx::query_as(
-        "select id, at, actor, action, detail from audit_log where subject = $1 order by id desc limit 100",
+        "select id, at, actor, action, detail from audit_log
+         where subject = $1 or subject = $2::text
+            or subject in (select r.id::text from releases r where r.app_id = $2)
+            or subject in (select f.release_id::text || ' ' || f.platform from release_files f
+                           join releases r on r.id = f.release_id where r.app_id = $2)
+         order by id desc limit 100",
     )
     .bind(&slug)
+    .bind(app.id)
     .fetch_all(db)
     .await?;
     Ok(Json(Record {

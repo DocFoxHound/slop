@@ -4864,3 +4864,515 @@ async fn lifting_a_staff_freeze_on_a_delisted_app_lets_it_come_back(db: PgPool) 
         (None, false, "listed".into(), false)
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// An app's record, the money overview, and staff fixes to profiles and teams
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_apps_record_holds_its_money_reports_decisions_and_release_history(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (looker_id, looker) = app.user("Lou Looker", "US").await;
+    sqlx::query("update users set is_admin = true where id = $1")
+        .bind(looker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (donor, _) = app.user("Dana Donor", "US").await;
+    let (_, rita) = app.user("Rita Reporter", "US").await;
+    let (_, maker, approved) = release_waiting(&app).await;
+    let rejected = submit_and_fetch(&app, &maker, "1.1.0").await;
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/releases/{approved}/approve"),
+            )
+            .cookie(&owner),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/releases/{rejected}/reject"),
+            )
+            .cookie(&owner)
+            .json(json!({ "reason": "Crashes at start." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    sqlx::query("update release_files set rescan_flagged_at = now() where release_id = $1::uuid")
+        .bind(&approved)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(
+            req(
+                Method::POST,
+                format!("/v1/admin/releases/{approved}/files/windows/rescan-clear"),
+            )
+            .cookie(&owner)
+            .json(json!({ "reason": "A false positive in the new signatures." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    sqlx::query("update apps set status = 'listed' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for (currency, amount, fee, status, refunded) in [
+        ("usd", 500, 25, "paid", 0),
+        ("usd", 300, 15, "partially_refunded", 100),
+        ("usd", 900, 45, "pending", 0),
+        ("eur", 400, 20, "paid", 0),
+    ] {
+        sqlx::query(
+            "insert into donations (id, kind, app_id, donor_id, stripe_account_id, currency, donation_minor,
+                                    slop_fee_minor, processing_minor, total_minor, donor_covers_fees, status, refunded_minor)
+             select $1, 'one_off', id, $2, 'acct_1', $3, $4, $5, 0, $4, false, $6, $7 from apps where slug = 'game'",
+        )
+        .bind(Uuid::now_v7())
+        .bind(donor)
+        .bind(currency)
+        .bind(amount)
+        .bind(fee)
+        .bind(status)
+        .bind(refunded)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    send_report(&app, Some(&rita), report_of("app", "game", "broken")).await;
+    let report = newest_report(&app).await;
+    app.send(
+        req(Method::POST, format!("/v1/admin/reports/{report}/dismiss"))
+            .cookie(&owner)
+            .json(json!({ "outcome": "Works for us." })),
+    )
+    .await;
+    send_report(&app, Some(&rita), report_of("app", "game", "misleading")).await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/apps/game/delist")
+                .cookie(&owner)
+                .json(json!({ "rule": "misleading", "reason": "The page shows another game." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/apps/nothing/record").cookie(&owner))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    let read = token(&app, &owner, "read").await;
+    assert_eq!(
+        app.send(as_who(
+            Method::GET,
+            "/v1/admin/apps/game/record".into(),
+            &read
+        ))
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    // Staff without a role can look too.
+    let record = body_json(
+        app.send(req(Method::GET, "/v1/admin/apps/game/record").cookie(&looker))
+            .await,
+    )
+    .await;
+    assert_eq!(record["app"]["status"], "delisted");
+    let versions: Vec<(&str, &str)> = record["releases"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| {
+            (
+                r["version"].as_str().unwrap(),
+                r["status"].as_str().unwrap(),
+            )
+        })
+        .collect();
+    assert_eq!(versions, [("1.1.0", "rejected"), ("1.0.0", "approved")]);
+    assert_eq!(
+        record["donations"],
+        json!([
+            { "currency": "eur", "donations": 1, "donated_minor": 400, "slop_fee_minor": 20, "refunded_minor": 0 },
+            { "currency": "usd", "donations": 2, "donated_minor": 800, "slop_fee_minor": 40, "refunded_minor": 100 }
+        ]),
+        "pending donations aren't counted"
+    );
+    let reports: Vec<(&str, &str)> = record["reports"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["reason"].as_str().unwrap(), r["status"].as_str().unwrap()))
+        .collect();
+    assert_eq!(reports, [("misleading", "open"), ("broken", "dismissed")]);
+    assert_eq!(record["decisions"][0]["action"], "delist_app");
+    assert_eq!(record["decisions"][0]["rule"], "misleading");
+    assert!(
+        record["decisions"][0]["decided_by"]
+            .as_str()
+            .unwrap()
+            .starts_with("Olive Owner (")
+    );
+    // The audit section: everything done to the app, its releases included.
+    let audit: Vec<&str> = record["audit"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["action"].as_str().unwrap())
+        .collect();
+    for action in [
+        "release.approve",
+        "release.reject",
+        "release.rescan_cleared",
+        "app.delist",
+        "moderation.delist_app",
+    ] {
+        assert!(audit.contains(&action), "{action} in {audit:?}");
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_money_overview_is_for_finance_staff_only(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, finance) = staff(&app, "Fay Finance", "finance").await;
+    let (_, moderator) = staff(&app, "Mo Moderator", "moderator").await;
+    for (kind, amount, fee, currency, ago) in [
+        ("donation", 1000, 50, "usd", "0 days"),
+        ("donation", 500, 25, "usd", "0 days"),
+        ("people_job", 2000, 100, "eur", "0 days"),
+        ("donation", 700, 35, "usd", "400 days"),
+    ] {
+        sqlx::query(
+            "insert into payments (id, kind, amount_minor, slop_fee_minor, currency, stripe_account_id, created_at)
+             values ($1, $2, $3, $4, $5, 'acct_1', now() - $6::interval)",
+        )
+        .bind(Uuid::now_v7())
+        .bind(kind)
+        .bind(amount)
+        .bind(fee)
+        .bind(currency)
+        .bind(ago)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    sqlx::query("insert into stripe_events (id, kind) values ('evt_new', 'charge.succeeded')")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into stripe_events (id, kind, received_at) values ('evt_old', 'charge.succeeded', now() - interval '2 days')",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/money").cookie(&moderator))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    // No token sees money, whatever its level.
+    for scope in ["read", "review", "moderate"] {
+        let t = token(&app, &owner, scope).await;
+        assert_eq!(
+            app.send(as_who(Method::GET, "/v1/admin/money".into(), &t))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN,
+            "{scope}"
+        );
+    }
+    let res = app
+        .send(req(Method::GET, "/v1/admin/money").cookie(&finance))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let money = body_json(res).await;
+    let month = OffsetDateTime::now_utc().date();
+    let month = format!("{}-{:02}", month.year(), u8::from(month.month()));
+    assert_eq!(
+        money["months"],
+        json!([
+            { "month": month, "kind": "donation", "currency": "usd", "payments": 2, "amount_minor": 1500, "slop_fee_minor": 75 },
+            { "month": month, "kind": "people_job", "currency": "eur", "payments": 1, "amount_minor": 2000, "slop_fee_minor": 100 }
+        ]),
+        "the last twelve months only"
+    );
+    assert_eq!(money["recent"].as_array().unwrap().len(), 4);
+    assert_eq!(money["recent"][3]["amount_minor"], 700, "newest first");
+    assert_eq!(money["recent"][0]["stripe_account_id"], "acct_1");
+    assert_eq!(money["stripe_events_today"], 1);
+    assert_eq!(money["active_server_donations"], 0);
+    assert_eq!(money["payments"], "off");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_fixes_to_a_profile_are_checked_and_logged(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (cass, _) = app.user("Valve Official", "US").await;
+    let (plain, _) = app.user("Pat Player", "US").await;
+    live_creative_row(&app, cass, "cass").await;
+    let profile =
+        |id: Uuid, who: &str| as_who(Method::GET, format!("/v1/admin/users/{id}/profile"), who);
+    let edit = |id: Uuid, who: &str, body: Value| {
+        as_who(Method::PATCH, format!("/v1/admin/users/{id}/profile"), who).json(body)
+    };
+
+    assert_eq!(
+        app.send(profile(cass, &reviewer)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    let read = token(&app, &owner, "read").await;
+    assert_eq!(
+        app.send(profile(cass, &read)).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(profile(Uuid::now_v7(), &support)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app.send(profile(plain, &support)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let seen = body_json(res).await;
+    assert_eq!(seen["display_name"], "Pat Player");
+    assert!(seen["creative"].is_null());
+    assert_eq!(seen["teams"], json!([]));
+
+    let reason = "Impersonating Valve.";
+    assert_eq!(
+        app.send(edit(
+            cass,
+            &reviewer,
+            json!({ "display_name": "Cass", "reason": reason })
+        ))
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(edit(
+            Uuid::now_v7(),
+            &support,
+            json!({ "display_name": "Cass", "reason": reason })
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    for (who, body, field) in [
+        (
+            cass,
+            json!({ "display_name": "Cass", "reason": "" }),
+            "reason",
+        ),
+        (
+            cass,
+            json!({ "display_name": "Cass", "reason": "x".repeat(2001) }),
+            "reason",
+        ),
+        (
+            cass,
+            json!({ "display_name": "", "reason": reason }),
+            "display_name",
+        ),
+        (
+            cass,
+            json!({ "display_name": "x".repeat(41), "reason": reason }),
+            "display_name",
+        ),
+        (
+            cass,
+            json!({ "display_name": "Bad\u{7}name", "reason": reason }),
+            "display_name",
+        ),
+        (
+            cass,
+            json!({ "creative": { "name": "Two\nlines" }, "reason": reason }),
+            "name",
+        ),
+        (
+            cass,
+            json!({ "creative": { "headline": "Tab\there" }, "reason": reason }),
+            "headline",
+        ),
+        (
+            cass,
+            json!({ "creative": { "location": "x".repeat(61) }, "reason": reason }),
+            "location",
+        ),
+        // Nothing that differs from what's there.
+        (
+            cass,
+            json!({ "display_name": "Valve Official", "reason": reason }),
+            "reason",
+        ),
+        (
+            cass,
+            json!({ "creative": { "remove_links": true }, "reason": reason }),
+            "reason",
+        ),
+        // No People page to fix.
+        (
+            plain,
+            json!({ "creative": { "headline": "Hi" }, "reason": reason }),
+            "creative",
+        ),
+    ] {
+        let res = app.send(edit(who, &support, body.clone())).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body_json(res).await["error"]["field"], field, "{body}");
+    }
+    let nothing_logged: i64 =
+        sqlx::query_scalar("select count(*) from audit_log where action = 'user.profile_edited'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(nothing_logged, 0);
+
+    // A review token's agent may fix it; the old values are kept in the audit log.
+    let agent = token(&app, &owner, "review").await;
+    let res = app
+        .send(edit(
+            cass,
+            &agent,
+            json!({
+                "display_name": " Cass ",
+                "creative": { "name": "Cass", "about_md": "I make music.", "location": "Leeds" },
+                "reason": reason
+            }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        body_json(res).await["changed"],
+        json!(["display name", "People name", "about", "location"])
+    );
+    let detail: Value =
+        sqlx::query_scalar("select detail from audit_log where action = 'user.profile_edited'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        detail["changed"]["display_name"],
+        json!({ "from": "Valve Official", "to": "Cass" })
+    );
+    assert_eq!(
+        detail["changed"]["name"],
+        json!({ "from": "cass", "to": "Cass" })
+    );
+    assert_eq!(detail["reason"], reason);
+    let told: (String, String) =
+        sqlx::query_as("select title, body from notifications where user_id = $1")
+            .bind(cass)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(told.0, "Slop changed your profile");
+    assert_eq!(
+        told.1,
+        format!("Changed: display name, People name, about, location.\n\n{reason}")
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_fixes_to_a_team_page_tell_whoever_runs_it(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (tess, _) = app.user("Tess Teamowner", "US").await;
+    let (ade, _) = app.user("Ade Admin", "US").await;
+    let (mel, _) = app.user("Mel Member", "US").await;
+    let team = team_of(&app, tess, "crew").await;
+    for (user, role) in [(ade, "admin"), (mel, "member")] {
+        sqlx::query("insert into team_members (team_id, user_id, role) values ($1, $2, $3)")
+            .bind(team)
+            .bind(user)
+            .bind(role)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    let edit = |slug: &str, who: &str, body: Value| {
+        as_who(Method::PATCH, format!("/v1/admin/teams/{slug}"), who).json(body)
+    };
+    let reason = "Not affiliated with Valve.";
+    assert_eq!(
+        app.send(edit(
+            "crew",
+            &reviewer,
+            json!({ "name": "Crew", "reason": reason })
+        ))
+        .await
+        .status(),
+        StatusCode::FORBIDDEN
+    );
+    assert_eq!(
+        app.send(edit(
+            "nobody",
+            &owner,
+            json!({ "name": "Crew", "reason": reason })
+        ))
+        .await
+        .status(),
+        StatusCode::NOT_FOUND
+    );
+    for (body, field) in [
+        (json!({ "name": "Crew", "reason": " " }), "reason"),
+        (
+            json!({ "about": "x".repeat(2001), "reason": reason }),
+            "about",
+        ),
+        (json!({ "name": "Two\nlines", "reason": reason }), "name"),
+        (
+            json!({ "name": "The crew", "about": "", "reason": reason }),
+            "reason",
+        ),
+        (json!({ "reason": reason }), "reason"),
+    ] {
+        let res = app.send(edit("crew", &owner, body.clone())).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{body}");
+        assert_eq!(body_json(res).await["error"]["field"], field, "{body}");
+    }
+    let res = app
+        .send(edit(
+            "crew",
+            &owner,
+            json!({ "about": "We play co-op games on Fridays.", "reason": reason }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["changed"], json!(["description"]));
+    let told: Vec<Uuid> = sqlx::query_scalar(
+        "select user_id from notifications where title = 'Slop changed your team''s page' order by user_id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    let mut runners = vec![tess, ade];
+    runners.sort();
+    assert_eq!(told, runners, "the owner and admins, not members");
+    let (subject, detail): (String, Value) =
+        sqlx::query_as("select subject, detail from audit_log where action = 'team.edited'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(subject, "team crew");
+    assert_eq!(
+        detail["changed"]["about"],
+        json!({ "from": "", "to": "We play co-op games on Fridays." })
+    );
+}
