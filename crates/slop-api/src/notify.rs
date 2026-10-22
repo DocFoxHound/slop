@@ -107,8 +107,8 @@ pub(crate) async fn send(conn: &mut sqlx::PgConnection, n: Notice<'_>) -> sqlx::
         )
         .bind(n.user_id)
         .bind(key)
-        .bind(&n.title)
-        .bind(&n.body)
+        .bind(clip(&n.title, 200))
+        .bind(clip(&n.body, 1000))
         .execute(&mut *conn)
         .await?
         .rows_affected();
@@ -223,21 +223,30 @@ struct Inbox {
     items: Vec<Item>,
 }
 
-pub async fn unread(db: &PgPool, user_id: Uuid) -> sqlx::Result<i64> {
-    sqlx::query_scalar("select count(*) from notifications where user_id = $1 and read_at is null")
-        .bind(user_id)
-        .fetch_one(db)
-        .await
-}
-
-async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Inbox>> {
-    // A maker's AI agent reads only what's about maker work: never chats, friends or account
-    // security, and People jobs only with a token allowed to handle them.
-    let hidden: Vec<&str> = match &user.agent {
+/// The categories a caller doesn't see: a maker's AI agent reads only what's about maker work,
+/// never chats, friends or account security, and People jobs only with a token allowed to
+/// handle them.
+fn hidden_for(user: &CurrentUser) -> Vec<&'static str> {
+    match &user.agent {
         Some(agent) if agent.people => vec!["chat", "friends", "security"],
         Some(_) => vec!["chat", "friends", "security", "jobs"],
         None => Vec::new(),
-    };
+    }
+}
+
+/// Unread notifications the caller can see (an agent's count leaves out what it can't).
+pub async fn unread(db: &PgPool, user: &CurrentUser) -> sqlx::Result<i64> {
+    sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and read_at is null and not (category = any($2))",
+    )
+    .bind(user.id)
+    .bind(hidden_for(user))
+    .fetch_one(db)
+    .await
+}
+
+async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Inbox>> {
+    let hidden = hidden_for(&user);
     let items = sqlx::query_as(
         "select id, category, title, body, link, count, created_at, read_at is not null as read
          from notifications where user_id = $1 and not (category = any($2))
@@ -248,7 +257,7 @@ async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Jso
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Inbox {
-        unread: unread(&state.db, user.id).await?,
+        unread: unread(&state.db, &user).await?,
         items,
     }))
 }
