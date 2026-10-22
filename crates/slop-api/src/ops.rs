@@ -11,8 +11,8 @@
 //! - the scanner failing on a release;
 //! - urgent or serious reports as they arrive, and any report past its deadline;
 //! - releases waiting more than a day for review;
-//! - revocations, admin rights granted or removed, payment records not matching Stripe, and a
-//!   re-scan flagging a live release (rescan.rs).
+//! - revocations, admin rights or staff roles granted, admin rights removed, payment records not
+//!   matching Stripe, and a re-scan flagging a live release (rescan.rs).
 //!
 //! If the whole server is down nothing here can say so: an outside uptime check on `/healthz`
 //! covers that (deploy/README.md).
@@ -308,23 +308,28 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
         ));
     }
 
-    // Reports: urgent and serious ones as they arrive, and any past its deadline.
+    // Reports: urgent and serious ones as they arrive, and any past its deadline. The cursor is
+    // in microseconds, as Postgres keeps time: in whole seconds the newest report matched again
+    // on every run. (It carries on from the earlier whole-second cursor, "reports".)
     let after = cursor(
         db,
-        "reports",
-        "select coalesce(extract(epoch from max(created_at))::int8, 0) from reports",
+        "reports_us",
+        "select coalesce((select value * 1000000 + 999999 from ops_cursor where name = 'reports'),
+                         (extract(epoch from max(created_at)) * 1000000)::int8, 0)
+         from reports",
     )
     .await?;
+    let since = OffsetDateTime::from_unix_timestamp_nanos(i128::from(after) * 1000)?;
     let new: Vec<(String, i16, OffsetDateTime)> = sqlx::query_as(
         "select reason, priority, created_at from reports
-         where status = 'open' and priority <= 1 and created_at > to_timestamp($1) order by created_at",
+         where status = 'open' and priority <= 1 and created_at > $1 order by created_at",
     )
-    .bind(after as f64)
+    .bind(since)
     .fetch_all(db)
     .await?;
     let mut newest = after;
     for (reason, priority, at) in new {
-        newest = newest.max(at.unix_timestamp());
+        newest = newest.max(i64::try_from(at.unix_timestamp_nanos() / 1000)?);
         out.push(alert(
             format!("report-{}-{reason}", at.unix_timestamp_nanos()),
             if priority == 0 {
@@ -337,7 +342,7 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
             true,
         ));
     }
-    set_cursor(db, "reports", newest).await?;
+    set_cursor(db, "reports_us", newest).await?;
     let overdue: i64 =
         sqlx::query_scalar("select count(*) from reports where status = 'open' and due_at < now()")
             .fetch_one(db)
@@ -408,9 +413,10 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
 
     // Events from the audit log.
     let after = cursor(db, "audit", "select coalesce(max(id), 0) from audit_log").await?;
-    let events: Vec<(i64, String, String, String)> = sqlx::query_as(
-        "select id, actor, action, subject from audit_log
-         where id > $1 and action in ('release.revoke', 'admin.grant', 'admin.revoke', 'payments.mismatch', 'release.rescan_flagged')
+    let events: Vec<(i64, String, String, String, String)> = sqlx::query_as(
+        "select id, actor, action, subject, coalesce(detail->>'role', '') from audit_log
+         where id > $1 and action in ('release.revoke', 'admin.grant', 'admin.revoke', 'payments.mismatch',
+                                      'release.rescan_flagged', 'staff.grant_role')
          order by id",
     )
     .bind(after)
@@ -419,7 +425,7 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
     let last: Option<i64> = sqlx::query_scalar("select max(id) from audit_log")
         .fetch_one(db)
         .await?;
-    for (id, actor, action, subject) in events {
+    for (id, actor, action, subject, role) in events {
         let (title, detail) = match action.as_str() {
             "release.revoke" => (
                 "A release was withdrawn",
@@ -433,11 +439,26 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
                 "Admin rights were removed",
                 format!("{actor} removed admin rights from {subject}."),
             ),
-            _ => (
+            // Staff roles given on the website make the account staff, like admin.grant.
+            "staff.grant_role" => (
+                "Someone was given a staff role",
+                format!("{actor} gave the {role} role to {subject}."),
+            ),
+            "release.rescan_flagged" => (
+                "A re-scan flagged a live release",
+                format!(
+                    "The re-scan of {subject} found something new. Withdraw it or keep it from the admin queue."
+                ),
+            ),
+            "payments.mismatch" => (
                 "Payments don't match Stripe",
                 format!(
                     "Slop's records and Stripe's fees differ for {subject}. See the audit log."
                 ),
+            ),
+            _ => (
+                "Something in the audit log needs a look",
+                format!("{actor}: {action} {subject}."),
             ),
         };
         out.push(alert(
@@ -464,20 +485,36 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
     let mut sent = 0;
     let mut tx = state.db.begin().await?;
     for a in &alerts {
-        let due: bool = sqlx::query_scalar(
-            "insert into ops_alerts (key, title, detail, link) values ($1, $2, $3, $4)
-             on conflict (key) do update set title = $2, detail = $3, link = $4,
-                 resolved_at = null,
-                 first_seen = case when ops_alerts.resolved_at is not null then now() else ops_alerts.first_seen end,
-                 last_sent = case when ops_alerts.resolved_at is not null then null else ops_alerts.last_sent end
-             returning last_sent is null or last_sent < now() - interval '1 day'",
-        )
-        .bind(&a.key)
-        .bind(&a.title)
-        .bind(&a.detail)
-        .bind(&a.link)
-        .fetch_one(&mut *tx)
-        .await?;
+        let due: bool = if a.once {
+            // An event is sent the first time it's seen and never again, though what it's about
+            // (a failed deploy's folder, a scan's result) is still there on the next runs.
+            sqlx::query_scalar(
+                "insert into ops_alerts (key, title, detail, link) values ($1, $2, $3, $4)
+                 on conflict (key) do nothing returning true",
+            )
+            .bind(&a.key)
+            .bind(&a.title)
+            .bind(&a.detail)
+            .bind(&a.link)
+            .fetch_optional(&mut *tx)
+            .await?
+            .unwrap_or(false)
+        } else {
+            sqlx::query_scalar(
+                "insert into ops_alerts (key, title, detail, link) values ($1, $2, $3, $4)
+                 on conflict (key) do update set title = $2, detail = $3, link = $4,
+                     resolved_at = null,
+                     first_seen = case when ops_alerts.resolved_at is not null then now() else ops_alerts.first_seen end,
+                     last_sent = case when ops_alerts.resolved_at is not null then null else ops_alerts.last_sent end
+                 returning last_sent is null or last_sent < now() - interval '1 day'",
+            )
+            .bind(&a.key)
+            .bind(&a.title)
+            .bind(&a.detail)
+            .bind(&a.link)
+            .fetch_one(&mut *tx)
+            .await?
+        };
         if !due {
             continue;
         }
