@@ -5376,3 +5376,639 @@ async fn staff_fixes_to_a_team_page_tell_whoever_runs_it(db: PgPool) {
         json!({ "from": "", "to": "We play co-op games on Fridays." })
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Abuse signals
+
+/// `n` votes on an app from accounts that don't exist as users (so they're never "new
+/// accounts"), `ago` (an SQL interval) ago.
+async fn votes(app: &TestApp, slug: &str, n: i32, vote: i16, prev: Option<i16>, ago: &str) {
+    sqlx::query(
+        "insert into vote_events (id, user_id, app_id, vote, prev_vote, weight, created_at)
+         select gen_random_uuid(), gen_random_uuid(), a.id, $2, $3, 1, now() - $4::interval
+         from apps a, generate_series(1, $5) where a.slug = $1",
+    )
+    .bind(slug)
+    .bind(vote)
+    .bind(prev)
+    .bind(ago)
+    .bind(n)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+/// The open signals: (kind, subject label), sorted.
+async fn signals(app: &TestApp) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> =
+        sqlx::query_as("select kind, subject_label from abuse_signals where status = 'open'")
+            .fetch_all(&app.db)
+            .await
+            .unwrap();
+    out.sort();
+    out
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn abuse_checks_find_review_bombs_thin_votes_and_swings_at_their_thresholds(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    for slug in [
+        "bombed",
+        "nearly-bombed",
+        "bombed-at-five-times",
+        "usually-hated",
+        "thin",
+        "nearly-thin",
+        "played",
+        "swung",
+        "nearly-swung",
+    ] {
+        listed_with(&app, maker, slug, "released", "").await;
+    }
+    // Review bombs: ten 👎 in a day, and five times the usual (at least one a day).
+    votes(&app, "bombed", 10, -1, None, "1 hour").await;
+    votes(&app, "nearly-bombed", 9, -1, None, "1 hour").await;
+    votes(&app, "bombed-at-five-times", 10, -1, None, "1 hour").await;
+    votes(&app, "bombed-at-five-times", 60, -1, None, "10 days").await;
+    votes(&app, "usually-hated", 10, -1, None, "1 hour").await;
+    votes(&app, "usually-hated", 61, -1, None, "10 days").await;
+    // Thin votes: fifteen voters in a week who barely played, at least half of them.
+    votes(&app, "thin", 15, 1, None, "3 days").await;
+    votes(&app, "nearly-thin", 14, 1, None, "3 days").await;
+    votes(&app, "played", 7, 1, None, "3 days").await;
+    let played: Vec<Uuid> = sqlx::query_scalar(
+        "insert into users (id, display_name, country_code, age_16_confirmed_at, created_at)
+         select gen_random_uuid(), 'Player ' || i, 'US', now(), now() - interval '1 year'
+         from generate_series(1, 8) i returning id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    let played_id = app_id(&app, "played").await;
+    for (i, user) in played.iter().enumerate() {
+        // Half an hour's play, or a few minutes on several days: either is really playing.
+        let (seconds, days) = if i % 2 == 0 { (1800, 1) } else { (300, 3) };
+        sqlx::query(
+            "insert into user_app_usage (user_id, app_id, playtime_seconds, days_launched) values ($1, $2, $3, $4)",
+        )
+        .bind(user)
+        .bind(played_id)
+        .bind(seconds)
+        .bind(days)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into vote_events (id, user_id, app_id, vote, weight, created_at) values ($1, $2, $3, 1, 1, now() - interval '2 days')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(user)
+        .bind(played_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // Vote swings: ten players changing their vote the same way in a day.
+    votes(&app, "swung", 10, 1, Some(-1), "2 hours").await;
+    votes(&app, "nearly-swung", 9, 1, Some(-1), "2 hours").await;
+    votes(&app, "nearly-swung", 5, -1, Some(1), "2 hours").await;
+
+    slop_api::abuse::run_once(&app.state).await.unwrap();
+    assert_eq!(
+        signals(&app).await,
+        [
+            ("review_bomb".to_string(), "bombed".to_string()),
+            ("review_bomb".into(), "bombed-at-five-times".into()),
+            ("thin_votes".into(), "thin".into()),
+            ("vote_swing".into(), "swung".into()),
+        ]
+    );
+    let detail: Value = sqlx::query_scalar(
+        "select detail from abuse_signals where kind = 'review_bomb' and subject_label = 'bombed-at-five-times'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        detail,
+        json!({ "slop_votes_today": 10, "usual_per_day": 2.0 })
+    );
+    let detail: Value =
+        sqlx::query_scalar("select detail from abuse_signals where kind = 'vote_swing'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        detail,
+        json!({ "changed_to": "not_slop", "players": 10, "window": "24 hours" })
+    );
+    // Each is raised once.
+    assert_eq!(slop_api::abuse::run_once(&app.state).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn abuse_checks_find_lookalike_names_bad_links_and_accounts_hitting_limits(db: PgPool) {
+    put_raw(
+        "admin-1-feed",
+        "bad.txt",
+        b"# a malware list\nhttps://evil.example/steal\n".to_vec(),
+    );
+    let fake = fake_github().await;
+    let app = test_app_with(db, move |c| {
+        c.bad_link_feeds = vec![
+            format!("{fake}raw/octo/game/admin-1-feed/.slop/bad.txt")
+                .parse()
+                .unwrap(),
+        ]
+    })
+    .await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (rival, _) = app.user("Rob Rival", "US").await;
+    let (modder, _) = app.user("Mo Modder", "US").await;
+    let (cass, _) = app.user("Cass Creative", "US").await;
+    let (pat, _) = app.user("Pat Player", "US").await;
+    let (busy, _) = app.user("Busy Body", "US").await;
+    let (calm, _) = app.user("Calm Person", "US").await;
+    listed_with(
+        &app,
+        maker,
+        "stardew",
+        "released",
+        "title = 'Stardew Valley'",
+    )
+    .await;
+    // The same maker's sequel, and a mod of it: not lookalikes.
+    listed_with(
+        &app,
+        maker,
+        "stardew-2",
+        "released",
+        "title = 'Stardew Va1ley', status = 'draft'",
+    )
+    .await;
+    let original = app_id(&app, "stardew").await;
+    listed_with(
+        &app,
+        modder,
+        "stardew-mod",
+        "released",
+        "title = 'Stardew Valley'",
+    )
+    .await;
+    sqlx::query(
+        "update apps set parent_app_id = $1, branch_kind = 'mod' where slug = 'stardew-mod'",
+    )
+    .bind(original)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    listed_with(
+        &app,
+        rival,
+        "stardew-copy",
+        "released",
+        "title = 'Stardew  Valley!', status = 'draft'",
+    )
+    .await;
+    // Bad links on a creative's page and in a review.
+    live_creative_row(&app, cass, "cass").await;
+    sqlx::query("update creatives set about_md = 'Free assets at https://evil.example/steal' where user_id = $1")
+        .bind(cass)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into app_reviews (id, user_id, app_id, body) values ($1, $2, $3, 'Get it cheaper: https://EVIL.example/steal/')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(pat)
+    .bind(original)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    // Accounts that keep hitting their limits: twenty refusals in a day is a signal.
+    let now = std::time::Instant::now();
+    for (user, tries) in [(busy, 30), (calm, 29)] {
+        for _ in 0..tries {
+            let _ = app
+                .state
+                .account_limiter
+                .take(user, slop_api::limits::Action::Review, now);
+        }
+    }
+
+    slop_api::abuse::run_once(&app.state).await.unwrap();
+    assert_eq!(
+        signals(&app).await,
+        [
+            ("bad_link".to_string(), "Pat Player".to_string()),
+            ("bad_link".into(), "cass".into()),
+            ("lookalike_name".into(), "Stardew  Valley!".into()),
+            ("rate_limited".into(), "Busy Body".into()),
+        ]
+    );
+    let (kind, detail): (String, Value) = sqlx::query_as(
+        "select subject_kind, detail from abuse_signals where kind = 'rate_limited'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(kind, "account");
+    assert_eq!(detail, json!({ "limit_hits_today": 20 }));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_bad_link_list_that_cannot_be_fetched_does_not_stop_the_other_checks(db: PgPool) {
+    let fake = fake_github().await;
+    let app = test_app_with(db, move |c| {
+        c.bad_link_feeds = vec![
+            format!("{fake}raw/octo/game/no-such-feed/.slop/bad.txt")
+                .parse()
+                .unwrap(),
+        ]
+    })
+    .await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker, "bombed", "released", "").await;
+    votes(&app, "bombed", 12, -1, None, "1 hour").await;
+    assert_eq!(slop_api::abuse::run_once(&app.state).await.unwrap(), 1);
+    let lists: i64 = sqlx::query_scalar("select count(*) from bad_links")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(lists, 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_abuse_signal_is_closed_with_a_note(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
+    let (_, support) = staff(&app, "Sue Support", "support").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker, "bombed", "released", "").await;
+    votes(&app, "bombed", 12, -1, None, "1 hour").await;
+    slop_api::abuse::run_once(&app.state).await.unwrap();
+    let signal: Uuid = sqlx::query_scalar("select id from abuse_signals")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let close = |id: Uuid, who: &str, body: Value| {
+        as_who(Method::POST, format!("/v1/admin/abuse/{id}/dismiss"), who).json(body)
+    };
+    let note = json!({ "note": "A streamer told their chat to play it; real players." });
+    assert_eq!(
+        app.send(close(signal, &reviewer, note.clone()))
+            .await
+            .status(),
+        StatusCode::FORBIDDEN
+    );
+    let read = token(&app, &owner, "read").await;
+    assert_eq!(
+        app.send(close(signal, &read, note.clone())).await.status(),
+        StatusCode::FORBIDDEN
+    );
+    for bad in ["", "  ", &"x".repeat(1001)] {
+        let res = app
+            .send(close(signal, &support, json!({ "note": bad })))
+            .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+        assert_eq!(body_json(res).await["error"]["field"], "note");
+    }
+    assert_eq!(
+        app.send(close(Uuid::now_v7(), &support, note.clone()))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    // Nothing wrong: dismissed (acted defaults to false).
+    assert_eq!(
+        app.send(close(signal, &support, note.clone()))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let (status, by, why): (String, String, String) =
+        sqlx::query_as("select status, decided_by, decision_note from abuse_signals where id = $1")
+            .bind(signal)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(status, "dismissed");
+    assert!(by.starts_with("Sue Support ("));
+    assert_eq!(why, "A streamer told their chat to play it; real players.");
+    let detail: Value = sqlx::query_scalar(
+        "select detail from audit_log where action = 'abuse.close' and subject = $1",
+    )
+    .bind(signal.to_string())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(detail["acted"], false);
+    // Closed already.
+    assert_eq!(
+        app.send(close(signal, &support, note)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
+// Ops alerts
+
+/// How many times admin `user` was told something with this title (repeats collapse into one
+/// notification with a count).
+async fn alerted(app: &TestApp, user: Uuid, title: &str) -> i64 {
+    sqlx::query_scalar(
+        "select coalesce(sum(count), 0)::int8 from notifications where user_id = $1 and category = 'ops' and title = $2",
+    )
+    .bind(user)
+    .bind(title)
+    .fetch_one(&app.db)
+    .await
+    .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn urgent_reports_are_alerted_once_and_old_ones_never(db: PgPool) {
+    let app = test_app(db).await;
+    let (admin_id, _) = make_admin(&app, "Ada Admin").await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (_, rita) = app.user("Rita", "US").await;
+    let (_, sam) = app.user("Sam", "US").await;
+    listed_with(&app, maker, "castle", "released", "").await;
+    // A report from before the alerts started isn't news.
+    send_report(&app, Some(&rita), report_of("app", "castle", "child_abuse")).await;
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let urgent = "Urgent report: act within the hour";
+    assert_eq!(alerted(&app, admin_id, urgent).await, 0);
+    // A new one is, once.
+    send_report(
+        &app,
+        Some(&sam),
+        report_of("app", "castle", "intimate_image"),
+    )
+    .await;
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    assert_eq!(alerted(&app, admin_id, urgent).await, 1);
+    for _ in 0..3 {
+        slop_api::ops::run_once(&app.state).await.unwrap();
+    }
+    assert_eq!(
+        alerted(&app, admin_id, urgent).await,
+        1,
+        "not again every five minutes"
+    );
+    // Serious ones too; everything else waits for the queue.
+    let (_, tom) = app.user("Tom", "US").await;
+    let (_, una) = app.user("Una", "US").await;
+    send_report(&app, Some(&tom), report_of("app", "castle", "malware")).await;
+    send_report(&app, Some(&una), report_of("app", "castle", "broken")).await;
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    assert_eq!(
+        alerted(&app, admin_id, "Serious report: act within 24 hours").await,
+        1
+    );
+    let all: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title like '%report:%'",
+    )
+    .bind(admin_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(all, 2);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn conditions_needing_a_person_are_alerted_daily_while_they_last(db: PgPool) {
+    let deploy = std::env::temp_dir().join(format!("slop-deploy-test-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(deploy.join("builds/failed-0123456789abcdef")).unwrap();
+    std::fs::create_dir_all(deploy.join("builds/failed-aaaaaaaaaaaaaaaa")).unwrap();
+    let old = std::fs::File::open(deploy.join("builds/failed-aaaaaaaaaaaaaaaa")).unwrap();
+    old.set_modified(std::time::SystemTime::now() - std::time::Duration::from_secs(3 * 86_400))
+        .unwrap();
+    std::fs::create_dir_all(deploy.join("builds/ok-bbbbbbb")).unwrap();
+    std::fs::write(
+        deploy.join("audit.json"),
+        r#"{"vulnerabilities": [{"package": "zip", "version": "4.6.1", "id": "RUSTSEC-1"}, {"package": "tar", "version": "0.4", "id": "RUSTSEC-2"}]}"#,
+    )
+    .unwrap();
+    let dir = deploy.clone();
+    let app = test_app_with(db, move |c| c.ops.deploy_dir = Some(dir)).await;
+    let (admin_id, admin) = make_admin(&app, "Ada Admin").await;
+    let (_, player) = app.user("Pat Player", "US").await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    // A report past its deadline, an open abuse signal, a release waiting two days, a scanner
+    // that failed, and a removal order due within the hour.
+    sqlx::query("update apps set status = 'listed'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    send_report(&app, Some(&player), report_of("app", "game", "broken")).await;
+    sqlx::query("update reports set due_at = now() - interval '1 hour'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "insert into abuse_signals (id, kind, key, subject_kind, subject_id, subject_label, detail)
+         values ($1, 'vote_burst', 'k', 'app', $1, 'game', '{}')",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let waiting = submit_and_fetch(&app, &maker, "1.0.0").await;
+    sqlx::query("update releases set created_at = now() - interval '2 days' where id = $1::uuid")
+        .bind(&waiting)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let failed = submit_and_fetch(&app, &maker, "1.1.0").await;
+    sqlx::query(
+        "update release_files set scan_detail = 'the scanner couldn''t finish: timed out' where release_id = $1::uuid",
+    )
+    .bind(&failed)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query(
+        "insert into legal_requests (id, reference, received_at, country, authority, kind, asked, deadline, created_by)
+         values ($1, 'LR-1', now(), 'FR', 'OCLCTIC', 'removal_order', 'Take down the castle', now() + interval '40 minutes', 'test')",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let _ = maker_id;
+
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let alerts = body_json(
+        app.send(req(Method::GET, "/v1/admin/ops").cookie(&admin))
+            .await,
+    )
+    .await;
+    let mut titles: Vec<&str> = alerts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["title"].as_str().unwrap())
+        .filter(|t| !t.starts_with("The disk at"))
+        .collect();
+    titles.sort();
+    assert_eq!(
+        titles,
+        [
+            "1 possible abuse pattern to look at",
+            "1 release waiting over a day for review",
+            "1 report past its deadline",
+            "2 known-vulnerable dependencies",
+            "Removal order LR-1: act within the hour",
+        ],
+        "conditions are listed while they last; events (the deploy, the scanner) are sent and done"
+    );
+    for title in [
+        "Commit 0123456 didn't deploy",
+        "The scanner failed on game 1.1.0",
+        "1 report past its deadline",
+    ] {
+        assert_eq!(alerted(&app, admin_id, title).await, 1, "{title}");
+    }
+    assert_eq!(
+        alerted(&app, admin_id, "Commit aaaaaaa didn't deploy").await,
+        0,
+        "older than two days"
+    );
+    // Five minutes later: nothing new is sent.
+    assert_eq!(slop_api::ops::run_once(&app.state).await.unwrap(), 0);
+    // A day later, what still holds is sent again; the events aren't.
+    sqlx::query("update ops_alerts set last_sent = now() - interval '25 hours'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    assert_eq!(
+        alerted(&app, admin_id, "1 report past its deadline").await,
+        2
+    );
+    assert_eq!(
+        alerted(&app, admin_id, "Commit 0123456 didn't deploy").await,
+        1
+    );
+    // Dealt with: the alert clears.
+    sqlx::query("update reports set status = 'dismissed'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let alerts = body_json(
+        app.send(req(Method::GET, "/v1/admin/ops").cookie(&admin))
+            .await,
+    )
+    .await;
+    assert!(
+        !alerts
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["key"] == "reports-overdue")
+    );
+    std::fs::remove_dir_all(&deploy).unwrap();
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn events_from_the_audit_log_are_alerted_with_their_own_titles(db: PgPool) {
+    let app = test_app(db).await;
+    let (admin_id, admin) = make_admin(&app, "Ada Admin").await;
+    let (pat_id, _) = app.user("Pat Player", "US").await;
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    for (action, subject) in [
+        ("admin.grant", "user-1"),
+        ("admin.revoke", "user-2"),
+        ("payments.mismatch", "pi_123"),
+        ("release.rescan_flagged", "rel-1 windows"),
+        ("app.list", "castle"),
+    ] {
+        sqlx::query("insert into audit_log (actor, action, subject) values ('Someone', $1, $2)")
+            .bind(action)
+            .bind(subject)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    // Making someone staff from the panel.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/staff/{pat_id}/roles"))
+                .cookie(&admin)
+                .json(json!({ "role": "reviewer", "grant": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    slop_api::ops::run_once(&app.state).await.unwrap();
+    let told: Vec<(String, String)> = sqlx::query_as(
+        "select title, body from notifications where user_id = $1 and category = 'ops' order by created_at",
+    )
+    .bind(admin_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    let titles: Vec<&str> = told.iter().map(|t| t.0.as_str()).collect();
+    assert!(titles.contains(&"Someone was made an admin"), "{titles:?}");
+    assert!(titles.contains(&"Admin rights were removed"), "{titles:?}");
+    assert!(
+        titles.contains(&"Payments don't match Stripe"),
+        "{titles:?}"
+    );
+    let mismatch = told
+        .iter()
+        .filter(|t| t.0 == "Payments don't match Stripe")
+        .count();
+    assert_eq!(mismatch, 1, "only the payments event: {titles:?}");
+    let flagged = told
+        .iter()
+        .find(|t| t.1.contains("rel-1 windows"))
+        .expect("the re-scan is alerted");
+    assert!(flagged.0.contains("re-scan"), "{flagged:?}");
+    let granted = told
+        .iter()
+        .find(|t| t.1.contains(&pat_id.to_string()))
+        .expect("a staff role given from the panel is alerted");
+    assert!(granted.1.contains("reviewer"), "{granted:?}");
+    assert!(
+        !told.iter().any(|t| t.1.contains("castle")),
+        "routine actions aren't alerted"
+    );
+    // Each once.
+    assert_eq!(slop_api::ops::run_once(&app.state).await.unwrap(), 0);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_ops_page_shows_the_newest_fifty_unresolved_alerts(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, admin) = make_admin(&app, "Ada Admin").await;
+    sqlx::query(
+        "insert into ops_alerts (key, title, detail, link, first_seen, resolved_at)
+         select 'k' || i, 'Alert ' || i, 'd', '/admin', now() - make_interval(mins => i),
+                case when i <= 3 then now() end
+         from generate_series(1, 60) i",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let read = token(&app, &admin, "read").await;
+    let shown = body_json(
+        app.send(as_who(Method::GET, "/v1/admin/ops".into(), &read))
+            .await,
+    )
+    .await;
+    let keys: Vec<&str> = shown
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["key"].as_str().unwrap())
+        .collect();
+    assert_eq!(keys.len(), 50);
+    assert_eq!(keys[0], "k4", "resolved ones are gone; newest first");
+    assert_eq!(keys[49], "k53");
+}
