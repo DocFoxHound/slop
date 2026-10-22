@@ -1444,7 +1444,7 @@ async fn app_limited_tokens_stay_on_their_apps(db: PgPool) {
         .unwrap();
     assert_eq!(summary, "An app about tower");
     assert_eq!(
-        count(&app, "select count(*) from apps").await,
+        count(app, "select count(*) from apps").await,
         2,
         "no new app"
     );
@@ -2872,4 +2872,332 @@ async fn agents_host_and_watch_a_browser_demo(db: PgPool) {
     assert_eq!(status["demo"]["status"], "live", "{status}");
     assert_eq!(status["play_url"], "http://play.localhost:8080/play/game/");
     let _ = std::fs::remove_dir_all(dir);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Maker MCP tools: People jobs
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_with_people_access_handle_jobs_but_never_agree_or_pay(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.payments.simulated = true;
+        c.rate_limits.write_per_minute = 1000;
+    })
+    .await;
+    let (_, vera) = live_creative(&app, "vera", "US", true).await;
+    let (client_id, client) = app.user("Tavern Dev", "US").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    listed_with(&app, client_id, "tiny-tavern", "released", "").await;
+    let hire = || {
+        req(Method::POST, "/v1/people/vera/hire")
+            .cookie(&client)
+            .json(json!({ "app_slug": "tiny-tavern", "skill": "pixel-art",
+                          "request_md": "A knight, 4 directions, 32×32.", "confirm_adult": true,
+                          "exact_wording_ack": true, "inquiry": true }))
+    };
+    let res = app.send(hire()).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let job = body_json(res).await["id"].as_str().unwrap().to_string();
+
+    let people =
+        |scope: &str| json!({ "name": format!("People {scope}"), "scope": scope, "people": true });
+    let (vera_agent, _) = maker_token(&app, &vera, people("publish")).await;
+    let (vera_reader, _) = maker_token(&app, &vera, people("read")).await;
+    let (vera_plain, _) = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "No People", "scope": "publish" }),
+    )
+    .await;
+    let (client_agent, _) = maker_token(&app, &client, people("publish")).await;
+    let (stranger_agent, _) = maker_token(&app, &stranger, people("publish")).await;
+    let id = json!({ "id": job });
+
+    // Reading: any token with People access, on a job they're a side of.
+    let (failed, text) = maker_tool(&app, &vera_reader, "my_jobs", json!({})).await;
+    assert!(!failed, "{text}");
+    let mine = parsed(&text);
+    assert_eq!(mine["as_creative"][0]["id"], job.as_str());
+    assert_eq!(mine["as_creative"][0]["conversation_requested"], true);
+    let (_, text) = maker_tool(&app, &client_agent, "my_jobs", json!({})).await;
+    assert_eq!(parsed(&text)["as_client"][0]["id"], job.as_str());
+    let (failed, text) = maker_tool(&app, &vera_reader, "get_job", id.clone()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["status"], "requested");
+    let (failed, text) = maker_tool(&app, &stranger_agent, "get_job", id.clone()).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(&app, &vera_plain, "get_job", id.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+
+    // The conversation: the creative opens and closes it, both sides acknowledge the recording.
+    let (failed, text) = maker_tool(&app, &client_agent, "open_job_conversation", id.clone()).await;
+    assert!(
+        failed && text.contains("conflict"),
+        "the creative opens it: {text}"
+    );
+    let (failed, text) = maker_tool(&app, &vera_reader, "open_job_conversation", id.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &vera_agent, "open_job_conversation", id.clone()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["conversation"]["open"], true);
+    let message = |ack: bool| json!({ "id": job, "body": "Which engine? (Vera's AI assistant)", "recording_ack": ack });
+    let (failed, text) = maker_tool(&app, &vera_reader, "send_job_message", message(true)).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &vera_agent, "send_job_message", message(false)).await;
+    assert!(failed && text.contains("recording_ack"), "{text}");
+    let (failed, text) = maker_tool(&app, &stranger_agent, "send_job_message", message(true)).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(&app, &vera_agent, "send_job_message", message(true)).await;
+    assert!(!failed, "{text}");
+    let (failed, text) = maker_tool(&app, &vera_reader, "read_job_conversation", id.clone()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(
+        parsed(&text)["messages"][0]["body"],
+        "Which engine? (Vera's AI assistant)"
+    );
+    let (failed, text) =
+        maker_tool(&app, &stranger_agent, "read_job_conversation", id.clone()).await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) =
+        maker_tool(&app, &client_agent, "close_job_conversation", id.clone()).await;
+    assert!(failed, "the creative closes it: {text}");
+    let (failed, text) = maker_tool(&app, &vera_agent, "close_job_conversation", id.clone()).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["conversation"]["open"], false);
+    // The client's agent asks for another; only the client can ask.
+    let (failed, text) = maker_tool(
+        &app,
+        &vera_agent,
+        "ask_for_job_conversation",
+        json!({ "id": job, "note": "Talk?" }),
+    )
+    .await;
+    assert!(failed && text.contains("conflict"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &client_agent,
+        "ask_for_job_conversation",
+        json!({ "id": job, "note": "One more question about the colours." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert!(parsed(&text)["conversation"]["requested_at"].is_string());
+
+    // The quote: only the creative's agent with publish and People access; prices are whole cents.
+    let due = (OffsetDateTime::now_utc().date() + time::Duration::days(14)).to_string();
+    let quote = |price: Value| {
+        json!({ "id": job, "title": "Knight sprite sheet", "scope_md": "4 directions × 8 frames.",
+                "price_minor": price, "currency": "usd", "payment": "upfront", "due_date": due,
+                "rights": "transfer", "open_source": false, "credit": true, "ai_use": "none" })
+    };
+    for token in [&vera_reader, &vera_plain] {
+        let (failed, text) = maker_tool(&app, token, "send_quote", quote(json!(12000))).await;
+        assert!(failed && text.contains("forbidden"), "{text}");
+    }
+    let (failed, text) = maker_tool(&app, &client_agent, "send_quote", quote(json!(12000))).await;
+    assert!(failed, "the client doesn't quote: {text}");
+    let (failed, text) = maker_tool(&app, &vera_agent, "send_quote", quote(json!("120.00"))).await;
+    assert!(failed, "{text}");
+    let mut short = quote(json!(12000));
+    short.as_object_mut().unwrap().remove("due_date");
+    let (failed, text) = maker_tool(&app, &vera_agent, "send_quote", short).await;
+    assert!(
+        failed && text.contains("missing argument: due_date"),
+        "{text}"
+    );
+    let (failed, text) = maker_tool(&app, &vera_agent, "send_quote", quote(json!(12000))).await;
+    assert!(!failed, "{text}");
+    let offered = parsed(&text);
+    assert_eq!(offered["status"], "offered");
+    assert_eq!(offered["offer"]["price_minor"], 12000, "{offered}");
+
+    // Agreeing, paying and delivering stay with the people.
+    for (token, path, body) in [
+        (
+            &client_agent,
+            "accept",
+            json!({ "offer_count": 1, "exact_terms_ack": true }),
+        ),
+        (&client_agent, "pay", json!({})),
+        (&client_agent, "withdraw", json!({})),
+        (&client_agent, "cancel", json!({})),
+        (&vera_agent, "deliver", json!({ "note": "Done." })),
+        (
+            &vera_agent,
+            "sign-off/send",
+            json!({ "links": ["https://drive.example/x.png"] }),
+        ),
+        (&client_agent, "sign-off", json!({})),
+        (&client_agent, "accept-delivery", json!({})),
+    ] {
+        let res = app
+            .send(
+                req(Method::POST, format!("/v1/jobs/{job}/{path}"))
+                    .header("authorization", token.clone())
+                    .json(body),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{path}");
+    }
+    let status: String = sqlx::query_scalar("select status from jobs where id = $1::uuid")
+        .bind(&job)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "offered");
+
+    // The client accepts and pays, signed in themselves.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/jobs/{job}/accept"))
+                .cookie(&client)
+                .json(json!({ "offer_count": 1, "exact_terms_ack": true, "start_now": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/jobs/{job}/pay"))
+                .cookie(&client)
+                .json(json!({})),
+        )
+        .await;
+    assert_eq!(body_json(res).await["job"]["status"], "in_progress");
+
+    // Changes: the client's agent asks, the creative's agent offers terms, and only the client
+    // agrees to them.
+    let (failed, text) = maker_tool(
+        &app,
+        &vera_agent,
+        "request_change",
+        json!({ "id": job, "note": "Could it run?" }),
+    )
+    .await;
+    assert!(
+        failed && text.contains("conflict"),
+        "only the client asks: {text}"
+    );
+    let (failed, text) = maker_tool(
+        &app,
+        &client_agent,
+        "request_change",
+        json!({ "id": job, "note": "Could the knight also run?" }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["changes"][0]["status"], "requested");
+    let new_due = (OffsetDateTime::now_utc().date() + time::Duration::days(30)).to_string();
+    let change = json!({ "id": job, "title": "Add a running animation", "scope_md": "8 frames, 4 directions.",
+                         "extra_price_minor": 4000, "new_due_date": new_due });
+    let (failed, text) = maker_tool(&app, &client_agent, "propose_change", change.clone()).await;
+    assert!(failed, "only the creative offers terms: {text}");
+    let (failed, text) = maker_tool(&app, &vera_reader, "propose_change", change.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &vera_agent, "propose_change", change).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["changes"][0]["status"], "offered");
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/jobs/{job}/change/accept"))
+                .header("authorization", client_agent.clone())
+                .json(json!({ "number": 1, "exact_terms_ack": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    // Declined: the work stays as agreed.
+    let (failed, text) = maker_tool(
+        &app,
+        &stranger_agent,
+        "decline_change",
+        json!({ "id": job, "note": "No." }),
+    )
+    .await;
+    assert!(failed && text.contains("not_found"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &client_agent,
+        "decline_change",
+        json!({ "id": job, "note": "Not this month." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let after = parsed(&text);
+    assert_eq!(after["changes"][0]["status"], "declined");
+    assert_eq!(after["status"], "in_progress");
+    assert_eq!(after["due_date"], due.as_str());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn agents_decline_job_requests_with_or_without_a_note(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (_, vera) = live_creative(&app, "vera", "US", true).await;
+    let (client_id, client) = app.user("Tavern Dev", "US").await;
+    listed_with(&app, client_id, "tiny-tavern", "released", "").await;
+    let mut jobs = vec![];
+    for _ in 0..2 {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/people/vera/hire")
+                    .cookie(&client)
+                    .json(json!({ "app_slug": "tiny-tavern", "skill": "pixel-art",
+                                  "request_md": "A knight.", "confirm_adult": true,
+                                  "exact_wording_ack": true, "inquiry": false })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::OK);
+        jobs.push(body_json(res).await["id"].as_str().unwrap().to_string());
+    }
+    let (reader, _) = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "Reader", "scope": "read", "people": true }),
+    )
+    .await;
+    let (agent, _) = maker_token(
+        &app,
+        &vera,
+        json!({ "name": "Agent", "scope": "publish", "people": true }),
+    )
+    .await;
+    let (failed, text) = maker_tool(
+        &app,
+        &reader,
+        "decline_job",
+        json!({ "id": jobs[0], "note": "Booked up." }),
+    )
+    .await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(
+        &app,
+        &agent,
+        "decline_job",
+        json!({ "id": jobs[0], "note": "Booked up until spring." }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["status"], "declined");
+    let (failed, text) = maker_tool(&app, &agent, "decline_job", json!({ "id": jobs[0] })).await;
+    assert!(
+        failed && text.contains("conflict"),
+        "already declined: {text}"
+    );
+    // The note is optional in the tools' schemas, so leaving it out must work too.
+    let (client_agent, _) = maker_token(
+        &app,
+        &client,
+        json!({ "name": "Client's", "scope": "publish", "people": true }),
+    )
+    .await;
+    let (failed, text) = maker_tool(
+        &app,
+        &client_agent,
+        "ask_for_job_conversation",
+        json!({ "id": jobs[1] }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert!(parsed(&text)["conversation"]["requested_at"].is_string());
+    let (failed, text) = maker_tool(&app, &agent, "decline_job", json!({ "id": jobs[1] })).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["status"], "declined");
 }
