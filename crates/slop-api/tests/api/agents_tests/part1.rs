@@ -2340,3 +2340,280 @@ async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(
     );
     assert!(!is_suspended(&app, other).await);
 }
+
+// ---------------------------------------------------------------------------------------------
+// The admin MCP endpoint
+
+/// Every tool the admin MCP endpoint offers (agent.rs TOOLS).
+const ADMIN_TOOLS: [&str; 54] = [
+    "slop_status", "review_guide", "review_queue", "admin_queue", "add_note", "approve_release",
+    "reject_release", "withdraw_release", "clear_scan_finding", "keep_rescanned_release",
+    "decide_change", "decide_pictures", "decide_portfolio", "list_app", "delist_app",
+    "act_on_report", "dismiss_report", "decide_appeal", "close_abuse_signal", "find_users",
+    "user_details", "moderate_user", "lift_suspension", "passkey_grace", "pending_actions",
+    "audit_log", "find_apps", "app_record", "edit_store_page", "set_app_stage", "freeze_app",
+    "unfreeze_app", "donation_pauses", "pause_donations", "lift_donation_pause",
+    "answer_donation_request", "user_profile", "edit_profile", "edit_team", "featured_apps",
+    "set_featured_apps", "store_shelves", "create_shelf", "update_shelf", "delete_shelf",
+    "order_shelves", "hide_front_shelf", "legal_documents", "publish_legal_document",
+    "withdraw_legal_document", "staff", "change_staff_role", "remove_from_staff",
+    "cancel_pending_action",
+];
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    let token = admin_token(&app, &owner, "review").await;
+    let ping = json!({ "jsonrpc": "2.0", "id": 1, "method": "ping" });
+
+    // Nobody, people who aren't staff, and makers' agents: there's nothing here.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&maker)
+                .json(json!({ "name": "Claude", "scope": "publish" })),
+        )
+        .await;
+    let maker_token = format!("Bearer {}", body_json(res).await["secret"].as_str().unwrap());
+    for r in [
+        req(Method::POST, "/v1/admin/mcp").json(ping.clone()),
+        req(Method::POST, "/v1/admin/mcp").cookie(&maker).json(ping.clone()),
+        with_token(req(Method::POST, "/v1/admin/mcp").json(ping.clone()), &maker_token),
+        with_token(
+            req(Method::POST, "/v1/admin/mcp").json(ping.clone()),
+            "Bearer slopadm_not-a-token",
+        ),
+    ] {
+        assert_eq!(app.send(r).await.status(), StatusCode::NOT_FOUND);
+    }
+    // There's no stream to open: staff get 405, everyone else still nothing.
+    assert_eq!(
+        app.send(with_token(req(Method::GET, "/v1/admin/mcp"), &token)).await.status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/admin/mcp").cookie(&owner)).await.status(),
+        StatusCode::METHOD_NOT_ALLOWED
+    );
+    for r in [
+        req(Method::GET, "/v1/admin/mcp"),
+        req(Method::GET, "/v1/admin/mcp").cookie(&maker),
+    ] {
+        assert_eq!(app.send(r).await.status(), StatusCode::NOT_FOUND);
+    }
+
+    // The handshake, a ping, the tools; ids come back as they were sent.
+    let init = mcp(
+        &app,
+        &token,
+        json!({ "jsonrpc": "2.0", "id": "start", "method": "initialize", "params": {} }),
+    )
+    .await;
+    assert_eq!(init["id"], "start");
+    assert_eq!(init["result"]["protocolVersion"], "2025-06-18");
+    assert_eq!(init["result"]["capabilities"]["tools"]["listChanged"], false);
+    assert!(init["result"]["instructions"].as_str().unwrap().contains("slop_status"));
+    let pong = mcp(&app, &token, json!({ "jsonrpc": "2.0", "id": 42, "method": "ping" })).await;
+    assert_eq!(pong, json!({ "jsonrpc": "2.0", "id": 42, "result": {} }));
+    let list = mcp(&app, &token, json!({ "jsonrpc": "2.0", "id": 2, "method": "tools/list" })).await;
+    let tools = list["result"]["tools"].as_array().unwrap();
+    let names: Vec<&str> = tools.iter().map(|t| t["name"].as_str().unwrap()).collect();
+    assert_eq!(names, ADMIN_TOOLS);
+    for t in tools {
+        assert_eq!(t["inputSchema"]["type"], "object", "{t}");
+        assert!(t["description"].as_str().unwrap().len() > 10);
+    }
+    let res = app
+        .send(with_token(
+            req(Method::POST, "/v1/admin/mcp")
+                .json(json!({ "jsonrpc": "2.0", "method": "notifications/initialized" })),
+            &token,
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::ACCEPTED);
+    assert!(res.into_body().collect().await.unwrap().to_bytes().is_empty());
+
+    // Protocol errors.
+    let unknown = mcp(&app, &token, json!({ "jsonrpc": "2.0", "id": 3, "method": "resources/list" })).await;
+    assert_eq!(unknown["error"]["code"], -32601);
+    assert_eq!(unknown["id"], 3);
+    let no_tool = mcp(
+        &app,
+        &token,
+        json!({ "jsonrpc": "2.0", "id": 4, "method": "tools/call", "params": { "name": "drop_tables" } }),
+    )
+    .await;
+    assert_eq!(no_tool["error"]["code"], -32602);
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/mcp")
+                .header("authorization", token.clone())
+                .header("content-type", "application/json")
+                .json(json!("not an object")),
+        )
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], -32700);
+    // Bodies over the router's 64 KiB limit never reach it.
+    let res = app
+        .send(with_token(
+            req(Method::POST, "/v1/admin/mcp").json(json!({
+                "jsonrpc": "2.0", "id": 5, "method": "ping", "params": { "pad": "p".repeat(70 * 1024) }
+            })),
+            &token,
+        ))
+        .await;
+    // (413 when the length is announced; read to the limit and refused otherwise.)
+    if res.status() == StatusCode::OK {
+        let reply = body_json(res).await;
+        assert_eq!(reply["error"]["code"], -32700, "{reply}");
+        assert_eq!(reply["error"]["message"], "request too large");
+    } else {
+        assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+    }
+    let big = json!({
+        "jsonrpc": "2.0", "id": 5, "method": "ping", "params": { "pad": "p".repeat(70 * 1024) }
+    });
+    let res = app
+        .send(
+            with_token(req(Method::POST, "/v1/admin/mcp"), &token)
+                .header("content-length", big.to_string().len().to_string())
+                .json(big),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
+
+    // Tool arguments: required ones, path values that would leave their segment, decisions.
+    let id = Uuid::now_v7().to_string();
+    assert_eq!(
+        tool_refused(&app, &token, "approve_release", json!({})).await,
+        "missing argument: id"
+    );
+    for bad in ["", ".", ".."] {
+        let text = tool_refused(&app, &token, "approve_release", json!({ "id": bad })).await;
+        assert_eq!(text, "id isn't a valid value", "{bad:?}");
+    }
+    let text = tool_refused(
+        &app,
+        &token,
+        "decide_change",
+        json!({ "id": id, "decision": "../../tokens" }),
+    )
+    .await;
+    assert_eq!(text, "decision must be approve or reject");
+    // A "/" is escaped: the value reaches the route as one (invalid) ID, not another route.
+    let text = tool_refused(&app, &token, "user_details", json!({ "id": "x/y" })).await;
+    assert!(!text.contains("not_found"), "{text}");
+    // The route's own refusal comes back as it was, marked as an error.
+    let text = tool_refused(&app, &token, "find_users", json!({ "q": " " })).await;
+    let err: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(err["error"]["field"], "q");
+    // An empty success says so.
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    let (ok, text) = tool(
+        &app,
+        &token,
+        "set_app_stage",
+        json!({ "slug": "arena", "stage": "coming_soon" }),
+    )
+    .await;
+    assert!(ok);
+    assert_eq!(text, "Done (HTTP 204).");
+
+    // A token revoked between two calls stops at once.
+    let token_id: Uuid = sqlx::query_scalar("select id from admin_tokens")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    app.send(req(Method::POST, format!("/v1/admin/tokens/{token_id}/revoke")).cookie(&owner))
+        .await;
+    assert_eq!(
+        app.send(with_token(req(Method::POST, "/v1/admin/mcp").json(ping), &token))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_signed_in_on_the_website_can_drive_the_admin_mcp_tools(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, rex) = staff(&app, "Rex Reviewer", &["reviewer"]).await;
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    let call = |cookie: &str, name: &str, args: Value| {
+        req(Method::POST, "/v1/admin/mcp").cookie(cookie).json(json!({
+            "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+            "params": { "name": name, "arguments": args }
+        }))
+    };
+    let result = |res: Response| async move {
+        assert_eq!(res.status(), StatusCode::OK);
+        let reply = body_json(res).await;
+        (reply["result"]["isError"] == false, reply["result"]["content"][0]["text"].clone())
+    };
+
+    // The session cookie is passed on: reading, and acting in the person's name.
+    let (ok, text) = result(app.send(call(&owner, "slop_status", json!({}))).await).await;
+    assert!(ok && text.as_str().unwrap().contains("\"waiting\""), "{text}");
+    let (ok, text) = result(
+        app.send(
+            call(&owner, "set_app_stage", json!({ "slug": "arena", "stage": "coming_soon" }))
+                .header("sec-fetch-site", "same-origin"),
+        )
+        .await,
+    )
+    .await;
+    assert!(ok, "{text}");
+    assert!(audit_actors(&app, "app.stage").await[0].starts_with("Olive Owner ("));
+    // With the person's own roles: a reviewer can't read an account.
+    let (ok, _) = result(
+        app.send(call(&rex, "user_details", json!({ "id": maker_id.to_string() })))
+            .await,
+    )
+    .await;
+    assert!(!ok);
+
+    // From another site, the cookie doesn't get anywhere.
+    for (name, value) in [("sec-fetch-site", "cross-site"), ("origin", "https://evil.example")] {
+        let res = app
+            .send(
+                call(&owner, "set_app_stage", json!({ "slug": "arena", "stage": "released" }))
+                    .header(name, value),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::FORBIDDEN, "{name}");
+    }
+    let stage: String = sqlx::query_scalar("select stage::text from apps where slug = 'arena'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(stage, "coming_soon");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+#[ignore = "b60: the router's 64 KiB body limit refuses legal documents (and MCP calls) that legal.rs and serve_mcp accept"]
+async fn a_long_legal_document_can_be_published_over_mcp(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let token = admin_token(&app, &owner, "moderate").await;
+    // legal.rs takes up to 200,000 characters; real terms run long.
+    let body = "Every clause, spelled out in full.\n\n".repeat(2_000);
+    assert!(body.len() > 64 * 1024 && body.chars().count() < 200_000);
+    let res = app
+        .send(with_token(
+            req(Method::POST, "/v1/admin/mcp").json(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": "publish_legal_document",
+                            "arguments": { "kind": "terms", "summary": "Spells everything out.", "body_md": body } }
+            })),
+            &token,
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let reply = body_json(res).await;
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+}
