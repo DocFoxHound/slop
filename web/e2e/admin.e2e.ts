@@ -48,3 +48,51 @@ test("staff pause an app's donations, the maker asks for them back, and staff li
   await admin.getByRole("link", { name: "Mia Maker" }).click();
   await expect(admin.getByRole("link", { name: "Mia's First Game" })).toBeVisible();
 });
+
+test("staff freeze an app, make a front-page shelf, and fix profiles", async ({ browser }) => {
+  const admin = await browser.newPage();
+  await signIn(admin, "admin");
+
+  // A hand freeze: the maker sees why, and staff lift it.
+  await admin.goto("/admin?tab=apps&app=mias-first");
+  await admin.getByRole("button", { name: "Freeze" }).click();
+  await admin.getByRole("textbox", { name: "Freeze: reason" }).fill("Checking a report about the last build.");
+  await admin.getByRole("button", { name: "Freeze" }).click();
+  await expect(admin.getByText("FROZEN", { exact: true })).toBeVisible();
+  const maker = await browser.newPage();
+  await signIn(maker, "maker");
+  await maker.goto("/publish/mias-first/manage");
+  await expect(maker.getByRole("heading", { name: "Frozen by Slop" })).toBeVisible();
+  await expect(maker.getByText(/Checking a report about the last build/)).toBeVisible();
+  await admin.getByRole("button", { name: "Lift the freeze" }).click();
+  await admin.getByRole("textbox", { name: "Lift the freeze: reason" }).fill("The report was wrong.");
+  await admin.getByRole("button", { name: "Lift the freeze" }).click();
+  await expect(admin.getByText("FROZEN", { exact: true })).toHaveCount(0);
+
+  // A shelf on the front page, then gone again.
+  await admin.goto("/admin?tab=store");
+  await admin.getByRole("button", { name: "New shelf" }).click();
+  await admin.getByRole("textbox", { name: "Address", exact: true }).fill("staff-picks");
+  await admin.getByRole("textbox", { name: "Title", exact: true }).fill("Staff picks this week");
+  await admin.getByRole("textbox", { name: /App address to add/ }).fill("castle-rock");
+  await admin.getByRole("button", { name: "Add app" }).click();
+  await admin.getByRole("button", { name: "Make the shelf" }).click();
+  await expect(admin.getByText("Staff picks this week").first()).toBeVisible();
+  const visitor = await browser.newPage();
+  await visitor.goto("/");
+  await expect(visitor.getByRole("heading", { name: "Staff picks this week" })).toBeVisible();
+  await admin.getByText("Staff picks this week").first().click();
+  admin.once("dialog", (d) => void d.accept());
+  await admin.getByRole("button", { name: "Delete shelf" }).click();
+  await expect(admin.getByText("No shelves yet.")).toBeVisible();
+
+  // An account's profile can be fixed from Accounts.
+  await admin.goto("/admin?tab=users&q=Mia%20Maker");
+  await admin.getByRole("link", { name: "Mia Maker" }).click();
+  await admin.getByText("Fix their profile").click();
+  await expect(admin.getByRole("textbox", { name: "Display name" })).toHaveValue("Mia Maker");
+
+  // The Terms & policies tab lists every document.
+  await admin.goto("/admin?tab=docs");
+  await expect(admin.getByRole("heading", { name: "Terms of Service" })).toBeVisible();
+});

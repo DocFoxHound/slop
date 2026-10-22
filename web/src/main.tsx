@@ -30,6 +30,7 @@ import { Source } from "./pages/Source";
 import { Verify } from "./pages/Verify";
 import { BountiesPage, BountyPage } from "./pages/Bounties";
 import { Store } from "./pages/Store";
+import { ShelfPage } from "./pages/ShelfPage";
 import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
 import "./styles.css";
@@ -70,6 +71,7 @@ const router = createBrowserRouter([
       { path: "/friends", element: <FriendsPage /> },
       { path: "/teams", element: <Teams /> },
       { path: "/teams/:slug", element: <Team /> },
+      { path: "/shelf/:slug", element: <ShelfPage /> },
       { path: "/legal/:kind", element: <LegalPage /> },
       { path: "/transparency", element: <Transparency /> },
       { path: "/source", element: <Source /> },

@@ -59,7 +59,13 @@ export function AppRecord({ slug }: { slug: string }) {
             · a branch of <Link to={`/admin?tab=apps&app=${encodeURIComponent(app.parent)}`}>{app.parent}</Link>
           </>
         )}
-        {app.frozen_at && <> · frozen since {formatDate(app.frozen_at)} (Slop lost access to its repository)</>}
+        {app.frozen_at && (
+          <>
+            {" "}
+            · frozen since {formatDate(app.frozen_at)}
+            {app.frozen_by ? <> by staff ({app.frozen_reason})</> : <> (Slop lost access to its repository)</>}
+          </>
+        )}
       </p>
 
       <section className="panel panel-pad">
@@ -94,6 +100,32 @@ export function AppRecord({ slug }: { slug: string }) {
               Put in the store
             </button>
           )}
+          {app.frozen_by ? (
+            <ReasonButton
+              label="Lift the freeze"
+              placeholder="For the maker and the record: what you found"
+              disabled={action.busy !== undefined}
+              onSubmit={(note) => void action.run("unfreeze", () => api.admin.unfreeze(app.slug, note))}
+            />
+          ) : (
+            <>
+              <ReasonButton
+                label="Freeze"
+                placeholder="For the maker: what's wrong and what would fix it (no new releases until you lift it)"
+                danger
+                disabled={action.busy !== undefined}
+                onSubmit={(reason) => void action.run("freeze", () => api.admin.freeze(app.slug, reason))}
+              />
+              {app.frozen_at && (
+                <ReasonButton
+                  label="Check the repository now"
+                  placeholder="For the record: why check now"
+                  disabled={action.busy !== undefined}
+                  onSubmit={(note) => void action.run("recheck", () => api.admin.unfreeze(app.slug, note))}
+                />
+              )}
+            </>
+          )}
           {approved.slice(0, 5).map((r) => (
             <ReasonButton
               key={r.id}
@@ -105,6 +137,10 @@ export function AppRecord({ slug }: { slug: string }) {
             />
           ))}
         </div>
+        <p className="muted small">
+          Freezing stops new releases while you look into something; the app stays in the store and installed copies
+          keep working. The daily repository check never lifts a staff freeze.
+        </p>
         <ActionMessages {...action} />
       </section>
 

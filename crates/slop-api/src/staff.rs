@@ -22,6 +22,12 @@
 //! at once, but it's recorded the same way; set it to 2 when there's a second person. A token
 //! counts as its admin, and approving takes a person signed in themselves (never a token), so an
 //! agent can ask but never be the second person. Requests expire after three days.
+//!
+//! **Staff changes by an agent.** Giving or taking a role, or removing someone from staff, is
+//! never done on a token's word alone, even while one approval is enough: an agent with a
+//! `moderate` token, working for someone who may manage staff, can *ask*, and it waits until a
+//! person approves it signed in on the website (`request_for_a_person`), which can be the same
+//! admin on their phone.
 
 use axum::{
     Json, Router,
@@ -223,6 +229,70 @@ pub async fn request(
     finish(state, id, kind, &payload, &admin.actor).await
 }
 
+/// Records an action an agent asked for that a person has to approve (staff changes): unlike
+/// `request`, the token's admin isn't counted as an approval, so it waits even while one approval
+/// is enough. The admin and everyone else who could approve it are told.
+pub async fn request_for_a_person(
+    state: &AppState,
+    admin: &AdminUser,
+    kind: &str,
+    summary: &str,
+    payload: Value,
+) -> ApiResult<Outcome> {
+    let needed = i16::from(state.config.approvals_required.max(1));
+    let id = Uuid::now_v7();
+    let mut tx = state.db.begin().await?;
+    sqlx::query(
+        "insert into staff_actions (id, kind, summary, payload, requested_by, requested_actor, approvals_needed)
+         values ($1, $2, $3, $4, $5, $6, $7)",
+    )
+    .bind(id)
+    .bind(kind)
+    .bind(summary)
+    .bind(&payload)
+    .bind(admin.user_id)
+    .bind(&admin.actor)
+    .bind(needed)
+    .execute(&mut *tx)
+    .await?;
+    admin::audit(
+        &mut tx,
+        &admin.actor,
+        "staff_action.request",
+        &id.to_string(),
+        json!({ "kind": kind, "summary": summary, "approvals_needed": needed, "needs_a_person": true }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    let people: Vec<Uuid> = sqlx::query_scalar(
+        "select distinct u.id from users u join staff_roles r on r.user_id = u.id
+         where u.is_admin and u.closed_at is null and r.role in ('owner', 'security')",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    for person in people {
+        crate::notify::send(
+            &mut tx,
+            crate::notify::Notice {
+                user_id: person,
+                category: "ops",
+                title: "An AI agent asked for a staff change".into(),
+                body: format!(
+                    "{summary}. It happens once a person approves it in the admin queue."
+                ),
+                link: "/admin?tab=queue".into(),
+                collapse_key: Some(format!("staff-action:{id}")),
+            },
+        )
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(Outcome::Pending {
+        id,
+        more_needed: i64::from(needed),
+    })
+}
+
 /// Runs an approved action and records how it went. `actor` names everyone who approved it.
 async fn finish(
     state: &AppState,
@@ -267,6 +337,12 @@ struct RolePayload {
     grant: bool,
 }
 
+#[derive(Deserialize)]
+struct RemovePayload {
+    user_id: Uuid,
+    reason: String,
+}
+
 /// Carries out an approved action.
 async fn execute(state: &AppState, kind: &str, payload: &Value, actor: &str) -> ApiResult<Value> {
     let bad =
@@ -292,9 +368,15 @@ async fn execute(state: &AppState, kind: &str, payload: &Value, actor: &str) -> 
         "account.lift" => crate::agent::lift_stored(state, payload, actor).await,
         "account.passkey_grace" => crate::agent::passkey_grace_stored(state, payload, actor).await,
         "donations.off" => crate::donation_holds::off_stored(state, payload, actor).await,
+        "legal.publish" => crate::legal::publish_stored(state, payload, actor).await,
         "staff.role" => {
             let p: RolePayload = serde_json::from_value(payload.clone()).map_err(bad)?;
             set_role(state, p.user_id, p.role, p.grant, actor).await?;
+            Ok(Value::Null)
+        }
+        "staff.remove" => {
+            let p: RemovePayload = serde_json::from_value(payload.clone()).map_err(bad)?;
+            remove_staff(state, p.user_id, &p.reason, actor).await?;
             Ok(Value::Null)
         }
         _ => Err(ApiError::Internal(anyhow::anyhow!(
@@ -370,6 +452,55 @@ async fn set_role(
     Ok(())
 }
 
+/// Ends someone's staff rights: every role, and every admin API token they made.
+async fn remove_staff(state: &AppState, user_id: Uuid, reason: &str, actor: &str) -> ApiResult<()> {
+    let mut tx = state.db.begin().await?;
+    let is_staff: Option<bool> =
+        sqlx::query_scalar("select is_admin from users where id = $1 for update")
+            .bind(user_id)
+            .fetch_optional(&mut *tx)
+            .await?;
+    if is_staff != Some(true) {
+        return Err(ApiError::Conflict("that account isn't staff".into()));
+    }
+    let other_owners: i64 = sqlx::query_scalar(
+        "select count(*) from staff_roles r join users u on u.id = r.user_id
+         where r.role = 'owner' and u.is_admin and u.closed_at is null and r.user_id <> $1",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if other_owners == 0 {
+        return Err(ApiError::Conflict("Slop needs at least one owner".into()));
+    }
+    sqlx::query("update users set is_admin = false where id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("delete from staff_roles where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    let tokens = sqlx::query(
+        "update admin_tokens set revoked_at = now() where user_id = $1 and revoked_at is null",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?
+    .rows_affected();
+    admin::audit(
+        &mut tx,
+        actor,
+        "admin.revoke",
+        &user_id.to_string(),
+        json!({ "reason": reason, "tokens_revoked": tokens }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tx.commit().await?;
+    Ok(())
+}
+
 /// Marks requests nobody approved in time.
 async fn expire(db: &sqlx::PgPool) -> sqlx::Result<()> {
     sqlx::query(
@@ -392,6 +523,7 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/actions/{id}/cancel", post(cancel))
         .route("/admin/staff", get(list_staff))
         .route("/admin/staff/{user_id}/roles", post(change_role))
+        .route("/admin/staff/{user_id}/remove", post(remove))
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -444,7 +576,7 @@ async fn list_actions(
 
 /// The permission approving an action needs.
 fn perm_for(kind: &str) -> Perm {
-    if kind == "staff.role" {
+    if kind.starts_with("staff.") {
         Perm::Security
     } else {
         Perm::Sensitive
@@ -590,9 +722,7 @@ async fn change_role(
     Path(user_id): Path<Uuid>,
     Json(b): Json<ChangeRole>,
 ) -> ApiResult<Outcome> {
-    admin.need(Perm::Security)?;
-    admin.signed_in()?;
-    admin.confirm_recent(&state.db).await?;
+    let by_agent = may_change_staff(&state, &admin).await?;
     // Only an owner gives or takes the owner role.
     if b.role == Role::Owner && !admin.roles.contains(&Role::Owner) {
         return Err(ApiError::Forbidden);
@@ -608,14 +738,78 @@ async fn change_role(
         b.role.name(),
         if b.grant { "to" } else { "from" }
     );
-    request(
-        &state,
-        &admin,
-        "staff.role",
-        &summary,
-        json!({ "user_id": user_id, "role": b.role, "grant": b.grant }),
+    let payload = json!({ "user_id": user_id, "role": b.role, "grant": b.grant });
+    if by_agent {
+        request_for_a_person(&state, &admin, "staff.role", &summary, payload).await
+    } else {
+        request(&state, &admin, "staff.role", &summary, payload).await
+    }
+}
+
+/// Whether this admin may change staff, and whether it's an agent asking (true), whose request
+/// then waits for a person. A person must have signed in or confirmed with a passkey lately.
+async fn may_change_staff(state: &AppState, admin: &AdminUser) -> ApiResult<bool> {
+    if !admin.roles.iter().any(|r| r.allows(Perm::Security)) {
+        return Err(ApiError::Forbidden);
+    }
+    match &admin.token {
+        Some(t) if t.can_moderate => Ok(true),
+        Some(_) => Err(ApiError::Forbidden),
+        None => {
+            admin.confirm_recent(&state.db).await?;
+            Ok(false)
+        }
+    }
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveBody {
+    /// For the record (10+ characters).
+    reason: String,
+}
+
+/// Takes someone off staff entirely: every role and every admin API token they made.
+async fn remove(
+    State(state): State<AppState>,
+    admin: AdminUser,
+    Path(user_id): Path<Uuid>,
+    Json(b): Json<RemoveBody>,
+) -> ApiResult<Outcome> {
+    let by_agent = may_change_staff(&state, &admin).await?;
+    let reason = b.reason.trim();
+    if reason.chars().count() < 10 || reason.chars().count() > 2000 {
+        return Err(ApiError::invalid(
+            "reason",
+            "say why in 10 to 2000 characters",
+        ));
+    }
+    let row: Option<(String, bool)> =
+        sqlx::query_as("select display_name, is_admin from users where id = $1")
+            .bind(user_id)
+            .fetch_optional(&state.db)
+            .await?;
+    let (name, is_staff) = row.ok_or(ApiError::NotFound)?;
+    if !is_staff {
+        return Err(ApiError::Conflict("that account isn't staff".into()));
+    }
+    // Only an owner removes an owner.
+    let target_owner: bool = sqlx::query_scalar(
+        "select exists (select 1 from staff_roles where user_id = $1 and role = 'owner')",
     )
-    .await
+    .bind(user_id)
+    .fetch_one(&state.db)
+    .await?;
+    if target_owner && !admin.roles.contains(&Role::Owner) {
+        return Err(ApiError::Forbidden);
+    }
+    let summary = format!("Remove {name} from staff");
+    let payload = json!({ "user_id": user_id, "reason": reason });
+    if by_agent {
+        request_for_a_person(&state, &admin, "staff.remove", &summary, payload).await
+    } else {
+        request(&state, &admin, "staff.remove", &summary, payload).await
+    }
 }
 
 #[cfg(test)]

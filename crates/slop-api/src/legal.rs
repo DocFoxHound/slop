@@ -52,6 +52,12 @@ pub fn routes() -> Router<AppState> {
         .route("/legal/{kind}", get(document))
         .route("/me/legal", get(my_notices))
         .route("/me/legal/accept", post(accept))
+        .route("/admin/legal", get(admin_index))
+        .route("/admin/legal/{kind}", post(admin_publish))
+        .route(
+            "/admin/legal/{kind}/{version}/withdraw",
+            post(admin_withdraw),
+        )
 }
 
 #[derive(Debug, PartialEq)]
@@ -459,6 +465,274 @@ async fn accept(
         ));
     }
     record_acceptance(&mut conn, user.id, &body.kind, &body.version).await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+// ---------------------------------------------------------------------------------------------
+// Publishing from the admin panel (built 2026-10-22)
+//
+// Staff can publish a new version without a deploy: it's a sensitive action (two people, once
+// there are two), gets the same 15 days' notice, and can be withdrawn until it takes effect.
+// The version lives in the database only; the panel shows it in the file's format to copy into
+// `crates/slop-api/legal/` so the repository keeps up. A file version that's newer still wins,
+// as `sync` publishes it like any other.
+
+#[derive(Serialize, sqlx::FromRow)]
+struct AdminVersion {
+    version: String,
+    summary: String,
+    #[serde(with = "time::serde::rfc3339")]
+    published_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339")]
+    effective_at: OffsetDateTime,
+    /// The staff member who published it from the panel; null for one from the repository.
+    published_by: Option<String>,
+}
+
+#[derive(Serialize)]
+struct AdminDocument {
+    kind: &'static str,
+    title: &'static str,
+    accepted: bool,
+    /// The newest version's words (the announced one if there is one), to start an edit from.
+    latest_body_md: String,
+    latest_version: Option<String>,
+    /// The newest version as a file for `crates/slop-api/legal/`, when it came from the panel.
+    file_text: Option<String>,
+    /// Every version, newest first.
+    versions: Vec<AdminVersion>,
+}
+
+fn file_text(title: &str, version: &str, summary: &str, body: &str) -> String {
+    format!("---\ntitle: {title}\nversion: {version}\nsummary: {summary}\n---\n{body}\n")
+}
+
+async fn admin_index(
+    State(state): State<AppState>,
+    _admin: crate::admin_web::AdminUser,
+) -> ApiResult<Json<Vec<AdminDocument>>> {
+    let mut out = Vec::new();
+    for (kind, _, accepted) in DOCUMENTS {
+        let versions: Vec<AdminVersion> = sqlx::query_as(
+            "select version, summary, published_at, effective_at, published_by from legal_documents
+             where kind = $1 order by effective_at desc, version desc",
+        )
+        .bind(kind)
+        .fetch_all(&state.db)
+        .await?;
+        let latest: Option<(String, String)> = sqlx::query_as(
+            "select version, body_md from legal_documents where kind = $1
+             order by effective_at desc, version desc limit 1",
+        )
+        .bind(kind)
+        .fetch_optional(&state.db)
+        .await?;
+        let file = versions.first().and_then(|v| {
+            let (_, body) = latest.as_ref()?;
+            v.published_by
+                .as_ref()
+                .map(|_| file_text(title(kind), &v.version, &v.summary, body))
+        });
+        out.push(AdminDocument {
+            kind,
+            title: title(kind),
+            accepted: *accepted,
+            latest_version: latest.as_ref().map(|(v, _)| v.clone()),
+            latest_body_md: latest.map(|(_, b)| b).unwrap_or_default(),
+            file_text: file,
+            versions,
+        });
+    }
+    Ok(Json(out))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct PublishBody {
+    /// What changed, in plain words: everyone is told this.
+    summary: String,
+    /// The whole new text (Markdown).
+    body_md: String,
+}
+
+fn known_kind(kind: &str) -> ApiResult<&'static str> {
+    DOCUMENTS
+        .iter()
+        .map(|(k, _, _)| *k)
+        .find(|k| *k == kind)
+        .ok_or(ApiError::NotFound)
+}
+
+async fn admin_publish(
+    State(state): State<AppState>,
+    admin: crate::admin_web::AdminUser,
+    Path(kind): Path<String>,
+    Json(b): Json<PublishBody>,
+) -> ApiResult<crate::staff::Outcome> {
+    admin.need(crate::staff::Perm::Sensitive)?;
+    let kind = known_kind(&kind)?;
+    let summary = crate::catalog::validate_text("summary", &b.summary, 300, false)?;
+    if summary.contains('\n') {
+        return Err(ApiError::invalid("summary", "keep it to one line"));
+    }
+    let body = crate::catalog::validate_text("body_md", &b.body_md, 200_000, false)?;
+    let upcoming: bool = sqlx::query_scalar(
+        "select exists (select 1 from legal_documents where kind = $1 and effective_at > now())",
+    )
+    .bind(kind)
+    .fetch_one(&state.db)
+    .await?;
+    if upcoming {
+        return Err(ApiError::Conflict(
+            "a change to it is already announced: withdraw that one first".into(),
+        ));
+    }
+    let same: bool = sqlx::query_scalar(
+        "select coalesce((select sha256 from legal_documents where kind = $1
+                          order by effective_at desc, version desc limit 1) = $2, false)",
+    )
+    .bind(kind)
+    .bind(sha256(&body))
+    .fetch_one(&state.db)
+    .await?;
+    if same {
+        return Err(ApiError::invalid(
+            "body_md",
+            "that's the text already published",
+        ));
+    }
+    crate::staff::request(
+        &state,
+        &admin,
+        "legal.publish",
+        &format!("Publish a new {}: {summary}", title(kind)),
+        serde_json::json!({ "kind": kind, "summary": summary, "body_md": body }),
+    )
+    .await
+}
+
+#[derive(Deserialize)]
+struct PublishPayload {
+    kind: String,
+    summary: String,
+    body_md: String,
+}
+
+/// Publishes an approved new version, taking effect after the notice period.
+pub(crate) async fn publish_stored(
+    state: &AppState,
+    payload: &serde_json::Value,
+    actor: &str,
+) -> ApiResult<serde_json::Value> {
+    let p: PublishPayload = serde_json::from_value(payload.clone())
+        .map_err(|e| ApiError::Internal(anyhow::anyhow!("stored action is damaged: {e}")))?;
+    let kind = known_kind(&p.kind)?;
+    let mut tx = state.db.begin().await?;
+    // Today's date, with a letter if today already has a version (2026-10-22b).
+    let today = OffsetDateTime::now_utc().date().to_string();
+    let taken: Vec<String> = sqlx::query_scalar(
+        "select version from legal_documents where kind = $1 and version like $2 || '%'",
+    )
+    .bind(kind)
+    .bind(&today)
+    .fetch_all(&mut *tx)
+    .await?;
+    let version = std::iter::once(today.clone())
+        .chain(('b'..='z').map(|c| format!("{today}{c}")))
+        .find(|v| !taken.contains(v))
+        .ok_or_else(|| ApiError::Conflict("too many versions today".into()))?;
+    let effective: OffsetDateTime = sqlx::query_scalar(
+        "insert into legal_documents (kind, version, title, summary, body_md, sha256, effective_at, published_by)
+         values ($1, $2, $3, $4, $5, $6, now() + $7, $8) returning effective_at",
+    )
+    .bind(kind)
+    .bind(&version)
+    .bind(title(kind))
+    .bind(&p.summary)
+    .bind(&p.body_md)
+    .bind(sha256(&p.body_md))
+    .bind(NOTICE)
+    .bind(actor)
+    .fetch_one(&mut *tx)
+    .await?;
+    crate::admin::audit(
+        &mut tx,
+        actor,
+        "legal.published",
+        &format!("{kind} {version}"),
+        serde_json::json!({ "summary": p.summary, "sha256": sha256(&p.body_md) }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tx.commit().await?;
+    Ok(serde_json::json!({ "version": version, "effective_at": effective.unix_timestamp() }))
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WithdrawBody {
+    reason: String,
+}
+
+/// Withdraws an announced version published from the panel, before it takes effect. Anyone who
+/// already accepted it keeps the acceptance of the version before.
+async fn admin_withdraw(
+    State(state): State<AppState>,
+    admin: crate::admin_web::AdminUser,
+    Path((kind, version)): Path<(String, String)>,
+    Json(b): Json<WithdrawBody>,
+) -> ApiResult<StatusCode> {
+    admin.need(crate::staff::Perm::Sensitive)?;
+    let kind = known_kind(&kind)?;
+    let reason = b.reason.trim();
+    if reason.is_empty() || reason.chars().count() > 2000 {
+        return Err(ApiError::invalid(
+            "reason",
+            "say why in up to 2000 characters",
+        ));
+    }
+    let mut tx = state.db.begin().await?;
+    let row: Option<(String, bool, bool)> = sqlx::query_as(
+        "select body_md, effective_at > now(), published_by is not null from legal_documents
+         where kind = $1 and version = $2 for update",
+    )
+    .bind(kind)
+    .bind(&version)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let (body, upcoming, from_panel) = row.ok_or(ApiError::NotFound)?;
+    if !upcoming {
+        return Err(ApiError::Conflict(
+            "it's already in effect: publish a new version instead".into(),
+        ));
+    }
+    if !from_panel {
+        return Err(ApiError::Conflict(
+            "it came from the file in the repository: change the file and redeploy".into(),
+        ));
+    }
+    let accepted = sqlx::query("delete from legal_acceptances where kind = $1 and version = $2")
+        .bind(kind)
+        .bind(&version)
+        .execute(&mut *tx)
+        .await?
+        .rows_affected();
+    sqlx::query("delete from legal_documents where kind = $1 and version = $2")
+        .bind(kind)
+        .bind(&version)
+        .execute(&mut *tx)
+        .await?;
+    crate::admin::audit(
+        &mut tx,
+        &admin.actor,
+        "legal.withdrawn",
+        &format!("{kind} {version}"),
+        // The words are kept here, since the version itself is gone.
+        serde_json::json!({ "reason": reason, "acceptances_removed": accepted, "body_md": body }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tx.commit().await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

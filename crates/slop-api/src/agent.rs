@@ -13,9 +13,16 @@
 //!   REST API above through Slop's own router (built for the call), so it gets exactly the same
 //!   checks, limits and audit log entries as any other client.
 //!
+//! The tools cover the whole admin panel (decided 2026-10-22: the owner runs Slop from their
+//! phone through an agent), except the payments record and making tokens, which stay with a
+//! person signed in. Staff changes an agent asks for wait for a person to approve them on the
+//! website (staff.rs).
+//!
 //! What a token may do is its scope: `read` looks and leaves notes, `review` also approves and
-//! rejects, `moderate` also suspends and reinstates accounts, withdraws releases and takes apps
-//! out of the store. Every action is in the audit log under the token's name and its admin.
+//! rejects and fixes store pages, profiles, shelves and freezes, `moderate` also suspends and
+//! reinstates accounts, withdraws releases, takes apps out of the store, turns donations off,
+//! publishes legal documents and asks for staff changes. Every action is in the audit log under
+//! the token's name and its admin.
 
 use axum::{
     Json, Router,
@@ -835,11 +842,241 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "audit_log",
-        description: "Recent decisions and actions, newest first, with who made them.",
+        description: "Decisions and actions, newest first, 100 at a time, with who made them. Search with q; page with before (the last id you got).",
         method: Method::GET,
         path: "/v1/admin/audit",
+        properties: || json!({ "q": s("Optional: part of who did it, what, or to what (an app address, an account ID)"), "before": { "type": "integer", "description": "Optional: entries older than this id" } }),
+        required: &[],
+    },
+    // Apps
+    Tool {
+        name: "find_apps",
+        description: "Find apps by part of the title, address or maker's name, optionally only one status.",
+        method: Method::GET,
+        path: "/v1/admin/apps",
+        properties: || json!({ "q": s("Optional: part of the title, address or maker's name"), "status": s("Optional: draft, listed or delisted") }),
+        required: &[],
+    },
+    Tool {
+        name: "app_record",
+        description: "Everything about one app: its store page, releases, donations and pauses, reports, decisions and full history.",
+        method: Method::GET,
+        path: "/v1/admin/apps/{slug}/record",
+        properties: || json!({ "slug": s("The app's address") }),
+        required: &["slug"],
+    },
+    Tool {
+        name: "edit_store_page",
+        description: "Fix an app's store page directly: title, summary, description (Markdown), minimum age, content labels. Give only what changes, and a reason the maker is told. Needs a review or moderate token.",
+        method: Method::PATCH,
+        path: "/v1/admin/apps/{slug}/listing",
+        properties: || json!({ "slug": s("The app's address"), "title": s("Optional"), "summary": s("Optional"), "description_md": s("Optional"), "min_age": { "type": "integer", "description": "Optional: 0, 3, 7, 12, 16 or 18" }, "content_labels": { "type": "array", "items": { "type": "string" }, "description": "Optional: the whole new list" }, "reason": s("Why, for the maker") }),
+        required: &["slug", "reason"],
+    },
+    Tool {
+        name: "set_app_stage",
+        description: "Move an app between coming_soon, beta and released.",
+        method: Method::POST,
+        path: "/v1/admin/apps/{slug}/stage",
+        properties: || json!({ "slug": s("The app's address"), "stage": s("coming_soon, beta or released") }),
+        required: &["slug", "stage"],
+    },
+    Tool {
+        name: "freeze_app",
+        description: "Stop an app taking new releases while you look into it. It stays in the store and installed copies keep working; the maker is told the reason. Needs a review or moderate token.",
+        method: Method::POST,
+        path: "/v1/admin/apps/{slug}/freeze",
+        properties: || json!({ "slug": s("The app's address"), "reason": s("What's wrong and what would fix it, for the maker") }),
+        required: &["slug", "reason"],
+    },
+    Tool {
+        name: "unfreeze_app",
+        description: "Lift a freeze staff placed. For an automatic freeze (Slop lost its repository) it checks the repository again now instead. Returns the freeze still in place, or null.",
+        method: Method::POST,
+        path: "/v1/admin/apps/{slug}/unfreeze",
+        properties: || json!({ "slug": s("The app's address"), "note": s("For the maker and the record") }),
+        required: &["slug", "note"],
+    },
+    // Donations
+    Tool {
+        name: "donation_pauses",
+        description: "Apps with donations paused, with makers' requests to lift them (open ones first).",
+        method: Method::GET,
+        path: "/v1/admin/donation-holds",
+        properties: || json!({ "show": s("open (the default) or all") }),
+        required: &[],
+    },
+    Tool {
+        name: "pause_donations",
+        description: "Pause an app's donations: kind review (for now, while you look) or off (until the maker fixes something; a sensitive action, needs a moderate token). Monthly donors aren't charged meanwhile. The maker is told the reason and can ask for it to be lifted.",
+        method: Method::POST,
+        path: "/v1/admin/apps/{slug}/donation-hold",
+        properties: || json!({ "slug": s("The app's address"), "kind": s("review or off"), "reason": s("What's wrong and what would fix it, for the maker"), "ground": s("Optional: a Content Policy rule, law or complaint reference") }),
+        required: &["slug", "kind", "reason"],
+    },
+    Tool {
+        name: "lift_donation_pause",
+        description: "Lift a donation pause. Monthly donations restart from their next date.",
+        method: Method::POST,
+        path: "/v1/admin/donation-holds/{id}/lift",
+        properties: || json!({ "id": s("The pause ID"), "note": s("For the maker and the record") }),
+        required: &["id", "note"],
+    },
+    Tool {
+        name: "answer_donation_request",
+        description: "Answer a maker who asked for their donation pause to be lifted: lift=true lifts it, false keeps it and the answer says what's still wrong.",
+        method: Method::POST,
+        path: "/v1/admin/donation-hold-requests/{id}/answer",
+        properties: || json!({ "id": s("The request ID"), "lift": { "type": "boolean", "description": "true lifts the pause" }, "answer": s("Shown to the maker") }),
+        required: &["id", "lift", "answer"],
+    },
+    // People
+    Tool {
+        name: "user_profile",
+        description: "What staff can fix about an account: its display name, its People page (name, headline, about, location, links) and the teams it runs.",
+        method: Method::GET,
+        path: "/v1/admin/users/{id}/profile",
+        properties: || json!({ "id": s("The account ID") }),
+        required: &["id"],
+    },
+    Tool {
+        name: "edit_profile",
+        description: "Fix an account's display name or People page (for impersonation, slurs, scam links): give only what changes, and a reason the person is told. Needs a review or moderate token.",
+        method: Method::PATCH,
+        path: "/v1/admin/users/{id}/profile",
+        properties: || json!({ "id": s("The account ID"), "display_name": s("Optional"), "creative": { "type": "object", "description": "Optional: their People page", "properties": { "name": s("Optional"), "headline": s("Optional"), "about_md": s("Optional"), "location": s("Optional"), "remove_links": { "type": "boolean", "description": "Optional: true removes every link" } } }, "reason": s("Why, for the person") }),
+        required: &["id", "reason"],
+    },
+    Tool {
+        name: "edit_team",
+        description: "Fix a team's name or description, with a reason its owners and admins are told.",
+        method: Method::PATCH,
+        path: "/v1/admin/teams/{slug}",
+        properties: || json!({ "slug": s("The team's address"), "name": s("Optional"), "about": s("Optional"), "reason": s("Why, for the team") }),
+        required: &["slug", "reason"],
+    },
+    // The front page
+    Tool {
+        name: "featured_apps",
+        description: "The Featured carousel at the top of the front page, in order.",
+        method: Method::GET,
+        path: "/v1/admin/featured",
         properties: || json!({}),
         required: &[],
+    },
+    Tool {
+        name: "set_featured_apps",
+        description: "Replace the Featured carousel (up to 8 apps, in order, each with a line of up to 160 characters saying why).",
+        method: Method::PUT,
+        path: "/v1/admin/featured",
+        properties: || json!({ "apps": { "type": "array", "items": { "type": "object", "properties": { "slug": s("App address"), "blurb": s("Why it's featured") }, "required": ["slug"] } } }),
+        required: &["apps"],
+    },
+    Tool {
+        name: "store_shelves",
+        description: "The shelves staff made (each with its apps), and the automatic front-page shelves with whether each is hidden.",
+        method: Method::GET,
+        path: "/v1/admin/shelves",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "create_shelf",
+        description: "Make a shelf: an address, a title, a line saying what ties the apps together, and app addresses in order (up to 24). on_front=false keeps it off the front page (it still has its own page).",
+        method: Method::POST,
+        path: "/v1/admin/shelves",
+        properties: || json!({ "slug": s("Its address: lowercase letters, digits and dashes"), "title": s("Up to 60 characters"), "blurb": s("Optional: up to 160 characters"), "on_front": { "type": "boolean", "description": "Optional, default true" }, "apps": { "type": "array", "items": { "type": "string" }, "description": "App addresses, in order" } }),
+        required: &["slug", "title", "apps"],
+    },
+    Tool {
+        name: "update_shelf",
+        description: "Replace a shelf's title, line, front-page setting and apps (send all of them).",
+        method: Method::PUT,
+        path: "/v1/admin/shelves/{slug}",
+        properties: || json!({ "slug": s("The shelf's address"), "title": s("Up to 60 characters"), "blurb": s("Optional"), "on_front": { "type": "boolean", "description": "Optional, default true" }, "apps": { "type": "array", "items": { "type": "string" }, "description": "App addresses, in order" } }),
+        required: &["slug", "title", "apps"],
+    },
+    Tool {
+        name: "delete_shelf",
+        description: "Remove a shelf staff made.",
+        method: Method::DELETE,
+        path: "/v1/admin/shelves/{slug}",
+        properties: || json!({ "slug": s("The shelf's address") }),
+        required: &["slug"],
+    },
+    Tool {
+        name: "order_shelves",
+        description: "Put the shelves staff made in a new order on the front page.",
+        method: Method::PUT,
+        path: "/v1/admin/shelves/order",
+        properties: || json!({ "slugs": { "type": "array", "items": { "type": "string" }, "description": "Every shelf's address, in order" } }),
+        required: &["slugs"],
+    },
+    Tool {
+        name: "hide_front_shelf",
+        description: "Hide or show one of the automatic front-page shelves (store_shelves lists their keys).",
+        method: Method::POST,
+        path: "/v1/admin/front-shelves/{key}",
+        properties: || json!({ "key": s("popular, upcoming, categories, not_slop, barely_seen, glow_ups, community, fresh or fresh_slop"), "hidden": { "type": "boolean", "description": "true hides it" } }),
+        required: &["key", "hidden"],
+    },
+    // Legal documents
+    Tool {
+        name: "legal_documents",
+        description: "Slop's legal documents (terms, privacy, content, publisher, people): every version with when it took or takes effect, and the newest text.",
+        method: Method::GET,
+        path: "/v1/admin/legal",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "publish_legal_document",
+        description: "Publish a new version of a legal document: the whole new text and a one-line summary of what changed, which everyone is told. It takes effect 15 days later. A sensitive action: needs a moderate token, and waits for a second person once Slop requires two. Only change legal text when your admin asked for exactly this.",
+        method: Method::POST,
+        path: "/v1/admin/legal/{kind}",
+        properties: || json!({ "kind": s("terms, privacy, content, publisher or people"), "summary": s("What changed, in plain words"), "body_md": s("The whole new text, Markdown") }),
+        required: &["kind", "summary", "body_md"],
+    },
+    Tool {
+        name: "withdraw_legal_document",
+        description: "Withdraw an announced version published from the admin panel, before it takes effect.",
+        method: Method::POST,
+        path: "/v1/admin/legal/{kind}/{version}/withdraw",
+        properties: || json!({ "kind": s("The document"), "version": s("The announced version, like 2026-10-22"), "reason": s("Why, for the record") }),
+        required: &["kind", "version", "reason"],
+    },
+    // Staff
+    Tool {
+        name: "staff",
+        description: "Slop's staff and their roles, and how many approvals sensitive actions need.",
+        method: Method::GET,
+        path: "/v1/admin/staff",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "change_staff_role",
+        description: "Ask to give or take a staff role (owner, moderator, reviewer, support, finance, security); giving one makes the account staff. From an agent this always waits for a person to approve it signed in on the website (tell your admin). Needs a moderate token and an admin who may manage staff.",
+        method: Method::POST,
+        path: "/v1/admin/staff/{user_id}/roles",
+        properties: || json!({ "user_id": s("The account ID"), "role": s("The role"), "grant": { "type": "boolean", "description": "true gives it, false takes it away" } }),
+        required: &["user_id", "role", "grant"],
+    },
+    Tool {
+        name: "remove_from_staff",
+        description: "Ask to take someone off staff entirely (every role, and their admin API tokens are revoked). From an agent this always waits for a person to approve it on the website.",
+        method: Method::POST,
+        path: "/v1/admin/staff/{user_id}/remove",
+        properties: || json!({ "user_id": s("The account ID"), "reason": s("Why, 10+ characters") }),
+        required: &["user_id", "reason"],
+    },
+    Tool {
+        name: "cancel_pending_action",
+        description: "Withdraw a sensitive action you asked for that's still waiting for approval.",
+        method: Method::POST,
+        path: "/v1/admin/actions/{id}/cancel",
+        properties: || json!({ "id": s("The pending action's ID") }),
+        required: &["id"],
     },
 ];
 

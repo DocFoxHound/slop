@@ -622,10 +622,19 @@ pub(crate) async fn create_release(
         floor.check_labels(&rating.content_labels)?;
     }
     if let Some(reason) = crate::frozen::frozen_reason(&state.db, app_id).await? {
-        return Err(ApiError::Conflict(format!(
-            "this app is frozen, so it can't take new releases: {reason}. Restore Slop's access \
-             to the repository, then press Check now on the app's Manage page"
-        )));
+        return Err(ApiError::Conflict(
+            if crate::frozen::by_staff(&state.db, app_id).await? {
+                format!(
+                    "Slop staff froze this app, so it can't take new releases: {reason}. Fix what \
+                     it says and Slop lifts the freeze once it's checked"
+                )
+            } else {
+                format!(
+                    "this app is frozen, so it can't take new releases: {reason}. Restore Slop's \
+                     access to the repository, then press Check now on the app's Manage page"
+                )
+            },
+        ));
     }
     let required: Vec<String> = sqlx::query_scalar("select platforms from apps where id = $1")
         .bind(app_id)

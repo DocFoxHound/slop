@@ -5,6 +5,7 @@ pub mod abuse;
 pub mod account;
 pub mod admin;
 pub mod admin_console;
+pub mod admin_tools;
 pub mod admin_web;
 pub mod agent;
 pub mod auth;
@@ -60,6 +61,7 @@ pub mod review;
 pub mod reviews;
 pub mod save_sync;
 pub mod scan;
+pub mod shelves;
 pub mod sim;
 pub mod sim_donations;
 pub mod sim_moderation;
@@ -174,6 +176,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())
         .merge(admin_console::routes())
+        .merge(admin_tools::routes())
         .merge(agent::routes())
         .merge(maker_agents::routes())
         .merge(fixes::routes())
@@ -187,6 +190,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(legal_requests::routes())
         .merge(votes::routes())
         .merge(featured::routes())
+        .merge(shelves::routes())
         .merge(foryou::routes())
         .merge(sim::routes())
         .merge(people::routes())
