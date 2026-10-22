@@ -5759,10 +5759,8 @@ async fn the_publish_dashboard_lists_only_the_makers_own_apps(db: PgPool) {
         .send(req(Method::GET, "/v1/me/apps").header("authorization", scoped.clone()))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(
-        slugs(body_json(res).await),
-        ["drafty", "listed-one", "secret-tool"]
-    );
+    // A token for some apps lists only those.
+    assert_eq!(slugs(body_json(res).await), ["drafty"]);
     // Its own app's details, yes; another app's maker pages, no.
     assert_eq!(
         status_of(

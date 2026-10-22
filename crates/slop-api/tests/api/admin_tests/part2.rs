@@ -984,7 +984,8 @@ fn tool_cases(ids: &ToolIds) -> Vec<(&'static str, Value, &'static str, &'static
         (
             "cancel_pending_action",
             json!({ "id": ids.action.to_string() }),
-            "moderate",
+            // Withdrawing your own request needs only a token that may decide.
+            "review",
             &["id"],
         ),
     ]
@@ -999,8 +1000,9 @@ struct ToolIds {
 }
 
 /// Owner Olive with read, review and moderate tokens; Troll; the maker's draft "game"; donation
-/// pauses on "held-game" and (with the maker's request to lift it) "asked-game"; and Ben's
-/// pending request to suspend Troll. Two approvals, so sensitive tools only ask.
+/// pauses on "held-game" and (with the maker's request to lift it) "asked-game"; and Olive's
+/// own pending request to suspend Troll (a token may withdraw only its owner's requests). Two
+/// approvals, so sensitive tools only ask.
 async fn tool_fixtures(db: PgPool) -> (TestApp, [String; 3], ToolIds) {
     let app = test_app_with(db, |c| {
         c.approvals_required = 2;
@@ -1009,7 +1011,6 @@ async fn tool_fixtures(db: PgPool) -> (TestApp, [String; 3], ToolIds) {
     })
     .await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
-    let (_, ben) = make_admin(&app, "Ben Owner").await;
     let (troll, _) = app.user("Troll", "US").await;
     let (maker, _) = maker_with_app(&app, "released").await;
     let (hold, asked, request) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
@@ -1035,7 +1036,7 @@ async fn tool_fixtures(db: PgPool) -> (TestApp, [String; 3], ToolIds) {
     let res = app
         .send(
             req(Method::POST, format!("/v1/admin/users/{troll}/decide"))
-                .cookie(&ben)
+                .cookie(&owner)
                 .json(json!({ "action": "suspend_account", "rule": "harassment", "facts": "Threats." })),
         )
         .await;
@@ -1765,12 +1766,27 @@ async fn staff_shelves_keep_their_address_their_order_and_their_reviewers(db: Pg
         StatusCode::NOT_FOUND
     );
 
-    // The new order is the front page's; an address that isn't a shelf is passed over.
+    // The new order names every shelf once: an address that isn't a shelf, or a missing one,
+    // is refused rather than leaving two shelves at one place.
+    for slugs in [
+        json!(["tea", "nope", "cozy", "dark"]),
+        json!(["tea", "cozy"]),
+    ] {
+        let res = send(
+            Method::PUT,
+            "/shelves/order",
+            &owner,
+            Some(json!({ "slugs": slugs })),
+        )
+        .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{slugs}");
+    }
+    // The new order is the front page's.
     let res = send(
         Method::PUT,
         "/shelves/order",
         &owner,
-        Some(json!({ "slugs": ["tea", "nope", "cozy", "dark"] })),
+        Some(json!({ "slugs": ["tea", "cozy", "dark"] })),
     )
     .await;
     assert_eq!(res.status(), StatusCode::OK);
@@ -1796,7 +1812,7 @@ async fn staff_shelves_keep_their_address_their_order_and_their_reviewers(db: Pg
             .await
             .unwrap();
     assert!(actor.starts_with("Olive Owner"), "{actor}");
-    assert_eq!(detail["order"][1], "nope");
+    assert_eq!(detail["order"][1], "cozy");
 
     // Built-in shelves: only the known ones, hidden and shown again.
     assert_eq!(

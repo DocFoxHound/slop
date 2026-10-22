@@ -1402,9 +1402,7 @@ async fn app_limited_tokens_stay_on_their_apps(db: PgPool) {
         StatusCode::OK
     );
 
-    // Nothing new: no new apps, community builds, bug report answers or bounty claims, which
-    // aren't tied to one of its apps.
-    let fake = Uuid::now_v7();
+    // Nothing new: no new apps or community builds, which aren't tied to one of its apps.
     for (m, path, body) in [
         (
             Method::POST,
@@ -1421,16 +1419,6 @@ async fn app_limited_tokens_stay_on_their_apps(db: PgPool) {
             "/v1/apps/game/branches".to_string(),
             Some(json!({})),
         ),
-        (
-            Method::PATCH,
-            format!("/v1/bug-reports/{report}"),
-            Some(json!({ "status": "fixed" })),
-        ),
-        (
-            Method::POST,
-            format!("/v1/bounties/{fake}/claims"),
-            Some(json!({})),
-        ),
     ] {
         assert_eq!(
             send(&limited, m.clone(), &path, body).await,
@@ -1438,6 +1426,17 @@ async fn app_limited_tokens_stay_on_their_apps(db: PgPool) {
             "{m} {path}"
         );
     }
+    // Reports and claims are found by their own IDs: another app's report isn't there for it.
+    assert_eq!(
+        send(
+            &limited,
+            Method::PATCH,
+            &format!("/v1/bug-reports/{report}"),
+            Some(json!({ "status": "fixed" })),
+        )
+        .await,
+        StatusCode::NOT_FOUND
+    );
     let summary: String = sqlx::query_scalar("select summary from apps where slug = 'tower'")
         .fetch_one(&app.db)
         .await
@@ -2054,12 +2053,10 @@ async fn agents_read_and_answer_reviews_and_bug_reports(db: PgPool) {
     .await;
     assert!(failed && text.contains("status"), "{text}");
 
-    // Answering a report: an all-apps publish token only.
+    // Answering a report: a publish token (one for some apps, on those apps' reports).
     let fix = json!({ "id": report, "status": "fixed", "maker_note": "Fixed in 1.0.1." });
-    for token in [&read, &limited] {
-        let (failed, text) = maker_tool(&app, token, "update_bug_report", fix.clone()).await;
-        assert!(failed && text.contains("forbidden"), "{text}");
-    }
+    let (failed, text) = maker_tool(&app, &read, "update_bug_report", fix.clone()).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
     let (failed, text) = maker_tool(
         &app,
         &publish,
@@ -2190,12 +2187,13 @@ async fn agents_find_bounties_and_claim_them_for_people_to_check(db: PgPool) {
         maker_tool(&app, &read, "get_bounty", json!({ "id": Uuid::now_v7() })).await;
     assert!(failed && text.contains("not_found"), "{text}");
 
-    // Claiming: an all-apps publish token, for the bounty's app or a build of it the maker owns.
+    // Claiming: a publish token, for the bounty's app or a build of it the maker owns (a token
+    // for some apps, only for those).
     let claim = |slug: &str| json!({ "id": bounty, "app_slug": slug, "note": "1.0.0 writes saves safely." });
-    for token in [&read, &limited] {
-        let (failed, text) = maker_tool(&app, token, "claim_bounty", claim("tower-fix")).await;
-        assert!(failed && text.contains("forbidden"), "{text}");
-    }
+    let (failed, text) = maker_tool(&app, &read, "claim_bounty", claim("tower-fix")).await;
+    assert!(failed && text.contains("forbidden"), "{text}");
+    let (failed, text) = maker_tool(&app, &limited, "claim_bounty", claim("forkers-own")).await;
+    assert!(failed && text.contains("not_found"), "{text}");
     let (failed, text) = maker_tool(&app, &all, "claim_bounty", claim("tower")).await;
     assert!(
         failed && text.contains("not_found"),

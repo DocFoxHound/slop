@@ -2204,7 +2204,7 @@ async fn rejecting_a_release_tells_the_maker_why(db: PgPool) {
         told,
         (
             "Game 1.0.0 wasn't approved".to_string(),
-            " The Windows build asks for administrator rights. ".to_string()
+            "The Windows build asks for administrator rights.".to_string()
         )
     );
     let (actor, subject): (String, String) =
