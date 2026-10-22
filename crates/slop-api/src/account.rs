@@ -11,6 +11,7 @@
 //! - a creative's page is frozen: still readable (its reviews and credits are other people's
 //!   record too) but it can't take new work, and it leaves the People directory;
 //! - the maker's apps leave the store (installs keep working), since nobody can answer for them;
+//!   their signing keys stop working and their repository tokens and push subscriptions go;
 //! - agreements, job records, reviews and moderation records stay as they were.
 //!
 //! An account with an unfinished People job, or a payment it owes, can't be closed until that's
@@ -415,6 +416,23 @@ pub async fn close_account(
         .execute(&mut *tx)
         .await?;
     sqlx::query("delete from admin_tokens where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    // Nothing signs, reads a repository or reaches a phone for a closed account any more.
+    sqlx::query(
+        "update maker_keys set revoked_at = now() where user_id = $1 and revoked_at is null",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query(
+        "delete from repo_tokens where app_id in (select id from apps where maker_id = $1)",
+    )
+    .bind(user_id)
+    .execute(&mut *tx)
+    .await?;
+    sqlx::query("delete from push_subscriptions where user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;

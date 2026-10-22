@@ -2790,3 +2790,854 @@ async fn agents_ask_for_a_passkey_grace_and_staff_approve_it(db: PgPool) {
             .unwrap();
     assert_eq!(until, None, "not until a person approves it");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Closing an account
+
+fn close(cookie: &str) -> Req {
+    req(Method::POST, "/v1/me/close")
+        .cookie(cookie)
+        .json(json!({ "confirm": "close my account" }))
+}
+
+/// Inserts with the given ids bound as $1, $2, ….
+async fn exec(app: &TestApp, sql: &str, ids: &[Uuid]) {
+    let mut q = sqlx::query(sqlx::AssertSqlSafe(sql.to_string()));
+    for id in ids {
+        q = q.bind(*id);
+    }
+    q.execute(&app.db).await.unwrap();
+}
+
+async fn app_id_of(app: &TestApp, slug: &str) -> Uuid {
+    sqlx::query_scalar("select id from apps where slug = $1")
+        .bind(slug)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn closing_waits_for_open_people_work_and_monthly_server_donations(db: PgPool) {
+    let app = test_app(db).await;
+    let (cleo, cleo_cookie) = app.user("Cleo Client", "US").await;
+    let (cris, cris_cookie) = app.user("Cris Creative", "US").await;
+    let (dan, _) = app.user("Dan Donor", "US").await;
+    listed_with(&app, cleo, "cleos-game", "released", "").await;
+    let game = app_id_of(&app, "cleos-game").await;
+    let job = Uuid::now_v7();
+    exec(
+        &app,
+        "insert into creatives (user_id, handle, name, ai_use, trader) values ($1, 'cris', 'Cris', 'none', false)",
+        &[cris],
+    )
+    .await;
+    exec(
+        &app,
+        "insert into jobs (id, creative_id, client_id, app_id, skill, status, request_md)
+         values ($1, $2, $3, $4, 'pixel-art', 'requested', 'Draw a cat.')",
+        &[job, cris, cleo, game],
+    )
+    .await;
+    let refused = |cookie: &str| {
+        let app = &app;
+        let r = close(cookie);
+        async move {
+            let res = app.send(r).await;
+            assert_eq!(res.status(), StatusCode::CONFLICT);
+            body_json(res).await["error"]["message"]
+                .as_str()
+                .unwrap()
+                .to_string()
+        }
+    };
+    let why = refused(&cleo_cookie).await;
+    assert!(
+        why.starts_with("You can't close your account yet: 1 People job is still open"),
+        "{why}"
+    );
+    assert!(
+        refused(&cris_cookie)
+            .await
+            .contains("People job is still open")
+    );
+
+    // Finished, but not paid for.
+    exec(
+        &app,
+        "update jobs set status = 'completed' where id = $1",
+        &[job],
+    )
+    .await;
+    exec(
+        &app,
+        "insert into job_payments (id, job_id, part, due_on, amount_minor, currency, status)
+         values ($1, $2, 'full', 'delivery', 1000, 'usd', 'due')",
+        &[Uuid::now_v7(), job],
+    )
+    .await;
+    assert!(refused(&cleo_cookie).await.contains("you owe a payment"));
+    // Paid, but a problem is still open.
+    exec(
+        &app,
+        "update job_payments set status = 'paid' where job_id = $1",
+        &[job],
+    )
+    .await;
+    exec(
+        &app,
+        "insert into job_problems (id, job_id, opened_by, statement) values ($1, $2, $3, 'The cat has five legs.')",
+        &[Uuid::now_v7(), job, cleo],
+    )
+    .await;
+    assert!(
+        refused(&cleo_cookie)
+            .await
+            .contains("a problem on a People job")
+    );
+    assert!(
+        refused(&cris_cookie)
+            .await
+            .contains("a problem on a People job")
+    );
+    exec(
+        &app,
+        "update job_problems set status = 'resolved' where job_id = $1",
+        &[job],
+    )
+    .await;
+
+    // Giving monthly to a game's servers, and receiving it.
+    listed_with(&app, dan, "dans-server", "released", "").await;
+    let server = app_id_of(&app, "dans-server").await;
+    let donation = |id: Uuid, app_id: Uuid, donor: Uuid| {
+        let app = &app;
+        async move {
+            exec(
+                app,
+                "insert into server_donations (id, app_id, donor_id, stripe_account_id, currency, donation_minor,
+                                               slop_fee_minor, total_minor, consent_text, status)
+                 values ($1, $2, $3, 'acct_x', 'usd', 500, 25, 525, 'Monthly.', 'active')",
+                &[id, app_id, donor],
+            )
+            .await
+        }
+    };
+    let giving = Uuid::now_v7();
+    donation(giving, server, cleo).await;
+    assert!(
+        refused(&cleo_cookie)
+            .await
+            .contains("you give a monthly server donation")
+    );
+    exec(
+        &app,
+        "update server_donations set status = 'cancelled' where id = $1",
+        &[giving],
+    )
+    .await;
+    let receiving = Uuid::now_v7();
+    donation(receiving, game, dan).await;
+    assert!(
+        refused(&cleo_cookie)
+            .await
+            .contains("1 people give monthly to your apps' servers")
+    );
+    let closed: bool = sqlx::query_scalar("select closed_at is not null from users where id = $1")
+        .bind(cleo)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(!closed);
+    exec(
+        &app,
+        "update server_donations set status = 'cancelled' where id = $1",
+        &[receiving],
+    )
+    .await;
+    assert_eq!(
+        status(&app, close(&cleo_cookie)).await,
+        StatusCode::NO_CONTENT
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn closing_takes_away_everything_personal_and_hands_teams_on(db: PgPool) {
+    let app = test_app(db).await;
+    let (zoe, cookie) = app.user("Zoe", "US").await;
+    let (finn, _) = app.user("Finn", "US").await;
+    let (gia, _) = app.user("Gia", "US").await;
+    let tokens = desktop_sign_in(&app, &cookie).await;
+    listed_with(&app, gia, "gias-game", "released", "").await;
+    listed_with(
+        &app,
+        zoe,
+        "zoes-secret",
+        "released",
+        "visibility = 'private', status = 'draft'",
+    )
+    .await;
+    let game = app_id_of(&app, "gias-game").await;
+    let secret = app_id_of(&app, "zoes-secret").await;
+    let (team_kept, team_gone, bounty) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    for (sql, ids) in [
+        (
+            "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x0a0b', '{}', 'Key')",
+            vec![Uuid::now_v7(), zoe],
+        ),
+        (
+            "insert into admin_tokens (id, user_id, name, scope, token_hash, expires_at) values ($1, $2, 'Bot', 'read', '\\x01', now() + interval '1 day')",
+            vec![Uuid::now_v7(), zoe],
+        ),
+        (
+            "insert into save_blobs (user_id, app_id, generation, body, device) values ($1, $2, 1, '\\x00', 'pc')",
+            vec![zoe, game],
+        ),
+        (
+            "insert into bounties (id, app_id, created_by, title, body, currency) values ($1, $2, $3, 'Fix it', 'Please.', 'usd')",
+            vec![bounty, game, gia],
+        ),
+        (
+            "insert into bounty_pledges (id, bounty_id, user_id, amount_minor, status) values ($1, $2, $3, 1000, 'active')",
+            vec![Uuid::now_v7(), bounty, zoe],
+        ),
+        (
+            "insert into library_entries (user_id, app_id) values ($1, $2)",
+            vec![zoe, game],
+        ),
+        (
+            "insert into interests (user_id, app_id) values ($1, $2)",
+            vec![zoe, game],
+        ),
+        (
+            "insert into user_app_usage (user_id, app_id, playtime_seconds) values ($1, $2, 3600)",
+            vec![zoe, game],
+        ),
+        (
+            "insert into notifications (id, user_id, category, title, link) values ($1, $2, 'apps', 'Hello', '/')",
+            vec![Uuid::now_v7(), zoe],
+        ),
+        // Shared with her, and hers shared with Finn.
+        (
+            "insert into app_shares (app_id, user_id) values ($1, $2), ($3, $4)",
+            vec![game, zoe, secret, finn],
+        ),
+        // A team she owns with Finn (joined first) and Gia, and one only she is in.
+        (
+            "insert into teams (id, slug, name, kind, created_by) values ($1, 'zoes-team', 'Zoe''s team', 'player', $3), ($2, 'zoe-alone', 'Alone', 'player', $3)",
+            vec![team_kept, team_gone, zoe],
+        ),
+        (
+            "insert into team_members (team_id, user_id, role, joined_at) values ($1, $2, 'owner', now() - interval '3 days'), ($1, $3, 'member', now() - interval '2 days'), ($1, $4, 'admin', now() - interval '1 day'), ($5, $2, 'owner', now())",
+            vec![team_kept, zoe, finn, gia, team_gone],
+        ),
+        (
+            "insert into creatives (user_id, handle, name, ai_use, trader) values ($1, 'zoe-art', 'Zoe Art', 'none', false)",
+            vec![zoe],
+        ),
+    ] {
+        exec(&app, sql, &ids).await;
+    }
+
+    // Suspended accounts can close too.
+    exec(
+        &app,
+        "update users set suspended_at = now() where id = $1",
+        &[zoe],
+    )
+    .await;
+    assert_eq!(status(&app, close(&cookie)).await, StatusCode::NO_CONTENT);
+
+    for (what, sql) in [
+        (
+            "passkeys",
+            "select count(*) from passkeys where user_id = $1",
+        ),
+        (
+            "admin tokens",
+            "select count(*) from admin_tokens where user_id = $1",
+        ),
+        (
+            "saves",
+            "select count(*) from save_blobs where user_id = $1",
+        ),
+        (
+            "library",
+            "select count(*) from library_entries where user_id = $1",
+        ),
+        (
+            "interests",
+            "select count(*) from interests where user_id = $1",
+        ),
+        (
+            "playtime",
+            "select count(*) from user_app_usage where user_id = $1",
+        ),
+        (
+            "notifications",
+            "select count(*) from notifications where user_id = $1",
+        ),
+        ("shares", "select count(*) from app_shares"),
+        (
+            "teams",
+            "select count(*) from team_members where user_id = $1",
+        ),
+        (
+            "live pledges",
+            "select count(*) from bounty_pledges where user_id = $1 and status <> 'withdrawn'",
+        ),
+        (
+            "live sessions",
+            "select count(*) from sessions where user_id = $1 and revoked_at is null",
+        ),
+    ] {
+        let n: i64 = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+            .bind(zoe)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+        assert_eq!(n, 0, "{what}");
+    }
+    let members: Vec<(Uuid, String)> = sqlx::query_as(
+        "select user_id, role from team_members where team_id = $1 order by joined_at",
+    )
+    .bind(team_kept)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        members,
+        [(finn, "owner".to_string()), (gia, "admin".to_string())],
+        "the longest-standing member takes over"
+    );
+    assert_eq!(
+        count(
+            &app,
+            &format!("select count(*) from teams where id = '{team_gone}'")
+        )
+        .await,
+        0
+    );
+    let taking_work: bool =
+        sqlx::query_scalar("select taking_work from creatives where user_id = $1")
+            .bind(zoe)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert!(!taking_work);
+    // The desktop app is signed out too.
+    assert_eq!(
+        status(
+            &app,
+            req(Method::GET, "/v1/me").header(
+                "authorization",
+                format!("Bearer {}", tokens["access_token"].as_str().unwrap())
+            )
+        )
+        .await,
+        StatusCode::UNAUTHORIZED
+    );
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let actor: String = sqlx::query_scalar(
+        "select actor from audit_log where action = 'account.close' and subject = $1",
+    )
+    .bind(zoe.to_string())
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(actor, "the account's owner");
+}
+
+/// b02: closing an account also stops its signing keys, forgets its repository tokens and its
+/// phones' push subscriptions (combining already drops push subscriptions).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn closing_an_account_ends_its_signing_keys_repository_tokens_and_pushes(db: PgPool) {
+    let app = test_app(db).await;
+    let (mia, cookie) = app.user("Mia Maker", "US").await;
+    let (other, _) = app.user("Other Maker", "US").await;
+    listed_with(&app, mia, "mias-game", "released", "").await;
+    listed_with(&app, other, "others-game", "released", "").await;
+    let mine = app_id_of(&app, "mias-game").await;
+    let theirs = app_id_of(&app, "others-game").await;
+    for user in [mia, other] {
+        exec(
+            &app,
+            "insert into maker_keys (id, user_id, public_key, fingerprint, name, active_from)
+             values ($1, $2, 'ssh-ed25519 AAAA', 'SHA256:' || $2::text, 'Laptop', now() - interval '4 days')",
+            &[Uuid::now_v7(), user],
+        )
+        .await;
+        exec(
+            &app,
+            "insert into push_subscriptions (id, user_id, endpoint) values ($1, $2, 'https://push.example/' || $2::text)",
+            &[Uuid::now_v7(), user],
+        )
+        .await;
+    }
+    for app_id in [mine, theirs] {
+        exec(
+            &app,
+            "insert into repo_tokens (app_id, repo_url, kind, sealed) select id, repo_url, 'gitea', '\\x00' from apps where id = $1",
+            &[app_id],
+        )
+        .await;
+    }
+    assert_eq!(status(&app, close(&cookie)).await, StatusCode::NO_CONTENT);
+    let left = |sql: &'static str, id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(sql)
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    let live_keys = "select count(*) from maker_keys where user_id = $1 and revoked_at is null";
+    let pushes = "select count(*) from push_subscriptions where user_id = $1";
+    let repo_tokens = "select count(*) from repo_tokens where app_id = $1";
+    assert_eq!(left(live_keys, mia).await, 0, "signing keys");
+    assert_eq!(left(pushes, mia).await, 0, "push subscriptions");
+    assert_eq!(left(repo_tokens, mine).await, 0, "repository tokens");
+    // Nobody else's.
+    assert_eq!(left(live_keys, other).await, 1);
+    assert_eq!(left(pushes, other).await, 1);
+    assert_eq!(left(repo_tokens, theirs).await, 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Proof-of-work challenges
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn proof_of_work_answers_are_for_one_account_once_and_in_time(db: PgPool) {
+    use slop_api::challenge::{Answer, check, solve};
+    use slop_api::error::ApiError;
+    let app = test_app(db).await;
+    let (ann, _) = app.user("Ann", "US").await;
+    let (bob, _) = app.user("Bob", "US").await;
+    let challenge = |user: Uuid, expires: &'static str| {
+        let db = app.db.clone();
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "insert into donation_challenges (id, user_id, prefix, difficulty, expires_at)
+                 values ($1, $2, 'prefix-{id}', 8, now() + interval '{expires}')"
+            )))
+            .bind(id)
+            .bind(user)
+            .execute(&db)
+            .await
+            .unwrap();
+            Answer {
+                id,
+                nonce: solve(&format!("prefix-{id}"), 8),
+            }
+        }
+    };
+    let refused = |r: Result<(), ApiError>| matches!(r, Err(ApiError::ChallengeRequired));
+
+    assert!(refused(check(&app.db, ann, None).await));
+    // Ann's challenge doesn't help Bob, and Bob trying doesn't use it up.
+    let answer = challenge(ann, "10 minutes").await;
+    assert!(refused(check(&app.db, bob, Some(&answer)).await));
+    assert!(check(&app.db, ann, Some(&answer)).await.is_ok());
+    assert!(refused(check(&app.db, ann, Some(&answer)).await), "once");
+
+    // Expired.
+    let answer = challenge(ann, "-1 second").await;
+    assert!(refused(check(&app.db, ann, Some(&answer)).await));
+
+    // An over-long answer is refused without looking.
+    let answer = challenge(ann, "10 minutes").await;
+    let long = Answer {
+        id: answer.id,
+        nonce: format!("{}{}", "0".repeat(41 - answer.nonce.len()), answer.nonce),
+    };
+    assert!(long.nonce.len() > 40);
+    assert!(refused(check(&app.db, ann, Some(&long)).await));
+    assert!(
+        check(&app.db, ann, Some(&answer)).await.is_ok(),
+        "still unused"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bounty_pledges_after_unfinished_ones_need_a_proof_of_work(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    let (ann, cookie) = app.user("Ann Backer", "US").await;
+    listed_with(&app, maker, "tower", "released", "").await;
+    approved_release(&app, "tower", maker).await;
+    let tower = app_id_of(&app, "tower").await;
+    let mut bounties = vec![];
+    for _ in 0..4 {
+        let id = Uuid::now_v7();
+        exec(
+            &app,
+            "insert into bounties (id, app_id, created_by, title, body, currency) values ($1, $2, $3, 'Fix saves', 'Saves vanish.', 'usd')",
+            &[id, tower, maker],
+        )
+        .await;
+        bounties.push(id);
+    }
+    // Three pledges in a day that came to nothing.
+    for id in &bounties[..3] {
+        exec(
+            &app,
+            "insert into bounty_pledges (id, bounty_id, user_id, amount_minor, status) values ($1, $2, $3, 1000, 'withdrawn')",
+            &[Uuid::now_v7(), *id, ann],
+        )
+        .await;
+    }
+    let pledge = |extra: Value| {
+        let mut body = json!({ "amount_minor": 1000, "confirm_adult": true });
+        body.as_object_mut()
+            .unwrap()
+            .extend(extra.as_object().unwrap().clone());
+        req(Method::POST, format!("/v1/bounties/{}/pledge", bounties[3]))
+            .cookie(&cookie)
+            .json(body)
+    };
+    let res = app.send(pledge(json!({}))).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(body_json(res).await["error"]["code"], "challenge_required");
+    let res = app
+        .send(pledge(
+            json!({ "challenge": { "id": Uuid::now_v7(), "nonce": "1" } }),
+        ))
+        .await;
+    assert_eq!(body_json(res).await["error"]["code"], "challenge_required");
+
+    let id = Uuid::now_v7();
+    exec(
+        &app,
+        "insert into donation_challenges (id, user_id, prefix, difficulty, expires_at) values ($1, $2, 'p', 8, now() + interval '10 minutes')",
+        &[id, ann],
+    )
+    .await;
+    let nonce = slop_api::challenge::solve("p", 8);
+    let res = app
+        .send(pledge(json!({ "challenge": { "id": id, "nonce": nonce } })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK, "{:?}", body_json(res).await);
+    let live: i64 = sqlx::query_scalar(
+        "select count(*) from bounty_pledges where user_id = $1 and status = 'active'",
+    )
+    .bind(ann)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(live, 1);
+}
+
+// ---------------------------------------------------------------------------------------------
+// Cleanup, sealed fields, cross-site writes, the simulation
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn cleanup_deletes_ended_sign_in_leftovers_and_keeps_live_ones(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Octo", "US").await;
+    // A desktop session that refreshed once: the used refresh token is kept until it expires.
+    let tokens = desktop_sign_in(&app, &web).await;
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    sqlx::query(
+        "update access_tokens set expires_at = now() - interval '1 second' where token_hash = $1",
+    )
+    .bind(slop_api::tokens::hash_token(
+        tokens["access_token"].as_str().unwrap(),
+    ))
+    .execute(&app.db)
+    .await
+    .unwrap();
+
+    // Two pending sign-ups and two desktop requests, one of each expired.
+    for _ in 0..2 {
+        oauth_flow(&app, "/v1/auth/github/start", &[], "ok").await;
+        app.send(
+            req(Method::POST, "/v1/auth/desktop/requests")
+                .json(desktop_request("state-state-state-1", "Laptop")),
+        )
+        .await;
+    }
+    exec(
+        &app,
+        "update pending_signups set expires_at = now() - interval '1 second' where ctid = (select ctid from pending_signups limit 1)",
+        &[],
+    )
+    .await;
+    exec(
+        &app,
+        "update desktop_auth_requests set expires_at = now() - interval '1 second' where ctid = (select ctid from desktop_auth_requests limit 1)",
+        &[],
+    )
+    .await;
+    let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(deleted.pending_signups, 1, "{deleted:?}");
+    assert_eq!(deleted.desktop_requests, 1, "{deleted:?}");
+    assert_eq!(deleted.access_tokens, 1, "{deleted:?}");
+    assert_eq!(deleted.refresh_tokens, 0, "{deleted:?}");
+    assert_eq!(count(&app, "select count(*) from refresh_tokens").await, 2);
+    // The used one still gives the theft away.
+    let res = app
+        .send(req(Method::POST, "/v1/auth/desktop/token").json(json!({
+            "grant_type": "refresh_token", "refresh_token": tokens["refresh_token"]
+        })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    sqlx::query("update refresh_tokens set expires_at = now() - interval '1 second'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(deleted.refresh_tokens, 2, "{deleted:?}");
+}
+
+/// b01: AI agent tokens are sessions that count as unused only after 30 days, like the desktop
+/// app's. Cleanup used the website's 7 days for them, deleting a token left alone for 15 days.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn cleanup_keeps_agent_and_desktop_sessions_for_their_thirty_idle_days(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, web) = app.user("Mia Maker", "US").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&web)
+                .json(json!({ "name": "Claude", "scope": "read" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let agent = format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    );
+    let tokens = desktop_sign_in(&app, &web).await;
+    let desktop = format!("Bearer {}", tokens["access_token"].as_str().unwrap());
+    sqlx::query("update sessions set last_seen_at = now() - interval '20 days' where kind in ('agent', 'desktop')")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(deleted.sessions, 0, "{deleted:?}");
+    for bearer in [&agent, &desktop] {
+        assert_eq!(
+            status(
+                &app,
+                req(Method::GET, "/v1/me").header("authorization", bearer.clone())
+            )
+            .await,
+            StatusCode::OK,
+            "still signed in after 20 unused days"
+        );
+    }
+    // 30 idle days and the week's keeping after: gone.
+    sqlx::query("update sessions set last_seen_at = now() - interval '38 days' where kind in ('agent', 'desktop')")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(deleted.sessions, 2, "{deleted:?}");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn vat_numbers_stored_before_the_key_are_sealed_at_start_up(db: PgPool) {
+    use slop_api::fields::{open, seal, seal_existing};
+    let key = [11u8; 32];
+    let app = test_app_with(db.clone(), |c| c.field_key = None).await;
+    let (plain, _) = app.user("Plain", "DE").await;
+    let (sealed, _) = app.user("Sealed", "DE").await;
+    let already = seal(Some(&key), "users.vat_number", "DE999999999").unwrap();
+    exec(
+        &app,
+        "update users set vat_number = 'DE123456789' where id = $1",
+        &[plain],
+    )
+    .await;
+    sqlx::query("update users set vat_number = $2 where id = $1")
+        .bind(sealed)
+        .bind(&already)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    // No key: nothing to do.
+    assert_eq!(seal_existing(&app.state).await.unwrap(), 0);
+    let vat = |id: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("select vat_number from users where id = $1")
+                .bind(id)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(vat(plain).await, "DE123456789");
+
+    // With the key: the plain one is sealed, the sealed one left as it is.
+    let keyed = test_app_with(db, |c| c.field_key = Some(key)).await;
+    assert_eq!(seal_existing(&keyed.state).await.unwrap(), 1);
+    let now_sealed = vat(plain).await;
+    assert!(now_sealed.starts_with("enc1:") && !now_sealed.contains("DE123"));
+    assert_eq!(
+        open(Some(&key), "users.vat_number", &now_sealed).unwrap(),
+        "DE123456789"
+    );
+    assert_eq!(vat(sealed).await, already);
+    assert_eq!(seal_existing(&keyed.state).await.unwrap(), 0, "once");
+
+    // Damaged values don't open.
+    let mut damaged = now_sealed.clone();
+    let last = damaged.pop().unwrap();
+    damaged.push(if last == 'A' { 'B' } else { 'A' });
+    for bad in [damaged.as_str(), "enc1:AAAA", "enc1:not base64!"] {
+        assert!(open(Some(&key), "users.vat_number", bad).is_err(), "{bad}");
+    }
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn account_changes_from_other_sites_are_refused(db: PgPool) {
+    let (base, _) = fake_providers().await;
+    let app = test_app_with(db, move |c| {
+        all_providers(c, &base);
+        c.trusted_origins = vec!["https://admin.slop.example".into()];
+    })
+    .await;
+    let (ann_id, ann) = app.user("Ann", "US").await;
+    let (bob_id, _) = app.user("Bob", "US").await;
+    identity(&app, ann_id, "github", "1").await;
+    identity(&app, ann_id, "gitlab", "2").await;
+    identity(&app, bob_id, "google", "g-bob").await;
+    let combine = start_combining(&app, &ann, "g-bob").await;
+    let request = body_json(
+        app.send(
+            req(Method::POST, "/v1/auth/desktop/requests")
+                .json(desktop_request("state-state-state-1", "Laptop")),
+        )
+        .await,
+    )
+    .await["id"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    let writes = || {
+        vec![
+            close(&ann),
+            req(
+                Method::POST,
+                format!("/v1/auth/desktop/requests/{request}/approve"),
+            )
+            .cookie(&ann),
+            req(Method::POST, "/v1/auth/combine")
+                .cookie(&ann)
+                .cookie(&combine),
+            req(Method::POST, "/v1/me/passkeys/register/start").cookie(&ann),
+            req(Method::DELETE, "/v1/me/identities/gitlab/2").cookie(&ann),
+            req(Method::PATCH, "/v1/me")
+                .cookie(&ann)
+                .json(json!({ "share_playtime": false })),
+        ]
+    };
+    for r in writes() {
+        let uri = r.uri.clone();
+        assert_eq!(
+            status(&app, r.header("sec-fetch-site", "cross-site")).await,
+            StatusCode::FORBIDDEN,
+            "{uri}"
+        );
+    }
+    for r in writes() {
+        let uri = r.uri.clone();
+        assert_eq!(
+            status(&app, r.header("origin", "https://evil.example")).await,
+            StatusCode::FORBIDDEN,
+            "{uri}"
+        );
+    }
+    // None of it happened.
+    let (closed, share): (bool, bool) =
+        sqlx::query_as("select closed_at is not null, share_playtime from users where id = $1")
+            .bind(ann_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((closed, share), (false, true));
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from desktop_auth_requests where approved_by is not null"
+        )
+        .await,
+        0
+    );
+    assert_eq!(count(&app, "select count(*) from identities").await, 3);
+    assert_eq!(
+        count(&app, "select count(*) from webauthn_challenges").await,
+        0
+    );
+    let merged: Option<Uuid> = sqlx::query_scalar("select merged_into from users where id = $1")
+        .bind(bob_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(merged, None);
+
+    // A trusted origin may, even across sites.
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/me")
+                .cookie(&ann)
+                .header("sec-fetch-site", "cross-site")
+                .header("origin", "https://admin.slop.example")
+                .json(json!({ "share_playtime": false })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn simulation_sign_in_exists_only_on_a_simulation_server(db: PgPool) {
+    let real = test_app(db.clone()).await;
+    let (person, _) = real.user("Real Person", "US").await;
+    let (sim_maker, _) = real.user("Sim maker 1", "US").await;
+    let (sim_player, _) = real.user("Sim player 1", "US").await;
+    exec(
+        &real,
+        "create table sim_users (user_id uuid primary key, personas text not null, taste jsonb not null, activity real not null)",
+        &[],
+    )
+    .await;
+    exec(
+        &real,
+        "insert into sim_users (user_id, personas, taste, activity) values ($1, 'casual', '{}', 0.5)",
+        &[sim_player],
+    )
+    .await;
+    let login = |id: Uuid| req(Method::POST, format!("/v1/sim/login/{id}"));
+    // A real server never signs anyone in this way, even a simulated person.
+    for id in [sim_player, sim_maker, person] {
+        let res = real.send(login(id)).await;
+        assert_eq!(res.status(), StatusCode::NOT_FOUND);
+        assert!(set_cookie(&res, "slop_session").is_none());
+    }
+
+    let sim = test_app_with(db, |c| c.simulation = true).await;
+    let res = sim.send(login(person)).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND, "real accounts never");
+    assert!(set_cookie(&res, "slop_session").is_none());
+    for id in [sim_player, sim_maker] {
+        let res = sim.send(login(id)).await;
+        assert_eq!(res.status(), StatusCode::NO_CONTENT);
+        let session = set_cookie(&res, "slop_session").unwrap();
+        let me = body_json(sim.send(req(Method::GET, "/v1/me").cookie(&session)).await).await;
+        assert_eq!(me["id"], json!(id));
+    }
+}
