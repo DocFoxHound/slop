@@ -323,7 +323,6 @@ pub async fn approve(
     Ok(())
 }
 
-/// Rejects a release. The reason is shown to the maker.
 /// Clears a scan finding (or a missing or flagging Defender check) a reviewer judged a false
 /// positive, with the reason, so the release can be approved. Audit-logged.
 pub async fn clear_scan(
@@ -365,6 +364,8 @@ pub async fn clear_scan(
     Ok(())
 }
 
+/// Rejects a release that's waiting for review, being fetched, or whose checks failed. The reason
+/// is shown to the maker.
 pub async fn reject(
     db: &PgPool,
     release_id: Uuid,
