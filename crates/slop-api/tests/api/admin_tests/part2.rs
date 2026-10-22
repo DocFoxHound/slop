@@ -1478,10 +1478,9 @@ async fn the_review_feed_filters_by_kind_and_says_who_can_decide(db: PgPool) {
             .await,
     )
     .await;
-    assert_eq!(
-        theirs["can_decide"], false,
-        "support staff don't review releases"
-    );
+    // Support staff decide the People problems and review disputes in the feed, though not
+    // releases (refused below).
+    assert_eq!(theirs["can_decide"], true);
     assert_eq!(
         app.send(
             req(

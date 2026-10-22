@@ -314,6 +314,10 @@ async fn create(
             "2 to 40 lowercase letters, digits and single dashes",
         ));
     }
+    // `/admin/shelves/order` is the reordering, so a shelf there could never be changed.
+    if slug == "order" {
+        return Err(ApiError::invalid("slug", "that address is taken"));
+    }
     let mut tx = state.db.begin().await?;
     // One shelf change at a time, so two can't both take the last place.
     lock_shelves(&mut tx).await?;

@@ -644,6 +644,13 @@ async fn claim(
         return Err(ApiError::invalid("note", "1 to 2,000 characters"));
     }
     let (app_id, _) = crate::updates::owned(&state, &b.app_slug, &user).await?;
+    // An agent token for some of the maker's apps claims only for those (maker_agents.rs).
+    if let Some(agent) = &user.agent
+        && !agent.app_ids.is_empty()
+        && !agent.app_ids.contains(&app_id)
+    {
+        return Err(ApiError::NotFound);
+    }
     let fits: bool = sqlx::query_scalar(
         "select id = $2 or coalesce(parent_app_id = $2, false) from apps where id = $1",
     )

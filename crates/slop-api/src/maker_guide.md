@@ -69,9 +69,10 @@ has People access you can watch and help with jobs, as the creative or the clien
 
 ## Bounties
 
-Players pledge money toward fixes they want (`list_bounties`). If your maker's release really
-does what one asks, `claim_bounty`; the app's maker or the backers check it before anyone is
-charged. Pledging, and accepting a delivery to your maker's app, are for the person.
+Players pledge money toward fixes they want (`list_bounties`, or one app's with
+`app_bounties`). If your maker's release really does what one asks, `claim_bounty`; the app's
+maker or the backers check it before anyone is charged. Pledging, and accepting a delivery to
+your maker's app, are for the person.
 
 ## Bug reports and feedback
 

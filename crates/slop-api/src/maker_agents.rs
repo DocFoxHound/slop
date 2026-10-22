@@ -76,6 +76,9 @@ enum Slug {
     /// checks the app is one of the token's (bug_reports.rs `load`), so a token for some apps
     /// works on those apps' reports.
     Checked,
+    /// Claiming a bounty: the route checks the app it's claimed for is one of the token's apps
+    /// (it's named in the body).
+    Claim,
 }
 
 /// (method, path after `/v1`, needs `publish`, what `{slug}` is). `*` is any one segment.
@@ -125,7 +128,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("GET", "/bounties", false, Slug::Any),
     ("GET", "/bounties/*", false, Slug::Any),
     // Claiming pays the maker; it's checked by the app's maker or the backers.
-    ("POST", "/bounties/*/claims", true, Slug::Any),
+    ("POST", "/bounties/*/claims", true, Slug::Claim),
     ("DELETE", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/answer", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/withdraw", true, Slug::Own),
@@ -148,7 +151,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
 ];
 
 /// The allowed route a request matches: whether it needs `publish`, how its slug is checked,
-/// and the slug.
+/// and the slug (for a bug report, the report's ID).
 fn route<'a>(method: &Method, path: &'a str) -> Option<(bool, Slug, Option<&'a str>)> {
     // Handlers inside the `/v1` router see the path without it.
     let path = path.strip_prefix("/v1").unwrap_or(path);
@@ -196,7 +199,9 @@ impl AgentToken {
         match (kind, slug) {
             // A token for some apps only can't make new ones.
             (Slug::Any, _) if publish => Err(ApiError::Forbidden),
-            (Slug::Any | Slug::People | Slug::Checked, _) | (Slug::Own, None) => Ok(()),
+            (Slug::Any | Slug::People | Slug::Checked | Slug::Claim, _) | (Slug::Own, None) => {
+                Ok(())
+            }
             (Slug::Own, Some(slug)) => {
                 let id: Option<Uuid> = sqlx::query_scalar("select id from apps where slug = $1")
                     .bind(slug)
@@ -406,20 +411,26 @@ async fn create(
             id.ok_or_else(|| ApiError::invalid("apps", format!("{slug} isn't one of your apps")))?,
         );
     }
+    let secret = format!("{PREFIX}{}", new_token());
+    let id = Uuid::now_v7();
+    let mut tx = state.db.begin().await?;
+    // Counted with the account locked, so requests at the same moment can't pass the limit
+    // together.
+    sqlx::query("select 1 from users where id = $1 for update")
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
     let live: i64 = sqlx::query_scalar(
         "select count(*) from sessions where user_id = $1 and kind = 'agent' and revoked_at is null and expires_at > now()",
     )
     .bind(user.id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
     if live >= MAX_TOKENS {
         return Err(ApiError::Conflict(format!(
             "you have {MAX_TOKENS} agent tokens; remove one first"
         )));
     }
-    let secret = format!("{PREFIX}{}", new_token());
-    let id = Uuid::now_v7();
-    let mut tx = state.db.begin().await?;
     // A passkey confirmation in the last 12 hours carries over to the token (passkeys.rs).
     sqlx::query(
         "insert into sessions (id, user_id, token_hash, user_agent, expires_at, kind, passkey_at)
@@ -740,11 +751,19 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_bounties",
-        description: "Open fix bounties: what players will pay for, biggest first. With an app's address: that app's bounties. A bounty is paid to whoever delivers it in an approved release of the app or of a community build of it.",
+        description: "Open fix bounties across the store: what players will pay for, biggest first (app_bounties lists one app's). A bounty is paid to whoever delivers it in an approved release of the app or of a community build of it.",
         method: Method::GET,
         path: "/v1/bounties",
         properties: || json!({}),
         required: &[],
+    },
+    Tool {
+        name: "app_bounties",
+        description: "One app's fix bounties (yours, or one you'd build a community version of), open ones first, biggest first.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/bounties",
+        properties: slug_only,
+        required: &["slug"],
     },
     Tool {
         name: "get_bounty",

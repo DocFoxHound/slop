@@ -480,6 +480,9 @@ async fn lift_suspension(
             "say why in 10 to 1000 characters",
         ));
     }
+    if id == admin.user_id {
+        return Err(ApiError::invalid("id", "not on your own account"));
+    }
     let name: Option<String> = sqlx::query_scalar(
         "select display_name from users where id = $1 and suspended_at is not null",
     )
@@ -513,6 +516,10 @@ async fn passkey_grace(
             "reason",
             "say how you checked it's them, in 10 to 1000 characters",
         ));
+    }
+    // Someone else checks it's really them.
+    if id == admin.user_id {
+        return Err(ApiError::invalid("id", "not on your own account"));
     }
     let name: Option<String> =
         sqlx::query_scalar("select display_name from users where id = $1 and closed_at is null")
