@@ -4219,3 +4219,281 @@ async fn an_agents_sensitive_actions_wait_for_a_second_person(db: PgPool) {
             .unwrap();
     assert_eq!(status, "revoked");
 }
+
+// ---------------------------------------------------------------------------------------------
+// Makers' agents (the reported problems in this area)
+
+/// A maker agent token made with this cookie, as an Authorization header value.
+async fn maker_token(app: &TestApp, cookie: &str, body: Value) -> String {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(cookie)
+                .json(body),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    format!(
+        "Bearer {}",
+        body_json(res).await["secret"].as_str().unwrap()
+    )
+}
+
+/// Calls one maker MCP tool: (whether it worked, the text it gave back).
+async fn maker_tool(app: &TestApp, auth: &str, name: &str, args: Value) -> (bool, String) {
+    let res = app
+        .send(with_token(
+            req(Method::POST, "/v1/maker/mcp").json(json!({
+                "jsonrpc": "2.0", "id": 1, "method": "tools/call",
+                "params": { "name": name, "arguments": args }
+            })),
+            auth,
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let reply = body_json(res).await;
+    (
+        reply["result"]["isError"] == false,
+        reply["result"]["content"][0]["text"]
+            .as_str()
+            .unwrap_or_default()
+            .to_string(),
+    )
+}
+
+async fn bounty(app: &TestApp, slug: &str, by: Uuid, title: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into bounties (id, app_id, created_by, title, body, currency)
+         values ($1, (select id from apps where slug = $2), $3, $4, 'Please fix it.', 'usd')",
+    )
+    .bind(id)
+    .bind(slug)
+    .bind(by)
+    .bind(title)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    id
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_makers_agent_lists_one_apps_bounties(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (mia, maker) = app.user("Mia Maker", "US").await;
+    let (otto, _) = app.user("Otto Other", "US").await;
+    let (pat, _) = app.user("Pat Player", "US").await;
+    listed_with(&app, mia, "pong", "released", "").await;
+    listed_with(&app, otto, "arena", "released", "").await;
+    bounty(&app, "pong", pat, "Add a two-player mode").await;
+    bounty(&app, "arena", pat, "Fix the crash on start").await;
+    let token = maker_token(&app, &maker, json!({ "name": "Claude", "scope": "read" })).await;
+
+    // The list across the store doesn't promise an app filter it hasn't got; one app's is its
+    // own tool.
+    let res = app
+        .send(with_token(
+            req(Method::POST, "/v1/maker/mcp")
+                .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/list" })),
+            &token,
+        ))
+        .await;
+    let tools = body_json(res).await["result"]["tools"].clone();
+    let find = |name: &str| {
+        tools
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|t| t["name"] == name)
+            .unwrap_or_else(|| panic!("{name}"))
+            .clone()
+    };
+    let list = find("list_bounties");
+    let props = list["inputSchema"]["properties"].as_object().unwrap();
+    let promises_filter = list["description"]
+        .as_str()
+        .unwrap()
+        .contains("With an app's address");
+    assert!(props.contains_key("slug") || !promises_filter, "{list}");
+    assert_eq!(
+        find("app_bounties")["inputSchema"]["required"],
+        json!(["slug"])
+    );
+
+    let (ok, text) = maker_tool(&app, &token, "list_bounties", json!({})).await;
+    assert!(ok, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text)
+            .unwrap()
+            .as_array()
+            .unwrap()
+            .len(),
+        2
+    );
+    let (ok, text) = maker_tool(&app, &token, "app_bounties", json!({ "slug": "pong" })).await;
+    assert!(ok, "{text}");
+    let pong: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(pong.as_array().unwrap().len(), 1);
+    assert_eq!(pong[0]["title"], "Add a two-player mode");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_clients_agent_cant_withdraw_their_job_request(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (mia, maker) = app.user("Mia Maker", "US").await;
+    let (cora, cora_cookie) = app.user("Cora Creative", "US").await;
+    listed_with(&app, mia, "pong", "released", "").await;
+    let pong = app_id(&app, "pong").await;
+    let first = people_job(&app, cora, mia, pong, "Sprites for Pong").await;
+    let second = people_job(&app, cora, mia, pong, "Music for Pong").await;
+    for job in [first, second] {
+        sqlx::query("update jobs set status = 'requested', offer = null where id = $1")
+            .bind(job)
+            .execute(&app.db)
+            .await
+            .unwrap();
+    }
+    let people = json!({ "name": "Claude", "scope": "publish", "people": true });
+    let mia_agent = maker_token(&app, &maker, people.clone()).await;
+    let cora_agent = maker_token(&app, &cora_cookie, people).await;
+    let decline = |job: Uuid| {
+        req(Method::POST, format!("/v1/jobs/{job}/decline"))
+            .json(json!({ "note": "Changed my mind." }))
+    };
+    let status = |job: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, String>("select status from jobs where id = $1")
+                .bind(job)
+                .fetch_one(&db)
+                .await
+                .unwrap()
+        }
+    };
+
+    // Withdrawing a request stays with the person: the client's agent can't.
+    let res = app.send(with_token(decline(first), &mia_agent)).await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(status(first).await, "requested");
+    // The creative's agent may decline the work; the client herself may withdraw.
+    let res = app.send(with_token(decline(first), &cora_agent)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(status(first).await, "declined");
+    let res = app.send(decline(second).cookie(&maker)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(status(second).await, "declined");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_app_limited_makers_agent_answers_its_apps_bug_reports_and_claims_their_bounties(
+    db: PgPool,
+) {
+    let app = agents_app(db, 1).await;
+    let (mia, maker) = app.user("Mia Maker", "US").await;
+    let (pat, _) = app.user("Pat Player", "US").await;
+    listed_with(&app, mia, "pong", "released", "").await;
+    listed_with(&app, mia, "other-game", "released", "").await;
+    let report = |slug: &str| {
+        let id = Uuid::now_v7();
+        let db = app.db.clone();
+        let slug = slug.to_string();
+        async move {
+            sqlx::query(
+                "insert into bug_reports (id, app_id, reporter_id, title, body)
+                 values ($1, (select id from apps where slug = $2), $3, 'Crashes', 'On start.')",
+            )
+            .bind(id)
+            .bind(slug)
+            .bind(pat)
+            .execute(&db)
+            .await
+            .unwrap();
+            id
+        }
+    };
+    let pong_report = report("pong").await;
+    let other_report = report("other-game").await;
+    let token = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Pong agent", "scope": "publish", "apps": ["pong"] }),
+    )
+    .await;
+    let fix = |id: Uuid| {
+        req(Method::PATCH, format!("/v1/bug-reports/{id}"))
+            .json(json!({ "status": "fixed", "maker_note": "Fixed in 1.0.1." }))
+    };
+
+    // Its own app's reports, yes; another app's (even the same maker's), no.
+    let res = app.send(with_token(fix(pong_report), &token)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["status"], "fixed");
+    let res = app.send(with_token(fix(other_report), &token)).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let res = app.send(with_token(fix(Uuid::now_v7()), &token)).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let status: String = sqlx::query_scalar("select status from bug_reports where id = $1")
+        .bind(other_report)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(status, "open");
+
+    // Claiming a bounty on its app gets as far as the claim's own checks; for another app, no.
+    let wanted = bounty(&app, "pong", pat, "Add a two-player mode").await;
+    let claim = |slug: &str| {
+        req(Method::POST, format!("/v1/bounties/{wanted}/claims"))
+            .json(json!({ "app_slug": slug, "note": "1.1 adds it." }))
+    };
+    let res = app.send(with_token(claim("pong"), &token)).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("release it first")
+    );
+    let res = app.send(with_token(claim("other-game"), &token)).await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_maker_can_never_hold_more_than_ten_agent_tokens(db: PgPool) {
+    let app = agents_app(db, 1).await;
+    let (mia, maker) = app.user("Mia Maker", "US").await;
+    // Fifteen requests at the same moment.
+    let mut tasks = vec![];
+    for i in 0..15 {
+        let router = app.router.clone();
+        let request = Request::builder()
+            .method(Method::POST)
+            .uri("/v1/me/maker-tokens")
+            .header(header::HOST, "localhost:8080")
+            .header(header::COOKIE, maker.clone())
+            .header(header::CONTENT_TYPE, "application/json")
+            .body(Body::from(
+                json!({ "name": format!("Agent {i}"), "scope": "read" }).to_string(),
+            ))
+            .unwrap();
+        tasks.push(tokio::spawn(async move {
+            router.oneshot(request).await.unwrap().status()
+        }));
+    }
+    let mut made = 0;
+    for t in tasks {
+        let status = t.await.unwrap();
+        if status == StatusCode::CREATED {
+            made += 1;
+        } else {
+            assert_eq!(status, StatusCode::CONFLICT);
+        }
+    }
+    let live = count(
+        &app,
+        &format!(
+            "select count(*) from sessions where user_id = '{mia}' and kind = 'agent' and revoked_at is null"
+        ),
+    )
+    .await;
+    assert_eq!((made, live), (10, 10));
+}

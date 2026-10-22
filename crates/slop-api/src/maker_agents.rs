@@ -72,6 +72,11 @@ enum Slug {
     /// People work (`*` is a job): only with a token allowed to handle People jobs. Each route
     /// checks the user is a side of the job.
     People,
+    /// `*` is a bug report: it must be about one of the token's apps.
+    BugReport,
+    /// Claiming a bounty: the route checks the app it's claimed for is one of the token's apps
+    /// (it's named in the body).
+    Claim,
 }
 
 /// (method, path after `/v1`, needs `publish`, what `{slug}` is). `*` is any one segment.
@@ -117,11 +122,11 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("DELETE", "/apps/{slug}/demo", true, Slug::Own),
     ("GET", "/bug-reports/*", false, Slug::Any),
     // Each route checks the report is on the user's own app.
-    ("PATCH", "/bug-reports/*", true, Slug::Any),
+    ("PATCH", "/bug-reports/*", true, Slug::BugReport),
     ("GET", "/bounties", false, Slug::Any),
     ("GET", "/bounties/*", false, Slug::Any),
     // Claiming pays the maker; it's checked by the app's maker or the backers.
-    ("POST", "/bounties/*/claims", true, Slug::Any),
+    ("POST", "/bounties/*/claims", true, Slug::Claim),
     ("DELETE", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/answer", true, Slug::Own),
     ("POST", "/apps/{slug}/offers/*/withdraw", true, Slug::Own),
@@ -144,7 +149,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
 ];
 
 /// The allowed route a request matches: whether it needs `publish`, how its slug is checked,
-/// and the slug.
+/// and the slug (for a bug report, the report's ID).
 fn route<'a>(method: &Method, path: &'a str) -> Option<(bool, Slug, Option<&'a str>)> {
     // Handlers inside the `/v1` router see the path without it.
     let path = path.strip_prefix("/v1").unwrap_or(path);
@@ -157,14 +162,17 @@ fn route<'a>(method: &Method, path: &'a str) -> Option<(bool, Slug, Option<&'a s
         if want.len() != parts.len() {
             return None;
         }
-        let mut slug = None;
+        let (mut slug, mut star) = (None, None);
         for (w, p) in want.iter().zip(&parts) {
             match *w {
                 "{slug}" if !p.is_empty() => slug = Some(*p),
-                "*" if !p.is_empty() => {}
+                "*" if !p.is_empty() => star = star.or(Some(*p)),
                 w if w == *p && !w.starts_with('{') && w != "*" => {}
                 _ => return None,
             }
+        }
+        if *kind == Slug::BugReport {
+            slug = star;
         }
         Some((*publish, *kind, slug))
     })
@@ -192,7 +200,24 @@ impl AgentToken {
         match (kind, slug) {
             // A token for some apps only can't make new ones.
             (Slug::Any, _) if publish => Err(ApiError::Forbidden),
-            (Slug::Any | Slug::People, _) | (Slug::Own, None) => Ok(()),
+            (Slug::Any | Slug::People | Slug::Claim, _) | (Slug::Own | Slug::BugReport, None) => {
+                Ok(())
+            }
+            (Slug::BugReport, Some(id)) => {
+                let app: Option<Uuid> = match id.parse::<Uuid>() {
+                    Ok(id) => {
+                        sqlx::query_scalar("select app_id from bug_reports where id = $1")
+                            .bind(id)
+                            .fetch_optional(&state.db)
+                            .await?
+                    }
+                    Err(_) => None,
+                };
+                match app {
+                    Some(app) if self.app_ids.contains(&app) => Ok(()),
+                    _ => Err(ApiError::NotFound),
+                }
+            }
             (Slug::Own, Some(slug)) => {
                 let id: Option<Uuid> = sqlx::query_scalar("select id from apps where slug = $1")
                     .bind(slug)
@@ -402,20 +427,26 @@ async fn create(
             id.ok_or_else(|| ApiError::invalid("apps", format!("{slug} isn't one of your apps")))?,
         );
     }
+    let secret = format!("{PREFIX}{}", new_token());
+    let id = Uuid::now_v7();
+    let mut tx = state.db.begin().await?;
+    // Counted with the account locked, so requests at the same moment can't pass the limit
+    // together.
+    sqlx::query("select 1 from users where id = $1 for update")
+        .bind(user.id)
+        .execute(&mut *tx)
+        .await?;
     let live: i64 = sqlx::query_scalar(
         "select count(*) from sessions where user_id = $1 and kind = 'agent' and revoked_at is null and expires_at > now()",
     )
     .bind(user.id)
-    .fetch_one(&state.db)
+    .fetch_one(&mut *tx)
     .await?;
     if live >= MAX_TOKENS {
         return Err(ApiError::Conflict(format!(
             "you have {MAX_TOKENS} agent tokens; remove one first"
         )));
     }
-    let secret = format!("{PREFIX}{}", new_token());
-    let id = Uuid::now_v7();
-    let mut tx = state.db.begin().await?;
     // A passkey confirmation in the last 12 hours carries over to the token (passkeys.rs).
     sqlx::query(
         "insert into sessions (id, user_id, token_hash, user_agent, expires_at, kind, passkey_at)
@@ -736,11 +767,19 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_bounties",
-        description: "Open fix bounties: what players will pay for, biggest first. With an app's address: that app's bounties. A bounty is paid to whoever delivers it in an approved release of the app or of a community build of it.",
+        description: "Open fix bounties across the store: what players will pay for, biggest first (app_bounties lists one app's). A bounty is paid to whoever delivers it in an approved release of the app or of a community build of it.",
         method: Method::GET,
         path: "/v1/bounties",
         properties: || json!({}),
         required: &[],
+    },
+    Tool {
+        name: "app_bounties",
+        description: "One app's fix bounties (yours, or one you'd build a community version of), open ones first, biggest first.",
+        method: Method::GET,
+        path: "/v1/apps/{slug}/bounties",
+        properties: slug_only,
+        required: &["slug"],
     },
     Tool {
         name: "get_bounty",

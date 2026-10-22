@@ -1569,7 +1569,12 @@ async fn decline(
     Path(id): Path<Uuid>,
     Json(body): Json<NoteBody>,
 ) -> ApiResult<Json<JobView>> {
-    let (_, _) = load(&state, id, &user).await?;
+    let (_, role) = load(&state, id, &user).await?;
+    // For the client this withdraws the request (or turns the offer down): that stays with the
+    // person, never their agent (maker_agents.rs).
+    if role == Role::Client && user.agent.is_some() {
+        return Err(ApiError::Forbidden);
+    }
     let text = note("note", &body.note, 1000, false)?;
     let mut tx = state.db.begin().await?;
     set_status(&mut tx, id, &["requested", "offered"], "declined").await?;
