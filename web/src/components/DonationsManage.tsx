@@ -4,7 +4,7 @@
 
 import { useState, type FormEvent } from "react";
 
-import { api, ApiError, type DonationSettings } from "../api";
+import { api, ApiError, type DonationHold, type DonationSettings } from "../api";
 import { formatDate, toMinor } from "../format";
 import { useLoad } from "../hooks";
 import { openExternal } from "../platform";
@@ -21,6 +21,7 @@ export function DonationsPanel({ slug }: { slug: string }) {
   return (
     <section className="panel panel-pad" id="donations">
       <h2>Donations</h2>
+      <HoldNotice slug={slug} />
       {s.payments === "off" ? (
         <p className="muted">Payments aren't switched on on this server yet.</p>
       ) : s.account_status !== "active" ? (
@@ -32,6 +33,84 @@ export function DonationsPanel({ slug }: { slug: string }) {
         </>
       )}
     </section>
+  );
+}
+
+/** Staff stopped this app's donations: why, and the maker's way to ask for them back. */
+function HoldNotice({ slug }: { slug: string }) {
+  const hold = useLoad(() => api.donations.hold(slug), [slug]);
+  if (!hold.data?.open) return null;
+  const h = hold.data.open;
+  return (
+    <div className="notice" role="status">
+      <p>
+        <b>
+          {h.kind === "review"
+            ? "Donations to this app are paused while Slop reviews it."
+            : "Donations to this app are turned off until the problem below is fixed."}
+        </b>{" "}
+        Your app stays in the store. Donors see only that donations are paused, and monthly server donations aren't
+        charged meanwhile.
+      </p>
+      <p className="pre-wrap">{h.reason}</p>
+      {h.ground && <p className="muted">Ground: {h.ground}</p>}
+      <p className="muted">Since {formatDate(h.placed_at)}</p>
+      {h.requests.length > 0 && (
+        <ol className="plain">
+          {h.requests.map((r) => (
+            <li key={r.id}>
+              <p>
+                You asked on {formatDate(r.created_at)}: <span className="pre-wrap">{r.message}</span>
+              </p>
+              {r.outcome === null ? (
+                <p className="muted">Waiting for Slop's answer.</p>
+              ) : (
+                <p>
+                  Slop {r.outcome === "kept" ? "kept the pause" : "lifted it"}: <span className="pre-wrap">{r.answer}</span>
+                </p>
+              )}
+            </li>
+          ))}
+        </ol>
+      )}
+      <AskToLift slug={slug} hold={h} canAskAt={hold.data.can_ask_at} onDone={hold.reload} />
+    </div>
+  );
+}
+
+function AskToLift({ slug, hold, canAskAt, onDone }: { slug: string; hold: DonationHold; canAskAt: string | null; onDone: () => void }) {
+  const [message, setMessage] = useState("");
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  if (hold.requests.some((r) => r.outcome === null)) return null;
+  if (canAskAt) return <p className="muted">You can ask again after {formatDate(canAskAt)}.</p>;
+  const send = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.donations.askToLift(slug, message);
+      setMessage("");
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <form className="form" onSubmit={send}>
+      <label htmlFor="hold-fix">Fixed it? Tell Slop what you changed and ask for donations back.</label>
+      <textarea id="hold-fix" rows={3} maxLength={4000} value={message} onChange={(e) => setMessage(e.target.value)} required />
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button className="btn" disabled={busy || !message.trim()}>
+        Ask for a review
+      </button>
+    </form>
   );
 }
 

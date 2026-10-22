@@ -9,14 +9,14 @@
 //! | moderator | review, reports and appeals, and sensitive actions |
 //! | reviewer | review releases, changes, pictures, portfolios and listings |
 //! | support | reports, appeals and People problems; no sensitive actions |
-//! | finance | payments (nothing in the admin API needs it yet) |
+//! | finance | payments: pausing donations to an app for review (donation_holds.rs) |
 //! | security | tokens, staff roles and the audit log |
 //!
 //! Staff without a role can only look. An API token is capped by its level as well
 //! (admin_web.rs `AdminUser::need`).
 //!
 //! **Two people.** Sensitive actions (withdrawing a release, taking an app out of the store,
-//! suspending or reinstating an account, changing staff roles) don't happen on one person's
+//! suspending or reinstating an account, turning off an app's donations, changing staff roles) don't happen on one person's
 //! word: they become a `staff_actions` request that needs `SLOP_APPROVALS_REQUIRED` different
 //! people (the requester is the first). While Slop has one person it's 1, so the action happens
 //! at once, but it's recorded the same way; set it to 2 when there's a second person. A token
@@ -291,6 +291,7 @@ async fn execute(state: &AppState, kind: &str, payload: &Value, actor: &str) -> 
         "account.suspend" => crate::agent::suspend_stored(state, payload, actor).await,
         "account.lift" => crate::agent::lift_stored(state, payload, actor).await,
         "account.passkey_grace" => crate::agent::passkey_grace_stored(state, payload, actor).await,
+        "donations.off" => crate::donation_holds::off_stored(state, payload, actor).await,
         "staff.role" => {
             let p: RolePayload = serde_json::from_value(payload.clone()).map_err(bad)?;
             set_role(state, p.user_id, p.role, p.grant, actor).await?;

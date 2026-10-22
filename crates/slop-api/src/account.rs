@@ -155,6 +155,15 @@ const EXPORT: &[(&str, &str)] = &[
          from server_donations s join apps a on a.id = s.app_id where s.donor_id = $1",
     ),
     (
+        "donation_holds",
+        "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug,
+                    'requests', (select coalesce(jsonb_agg(to_jsonb(r) - 'hold_id' order by r.created_at), '[]')
+                                 from donation_hold_requests r where r.hold_id = h.id))
+                    || (to_jsonb(h) - 'app_id' - 'placed_by' - 'lifted_by')
+                order by h.placed_at), '[]')
+         from donation_holds h join apps a on a.id = h.app_id where a.maker_id = $1",
+    ),
+    (
         "donation_account",
         "select to_jsonb(d) - 'user_id' from donation_accounts d where d.user_id = $1",
     ),

@@ -31,6 +31,8 @@ test("a maker creates a store page, submits a release, and staff approve it", as
   const admin = await browser.newPage();
   await signIn(admin, "admin");
   await admin.goto("/admin");
+  // Home lists what's waiting; each links to the queue.
+  await admin.getByRole("link", { name: /Releases to review$/ }).click();
   const row = admin.locator("article, li, section").filter({ hasText: "Pong Test" }).filter({
     has: admin.getByRole("button", { name: "Approve and sign" }),
   });

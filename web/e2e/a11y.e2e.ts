@@ -3,7 +3,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { expect, signIn, test } from "./fixtures";
 
-const pages: Array<[string, "player" | "maker" | null]> = [
+const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/", null],
   ["/search?q=castle", null],
   ["/app/castle-rock", null],
@@ -17,6 +17,9 @@ const pages: Array<[string, "player" | "maker" | null]> = [
   ["/verify", null],
   ["/source", null],
   ["/bounties", null],
+  ["/admin", "admin"],
+  ["/admin?tab=apps&app=castle-rock", "admin"],
+  ["/admin?tab=money", "admin"],
 ];
 
 for (const [path, who] of pages) {
