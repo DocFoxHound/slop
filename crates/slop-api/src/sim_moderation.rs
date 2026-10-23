@@ -220,7 +220,8 @@ pub async fn write(
                 decided_by: MODERATOR,
             },
         )
-        .await?;
+        .await?
+        .id;
         sqlx::query("update moderation_decisions set created_at = $2 where id = $1")
             .bind(decision)
             .bind(decided)

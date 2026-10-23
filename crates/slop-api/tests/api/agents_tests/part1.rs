@@ -3181,6 +3181,7 @@ async fn agents_moderate_reports_appeals_and_accounts_through_mcp_tools(db: PgPo
     let moderate = admin_token(&app, &owner, "moderate").await;
     let (mia, mia_cookie) = app.user("Mia Maker", "US").await;
     listed_with(&app, mia, "miner", "released", "").await;
+    approved_release(&app, "miner", mia).await;
     listed_with(&app, mia, "decoy", "released", "").await;
     let (rita, rita_cookie) = app.user("Rita Reporter", "US").await;
     let (_, otto) = app.user("Otto Other", "US").await;

@@ -875,12 +875,20 @@ pub(crate) async fn record(
     Ok(id)
 }
 
+/// A decision carried out and recorded.
+pub(crate) struct Decided {
+    pub id: Uuid,
+    /// Saved cards of the pledges it released, for `bounties::forget_cards` once the
+    /// transaction commits.
+    pub cards: Vec<String>,
+}
+
 /// Carries out a decision and records it.
 pub(crate) async fn decide(
     tx: &mut sqlx::PgConnection,
     d: &NewDecision<'_>,
-) -> anyhow::Result<Uuid> {
-    apply(
+) -> anyhow::Result<Decided> {
+    let applied = apply(
         tx,
         d.action,
         d.subject_kind,
@@ -890,8 +898,23 @@ pub(crate) async fn decide(
         false,
     )
     .await?;
-    record(tx, d).await
+    Ok(Decided {
+        id: record(tx, d).await?,
+        cards: applied.cards,
+    })
 }
+
+/// What carrying out or undoing a decision left to do, or to say.
+#[derive(Default)]
+struct Applied {
+    /// Saved cards to forget at Stripe once the transaction commits.
+    cards: Vec<String>,
+    /// Why an app put back on appeal stays out of the store for now, for the maker and staff.
+    stays_out: Option<String>,
+}
+
+/// A bounty put back on appeal runs for the time it had left, but at least this long.
+const RESTORED_BOUNTY_RUNS: Duration = Duration::days(7);
 
 /// Puts a decision into effect, or undoes it when an appeal reverses it.
 async fn apply(
@@ -902,26 +925,56 @@ async fn apply(
     user_id: Uuid,
     rule: &str,
     undo: bool,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Applied> {
     let why = rule_title(rule);
+    let mut out = Applied::default();
     match (action, kind) {
-        ("delist_app", "app") => {
-            let (from, to) = if undo {
-                ("delisted", "listed")
-            } else {
-                ("listed", "delisted")
-            };
-            let n = sqlx::query(
-                "update apps set status = $3::app_status, updated_at = now() where id = $1 and status = $2::app_status",
+        ("delist_app", "app") if undo => {
+            // Back in the store only if it passes the checks any listing does. Frozen: it goes
+            // back when the freeze ends, like an app delisted for being frozen (frozen.rs).
+            // Otherwise it waits under Ready to list for a reviewer.
+            let stage: Option<crate::catalog::AppStage> = sqlx::query_scalar(
+                "select stage from apps where id = $1 and status = 'delisted' for update",
             )
             .bind(subject_id)
-            .bind(from)
-            .bind(to)
+            .fetch_optional(&mut *tx)
+            .await?;
+            if let Some(stage) = stage {
+                match admin::not_listable(tx, subject_id, stage).await? {
+                    None => {
+                        sqlx::query(
+                            "update apps set status = 'listed', relist_after_appeal = false, updated_at = now()
+                             where id = $1",
+                        )
+                        .bind(subject_id)
+                        .execute(&mut *tx)
+                        .await?;
+                    }
+                    Some(blocked) => {
+                        let frozen = matches!(blocked, admin::NotListable::Frozen(_));
+                        sqlx::query(
+                            "update apps set frozen_delisted = frozen_delisted or $2, relist_after_appeal = not $2
+                             where id = $1",
+                        )
+                        .bind(subject_id)
+                        .bind(frozen)
+                        .execute(&mut *tx)
+                        .await?;
+                        out.stays_out = Some(blocked.for_maker());
+                    }
+                }
+            }
+        }
+        ("delist_app", "app") => {
+            let n = sqlx::query(
+                "update apps set status = 'delisted', updated_at = now() where id = $1 and status = 'listed'",
+            )
+            .bind(subject_id)
             .execute(&mut *tx)
             .await?
             .rows_affected();
             anyhow::ensure!(
-                n == 1 || undo,
+                n == 1,
                 "the app isn't in the store, so there's nothing to take out"
             );
         }
@@ -959,28 +1012,78 @@ async fn apply(
             .execute(&mut *tx)
             .await?;
         }
-        ("hide_bounty", "bounty") => {
-            // Hiding ends it: saved cards are released by the charger's expiry pass.
-            sqlx::query(
-                "update bounties set status = case when $2 then 'open' else 'hidden' end,
-                        hidden_reason = case when $2 then null else $3 end,
-                        expires_at = case when $2 then expires_at else now() end
-                 where id = $1",
+        ("hide_bounty", "bounty") if undo => {
+            // Back as it was, for the time it had left (at least a week). A delivery withdrawn
+            // while it was hidden leaves it open; one being paid has nothing left to charge.
+            let title: Option<String> = sqlx::query_scalar(
+                "update bounties set
+                        status = case
+                            when hidden_from = 'claimed' and not exists (
+                                select 1 from bounty_claims c where c.bounty_id = $1 and c.status = 'pending')
+                            then 'open'
+                            when hidden_from = 'paying' then 'paid'
+                            else coalesce(hidden_from, 'open') end,
+                        expires_at = now() + greatest(coalesce(hidden_left, interval '0'), $2),
+                        hidden_reason = null, hidden_from = null, hidden_left = null
+                 where id = $1 and status = 'hidden'
+                 returning title",
             )
             .bind(subject_id)
-            .bind(undo)
+            .bind(RESTORED_BOUNTY_RUNS)
+            .fetch_optional(&mut *tx)
+            .await?;
+            let Some(title) = title else {
+                return Ok(out);
+            };
+            // Their pledges stay released (the cards were let go): they can pledge again.
+            let mut backers: Vec<Uuid> = sqlx::query_scalar(
+                "update bounty_pledges set released_by_hide = false
+                 where bounty_id = $1 and released_by_hide returning user_id",
+            )
+            .bind(subject_id)
+            .fetch_all(&mut *tx)
+            .await?;
+            backers.sort();
+            backers.dedup();
+            for backer in backers {
+                crate::notify::send(
+                    tx,
+                    crate::notify::Notice {
+                        user_id: backer,
+                        category: "donations",
+                        title: format!("\"{title}\" is back"),
+                        body: "The bounty was restored on appeal. Your pledge was released when it \
+                               was hidden and won't be charged: pledge again if you still want to back it."
+                            .into(),
+                        link: format!("/bounties/{subject_id}"),
+                        collapse_key: Some(format!("bounty:{subject_id}")),
+                    },
+                )
+                .await?;
+            }
+        }
+        ("hide_bounty", "bounty") => {
+            // Hiding ends it: nothing more is charged, and every pledge is released, its saved
+            // card forgotten at Stripe once the decision commits. What it was is kept for an
+            // appeal.
+            sqlx::query(
+                "update bounties set hidden_from = status, hidden_left = greatest(expires_at - now(), interval '0'),
+                        status = 'hidden', hidden_reason = $2, expires_at = now()
+                 where id = $1 and status <> 'hidden'",
+            )
+            .bind(subject_id)
             .bind(why)
             .execute(&mut *tx)
             .await?;
-            if !undo {
-                sqlx::query(
-                    "update bounty_pledges set status = 'released'
-                     where bounty_id = $1 and status in ('saving', 'active')",
-                )
-                .bind(subject_id)
-                .execute(&mut *tx)
-                .await?;
-            }
+            let cards: Vec<Option<String>> = sqlx::query_scalar(
+                "update bounty_pledges set status = 'released', released_by_hide = true
+                 where bounty_id = $1 and status in ('saving', 'active', 'due')
+                 returning payment_method_id",
+            )
+            .bind(subject_id)
+            .fetch_all(&mut *tx)
+            .await?;
+            out.cards = cards.into_iter().flatten().collect();
         }
         ("remove_reply", "app_review") => {
             sqlx::query(
@@ -1030,7 +1133,7 @@ async fn apply(
         ("warn", _) => {}
         _ => anyhow::bail!("that action doesn't apply to a {kind}"),
     }
-    Ok(())
+    Ok(out)
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -1583,14 +1686,15 @@ async fn act_on_report(
     .bind(subject_id)
     .bind(&outcome)
     .bind(actor)
-    .bind(decision)
+    .bind(decision.id)
     .bind(&external)
     .bind(&kind)
     .fetch_all(&mut *tx)
     .await?;
     tell_reporters(&mut tx, &state.config, &closed, &outcome).await?;
     tx.commit().await?;
-    Ok(json!({ "decision": decision }))
+    crate::bounties::forget_cards(state, &decision.cards).await;
+    Ok(json!({ "decision": decision.id }))
 }
 
 /// A report that was just answered.
@@ -1700,13 +1804,19 @@ struct AppealDecision {
     reason: String,
 }
 
+#[derive(Serialize)]
+struct AppealDecided {
+    /// Reversed, but the app can't go back in the store yet: why, as the maker is told.
+    stays_out: Option<String>,
+}
+
 /// Keeps or reverses a decision on appeal, with the reason the user is shown.
 async fn decide_appeal(
     State(state): State<AppState>,
     admin: AdminUser,
     Path(id): Path<Uuid>,
     Json(b): Json<AppealDecision>,
-) -> ApiResult<axum::http::StatusCode> {
+) -> ApiResult<Json<AppealDecided>> {
     admin.need(crate::staff::Perm::Moderate)?;
     let reason = text("reason", &b.reason, 2000, true)?;
     let mut tx = state.db.begin().await?;
@@ -1719,6 +1829,13 @@ async fn decide_appeal(
     .await?;
     let (action, kind, subject_id, user_id, rule, label) =
         row.ok_or_else(|| ApiError::Conflict("that appeal isn't pending".into()))?;
+    let applied = if b.reverse {
+        apply(&mut tx, &action, &kind, subject_id, user_id, &rule, true)
+            .await
+            .map_err(refused)?
+    } else {
+        Applied::default()
+    };
     crate::notify::send(
         &mut tx,
         crate::notify::Notice {
@@ -1732,17 +1849,15 @@ async fn decide_appeal(
                     "the decision stands"
                 }
             ),
-            body: reason.clone(),
+            body: match &applied.stays_out {
+                Some(why) => format!("{reason}\n\n{why}"),
+                None => reason.clone(),
+            },
             link: "/account#decisions".into(),
             collapse_key: None,
         },
     )
     .await?;
-    if b.reverse {
-        apply(&mut tx, &action, &kind, subject_id, user_id, &rule, true)
-            .await
-            .map_err(refused)?;
-    }
     sqlx::query(
         "update moderation_decisions set appeal_status = $2, appeal_reason = $3, appeal_decided_by = $4,
                 appeal_decided_at = now(), reversed_at = case when $5 then now() end, seen_at = null
@@ -1764,11 +1879,13 @@ async fn decide_appeal(
             "appeal.uphold"
         },
         &id.to_string(),
-        json!({ "reason": reason }),
+        json!({ "reason": reason, "stays_out": applied.stays_out }),
     )
     .await?;
     tx.commit().await?;
-    Ok(axum::http::StatusCode::NO_CONTENT)
+    Ok(Json(AppealDecided {
+        stays_out: applied.stays_out,
+    }))
 }
 
 #[cfg(test)]

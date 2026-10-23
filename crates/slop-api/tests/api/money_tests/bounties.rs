@@ -1559,7 +1559,7 @@ async fn staff_hide_a_bounty_and_can_reverse_it_on_appeal(db: PgPool) {
             .json(json!({ "reverse": true, "reason": "It is a real bug." })),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(bounty_status(&app, &id).await, "open");
     assert_eq!(
         app.send(req(Method::GET, format!("/v1/bounties/{id}")))
@@ -1569,10 +1569,9 @@ async fn staff_hide_a_bounty_and_can_reverse_it_on_appeal(db: PgPool) {
     );
 }
 
-/// b31: hiding a bounty must also forget its saved cards at Stripe and stop any charges still
-/// due; reversing it must not leave it to expire at once.
+/// b31: hiding a bounty also forgets its saved cards at Stripe and stops any charges still due;
+/// reversing it doesn't leave it to expire at once.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "b31: hiding a bounty doesn't detach cards or stop due charges, and reversing it leaves it expired (needs a decision on what hiding a paying bounty does)"]
 async fn hiding_a_bounty_lets_go_of_its_cards_and_charges(db: PgPool) {
     let fake = FakeStripe::start().await;
     let app = stripe_app(db, &fake).await;
@@ -1620,7 +1619,12 @@ async fn hiding_a_bounty_lets_go_of_its_cards_and_charges(db: PgPool) {
     .await;
     hide(&app, &ann, &admin, &paying).await;
     slop_api::bounties::charge_due(&app.state).await.unwrap();
-    assert_ne!(pledge_status(&app, &paying, bob_id).await, "paid");
+    assert_eq!(pledge_status(&app, &paying, bob_id).await, "released");
+    assert!(fake.calls("POST", "v1/payment_intents").is_empty());
+    assert_eq!(
+        fake.calls("POST", "v1/payment_methods/pm_bob/detach").len(),
+        1
+    );
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
