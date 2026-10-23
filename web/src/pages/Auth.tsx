@@ -436,6 +436,7 @@ export function Account() {
   const navigate = useNavigate();
   const { me, signOut, refresh } = useSession();
   const sessions = useLoad(() => (me ? api.sessions() : Promise.resolve([])), [me?.id]);
+  const [privacyError, setPrivacyError] = useState<string>();
 
   if (me === undefined) return <Loading />;
   if (!me) {
@@ -450,6 +451,13 @@ export function Account() {
       </div>
     );
   }
+
+  const setPrivacy = (changes: Parameters<typeof api.updateMe>[0]) => {
+    setPrivacyError(undefined);
+    void api.updateMe(changes).then(refresh, (err: unknown) =>
+      setPrivacyError(err instanceof ApiError ? err.message : String(err)),
+    );
+  };
 
   const revoke = async (id: string) => {
     await api.revokeSession(id);
@@ -476,7 +484,7 @@ export function Account() {
           <input
             type="checkbox"
             checked={me.profile_public}
-            onChange={(e) => void api.updateMe({ profile_public: e.target.checked }).then(refresh)}
+            onChange={(e) => setPrivacy({ profile_public: e.target.checked })}
           />{" "}
           <span>
             <b>Show my votes and reviews on my profile</b>
@@ -490,7 +498,7 @@ export function Account() {
           <input
             type="checkbox"
             checked={me.share_playtime}
-            onChange={(e) => void api.updateMe({ share_playtime: e.target.checked }).then(refresh)}
+            onChange={(e) => setPrivacy({ share_playtime: e.target.checked })}
           />{" "}
           <span>
             <b>Share my playtime</b>
@@ -504,7 +512,7 @@ export function Account() {
           <input
             type="checkbox"
             checked={me.personalize}
-            onChange={(e) => void api.updateMe({ personalize: e.target.checked }).then(refresh)}
+            onChange={(e) => setPrivacy({ personalize: e.target.checked })}
           />{" "}
           <span>
             <b>Recommendations based on my activity</b>
@@ -518,6 +526,11 @@ export function Account() {
           <p className="muted small">
             Your browser sends Global Privacy Control, asking sites not to sell or share your data. Slop never does, and
             because of it, recommendations based on your activity stay off unless you turn them on.
+          </p>
+        )}
+        {privacyError && (
+          <p className="form-error" role="alert">
+            {privacyError}
           </p>
         )}
       </div>

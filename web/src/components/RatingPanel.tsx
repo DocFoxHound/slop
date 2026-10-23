@@ -238,10 +238,15 @@ function MyReview({
     }
   };
   const remove = async () => {
-    await api.reviews.remove(slug);
-    setText("");
-    await onSaved();
-    window.dispatchEvent(new Event("slop:reviews-changed"));
+    setError(undefined);
+    try {
+      await api.reviews.remove(slug);
+      setText("");
+      await onSaved();
+      window.dispatchEvent(new Event("slop:reviews-changed"));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
   };
   if (review && !editing) {
     return (
@@ -261,6 +266,11 @@ function MyReview({
             Delete
           </button>
         </span>
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
       </div>
     );
   }

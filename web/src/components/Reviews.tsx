@@ -16,6 +16,7 @@ export function Reviews({ slug }: { slug: string }) {
   const [next, setNext] = useState<number | null>(null);
   const [nonce, setNonce] = useState(0);
   const [canReply, setCanReply] = useState(false);
+  const [moreError, setMoreError] = useState<string>();
   useEffect(() => {
     const changed = () => setNonce((n) => n + 1);
     window.addEventListener("slop:reviews-changed", changed);
@@ -36,9 +37,14 @@ export function Reviews({ slug }: { slug: string }) {
   }, [slug, filter, nonce]);
   const more = async () => {
     if (next === null) return;
-    const page = await api.reviews.list(slug, filter || undefined, next);
-    setReviews((r) => [...(r ?? []), ...page.reviews]);
-    setNext(page.next_offset);
+    setMoreError(undefined);
+    try {
+      const page = await api.reviews.list(slug, filter || undefined, next);
+      setReviews((r) => [...(r ?? []), ...page.reviews]);
+      setNext(page.next_offset);
+    } catch (err) {
+      setMoreError(err instanceof ApiError ? err.message : String(err));
+    }
   };
   if (!reviews || counts.not_slop + counts.slop === 0) return null;
   return (
@@ -95,6 +101,11 @@ export function Reviews({ slug }: { slug: string }) {
         <button type="button" className="btn small" onClick={() => void more()}>
           More reviews
         </button>
+      )}
+      {moreError && (
+        <p className="form-error" role="alert">
+          {moreError}
+        </p>
       )}
     </section>
   );
