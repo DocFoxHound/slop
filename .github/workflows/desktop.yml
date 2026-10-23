@@ -1,11 +1,16 @@
-# Builds the Windows desktop app on every push to main and publishes it to the test server, which
-# signs it for the app's auto-updater (crates/slop-api/src/desktop_updates.rs). No secrets: the
-# upload is authenticated with this run's GitHub OIDC token.
+# Builds the Windows desktop app and publishes it to its site, which signs it for the app's
+# auto-updater (crates/slop-api/src/desktop_updates.rs). Two channels: every push to main builds
+# the test server's app, and moving the `production` tag (deploy/ship-to-production.sh) builds
+# slopai.games's. Each app talks to and updates from its own site only, and each site accepts
+# only its own channel's runs (SLOP_DESKTOP_REF). No secrets: the upload is authenticated with
+# this run's GitHub OIDC token.
 name: Desktop app
 
 on:
   push:
     branches: [main]
+    # GitHub doesn't apply the path filter below to tags: production always gets a build.
+    tags: [production]
     paths:
       - "crates/**"
       - "web/**"
@@ -23,7 +28,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SLOP_URL: https://slop.188-68-41-241.sslip.io
+  SLOP_URL: ${{ github.ref == 'refs/tags/production' && 'https://slopai.games' || 'https://slop.188-68-41-241.sslip.io' }}
 
 jobs:
   windows:
@@ -57,13 +62,17 @@ jobs:
           key: windows-cargo-${{ hashFiles('Cargo.lock') }}
           restore-keys: windows-cargo-
 
-      - name: Set the version
+      - name: Set the version and site
         run: |
           node -e '
             const fs = require("fs");
             const file = "crates/slop-desktop/tauri.conf.json";
             const conf = JSON.parse(fs.readFileSync(file, "utf8"));
             conf.version = process.env.VERSION;
+            // The app updates from the site it was built for (the file names slopai.games).
+            const site = process.env.SLOP_URL;
+            conf.bundle.homepage = site;
+            conf.plugins.updater.endpoints = conf.plugins.updater.endpoints.map((e) => site + e.slice(e.indexOf("/v1/")));
             fs.writeFileSync(file, JSON.stringify(conf, null, 2));
           '
 
@@ -75,11 +84,13 @@ jobs:
         working-directory: web
         env:
           SLOP_API_URL: ${{ env.SLOP_URL }}/
-          # The test server's release-signing public key (not a secret).
+          # The release-signing public key (not a secret); the test server and production share it.
           SLOP_TRUSTED_KEYS: Y4ONcDe13CHu7blM2TpRSTcxuQ3Jc5yl2jrSLfJkav0=
-          # Private repositories can't make GitHub attestations (docs/TESTING.md).
-          SLOP_ALLOW_UNSIGNED: "true"
-        run: npm run desktop:build:windows
+        run: |
+          # Private repositories can't make GitHub attestations (docs/TESTING.md), so the test
+          # server's app accepts releases without them. Never production's: build.rs refuses it.
+          if [ "$GITHUB_REF" != refs/tags/production ]; then export SLOP_ALLOW_UNSIGNED=true; fi
+          npm run desktop:build:windows
 
       - name: Publish to Slop
         run: |

@@ -1,11 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Updates for the Slop desktop app itself (SECURITY §7: self-updates are signed and verified).
 //!
-//! CI builds the app on every push to main and uploads it here, proving where it came from with
-//! the run's GitHub OIDC token (no secrets in CI). The server signs each build with the updater
-//! key, which never leaves this server, and answers the app's update checks in the format Tauri's
-//! updater expects. The signature records the version, and the app requires that it matches what
-//! it was offered, so an old build can't be passed off as a new one.
+//! CI builds the app on every push to main (the test server's channel) and when the `production`
+//! tag moves (production's), and uploads it to that channel's server, proving where it came from
+//! with the run's GitHub OIDC token (no secrets in CI). The server signs each build with the
+//! updater key, which never leaves this server, and answers the app's update checks in the format
+//! Tauri's updater expects. The signature records the version, and the app requires that it
+//! matches what it was offered, so an old build can't be passed off as a new one.
 
 use std::{io::Write, path::PathBuf};
 
@@ -146,8 +147,9 @@ async fn upload(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(ApiError::Unauthorized)?;
     let claims = verify_github_token(&state, token.trim()).await?;
-    // Only the desktop workflow on main, in Slop's own repository.
-    let workflow = format!("{repo}/.github/workflows/desktop.yml@refs/heads/main");
+    // Only the desktop workflow in Slop's own repository, run for this server's channel: main
+    // on the test server, the `production` tag in production (SLOP_DESKTOP_REF).
+    let workflow = format!("{repo}/.github/workflows/desktop.yml@{}", cfg.git_ref);
     if !claims.repository.eq_ignore_ascii_case(repo)
         || !claims.job_workflow_ref.eq_ignore_ascii_case(&workflow)
     {

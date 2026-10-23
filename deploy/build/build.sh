@@ -7,6 +7,10 @@
 #   /out/sbom.json       the software bill of materials (on success)
 #   /out/shipped.json    the shipped dependencies, for the dependency audit (on success)
 # The built files stay in /src (target/release/slop-api, web/dist) for update.sh to copy.
+#
+# SLOP_BUILD_ONLY=1 (production, deploy/README.md "Production") skips the tests, lints and browser
+# tests: production deploys only commits that already passed them on the test server, and it has
+# no test database. The build, the SBOM and shipped.json are the same either way.
 set -uo pipefail
 cd /src
 out=/out
@@ -23,17 +27,24 @@ mkdir -p target && touch target/.built-in-container
 # Only the release build is stamped with the commit (the tests check a plain build has none).
 commit="${SLOP_COMMIT:-}"
 unset SLOP_COMMIT
-# Tests, once more if the database was busy (someone else's run): real failures fail twice.
-run_tests() { DATABASE_URL="$SLOP_TEST_DATABASE_URL" cargo test -q --locked >"$out/test.log" 2>&1; }
-if ! run_tests; then
-  grep -qE "PoolTimedOut|too many clients|connection refused" "$out/test.log" || fail tests
-  sleep 60
-  run_tests || fail tests
+build_only="${SLOP_BUILD_ONLY:-}"
+if [ "$build_only" != 1 ]; then
+  # Tests, once more if the database was busy (someone else's run): real failures fail twice.
+  run_tests() { DATABASE_URL="$SLOP_TEST_DATABASE_URL" cargo test -q --locked >"$out/test.log" 2>&1; }
+  if ! run_tests; then
+    grep -qE "PoolTimedOut|too many clients|connection refused" "$out/test.log" || fail tests
+    sleep 60
+    run_tests || fail tests
+  fi
+  cargo clippy --locked --all-targets -q -- -D warnings >"$out/lint.log" 2>&1 || fail lint
 fi
-cargo clippy --locked --all-targets -q -- -D warnings >"$out/lint.log" 2>&1 || fail lint
 SLOP_COMMIT="$commit" cargo build --locked -q --release -p slop-api >"$out/build.log" 2>&1 || fail build
-(cd web && npm ci --silent --no-audit --no-fund && npm test --silent && npm run build --silent) >"$out/web.log" 2>&1 || fail "web build"
-(cd web && npx playwright test) >"$out/e2e.log" 2>&1 || fail "browser tests"
+if [ "$build_only" = 1 ]; then
+  (cd web && npm ci --silent --no-audit --no-fund && npm run build --silent) >"$out/web.log" 2>&1 || fail "web build"
+else
+  (cd web && npm ci --silent --no-audit --no-fund && npm test --silent && npm run build --silent) >"$out/web.log" 2>&1 || fail "web build"
+  (cd web && npx playwright test) >"$out/e2e.log" 2>&1 || fail "browser tests"
+fi
 python3 deploy/sbom.py . "$commit" >"$out/sbom.json" 2>"$out/sbom.log" || rm -f "$out/sbom.json"
 python3 - >"$out/shipped.json" <<'PY' || rm -f "$out/shipped.json"
 import json, sys
