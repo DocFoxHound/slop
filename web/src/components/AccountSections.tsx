@@ -533,11 +533,14 @@ export function AccountDonations() {
   );
 }
 
-/** A sign-in link for actions that need a fresh one (SECURITY §4.3). */
+/**
+ * A fresh sign-in for actions that need one (SECURITY §4.3). Through the sign-in page, which
+ * offers every sign-in the account might use (and passkeys), not only GitHub.
+ */
 function StepUp({ error }: { error: ApiError }) {
   if (error.code !== "step_up_required") return <>{error.message}</>;
   const back = window.location.pathname + "#receiving";
-  return <StepUpPrompt signInAgain={api.githubSignInUrl(back)} />;
+  return <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent(back)}`} />;
 }
 
 /** Where donations are paid, and switching or disconnecting it: 72 hours' wait (SECURITY §9). */

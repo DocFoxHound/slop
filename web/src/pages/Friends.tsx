@@ -173,7 +173,7 @@ export function FriendsPage() {
             <input
               type="checkbox"
               checked={settings.data?.from_anyone ?? false}
-              onChange={(e) => void api.friends.setChatSettings(e.target.checked).then(settings.reload)}
+              onChange={(e) => void run(() => api.friends.setChatSettings(e.target.checked)).then(settings.reload)}
             />
             <span>Anyone on Slop (otherwise only friends, teammates and People job partners)</span>
           </label>

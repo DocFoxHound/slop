@@ -322,7 +322,9 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .doc pre { font-size: 12.5px; line-height: 1.5; }
 .doc li { margin: 4px 0; }
 /* Links in running text are underlined, not just coloured (WCAG 1.4.1). */
-.doc a, main p a:not(.btn):not(.chip), .hint a, .crumbs a, main .muted a:not(.btn):not(.chip), .notice a:not(.btn) { text-decoration: underline; text-underline-offset: 2px; }
+.doc a, main p a:not(.btn):not(.chip), .hint a, .crumbs a,
+.notice a:not(.btn):not(.chip), .account-notice a:not(.btn), .sim-banner a,
+main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), main label a:not(.btn) { text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---- publishing progress and admin --------------------------------------- */
 .progress { margin-bottom: 16px; }
