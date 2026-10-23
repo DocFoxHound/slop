@@ -638,7 +638,7 @@ async fn detach(state: &AppState, stripe: &StripeConfig, payment_method: &str) {
 
 /// A closed account's saved cards: its Stripe customer on Slop's account is deleted, which
 /// removes every card saved to it (best effort, like `detach`).
-pub async fn forget_cards(state: &AppState, user: Uuid) {
+pub async fn forget_customer(state: &AppState, user: Uuid) {
     let Mode::Stripe(stripe) = stripe::mode(state) else {
         return;
     };
