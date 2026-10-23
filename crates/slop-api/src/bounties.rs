@@ -10,6 +10,7 @@
 //!   release delivers it. They need a donation account (their own Stripe account) to be paid.
 //! - **Confirming:** the app's maker accepts or declines. If they made the claim themselves, or
 //!   don't answer within 14 days, the backers vote: more than half of the pledged amount decides.
+//!   If every pledge that counts is withdrawn, the delivery is declined and the bounty reopens.
 //! - **Paying:** each pledge is charged off-session as a **direct charge on the builder's own
 //!   Stripe account** (the card is cloned there), with Slop's 5% as the application fee, and
 //!   recorded in `payments`. Slop never holds the money. A refused card marks that pledge failed
@@ -594,6 +595,18 @@ async fn withdraw(
     if let (Some(pm), Mode::Stripe(stripe)) = (method, stripe::mode(&state)) {
         detach(&state, stripe, &pm).await;
     }
+    // A delivery the backers decide may now be settled, or have nobody left to decide it.
+    let pending: Option<Uuid> = sqlx::query_scalar(
+        "select id from bounty_claims where bounty_id = $1 and status = 'pending'",
+    )
+    .bind(id)
+    .fetch_optional(&state.db)
+    .await?;
+    if let Some(claim) = pending
+        && backers_decide(&state.db, claim).await?
+    {
+        settle(&state, id, claim).await?;
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 
@@ -610,6 +623,50 @@ async fn detach(state: &AppState, stripe: &StripeConfig, payment_method: &str) {
     .await
     {
         tracing::warn!(error = %e, "detaching a pledge's card");
+    }
+}
+
+/// A closed account's saved cards: its Stripe customer on Slop's account is deleted, which
+/// removes every card saved to it (best effort, like `detach`).
+pub async fn forget_cards(state: &AppState, user: Uuid) {
+    let Mode::Stripe(stripe) = stripe::mode(state) else {
+        return;
+    };
+    let customer: Option<String> =
+        match sqlx::query_scalar("select customer_id from stripe_customers where user_id = $1")
+            .bind(user)
+            .fetch_optional(&state.db)
+            .await
+        {
+            Ok(c) => c,
+            Err(e) => {
+                tracing::warn!(error = %e, %user, "finding a closed account's saved cards");
+                return;
+            }
+        };
+    let Some(customer) = customer else {
+        return;
+    };
+    let deleted = call(
+        state,
+        stripe,
+        reqwest::Method::DELETE,
+        &format!("v1/customers/{customer}"),
+        None,
+        &[],
+    )
+    .await;
+    match deleted {
+        Ok(_) => {
+            if let Err(e) = sqlx::query("delete from stripe_customers where user_id = $1")
+                .bind(user)
+                .execute(&state.db)
+                .await
+            {
+                tracing::warn!(error = %e, %user, "forgetting a closed account's Stripe customer");
+            }
+        }
+        Err(e) => tracing::warn!(error = %e, %user, "deleting a closed account's saved cards"),
     }
 }
 
@@ -881,8 +938,20 @@ async fn settle(state: &AppState, id: Uuid, claim: Uuid) -> ApiResult<()> {
         .bind(claim)
         .fetch_one(&state.db)
         .await?;
+    // Every counted pledge was withdrawn: nobody is left to decide it or pay for it (b34).
+    if total == 0 {
+        return decide_as(
+            state,
+            id,
+            claim,
+            false,
+            "backers",
+            "Every backer withdrew their pledge. ",
+        )
+        .await;
+    }
     let window_over = open_for.unwrap_or(0.0) >= VOTING_WINDOW.as_seconds_f64();
-    if total == 0 || (unvoted > 0 && !window_over) {
+    if unvoted > 0 && !window_over {
         return Ok(());
     }
     if yes * 2 > total {
@@ -940,6 +1009,19 @@ async fn withdraw_claim(
 
 /// Settles a claim. Accepted: the bounty is paid out (charge_due charges each pledge).
 async fn decide(state: &AppState, id: Uuid, claim: Uuid, accept: bool, by: &str) -> ApiResult<()> {
+    decide_as(state, id, claim, accept, by, "").await
+}
+
+/// `decide`, telling the builder why first. Declined: the bounty reopens until its deadline (the
+/// charger expires it if that has passed).
+async fn decide_as(
+    state: &AppState,
+    id: Uuid,
+    claim: Uuid,
+    accept: bool,
+    by: &str,
+    why: &str,
+) -> ApiResult<()> {
     let mut tx = state.db.begin().await?;
     let row: Option<(Uuid, String)> = sqlx::query_as(
         "update bounty_claims c set status = $3, decided_by = $4, decided_at = now()
@@ -969,12 +1051,17 @@ async fn decide(state: &AppState, id: Uuid, claim: Uuid, accept: bool, by: &str)
             .bind(id)
             .execute(&mut *tx)
             .await?;
-    } else {
-        sqlx::query("update bounties set status = 'open' where id = $1")
-            .bind(id)
-            .execute(&mut *tx)
-            .await?;
     }
+    let ended: bool = if accept {
+        false
+    } else {
+        sqlx::query_scalar(
+            "update bounties set status = 'open' where id = $1 returning expires_at < now()",
+        )
+        .bind(id)
+        .fetch_one(&mut *tx)
+        .await?
+    };
     notify::send(
         &mut tx,
         Notice {
@@ -987,8 +1074,10 @@ async fn decide(state: &AppState, id: Uuid, claim: Uuid, accept: bool, by: &str)
             },
             body: if accept {
                 "The backers' pledges are being charged and paid to your Stripe account.".into()
+            } else if ended {
+                format!("{why}The bounty has passed its deadline, so it has ended.")
             } else {
-                "The bounty is open again.".into()
+                format!("{why}The bounty is open again.")
             },
             link: format!("/bounties/{id}"),
             collapse_key: Some(format!("bounty:{id}")),
@@ -1165,6 +1254,78 @@ async fn charge_due_locked(state: &AppState) -> anyhow::Result<usize> {
         }
     }
     Ok(charged)
+}
+
+/// A refund on a pledge's charge (the builder's, from their Stripe dashboard): records the new
+/// part of it against the pledge's payment, which holds the payment intent's ID (`keys`, from the
+/// charge).
+pub async fn refund_recorded(
+    db: &sqlx::PgPool,
+    charge: &str,
+    keys: &[String],
+    refunded_total: i64,
+) -> anyhow::Result<()> {
+    let mut tx = db.begin().await?;
+    #[allow(clippy::type_complexity)] // one row of the query below
+    let original: Option<(Uuid, Option<Uuid>, Option<String>, i32, String)> = sqlx::query_as(
+        "select id, bounty_pledge_id, stripe_account_id, amount_minor, currency from payments
+         where stripe_object_id = any($1) and kind = 'bounty' limit 1 for update",
+    )
+    .bind(keys)
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some((id, pledge, account, paid, currency)) = original else {
+        return Ok(());
+    };
+    // Stripe gives the total refunded so far: record only what's new since the last refund.
+    let so_far: i64 = sqlx::query_scalar(
+        "select coalesce(-sum(amount_minor), 0)::int8 from payments where refund_of = $1 and kind = 'refund'",
+    )
+    .bind(id)
+    .fetch_one(&mut *tx)
+    .await?;
+    let new = refunded_total.min(i64::from(paid)) - so_far;
+    if new > 0 {
+        sqlx::query(
+            "insert into payments (id, kind, refund_of, bounty_pledge_id, stripe_account_id, stripe_object_id, amount_minor, currency)
+             values ($1, 'refund', $2, $3, $4, $5, $6, $7) on conflict (stripe_object_id) do nothing",
+        )
+        .bind(Uuid::now_v7())
+        .bind(id)
+        .bind(pledge)
+        .bind(account)
+        .bind(format!("{charge}:refunded:{refunded_total}"))
+        .bind(-(new as i32))
+        .bind(currency)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(())
+}
+
+/// A card dispute (chargeback) on a pledge's charge: recorded against its payment, as for People
+/// jobs; the dispute's ID makes it once only.
+pub async fn dispute_recorded(
+    db: &sqlx::PgPool,
+    keys: &[String],
+    dispute: &str,
+    amount: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "insert into payments (id, kind, refund_of, bounty_pledge_id, stripe_account_id, stripe_object_id, amount_minor, currency)
+         select $1, 'dispute', p.id, p.bounty_pledge_id, p.stripe_account_id, $3, $4, p.currency
+         from payments p where p.stripe_object_id = any($2) and p.kind = 'bounty'
+         limit 1
+         on conflict (stripe_object_id) do nothing",
+    )
+    .bind(Uuid::now_v7())
+    .bind(keys)
+    .bind(dispute)
+    .bind(-(amount as i32))
+    .execute(db)
+    .await?;
+    Ok(())
 }
 
 /// One pledge, as a direct charge on the builder's Stripe account: the saved card is cloned

@@ -1629,10 +1629,9 @@ async fn closing_an_account_waits_for_server_donations_and_withdraws_pledges(db:
     assert_eq!(pledge, "withdrawn");
 }
 
-/// b37: a pledge whose delivery was confirmed is due; closing the account must not leave it to be
-/// charged (refuse to close, or withdraw it).
+/// b37: a pledge whose delivery was confirmed is due: the builder is owed it, so closing waits
+/// until it's charged, as it does for an owed job payment. A closed account is never charged.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "b37: closing an account leaves 'due' pledges to be charged afterwards (product decision: block closing or withdraw)"]
 async fn a_closed_account_is_never_charged_for_a_pledge(db: PgPool) {
     let app = test_app_with(db, simulated).await;
     let (maker_id, maker) = app.user("Mia Maker", "US").await;
@@ -1677,25 +1676,80 @@ async fn a_closed_account_is_never_charged_for_a_pledge(db: PgPool) {
         )
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    let closed = app
-        .send(
-            req(Method::POST, "/v1/me/close")
-                .cookie(&eve)
-                .json(json!({ "confirm": "close my account" })),
-        )
-        .await
-        .status()
-        == StatusCode::NO_CONTENT;
+    let close = || {
+        req(Method::POST, "/v1/me/close")
+            .cookie(&eve)
+            .json(json!({ "confirm": "close my account" }))
+    };
+    let res = app.send(close()).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("your pledge is still being charged")
+    );
+    let charged = || {
+        let app = &app;
+        async move {
+            sqlx::query_scalar::<_, i64>("select count(*) from payments where payer_id = $1")
+                .bind(eve_id)
+                .fetch_one(&app.db)
+                .await
+                .unwrap()
+        }
+    };
+    assert_eq!(charged().await, 0);
+    // Charged, it's settled: now the account closes, and nothing more is charged.
     slop_api::bounties::charge_due(&app.state).await.unwrap();
-    let charged: i64 = sqlx::query_scalar("select count(*) from payments where payer_id = $1")
+    assert_eq!(charged().await, 1);
+    assert_eq!(app.send(close()).await.status(), StatusCode::NO_CONTENT);
+    slop_api::bounties::charge_due(&app.state).await.unwrap();
+    assert_eq!(charged().await, 1);
+}
+
+/// b37: a pledge confirmed between the check and the closing still stops it: the account isn't
+/// closed with a pledge due.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn closing_never_leaves_a_due_pledge_behind(db: PgPool) {
+    let app = test_app_with(db, simulated).await;
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    let (eve_id, eve) = adult(&app, "Eve Backer", "US").await;
+    let bounty = body_json(
+        app.send(
+            req(Method::POST, "/v1/apps/arena/bounties")
+                .cookie(&eve)
+                .json(json!({ "title": "Fix saves", "body": "They vanish.", "currency": "usd" })),
+        )
+        .await,
+    )
+    .await;
+    let id = bounty["id"].as_str().unwrap();
+    app.send(
+        req(Method::POST, format!("/v1/bounties/{id}/pledge"))
+            .cookie(&eve)
+            .json(json!({ "amount_minor": 1000 })),
+    )
+    .await;
+    sqlx::query("update bounty_pledges set status = 'due' where user_id = $1")
+        .bind(eve_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let err = slop_api::account::close_account(&app.db, eve_id, "test")
+        .await
+        .unwrap_err();
+    assert!(
+        err.to_string()
+            .contains("your pledge is still being charged")
+    );
+    let closed: bool = sqlx::query_scalar("select closed_at is not null from users where id = $1")
         .bind(eve_id)
         .fetch_one(&app.db)
         .await
         .unwrap();
-    assert!(
-        !(closed && charged > 0),
-        "the account was closed, then its pledge was charged"
-    );
+    assert!(!closed);
 }
 
 /// Pruning the limiter's buckets (at 200,000) keeps every account that's still limited.

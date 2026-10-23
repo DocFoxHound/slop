@@ -331,6 +331,7 @@ fn stripe_answer(
             json!({ "data": page, "has_more": from + 2 < s.application_fees.len() })
         }
         ("POST", ["v1", "customers"]) => json!({ "id": format!("cus_{n}") }),
+        ("DELETE", ["v1", "customers", id]) => json!({ "id": id, "deleted": true }),
         ("POST", ["v1", "payment_methods"]) => {
             let id = format!("pm_clone_{n}");
             let card = form.get("payment_method").cloned().unwrap_or_default();

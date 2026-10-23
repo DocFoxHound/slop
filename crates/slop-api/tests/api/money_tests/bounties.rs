@@ -812,14 +812,28 @@ async fn withdrawing_a_pledge_works_until_its_delivery_is_accepted(db: PgPool) {
     assert_eq!(pledge_status(&app, &id, bob_id).await, "due");
 }
 
-/// b34: when every counted pledge is withdrawn from a delivery the backers decide, nothing can
-/// ever settle it, and the bounty can take neither pledges nor another delivery.
+/// b34: when every counted pledge is withdrawn from a delivery the backers decide, nobody is left
+/// to settle it: the delivery is declined and the bounty reopens (or ends, past its deadline),
+/// and the builder is told why.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "b34: a backer-decided claim with no counted pledges left stays pending for ever (decide: decline and reopen, or expire)"]
 async fn a_delivery_with_no_pledges_left_doesnt_hold_the_bounty_for_ever(db: PgPool) {
     let app = test_app_with(db, simulated).await;
-    let ((_, maker), _) = tower(&app).await;
+    let ((maker_id, maker), (forker_id, forker)) = tower(&app).await;
     let (_, ann) = adult(&app, "Ann Backer", "US").await;
+    let withdraw = |id: &str| req(Method::DELETE, format!("/v1/bounties/{id}/pledge")).cookie(&ann);
+    let told = |who: Uuid| {
+        let app = &app;
+        async move {
+            sqlx::query_scalar::<_, String>(
+                "select body from notifications where user_id = $1 and title like '%was declined'",
+            )
+            .bind(who)
+            .fetch_all(&app.db)
+            .await
+            .unwrap()
+        }
+    };
+    // The maker's own delivery: the last backer withdrawing settles it at once.
     let id = open_bounty(&app, &ann, "tower", "Fix lost saves").await;
     pledge_ok(&app, &ann, &id, 1000).await;
     assert_eq!(
@@ -827,11 +841,59 @@ async fn a_delivery_with_no_pledges_left_doesnt_hold_the_bounty_for_ever(db: PgP
         StatusCode::NO_CONTENT
     );
     let c = pending_claim(&app, &id).await;
-    app.send(req(Method::DELETE, format!("/v1/bounties/{id}/pledge")).cookie(&ann))
-        .await;
+    assert_eq!(
+        app.send(withdraw(&id)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(bounty_status(&app, &id).await, "open");
+    let (status, by): (String, Option<String>) =
+        sqlx::query_as("select status, decided_by from bounty_claims where id = $1")
+            .bind(c)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(
+        (status.as_str(), by.as_deref()),
+        ("declined", Some("backers"))
+    );
+    assert_eq!(
+        told(maker_id).await,
+        ["Every backer withdrew their pledge. The bounty is open again."]
+    );
+    // Someone else's delivery the maker never answered, on a bounty past its deadline: the
+    // charger declines it once the backers would decide, and the bounty ends as usual.
+    let id = open_bounty(&app, &ann, "tower", "Add a map").await;
+    pledge_ok(&app, &ann, &id, 1000).await;
+    assert_eq!(
+        claim(&app, &forker, &id, "tower-fix").await,
+        StatusCode::NO_CONTENT
+    );
+    let c = pending_claim(&app, &id).await;
+    assert_eq!(
+        app.send(withdraw(&id)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        bounty_status(&app, &id).await,
+        "claimed",
+        "the maker decides first"
+    );
     age_claim(&app, c, 30).await;
+    sqlx::query("update bounties set expires_at = now() - interval '1 day' where id = $1")
+        .bind(id.parse::<Uuid>().unwrap())
+        .execute(&app.db)
+        .await
+        .unwrap();
     slop_api::bounties::settle_due(&app.state).await.unwrap();
-    assert_ne!(bounty_status(&app, &id).await, "claimed");
+    assert_eq!(bounty_status(&app, &id).await, "open");
+    assert_eq!(
+        told(forker_id).await,
+        [
+            "Every backer withdrew their pledge. The bounty has passed its deadline, so it has ended."
+        ]
+    );
+    slop_api::bounties::charge_due(&app.state).await.unwrap();
+    assert_eq!(bounty_status(&app, &id).await, "expired");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

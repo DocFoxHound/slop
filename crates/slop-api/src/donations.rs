@@ -1314,15 +1314,23 @@ pub async fn subscription_ended(
 }
 
 /// A refund on a donation's charge (the maker's, from Slop's button or their Stripe dashboard).
-pub async fn refund_recorded(db: &PgPool, charge: &str, refunded_total: i64) -> anyhow::Result<()> {
+/// `keys` are the IDs the donation may be recorded under (the charge, or a monthly one's
+/// invoice).
+pub async fn refund_recorded(
+    db: &PgPool,
+    charge: &str,
+    keys: &[String],
+    refunded_total: i64,
+) -> anyhow::Result<()> {
     let mut tx = db.begin().await?;
-    let row: Option<(Uuid, i32, String, String)> = sqlx::query_as(
-        "select id, total_minor, currency, stripe_account_id from donations where stripe_object_id = $1 for update",
+    let row: Option<(Uuid, i32, String, String, String)> = sqlx::query_as(
+        "select id, total_minor, currency, stripe_account_id, stripe_object_id from donations
+         where stripe_object_id = any($1) for update",
     )
-    .bind(charge)
+    .bind(keys)
     .fetch_optional(&mut *tx)
     .await?;
-    let Some((id, total, currency, account)) = row else {
+    let Some((id, total, currency, account, recorded_as)) = row else {
         return Ok(());
     };
     sqlx::query(
@@ -1337,7 +1345,7 @@ pub async fn refund_recorded(db: &PgPool, charge: &str, refunded_total: i64) -> 
     let original: Option<Uuid> = sqlx::query_scalar(
         "select id from payments where stripe_object_id = $1 and kind = 'donation'",
     )
-    .bind(charge)
+    .bind(&recorded_as)
     .fetch_optional(&mut *tx)
     .await?;
     // Stripe gives the total refunded so far: record only what's new since the last refund.
@@ -1364,6 +1372,30 @@ pub async fn refund_recorded(db: &PgPool, charge: &str, refunded_total: i64) -> 
         .await?;
     }
     tx.commit().await?;
+    Ok(())
+}
+
+/// A card dispute (chargeback) on a donation's charge: recorded against its payment, as for People
+/// jobs. `keys` as for `refund_recorded`; the dispute's ID makes it once only.
+pub async fn dispute_recorded(
+    db: &PgPool,
+    keys: &[String],
+    dispute: &str,
+    amount: i64,
+) -> anyhow::Result<()> {
+    sqlx::query(
+        "insert into payments (id, kind, refund_of, donation_id, stripe_account_id, stripe_object_id, amount_minor, currency)
+         select $1, 'dispute', p.id, p.donation_id, p.stripe_account_id, $3, $4, p.currency
+         from payments p where p.stripe_object_id = any($2) and p.kind = 'donation'
+         limit 1
+         on conflict (stripe_object_id) do nothing",
+    )
+    .bind(Uuid::now_v7())
+    .bind(keys)
+    .bind(dispute)
+    .bind(-(amount as i32))
+    .execute(db)
+    .await?;
     Ok(())
 }
 
@@ -1884,7 +1916,13 @@ async fn refund(
         )
         .await?;
     }
-    refund_recorded(&state.db, &charge, i64::from(total)).await?;
+    refund_recorded(
+        &state.db,
+        &charge,
+        std::slice::from_ref(&charge),
+        i64::from(total),
+    )
+    .await?;
     Ok(StatusCode::NO_CONTENT)
 }
 

@@ -84,9 +84,11 @@ A community build or mod has its own Donate button for the author's own Stripe a
 Players pledge toward a fix or feature on an app; whoever delivers it in an approved release (the app's maker, or a community build's maker) is paid.
 
 - **A pledge saves a card, nothing more.** Stripe Checkout in **setup mode on Slop's platform account** saves the backer's card to their Stripe customer. Slop stores Stripe's IDs only. 1.00 to 500.00 per backer per bounty, one currency per bounty; withdrawable until a delivery is confirmed.
-- **Confirmation:** the app's maker accepts or declines a delivery. When the maker delivered it themselves, or doesn't answer in 14 days, the backers vote; more than half of the pledged amount decides.
+- **Confirmation:** the app's maker accepts or declines a delivery. When the maker delivered it themselves, or doesn't answer in 14 days, the backers vote; more than half of the pledged amount decides. If every pledge that counts for the vote is withdrawn, nobody is left to decide or pay: the delivery is declined, the builder is told, and the bounty reopens until its deadline (or ends, if that has passed).
 - **Payment is a direct charge on the builder's own Stripe account** (their donation account): the saved card is cloned to that account and charged off-session, with Slop's 5% as `application_fee_amount`, recorded in `payments` (kind `bounty`). **Slop never holds the money.** A refused card marks that pledge failed and tells the backer; the others still pay.
 - **Expiry:** 180 days without a confirmed delivery ends the bounty and releases the saved cards (detached at Stripe). Staff hiding a bounty (`hide_bounty`) releases them too.
+- **Closing an account** waits while one of its pledges is due (confirmed, not yet charged), as it does for an owed job payment. Otherwise its pledges are withdrawn and its Stripe customer, with every card saved to it, is deleted.
+- **Refunds and disputes** the builder's Stripe account reports on a pledge's charge are recorded in `payments` against it (the charge is matched to the payment intent the pledge's payment holds), as for donations and People jobs. They change no pledge or bounty status.
 - **Needs before going live:** Stripe's rules for saving a card for later merchant-initiated charges (the pledge text is the customer's agreement, and it's shown before Checkout), the lawyer's review of that text and of refunds and disputes (the builder handles them, as with donations), and a webhook for **platform** events (`checkout.session.completed`) besides the connected-account one. Pledges also sync when the backer returns from Checkout, so the webhook is a backup.
 
 ### 5.5 Donation holds (built 2026-10-22, `donation_holds.rs`)
@@ -150,7 +152,7 @@ payments(id, kind,                  -- donation | server_donation | people_job |
 ```
 
 - **Integer amounts in minor units** (cents), with the currency on every row.
-- Records are only ever **added**. Corrections (refunds, disputes) are new rows linked to the original.
+- Records are only ever **added**. Corrections (refunds, disputes) are new rows linked to the original. Built for People jobs, donations and bounty pledges: a `charge.refunded` or `charge.dispute.created` event is matched to the original by the charge, its payment intent (bounty pledges) or its invoice (monthly donations, where Stripe's charge names it).
 - **Idempotent webhook processing**, keyed on the Stripe event ID. The current state is always fetched from Stripe's API, never trusted from the webhook body (`SECURITY.md` §8.2).
 - **Daily reconciliation** of the record against Stripe's application fees and charges. Any mismatch alerts an admin.
 - Slop's own fee income is reconciled for accounting, with a monthly fee statement to each maker (`LEGAL.md` §3.5).

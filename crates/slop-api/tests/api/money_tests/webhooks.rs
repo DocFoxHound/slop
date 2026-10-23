@@ -563,7 +563,6 @@ async fn refund_webhooks_record_partial_and_full_refunds_once(db: PgPool) {
 /// b40: refunds and disputes on bounty payouts and donations are money moving back; the payments
 /// record (append-only, PAYMENTS §8) should show them as it does for People jobs.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "b40: disputes on donations and bounties, and refunds of bounty charges, aren't recorded (needs a decision on what they change)"]
 async fn disputes_on_donations_and_bounty_refunds_are_recorded(db: PgPool) {
     let fake = FakeStripe::start().await;
     let app = stripe_app(db, &fake).await;
@@ -625,6 +624,29 @@ async fn disputes_on_donations_and_bounty_refunds_are_recorded(db: PgPool) {
         )
         .await,
         -2000
+    );
+    // A dispute on the same charge, told twice: recorded once, against the pledge's payment.
+    for evt in ["evt_bounty_dispute", "evt_bounty_dispute_again"] {
+        let status = hook(
+            &app,
+            event(
+                evt,
+                "charge.dispute.created",
+                Some(&acct),
+                json!({ "id": "dp_2", "charge": "ch_bounty", "amount": 2000 }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK);
+    }
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from payments where kind = 'dispute'
+             and refund_of = (select id from payments where stripe_object_id = 'pi_bounty')"
+        )
+        .await,
+        1
     );
 }
 
@@ -768,6 +790,79 @@ async fn pledge_webhooks_activate_a_saved_card_and_never_revive_a_withdrawn_pled
         StatusCode::OK
     );
     assert_eq!(pledge_status(bob_id).await, ("withdrawn".into(), None));
+}
+
+/// b37: closing an account withdraws its pledges and deletes its Stripe customer, so no card
+/// stays saved for it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn closing_an_account_removes_its_saved_cards(db: PgPool) {
+    let fake = FakeStripe::start().await;
+    let app = stripe_app(db, &fake).await;
+    let (maker_id, _) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "arena", "released", "").await;
+    let (ann_id, ann) = adult(&app, "Ann Backer", "US").await;
+    let bounty = body_json(
+        app.send(
+            req(Method::POST, "/v1/apps/arena/bounties")
+                .cookie(&ann)
+                .json(json!({ "title": "Fix saves", "body": "They vanish.", "currency": "usd" })),
+        )
+        .await,
+    )
+    .await;
+    let id = bounty["id"].as_str().unwrap();
+    let started = body_json(
+        app.send(
+            req(Method::POST, format!("/v1/bounties/{id}/pledge"))
+                .cookie(&ann)
+                .json(json!({ "amount_minor": 1000 })),
+        )
+        .await,
+    )
+    .await;
+    let session = started["url"].as_str().unwrap().rsplit('/').next().unwrap();
+    fake.patch_session(
+        session,
+        json!({ "status": "complete", "setup_intent": { "payment_method": "pm_ann" } }),
+    );
+    let saved = event(
+        "evt_saved",
+        "checkout.session.completed",
+        None,
+        json!({ "id": session, "metadata": { "bounty_pledge_id": "x" } }),
+    );
+    assert_eq!(hook(&app, saved).await, StatusCode::OK);
+    let customer: String =
+        sqlx::query_scalar("select customer_id from stripe_customers where user_id = $1")
+            .bind(ann_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/close")
+                .cookie(&ann)
+                .json(json!({ "confirm": "close my account" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(
+        fake.calls("DELETE", &format!("v1/customers/{customer}"))
+            .len(),
+        1
+    );
+    assert_eq!(
+        count(&app, "select count(*) from stripe_customers").await,
+        0
+    );
+    assert_eq!(
+        count(
+            &app,
+            "select count(*) from bounty_pledges where status = 'withdrawn'"
+        )
+        .await,
+        1
+    );
 }
 
 /// A People job the client has accepted, on a creative with a Stripe account: (job ID, the
