@@ -41,3 +41,11 @@ test("the source code page offers the code", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "Source code", level: 1 })).toBeVisible();
   await expect(page.getByText(/GNU Affero General Public License/)).toBeVisible();
 });
+
+test("the contact page publishes the address, linked from the menu", async ({ page }) => {
+  await page.goto("/");
+  await page.getByRole("link", { name: /Contact/ }).first().click();
+  await expect(page.getByRole("heading", { name: "Contact", level: 1 })).toBeVisible();
+  const address = page.getByRole("link", { name: "hello@slop.example" });
+  await expect(address).toHaveAttribute("href", "mailto:hello@slop.example");
+});

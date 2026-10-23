@@ -212,6 +212,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
 
     let v1 = Router::new()
         .route("/source", get(source))
+        .route("/contact", get(contact))
         .merge(abuse::routes())
         .merge(auth::routes())
         .merge(catalog::routes())
@@ -457,13 +458,21 @@ async fn source(axum::extract::State(state): axum::extract::State<AppState>) -> 
     }))
 }
 
-/// How to report a security problem (RFC 9116), once `SLOP_SECURITY_CONTACT` names a contact.
+/// Slop's published contact address (`SLOP_CONTACT_EMAIL`) for the contact page; null when unset.
+async fn contact(axum::extract::State(state): axum::extract::State<AppState>) -> Json<Value> {
+    Json(json!({ "email": state.config.contact_email }))
+}
+
+/// How to report a security problem (RFC 9116), once `SLOP_SECURITY_CONTACT` or, failing that,
+/// `SLOP_CONTACT_EMAIL` names a contact.
 async fn security_txt(
     axum::extract::State(state): axum::extract::State<AppState>,
 ) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let Some(contact) = state.config.security_contact.as_deref() else {
-        return StatusCode::NOT_FOUND.into_response();
+    let contact = match (&state.config.security_contact, &state.config.contact_email) {
+        (Some(c), _) => c.clone(),
+        (None, Some(email)) => format!("mailto:{email}"),
+        (None, None) => return StatusCode::NOT_FOUND.into_response(),
     };
     let expires = (time::OffsetDateTime::now_utc() + time::Duration::days(180))
         .replace_nanosecond(0)

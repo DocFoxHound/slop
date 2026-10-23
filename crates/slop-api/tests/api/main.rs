@@ -574,6 +574,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         approvals_required: 1,
         field_key: Some([11; 32]),
         security_contact: Some("mailto:security@slop.example".into()),
+        contact_email: Some("hello@slop.example".into()),
         source_url: Some("https://github.com/slop/slop".into()),
     };
     let mut config = config;
