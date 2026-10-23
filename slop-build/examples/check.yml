@@ -18,4 +18,4 @@ jobs:
     with:
       tag: ${{ inputs.tag }}
       app: your-app
-      slop-url: https://slop.188-68-41-241.sslip.io
+      slop-url: https://slopai.games

@@ -34,7 +34,9 @@ The diagram in §2 is the target. Today everything runs on **one server** (detai
 | Desktop app | Windows (built on GitHub, signed updates) and Linux (`.deb`, `.rpm`, built on the server) | Plus macOS, Android, and iOS if it goes ahead |
 | Slop Build | GitHub Actions on makers' repositories (§6.2) | Plus Slop-run builders for other hosts |
 
-The domain is a temporary `sslip.io` name; there's no staging environment yet.
+The `sslip.io` server is the test deployment, which every commit on `main` reaches first;
+production (`slopai.games`, its own server set up the same way) runs only commits already live
+there, when the `production` tag is moved to them (`deploy/README.md`, "Production").
 
 ## 1. Goals and constraints
 

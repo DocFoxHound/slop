@@ -22,7 +22,15 @@ flock 9
 set -a; . "$HOME/.config/slop/slop.env"; . "$HOME/.config/slop/desktop-build.env"; set +a
 VERSION="0.1.$(git -C "$REPO" rev-list --count "$COMMIT")"
 SITE="${SLOP_PUBLIC_URL%/}"
-log "building $VERSION from ${COMMIT:0:12}: ${KINDS[*]}"
+# Private repositories can't make GitHub attestations (docs/TESTING.md), so a test site's app
+# accepts releases without them. Only a test site's: the same rule as crates/slop-desktop/build.rs,
+# which refuses to build it for any other.
+host=${SITE#*://}; host=${host%%[/:]*}
+case "$host" in
+  localhost | 127.0.0.1 | *.sslip.io) unsigned=(-e SLOP_ALLOW_UNSIGNED=true) ;;
+  *) unsigned=() ;;
+esac
+log "building $VERSION from ${COMMIT:0:12} for $SITE: ${KINDS[*]}"
 
 for kind in "${KINDS[@]}"; do
   podman build -q -t "slop-build-$kind" -f "$HERE/Containerfile.$kind" "$HERE" >/dev/null
@@ -33,14 +41,17 @@ for kind in "${KINDS[@]}"; do
   podman run --rm \
     -v "$src:/src:Z" -v "$out:/out:Z" -v "slop-build-cache-$kind:/cache" \
     -e CARGO_HOME=/cache/cargo -e CARGO_TARGET_DIR=/cache/target -e npm_config_cache=/cache/npm \
-    -e VERSION="$VERSION" -e KIND="$kind" \
-    -e SLOP_API_URL="$SITE/" -e SLOP_TRUSTED_KEYS="$SLOP_TRUSTED_KEYS" -e SLOP_ALLOW_UNSIGNED=true \
+    -e VERSION="$VERSION" -e KIND="$kind" -e SITE="$SITE" \
+    -e SLOP_API_URL="$SITE/" -e SLOP_TRUSTED_KEYS="$SLOP_TRUSTED_KEYS" "${unsigned[@]}" \
     "slop-build-$kind" bash -euo pipefail -c '
       export PATH=/root/.cargo/bin:$PATH
       cd /src
+      # The version, and the site the app talks to and updates from (this server).
       node -e "
         const fs = require(\"fs\"); const f = \"crates/slop-desktop/tauri.conf.json\";
         const c = JSON.parse(fs.readFileSync(f, \"utf8\")); c.version = process.env.VERSION;
+        c.bundle.homepage = process.env.SITE;
+        c.plugins.updater.endpoints = c.plugins.updater.endpoints.map((e) => process.env.SITE + e.slice(e.indexOf(\"/v1/\")));
         fs.writeFileSync(f, JSON.stringify(c, null, 2));"
       cd web && npm ci --no-audit --no-fund --silent
       # The cache keeps earlier builds; clear their packages so only this version is published.

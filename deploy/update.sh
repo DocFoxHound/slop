@@ -1,6 +1,13 @@
 #!/usr/bin/env bash
 # Deploys the newest commit on main, if it passes the tests (deploy/README.md).
 #
+# Production (deploy/README.md, "Production") sets, in a drop-in for slop-deploy.service:
+#   SLOP_DEPLOY_REF=production     deploy the commit the `production` tag points to, which must be
+#                                  on main, instead of main's newest
+#   SLOP_DEPLOY_MODE=production    build without the tests: the commit already passed them on the
+#                                  test server, and production has no test database
+# Unset, both mean the test server's behaviour.
+#
 # Run every two minutes by slop-deploy.timer. Builds in its own clone, never in a working copy,
 # and runs the commit's code (tests, build scripts, npm scripts) only inside the build container
 # (deploy/build/), which sees the source and a cache folder: no home folder, secrets or keys.
@@ -14,21 +21,47 @@ BRANCH="${SLOP_DEPLOY_BRANCH:-main}"
 REMOTE="${SLOP_DEPLOY_REMOTE:-git@github.com:DocFoxHound/slop.git}"
 # The test suite creates throwaway databases on this server (the dev superuser).
 TEST_DATABASE_URL="${SLOP_TEST_DATABASE_URL:-postgres://slop:slop@127.0.0.1:5434/slop}"
+DEPLOY_TAG="${SLOP_DEPLOY_REF:-}"
+MODE="${SLOP_DEPLOY_MODE:-test}"
 export PATH="$HOME/.cargo/bin:$PATH"
 
 log() { echo "slop-deploy: $*"; }
+case "$MODE" in
+  test | production) ;;
+  *) log "SLOP_DEPLOY_MODE must be test or production, not '$MODE'"; exit 1 ;;
+esac
+# Building without the tests is only for commits that passed them elsewhere: never main's newest.
+if [ "$MODE" = production ] && [ -z "$DEPLOY_TAG" ]; then
+  log "SLOP_DEPLOY_MODE=production needs SLOP_DEPLOY_REF (the tag to deploy)"
+  exit 1
+fi
 mkdir -p "$ROOT/builds"
 exec 9>"$ROOT/.lock"
 flock -n 9 || { log "another deploy is running"; exit 0; }
 
 [ -d "$REPO/.git" ] || git clone -q "$REMOTE" "$REPO"
-git -C "$REPO" fetch -q origin "$BRANCH"
-target=$(git -C "$REPO" rev-parse "origin/$BRANCH")
+if [ -n "$DEPLOY_TAG" ]; then
+  # The tag moves (deploy/ship-to-production.sh), so it's fetched with force; an annotated tag is
+  # peeled to its commit.
+  git -C "$REPO" fetch -q origin "$BRANCH" "+refs/tags/$DEPLOY_TAG:refs/tags/$DEPLOY_TAG"
+  target=$(git -C "$REPO" rev-parse --verify -q "refs/tags/$DEPLOY_TAG^{commit}") \
+    || { log "tag $DEPLOY_TAG doesn't name a commit"; exit 1; }
+else
+  git -C "$REPO" fetch -q origin "$BRANCH"
+  target=$(git -C "$REPO" rev-parse "origin/$BRANCH")
+fi
 current=$(basename "$(readlink "$ROOT/current" 2>/dev/null || echo none)")
 [ "$target" = "$current" ] && exit 0
 if [ -f "$ROOT/builds/failed-$target" ]; then exit 0; fi
 
-log "deploying ${target:0:12} (running ${current:0:12})"
+log "deploying ${target:0:12}${DEPLOY_TAG:+ (tag $DEPLOY_TAG)} (running ${current:0:12})"
+# A tag can be put on any commit, but production takes only what went through main (and so went
+# live on the test server first).
+if [ -n "$DEPLOY_TAG" ] && ! git -C "$REPO" merge-base --is-ancestor "$target" "origin/$BRANCH"; then
+  log "REFUSED ${target:0:12}: tag $DEPLOY_TAG isn't on $BRANCH"
+  touch "$ROOT/builds/failed-$target"
+  exit 1
+fi
 # Signed commits only, once there's a list of who may sign (deploy/README.md, "Signed commits").
 SIGNERS="$ROOT/allowed_signers"
 if [ -s "$SIGNERS" ]; then
@@ -80,7 +113,13 @@ print(json.dumps({"checked_at": datetime.datetime.now(datetime.timezone.utc).str
 PY
 }
 
-# Tests and build, in the build container. The image is rebuilt when its Containerfile changes.
+# Tests and build, in the build container (only the build in production mode). The image is
+# rebuilt when its Containerfile changes.
+if [ "$MODE" = production ]; then
+  build_env=(-e SLOP_BUILD_ONLY=1)
+else
+  build_env=(-e SLOP_TEST_DATABASE_URL="$TEST_DATABASE_URL")
+fi
 image="localhost/slop-deploy-build:$(sha256sum deploy/build/Containerfile | cut -c1-16)"
 if ! podman image exists "$image"; then
   podman build -q -t "$image" -f deploy/build/Containerfile deploy/build >"$ROOT/image.log" 2>&1 \
@@ -90,7 +129,7 @@ mkdir -p "$ROOT/cache/cargo" "$ROOT/cache/npm" "$ROOT/out"
 rm -rf "$ROOT/out"/* target/release/slop-api web/dist
 podman run --rm --network=host --userns=keep-id --cap-drop=all --security-opt=no-new-privileges \
   -e HOME=/tmp/home -e CARGO_HOME=/cache/cargo -e npm_config_cache=/cache/npm \
-  -e SLOP_TEST_DATABASE_URL="$TEST_DATABASE_URL" -e SLOP_COMMIT="$target" \
+  "${build_env[@]}" -e SLOP_COMMIT="$target" \
   -v "$REPO:/src:Z" -v "$ROOT/cache:/cache:Z" -v "$ROOT/out:/out:Z" -w /src \
   "$image" bash deploy/build/build.sh >"$ROOT/out/container.log" 2>&1 || true
 if [ ! -e "$ROOT/out/ok" ] || [ -e "$ROOT/out/failed" ] || [ ! -x target/release/slop-api ] || [ ! -d web/dist ]; then

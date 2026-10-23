@@ -5151,15 +5151,22 @@ async fn ownership_checks_refuse_private_network_hosts(db: PgPool) {
 /// A test app that keeps desktop builds in a fresh folder on disk (under target/tmp, not a
 /// RAM-backed /tmp), signing them with a new updater key, for uploads from octo/slop's CI.
 async fn desktop_app(db: PgPool) -> (TestApp, std::path::PathBuf, String) {
+    desktop_app_on(db, slop_api::config::DEFAULT_DESKTOP_REF).await
+}
+
+/// `desktop_app` for one channel: the git ref whose desktop workflow may upload.
+async fn desktop_app_on(db: PgPool, git_ref: &str) -> (TestApp, std::path::PathBuf, String) {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("slop-desktop-{}", Uuid::now_v7()));
     let (secret, public) = slop_api::desktop_updates::generate_updater_key().unwrap();
     let key_dir = dir.clone();
+    let git_ref = git_ref.to_string();
     let app = test_app_with(db, move |c| {
         c.desktop = slop_api::config::DesktopConfig {
             dir: Some(key_dir),
             updater_key: Some(slop_api::desktop_updates::updater_key_from_base64(&secret).unwrap()),
             repo: Some("octo/slop".into()),
+            git_ref,
         };
     })
     .await;
@@ -5271,6 +5278,37 @@ async fn desktop_uploads_are_checked_and_leave_nothing_when_refused(db: PgPool) 
     )
     .await;
     assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// Production takes builds only from the `production` tag's runs (SLOP_DESKTOP_REF), so a push
+/// to main, which goes to the test server first, can never update production's players.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn production_takes_desktop_builds_only_from_the_production_tag(db: PgPool) {
+    let (app, dir, _) = desktop_app_on(db, "refs/tags/production").await;
+    let query = format!("platform=windows&version=0.3.0&commit={BUILD_COMMIT}");
+    let workflow = |r: &str| json!({ "job_workflow_ref": format!("octo/slop/.github/workflows/desktop.yml@{r}") });
+    for refused in [
+        "refs/heads/main",
+        "refs/tags/production-old",
+        "refs/heads/production",
+        "refs/tags/v1",
+    ] {
+        let token = desktop_ci(&app, workflow(refused));
+        assert_eq!(
+            upload_build(&app, Some(&token), &query, Body::from("x"))
+                .await
+                .status(),
+            StatusCode::FORBIDDEN,
+            "{refused}"
+        );
+    }
+    assert_eq!(count(&app, "select count(*) from desktop_builds").await, 0);
+
+    let token = desktop_ci(&app, workflow("refs/tags/production"));
+    let res = upload_build(&app, Some(&token), &query, Body::from("installer 0.3.0")).await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(body_json(res).await["version"], "0.3.0");
     let _ = std::fs::remove_dir_all(&dir);
 }
 
