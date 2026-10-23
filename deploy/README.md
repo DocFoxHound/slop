@@ -133,6 +133,15 @@ account at launch. Stripe calls webhooks "event destinations"; the steps are the
 6. Once Slop has its EU OSS / UK VAT registrations, put the numbers in `SLOP_VAT_ID` so fee
    statements show them (e.g. `SLOP_VAT_ID=EU372000000 · GB000000000`).
 
+## Contact address
+
+The website's Contact page (`/contact`, the Terms' "contact page on Slop") publishes one address
+for legal notices, authorities, copyright claims, security problems and everything else:
+```
+SLOP_CONTACT_EMAIL=slop@example.com
+```
+`/.well-known/security.txt` uses it too, unless `SLOP_SECURITY_CONTACT` names a different contact.
+
 ## Email (notifications)
 
 Until SMTP is set, notifications only show under the 🔔 in Slop. To email them too (each user

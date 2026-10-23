@@ -57,6 +57,9 @@ pub struct Config {
     /// Where to report security problems (`mailto:` or https), published in
     /// /.well-known/security.txt. Unset: no security.txt.
     pub security_contact: Option<String>,
+    /// Slop's published email for legal notices and everything else (`SLOP_CONTACT_EMAIL`),
+    /// shown on the contact page and, without `security_contact`, in security.txt.
+    pub contact_email: Option<String>,
     /// Where this Slop's source code is published (`SLOP_SOURCE_URL`, https). The AGPL asks a
     /// network service to offer its users the source (lib.rs `source`). Unset: not public yet.
     pub source_url: Option<String>,
@@ -692,6 +695,9 @@ impl Config {
                 .ok()
                 .map(|v| v.trim().to_string())
                 .filter(|v| v.starts_with("mailto:") || v.starts_with("https://")),
+            contact_email: env::var("SLOP_CONTACT_EMAIL")
+                .ok()
+                .and_then(|v| email_address(&v)),
             source_url: env::var("SLOP_SOURCE_URL")
                 .ok()
                 .map(|v| v.trim().trim_end_matches('/').to_string())
@@ -775,4 +781,48 @@ fn parse_source_hosts(s: &str) -> anyhow::Result<Vec<(String, crate::repo_tokens
             }
         })
         .collect()
+}
+
+/// A plain email address from a setting (a leading `mailto:` is dropped), or `None` when it
+/// isn't one.
+fn email_address(raw: &str) -> Option<String> {
+    let v = raw.trim();
+    let v = v.strip_prefix("mailto:").unwrap_or(v);
+    let (local, domain) = v.split_once('@')?;
+    let ok = !local.is_empty()
+        && domain.contains('.')
+        && !domain.contains('@')
+        && v.len() <= 254
+        && !v
+            .chars()
+            .any(|c| c.is_whitespace() || c.is_control() || "<>\"(),;:[]".contains(c));
+    ok.then(|| v.to_string())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::email_address;
+
+    #[test]
+    fn contact_emails_are_plain_addresses() {
+        assert_eq!(
+            email_address(" mailto:slop@example.com ").as_deref(),
+            Some("slop@example.com")
+        );
+        assert_eq!(
+            email_address("slop@example.com").as_deref(),
+            Some("slop@example.com")
+        );
+        for bad in [
+            "",
+            "slop",
+            "@example.com",
+            "slop@localhost",
+            "a@b@c.com",
+            "a b@c.com",
+            "<a@b.com>",
+        ] {
+            assert_eq!(email_address(bad), None, "{bad}");
+        }
+    }
 }

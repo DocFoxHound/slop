@@ -27,6 +27,7 @@ import { PeopleEdit } from "./pages/PeopleEdit";
 import { Sim } from "./pages/Sim";
 import { Transparency } from "./pages/Transparency";
 import { Source } from "./pages/Source";
+import { Contact } from "./pages/Contact";
 import { Verify } from "./pages/Verify";
 import { BountiesPage, BountyPage } from "./pages/Bounties";
 import { Store } from "./pages/Store";
@@ -75,6 +76,7 @@ const router = createBrowserRouter([
       { path: "/legal/:kind", element: <LegalPage /> },
       { path: "/transparency", element: <Transparency /> },
       { path: "/source", element: <Source /> },
+      { path: "/contact", element: <Contact /> },
       { path: "/verify", element: <Verify /> },
       { path: "/bounties", element: <BountiesPage /> },
       { path: "/bounties/:id", element: <BountyPage /> },
