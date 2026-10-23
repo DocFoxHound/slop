@@ -597,6 +597,16 @@ async fn withdraw(
     Ok(StatusCode::NO_CONTENT)
 }
 
+/// Forgets the saved cards of pledges released elsewhere (staff hiding a bounty, moderation.rs),
+/// once that's committed.
+pub(crate) async fn forget_cards(state: &AppState, cards: &[String]) {
+    if let Mode::Stripe(stripe) = stripe::mode(state) {
+        for pm in cards {
+            detach(state, stripe, pm).await;
+        }
+    }
+}
+
 /// Forgets a saved card at Stripe (best effort: Slop stops using it either way).
 async fn detach(state: &AppState, stripe: &StripeConfig, payment_method: &str) {
     if let Err(e) = call(
@@ -944,6 +954,7 @@ async fn decide(state: &AppState, id: Uuid, claim: Uuid, accept: bool, by: &str)
     let row: Option<(Uuid, String)> = sqlx::query_as(
         "update bounty_claims c set status = $3, decided_by = $4, decided_at = now()
          from bounties b where c.id = $1 and c.bounty_id = $2 and c.status = 'pending' and b.id = c.bounty_id
+           and b.status <> 'hidden'
          returning c.claimed_by, b.title",
     )
     .bind(claim)

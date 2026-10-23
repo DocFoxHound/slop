@@ -1088,7 +1088,7 @@ fn decision_body(action: &str, rule: &str) -> Value {
 }
 
 /// The decision's user appeals, and an admin reverses it.
-async fn appeal_and_reverse(app: &TestApp, decision: &str, user: &str, admin: &str) {
+async fn appeal_and_reverse(app: &TestApp, decision: &str, user: &str, admin: &str) -> Value {
     let res = app
         .send(
             req(Method::POST, format!("/v1/me/decisions/{decision}/appeal"))
@@ -1107,7 +1107,8 @@ async fn appeal_and_reverse(app: &TestApp, decision: &str, user: &str, admin: &s
             .json(json!({ "reverse": true, "reason": "We looked again: it's fine." })),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::NO_CONTENT, "{decision}");
+    assert_eq!(res.status(), StatusCode::OK, "{decision}");
+    body_json(res).await
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -1333,10 +1334,10 @@ async fn each_kind_of_decision_is_carried_out_and_undone_on_appeal(db: PgPool) {
     assert_eq!(reversed, 7);
 }
 
-/// A bounty hidden by mistake comes back as it was: open for pledges until its old end, not
-/// expired the moment it's restored.
+/// A bounty hidden by mistake comes back as it was: open for the time it had left (at least a
+/// week), not expired the moment it's restored. Its pledges stay released, since their cards were
+/// let go, and the backers are told they can pledge again.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "n01: reversing hide_bounty leaves expires_at at the moment it was hidden and its pledges released, so the restored bounty expires at the charger's next pass"]
 async fn a_bounty_restored_on_appeal_is_still_open_for_its_backers(db: PgPool) {
     let app = test_app(db).await;
     let (_, admin) = make_admin(&app, "Ada Admin").await;
@@ -1346,27 +1347,62 @@ async fn a_bounty_restored_on_appeal_is_still_open_for_its_backers(db: PgPool) {
     let (_, rita) = app.user("Rita Reporter", "US").await;
     listed_with(&app, maker_id, "castle", "released", "").await;
     let bounty = bounty_on(&app, "castle", pat_id, backer).await;
-    send_report(
-        &app,
-        Some(&rita),
-        report_of("bounty", &bounty.to_string(), "scam"),
+    let hide_and_restore = |bounty: Uuid| {
+        let (app, admin, rita, pat) = (&app, &admin, &rita, &pat);
+        async move {
+            send_report(
+                app,
+                Some(rita),
+                report_of("bounty", &bounty.to_string(), "scam"),
+            )
+            .await;
+            let res = act_on_newest(app, admin, decision_body("hide_bounty", "scam")).await;
+            let decision = body_json(res).await["decision"]
+                .as_str()
+                .unwrap()
+                .to_string();
+            appeal_and_reverse(app, &decision, pat, admin).await;
+        }
+    };
+    hide_and_restore(bounty).await;
+    slop_api::bounties::charge_due(&app.state).await.unwrap();
+    let (status, left, pledge): (String, bool, String) = sqlx::query_as(
+        "select b.status, b.expires_at > now() + interval '179 days', p.status
+         from bounties b join bounty_pledges p on p.bounty_id = b.id where b.id = $1",
     )
-    .await;
-    let res = act_on_newest(&app, &admin, decision_body("hide_bounty", "scam")).await;
-    let decision = body_json(res).await["decision"]
-        .as_str()
-        .unwrap()
-        .to_string();
-    appeal_and_reverse(&app, &decision, &pat, &admin).await;
-    let (open, pledges): (bool, String) = sqlx::query_as(
-        "select b.status = 'open' and b.expires_at > now() + interval '1 day', p.status
-         from bounties b join bounty_pledges p on p.bounty_id = b.id",
-    )
+    .bind(bounty)
     .fetch_one(&app.db)
     .await
     .unwrap();
-    assert!(open, "still open after the next expiry pass");
-    assert_eq!(pledges, "active", "the backer's pledge stands again");
+    assert_eq!(status, "open", "still open after the next expiry pass");
+    assert!(left, "it runs for the time it had left");
+    assert_eq!(pledge, "released", "its card was let go");
+    let told: Vec<String> = sqlx::query_scalar(
+        "select title from notifications where user_id = $1 and title like '%is back'",
+    )
+    .bind(backer)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, ["\"Fix the save bug\" is back"]);
+
+    // One with two days left gets a week.
+    let short = bounty_on(&app, "castle", pat_id, backer).await;
+    sqlx::query("update bounties set expires_at = now() + interval '2 days' where id = $1")
+        .bind(short)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    hide_and_restore(short).await;
+    let week: bool = sqlx::query_scalar(
+        "select status = 'open' and expires_at between now() + interval '6 days 23 hours' and now() + interval '7 days 1 hour'
+         from bounties where id = $1",
+    )
+    .bind(short)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(week, "at least a week");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -1811,7 +1847,7 @@ async fn appeals_are_kept_or_reversed_with_a_reason(db: PgPool) {
     // Kept: nothing is undone, and the maker is told why.
     assert_eq!(
         app.send(decide(&support, keep.clone())).await.status(),
-        StatusCode::NO_CONTENT
+        StatusCode::OK
     );
     let status: String = sqlx::query_scalar("select status::text from apps where slug = 'castle'")
         .fetch_one(&app.db)
@@ -6715,9 +6751,9 @@ async fn the_simulation_lets_anyone_view_as_its_own_users_only(db: PgPool) {
 // Reversing a delisting on appeal
 
 /// An app taken out of the store, then frozen (Slop lost its repository): reversing the
-/// delisting on appeal mustn't put a frozen app back in the store.
+/// delisting on appeal mustn't put a frozen app back in the store. The appeal is recorded, the
+/// maker and staff are told why it stays out, and it goes back once the freeze ends.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "b55: undoing delist_app on appeal sets status listed without the listing checks (frozen, pictures waiting, an approved release)"]
 async fn reversing_a_delisting_keeps_the_listing_rules(db: PgPool) {
     let app = test_app(db).await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
@@ -6737,10 +6773,106 @@ async fn reversing_a_delisting_keeps_the_listing_rules(db: PgPool) {
         .fetch_one(&app.db)
         .await
         .unwrap();
-    appeal_and_reverse(&app, &decision.to_string(), &maker, &owner).await;
-    let status: String = sqlx::query_scalar("select status::text from apps where slug = 'castle'")
+    let res = appeal_and_reverse(&app, &decision.to_string(), &maker, &owner).await;
+    let stays_out = res["stays_out"].as_str().unwrap();
+    assert!(
+        stays_out.contains("frozen (Repository gone)"),
+        "{stays_out}"
+    );
+    let app_status = || async {
+        sqlx::query_scalar::<_, String>("select status::text from apps where slug = 'castle'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    assert_ne!(
+        app_status().await,
+        "listed",
+        "a frozen app stays out of the store"
+    );
+    let reversed: bool = sqlx::query_scalar(
+        "select appeal_status = 'reversed' and reversed_at is not null from moderation_decisions",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(reversed, "the appeal's outcome is recorded");
+    let body: String = sqlx::query_scalar(
+        "select body from notifications where user_id = $1 and title like 'Your appeal%'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert!(body.ends_with(stays_out), "{body}");
+
+    // The freeze ends: it's listed the usual way.
+    let id: Uuid = sqlx::query_scalar("select id from apps where slug = 'castle'")
         .fetch_one(&app.db)
         .await
         .unwrap();
-    assert_ne!(status, "listed", "a frozen app stays out of the store");
+    slop_api::frozen::apply(&app.state, id, slop_api::frozen::Access::Readable)
+        .await
+        .unwrap();
+    assert_eq!(app_status().await, "listed");
+}
+
+/// Reversed while new pictures wait for review: it stays out and waits under Ready to list,
+/// and a reviewer lists it once they're reviewed.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_reinstated_app_with_pictures_waiting_waits_for_a_reviewer(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    listed_with(&app, maker_id, "castle", "released", "").await;
+    approved_release(&app, "castle", maker_id).await;
+    app.send(
+        req(Method::POST, "/v1/admin/apps/castle/delist")
+            .cookie(&owner)
+            .json(json!({ "rule": "misleading", "reason": "Fake screenshots." })),
+    )
+    .await;
+    sqlx::query(
+        "insert into media_sets (id, app_id, commit_sha, fingerprint, source)
+         select $1, id, 'abc123', 'fp', 'maker' from apps where slug = 'castle'",
+    )
+    .bind(Uuid::now_v7())
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let decision: Uuid = sqlx::query_scalar("select id from moderation_decisions")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    let res = appeal_and_reverse(&app, &decision.to_string(), &maker, &owner).await;
+    assert!(
+        res["stays_out"]
+            .as_str()
+            .unwrap()
+            .contains("new pictures are reviewed"),
+        "{res}"
+    );
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
+            .await,
+    )
+    .await;
+    let ready = &queue["ready_to_list"][0];
+    assert_eq!(ready["slug"], "castle");
+    assert_eq!(ready["after_appeal"], true);
+    assert_eq!(ready["pictures_pending"], true);
+    // Listing still waits for the pictures, then goes through.
+    let list = || app.send(req(Method::POST, "/v1/admin/apps/castle/list").cookie(&owner));
+    assert_eq!(list().await.status(), StatusCode::CONFLICT);
+    sqlx::query("update media_sets set status = 'approved'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(list().await.status(), StatusCode::NO_CONTENT);
+    let (status, waiting): (String, bool) =
+        sqlx::query_as("select status::text, relist_after_appeal from apps where slug = 'castle'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!((status.as_str(), waiting), ("listed", false));
 }

@@ -209,6 +209,8 @@ struct ReadyApp {
     /// Private Slop its owner asked to make public: listing it makes it public (SECURITY §12.3),
     /// after Slop checks the repository is public again.
     going_public: bool,
+    /// Taken out of the store, then reinstated on appeal while it couldn't be listed.
+    after_appeal: bool,
     #[sqlx(skip)]
     notes: Vec<Note>,
     #[sqlx(skip)]
@@ -249,7 +251,8 @@ struct Queue {
     appeals: Vec<crate::moderation::QueuedAppeal>,
     /// The Content Policy rules a decision can cite: (code, title).
     rules: &'static [(&'static str, &'static str)],
-    /// Drafts that could go in the store: Coming soon pages, or apps with an approved release.
+    /// Drafts that could go in the store (Coming soon pages, or apps with an approved release),
+    /// and apps reinstated on appeal that wait to go back.
     ready_to_list: Vec<ReadyApp>,
     /// Live releases a re-scan flagged (rescan.rs): withdraw them or keep them.
     rescans: Vec<FlaggedFile>,
@@ -286,9 +289,11 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         "select {APP_COLUMNS},
                 (select count(*) from releases r where r.app_id = a.id and r.status = 'approved') as approved_releases,
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending,
-                a.visibility = 'private' as going_public
+                a.visibility = 'private' as going_public,
+                a.relist_after_appeal as after_appeal
          from apps a join users u on u.id = a.maker_id
-         where a.status = 'draft' and (a.visibility = 'public' or a.public_requested_at is not null)
+         where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal))
+           and (a.visibility = 'public' or a.public_requested_at is not null)
            and (a.stage = 'coming_soon' or exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved'))
          order by a.updated_at"
     )))

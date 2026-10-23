@@ -460,6 +460,85 @@ async fn has_approved_release(tx: &mut sqlx::PgConnection, app_id: Uuid) -> anyh
     .await?)
 }
 
+/// Why an app can't go in the store yet: the checks every listing makes.
+pub(crate) enum NotListable {
+    Private,
+    Frozen(String),
+    NoPulse,
+    NoRelease(AppStage),
+    PicturesWaiting,
+}
+
+impl NotListable {
+    fn for_reviewer(&self) -> String {
+        match self {
+            Self::Private => "it's Private Slop: private apps are never listed in the store \
+                              (unless the owner asks to make it public)"
+                .into(),
+            Self::Frozen(reason) => format!(
+                "the app is frozen ({reason}); it can be listed once Slop can read its repository"
+            ),
+            Self::NoPulse => "this community build's original counts players with Slop Pulse, so \
+                              the build must too (DESIGN §9): no Pulse handshake from it yet. The \
+                              author launches it through Slop once and the handshake is recorded."
+                .into(),
+            Self::NoRelease(stage) => format!(
+                "approve a release before listing a {stage:?} app: it has no approved release \
+                 yet. The maker submits one from Releases & progress, then it waits under \
+                 Releases for review. A Coming soon page can be listed without one."
+            ),
+            Self::PicturesWaiting => {
+                "review the app's pictures first: a new set is waiting under Pictures to review"
+                    .into()
+            }
+        }
+    }
+
+    /// For the maker, when an appeal reverses a delisting but the app can't go back in yet.
+    pub(crate) fn for_maker(&self) -> String {
+        match self {
+            Self::Private => "It's Private Slop, so it isn't listed in the store.".into(),
+            Self::Frozen(reason) => format!(
+                "It stays out of the store while it's frozen ({reason}). It goes back in once \
+                 Slop can read its repository again."
+            ),
+            Self::NoPulse => "It stays out of the store until Slop records a Pulse handshake \
+                              from it: launch it through Slop once. A reviewer then puts it back."
+                .into(),
+            Self::NoRelease(_) => "It stays out of the store until a release is approved: submit \
+                                   one from Releases & progress. A reviewer then puts it back."
+                .into(),
+            Self::PicturesWaiting => "It stays out of the store until its new pictures are \
+                                      reviewed. A reviewer then puts it back."
+                .into(),
+        }
+    }
+}
+
+/// What stops the app going in the store, if anything.
+pub(crate) async fn not_listable(
+    tx: &mut sqlx::PgConnection,
+    id: Uuid,
+    stage: AppStage,
+) -> anyhow::Result<Option<NotListable>> {
+    if crate::catalog::is_private(&mut *tx, id).await? {
+        return Ok(Some(NotListable::Private));
+    }
+    if let Some(reason) = crate::frozen::frozen_reason(&mut *tx, id).await? {
+        return Ok(Some(NotListable::Frozen(reason)));
+    }
+    if crate::branches::needs_pulse(tx, id).await? && !crate::branches::has_pulse(tx, id).await? {
+        return Ok(Some(NotListable::NoPulse));
+    }
+    if stage != AppStage::ComingSoon && !has_approved_release(tx, id).await? {
+        return Ok(Some(NotListable::NoRelease(stage)));
+    }
+    if crate::media::has_pending(tx, id).await? {
+        return Ok(Some(NotListable::PicturesWaiting));
+    }
+    Ok(None)
+}
+
 /// Puts a reviewed draft in the store. Beta and Released apps need an approved release first;
 /// Coming soon pages have no build (DESIGN §8).
 pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result<()> {
@@ -511,34 +590,12 @@ async fn list_app_as(
             .execute(&mut *tx)
             .await?;
     }
-    ensure!(
-        !crate::catalog::is_private(&mut *tx, id).await?,
-        "it's Private Slop: private apps are never listed in the store (unless the owner asks to make it public)"
-    );
-    if let Some(reason) = crate::frozen::frozen_reason(&mut *tx, id).await? {
-        bail!("the app is frozen ({reason}); it can be listed once Slop can read its repository");
+    if let Some(why) = not_listable(&mut tx, id, stage).await? {
+        bail!("{}", why.for_reviewer());
     }
-    if crate::branches::needs_pulse(&mut tx, id).await? {
-        ensure!(
-            crate::branches::has_pulse(&mut tx, id).await?,
-            "this community build's original counts players with Slop Pulse, so the build must \
-             too (DESIGN §9): no Pulse handshake from it yet. The author launches it through \
-             Slop once and the handshake is recorded."
-        );
-    }
-    if stage != AppStage::ComingSoon {
-        ensure!(
-            has_approved_release(&mut tx, id).await?,
-            "approve a release before listing a {stage:?} app: it has no approved release yet. \
-             The maker submits one from Releases & progress, then it waits under Releases for \
-             review. A Coming soon page can be listed without one."
-        );
-    }
-    ensure!(
-        !crate::media::has_pending(&mut tx, id).await?,
-        "review the app's pictures first: a new set is waiting under Pictures to review"
-    );
-    sqlx::query("update apps set status = 'listed', updated_at = now() where id = $1")
+    sqlx::query(
+        "update apps set status = 'listed', relist_after_appeal = false, updated_at = now() where id = $1",
+    )
         .bind(id)
         .execute(&mut *tx)
         .await?;
