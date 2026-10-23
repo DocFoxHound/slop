@@ -1,14 +1,19 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! A throwaway Slop for the browser tests (web/e2e). Never for real use.
 //!
-//! Makes a new database (`slop_e2e_<random>_sim`) on the test Postgres, migrates and seeds it
-//! (a maker, a player, an admin, a few games), starts a fake GitHub that serves release files,
-//! and runs the API with the release fetcher on a free port, serving the built website
-//! (`web/dist`). Prints one line of JSON (`url`, `cookie_name`, `cookies`, `fake`) once it's
-//! ready, and drops the database when stopped (Ctrl-C, SIGTERM, or stdin closing).
+//! Makes a new database (`slop_e2e_<random>_sim`) on the test Postgres, migrates it, starts a
+//! fake GitHub (release files, repository pictures) and a fake Stripe (fake_stripe.rs), runs the
+//! API with the release fetcher on a free port, serving the built website (`web/dist`), and
+//! seeds it (seed.rs: accounts for every kind of person, apps, money, People, teams, chat and
+//! admin queues). Prints one line of JSON (`url`, `fake`, `stripe`, `cookie_name`, `cookies`,
+//! `ids`) once it's ready, and drops the database when stopped (Ctrl-C, SIGTERM, or stdin
+//! closing). web/e2e/fixtures.ts lists what's seeded.
 //!
 //! `cargo run -p slop-api --example e2e_server` with `DATABASE_URL` pointing at the test server.
 //! `SLOP_E2E_SIMULATE=<apps>,<users>` fills the store with the simulation first (the load test).
+
+mod fake_stripe;
+mod seed;
 
 use std::{io::Write as _, net::SocketAddr, path::PathBuf};
 
@@ -21,7 +26,6 @@ use slop_api::{
     router,
 };
 use sqlx::{Connection, Executor, PgConnection, PgPool};
-use uuid::Uuid;
 
 /// A tiny Windows build: a `.zip` with the program to start.
 fn release_zip() -> Vec<u8> {
@@ -34,139 +38,79 @@ fn release_zip() -> Vec<u8> {
     buf.into_inner()
 }
 
+/// The commit every fake repository is at.
+const MEDIA_COMMIT: &str = "d00dfeed00d00dfeed00d00dfeed00d00dfeed0";
+
+fn png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
+    let mut out = Vec::new();
+    image::RgbImage::from_fn(w, h, |x, y| {
+        // A diagonal band, so pictures aren't flat.
+        if (x + y) % 160 < 40 {
+            image::Rgb([rgb[0] / 2, rgb[1] / 2, rgb[2] / 2])
+        } else {
+            image::Rgb(rgb)
+        }
+    })
+    .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+    .expect("a PNG");
+    out
+}
+
+/// A repository's store pictures (`.slop/media.json` and the files it lists), as
+/// raw.githubusercontent.com would serve them. Served by the test server itself, so the
+/// website's content security policy lets the pictures show.
+async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
+    use axum::response::IntoResponse;
+    let Some((_, file)) = path.split_once("/.slop/") else {
+        return axum::http::StatusCode::NOT_FOUND.into_response();
+    };
+    let body = match file {
+        "media.json" => serde_json::json!({
+            "thumbnail": "thumb.png",
+            "gallery": [
+                { "image": "shots/one.png", "caption": "The keep at dusk" },
+                { "image": "shots/two.png", "caption": "Lighting the first lantern" },
+                { "youtube": "https://youtu.be/dQw4w9WgXcQ" }
+            ]
+        })
+        .to_string()
+        .into_bytes(),
+        "thumb.png" => png(920, 430, [200, 120, 40]),
+        "shots/one.png" => png(1280, 720, [40, 90, 160]),
+        "shots/two.png" => png(1280, 720, [60, 140, 80]),
+        _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
+    };
+    body.into_response()
+}
+
 /// Stands in for GitHub: release files under any `/<owner>/<repo>/releases/download/...`.
 async fn fake_github() -> anyhow::Result<String> {
     let zip = Bytes::from(release_zip());
-    let app = Router::new().route(
-        "/{owner}/{repo}/releases/download/{tag}/{file}",
-        get(
-            move |Path((_, _, _, file)): Path<(String, String, String, String)>| {
-                let zip = zip.clone();
-                async move {
-                    if file.ends_with(".zip") {
-                        Ok(zip)
-                    } else {
-                        Err(axum::http::StatusCode::NOT_FOUND)
+    let app = Router::new()
+        // The newest commit, for store pictures (media.rs).
+        .route(
+            "/repos/{owner}/{repo}/commits/HEAD",
+            get(|| async { axum::Json(serde_json::json!({ "sha": MEDIA_COMMIT })) }),
+        )
+        .route(
+            "/{owner}/{repo}/releases/download/{tag}/{file}",
+            get(
+                move |Path((_, _, _, file)): Path<(String, String, String, String)>| {
+                    let zip = zip.clone();
+                    async move {
+                        if file.ends_with(".zip") {
+                            Ok(zip)
+                        } else {
+                            Err(axum::http::StatusCode::NOT_FOUND)
+                        }
                     }
-                }
-            },
-        ),
-    );
+                },
+            ),
+        );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr = listener.local_addr()?;
     tokio::spawn(async move { axum::serve(listener, app).await });
     Ok(format!("http://{addr}/"))
-}
-
-async fn user(
-    db: &PgPool,
-    config: &Config,
-    name: &str,
-    staff: bool,
-) -> anyhow::Result<(Uuid, String)> {
-    let id = Uuid::now_v7();
-    sqlx::query(
-        "insert into users (id, display_name, country_code, age_16_confirmed_at) values ($1, $2, 'US', now())",
-    )
-    .bind(id)
-    .bind(name)
-    .execute(db)
-    .await?;
-    sqlx::query(
-        "insert into legal_acceptances (user_id, kind, version)
-         select $1, kind, version from legal_documents where kind in ('terms', 'publisher', 'people')",
-    )
-    .bind(id)
-    .execute(db)
-    .await?;
-    if staff {
-        sqlx::query("update users set is_admin = true where id = $1")
-            .bind(id)
-            .execute(db)
-            .await?;
-        sqlx::query("insert into staff_roles (user_id, role, granted_by) values ($1, 'owner', $1)")
-            .bind(id)
-            .execute(db)
-            .await?;
-    }
-    let cookie = session::create(db, config, id, Some("e2e")).await?;
-    Ok((id, cookie.value().to_string()))
-}
-
-/// A listed game by `maker`, with an approved release.
-async fn listed(
-    db: &PgPool,
-    maker: Uuid,
-    slug: &str,
-    title: &str,
-    extra: &str,
-) -> anyhow::Result<()> {
-    let id = Uuid::now_v7();
-    sqlx::query(
-        "insert into apps (id, slug, title, summary, description_md, kind, stage, status, maker_id, repo_url,
-                           license_spdx, platforms, last_commit_at)
-         values ($1, $2, $3, $4, $5, 'game', 'released', 'listed', $6, $7, 'MIT', '{windows}', now())",
-    )
-    .bind(id)
-    .bind(slug)
-    .bind(title)
-    .bind(format!("{title}: a game for the browser tests."))
-    .bind(format!("# {title}\n\nMade for Slop's browser tests."))
-    .bind(maker)
-    .bind(format!("https://github.com/e2e/{slug}"))
-    .execute(db)
-    .await?;
-    if !extra.is_empty() {
-        sqlx::query(sqlx::AssertSqlSafe(format!(
-            "update apps set {extra} where id = $1"
-        )))
-        .bind(id)
-        .execute(db)
-        .await?;
-    }
-    sqlx::query(
-        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, commit_verified)
-         values ($1, $2, '1.0.0', repeat('a', 40), 'approved', $3, now(), true)",
-    )
-    .bind(Uuid::now_v7())
-    .bind(id)
-    .bind(maker)
-    .execute(db)
-    .await?;
-    Ok(())
-}
-
-/// A thread an account's AI agent started with every admin, with a token made 12 days before.
-async fn agent_message(
-    db: &PgPool,
-    sender: Uuid,
-    category: &str,
-    subject: &str,
-    body: &str,
-) -> anyhow::Result<()> {
-    let id = Uuid::now_v7();
-    sqlx::query(
-        "insert into admin_threads (id, sender_id, via, category, subject) values ($1, $2, 'maker_agent', $3, $4)",
-    )
-    .bind(id)
-    .bind(sender)
-    .bind(category)
-    .bind(subject)
-    .execute(db)
-    .await?;
-    sqlx::query(
-        "insert into admin_thread_messages (id, thread_id, author_id, from_staff, by_agent, body,
-                token_kind, token_id, token_name, token_scope, token_created_at)
-         values ($1, $2, $3, false, true, $4, 'maker', $5, 'Claude Code', 'read', now() - interval '12 days 1 hour')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(id)
-    .bind(sender)
-    .bind(body)
-    .bind(Uuid::now_v7())
-    .execute(db)
-    .await?;
-    Ok(())
 }
 
 #[tokio::main]
@@ -202,6 +146,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
     let fake = fake_github().await?;
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
     let addr: SocketAddr = listener.local_addr()?;
+    let stripe = fake_stripe::FakeStripe::start(format!("http://{addr}/v1/stripe/webhook")).await?;
     let web_dir = PathBuf::from(env!("CARGO_MANIFEST_DIR")).join("../../web/dist");
     anyhow::ensure!(
         web_dir.join("index.html").exists(),
@@ -255,12 +200,19 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         desktop: Default::default(),
         demos: Default::default(),
         media: slop_api::config::MediaConfig {
-            github_raw_base: format!("{fake}raw/").parse()?,
+            // Served by this server (raw_file), not the fake GitHub: see there.
+            github_raw_base: format!("http://{addr}/raw/").parse()?,
         },
-        // Simulated, as on the simulation sandbox: the browser tests pledge to bounties.
+        // Stripe, faked (fake_stripe.rs): checkout links lead to its pay page.
         payments: slop_api::config::PaymentsConfig {
-            simulated: true,
-            ..Default::default()
+            stripe: Some(slop_api::config::StripeConfig {
+                secret_key: fake_stripe::SECRET_KEY.into(),
+                webhook_secret: fake_stripe::WEBHOOK_SECRET.into(),
+                api_base: stripe.base.parse()?,
+            }),
+            simulated: false,
+            vat_id: None,
+            vies_url: None,
         },
         email: None,
         push: None,
@@ -291,53 +243,29 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         )
         .await?;
     }
-    let (maker, maker_cookie) = user(db, &config, "Mia Maker", false).await?;
-    let (_, player_cookie) = user(db, &config, "Pat Player", false).await?;
-    let (_, admin_cookie) = user(db, &config, "Ada Admin", true).await?;
-    let (other, _) = user(db, &config, "Sam Seed", false).await?;
-    // A publisher past their passkey deadline, with no passkey (passkeys.rs).
-    let (overdue, overdue_cookie) = user(db, &config, "Olly Overdue", false).await?;
-    sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
-        .bind(overdue)
-        .execute(db)
-        .await?;
-    listed(db, other, "castle-rock", "Castle Rock", "").await?;
-    listed(
-        db,
-        other,
-        "neon-drift",
-        "Neon Drift",
-        "online = '{player_servers}'",
-    )
-    .await?;
-    listed(db, maker, "mias-first", "Mia's First Game", "").await?;
-    // Messages Mia's AI agent wrote to the admins (admin_messages.rs), for the AI messages tab.
-    agent_message(
-        db,
-        maker,
-        "report",
-        "Release upload times out",
-        "Submitting 1.2.0 timed out after 30 s.\nLog: https://example.com/log <b>not bold</b>",
-    )
-    .await?;
-    agent_message(
-        db,
-        maker,
-        "suggestion",
-        "Show scan progress",
-        "A percentage while files are scanned would help.",
-    )
-    .await?;
-
     let state = AppState::new(db.clone(), config.clone())?;
     tokio::spawn(slop_api::releases::run_fetcher(state.clone()));
     tokio::spawn(slop_api::bounties::run_charger(state.clone()));
-    let app = router(state)?;
-    // As the real server does (main.rs).
+    let app = router(state)?.route("/raw/{*path}", get(raw_file));
+    // As the real server does (main.rs). It serves while the seed runs: the fake Stripe's
+    // webhooks reach it.
     let listener = axum::serve::ListenerExt::tap_io(listener, |tcp| {
         let _ = tcp.set_nodelay(true);
     });
-    tokio::spawn(async move { axum::serve(listener, app).await });
+    tokio::spawn({
+        let app = app.clone();
+        async move { axum::serve(listener, app).await }
+    });
+
+    let seeded = seed::seed(&seed::Ctx {
+        db: db.clone(),
+        config: config.clone(),
+        router: app,
+        fake: fake.clone(),
+        stripe: stripe.clone(),
+    })
+    .await
+    .context("seeding")?;
 
     let cookie_name = session::cookie_name(&config);
     println!(
@@ -345,11 +273,12 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         serde_json::json!({
             "url": format!("http://{addr}"),
             "fake": fake,
+            "stripe": stripe.base,
             "cookie_name": cookie_name,
-            "cookies": { "maker": maker_cookie, "player": player_cookie, "admin": admin_cookie, "overdue": overdue_cookie },
+            "cookies": seeded.cookies,
+            "ids": seeded.ids,
         })
     );
-    let _ = maker;
 
     // Until stopped, or until whoever started it goes away.
     let mut term = tokio::signal::unix::signal(tokio::signal::unix::SignalKind::terminate())?;

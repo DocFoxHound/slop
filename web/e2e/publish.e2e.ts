@@ -33,11 +33,18 @@ test("a maker creates a store page, submits a release, and staff approve it", as
   await admin.goto("/admin");
   // Home lists what's waiting; each links to the queue.
   await admin.getByRole("link", { name: /Releases to review$/ }).click();
-  const row = admin.locator("article, li, section").filter({ hasText: "Pong Test" }).filter({
+  // One release to a row; the seed has another waiting (Pocket Golf 1.1.0), which stays.
+  const row = admin.locator("li").filter({ hasText: "Pong Test" }).filter({
     has: admin.getByRole("button", { name: "Approve and sign" }),
   });
-  await row.first().getByRole("button", { name: "Approve and sign" }).click();
-  await expect(admin.getByRole("button", { name: "Approve and sign" })).toHaveCount(0, { timeout: 10_000 });
+  await expect(row).toHaveCount(1);
+  await row.getByRole("button", { name: "Approve and sign" }).click();
+  await expect(row).toHaveCount(0, { timeout: 10_000 });
+  await expect(
+    admin.locator("li").filter({ hasText: "Pocket Golf" }).filter({
+      has: admin.getByRole("button", { name: "Approve and sign" }),
+    }),
+  ).toHaveCount(1);
 
   await maker.reload();
   await expect(maker.getByText("APPROVED").first()).toBeVisible();

@@ -60,4 +60,4 @@ semver = "1.0.28"
 sha2 = "0.11.1"
 slop-client = { path = "../slop-client" }
 slop-manifest = { path = "../slop-manifest" }
-# The browser tests' server (examples/e2e_server.rs) makes a release .zip.
+# The browser tests' server (examples/e2e_server/) makes a release .zip and fakes Stripe.
