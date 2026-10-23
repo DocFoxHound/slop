@@ -19,7 +19,13 @@ export function AiAgents() {
   const [days, setDays] = useState(30);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [created, setCreated] = useState<{ secret: string; claude_command: string; mcp_url: string; passkey_proved: boolean }>();
+  const [created, setCreated] = useState<{
+    secret: string;
+    claude_command: string;
+    mcp_url: string;
+    passkey_proved: boolean;
+    scope: AgentToken["scope"];
+  }>();
 
   const create = async () => {
     setBusy(true);
@@ -122,7 +128,7 @@ export function AiAgents() {
           <p className="small">
             Other agents: send <code>Authorization: Bearer {created.secret}</code> to <code>{created.mcp_url}</code>.
           </p>
-          {!created.passkey_proved && scope === "publish" && (
+          {!created.passkey_proved && created.scope === "publish" && (
             <p className="small">
               Confirm with a passkey before making a token if you want it to publish once Slop asks you for one (30
               days after you first publish).

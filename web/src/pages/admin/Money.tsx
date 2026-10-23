@@ -39,13 +39,14 @@ export function MoneyTab() {
           ))}
         </div>
       </section>
-      <Payments />
+      {/* Its counts of pauses follow the list above as staff answer and lift them. */}
+      <Payments holds={holds.data} />
     </>
   );
 }
 
-function Payments() {
-  const m = useLoad(() => api.admin.money(), []);
+function Payments({ holds }: { holds: unknown }) {
+  const m = useLoad(() => api.admin.money(), [holds]);
   if (m.error instanceof ApiError && m.error.status === 403)
     return <p className="muted">The payments record is for staff with the finance role.</p>;
   if (m.error) return <ErrorState error={m.error} onRetry={m.reload} />;

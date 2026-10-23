@@ -753,7 +753,14 @@ export interface ModerationDecision {
   subject_kind: ReportKind | "account";
   subject_label: string;
   action:
-    "delist_app" | "hide_review" | "remove_reply" | "hide_profile" | "hide_team" | "suspend_account" | "warn";
+    | "delist_app"
+    | "hide_review"
+    | "remove_reply"
+    | "hide_profile"
+    | "hide_team"
+    | "hide_bounty"
+    | "suspend_account"
+    | "warn";
   action_label: string;
   rule: string;
   rule_title: string;

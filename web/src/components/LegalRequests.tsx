@@ -5,7 +5,7 @@
 import { useState, type FormEvent } from "react";
 
 import { api, ApiError, type LegalRequest, type LegalRequestKind } from "../api";
-import { formatDate } from "../format";
+import { accountId, formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { ErrorState, Loading } from "./ui";
 
@@ -117,13 +117,19 @@ function NewRequest({ onLogged }: { onLogged: () => void }) {
   }
   const submit = async (e: FormEvent) => {
     e.preventDefault();
+    // An ID or a link to the profile; anything else would only come back as "Request failed".
+    const subject = f.subject_user_id.trim() ? accountId(f.subject_user_id) : null;
+    if (subject === undefined) {
+      setError(new ApiError(0, "invalid", "Paste the account's ID, or the link to their profile (…/u/…).", "subject_user_id"));
+      return;
+    }
     setBusy(true);
     setError(undefined);
     try {
       await api.admin.logLegalRequest({
         ...f,
         received_at: new Date(f.received_at || Date.now()).toISOString(),
-        subject_user_id: f.subject_user_id.trim() || null,
+        subject_user_id: subject,
       });
       setOpen(false);
       onLogged();
@@ -183,7 +189,7 @@ function NewRequest({ onLogged }: { onLogged: () => void }) {
         <input value={f.subject_user_id} onChange={(e) => set("subject_user_id", e.target.value)} />
         {fieldError("subject_user_id")}
       </label>
-      {error && !error.field && (
+      {error && !["country", "authority", "asked", "subject_user_id"].includes(error.field ?? "") && (
         <p className="form-error" role="alert">
           {error.message}
         </p>
