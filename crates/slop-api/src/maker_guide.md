@@ -23,9 +23,13 @@ reviews it. Read only the guide sections you need (`publishing_guide`).
 ## Every release
 
 1. Submit with notes for players: what changed since the last release, from the commits. Plain, short, no hype.
-2. `list_releases` shows its progress: fetching, then awaiting_review, then approved (or rejected or failed, with the reason).
-3. `get_fixes`: every problem Slop's checks found, with what to do. Fix the `must` ones first. `check_repository` checks the source again without a release.
+2. `list_releases` shows its progress: fetching, then awaiting_review, then approved (or rejected or failed, with the reason). If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
+3. `get_fixes`: every problem Slop's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked.
 4. Fix, commit, push, and release again with a new version.
+
+If an app is frozen because Slop can't read its repository, it takes no new releases. Restore
+Slop's access, then `check_repository`: it checks Slop can read the repository again and lifts
+the freeze (not one Slop's staff placed). It doesn't check the code.
 
 ## Reviews
 

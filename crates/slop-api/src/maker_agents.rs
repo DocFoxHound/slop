@@ -114,6 +114,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/apps/{slug}/releases", true, Slug::Own),
     ("POST", "/apps/{slug}/releases/from-github", true, Slug::Own),
     ("PATCH", "/apps/{slug}/releases/*", true, Slug::Own),
+    ("POST", "/apps/{slug}/releases/*/withdraw", true, Slug::Own),
     ("POST", "/apps/{slug}/repo-check", true, Slug::Own),
     ("POST", "/apps/{slug}/media/check", true, Slug::Own),
     ("POST", "/apps/{slug}/offers", true, Slug::Own),
@@ -675,7 +676,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_releases",
-        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked) and the reason, its files and Slop's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans.",
+        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and Slop's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases",
         properties: slug_only,
@@ -897,8 +898,21 @@ pub(crate) const TOOLS: &[Tool] = &[
         required: &["slug", "id", "notes"],
     },
     Tool {
+        name: "withdraw_release",
+        description: "Withdraws a release that hasn't been reviewed yet (fetching or awaiting_review), so it never reaches players: one your maker didn't publish, or one sent by mistake. Only when your maker asks. The app's next release is then reviewed by a person.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/releases/{id}/withdraw",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "id": s("The release's ID, from list_releases"),
+            })
+        },
+        required: &["slug", "id"],
+    },
+    Tool {
         name: "check_repository",
-        description: "Runs Slop's source check on the repository's newest commit now, without a release: licence, saves, online code, purchases. Use it after fixing, before releasing.",
+        description: "Checks now that Slop can still read the app's repository, instead of waiting for the daily check. A freeze for lost access is lifted once Slop can read it (not one Slop's staff placed). Returns the freeze still in place, or null. It doesn't check the code: Slop's source check runs on each release.",
         method: Method::POST,
         path: "/v1/apps/{slug}/repo-check",
         properties: slug_only,

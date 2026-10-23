@@ -57,8 +57,17 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/users/{id}/decide", post(decide_user))
         .route("/admin/users/{id}/lift-suspension", post(lift_suspension))
         .route("/admin/users/{id}/passkey-grace", post(passkey_grace))
-        .route("/admin/mcp", post(mcp).get(mcp_get))
 }
+
+/// The admin MCP endpoint: its own body limit (lib.rs), since a tool call may carry a whole
+/// legal document.
+pub fn mcp_routes() -> Router<AppState> {
+    Router::new().route("/admin/mcp", post(mcp).get(mcp_get))
+}
+
+/// The largest MCP request read: a call carrying a whole legal document (legal.rs), with room
+/// for the rest of the call.
+pub const MAX_MCP_BYTES: usize = crate::legal::MAX_PUBLISH_BYTES + 64 * 1024;
 
 // ---------------------------------------------------------------------------------------------
 // Status
@@ -1325,7 +1334,7 @@ pub(crate) async fn serve_mcp(
         .extensions()
         .get::<ConnectInfo<std::net::SocketAddr>>()
         .cloned();
-    let Ok(bytes) = axum::body::to_bytes(request.into_body(), 256 * 1024).await else {
+    let Ok(bytes) = axum::body::to_bytes(request.into_body(), MAX_MCP_BYTES).await else {
         return Json(rpc_error(Value::Null, -32700, "request too large")).into_response();
     };
     let Ok(req) = serde_json::from_slice::<RpcRequest>(&bytes) else {

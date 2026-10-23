@@ -15970,7 +15970,8 @@ async fn staff_publish_legal_changes_and_agents_only_ask_for_staff_changes(db: P
     let (owner_id, owner) = make_admin(&app, "Olive Owner").await;
     let (helper_id, _) = app.user("Hal Helper", "US").await;
 
-    // A new Terms version from the panel: announced, in effect 15 days later, withdrawable.
+    // A new Terms version from the panel (longer than most requests may be): announced, in
+    // effect 15 days later, withdrawable.
     let docs = body_json(
         app.send(req(Method::GET, "/v1/admin/legal").cookie(&owner))
             .await,
@@ -15984,14 +15985,16 @@ async fn staff_publish_legal_changes_and_agents_only_ask_for_staff_changes(db: P
         .unwrap()
         .clone();
     let body = format!(
-        "{}\n\nOne more line.",
-        terms["latest_body_md"].as_str().unwrap()
+        "{}\n\n{}",
+        terms["latest_body_md"].as_str().unwrap(),
+        "One more clause, spelled out in full.\n".repeat(2_000)
     );
+    assert!(body.len() > 64 * 1024);
     let res = app
         .send(
             req(Method::POST, "/v1/admin/legal/terms")
                 .cookie(&owner)
-                .json(json!({ "summary": "Adds one line.", "body_md": body })),
+                .json(json!({ "summary": "Adds some clauses.", "body_md": body })),
         )
         .await;
     assert_eq!(res.status(), StatusCode::OK);

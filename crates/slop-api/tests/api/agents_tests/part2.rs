@@ -261,14 +261,23 @@ async fn an_agent_reads_publishes_and_withdraws_legal_documents(db: PgPool) {
     }
     assert_eq!(versions().await, 1);
 
-    // More than one request may carry (the API takes up to 64 KiB): refused, nothing stored.
+    // Over 200,000 characters: refused, nothing stored.
+    let (failed, text) = admin_tool(
+        &app,
+        &moderate,
+        "publish_legal_document",
+        json!({ "kind": "terms", "summary": "Huge.", "body_md": "x".repeat(200_001) }),
+    )
+    .await;
+    assert!(failed && text.contains("200000 characters"), "{text}");
+    // More than a request may carry (about 1 MiB): refused, nothing stored.
     let res = app
         .send(
             req(Method::POST, "/v1/admin/mcp")
                 .header("authorization", moderate.clone())
                 .json(json!({ "jsonrpc": "2.0", "id": 1, "method": "tools/call", "params": {
                     "name": "publish_legal_document",
-                    "arguments": { "kind": "terms", "summary": "Huge.", "body_md": "x".repeat(70 * 1024) } } })),
+                    "arguments": { "kind": "terms", "summary": "Huge.", "body_md": "x".repeat(1200 * 1024) } } })),
         )
         .await;
     // (413 when the client sends its length first; otherwise the reading stops at the limit.)
@@ -2784,17 +2793,38 @@ async fn check_repository_checks_that_slop_can_still_read_the_repository(db: PgP
     assert!(!frozen);
 }
 
-/// The tool says it runs the source check (licence, saves, online code, purchases) on the newest
-/// commit, and the guide and get_fixes tell agents to use it after fixing; the route it calls
-/// only checks that Slop can still read the repository (frozen.rs), so nothing about the code
-/// comes back.
+/// check_repository checks Slop can read the repository, freezing or unfreezing the app, and
+/// says so; it doesn't check the code (bug b111: it used to say it ran the source check).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "agents-2-n1: check_repository promises a source check but only checks repository access"]
-async fn check_repository_runs_the_source_check(db: PgPool) {
+async fn check_repository_freezes_and_unfreezes_by_repository_access(db: PgPool) {
     let app = test_app(db).await;
     let (_, maker) = maker_with_app(&app, "released").await;
     let (publish, _) =
         maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let tools = rpc(&app, "/v1/maker/mcp", &publish, "tools/list", json!({})).await;
+    let described = tools["result"]["tools"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["name"] == "check_repository")
+        .unwrap()["description"]
+        .as_str()
+        .unwrap()
+        .to_string();
+    assert!(described.contains("doesn't check the code"), "{described}");
+    let frozen = || async {
+        sqlx::query_scalar::<_, bool>("select frozen_at is not null from apps where slug = 'game'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+
+    // The repository can't be read: frozen, with the reason.
+    sqlx::query("update apps set repo_url = $1 where slug = 'game'")
+        .bind(format!("{}octo/gone", app.fake_base))
+        .execute(&app.db)
+        .await
+        .unwrap();
     let (failed, text) = maker_tool(
         &app,
         &publish,
@@ -2803,9 +2833,30 @@ async fn check_repository_runs_the_source_check(db: PgPool) {
     )
     .await;
     assert!(!failed, "{text}");
-    // octo/game's source is an MIT licence file (SCANNED_SOURCE[..1] in main.rs): the answer
-    // should say what the source check found, not only that the repository can be read.
-    assert!(text.contains("MIT"), "{text}");
+    let freeze = parsed(&text);
+    assert!(
+        freeze["reason"].as_str().unwrap().contains("can't be read"),
+        "{text}"
+    );
+    assert_eq!(freeze["by_staff"], false);
+    assert!(frozen().await);
+
+    // Readable again: the freeze is lifted (null).
+    sqlx::query("update apps set repo_url = $1 where slug = 'game'")
+        .bind(format!("{}octo/game", app.fake_base))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "check_repository",
+        json!({ "slug": "game" }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text), Value::Null);
+    assert!(!frozen().await);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

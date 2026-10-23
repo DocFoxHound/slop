@@ -2572,34 +2572,166 @@ async fn reviewers_turn_down_changes_with_a_reason(db: PgPool) {
     );
 }
 
-/// Bug b21: the "was submitted" notice tells the maker to withdraw an unexpected release from
-/// Manage, but makers have no way to withdraw a release.
+/// The "was submitted" notice tells the maker to withdraw a release they didn't send from the
+/// app's Manage page, and they can (bug b21): only before it's reviewed, only their own, audited,
+/// and the app's next release then waits for a person.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "b21: the submitted-release notice says to withdraw it from Manage, which makers can't do"]
-async fn the_submitted_notice_only_suggests_what_makers_can_do(db: PgPool) {
+async fn makers_withdraw_a_release_before_it_is_reviewed(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = maker_with_app(&app, "released").await;
-    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
-    let body: String = sqlx::query_scalar(
-        "select body from notifications where user_id = $1 and title = 'Game 1.0.0 was submitted'",
+    let (_, other) = app.user("Otto Other", "US").await;
+    sqlx::query("update apps set auto_update = true")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let withdraw = |id: &str, cookie: &str| {
+        req(
+            Method::POST,
+            format!("/v1/apps/game/releases/{id}/withdraw"),
+        )
+        .cookie(cookie)
+    };
+    let overview = || async {
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+                .await,
+        )
+        .await
+    };
+
+    // The first release, approved by a person.
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    let (body, link): (String, String) = sqlx::query_as(
+        "select body, link from notifications where user_id = $1 and title = 'Game 1.0.0 was submitted'",
     )
     .bind(maker_id)
     .fetch_one(&app.db)
     .await
     .unwrap();
-    if body.contains("withdraw it from Manage") {
-        // Then the maker must be able to withdraw it.
-        let res = app
-            .send(
-                req(
-                    Method::POST,
-                    format!("/v1/apps/game/releases/{id}/withdraw"),
-                )
-                .cookie(&maker),
-            )
-            .await;
-        assert!(res.status().is_success(), "{body}");
-    }
+    assert!(
+        body.contains("withdraw it on the app's Manage page"),
+        "{body}"
+    );
+    assert_eq!(link, "/publish/game/manage");
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        first.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    assert_eq!(overview().await["auto_approval_ready"], true);
+
+    // Another one comes in: the Manage page lists it as waiting, while it's still fetched.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(release_body(&app, "1.1.0", "game-windows.zip")),
+        )
+        .await;
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    let waiting = overview().await["waiting"].clone();
+    assert_eq!(waiting.as_array().unwrap().len(), 1, "{waiting}");
+    assert_eq!(waiting[0]["id"], id.as_str());
+    assert_eq!(waiting[0]["status"], "fetching");
+    assert_eq!(waiting[0]["source"], "maker");
+
+    // Only the app's maker may withdraw it.
+    assert_eq!(
+        status_of(&app, withdraw(&id, &other)).await,
+        StatusCode::NOT_FOUND
+    );
+    let res = app.send(withdraw(&id, &maker)).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let release = body_json(res).await;
+    assert_eq!(release["status"], "withdrawn");
+    assert_eq!(
+        release["status_reason"],
+        "Withdrawn by the maker before review."
+    );
+    assert_eq!(
+        status_of(&app, withdraw(&id, &maker)).await,
+        StatusCode::CONFLICT,
+        "once"
+    );
+    assert!(
+        !releases::fetch_next(&app.state).await.unwrap(),
+        "not fetched"
+    );
+    let (actor, detail): (String, Value) = sqlx::query_as(
+        "select actor, detail from audit_log where action = 'release.withdraw' and subject = $1",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(actor, maker_id.to_string());
+    assert_eq!(detail["version"], "1.1.0");
+    assert_eq!(detail["by_agent"], false);
+    let told: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title = 'Game 1.1.0 was withdrawn'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, 1);
+    let now = overview().await;
+    assert_eq!(now["waiting"], json!([]));
+    // The next release waits for a person.
+    assert_eq!(now["auto_approval_ready"], false);
+    assert!(
+        now["auto_approval_note"]
+            .as_str()
+            .unwrap()
+            .contains("withdrawn or rejected"),
+        "{now}"
+    );
+
+    // One waiting for review can be withdrawn too, and then not approved.
+    let id = submit_and_fetch(&app, &maker, "1.2.0").await;
+    assert_eq!(overview().await["waiting"][0]["status"], "awaiting_review");
+    assert_eq!(status_of(&app, withdraw(&id, &maker)).await, StatusCode::OK);
+    let err = admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap_err();
+    assert!(err.to_string().contains("not awaiting review"), "{err}");
+    // A reviewed release can't be withdrawn this way.
+    assert_eq!(
+        status_of(&app, withdraw(&first, &maker)).await,
+        StatusCode::CONFLICT
+    );
+
+    // A maker's agent may with a publish token, not a read one.
+    let id = submit_and_fetch(&app, &maker, "1.3.0").await;
+    let read = agent_token(&app, &maker, "read", None).await;
+    let publish = agent_token(&app, &maker, "publish", Some(&["game"])).await;
+    let args = json!({ "slug": "game", "id": id });
+    let (error, text) = call_tool(&app, &read, "withdraw_release", args.clone()).await;
+    assert!(error && text.contains("forbidden"), "{text}");
+    let (error, text) = call_tool(&app, &publish, "withdraw_release", args).await;
+    assert!(!error, "{text}");
+    assert_eq!(
+        serde_json::from_str::<Value>(&text).unwrap()["status"],
+        "withdrawn"
+    );
+    let by_agent: Value = sqlx::query_scalar(
+        "select detail->'by_agent' from audit_log where action = 'release.withdraw' and subject = $1",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(by_agent, true);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -3691,10 +3823,9 @@ async fn repository_ids_are_recorded_once_and_filled_in_for_older_apps(db: PgPoo
     assert_eq!(filled, (Some(7), Some(8)));
 }
 
-/// Slop Build's source checks may be up to 256 KiB, but its submissions share the API's 64 KiB
-/// body limit, so a release with a long list of findings can't be submitted at all.
+/// Slop Build's source checks may be up to 256 KiB, so its submissions have their own body
+/// limit, over the API's usual 64 KiB (bug b99).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "n1: Slop Build submissions over 64 KiB are refused (413) though source checks may be up to 256 KiB"]
 async fn slop_build_takes_source_checks_up_to_their_own_limit(db: PgPool) {
     let (app, _, _, _) = slop_build_app(db).await;
     let findings: Vec<Value> = (0..1500)
