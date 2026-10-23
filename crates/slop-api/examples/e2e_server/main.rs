@@ -224,6 +224,7 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         approvals_required: 1,
         field_key: Some([11; 32]),
         security_contact: None,
+        contact_email: Some("hello@slop.example".into()),
         source_url: None,
     };
 
