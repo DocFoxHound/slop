@@ -37,6 +37,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { NotFound } from "./Listing";
 import { LegalRequestsTab } from "../components/LegalRequests";
+import { AiMessagesTab } from "./admin/AiMessages";
 import { AppRecord, AuditRows } from "./admin/AppRecord";
 import { AdminHome } from "./admin/Home";
 import { LegalDocsTab } from "./admin/LegalDocs";
@@ -45,7 +46,19 @@ import { MoneyTab } from "./admin/Money";
 import { DelistButton, ReasonButton, RuleSelect, useAction } from "./admin/shared";
 import { UsersTab } from "./admin/Users";
 
-type Tab = "home" | "queue" | "apps" | "users" | "store" | "money" | "audit" | "ai" | "staff" | "docs" | "legal";
+type Tab =
+  | "home"
+  | "queue"
+  | "apps"
+  | "users"
+  | "store"
+  | "money"
+  | "audit"
+  | "ai-messages"
+  | "ai"
+  | "staff"
+  | "docs"
+  | "legal";
 
 export function Admin() {
   useDocumentTitle("Admin");
@@ -69,6 +82,7 @@ export function Admin() {
             ["store", "Front page"],
             ["money", "Money"],
             ["audit", "Audit log"],
+            ["ai-messages", "AI messages"],
             ["ai", "AI reviewers"],
             ["staff", "Staff"],
             ["docs", "Terms & policies"],
@@ -93,6 +107,7 @@ export function Admin() {
       {tab === "store" && <StoreTab />}
       {tab === "money" && <MoneyTab />}
       {tab === "audit" && <AuditTab />}
+      {tab === "ai-messages" && <AiMessagesTab />}
       {tab === "ai" && <TokensTab />}
       {tab === "staff" && <StaffTab />}
       {tab === "docs" && <LegalDocsTab />}
@@ -999,6 +1014,7 @@ function StaffTab() {
                 {r}
               </th>
             ))}
+            <th scope="col">Name shown to AI agents</th>
             {canManage && <th scope="col">Remove</th>}
           </tr>
         </thead>
@@ -1031,6 +1047,15 @@ function StaffTab() {
                   </td>
                 );
               })}
+              <td>
+                <input
+                  type="checkbox"
+                  aria-label={`${m.display_name}: name shown to AI agents`}
+                  checked={m.listed_by_name}
+                  disabled={busy !== undefined || (m.id !== s.me && !s.my_roles.includes("owner"))}
+                  onChange={() => void run(`${m.id}/listed`, () => api.admin.setListedByName(m.id, !m.listed_by_name))}
+                />
+              </td>
               {canManage && (
                 <td>
                   <ReasonButton

@@ -136,6 +136,39 @@ async fn listed(
     Ok(())
 }
 
+/// A thread an account's AI agent started with every admin, with a token made 12 days before.
+async fn agent_message(
+    db: &PgPool,
+    sender: Uuid,
+    category: &str,
+    subject: &str,
+    body: &str,
+) -> anyhow::Result<()> {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into admin_threads (id, sender_id, via, category, subject) values ($1, $2, 'maker_agent', $3, $4)",
+    )
+    .bind(id)
+    .bind(sender)
+    .bind(category)
+    .bind(subject)
+    .execute(db)
+    .await?;
+    sqlx::query(
+        "insert into admin_thread_messages (id, thread_id, author_id, from_staff, by_agent, body,
+                token_kind, token_id, token_name, token_scope, token_created_at)
+         values ($1, $2, $3, false, true, $4, 'maker', $5, 'Claude Code', 'read', now() - interval '12 days 1 hour')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(id)
+    .bind(sender)
+    .bind(body)
+    .bind(Uuid::now_v7())
+    .execute(db)
+    .await?;
+    Ok(())
+}
+
 #[tokio::main]
 async fn main() -> anyhow::Result<()> {
     tracing_subscriber::fmt()
@@ -278,6 +311,23 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
     )
     .await?;
     listed(db, maker, "mias-first", "Mia's First Game", "").await?;
+    // Messages Mia's AI agent wrote to the admins (admin_messages.rs), for the AI messages tab.
+    agent_message(
+        db,
+        maker,
+        "report",
+        "Release upload times out",
+        "Submitting 1.2.0 timed out after 30 s.\nLog: https://example.com/log <b>not bold</b>",
+    )
+    .await?;
+    agent_message(
+        db,
+        maker,
+        "suggestion",
+        "Show scan progress",
+        "A percentage while files are scanned would help.",
+    )
+    .await?;
 
     let state = AppState::new(db.clone(), config.clone())?;
     tokio::spawn(slop_api::releases::run_fetcher(state.clone()));

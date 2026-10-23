@@ -22,6 +22,7 @@ const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/admin?tab=money", "admin"],
   ["/admin?tab=store", "admin"],
   ["/admin?tab=docs", "admin"],
+  ["/admin?tab=ai-messages", "admin"],
 ];
 
 for (const [path, who] of pages) {
