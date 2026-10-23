@@ -412,7 +412,7 @@ async fn close(
             Ok(e) => e,
             Err(e) => ApiError::Internal(e),
         })?;
-    crate::bounties::forget_cards(&state, user.id).await;
+    crate::bounties::forget_customer(&state, user.id).await;
     let jar = jar.remove(session::removal_cookie(
         &state.config,
         session::cookie_name(&state.config),
