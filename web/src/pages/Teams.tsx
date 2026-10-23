@@ -38,7 +38,7 @@ export function Teams() {
   useDocumentTitle("Teams");
   const { me } = useSession();
   const all = useLoad(() => api.teams.list(), []);
-  const mine = useLoad(() => (me ? api.teams.mine() : Promise.resolve({ teams: [], invites: [] })), [me?.id]);
+  const mine = useLoad(() => (me ? api.teams.mine() : Promise.resolve({ teams: [], invites: [], team_chats: false })), [me?.id]);
   const [creating, setCreating] = useState(false);
   return (
     <div className="page narrow">
@@ -248,8 +248,8 @@ export function Team() {
               Join
             </button>
           )}
-          {t.role && t.kind === "player" && !t.hidden && (
-            // Team chat: everyone in the team, end-to-end encrypted (pages/Chat.tsx).
+          {t.chat && (
+            // Team chat: everyone in an invite-only team, end-to-end encrypted (pages/Chat.tsx).
             isDesktop ? (
               <button
                 type="button"

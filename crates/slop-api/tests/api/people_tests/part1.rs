@@ -3638,7 +3638,6 @@ async fn only_the_client_reviews_and_only_finished_work(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "nb2: withdrawal ignores the start-now acknowledgement and completion (HUM-2, HUM-4): allowed after the work is fully done and paid, refused once auto-completion ends the job inside the 14 days"]
 async fn withdrawing_follows_the_start_now_acknowledgement_not_completion(db: PgPool) {
     let h = hiring(db, "DE").await;
     // Asked to start now, then the work was fully done and paid for: the right is gone.
@@ -3678,8 +3677,17 @@ async fn withdrawing_follows_the_start_now_acknowledgement_not_completion(db: Pg
     .await
     .unwrap();
     assert_eq!(h.status(&waiting).await, "completed");
+    let job = h.view(&waiting, &h.tavern).await;
+    assert_eq!(
+        (
+            job["withdrawal"]["open"].as_bool(),
+            job["credited"].as_bool()
+        ),
+        (Some(true), Some(true))
+    );
     let job = h.ok(&waiting, &h.tavern, "withdraw", json!({})).await;
     assert_eq!(job["status"], "withdrawn");
+    assert_eq!(job["credited"], false, "withdrawn work isn't credited");
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -4121,20 +4129,45 @@ async fn clients_ask_for_a_conversation_and_creatives_open_and_close_it(db: PgPo
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "nb3: a creative can reopen the conversation on a declined, cancelled or withdrawn job, after ending it closed it"]
 async fn conversations_stay_closed_once_a_job_has_ended(db: PgPool) {
     let h = hiring(db, "US").await;
     let id = h.job("upfront", "offered").await;
+    h.ok(&id, &h.vera, "conversation/open", json!({})).await;
     h.ok(&id, &h.tavern, "decline", json!({ "note": "No thanks." }))
         .await;
-    h.refused(
-        &id,
+    let cancelled = h.job("upfront", "in_progress").await;
+    h.ok(
+        &cancelled,
         &h.vera,
-        "conversation/open",
-        json!({}),
-        StatusCode::CONFLICT,
+        "cancel",
+        json!({ "note": "Can't do it after all." }),
     )
     .await;
+    for id in [&id, &cancelled] {
+        let job = h.view(id, &h.vera).await;
+        assert_eq!(job["conversation"]["open"], false);
+        assert!(!actions(&job).contains(&"open_conversation"));
+        assert!(!actions(&h.view(id, &h.tavern).await).contains(&"request_conversation"));
+        h.refused(
+            id,
+            &h.vera,
+            "conversation/open",
+            json!({}),
+            StatusCode::CONFLICT,
+        )
+        .await;
+        h.refused(
+            id,
+            &h.tavern,
+            "conversation/request",
+            json!({}),
+            StatusCode::CONFLICT,
+        )
+        .await;
+    }
+    // A finished job's conversation can still be opened.
+    let done = h.job("upfront", "completed").await;
+    h.ok(&done, &h.vera, "conversation/open", json!({})).await;
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -5237,7 +5270,6 @@ async fn delivered_jobs_complete_themselves_after_seven_days_once(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "nb4: a delivery with an open problem about it still completes on its own after 7 days"]
 async fn an_open_problem_holds_off_automatic_completion(db: PgPool) {
     let h = hiring(db, "US").await;
     let id = h.job("upfront", "delivered").await;
@@ -5255,6 +5287,16 @@ async fn an_open_problem_holds_off_automatic_completion(db: PgPool) {
     .await
     .unwrap();
     assert_eq!(h.status(&id).await, "delivered");
+    assert!(h.view(&id, &h.tavern).await["auto_complete_at"].is_null());
+    // Once it closes, the delivery counts as accepted as usual.
+    h.ok(&id, &h.tavern, "problem/withdraw", json!({})).await;
+    slop_api::people::jobs::auto_complete(
+        &h.app.db,
+        OffsetDateTime::now_utc() + time::Duration::days(8),
+    )
+    .await
+    .unwrap();
+    assert_eq!(h.status(&id).await, "completed");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

@@ -1,7 +1,7 @@
 ---
 title: People Terms
-version: 2026-10-21
-summary: Slop's fee promise: never more than 5%, and 12 months' notice of any other fee change that costs creatives more.
+version: 2026-10-23
+summary: A delivery with an open problem doesn't count as accepted until the problem closes, and completing a job never shortens a consumer's right to cancel.
 ---
 > **Draft for legal review.** These terms haven't been reviewed by a lawyer yet. You'll get 15 days' notice of any change.
 
@@ -23,7 +23,7 @@ The Service Agreement binds both sides to its words: the creative delivers what'
 - Creatives are responsible for their own taxes. Slop may have to report creatives' income to tax authorities (EU DAC7, US 1099-K).
 
 ## 4. Delivery
-Delivery before the last payment is a preview. The client may use the work only once it's paid in full. After delivery, the client has 7 days to accept it or ask for a change; after that, it counts as accepted.
+Delivery before the last payment is a preview. The client may use the work only once it's paid in full. After delivery, the client has 7 days to accept it or ask for a change; after that, it counts as accepted, but not while a problem about it is open. Completing a job never shortens a consumer's legal right to cancel.
 
 ## 5. Conversations
 Job conversations are recorded for contract and legal purposes. The creative opens them; the client can ask at any time. Slop keeps the text while the conversation is open and for 30 days after it closes, then keeps only fingerprints that prove a downloaded copy is unchanged. Download your copy.
