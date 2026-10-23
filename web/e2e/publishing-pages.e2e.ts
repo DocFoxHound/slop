@@ -5,7 +5,7 @@ import { expect, signIn, test } from "./fixtures";
 import { answer, apiError, readNotices, uniq } from "./publishing-helpers";
 
 test("a branch shows its errors by their fields", async ({ page }) => {
-  // Fin publishes nothing: the attempt is refused (counting against Fin's new-app limit).
+  // Fin publishes nothing here: the attempt is refused.
   await signIn(page, "finance");
   await page.goto("/app/neon-drift/branch");
   await expect(page.getByRole("heading", { name: "Register a branch of Neon Drift" })).toBeVisible();

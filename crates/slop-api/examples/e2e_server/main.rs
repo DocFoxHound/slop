@@ -197,6 +197,10 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             write_per_minute: 1_000_000,
             read_per_minute: 1_000_000,
         },
+        // A handful of seeded accounts create the apps, offers, reports and reviews of every
+        // test file in one run, more than a person would in a day. No browser test meets a real
+        // per-account limit: the ones about a 429 answer it themselves.
+        account_limit_scale: 1_000,
         desktop: Default::default(),
         demos: Default::default(),
         media: slop_api::config::MediaConfig {
@@ -267,6 +271,23 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
     })
     .await
     .context("seeding")?;
+
+    // The whole suite takes longer than the step-up window (auth/session.rs), so the seeded
+    // sessions keep counting as recent sign-ins. Tests of an old sign-in answer for the server.
+    tokio::spawn({
+        let db = db.clone();
+        async move {
+            let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
+            loop {
+                every.tick().await;
+                let _ = sqlx::query(
+                    "update sessions set stepped_up_at = now() where user_agent = 'e2e'",
+                )
+                .execute(&db)
+                .await;
+            }
+        }
+    });
 
     let cookie_name = session::cookie_name(&config);
     println!(

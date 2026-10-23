@@ -558,6 +558,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
             source_hosts: vec![("localhost".into(), slop_api::repo_tokens::Kind::Gitlab)],
         },
         rate_limits: slop_api::ratelimit::Limits::default(),
+        account_limit_scale: 1,
         desktop: Default::default(),
         demos: Default::default(),
         media: slop_api::config::MediaConfig {

@@ -102,11 +102,15 @@ test("the terms list offers Try again when it can't load", async ({ page }) => {
 
 test("the transparency report: a year's counts, and switching years", async ({ page }) => {
   // Early 2027: two years to choose from, the newest first. (The server still lives in 2026, so
-  // 2027's numbers are this year's, as it would answer them then.)
+  // 2027's numbers are this year's, as it would answer them then, except that no authority has
+  // asked for anything yet: other test files file legal requests, so 2026 may have some.)
   await page.clock.setFixedTime(new Date("2027-02-01T12:00:00Z"));
   await page.route(path("/v1/transparency/2027"), async (route) => {
     const res = await route.fetch({ url: route.request().url().replace("/2027", "/2026") });
-    await route.fulfill({ json: { ...(await res.json()), year: 2027, complete: false } });
+    const report = await res.json();
+    await route.fulfill({
+      json: { ...report, year: 2027, complete: false, legal_requests: { ...report.legal_requests, by_country: [] } },
+    });
   });
   const asked: string[] = [];
   page.on("request", (r) => {
@@ -119,6 +123,9 @@ test("the transparency report: a year's counts, and switching years", async ({ p
   await expect(year.locator("option")).toHaveText(["2027", "2026"]);
   await expect(year).toHaveValue("2027");
   await expect(page.getByText("2027 isn't over yet: these are the numbers so far.")).toBeVisible();
+  // An empty table says so.
+  const byCountry = page.getByRole("table", { name: "By country" });
+  await expect(byCountry.getByRole("cell", { name: "None" })).toBeVisible();
 
   await year.selectOption("2026");
   await expect.poll(() => asked).toEqual(["2027", "2026"]);
@@ -127,7 +134,15 @@ test("the transparency report: a year's counts, and switching years", async ({ p
   await expect(decisions.getByRole("row", { name: /App taken out of the store \d+/ })).toBeVisible();
   await expect(decisions.getByRole("row", { name: /Account suspended \d+/ })).toBeVisible();
   await expect(page.getByRole("table", { name: "Appeals by outcome" }).getByRole("row", { name: /Waiting \d+/ })).toBeVisible();
-  await expect(page.getByRole("table", { name: "By country" }).getByRole("cell", { name: "None" })).toBeVisible();
+  // Each country counted, as the server counts them.
+  const { legal_requests } = await call<{ legal_requests: { by_country: Array<{ key: string; count: number }> } }>(
+    null,
+    "GET",
+    "/v1/transparency/2026",
+  );
+  await expect(byCountry.locator("tbody tr")).toHaveText(
+    legal_requests.by_country.length ? legal_requests.by_country.map((r) => `${r.key}${r.count}`) : ["None"],
+  );
   await expect(page.getByText(/^Decisions made by automated tools alone: 0\./)).toBeVisible();
 
   // A finished year has no "so far" note.

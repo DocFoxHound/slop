@@ -158,7 +158,9 @@ test("pledging refuses bad amounts and minors, waits while a delivery is decided
   await page.reload();
   await expect(page.getByText("Payments aren't set up on this server yet.")).toBeVisible();
   await expect(page.getByRole("button", { name: "Pledge" })).toHaveCount(0);
-  await page.unroute(`**/v1/bounties/${bounty}`);
+  // The page asks for the bounty again once it knows who's signed in, so a request may still be
+  // in the handler: waiting for it keeps it from being let through (and answered twice) instead.
+  await page.unrouteAll({ behavior: "wait" });
 
   // After three unfinished pledges in a day, the browser does a quick proof of work first; then
   // on to Stripe as usual.

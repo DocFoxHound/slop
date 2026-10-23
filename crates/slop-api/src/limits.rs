@@ -98,23 +98,45 @@ struct Bucket {
 
 const MAX_BUCKETS: usize = 200_000;
 
-#[derive(Default)]
 pub struct AccountLimiter {
     buckets: Mutex<HashMap<(Action, Uuid), Bucket>>,
     /// How often each account hit a limit recently (for abuse checks).
     hits: Mutex<HashMap<Uuid, (u32, Instant)>>,
+    /// Every limit is this many times `Action::limit` (config.rs `account_limit_scale`).
+    scale: u32,
+}
+
+impl Default for AccountLimiter {
+    fn default() -> Self {
+        Self::new(1)
+    }
 }
 
 impl AccountLimiter {
+    /// Limits `scale` times the usual ones: 1 everywhere but the browser tests' server, where a
+    /// handful of seeded accounts do in one run what many people would.
+    pub fn new(scale: u32) -> Self {
+        Self {
+            buckets: Mutex::default(),
+            hits: Mutex::default(),
+            scale: scale.max(1),
+        }
+    }
+
+    fn limit(&self, action: Action) -> (u32, Duration) {
+        let (n, per) = action.limit();
+        (n.saturating_mul(self.scale), per)
+    }
+
     /// Takes one. `Err` is how long until the next.
     pub fn take(&self, user: Uuid, action: Action, now: Instant) -> Result<(), Duration> {
-        let (n, per) = action.limit();
+        let (n, per) = self.limit(action);
         let capacity = f64::from(n.max(1));
         let per_second = capacity / per.as_secs_f64();
         let mut buckets = self.buckets.lock().expect("account limiter lock");
         if buckets.len() >= MAX_BUCKETS {
             buckets.retain(|(a, _), b| {
-                let (n, per) = a.limit();
+                let (n, per) = self.limit(*a);
                 b.tokens
                     + now.saturating_duration_since(b.updated).as_secs_f64() * f64::from(n)
                         / per.as_secs_f64()

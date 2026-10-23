@@ -60,8 +60,10 @@ test("the dashboard says where each app is, and checks again while one is moving
 });
 
 test("the new app form: the address follows the name, errors show where they belong", async ({ page }) => {
-  // Fin publishes nothing; every attempt here is refused (and counts against Fin's new-app limit,
-  // not a maker's).
+  // Every attempt here is refused, so Fin has the same apps at the end as at the start (the admin
+  // tests give Fin some of their own, so that may be none or a few).
+  const mine = async () => (await call<Array<{ slug: string }>>("finance", "GET", "/v1/me/apps")).map((a) => a.slug).sort();
+  const before = await mine();
   await signIn(page, "finance");
   await page.goto("/publish/new");
   const name = page.getByLabel("Name", { exact: true });
@@ -142,7 +144,9 @@ test("the new app form: the address follows the name, errors show where they bel
   // Cancel leaves without saving.
   await page.getByRole("link", { name: "Cancel" }).click();
   await expect(page).toHaveURL(/\/publish$/);
-  await expect(page.getByText("You haven't made anything yet.")).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Your apps", level: 1 })).toBeVisible();
+  await expect(page.locator("li.status-row").filter({ hasText: "Night Ferry" })).toHaveCount(0);
+  expect(await mine()).toEqual(before);
   // Checking the address started Fin's passkey deadline (the first time anyone publishes).
   await readNotices("finance", "/account#sign-ins");
 });
