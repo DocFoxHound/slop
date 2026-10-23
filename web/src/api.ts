@@ -1539,6 +1539,8 @@ export interface AdminQueue {
       approved_releases: number;
       pictures_pending: boolean;
       going_public: boolean;
+      /** Taken out of the store, then reinstated on appeal while it couldn't be listed. */
+      after_appeal: boolean;
       notes: ReviewNote[];
     }
   >;
@@ -2826,11 +2828,13 @@ export const api = {
         outcome,
         external_reference,
       }),
+    /** stays_out: reversed, but the app can't go back in the store yet (what the maker is told). */
     decideAppeal: (id: string, reverse: boolean, reason: string) =>
-      request<void>("POST", `/v1/admin/decisions/${id}/appeal`, {
-        reverse,
-        reason,
-      }),
+      request<{ stays_out: string | null }>(
+        "POST",
+        `/v1/admin/decisions/${id}/appeal`,
+        { reverse, reason },
+      ),
     stage: (slug: string, stage: AppStage) =>
       request<void>(
         "POST",

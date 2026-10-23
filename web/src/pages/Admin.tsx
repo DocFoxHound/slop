@@ -793,6 +793,7 @@ function QueueTab() {
                   {a.approved_releases === 1 ? "" : "s"}
                   {a.going_public &&
                     " · Private Slop going public: check the repository and licence from scratch"}
+                  {a.after_appeal && " · Reinstated on appeal"}
                 </span>
               </div>
               {a.pictures_pending ? (
@@ -1972,6 +1973,7 @@ function ReportCard({
 }
 
 function AppealsSection({ q, onDone }: { q: AdminQueue; onDone: () => void }) {
+  const [notice, setNotice] = useState<string>();
   return (
     <>
       <h2 className="section-title">Appeals ({q.appeals.length})</h2>
@@ -1979,19 +1981,37 @@ function AppealsSection({ q, onDone }: { q: AdminQueue; onDone: () => void }) {
         Look at the decision again with fresh eyes, ideally not the person who
         made it. Keeping or reversing it, the person is told why.
       </p>
+      {notice && (
+        <p className="notice" role="status">
+          {notice}
+        </p>
+      )}
       {q.appeals.length === 0 && (
         <div className="empty-state">No appeals waiting.</div>
       )}
       <ul className="release-list">
         {q.appeals.map((a) => (
-          <AppealCard key={a.id} a={a} onDone={onDone} />
+          <AppealCard
+            key={a.id}
+            a={a}
+            onDone={onDone}
+            onNotice={setNotice}
+          />
         ))}
       </ul>
     </>
   );
 }
 
-function AppealCard({ a, onDone }: { a: QueuedAppeal; onDone: () => void }) {
+function AppealCard({
+  a,
+  onDone,
+  onNotice,
+}: {
+  a: QueuedAppeal;
+  onDone: () => void;
+  onNotice: (notice: string | undefined) => void;
+}) {
   const { busy, error, run } = useAction(onDone);
   const [reason, setReason] = useState("");
   return (
@@ -2063,7 +2083,18 @@ function AppealCard({ a, onDone }: { a: QueuedAppeal; onDone: () => void }) {
             className="btn small slime"
             disabled={busy !== undefined || !reason.trim()}
             onClick={() =>
-              void run(a.id, () => api.admin.decideAppeal(a.id, true, reason))
+              void run(a.id, async () => {
+                const { stays_out } = await api.admin.decideAppeal(
+                  a.id,
+                  true,
+                  reason,
+                );
+                onNotice(
+                  stays_out
+                    ? `Reversed, but ${a.subject_label} can't go back in the store yet. The maker was told: ${stays_out}`
+                    : undefined,
+                );
+              })
             }
           >
             Reverse the decision

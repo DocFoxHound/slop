@@ -133,7 +133,7 @@ async fn status(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<J
             appeals: count(db, "select count(*) from moderation_decisions where appeal_status = 'pending'").await.unwrap_or(0),
             live_releases_flagged_by_rescan: count(db, "select count(*) from release_files f join releases r on r.id = f.release_id where f.rescan_flagged_at is not null and r.status = 'approved'").await?,
             abuse_signals: count(db, "select count(*) from abuse_signals where status = 'open'").await?,
-            apps_ready_to_list: count(db, "select count(*) from apps a where a.status = 'draft' and a.visibility = 'public' and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')").await?,
+            apps_ready_to_list: count(db, "select count(*) from apps a where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal)) and a.visibility = 'public' and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')").await?,
         },
         last_backup: ops.backup_dir.as_ref().and_then(|d| crate::ops::stamp_in(&d.join("last-success"))),
         last_restore_check: ops.backup_dir.as_ref().and_then(|d| crate::ops::stamp_in(&d.join("last-restore-check"))),
@@ -440,7 +440,8 @@ async fn decide_account(
         },
     )
     .await
-    .map_err(|e| ApiError::Conflict(format!("{e:#}")))?;
+    .map_err(|e| ApiError::Conflict(format!("{e:#}")))?
+    .id;
     tx.commit().await?;
     Ok(json!({ "decision": decision }))
 }
@@ -789,7 +790,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "decide_appeal",
-        description: "Keep or reverse a moderation decision someone appealed, with the reason they're shown.",
+        description: "Keep or reverse a moderation decision someone appealed, with the reason they're shown. Reversing a delisting returns stays_out when the app can't go back in the store yet, and why.",
         method: Method::POST,
         path: "/v1/admin/decisions/{id}/appeal",
         properties: || json!({ "id": s("The decision ID"), "reverse": { "type": "boolean", "description": "true reverses it" }, "reason": s("Shown to the person") }),

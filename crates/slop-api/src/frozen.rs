@@ -207,7 +207,8 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
         Access::Readable if frozen || left_out => {
             sqlx::query(
                 "update apps set frozen_at = null, frozen_reason = null, frozen_delisted = false,
-                        status = case when frozen_delisted then 'listed'::app_status else status end
+                        status = case when frozen_delisted then 'listed'::app_status else status end,
+                        relist_after_appeal = relist_after_appeal and not frozen_delisted
                  where id = $1",
             )
             .bind(app_id)

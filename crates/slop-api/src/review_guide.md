@@ -228,6 +228,9 @@ let your admin decide, unless they told you to handle a kind of case yourself.
   `{"action": "warn" | "suspend_account", "rule", "facts"}`;
   `POST /v1/admin/users/{id}/lift-suspension` with `{"reason"}`.
 - Appeals: `POST /v1/admin/decisions/{id}/appeal` with `{"reverse": true | false, "reason"}`.
+  Reversing a delisting answers `{"stays_out": "..."}` when the app can't go back in the store
+  yet (frozen, pictures waiting, no approved release): the maker is told the same. A frozen app
+  goes back when the freeze ends; otherwise it waits under Ready to list for you.
 - Releases already live: `POST /v1/admin/releases/{id}/revoke` with `{"reason"}` withdraws one
   (it stops launching for everyone); `POST /v1/admin/releases/{id}/files/{platform}/rescan-clear`
   with `{"reason"}` keeps one a re-scan flagged.
