@@ -39,7 +39,7 @@ The creative promises that they made the work, or have the rights to everything 
 {{credit_line}}
 
 ## 5. Delivery and acceptance
-The creative delivers through Slop, with links to the files. After delivery the client has **7 days** to accept the delivery (paying anything still owed) or ask for a Change to Agreement. If they do neither, the delivery counts as accepted, and anything still owed remains owed. That doesn't shorten any legal cancellation right.
+The creative delivers through Slop, with links to the files. After delivery the client has **7 days** to accept the delivery (paying anything still owed) or ask for a Change to Agreement. If they do neither, the delivery counts as accepted, and anything still owed remains owed, but not while a problem about it is open (section 6). That doesn't shorten any legal cancellation right.
 
 ## 6. Refunds, problems and cancelling
 {{refund_policy}}
