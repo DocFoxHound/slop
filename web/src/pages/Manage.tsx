@@ -86,7 +86,7 @@ export function Manage() {
       {m.pulse_required !== null && <PulseNeeded received={m.pulse_required} />}
       <WaitingReleases slug={slug} waiting={m.waiting} onChanged={changed} />
       <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
-      <UpdatesPanel key={settingsNonce} slug={slug} />
+      <UpdatesPanel key={settingsNonce} slug={slug} onChanged={overview.reload} />
       {!app.data.private && app.data.stage === "released" && <RatingBreakdown slug={slug} />}
       {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
       <RepoMove slug={slug} overview={m} onChanged={changed} />

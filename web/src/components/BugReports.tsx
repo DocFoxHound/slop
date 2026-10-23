@@ -59,7 +59,9 @@ const STATUS: Record<BugReport["status"], string> = {
 export function BugReports({ slug, version }: { slug: string; version?: string }) {
   const location = useLocation();
   const crash = (location.state as { crash?: Crash } | null)?.crash;
-  const list = useLoad(() => api.bugReports.list(slug).catch(() => null), [slug]);
+  // "all": the open ones (to say "me too") and the player's own whatever their status, so the
+  // maker's answer shows on a report they closed (the API leaves out others' closed ones).
+  const list = useLoad(() => api.bugReports.list(slug, "all").catch(() => null), [slug]);
   const [open, setOpen] = useState(Boolean(crash));
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");

@@ -90,6 +90,22 @@ function BranchForm({ parent: p }: { parent: AppDetail }) {
         {error.message}
       </span>
     ) : null;
+  // Fields with their own error line; any other error (an agreement or passkey declined) shows at
+  // the bottom.
+  const shownByField = new Set<string>([
+    "title",
+    "slug",
+    "summary",
+    "note",
+    "description_md",
+    "repo_url",
+    "license_spdx",
+    "min_age",
+    "content_labels",
+    "online",
+    "online_hosts",
+    ...(form.kind === "addon" ? [] : ["platforms"]),
+  ]);
   const missing = (["windows", "linux"] as const).filter((x) => !p.platforms.includes(x));
   const isMod = form.kind === "addon";
   const thing = p.kind === "game" ? "game" : "app";
@@ -243,7 +259,7 @@ function BranchForm({ parent: p }: { parent: AppDetail }) {
             across when they pick your build.
           </p>
         )}
-        {error && !error.field && (
+        {error && !(error.field && shownByField.has(error.field)) && (
           <p className="form-error" role="alert">
             {error.message}
           </p>
