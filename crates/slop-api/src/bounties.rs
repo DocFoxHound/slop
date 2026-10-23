@@ -152,6 +152,8 @@ struct Claim {
     /// Backers' votes so far, by amount pledged.
     accept_minor: i64,
     reject_minor: i64,
+    /// The viewer delivered it (they may withdraw it while it waits).
+    mine: bool,
 }
 
 #[derive(Serialize)]
@@ -210,6 +212,7 @@ async fn detail(
             .bind(id)
             .fetch_one(&state.db)
             .await?;
+    let viewer = user.as_ref().map(|u| u.id);
     let claims: Vec<Claim> = sqlx::query_as(
         "select c.id, u.display_name as builder, a.slug as app_slug, a.title as app_title, r.version, c.note,
                 c.status, c.decided_by, c.created_at,
@@ -218,15 +221,16 @@ async fn detail(
                           where v.claim_id = c.id and v.accept), 0)::int8 as accept_minor,
                 coalesce((select sum(p.amount_minor) from bounty_votes v join bounty_pledges p
                           on p.bounty_id = c.bounty_id and p.user_id = v.user_id and p.status = 'active'
-                          where v.claim_id = c.id and not v.accept), 0)::int8 as reject_minor
+                          where v.claim_id = c.id and not v.accept), 0)::int8 as reject_minor,
+                coalesce(c.claimed_by = $2, false) as mine
          from bounty_claims c join users u on u.id = c.claimed_by join apps a on a.id = c.app_id
          join releases r on r.id = c.release_id
          where c.bounty_id = $1 order by c.created_at desc",
     )
     .bind(id)
+    .bind(viewer)
     .fetch_all(&state.db)
     .await?;
-    let viewer = user.as_ref().map(|u| u.id);
     let my_pledge: Option<MyPledge> = sqlx::query_as(
         "select amount_minor, status, failure from bounty_pledges where bounty_id = $1 and user_id = $2
          order by created_at desc limit 1",
