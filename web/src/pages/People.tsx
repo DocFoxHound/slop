@@ -487,6 +487,9 @@ function HireForm({
   const [exact, setExact] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
+  // Before the early return below: the form opens signed out while the session is still loading,
+  // and every hook has to run on every render (rules of hooks).
+  const terms = useTermsGate();
 
   if (!signedIn) {
     return (
@@ -502,7 +505,6 @@ function HireForm({
   }
   const apps = projects.data ?? [];
   const chosenProject = project || apps[0]?.slug || "";
-  const terms = useTermsGate();
   const send = async (inquiry: boolean) => {
     setBusy(true);
     setError(undefined);

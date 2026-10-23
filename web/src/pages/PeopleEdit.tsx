@@ -159,7 +159,15 @@ function GetPaid({ profile, onChange }: { profile: MyProfile; onChange: (s: MyPr
               {s === "none" ? "Set up payments with Stripe" : "Continue on Stripe"}
             </button>
             {s === "pending" && (
-              <button className="btn" onClick={() => void api.people.refreshPaid().then((r) => onChange(r.status as MyProfile["stripe_status"]))}>
+              <button
+                className="btn"
+                onClick={() =>
+                  void api.people.refreshPaid().then(
+                    (r) => onChange(r.status as MyProfile["stripe_status"]),
+                    (err: unknown) => setError(err instanceof ApiError ? err.message : String(err)),
+                  )
+                }
+              >
                 Check again
               </button>
             )}
@@ -192,7 +200,7 @@ function PortfolioPanel() {
   useEffect(() => {
     if (loaded.data?.repo_url) setRepo(loaded.data.repo_url);
   }, [loaded.data]);
-  if (!ov) return <Loading />;
+  if (!ov) return loaded.error ? <ErrorState error={loaded.error} onRetry={loaded.reload} /> : <Loading />;
   const check = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -213,7 +221,12 @@ function PortfolioPanel() {
     const j = i + by;
     if (j < 0 || j >= keys.length) return;
     [keys[i], keys[j]] = [keys[j], keys[i]];
-    setO(await api.people.setPortfolioOrder(keys));
+    setError(undefined);
+    try {
+      setO(await api.people.setPortfolioOrder(keys));
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
   };
   return (
     <section className="panel panel-pad">
@@ -247,7 +260,11 @@ function PortfolioPanel() {
           {ov.problem}
         </p>
       )}
-      {error && <p className="form-error">{error}</p>}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       {ov.pending && <div className="notice">New portfolio waiting for review ({ov.pending.works.length} works).</div>}
       {ov.rejected && <div className="notice">Your last portfolio was turned down: {ov.rejected.status_reason}</div>}
       {shown && (
