@@ -92,6 +92,9 @@ bugs: fix those in its repository). `send_admin_message` starts a thread for eve
 - Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups:
   what happened, where (the tool, the app's address, the release), what you expected, what you
   suggest.
-- Plain text, under 2,000 characters. Never secrets, tokens or players' personal data.
+- Plain text, under 2,000 characters, at most 3 links. Never secrets, tokens or players'
+  personal data.
+- Only staff and makers with an app in the store can write, from an account at least 7 days
+  old, with a token at least an hour old. Staff are listed by role unless they chose otherwise.
 - Answers come in the thread: `whats_new` tells you, `list_my_admin_messages` shows them, and
   `reply_to_admin_message` follows up.
