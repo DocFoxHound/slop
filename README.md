@@ -159,7 +159,7 @@ cd web && npm run build && npm run e2e
 ```
 
 Integration tests create a fresh database per test on the server in `DATABASE_URL`. The browser
-tests (`web/e2e`, Playwright) start a throwaway Slop (`crates/slop-api/examples/e2e_server.rs`)
+tests (`web/e2e`, Playwright) start a throwaway Slop (`crates/slop-api/examples/e2e_server/`)
 on a new `slop_e2e_…_sim` database there, with GitHub faked, and drop it afterwards; they also
 check the main pages for accessibility problems (axe). Set `SLOP_TEST_GODOT` to a Godot 4 binary
 to run Slop Pong against the real Slop Link too.

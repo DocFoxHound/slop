@@ -16,7 +16,10 @@ test("a player opens a bounty and pledges toward it", async ({ page }) => {
   await page.getByRole("checkbox", { name: /Save my card with Stripe/ }).check();
   await page.getByRole("checkbox", { name: "I'm 18 or older" }).check();
   await pledge.click();
-  // Simulated payments: the pledge is saved at once; nothing is charged.
+  // Stripe Checkout (the fake's page) saves the card, then sends the player back.
+  await expect(page.getByRole("heading", { name: "Fake Stripe Checkout" })).toBeVisible();
+  await page.getByRole("button", { name: "Pay" }).click();
+  await expect(page).toHaveURL(/\/bounties\/[0-9a-f-]+\?pledged=1$/);
   await expect(page.getByText(/your card is saved; charged only if a delivery is confirmed/)).toBeVisible();
   await expect(page.getByText("$12.50").first()).toBeVisible();
   await page.getByRole("button", { name: "Withdraw my pledge" }).click();

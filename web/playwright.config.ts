@@ -1,6 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Browser tests (web/e2e): the real website against a throwaway Slop (crates/slop-api/examples/
-// e2e_server.rs), with GitHub faked. `npm run e2e` (build the website first: `npm run build`).
+// e2e_server/), with GitHub and Stripe faked and everything seeded (e2e/fixtures.ts lists it).
+// `npm run e2e` (build the website first: `npm run build`).
 import { defineConfig, devices } from "@playwright/test";
 
 export default defineConfig({
