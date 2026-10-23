@@ -29,7 +29,8 @@ signing key's public half, which desktop builds trust, is in `~/.config/slop/des
 ## The desktop app
 
 `.github/workflows/desktop.yml` builds the Windows installer on every push to `main` that touches
-the app, and uploads it to the deployment with the run's GitHub OIDC token. The server signs it
+the app, and uploads it to the deployment with the run's GitHub OIDC token. Production's app is
+built the same way when the `production` tag moves (below, "Production"). The server signs it
 with the updater key (`SLOP_UPDATER_KEY`, only on the server). The app checks for updates shortly
 after it starts and every 3 hours, and shows a notice ("Slop 0.1.N is available: Update and restart
 / Later"); updates are never installed without the player choosing to. The website's store page
@@ -65,6 +66,58 @@ The same staff commands also work from the server:
 set -a; . ~/.config/slop/slop.env; set +a
 ~/slop-deploy/current/slop-api review pending
 ```
+
+## Production (slopai.games)
+
+Production runs at **https://slopai.games** on its own server (Fedora, user `slop`, rootless
+podman), laid out like this one: `~/slop-deploy`, `~/.config/slop/slop.env`, the user units from
+`deploy/systemd`, Postgres in `slop-pg` on `127.0.0.1:5433`, the API on `127.0.0.1:8090`.
+
+**How shipping works.** Every push to `main` goes to this test server first, which runs all the
+tests. Production deploys only a commit that's already live here, and only when the `production`
+tag is moved to it. To ship, on this server, from your own checkout with your GitHub access:
+
+```sh
+cd /srv/Development/Projects/slop
+deploy/ship-to-production.sh     # shows what's new since the last ship, asks, moves the tag
+```
+
+It takes the commit in `~/slop-deploy/current`, checks it's on `main`, and pushes only the tag.
+Within two minutes production's `update.sh` fetches the tag, refuses a commit that isn't on `main`
+or isn't signed (as here), builds it without the tests (it passed them here, and production has no
+test database), snapshots the database, switches, and rolls back if it isn't healthy.
+
+**The deploy's settings.** `update.sh` is the same file; production picks its mode in a drop-in
+(`systemctl --user edit slop-deploy.service`), with the read-only deploy key ("A read-only deploy
+key", below):
+
+```ini
+[Service]
+Environment=SLOP_DEPLOY_REF=production
+Environment=SLOP_DEPLOY_MODE=production
+Environment=SLOP_DEPLOY_REMOTE=git@github-slop-deploy:DocFoxHound/slop.git
+```
+
+**The desktop app has two channels.** Pushes to `main` build an app that talks to and updates from
+this test server; moving the `production` tag builds one for slopai.games (`tauri.conf.json`'s
+default). Linux packages are built after each deploy on each server, for that server's
+`SLOP_PUBLIC_URL`. Each server takes uploads only from its own channel: this one leaves
+`SLOP_DESKTOP_REF` unset (`refs/heads/main`). In production's `slop.env`:
+
+```sh
+SLOP_PUBLIC_URL=https://slopai.games
+SLOP_DESKTOP_REPO=DocFoxHound/slop
+SLOP_DESKTOP_REF=refs/tags/production
+SLOP_DESKTOP_DIR=/home/slop/slop-desktop
+```
+
+Both apps trust the same keys, so production uses this server's `SLOP_UPDATER_KEY` and
+`SLOP_SIGNING_KEY`, and the same `~/.config/slop/desktop-build.env`. Production's app never accepts
+releases without a maker signature; only test sites' do (`crates/slop-desktop/build.rs`).
+
+**Caddy.** `deploy/slop-prod.caddyfile` serves `slopai.games`, sends `www.slopai.games` there, and
+has the browser demos' `play.slopai.games` commented out until it has a DNS record and
+`SLOP_PLAY_URL` ("Browser demos", below). Copy it to `/etc/caddy/Caddyfile.d/` there and reload.
 
 ## GitHub App
 
