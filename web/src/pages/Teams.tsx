@@ -179,6 +179,8 @@ function CreateTeam({ onCancel }: { onCancel: () => void }) {
   );
 }
 
+const errorText = (err: unknown) => (err instanceof ApiError ? err.message : String(err));
+
 const CHECK_NAME: Record<string, string> = {
   app_installed: "Slop's GitHub App is installed",
   owner: "You own the organization",
@@ -404,7 +406,7 @@ function Picks({ t, onChange, isAdmin }: { t: TeamPage; onChange: () => void; is
               <span className="muted small">· picked by {p.by}</span>
               {p.note && <p className="small">“{p.note}”</p>}
               {isAdmin && (
-                <button type="button" className="link-btn small muted" onClick={() => void api.teams.unpick(t.slug, p.id).then(onChange)}>
+                <button type="button" className="link-btn small muted" onClick={() => void api.teams.unpick(t.slug, p.id).then(onChange, (err: unknown) => setError(errorText(err)))}>
                   Remove
                 </button>
               )}
@@ -420,7 +422,11 @@ function Picks({ t, onChange, isAdmin }: { t: TeamPage; onChange: () => void; is
             Pick it
           </button>
         </div>
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
       </form>
     </>
   );
@@ -471,7 +477,7 @@ function GameNights({ t, onChange }: { t: TeamPage; onChange: () => void }) {
                   <>
                     {" "}
                     ·{" "}
-                    <button type="button" className="link-btn small muted" onClick={() => void api.teams.removeEvent(t.slug, e.id).then(onChange)}>
+                    <button type="button" className="link-btn small muted" onClick={() => void api.teams.removeEvent(t.slug, e.id).then(onChange, (err: unknown) => setError(errorText(err)))}>
                       Cancel it
                     </button>
                   </>
@@ -490,7 +496,11 @@ function GameNights({ t, onChange }: { t: TeamPage; onChange: () => void }) {
             Plan it
           </button>
         </div>
-        {error && <p className="form-error">{error}</p>}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
       </form>
     </>
   );

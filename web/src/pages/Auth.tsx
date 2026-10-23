@@ -436,6 +436,8 @@ export function Account() {
   const navigate = useNavigate();
   const { me, signOut, refresh } = useSession();
   const sessions = useLoad(() => (me ? api.sessions() : Promise.resolve([])), [me?.id]);
+  const [privacyError, setPrivacyError] = useState<string>();
+  const [sessionError, setSessionError] = useState<string>();
 
   if (me === undefined) return <Loading />;
   if (!me) {
@@ -452,8 +454,23 @@ export function Account() {
   }
 
   const revoke = async (id: string) => {
-    await api.revokeSession(id);
-    sessions.reload();
+    setSessionError(undefined);
+    try {
+      await api.revokeSession(id);
+      sessions.reload();
+    } catch (err) {
+      setSessionError(err instanceof ApiError ? err.message : String(err));
+    }
+  };
+  const savePrivacy = async (changes: Parameters<typeof api.updateMe>[0]) => {
+    setPrivacyError(undefined);
+    try {
+      await api.updateMe(changes);
+    } catch (err) {
+      setPrivacyError(err instanceof ApiError ? err.message : String(err));
+    }
+    // Either way, the switches show what's saved.
+    await refresh();
   };
 
   return (
@@ -476,7 +493,7 @@ export function Account() {
           <input
             type="checkbox"
             checked={me.profile_public}
-            onChange={(e) => void api.updateMe({ profile_public: e.target.checked }).then(refresh)}
+            onChange={(e) => void savePrivacy({ profile_public: e.target.checked })}
           />{" "}
           <span>
             <b>Show my votes and reviews on my profile</b>
@@ -490,7 +507,7 @@ export function Account() {
           <input
             type="checkbox"
             checked={me.share_playtime}
-            onChange={(e) => void api.updateMe({ share_playtime: e.target.checked }).then(refresh)}
+            onChange={(e) => void savePrivacy({ share_playtime: e.target.checked })}
           />{" "}
           <span>
             <b>Share my playtime</b>
@@ -504,7 +521,7 @@ export function Account() {
           <input
             type="checkbox"
             checked={me.personalize}
-            onChange={(e) => void api.updateMe({ personalize: e.target.checked }).then(refresh)}
+            onChange={(e) => void savePrivacy({ personalize: e.target.checked })}
           />{" "}
           <span>
             <b>Recommendations based on my activity</b>
@@ -514,6 +531,11 @@ export function Account() {
             </span>
           </span>
         </label>
+        {privacyError && (
+          <p className="form-error" role="alert">
+            {privacyError}
+          </p>
+        )}
         {me.gpc && (
           <p className="muted small">
             Your browser sends Global Privacy Control, asking sites not to sell or share your data. Slop never does, and
@@ -534,6 +556,11 @@ export function Account() {
 
       <h2 className="section-title">Where you're signed in</h2>
       {sessions.error && <ErrorState error={sessions.error} onRetry={sessions.reload} />}
+      {sessionError && (
+        <p className="form-error" role="alert">
+          {sessionError}
+        </p>
+      )}
       <ul className="sessions panel">
         {sessions.data?.map((s) => (
           <li key={s.id}>

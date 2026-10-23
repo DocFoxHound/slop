@@ -75,19 +75,40 @@ export function Layout() {
   useEffect(() => {
     view.current?.scrollTo({ top: 0 });
   }, [location.pathname]);
-  // Links to a part of a page (/account#decisions): wait for it to load, then go there.
+  // Links to a part of a page (/account#decisions): wait for it to load, then go there. Parts
+  // above it may still be loading and push it down, so it's followed until the page settles
+  // (or the person scrolls themselves).
   useEffect(() => {
     const id = decodeURIComponent(location.hash.slice(1));
     if (!id) return;
     let tries = 0;
+    let observer: ResizeObserver | undefined;
+    let settled: number | undefined;
+    const youScrolled = ["wheel", "touchstart", "keydown", "mousedown"] as const;
+    const stop = () => {
+      observer?.disconnect();
+      observer = undefined;
+      window.clearTimeout(settled);
+      youScrolled.forEach((e) => window.removeEventListener(e, stop));
+    };
     const timer = window.setInterval(() => {
       const el = document.getElementById(id);
       if (el || ++tries > 30) {
         window.clearInterval(timer);
-        el?.scrollIntoView({ block: "start" });
+        if (!el) return;
+        el.scrollIntoView({ block: "start" });
+        const page = view.current?.firstElementChild;
+        if (!page || typeof ResizeObserver === "undefined") return;
+        observer = new ResizeObserver(() => el.scrollIntoView({ block: "start" }));
+        observer.observe(page);
+        settled = window.setTimeout(stop, 3000);
+        youScrolled.forEach((e) => window.addEventListener(e, stop, { passive: true }));
       }
     }, 100);
-    return () => window.clearInterval(timer);
+    return () => {
+      window.clearInterval(timer);
+      stop();
+    };
   }, [location.pathname, location.hash]);
 
   return (
