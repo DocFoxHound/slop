@@ -2226,11 +2226,40 @@ async fn security_txt_is_served_only_with_a_contact(db: PgPool) {
         "{left}"
     );
 
-    let none = test_app_with(db, |c| c.security_contact = None).await;
+    // Without a security contact, the published contact address stands in.
+    let fallback = test_app_with(db.clone(), |c| c.security_contact = None).await;
+    let res = fallback
+        .send(req(Method::GET, "/.well-known/security.txt"))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let text =
+        String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
+    assert!(
+        text.contains("Contact: mailto:hello@slop.example\n"),
+        "{text}"
+    );
+
+    let none = test_app_with(db, |c| {
+        c.security_contact = None;
+        c.contact_email = None;
+    })
+    .await;
     let res = none
         .send(req(Method::GET, "/.well-known/security.txt"))
         .await;
     assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_contact_page_shows_the_published_address(db: PgPool) {
+    let app = test_app(db.clone()).await;
+    let res = app.send(req(Method::GET, "/v1/contact")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["email"], "hello@slop.example");
+
+    let unset = test_app_with(db, |c| c.contact_email = None).await;
+    let res = unset.send(req(Method::GET, "/v1/contact")).await;
+    assert!(body_json(res).await["email"].is_null());
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -4187,13 +4216,15 @@ async fn official_badges_are_rechecked_daily_and_removed_when_a_check_fails(db: 
         .unwrap();
 
     let job = tokio::spawn(slop_api::teams::run(app.state.clone()));
-    eventually(15, "acme was checked", || async {
+    // Checked, and its owner told: the notice comes after the check is saved.
+    eventually(15, "acme was checked and its owner told", || async {
         sqlx::query_scalar::<_, bool>(
             "select checked_at > now() - interval '1 minute' from teams where slug = 'acme'",
         )
         .fetch_one(&app.db)
         .await
         .unwrap()
+            && notices(&app, owner_id, "Your team's official badge was removed").await > 0
     })
     .await;
     job.abort();

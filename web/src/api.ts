@@ -2619,6 +2619,8 @@ export const api = {
       "GET",
       "/v1/source",
     ),
+  /** Slop's published contact address (contact page); null until the server sets one. */
+  contact: () => request<{ email: string | null }>("GET", "/v1/contact"),
   /** The yearly transparency report (counts only). */
   transparency: (year: number) => request<TransparencyReport>("GET", `/v1/transparency/${year}`),
   admin: {
