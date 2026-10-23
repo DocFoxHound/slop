@@ -623,7 +623,7 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
             )
             .await?;
             let refunded = charge["amount_refunded"].as_i64().unwrap_or_default();
-            let keys = payment_keys(&charge, &object_id);
+            let keys = payment_keys(state, stripe, acct, &charge, &object_id).await?;
             jobs::refund_recorded(&state.db, &object_id, refunded).await?;
             crate::donations::refund_recorded(&state.db, &object_id, &keys, refunded).await?;
             crate::bounties::refund_recorded(&state.db, &object_id, &keys, refunded).await?;
@@ -642,7 +642,7 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
                     &[],
                 )
                 .await?;
-                let keys = payment_keys(&charge, charge_id);
+                let keys = payment_keys(state, stripe, acct, &charge, charge_id).await?;
                 crate::donations::dispute_recorded(&state.db, &keys, &object_id, amount).await?;
                 crate::bounties::dispute_recorded(&state.db, &keys, &object_id, amount).await?;
             }
@@ -661,16 +661,47 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
 }
 
 /// The IDs Slop may have recorded a charge's payment under: the charge itself (People jobs,
-/// one-off donations), its payment intent (bounty pledges) or its invoice (monthly donations, on
-/// Stripe API versions whose charges still name it).
-fn payment_keys(charge: &Value, charge_id: &str) -> Vec<String> {
+/// one-off donations), its payment intent (bounty pledges) or its invoice (monthly donations).
+/// From Stripe's API version 2025-03-31, charges no longer name their invoice (the field is
+/// gone, not null), so the invoice is looked up through Stripe's invoice payments instead.
+async fn payment_keys(
+    state: &AppState,
+    stripe: &StripeConfig,
+    acct: &str,
+    charge: &Value,
+    charge_id: &str,
+) -> anyhow::Result<Vec<String>> {
     let mut keys = vec![charge_id.to_string()];
     for field in ["payment_intent", "invoice"] {
         if let Some(id) = charge[field].as_str() {
             keys.push(id.to_string());
         }
     }
-    keys
+    if charge.get("invoice").is_none()
+        && let Some(intent) = charge["payment_intent"].as_str()
+    {
+        let found = call(
+            state,
+            stripe,
+            reqwest::Method::GET,
+            "v1/invoice_payments",
+            Some(acct),
+            &[
+                ("payment[type]", "payment_intent".into()),
+                ("payment[payment_intent]", intent.to_string()),
+            ],
+        )
+        .await?;
+        for paid in found["data"].as_array().into_iter().flatten() {
+            if let Some(id) = paid["invoice"]
+                .as_str()
+                .or_else(|| paid["invoice"]["id"].as_str())
+            {
+                keys.push(id.to_string());
+            }
+        }
+    }
+    Ok(keys)
 }
 
 /// For the job page: what a payment will look like to both sides.
