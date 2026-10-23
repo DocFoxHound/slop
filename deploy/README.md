@@ -104,20 +104,31 @@ Until Stripe keys are set, People works (profiles, portfolios, requests and offe
 be paid, so nobody can be hired; pages say "Payments aren't switched on yet". The sandbox
 simulates payments instead.
 
-1. In Stripe: turn on **Connect** for the platform account (the creatives' accounts are their
-   own, with the full Stripe dashboard; Stripe carries losses).
-2. **Developers → Webhooks → Add endpoint** on **connected accounts**:
-   `https://<site>/v1/stripe/webhook`, events `checkout.session.completed`,
-   `checkout.session.async_payment_succeeded`, `charge.refunded`, `charge.dispute.created`,
-   `account.updated`, and for server donations `invoice.paid` and `customer.subscription.deleted`.
-3. For fix bounties, add a **second endpoint** at the same address for events on **your account**
-   (not connected accounts), with the event `checkout.session.completed`.
-4. Add to `~/.config/slop/slop.env` and restart. Each endpoint has its own signing secret (shown
-   on its page in Stripe); list both, comma-separated:
+Do this once in a Stripe **sandbox** (test keys, no real money) and again on the **live**
+account at launch. Stripe calls webhooks "event destinations"; the steps are the same for both.
+
+1. In Stripe: **Connect → Get started**. Slop is a platform whose sellers (makers, creatives) are
+   paid directly and sign up through Stripe's own onboarding; give them the **full Stripe
+   dashboard**, and **Stripe** covers losses (refunds, disputes). Slop creates the accounts the
+   v1 way (`v1/accounts` with `controller`), so the Accounts v2 notes don't apply.
+2. **Developers → Webhooks → Add destination**, scope **Connected accounts**, payload style
+   **Snapshot**, the default API version (Slop reads both the older and newer shapes), type
+   **Webhook endpoint**, URL `https://<site>/v1/stripe/webhook`. Events:
+   `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
+   `checkout.session.expired`, `charge.refunded`, `charge.dispute.created`, `account.updated`,
+   `invoice.paid`, `customer.subscription.deleted`.
+3. A **second destination** at the same URL, scope **Your account** (fix bounties' saved cards),
+   Snapshot, the same API version. Events: `checkout.session.completed`, `charge.refunded`,
+   `charge.dispute.created`, `checkout.session.expired`.
+4. Add to `~/.config/slop/slop.env` and restart. The secret key is under **Developers → API
+   keys** (the publishable `pk_` key isn't used). Each destination has its own **signing secret**
+   (on its page, **Reveal**); list both, comma-separated. Type them into the file yourself: never
+   paste them into a chat or a ticket.
    ```
    STRIPE_SECRET_KEY=sk_test_…   # sk_live_… only after the lawyer's review (LEGAL §4)
    STRIPE_WEBHOOK_SECRET=whsec_connected…,whsec_platform…
    ```
+   Check: an app's `GET /v1/apps/{slug}/donate` no longer says donations aren't switched on.
 5. Before live keys: DAC7 and HMRC platform-reporting registration (LEGAL-GUIDANCE §16 checklist).
 6. Once Slop has its EU OSS / UK VAT registrations, put the numbers in `SLOP_VAT_ID` so fee
    statements show them (e.g. `SLOP_VAT_ID=EU372000000 · GB000000000`).
