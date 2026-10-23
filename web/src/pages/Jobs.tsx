@@ -126,13 +126,16 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
   const due = j.payments.find((p) => p.status === "due");
   const openChange = j.changes.find((c) => c.status === "requested" || c.status === "offered");
 
-  const run = async (step: () => Promise<Job>) => {
+  /** Runs a step; false when it failed (the error is shown), so forms can keep what was typed. */
+  const run = async (step: () => Promise<Job>): Promise<boolean> => {
     setBusy(true);
     setError(undefined);
     try {
       onChange(await step());
+      return true;
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
+      return false;
     } finally {
       setBusy(false);
     }
@@ -295,7 +298,7 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
           <p className="muted small">Accept only if it matches the agreement. Otherwise ask for a change or open a problem.</p>
         </div>
       )}
-      {can("review") && <ReviewForm j={j} busy={busy} onSend={(body) => step("review", body)} />}
+      {can("review") && <ReviewForm j={j} busy={busy} onSend={(body) => step("review", body)} onAnswered={onChange} />}
 
       <ChangesPanel j={j} busy={busy} step={step} openChange={openChange} />
       <ConversationPanel j={j} busy={busy} step={step} onError={setError} />
@@ -754,7 +757,7 @@ function FilesForm({
   );
 }
 
-type Step = (name: string, body?: unknown) => Promise<void>;
+type Step = (name: string, body?: unknown) => Promise<boolean>;
 
 function ChangesPanel({ j, busy, step, openChange }: { j: Job; busy: boolean; step: Step; openChange: Job["changes"][number] | undefined }) {
   const can = (a: Job["actions"][number]) => j.actions.includes(a);
@@ -937,7 +940,7 @@ function ConversationPanel({ j, busy, step, onError }: { j: Job; busy: boolean; 
           className="form"
           onSubmit={(e) => {
             e.preventDefault();
-            void step("messages", { body: text, recording_ack: ack }).then(() => setText(""));
+            void step("messages", { body: text, recording_ack: ack }).then((ok) => ok && setText(""));
           }}
         >
           <label>
@@ -1077,7 +1080,9 @@ function ProblemPanel({ j, busy, step }: { j: Job; busy: boolean; step: Step }) 
             className="form"
             onSubmit={(e) => {
               e.preventDefault();
-              void step("problem/propose", { kind, note, amount_minor: kind === "refund" ? toMinor(amount) : null }).then(() => setNote(""));
+              void step("problem/propose", { kind, note, amount_minor: kind === "refund" ? toMinor(amount) : null }).then(
+                (ok) => ok && setNote(""),
+              );
             }}
           >
             <div className="form-row">
@@ -1124,10 +1129,21 @@ function ProblemPanel({ j, busy, step }: { j: Job; busy: boolean; step: Step }) 
   );
 }
 
-function ReviewForm({ j, busy, onSend }: { j: Job; busy: boolean; onSend: (body: { vote: string; body: string }) => void }) {
+function ReviewForm({
+  j,
+  busy,
+  onSend,
+  onAnswered,
+}: {
+  j: Job;
+  busy: boolean;
+  onSend: (body: { vote: string; body: string }) => void;
+  onAnswered: (j: Job) => void;
+}) {
   const [vote, setVote] = useState<"not_slop" | "slop" | undefined>(j.review?.vote);
   const [body, setBody] = useState(j.review?.body ?? "");
   const [answer, setAnswer] = useState("");
+  const [answerError, setAnswerError] = useState<string>();
   const dispute = j.review?.dispute;
   return (
     <form
@@ -1179,12 +1195,20 @@ function ReviewForm({ j, busy, onSend }: { j: Job; busy: boolean; onSend: (body:
                 type="button"
                 className="btn small"
                 disabled={busy || !answer.trim()}
-                onClick={() =>
-                  void api.people.step(j.id, "review/dispute-answer", { statement: answer }).then(() => window.location.reload())
-                }
+                onClick={() => {
+                  setAnswerError(undefined);
+                  api.people.step(j.id, "review/dispute-answer", { statement: answer }).then(onAnswered, (err: unknown) =>
+                    setAnswerError(err instanceof ApiError ? err.message : String(err)),
+                  );
+                }}
               >
                 Send your answer
               </button>
+              {answerError && (
+                <p className="form-error" role="alert">
+                  {answerError}
+                </p>
+              )}
             </div>
           )}
         </div>
@@ -1208,7 +1232,8 @@ function NoteAction({
 }: {
   label: string;
   busy: boolean;
-  onSend: (note: string) => void;
+  /** May answer false (or a promise of false) when sending failed: the note stays open. */
+  onSend: (note: string) => unknown;
   danger?: boolean;
   required?: boolean;
   hint?: string;
@@ -1240,8 +1265,8 @@ function NoteAction({
           type="button"
           className={`btn ${danger ? "danger" : "slime"}`}
           disabled={busy || (required && !note.trim())}
-          onClick={() => {
-            onSend(note);
+          onClick={async () => {
+            if ((await onSend(note)) === false) return;
             setOpen(false);
             setNote("");
           }}
