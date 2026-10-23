@@ -344,12 +344,16 @@ export function AccountData() {
               <li>Your email and settings are removed, and your library and playtime deleted.</li>
               <li>Your votes still count in ratings, but aren't linked to you any more.</li>
               <li>Your apps leave the store. Players who installed them keep them.</li>
+              <li>Your bounty pledges are withdrawn, and the cards you saved for them are removed.</li>
               <li>
                 A People page is frozen as it is and takes no new work; job records, agreements and reviews stay, because
                 the other side relies on them.
               </li>
             </ul>
-            <p className="muted small">Download your data first if you want a copy. Open People jobs must be finished first.</p>
+            <p className="muted small">
+              Download your data first if you want a copy. Open People jobs, and pledges being charged for a delivery, must
+              be finished first.
+            </p>
             <label>
               Type <b>{CONFIRMATION}</b> to confirm
               <input value={confirm} onChange={(e) => setConfirm(e.target.value)} autoComplete="off" />

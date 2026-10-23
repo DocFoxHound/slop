@@ -623,13 +623,29 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
             )
             .await?;
             let refunded = charge["amount_refunded"].as_i64().unwrap_or_default();
+            let keys = payment_keys(&charge, &object_id);
             jobs::refund_recorded(&state.db, &object_id, refunded).await?;
-            crate::donations::refund_recorded(&state.db, &object_id, refunded).await?;
+            crate::donations::refund_recorded(&state.db, &object_id, &keys, refunded).await?;
+            crate::bounties::refund_recorded(&state.db, &object_id, &keys, refunded).await?;
         }
-        ("charge.dispute.created", Some(_)) => {
-            let charge = event.data.object["charge"].as_str().unwrap_or_default();
+        ("charge.dispute.created", Some(acct)) => {
+            let charge_id = event.data.object["charge"].as_str().unwrap_or_default();
             let amount = event.data.object["amount"].as_i64().unwrap_or_default();
-            jobs::dispute_recorded(&state.db, charge, &object_id, amount).await?;
+            jobs::dispute_recorded(&state.db, charge_id, &object_id, amount).await?;
+            if !charge_id.is_empty() {
+                let charge = call(
+                    state,
+                    stripe,
+                    reqwest::Method::GET,
+                    &format!("v1/charges/{charge_id}"),
+                    Some(acct),
+                    &[],
+                )
+                .await?;
+                let keys = payment_keys(&charge, charge_id);
+                crate::donations::dispute_recorded(&state.db, &keys, &object_id, amount).await?;
+                crate::bounties::dispute_recorded(&state.db, &keys, &object_id, amount).await?;
+            }
         }
         ("account.updated", _) => {
             sync_account(state, stripe, &object_id).await?;
@@ -642,6 +658,19 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
         .execute(&state.db)
         .await?;
     Ok(())
+}
+
+/// The IDs Slop may have recorded a charge's payment under: the charge itself (People jobs,
+/// one-off donations), its payment intent (bounty pledges) or its invoice (monthly donations, on
+/// Stripe API versions whose charges still name it).
+fn payment_keys(charge: &Value, charge_id: &str) -> Vec<String> {
+    let mut keys = vec![charge_id.to_string()];
+    for field in ["payment_intent", "invoice"] {
+        if let Some(id) = charge[field].as_str() {
+            keys.push(id.to_string());
+        }
+    }
+    keys
 }
 
 /// For the job page: what a payment will look like to both sides.

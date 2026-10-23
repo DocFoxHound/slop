@@ -15,8 +15,9 @@
 //! - what its AI agents wrote to Slop's admins (admin_messages.rs) is deleted;
 //! - agreements, job records, reviews and moderation records stay as they were.
 //!
-//! An account with an unfinished People job, or a payment it owes, can't be closed until that's
-//! settled: the other side relies on it.
+//! An account with an unfinished People job, a payment it owes, or a bounty pledge being charged
+//! for a confirmed delivery can't be closed until that's settled: the other side relies on it.
+//! Pledges not yet charged are withdrawn, and the backer's saved cards are removed at Stripe.
 
 use axum::{
     Json, Router,
@@ -311,6 +312,9 @@ struct CloseBody {
     confirm: String,
 }
 
+/// Why closing waits for a pledge whose delivery was confirmed: the builder is owed it.
+const PLEDGE_DUE: &str = "a bounty you backed was delivered and your pledge is still being charged: try again once it's paid";
+
 /// What stops an account being closed now, in words for the user.
 pub async fn blockers(db: &sqlx::PgPool, user_id: Uuid) -> sqlx::Result<Vec<String>> {
     let open_jobs: i64 = sqlx::query_scalar(
@@ -347,6 +351,12 @@ pub async fn blockers(db: &sqlx::PgPool, user_id: Uuid) -> sqlx::Result<Vec<Stri
     .bind(user_id)
     .fetch_one(db)
     .await?;
+    let pledges_due: i64 = sqlx::query_scalar(
+        "select count(*) from bounty_pledges where user_id = $1 and status = 'due'",
+    )
+    .bind(user_id)
+    .fetch_one(db)
+    .await?;
     let mut out = Vec::new();
     if giving > 0 {
         out.push("you give a monthly server donation: cancel it first".into());
@@ -368,6 +378,9 @@ pub async fn blockers(db: &sqlx::PgPool, user_id: Uuid) -> sqlx::Result<Vec<Stri
     }
     if problems > 0 {
         out.push("a problem on a People job is still open: settle or withdraw it first".into());
+    }
+    if pledges_due > 0 {
+        out.push(PLEDGE_DUE.into());
     }
     Ok(out)
 }
@@ -393,7 +406,13 @@ async fn close(
             blocked.join("; ")
         )));
     }
-    close_account(&state.db, user.id, "the account's owner").await?;
+    close_account(&state.db, user.id, "the account's owner")
+        .await
+        .map_err(|e| match e.downcast::<ApiError>() {
+            Ok(e) => e,
+            Err(e) => ApiError::Internal(e),
+        })?;
+    crate::bounties::forget_cards(&state, user.id).await;
     let jar = jar.remove(session::removal_cookie(
         &state.config,
         session::cookie_name(&state.config),
@@ -466,6 +485,19 @@ pub async fn close_account(
     .bind(user_id)
     .execute(&mut *tx)
     .await?;
+    // A delivery confirmed since `blockers` looked made a pledge due: it's owed, so closing
+    // waits. (Checked after the withdrawal above, which a confirmation can't slip past.)
+    let due: bool = sqlx::query_scalar(
+        "select exists (select 1 from bounty_pledges where user_id = $1 and status = 'due')",
+    )
+    .bind(user_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    if due {
+        return Err(
+            ApiError::Conflict(format!("You can't close your account yet: {PLEDGE_DUE}.")).into(),
+        );
+    }
     // One random ID for all of them, so each app still counts this person's vote once.
     let anonymous = Uuid::new_v4();
     for table in ["votes", "vote_events"] {

@@ -48,7 +48,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
   - a creative's page stays readable, frozen, with a "closed" notice, and takes no new work; job records, agreements and reviews stay;
   - the maker's apps leave the store (installs keep working).
 
-  Open People jobs, unpaid amounts and open problems must be settled first.
+  Open People jobs, unpaid amounts and open problems must be settled first, and so must a bounty pledge being charged for a confirmed delivery (the builder is owed it). Pledges not yet charged are withdrawn, and the backer's saved cards are removed at Stripe (their Stripe customer is deleted).
 - **Terms** (built 2026-10-20). The Terms of Service are accepted at sign-up, the Publisher Agreement before a first app, and the People Terms before a creative profile or a hire. Each acceptance records the version. Changes are published 15 days before they take effect: a notice shows on every page, and once in effect, only the actions behind that agreement wait for it (accepting takes one tick). Every version stays readable at /legal. The texts are drafts until the lawyer has read them (`crates/slop-api/legal/`).
 
 ## 5. Store & discovery
