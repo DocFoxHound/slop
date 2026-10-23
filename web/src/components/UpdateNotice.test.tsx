@@ -42,6 +42,15 @@ describe("UpdateNotice", () => {
     expect(desktop.installUpdate).toHaveBeenCalledTimes(1);
   });
 
+  it("a failed install says why and offers to try again", async () => {
+    vi.mocked(desktop.installUpdate).mockRejectedValueOnce(new Error("The update's signature didn't check out."));
+    render(<UpdateNotice />);
+    await act(async () => emit({ version: "0.1.43", current_version: "0.1.33", notes: null }));
+    await act(async () => fireEvent.click(screen.getByRole("button", { name: "Update and restart" })));
+    expect(screen.getByRole("status").textContent).toContain("The update's signature didn't check out.");
+    expect(screen.getByRole("button", { name: "Try again" })).toBeTruthy();
+  });
+
   it("Later hides it", async () => {
     render(<UpdateNotice />);
     await act(async () => emit({ version: "0.1.42", current_version: "0.1.33", notes: null }));

@@ -21,8 +21,14 @@ interface Pending {
 
 /**
  * `guard(fn)` runs `fn`; if it needs an agreement accepted first, `prompt` shows it, and `fn`
- * runs again once it's accepted. Cancelling rejects with the original error.
+ * runs again once it's accepted. Cancelling rejects with the original error (without its field).
  */
+/**
+ * The refusal, for whoever asked, once the person says no: its field names the agreement (or
+ * "add" for a passkey), not one of the form's fields, so it's shown as a message of its own.
+ */
+const declined = (err: ApiError) => new ApiError(err.status, err.code, err.message);
+
 export function useTermsGate(): { guard: <T>(fn: () => Promise<T>) => Promise<T>; prompt: ReactNode } {
   const [pending, setPending] = useState<Pending>();
   const [passkey, setPasskey] = useState<{ add: boolean; resolve: () => void; reject: () => void }>();
@@ -33,12 +39,12 @@ export function useTermsGate(): { guard: <T>(fn: () => Promise<T>) => Promise<T>
       } catch (err) {
         if (err instanceof ApiError && err.code === "passkey_required") {
           const add = err.field === "add";
-          await new Promise<void>((resolve, reject) => setPasskey({ add, resolve, reject: () => reject(err) }));
+          await new Promise<void>((resolve, reject) => setPasskey({ add, resolve, reject: () => reject(declined(err)) }));
           continue;
         }
         if (!(err instanceof ApiError) || err.code !== "terms_required" || !err.field) throw err;
         const kind = err.field as LegalKind;
-        await new Promise<void>((resolve, reject) => setPending({ kind, resolve, reject: () => reject(err) }));
+        await new Promise<void>((resolve, reject) => setPending({ kind, resolve, reject: () => reject(declined(err)) }));
       }
     }
   }, []);

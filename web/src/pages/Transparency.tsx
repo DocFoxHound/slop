@@ -29,6 +29,8 @@ const LABEL: Record<string, string> = {
   hide_review: "Review hidden",
   remove_reply: "Maker's reply removed",
   hide_profile: "Profile hidden",
+  hide_team: "Team hidden",
+  hide_bounty: "Bounty hidden",
   suspend_account: "Account suspended",
   warn: "Warning",
   pending: "Waiting",
