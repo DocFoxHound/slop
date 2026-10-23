@@ -10,6 +10,7 @@
 //! | Content removed on a terrorist content order | 6 months | Regulation (EU) 2021/784 Art. 6 |
 //! | Agreement acceptances | 6 years after the account closed | contract claims |
 //! | Crash logs in bug reports | 90 days (the report stays) | data minimisation |
+//! | Closed threads from AI agents to the admins | a year after closing | data minimisation |
 //!
 //! Not here: payments and vote history (10 years) only grow, and the API's own database role
 //! can't delete them (migration 0050), so their purge runs as the owner when the first records
@@ -27,6 +28,7 @@ pub struct Purged {
     pub removed_content: u64,
     pub acceptances: u64,
     pub bug_logs: u64,
+    pub ai_messages: u64,
 }
 
 pub async fn purge(db: &PgPool) -> sqlx::Result<Purged> {
@@ -61,6 +63,10 @@ pub async fn purge(db: &PgPool) -> sqlx::Result<Purged> {
         .await?,
         bug_logs: exec(
             "update bug_reports set log = null where log is not null and created_at < now() - interval '90 days'",
+        )
+        .await?,
+        ai_messages: exec(
+            "delete from admin_threads where status = 'closed' and closed_at < now() - interval '1 year'",
         )
         .await?,
     })

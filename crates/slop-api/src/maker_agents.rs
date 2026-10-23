@@ -15,6 +15,8 @@
 //!   scans and a person's review.
 //! - **Passkeys:** a token made within 12 hours of confirming with a passkey counts as
 //!   passkey-proven for its lifetime (passkeys.rs `require`), so the agent can publish.
+//! - **Writing to Slop's admins** (admin_messages.rs) works with any token, read or publish, for
+//!   some apps or all: it's limited per account instead (once an hour, five a day).
 //! - **MCP:** `POST /v1/maker/mcp` speaks the Model Context Protocol, with the tools in `TOOLS`,
 //!   each calling the API above with the token.
 
@@ -148,6 +150,12 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/jobs/*/conversation/open", true, Slug::People),
     ("POST", "/jobs/*/conversation/close", true, Slug::People),
     ("POST", "/jobs/*/messages", true, Slug::People),
+    // Writing to Slop's admins: any token, since it changes nothing of the maker's. It has its
+    // own limits per account (admin_messages.rs).
+    ("GET", "/staff-contacts", false, Slug::Any),
+    ("GET", "/admin-messages", false, Slug::Any),
+    ("POST", "/admin-messages", false, Slug::Any),
+    ("POST", "/admin-messages/*/reply", false, Slug::Any),
 ];
 
 /// The allowed route a request matches: whether it needs `publish`, how its slug is checked,
@@ -1118,7 +1126,54 @@ pub(crate) const TOOLS: &[Tool] = &[
         },
         required: &["slug", "id"],
     },
+    Tool {
+        name: "list_staff_contacts",
+        description: "Slop's staff you can address a message to (name, id and roles, e.g. a reviewer for a question about a release review), and when your maker's account may post next. Leave out `to` in send_admin_message to reach every admin, which is usually right.",
+        method: Method::GET,
+        path: "/v1/staff-contacts",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "send_admin_message",
+        description: ADMIN_MESSAGE_RULES,
+        method: Method::POST,
+        path: "/v1/admin-messages",
+        properties: || {
+            json!({
+                "category": s("report (an error, or a bug in Slop itself), suggestion, or other"),
+                "subject": s("One line, up to 120 characters: what it's about"),
+                "body": s("Plain text, up to 2,000 characters: what happened, where (the tool or request, the app's address, the release's ID), what you expected, and what you suggest"),
+                "to": s("Optional: a staff member's id from list_staff_contacts; leave out to reach every admin"),
+            })
+        },
+        required: &["category", "subject", "body"],
+    },
+    Tool {
+        name: "list_my_admin_messages",
+        description: "The threads your maker's account started with Slop's admins, newest first, with every message, the admins' replies (signed with their names), whether each is open or closed, and when the account may post next. Check it when whats_new says the admins answered.",
+        method: Method::GET,
+        path: "/v1/admin-messages",
+        properties: || json!({}),
+        required: &[],
+    },
+    Tool {
+        name: "reply_to_admin_message",
+        description: "Adds a follow-up to one of your maker's open threads with Slop's admins, e.g. an answer to their question. It counts like a new message: once an hour, 5 a day for the whole account. Plain text, up to 2,000 characters; never secrets or players' personal data.",
+        method: Method::POST,
+        path: "/v1/admin-messages/{id}/reply",
+        properties: || {
+            json!({
+                "id": s("The thread's id, from list_my_admin_messages"),
+                "body": s("Plain text, up to 2,000 characters"),
+            })
+        },
+        required: &["id", "body"],
+    },
 ];
+
+/// What a maker's agent is told before writing to Slop's admins.
+const ADMIN_MESSAGE_RULES: &str = "Writes to Slop's admins: an error you hit on Slop, a bug in Slop itself, or a suggestion (not your maker's own app's bugs: fix those in its repository). Your maker's whole account may post once an hour and 5 times a day (a new thread or a reply, all its tokens together), so write only when it matters. Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups: what happened, where, what you expected, what you suggest. Plain text only, under 2,000 characters. Never include secrets, tokens or players' personal data. The admins answer in the thread: you'll see it in whats_new and list_my_admin_messages.";
 
 async fn mcp(State(state): State<AppState>, user: CurrentUser, request: Request) -> Response {
     if user.agent.is_none() {
@@ -1177,8 +1232,23 @@ mod tests {
             (Method::POST, "/v1/apps/pong/changes//cancel"),
             (Method::GET, "/v2/apps/pong"),
             (Method::GET, "/v1/apps//releases"),
+            (Method::GET, "/v1/admin/ai-messages"),
+            (Method::POST, "/v1/admin-messages/x/close"),
+            (Method::DELETE, "/v1/admin-messages/x"),
         ] {
             assert_eq!(route(&m, p), None, "{m} {p}");
+        }
+    }
+
+    #[test]
+    fn writing_to_the_admins_is_open_to_every_token() {
+        for (m, p) in [
+            (Method::GET, "/v1/staff-contacts"),
+            (Method::GET, "/v1/admin-messages"),
+            (Method::POST, "/v1/admin-messages"),
+            (Method::POST, "/v1/admin-messages/x/reply"),
+        ] {
+            assert_eq!(route(&m, p), Some((false, Slug::Any, None)), "{m} {p}");
         }
     }
 

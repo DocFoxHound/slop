@@ -46,6 +46,12 @@ pub enum ApiError {
         what: &'static str,
         retry_after: u64,
     },
+    /// Refused, saying why and what to do instead (403).
+    #[error("{0}")]
+    Refused(&'static str),
+    /// Allowed again later, saying when (429 with `Retry-After`; admin_messages.rs).
+    #[error("{message}")]
+    NotYet { message: String, retry_after: u64 },
     #[error(transparent)]
     Internal(#[from] anyhow::Error),
 }
@@ -81,7 +87,10 @@ impl IntoResponse for ApiError {
             Self::StepUpRequired => (StatusCode::FORBIDDEN, "step_up_required"),
             Self::PasskeyRequired(_) => (StatusCode::FORBIDDEN, "passkey_required"),
             Self::ChallengeRequired => (StatusCode::CONFLICT, "challenge_required"),
-            Self::TooFast { .. } => (StatusCode::TOO_MANY_REQUESTS, "rate_limited"),
+            Self::TooFast { .. } | Self::NotYet { .. } => {
+                (StatusCode::TOO_MANY_REQUESTS, "rate_limited")
+            }
+            Self::Refused(_) => (StatusCode::FORBIDDEN, "forbidden"),
             Self::Internal(err) => {
                 tracing::error!(error = ?err, "internal error");
                 (StatusCode::INTERNAL_SERVER_ERROR, "internal")
@@ -104,7 +113,7 @@ impl IntoResponse for ApiError {
             body["error"]["field"] = json!(kind);
         }
         let mut res = (status, Json(body)).into_response();
-        if let Self::TooFast { retry_after, .. } = &self
+        if let Self::TooFast { retry_after, .. } | Self::NotYet { retry_after, .. } = &self
             && let Ok(v) = axum::http::HeaderValue::from_str(&retry_after.to_string())
         {
             res.headers_mut().insert(axum::http::header::RETRY_AFTER, v);

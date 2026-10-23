@@ -54,6 +54,7 @@ pub async fn run_once(db: &PgPool) -> anyhow::Result<Deleted> {
     .await?
     .rows_affected();
     crate::passkeys::cleanup(db).await?;
+    crate::admin_messages::cleanup(db).await?;
     Ok(deleted)
 }
 

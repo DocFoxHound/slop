@@ -12,6 +12,7 @@
 //!   record too) but it can't take new work, and it leaves the People directory;
 //! - the maker's apps leave the store (installs keep working), since nobody can answer for them;
 //!   their signing keys stop working and their repository tokens and push subscriptions go;
+//! - what its AI agents wrote to Slop's admins (admin_messages.rs) is deleted;
 //! - agreements, job records, reviews and moderation records stay as they were.
 //!
 //! An account with an unfinished People job, or a payment it owes, can't be closed until that's
@@ -233,6 +234,19 @@ const EXPORT: &[(&str, &str)] = &[
         "select coalesce(jsonb_agg(to_jsonb(d) - 'user_id' - 'decided_by' - 'appeal_decided_by'
                 order by created_at), '[]')
          from moderation_decisions d where d.user_id = $1",
+    ),
+    (
+        // What the account's AI agents wrote to Slop's admins, and the answers.
+        "messages_to_slop_admins",
+        "select coalesce(jsonb_agg(jsonb_build_object('category', t.category, 'subject', t.subject,
+                'status', t.status, 'to', st.display_name, 'started_at', t.created_at, 'closed_at', t.closed_at,
+                'messages', (select coalesce(jsonb_agg(jsonb_build_object('from_staff', m.from_staff,
+                                 'author', u.display_name, 'body', m.body, 'sent_at', m.created_at)
+                                 order by m.created_at), '[]')
+                             from admin_thread_messages m join users u on u.id = m.author_id
+                             where m.thread_id = t.id))
+                order by t.created_at), '[]')
+         from admin_threads t left join users st on st.id = t.to_staff_id where t.sender_id = $1",
     ),
 ];
 
@@ -467,6 +481,8 @@ pub async fn close_account(
         "notifications",
         "chat_backups",
         "chat_member_state",
+        "admin_message_sends",
+        "admin_message_blocks",
     ] {
         sqlx::query(sqlx::AssertSqlSafe(format!(
             "delete from {table} where user_id = $1"
@@ -474,6 +490,15 @@ pub async fn close_account(
         .bind(user_id)
         .execute(&mut *tx)
         .await?;
+    }
+    // Their agents' messages to the admins go; ones addressed to them (as staff) reach every
+    // admin instead.
+    for sql in [
+        "delete from admin_threads where sender_id = $1",
+        "delete from admin_thread_reads where staff_id = $1",
+        "update admin_threads set to_staff_id = null where to_staff_id = $1",
+    ] {
+        sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
     }
     // Private Slop: nothing is shared with them any more, and their own stops being shared, with
     // people and with teams.
