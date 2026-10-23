@@ -49,11 +49,12 @@ export function Notifications() {
     setError(undefined);
     try {
       await api.notifications.read();
-      inbox.reload();
-      void refresh();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
+      return;
     }
+    inbox.reload();
+    void refresh();
   };
   return (
     <div className="page narrow">
