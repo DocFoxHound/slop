@@ -136,12 +136,14 @@ if [ ! -e "$ROOT/out/ok" ] || [ -e "$ROOT/out/failed" ] || [ ! -x target/release
   # The step name comes from the commit's own script: shown, never run.
   step=$(head -c 40 "$ROOT/out/failed" 2>/dev/null | tr -cd 'a-z ' || true)
   step=${step:-container}
+  # Only a summary for the log: whatever it hits (no match, head closing the pipe), the commit is
+  # still marked failed below, so it isn't tested again every two minutes.
   case "$step" in
     tests) grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$ROOT/out/test.log" | tail -n 30 ;;
     lint) tail -n 30 "$ROOT/out/lint.log" ;;
     "browser tests") grep -E "✘|Error:|failed" "$ROOT/out/e2e.log" | head -n 30 ;;
     *) tail -n 30 "$ROOT/out/container.log" ;;
-  esac
+  esac || true
   fail "$step"
 fi
 

@@ -141,7 +141,17 @@ export async function signIn(page: Page, who: Who) {
   ]);
 }
 
-export const test = base.extend({
+export const test = base.extend<{ closeOwnWindows: void }>({
   baseURL: async ({}, use) => use(server.url),
+  // Tests open windows of their own for other people (browser.newPage()). Each is closed when its
+  // test ends: left open, hundreds pile up over a run and the browser starts dropping page loads.
+  closeOwnWindows: [
+    async ({ browser }, use) => {
+      const before = new Set(browser.contexts());
+      await use();
+      await Promise.all(browser.contexts().filter((c) => !before.has(c)).map((c) => c.close().catch(() => {})));
+    },
+    { auto: true },
+  ],
 });
 export { expect } from "@playwright/test";

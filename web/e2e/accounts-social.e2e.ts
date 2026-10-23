@@ -318,9 +318,14 @@ test.describe("teams", () => {
     await page.getByRole("button", { name: "Check now" }).click();
     await expect(page.locator("section.verification").getByRole("alert")).toHaveText("GitHub didn't answer: try again later");
     await page.unrouteAll();
+    // The reload can cancel a request the old page still had open; only the new page's matters.
     await page.route(`**/v1/teams/${slug}`, async (route) => {
-      const res = await route.fetch();
-      await route.fulfill({ response: res, json: { ...(await res.json()), verified: true } });
+      try {
+        const res = await route.fetch();
+        await route.fulfill({ response: res, json: { ...(await res.json()), verified: true } });
+      } catch {
+        // Cancelled by the reload.
+      }
     });
     await page.reload();
     await expect(page.getByRole("heading", { name: /Badge Studio/ }).getByTitle("Verified through its GitHub organization")).toHaveText("✓ OFFICIAL");
