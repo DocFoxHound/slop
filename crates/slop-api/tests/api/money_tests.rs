@@ -40,6 +40,8 @@ struct StripeState {
     subscriptions: HashMap<String, Value>,
     invoices: HashMap<String, Value>,
     charges: HashMap<String, Value>,
+    /// Invoice payments: payment intent → the invoice it paid.
+    invoice_payments: HashMap<String, String>,
     application_fees: Vec<Value>,
     /// (method, path prefix, status): answered with that error instead.
     failures: Vec<(String, String, u16)>,
@@ -303,6 +305,15 @@ fn stripe_answer(
         },
         ("POST", ["v1", "refunds"]) => {
             json!({ "id": format!("re_{n}"), "charge": form.get("charge") })
+        }
+        ("GET", ["v1", "invoice_payments"]) => {
+            let data: Vec<Value> = form
+                .get("payment[payment_intent]")
+                .and_then(|intent| s.invoice_payments.get(intent))
+                .map(|invoice| json!({ "invoice": invoice }))
+                .into_iter()
+                .collect();
+            json!({ "object": "list", "data": data, "has_more": false })
         }
         ("GET", ["v1", "charges", id]) => s
             .charges

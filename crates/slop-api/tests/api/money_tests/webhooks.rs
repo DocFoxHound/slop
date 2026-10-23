@@ -650,6 +650,98 @@ async fn disputes_on_donations_and_bounty_refunds_are_recorded(db: PgPool) {
     );
 }
 
+/// On Stripe's API versions from 2025-03-31 a charge no longer names its invoice, so a monthly
+/// donation's refund and dispute are matched through Stripe's invoice payments.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn monthly_refunds_and_disputes_match_on_newer_stripe_versions(db: PgPool) {
+    let fake = FakeStripe::start().await;
+    let app = stripe_app(db, &fake).await;
+    let (_, _, acct) = stripe_maker(&app).await;
+    let (_, dee) = adult(&app, "Dee Donor", "US").await;
+    let (id, session) = started(
+        &app,
+        &dee,
+        json!({ "amount_minor": 500, "monthly": true, "consent": true }),
+    )
+    .await;
+    fake.patch_session(
+        &session,
+        json!({ "status": "complete", "subscription": "sub_dee" }),
+    );
+    app.send(req(Method::POST, format!("/v1/me/donations/{id}/check")).cookie(&dee))
+        .await;
+    fake.with(|s| {
+        s.invoices.insert(
+            "in_1".into(),
+            json!({ "id": "in_1", "status": "paid",
+                    "parent": { "subscription_details": { "subscription": "sub_dee",
+                                                          "metadata": { "server_donation_id": id } } } }),
+        );
+        // The newer shape: no `invoice` field at all.
+        s.charges.insert(
+            "ch_month".into(),
+            json!({ "id": "ch_month", "payment_intent": "pi_month", "amount_refunded": 546 }),
+        );
+        s.invoice_payments.insert("pi_month".into(), "in_1".into());
+    });
+    assert_eq!(
+        hook(
+            &app,
+            event(
+                "evt_paid",
+                "invoice.paid",
+                Some(&acct),
+                json!({ "id": "in_1" })
+            )
+        )
+        .await,
+        StatusCode::OK
+    );
+    let against_the_month = |kind: &'static str| {
+        count(
+            &app,
+            match kind {
+                "refund" => "select coalesce(sum(amount_minor), 0)::int8 from payments where kind = 'refund'
+                             and refund_of = (select id from payments where stripe_object_id = 'in_1')",
+                _ => "select count(*) from payments where kind = 'dispute'
+                      and refund_of = (select id from payments where stripe_object_id = 'in_1')",
+            },
+        )
+    };
+    let status = hook(
+        &app,
+        event(
+            "evt_refund",
+            "charge.refunded",
+            Some(&acct),
+            json!({ "id": "ch_month", "payment_intent": "pi_month" }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(against_the_month("refund").await, -546);
+    let status = hook(
+        &app,
+        event(
+            "evt_dispute",
+            "charge.dispute.created",
+            Some(&acct),
+            json!({ "id": "dp_month", "charge": "ch_month", "amount": 546 }),
+        ),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(against_the_month("dispute").await, 1);
+    let looked_up = fake.calls("GET", "v1/invoice_payments");
+    assert!(
+        looked_up
+            .iter()
+            .all(|c| c.account.as_deref() == Some(acct.as_str())
+                && c.form["payment[payment_intent]"] == "pi_month"),
+        "asked on the maker's account, by payment intent"
+    );
+}
+
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn account_webhooks_update_every_place_the_account_is_used(db: PgPool) {
     let fake = FakeStripe::start().await;
