@@ -1330,6 +1330,14 @@ export interface AppChange {
   automatic: boolean;
 }
 
+export interface WaitingRelease {
+  id: string;
+  version: string;
+  status: "fetching" | "awaiting_review";
+  source: "maker" | "slop_build" | "github_release";
+  created_at: string;
+}
+
 export interface ApprovedRelease {
   id: string;
   version: string;
@@ -1343,6 +1351,8 @@ export interface ManageOverview {
   /** Whether the app is held at `serving` instead of following the newest. */
   held: boolean;
   approved: ApprovedRelease[];
+  /** Releases not reviewed yet, newest first: the maker can withdraw one they didn't send. */
+  waiting: WaitingRelease[];
   repo_url: string;
   /** Players have the app, so moving it is reviewed by a person. */
   repo_locked: boolean;
@@ -1769,7 +1779,8 @@ export type ReleaseStatus =
   | "approved"
   | "rejected"
   | "failed"
-  | "revoked";
+  | "revoked"
+  | "withdrawn";
 
 /** Who built a file, proven by the maker's GitHub artifact attestation. */
 export interface Provenance {
@@ -2581,6 +2592,12 @@ export const api = {
       "POST",
       `/v1/apps/${encodeURIComponent(slug)}/changes`,
       change,
+    ),
+  /** Withdraws a release that hasn't been reviewed yet. */
+  withdrawRelease: (slug: string, id: string) =>
+    request<Release>(
+      "POST",
+      `/v1/apps/${encodeURIComponent(slug)}/releases/${encodeURIComponent(id)}/withdraw`,
     ),
   cancelChange: (slug: string, id: string) =>
     request<AppChange>(

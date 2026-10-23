@@ -170,6 +170,21 @@ describe("progressSteps", () => {
     ).toContain("loot boxes");
   });
 
+  it("leaves out a release withdrawn before review", () => {
+    const steps = progressSteps(
+      app(),
+      [
+        release({ id: "r2", version: "1.1.0", status: "withdrawn" }),
+        release({ status: "rejected", status_reason: "loot boxes" }),
+      ],
+      testServer,
+    );
+    expect(steps.find((s) => s.title === "Release")!.detail).toBe("Version 1.0.0 received.");
+    expect(String(steps.find((s) => s.title === "Review")!.detail)).toContain("loot boxes");
+    const only = progressSteps(app(), [release({ status: "withdrawn" })], testServer);
+    expect(only.find((s) => s.title === "Release")!.state).toBe("waiting");
+  });
+
   it("is waiting for staff once a release is approved", () => {
     expect(
       states(

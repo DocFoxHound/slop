@@ -37,6 +37,8 @@ export function progressSteps(
 ): Step[] {
   const comingSoon = app.stage === "coming_soon";
   // The release that matters: the newest one, unless an approved one is newer than a failure.
+  // One withdrawn before review never counts.
+  releases = releases.filter((r) => r.status !== "withdrawn");
   const latest = releases[0];
   const approved = releases.find((r) => r.status === "approved");
   // The API leaves `status` out once an app is listed.

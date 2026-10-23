@@ -6,7 +6,7 @@
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
 
-import { api, ApiError, type AppChange, type ManageOverview, type RatingGroup } from "../api";
+import { api, ApiError, type AppChange, type ManageOverview, type RatingGroup, type WaitingRelease } from "../api";
 import { OffersPanel } from "../components/Offers";
 import { DemoPanel } from "../components/Demo";
 import { BugReportsPanel, ReleaseFeedbackPanel } from "../components/BugReports";
@@ -84,6 +84,7 @@ export function Manage() {
 
       {m.frozen && <Frozen slug={slug} frozen={m.frozen} isPrivate={app.data.private} onChanged={changed} />}
       {m.pulse_required !== null && <PulseNeeded received={m.pulse_required} />}
+      <WaitingReleases slug={slug} waiting={m.waiting} onChanged={changed} />
       <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
       <UpdatesPanel key={settingsNonce} slug={slug} />
       {!app.data.private && app.data.stage === "released" && <RatingBreakdown slug={slug} />}
@@ -319,6 +320,49 @@ function Outcome({ change }: { change: AppChange }) {
     <p className="notice">Done. {change.status_reason}</p>
   ) : (
     <p className="notice">Sent for review. {change.status_reason} You'll see the decision below.</p>
+  );
+}
+
+/** Where a release not reviewed yet is, and where it came from. Exported for tests. */
+export function describeWaiting(r: Pick<WaitingRelease, "status" | "source">): string {
+  const where = r.status === "fetching" ? "Checking files" : "Waiting for review";
+  const from = { maker: "submitted from your account", slop_build: "from Slop Build", github_release: "picked up from GitHub" }[
+    r.source
+  ];
+  return `${where}, ${from}`;
+}
+
+/** Releases not reviewed yet: one the maker didn't send, or sent by mistake, can be withdrawn. */
+function WaitingReleases({ slug, waiting, onChanged }: { slug: string; waiting: WaitingRelease[]; onChanged: () => void }) {
+  const { busy, error, submit } = useSubmit(onChanged);
+  if (waiting.length === 0) return null;
+  const withdraw = (r: WaitingRelease) => {
+    if (!window.confirm(`Withdraw v${r.version}? It won't be reviewed or reach players.`)) return;
+    void submit(async () => {
+      await api.withdrawRelease(slug, r.id);
+    });
+  };
+  return (
+    <section className="panel panel-pad">
+      <h2>Not reviewed yet</h2>
+      <p className="muted small">
+        If you didn't send one of these, withdraw it and secure your accounts and repository. Your next release is then
+        reviewed by a person.
+      </p>
+      {error && <p className="form-error">{error}</p>}
+      <ul className="release-list">
+        {waiting.map((r) => (
+          <li key={r.id} className="title-row spread">
+            <span>
+              <b>v{r.version}</b> <span className="muted small">{describeWaiting(r)}, {formatDate(r.created_at)}</span>
+            </span>
+            <button type="button" className="btn small" disabled={busy} onClick={() => withdraw(r)}>
+              Withdraw
+            </button>
+          </li>
+        ))}
+      </ul>
+    </section>
   );
 }
 

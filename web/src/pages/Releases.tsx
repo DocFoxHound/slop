@@ -66,6 +66,11 @@ const STATUS: Record<
     badge: "bad",
     help: "Slop withdrew this release; it no longer launches.",
   },
+  withdrawn: {
+    label: "WITHDRAWN BEFORE REVIEW",
+    badge: "neutral",
+    help: "Withdrawn from your account before review. It never reached players.",
+  },
 };
 
 const PLATFORMS: Array<{ value: Platform; label: string }> = [

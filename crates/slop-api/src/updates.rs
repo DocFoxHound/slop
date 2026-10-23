@@ -65,7 +65,7 @@ pub async fn auto_approval(db: &sqlx::PgPool, app_id: Uuid) -> anyhow::Result<Re
                 h.at,
                 exists (select 1 from releases r where r.app_id = a.id and h.at is not null and (
                     (r.status = 'revoked' and r.revoked_at > h.at) or
-                    (r.status = 'rejected' and r.reviewed_at > h.at))),
+                    (r.status in ('rejected', 'withdrawn') and r.reviewed_at > h.at))),
                 a.repo_changed_at is not null
          from apps a
          left join lateral (
