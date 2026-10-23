@@ -126,6 +126,19 @@ pub(crate) struct ApprovedRelease {
 const APPROVED_COLUMNS: &str =
     "r.id, r.version, r.reviewed_at, coalesce(r.reviewed_by = 'slop', false) as automatic";
 
+/// A release not reviewed yet, which its maker may withdraw (releases.rs).
+#[derive(Serialize, sqlx::FromRow)]
+struct WaitingRelease {
+    id: Uuid,
+    version: String,
+    /// fetching or awaiting_review.
+    status: String,
+    /// maker, slop_build or github_release.
+    source: String,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+}
+
 /// The release players get now.
 pub(crate) async fn serving(
     conn: &mut PgConnection,
@@ -162,6 +175,8 @@ struct Overview {
     held: bool,
     /// Approved releases players could be given, newest first.
     approved: Vec<ApprovedRelease>,
+    /// Releases not reviewed yet, newest first: the maker can withdraw one they didn't send.
+    waiting: Vec<WaitingRelease>,
     repo_url: String,
     /// Players have the app, so moving it to another repository is reviewed by a person.
     repo_locked: bool,
@@ -201,6 +216,13 @@ async fn overview(
     .bind(app_id)
     .fetch_all(&mut *conn)
     .await?;
+    let waiting = sqlx::query_as(
+        "select id, version, status::text as status, source, created_at from releases
+         where app_id = $1 and status in ('fetching', 'awaiting_review') order by created_at desc",
+    )
+    .bind(app_id)
+    .fetch_all(&mut *conn)
+    .await?;
     let changes = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select {} where c.app_id = $1
          order by (c.status = 'pending') desc, c.created_at desc limit 20",
@@ -225,6 +247,7 @@ async fn overview(
         held: pinned.is_some() && pinned == serving.as_ref().map(|r| r.id),
         serving,
         approved,
+        waiting,
         repo_locked: repo_locked(&mut conn, app_id).await?,
         repo_url,
         auto_approval_ready: approval.is_ok(),

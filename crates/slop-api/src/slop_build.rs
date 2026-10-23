@@ -30,10 +30,20 @@ use crate::{
 };
 
 pub fn routes() -> Router<AppState> {
+    Router::new().route("/apps/{slug}/slop-build", get(setup))
+}
+
+/// The longest source checks a submission may carry (gitleaks and OSV findings).
+const MAX_SOURCE_CHECKS: usize = 256 * 1024;
+/// The largest submission: its source checks, files and Defender checks.
+pub const MAX_SUBMISSION_BYTES: usize = 1024 * 1024;
+
+/// What the recipe sends: their own body limit (lib.rs), since the source checks alone may be
+/// four times the usual 64 KiB.
+pub fn submit_routes() -> Router<AppState> {
     Router::new()
         .route("/slop-build/releases", post(submit_from_ci))
         .route("/slop-build/checks", post(submit_checks))
-        .route("/apps/{slug}/slop-build", get(setup))
 }
 
 /// GitHub's OIDC signing keys, cached.
@@ -259,7 +269,7 @@ async fn submit_from_ci(
     }
     // Checked before the release is made, so a refusal leaves nothing behind to retry against.
     if let Some(checks) = &req.source_checks
-        && checks.to_string().len() > 256 * 1024
+        && checks.to_string().len() > MAX_SOURCE_CHECKS
     {
         return Err(ApiError::invalid("source_checks", "too large"));
     }

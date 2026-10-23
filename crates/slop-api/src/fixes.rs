@@ -119,7 +119,7 @@ async fn fixes(
             status_reason,
         }),
         fixes: list,
-        next: "Fix the `must` items, then the `should` items; commit and push; run check_repository to see the source check again; then submit a new release (Slop Build does it on push).",
+        next: "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). Slop's checks run again on the new release.",
     }))
 }
 

@@ -426,8 +426,8 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
 passes every check is approved and signed by Slop straight away, with no wait for a person.
 Combined with **Pick up new GitHub releases** (or Slop Build), publishing an update is just
 publishing a release on GitHub. Players' apps show a notice and update when the player chooses.
-A person looks again if a release fails a check, or if one of your releases was withdrawn or
-rejected since the last one a person approved. Slop can withdraw a release that turns out to be
+A person looks again if a release fails a check, or if one of your releases was withdrawn (by
+Slop or by you) or rejected since the last one a person approved. Slop can withdraw a release that turns out to be
 harmful; it then stops launching for everyone.
 
 **Where things stand:** **Publish** lists each of your apps with the step it's waiting on or
@@ -437,6 +437,10 @@ stuck at. **Releases & progress** has the full checklist and every release's his
 
 Each app has a **Manage** page (Publish → **Manage**):
 
+- **Not reviewed yet.** Releases Slop is still checking or that wait for review. Slop tells you
+  about every release it receives; if you didn't send one, or sent it by mistake, **Withdraw** it
+  there. It never reaches players, and your next release is reviewed by a person. If you didn't
+  send it, also secure your accounts and repository.
 - **What players get.** By default players get the newest approved release. You can instead hold
   them at any approved release, to roll back a bad update or to wait before sending a new one out,
   and switch back later. New releases are still checked and approved while you hold; they just

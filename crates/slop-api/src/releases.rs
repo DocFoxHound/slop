@@ -13,7 +13,7 @@ use axum::{
     Json, Router,
     extract::{Path, Query, State},
     http::{HeaderMap, StatusCode},
-    routing::{get, patch},
+    routing::{get, patch, post},
 };
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
@@ -45,6 +45,10 @@ pub fn routes() -> Router<AppState> {
             get(list_releases).post(submit_release),
         )
         .route("/apps/{slug}/releases/{release_id}", patch(edit_release))
+        .route(
+            "/apps/{slug}/releases/{release_id}/withdraw",
+            post(withdraw_release),
+        )
         .route("/apps/{slug}/manifest", get(latest_manifest))
         .route("/runtimes", get(runtimes_list))
         .route(
@@ -559,6 +563,55 @@ async fn edit_release(
     Ok(Json(load_release(&state, release_id).await?))
 }
 
+/// The maker withdraws a release that hasn't been reviewed yet: one they didn't publish (the
+/// "was submitted" notice says how), or one sent by mistake. It never reaches players, and the
+/// app's next release waits for a person (updates.rs), in case it wasn't the maker who sent it.
+/// No passkey: it only takes away a release nobody has yet.
+async fn withdraw_release(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path((slug, release_id)): Path<(String, Uuid)>,
+) -> ApiResult<Json<ReleaseInfo>> {
+    let (app_id, _) = owned_app(&state, &slug, &user).await?;
+    let mut tx = state.db.begin().await?;
+    let status: Option<String> = sqlx::query_scalar(
+        "select status::text from releases where id = $1 and app_id = $2 for update",
+    )
+    .bind(release_id)
+    .bind(app_id)
+    .fetch_optional(&mut *tx)
+    .await?;
+    match status.as_deref() {
+        None => return Err(ApiError::NotFound),
+        Some("fetching" | "awaiting_review") => {}
+        Some(_) => {
+            return Err(ApiError::Conflict(
+                "only a release that hasn't been reviewed yet can be withdrawn".into(),
+            ));
+        }
+    }
+    let version: String = sqlx::query_scalar(
+        "update releases set status = 'withdrawn', reviewed_at = now(),
+                status_reason = 'Withdrawn by the maker before review.'
+         where id = $1 returning version",
+    )
+    .bind(release_id)
+    .fetch_one(&mut *tx)
+    .await?;
+    crate::admin::audit(
+        &mut tx,
+        &user.id.to_string(),
+        "release.withdraw",
+        &release_id.to_string(),
+        serde_json::json!({ "app": slug, "version": version, "by_agent": user.agent.is_some() }),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tell_maker(&mut tx, release_id, ReleaseEvent::WithdrawnByMaker).await?;
+    tx.commit().await?;
+    Ok(Json(load_release(&state, release_id).await?))
+}
+
 /// Checks and records a new release for fetching and review. Shared by makers' own submissions,
 /// Slop Build's (slop_build.rs) and the GitHub release watcher (updates.rs), so all go through
 /// the same checks. `source` is maker, slop_build or github_release.
@@ -719,13 +772,15 @@ pub(crate) async fn create_release(
     load_release(state, id).await
 }
 
-/// What happened to a release, for its maker.
+/// What happened to a release, for its maker. `Withdrawn` is Slop's kill switch;
+/// `WithdrawnByMaker` is the maker taking one back before review (`withdraw_release`).
 pub enum ReleaseEvent<'a> {
     Received { source: &'a str },
     Approved { automatically: bool },
     Rejected { reason: &'a str },
     Failed { reason: &'a str },
     Withdrawn { reason: &'a str },
+    WithdrawnByMaker,
 }
 
 /// Tells the app's maker about every release (SECURITY §5.3, §5.4): if someone else publishes in
@@ -745,11 +800,16 @@ pub async fn tell_maker(
     let Some((maker, slug, title, version)) = row else {
         return Ok(());
     };
+    // Where to act on it: an unexpected release is withdrawn from the app's Manage page.
+    let page = match event {
+        ReleaseEvent::Received { .. } => "manage",
+        _ => "releases",
+    };
     let (headline, body) = match event {
         ReleaseEvent::Received { source } => (
             format!("{title} {version} was submitted"),
             format!(
-                "{}. Slop is checking it now. If you didn't publish this, withdraw it from Manage and secure your accounts and repository.",
+                "{}. Slop is checking it now. If you didn't publish this, withdraw it on the app's Manage page and secure your accounts and repository.",
                 match source {
                     "slop_build" => "Slop Build sent it from your repository",
                     "github_release" => "Slop picked it up from a GitHub release",
@@ -778,6 +838,11 @@ pub async fn tell_maker(
             format!("{title} {version} was withdrawn"),
             format!("It no longer launches for anyone. Why: {reason}"),
         ),
+        ReleaseEvent::WithdrawnByMaker => (
+            format!("{title} {version} was withdrawn"),
+            "It was withdrawn from your account before review, so it never reached players. If you didn't do this, secure your accounts."
+                .into(),
+        ),
     };
     crate::notify::send(
         conn,
@@ -786,7 +851,7 @@ pub async fn tell_maker(
             category: "apps",
             title: headline,
             body,
-            link: format!("/publish/{slug}/releases"),
+            link: format!("/publish/{slug}/{page}"),
             collapse_key: None,
         },
     )
@@ -1314,14 +1379,19 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
 
     match fetch_release(state, id, &commit, &repo_url).await {
         Ok(commit_verified) => {
-            sqlx::query(
+            let updated = sqlx::query(
                 "update releases set status = 'awaiting_review', commit_verified = $2
                  where id = $1 and status = 'fetching'",
             )
             .bind(id)
             .bind(commit_verified)
             .execute(&state.db)
-            .await?;
+            .await?
+            .rows_affected();
+            // Withdrawn by its maker while it was fetched: nothing more to check.
+            if updated == 0 {
+                return Ok(true);
+            }
             tracing::info!(release = %id, "release fetched; awaiting review");
             // Pictures that changed with this release wait for their own review.
             crate::media::refresh_for_release(state, app_id, &repo_url, &commit).await;
@@ -1333,12 +1403,15 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
             tracing::warn!(release = %id, error = %err, "release fetch failed");
             let reason = format!("{err:#}");
             let mut tx = state.db.begin().await?;
-            sqlx::query("update releases set status = 'failed', status_reason = $2 where id = $1 and status = 'fetching'")
+            let updated = sqlx::query("update releases set status = 'failed', status_reason = $2 where id = $1 and status = 'fetching'")
                 .bind(id)
                 .bind(&reason)
                 .execute(&mut *tx)
-                .await?;
-            tell_maker(&mut tx, id, ReleaseEvent::Failed { reason: &reason }).await?;
+                .await?
+                .rows_affected();
+            if updated == 1 {
+                tell_maker(&mut tx, id, ReleaseEvent::Failed { reason: &reason }).await?;
+            }
             tx.commit().await?;
         }
     }
