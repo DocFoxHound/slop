@@ -116,14 +116,32 @@ impl Default for DemoConfig {
     }
 }
 
-#[derive(Clone, Default)]
+#[derive(Clone)]
 pub struct DesktopConfig {
     /// Where uploaded builds are kept.
     pub dir: Option<std::path::PathBuf>,
     /// Signs builds for the app's updater (`slop-api keys generate-updater`).
     pub updater_key: Option<minisign::SecretKey>,
-    /// Slop's own repository (`owner/repo`); only its desktop workflow on main may upload.
+    /// Slop's own repository (`owner/repo`); only its desktop workflow on `git_ref` may upload.
     pub repo: Option<String>,
+    /// The git ref whose desktop workflow runs may upload (`SLOP_DESKTOP_REF`): pushes to main
+    /// build the test server's app, and the `production` tag builds production's, so each server
+    /// takes only its own channel's builds (deploy/README.md, "Production").
+    pub git_ref: String,
+}
+
+/// The test server's channel: every push to main.
+pub const DEFAULT_DESKTOP_REF: &str = "refs/heads/main";
+
+impl Default for DesktopConfig {
+    fn default() -> Self {
+        Self {
+            dir: None,
+            updater_key: None,
+            repo: None,
+            git_ref: DEFAULT_DESKTOP_REF.to_string(),
+        }
+    }
 }
 
 impl fmt::Debug for DesktopConfig {
@@ -135,6 +153,7 @@ impl fmt::Debug for DesktopConfig {
                 &self.updater_key.as_ref().map(|_| "<redacted>"),
             )
             .field("repo", &self.repo)
+            .field("git_ref", &self.git_ref)
             .finish()
     }
 }
@@ -628,6 +647,7 @@ impl Config {
                     _ => None,
                 },
                 repo: env::var("SLOP_DESKTOP_REPO").ok().filter(|s| !s.is_empty()),
+                git_ref: desktop_ref(&env::var("SLOP_DESKTOP_REF").unwrap_or_default())?,
             },
             media: MediaConfig {
                 github_raw_base: var_or("GITHUB_RAW_BASE", "https://raw.githubusercontent.com/")
@@ -802,9 +822,43 @@ fn email_address(raw: &str) -> Option<String> {
     ok.then(|| v.to_string())
 }
 
+/// `SLOP_DESKTOP_REF`: a full ref name such as `refs/tags/production`, or main when unset. A bare
+/// name like `production` would never match a run's workflow ref and silently refuse every
+/// upload, so it stops the server instead.
+fn desktop_ref(value: &str) -> anyhow::Result<String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Ok(DEFAULT_DESKTOP_REF.to_string());
+    }
+    anyhow::ensure!(
+        v.starts_with("refs/") && !v.chars().any(|c| c.is_whitespace() || c == '@'),
+        "SLOP_DESKTOP_REF must be a full git ref, like refs/heads/main or refs/tags/production"
+    );
+    Ok(v.to_string())
+}
+
 #[cfg(test)]
 mod tests {
-    use super::email_address;
+    use super::{desktop_ref, email_address};
+
+    #[test]
+    fn desktop_refs_are_full_ref_names() {
+        assert_eq!(desktop_ref("").unwrap(), "refs/heads/main");
+        assert_eq!(desktop_ref("  ").unwrap(), "refs/heads/main");
+        assert_eq!(
+            desktop_ref(" refs/tags/production ").unwrap(),
+            "refs/tags/production"
+        );
+        for bad in [
+            "production",
+            "main",
+            "heads/main",
+            "refs/tags/a b",
+            "refs/x@y",
+        ] {
+            assert!(desktop_ref(bad).is_err(), "{bad}");
+        }
+    }
 
     #[test]
     fn contact_emails_are_plain_addresses() {

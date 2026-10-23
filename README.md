@@ -37,6 +37,10 @@ Running at **https://slop.188-68-41-241.sslip.io**, updated automatically from `
 (`deploy/README.md`). The Windows app is built on every push and updates itself. Testing with
 private repositories: `docs/TESTING.md`.
 
+Production, **https://slopai.games**, runs only commits that went live on the test deployment
+first, when the owner moves the `production` tag to them (`deploy/ship-to-production.sh`,
+`deploy/README.md` "Production").
+
 ## Layout
 
 ```
