@@ -32,6 +32,8 @@ pub struct Config {
     pub catalog: CatalogRules,
     pub releases: ReleaseConfig,
     pub rate_limits: crate::ratelimit::Limits,
+    /// Multiplies every per-account limit (limits.rs). 1, except on the browser tests' server.
+    pub account_limit_scale: u32,
     pub desktop: DesktopConfig,
     /// Browser demos of new games (demos.rs).
     pub demos: DemoConfig,
@@ -592,6 +594,7 @@ impl Config {
                 write_per_minute: int_var("SLOP_RATE_WRITE_PER_MIN", 60)?.max(1) as u32,
                 read_per_minute: int_var("SLOP_RATE_READ_PER_MIN", 600)?.max(1) as u32,
             },
+            account_limit_scale: 1,
             demos: DemoConfig {
                 play_url: env::var("SLOP_PLAY_URL")
                     .ok()

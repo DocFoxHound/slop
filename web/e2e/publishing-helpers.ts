@@ -4,8 +4,10 @@
 // notifications their actions send to seeded accounts, so other tests' unread counts don't move.
 //
 // Making an app counts against the account's "10 new apps a day" (crates/slop-api/src/limits.rs),
-// failed attempts included, and other tests make apps as Mia and Bo too: the publishing tests make
-// three as Mia and two as Bo, and send form errors as Fin Finance, who publishes nothing.
+// failed attempts included. The whole suite makes far more than that as the same few seeded
+// accounts, so the test server raises every per-account limit (examples/e2e_server/main.rs). The
+// publishing tests send form errors as Fin Finance, who publishes nothing here (though the admin
+// tests make apps as Fin).
 import { expect, type Page, type Route } from "@playwright/test";
 
 import { server, type Who } from "./fixtures";

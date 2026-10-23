@@ -183,6 +183,7 @@ impl AppState {
         }
         let fetch_http = fetch_http.build()?;
         let rate_limiter = Arc::new(ratelimit::RateLimiter::new(config.rate_limits));
+        let account_limiter = Arc::new(limits::AccountLimiter::new(config.account_limit_scale));
         Ok(Self {
             db,
             config: Arc::new(config),
@@ -197,7 +198,7 @@ impl AppState {
             license_cache: Arc::default(),
             github_app_tokens: Arc::default(),
             chat_hub: chat::Hub::default(),
-            account_limiter: Arc::default(),
+            account_limiter,
         })
     }
 }
