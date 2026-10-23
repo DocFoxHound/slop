@@ -724,7 +724,7 @@ function ReleaseForm({
       <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
       <RuntimeFields value={runtimes} onChange={setRuntimes} />
       <NotesField value={notes} onChange={setNotes} />
-      {error && (error.field === "files" || !error.field) && (
+      {error && error.field !== "version" && error.field !== "commit_sha" && (
         <p className="form-error" role="alert">
           {error.message}
         </p>
@@ -799,10 +799,11 @@ function ReleasePicker({
 
   const releases = list.data ?? [];
   const chosen = releases.find((r) => r.tag === tag);
-  const choose = (t: string) => {
+  /** `keepNotice`: picked by the page itself (after sending one), so "sent" stays up. */
+  const choose = (t: string, keepNotice = false) => {
     setTag(t);
     setError(undefined);
-    setDone(undefined);
+    if (!keepNotice) setDone(undefined);
     const r = releases.find((x) => x.tag === t);
     setRows(r ? pickRows(r, platforms) : []);
   };
@@ -812,7 +813,7 @@ function ReleasePicker({
     const first =
       list.data.find((r) => !r.submitted && !r.prerelease) ??
       list.data.find((r) => !r.submitted);
-    if (first) choose(first.tag);
+    if (first) choose(first.tag, true);
   }, [list.data]);
 
   const update = (i: number, change: Partial<PickRow>) =>
@@ -1029,8 +1030,11 @@ function ReleasePicker({
   );
 }
 
-/** Automatic pickup of new GitHub releases, and automatic approval of updates. */
-export function UpdatesPanel({ slug }: { slug: string }) {
+/**
+ * Automatic pickup of new GitHub releases, and automatic approval of updates. `onChanged` tells
+ * the page after a change (Manage's release choice says whether a person checks it first).
+ */
+export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: () => void }) {
   const loaded = useLoad(() => api.updateSettings(slug), [slug]);
   const [settings, setSettings] = useState<UpdateSettings>();
   const [error, setError] = useState<string>();
@@ -1043,6 +1047,7 @@ export function UpdatesPanel({ slug }: { slug: string }) {
     setError(undefined);
     try {
       setSettings(await api.changeUpdateSettings(slug, c));
+      onChanged?.();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     }

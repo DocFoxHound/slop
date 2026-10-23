@@ -254,6 +254,25 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const [token, setToken] = useState<RepoTokenInput>({ kind: "gitea", token: "" });
   const needsToken = !existing && form.visibility === "private" && /^https?:\/\/[^/]+\/.+/.test(form.repo_url.trim()) && !isGithub(form.repo_url);
   useEffect(() => setToken((t) => (t.token ? t : { ...t, kind: guessKind(form.repo_url) })), [form.repo_url]);
+  // Errors for a field the form shows next to that field; any other (an agreement or passkey the
+  // user declined, a field this form doesn't have) shows at the bottom, so none goes unseen.
+  const inline = new Set<string>([
+    "title",
+    "slug",
+    "summary",
+    "description_md",
+    "repo_url",
+    "license_spdx",
+    "min_age",
+    "content_labels",
+    "online",
+    "online_hosts",
+    "platforms",
+    "tags",
+    ...(existing ? [] : ["kind", "stage"]),
+    ...(isMod ? [] : ["mods_folder"]),
+    ...(needsToken ? ["repo_token"] : []),
+  ]);
   const toggleTag = (tag: string) =>
     set("tags", form.tags.includes(tag) ? form.tags.filter((t) => t !== tag) : [...form.tags, tag]);
 
@@ -432,6 +451,11 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             <legend>Private repository on another host</legend>
             <p className="muted small">If the repository is private, Slop needs a read-only token to see it. Public repositories don't.</p>
             <TokenFields value={token} onChange={setToken} />
+            {error?.field === "repo_token" && (
+              <span className="field-error" role="alert">
+                {error.message}
+              </span>
+            )}
           </fieldset>
         )}
         {(!existing || form.repo_url !== existing.repo_url) && !repoLocked && (
@@ -534,7 +558,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           )}
         </fieldset>
 
-        {error && !error.field && (
+        {error && !(error.field && inline.has(error.field)) && (
           <p className="form-error" role="alert">
             {error.message}
           </p>

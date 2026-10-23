@@ -424,7 +424,7 @@ async fn freeze(
                 "{title} can't take new releases for now: {reason}\n\nIt stays in the store and \
                  copies people installed keep working. Slop lifts the freeze once it's dealt with."
             ),
-            link: format!("/manage/{slug}"),
+            link: format!("/publish/{slug}/manage"),
             collapse_key: Some(format!("frozen:{app_id}")),
         },
     )
@@ -490,7 +490,7 @@ async fn unfreeze(
                 category: "apps",
                 title: format!("{title} isn't frozen any more"),
                 body: format!("{title} takes new releases again.\n\n{note}"),
-                link: format!("/manage/{slug}"),
+                link: format!("/publish/{slug}/manage"),
                 collapse_key: Some(format!("frozen:{app_id}")),
             },
         )

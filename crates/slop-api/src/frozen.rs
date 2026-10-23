@@ -197,7 +197,7 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
                          shared, for Private Slop). Restore access and Slop picks it up at the \
                          next daily check, or press Check now on the app's Manage page."
                     ),
-                    link: format!("/manage/{slug}"),
+                    link: format!("/publish/{slug}/manage"),
                     collapse_key: Some(format!("frozen:{app_id}")),
                 },
             )
@@ -228,7 +228,7 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
                             ""
                         }
                     ),
-                    link: format!("/manage/{slug}"),
+                    link: format!("/publish/{slug}/manage"),
                     collapse_key: Some(format!("frozen:{app_id}")),
                 },
             )
@@ -263,7 +263,7 @@ pub async fn end_grace(state: &AppState) -> anyhow::Result<usize> {
                     "Slop still can't read {title}'s repository after 14 days, so it's out of the \
                      store. Installed copies keep working. Restore access and it's listed again."
                 ),
-                link: format!("/manage/{slug}"),
+                link: format!("/publish/{slug}/manage"),
                 collapse_key: Some(format!("frozen:{id}")),
             },
         )
