@@ -2,9 +2,10 @@
 // The bell's page (crates/slop-api/src/notify.rs): job steps, Interested apps moving on, and
 // moderation. Opening one marks it read.
 
+import { useState } from "react";
 import { Link, useNavigate } from "react-router";
 
-import { api, type Notification } from "../api";
+import { api, ApiError, type Notification } from "../api";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -27,6 +28,7 @@ export function Notifications() {
   const { me, refresh } = useSession();
   const navigate = useNavigate();
   const inbox = useLoad(() => (me ? api.notifications.list() : Promise.resolve(undefined)), [me?.id]);
+  const [error, setError] = useState<string>();
   if (me === null) {
     return (
       <div className="page narrow">
@@ -44,9 +46,14 @@ export function Notifications() {
     navigate(n.link);
   };
   const readAll = async () => {
-    await api.notifications.read();
-    inbox.reload();
-    void refresh();
+    setError(undefined);
+    try {
+      await api.notifications.read();
+      inbox.reload();
+      void refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    }
   };
   return (
     <div className="page narrow">
@@ -58,6 +65,11 @@ export function Notifications() {
           </button>
         )}
       </div>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
       {inbox.data.items.length === 0 ? (
         <div className="empty-state">Nothing yet. Job steps, apps you're Interested in and decisions about your content show up here.</div>
       ) : (

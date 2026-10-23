@@ -4,7 +4,7 @@
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
-import { ACCESSIBILITY, api, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
+import { ACCESSIBILITY, api, ApiError, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
 import { detectOs, OS_LABEL } from "../platform";
 import { Sidebar } from "../components/Layout";
 import { ErrorState, Loading, Shelf } from "../components/ui";
@@ -42,6 +42,7 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
   const accessibility = params.get("accessibility") ?? undefined;
   const mine = myPlatform();
   const [extra, setExtra] = useState<{ key: string; apps: AppSummary[]; next: number | null }>();
+  const [moreError, setMoreError] = useState<{ key: string; message: string }>();
 
   const filters: AppQuery = { ...base, stage: stage || base.stage, upcoming, platform, min_not_slop, accessibility, sort };
   const key = JSON.stringify(filters);
@@ -59,8 +60,13 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
 
   const more = async () => {
     if (next == null) return;
-    const page = await api.apps({ ...filters, limit: PAGE, offset: next });
-    setExtra({ key, apps: [...(pages?.apps ?? []), ...page.apps], next: page.next_offset });
+    setMoreError(undefined);
+    try {
+      const page = await api.apps({ ...filters, limit: PAGE, offset: next });
+      setExtra({ key, apps: [...(pages?.apps ?? []), ...page.apps], next: page.next_offset });
+    } catch (err) {
+      setMoreError({ key, message: err instanceof ApiError ? err.message : String(err) });
+    }
   };
 
   const sortLabels: Record<string, string> = {
@@ -147,6 +153,11 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
             Show more
           </button>
         </div>
+      )}
+      {moreError?.key === key && (
+        <p className="form-error" role="alert">
+          {moreError.message}
+        </p>
       )}
     </>
   );
