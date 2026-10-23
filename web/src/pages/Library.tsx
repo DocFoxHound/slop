@@ -39,6 +39,7 @@ export function Library() {
   const interested = useLoad(() => (me ? api.interested.mine() : Promise.resolve([])), [me?.id]);
   const sandbox = useLoad(() => (isDesktop ? desktop.sandboxStatus() : Promise.resolve(undefined)), []);
   const privateSlop = useLoad(() => (me ? api.private.mine() : Promise.resolve({ mine: [], shared: [] })), [me?.id]);
+  const [interestError, setInterestError] = useState<string>();
 
   if (me === undefined || library.loading || installed.loading) return <Loading />;
 
@@ -192,7 +193,12 @@ export function Library() {
                     <button
                       type="button"
                       className="btn small ghost"
-                      onClick={() => void api.interested.remove(a.slug).then(interested.reload)}
+                      onClick={() => {
+                        setInterestError(undefined);
+                        void api.interested.remove(a.slug).then(interested.reload, (err: unknown) =>
+                          setInterestError(err instanceof Error ? err.message : String(err)),
+                        );
+                      }}
                     >
                       Not interested
                     </button>
@@ -201,6 +207,11 @@ export function Library() {
               </li>
             ))}
           </ul>
+          {interestError && (
+            <p className="form-error" role="alert">
+              {interestError}
+            </p>
+          )}
         </>
       )}
     </div>
