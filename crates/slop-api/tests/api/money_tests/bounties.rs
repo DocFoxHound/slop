@@ -1216,6 +1216,17 @@ async fn builders_withdraw_their_own_waiting_deliveries(db: PgPool) {
         StatusCode::NO_CONTENT
     );
     let c = pending_claim(&app, &id).await;
+    // The builder sees it's theirs (the website's Withdraw button); nobody else does.
+    for (cookie, mine) in [(&forker, true), (&ann, false), (&maker, false)] {
+        let res = app
+            .send(req(Method::GET, format!("/v1/bounties/{id}")).cookie(cookie))
+            .await;
+        assert_eq!(body_json(res).await["claims"][0]["mine"], mine);
+    }
+    let res = app
+        .send(req(Method::GET, format!("/v1/bounties/{id}")))
+        .await;
+    assert_eq!(body_json(res).await["claims"][0]["mine"], false);
     let withdraw = |cookie: &str, claim: Uuid| {
         req(
             Method::POST,

@@ -178,10 +178,14 @@ export function BountyPage() {
         // After a few unfinished pledges, a quick proof of work in the browser (card testing).
         if (!(err instanceof ApiError) || err.code !== "challenge_required") throw err;
         setChecking(true);
-        const c = await api.donations.challenge();
-        const nonce = await solve(c.prefix, c.difficulty);
-        setChecking(false);
-        started = await api.bounties.pledge(id, minor, { confirm_adult: adult, challenge: { id: c.id, nonce } });
+        try {
+          const c = await api.donations.challenge();
+          const nonce = await solve(c.prefix, c.difficulty);
+          started = await api.bounties.pledge(id, minor, { confirm_adult: adult, challenge: { id: c.id, nonce } });
+        } finally {
+          // Also when the check or the second try fails: the button comes back (b63).
+          setChecking(false);
+        }
       }
       if (started.url) window.location.assign(started.url);
     });
@@ -257,6 +261,9 @@ export function BountyPage() {
             </button>
           </form>
         )}
+        {me && b.status === "claimed" && !pledged && (
+          <p className="muted">A delivery is waiting for a decision: pledge again once it's settled.</p>
+        )}
         {!me && <p className="muted">Sign in to pledge.</p>}
         {b.payments === "off" && <p className="muted">Payments aren't set up on this server yet.</p>}
       </section>
@@ -276,10 +283,16 @@ export function BountyPage() {
                   Backers so far: {money(c.accept_minor, b.currency)} yes, {money(c.reject_minor, b.currency)} no
                 </p>
               )}
+              {c.status === "pending" && c.mine && (
+                <button type="button" className="btn small ghost" onClick={() => void run(() => api.bounties.withdrawClaim(id, c.id))}>
+                  Withdraw my delivery
+                </button>
+              )}
             </li>
           ))}
         </ul>
-        {pending && b.is_app_maker && (
+        {/* The maker's own delivery is the backers' to decide (bounties.rs). */}
+        {pending && b.is_app_maker && !pending.mine && (
           <div className="row-actions">
             <button type="button" className="btn small slime" onClick={() => void run(() => api.bounties.answer(id, pending.id, "accepted"))}>
               It's delivered: pay the builder

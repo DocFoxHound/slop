@@ -2204,6 +2204,8 @@ export interface BountyDetail extends Bounty {
     created_at: string;
     accept_minor: number;
     reject_minor: number;
+    /** The viewer delivered it: they may withdraw it while it waits. */
+    mine: boolean;
   }>;
   my_pledge: { amount_minor: number; status: string; failure: string | null } | null;
   is_app_maker: boolean;
