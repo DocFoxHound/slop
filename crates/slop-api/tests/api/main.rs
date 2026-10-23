@@ -29,6 +29,7 @@ use uuid::Uuid;
 mod accounts_tests;
 mod admin_tests;
 mod agents_tests;
+mod messages_tests;
 mod money_tests;
 mod people_tests;
 mod publishing_tests;
@@ -13431,6 +13432,7 @@ async fn records_are_purged_after_their_keeping_period(db: PgPool) {
             removed_content: 0,
             acceptances: 3,
             bug_logs: 0,
+            ai_messages: 0,
         }
     );
     let left = |sql: &'static str| {

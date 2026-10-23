@@ -5,6 +5,7 @@ pub mod abuse;
 pub mod account;
 pub mod admin;
 pub mod admin_console;
+pub mod admin_messages;
 pub mod admin_tools;
 pub mod admin_web;
 pub mod agent;
@@ -226,6 +227,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(admin_web::routes())
         .merge(admin_console::routes())
         .merge(admin_tools::routes())
+        .merge(admin_messages::routes())
         .merge(agent::routes())
         .merge(maker_agents::routes())
         .merge(fixes::routes())

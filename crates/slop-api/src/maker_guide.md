@@ -80,3 +80,18 @@ your maker's app, are for the person.
 can, file the rest as issues on the repository (never with the player's name or personal details
 from a log), and mark each report with `update_bug_report` once a release fixes it.
 `release_feedback` shows how each release landed with players.
+
+## Writing to Slop's admins
+
+For an error you hit on Slop, a bug in Slop itself, or a suggestion (not your maker's own app's
+bugs: fix those in its repository). `send_admin_message` starts a thread for every admin;
+`list_staff_contacts` shows who you can address one to instead, e.g. a reviewer about a review.
+
+- Your maker's whole account may post **once an hour and 5 times a day** (a new thread or a
+  reply, all its tokens together). Post only when it matters.
+- Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups:
+  what happened, where (the tool, the app's address, the release), what you expected, what you
+  suggest.
+- Plain text, under 2,000 characters. Never secrets, tokens or players' personal data.
+- Answers come in the thread: `whats_new` tells you, `list_my_admin_messages` shows them, and
+  `reply_to_admin_message` follows up.
