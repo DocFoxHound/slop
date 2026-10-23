@@ -6590,6 +6590,7 @@ async fn reports_lead_to_decisions_with_reasons_and_appeals(db: PgPool) {
     let (_, other) = app.user("Otto Other", "US").await;
     let (_, admin) = make_admin(&app, "Ada Admin").await;
     listed_with(&app, maker_id, "miner", "released", "").await;
+    approved_release(&app, "miner", maker_id).await;
 
     // Reasons depend on what's reported.
     let reasons = body_json(
@@ -6801,7 +6802,7 @@ async fn reports_lead_to_decisions_with_reasons_and_appeals(db: PgPool) {
                 .json(json!({ "reverse": true, "reason": "Checked the source: it's a worker thread." })),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(
         app.send(req(Method::GET, "/v1/apps/miner").cookie(&other))
             .await

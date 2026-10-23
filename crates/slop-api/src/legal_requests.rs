@@ -395,7 +395,7 @@ async fn removal_order(
         },
     )
     .await
-    .map_err(|e| ApiError::Conflict(format!("{e:#}")))?;
+    .map_err(|e| ApiError::Conflict(format!("{e:#}")))?.id;
     let removed_at = OffsetDateTime::now_utc();
     let minutes = ((removed_at - b.received_at).whole_seconds().max(0) + 59) / 60;
     sqlx::query(
