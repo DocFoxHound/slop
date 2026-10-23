@@ -15,6 +15,18 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+/**
+ * An account's ID from what staff paste: the ID itself, or a link to the profile (…/u/<id>).
+ * Undefined when it's neither, so the form can say so instead of sending it.
+ */
+export function accountId(text: string): string | undefined {
+  const id = text
+    .trim()
+    .replace(/^.*\/u\//, "")
+    .replace(/[/?#].*$/, "");
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id) ? id.toLowerCase() : undefined;
+}
+
 export function daysUntil(iso: string, now: number = Date.now()): number {
   return Math.ceil((new Date(iso).getTime() - now) / DAY);
 }

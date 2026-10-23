@@ -136,6 +136,13 @@ function AppealForm({ d, onDone, onCancel }: { d: ModerationDecision; onDone: ()
         {error.message}
       </span>
     ) : null;
+  // Errors about a field shown here go next to it; any other goes at the end.
+  const inline = [
+    "appeal",
+    ...(copyright
+      ? ["counter_notice.name", "counter_notice.address", "counter_notice.phone", "counter_notice.statements", "counter_notice.signature"]
+      : []),
+  ];
   return (
     <form className="form appeal-form" onSubmit={(e) => void submit(e)}>
       <label>
@@ -193,7 +200,7 @@ function AppealForm({ d, onDone, onCancel }: { d: ModerationDecision; onDone: ()
           </label>
         </fieldset>
       )}
-      {error && !error.field && (
+      {error && !(error.field && inline.includes(error.field)) && (
         <p className="form-error" role="alert">
           {error.message}
         </p>
