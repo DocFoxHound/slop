@@ -131,7 +131,7 @@ function UserRecord({ id }: { id: string }) {
         </section>
       )}
 
-      {!u.closed_at && <ProfileFix id={u.id} />}
+      {!u.closed_at && <ProfileFix id={u.id} onSaved={user.reload} />}
       {!u.closed_at && <StaffControls id={u.id} name={u.display_name} isStaff={u.is_admin} onDone={user.reload} />}
 
       <section className="panel panel-pad">

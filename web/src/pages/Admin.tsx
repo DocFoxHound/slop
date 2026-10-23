@@ -32,7 +32,7 @@ import {
 import { StepUpPrompt } from "../components/PasskeyStepUp";
 import { ItemThumb } from "../components/MediaEditor";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
-import { formatDate, STAGE_LABEL } from "../format";
+import { accountId, formatDate, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { NotFound } from "./Listing";
@@ -959,6 +959,7 @@ function StaffTab() {
     history.reload();
   });
   const [newId, setNewId] = useState("");
+  const [newIdError, setNewIdError] = useState<string>();
   const [newRole, setNewRole] = useState<StaffRole>("reviewer");
   if (staff.error)
     return <ErrorState error={staff.error} onRetry={staff.reload} />;
@@ -1077,7 +1078,11 @@ function StaffTab() {
           className="reason-form"
           onSubmit={(e) => {
             e.preventDefault();
-            const id = newId.trim().replace(/^.*\/u\//, "");
+            const id = accountId(newId);
+            setNewIdError(
+              id ? undefined : "Paste the account's ID, or the link to their profile (…/u/…).",
+            );
+            if (!id) return;
             void run("new", () => api.admin.changeRole(id, newRole, true)).then(
               () => setNewId(""),
             );
@@ -1106,6 +1111,11 @@ function StaffTab() {
           >
             Add to staff
           </button>
+          {newIdError && (
+            <p className="form-error" role="alert">
+              {newIdError}
+            </p>
+          )}
         </form>
       )}
       <h2 className="section-title">Sensitive actions</h2>
@@ -1712,6 +1722,7 @@ const ACTION_LABEL: Record<ModerationDecision["action"], string> = {
   remove_reply: "Remove the maker's reply under it",
   hide_profile: "Hide the profile",
   hide_team: "Hide the team",
+  hide_bounty: "Hide the bounty",
   warn: "Warn them (no restriction)",
   suspend_account: "Suspend their account",
 };
@@ -1722,7 +1733,7 @@ function ReportsSection({ q, onDone }: { q: AdminQueue; onDone: () => void }) {
   const overdue = q.reports.filter((r) => r.overdue).length;
   return (
     <>
-      <h2 className="section-title">
+      <h2 className="section-title" id="reports">
         Reports ({q.reports.length})
         {overdue > 0 && <span className="badge bad"> {overdue} OVERDUE</span>}
       </h2>
@@ -1976,7 +1987,9 @@ function AppealsSection({ q, onDone }: { q: AdminQueue; onDone: () => void }) {
   const [notice, setNotice] = useState<string>();
   return (
     <>
-      <h2 className="section-title">Appeals ({q.appeals.length})</h2>
+      <h2 className="section-title" id="appeals">
+        Appeals ({q.appeals.length})
+      </h2>
       <p className="muted small">
         Look at the decision again with fresh eyes, ideally not the person who
         made it. Keeping or reversing it, the person is told why.
