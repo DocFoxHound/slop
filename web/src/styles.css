@@ -322,7 +322,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .doc pre { font-size: 12.5px; line-height: 1.5; }
 .doc li { margin: 4px 0; }
 /* Links in running text are underlined, not just coloured (WCAG 1.4.1). */
-.doc a, main p a:not(.btn):not(.chip), .hint a { text-decoration: underline; text-underline-offset: 2px; }
+.doc a, main p a:not(.btn):not(.chip), .hint a, .crumbs a, main .muted a:not(.btn):not(.chip), .notice a:not(.btn) { text-decoration: underline; text-underline-offset: 2px; }
 
 /* ---- publishing progress and admin --------------------------------------- */
 .progress { margin-bottom: 16px; }
@@ -681,7 +681,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .small-seg { margin-bottom: 10px; }
 .bell { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; color: var(--text); font-size: 17px; }
 .bell:hover, .bell.on { background: var(--panel-2); }
-.bell-count { position: absolute; top: 1px; right: 0; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: var(--bad); color: #fff; font-size: 10px; font-weight: 700; line-height: 17px; text-align: center; }
+.bell-count { position: absolute; top: 1px; right: 0; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #dc2626; color: #fff; font-size: 10px; font-weight: 700; line-height: 17px; text-align: center; }
 .notifications { list-style: none; margin: 0 0 14px; padding: 0; }
 .notifications li { border-bottom: 1px solid var(--line); }
 .notifications li:last-child { border-bottom: 0; }
