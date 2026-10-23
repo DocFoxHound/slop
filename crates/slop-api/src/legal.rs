@@ -46,6 +46,17 @@ const DOCUMENTS: &[(&str, &str, bool)] = &[
     ("people", include_str!("../legal/people.md"), true),
 ];
 
+/// The longest document text, in characters.
+const MAX_BODY_CHARS: usize = 200_000;
+/// The largest request to publish one: its text, even in 4-byte characters, and the rest.
+pub const MAX_PUBLISH_BYTES: usize = 1024 * 1024;
+
+/// Publishing a document: its own body limit (lib.rs), since the text is far over the usual
+/// 64 KiB. Admin agents' calls (agent.rs) come through here too.
+pub fn publish_routes() -> Router<AppState> {
+    Router::new().route("/admin/legal/{kind}", post(admin_publish))
+}
+
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/legal", get(index))
@@ -53,7 +64,6 @@ pub fn routes() -> Router<AppState> {
         .route("/me/legal", get(my_notices))
         .route("/me/legal/accept", post(accept))
         .route("/admin/legal", get(admin_index))
-        .route("/admin/legal/{kind}", post(admin_publish))
         .route(
             "/admin/legal/{kind}/{version}/withdraw",
             post(admin_withdraw),
@@ -575,7 +585,7 @@ async fn admin_publish(
     if summary.contains('\n') {
         return Err(ApiError::invalid("summary", "keep it to one line"));
     }
-    let body = crate::catalog::validate_text("body_md", &b.body_md, 200_000, false)?;
+    let body = crate::catalog::validate_text("body_md", &b.body_md, MAX_BODY_CHARS, false)?;
     let upcoming: bool = sqlx::query_scalar(
         "select exists (select 1 from legal_documents where kind = $1 and effective_at > now())",
     )

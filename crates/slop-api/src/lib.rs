@@ -264,7 +264,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(repo_tokens::routes())
         .merge(chat::routes())
         .merge(interested::routes())
-        // Everything except the desktop build upload and webhooks: small bodies, quick answers.
+        // Everything except the routes merged below (uploads, webhooks, legal documents, Slop
+        // Build submissions): small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
             StatusCode::SERVICE_UNAVAILABLE,
@@ -307,6 +308,37 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             StatusCode::SERVICE_UNAVAILABLE,
             Duration::from_secs(40),
         )))
+        .merge(
+            legal::publish_routes()
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    legal::MAX_PUBLISH_BYTES,
+                ))
+                .layer(RequestBodyLimitLayer::new(legal::MAX_PUBLISH_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(20),
+                )),
+        )
+        .merge(
+            agent::mcp_routes()
+                .layer(axum::extract::DefaultBodyLimit::max(agent::MAX_MCP_BYTES))
+                .layer(RequestBodyLimitLayer::new(agent::MAX_MCP_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(20),
+                )),
+        )
+        .merge(
+            slop_build::submit_routes()
+                .layer(axum::extract::DefaultBodyLimit::max(
+                    slop_build::MAX_SUBMISSION_BYTES,
+                ))
+                .layer(RequestBodyLimitLayer::new(slop_build::MAX_SUBMISSION_BYTES))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(20),
+                )),
+        )
         .merge(
             people::jobs::evidence_routes()
                 .layer(axum::extract::DefaultBodyLimit::max(2 * 1024 * 1024))

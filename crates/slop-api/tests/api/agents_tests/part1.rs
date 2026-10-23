@@ -2552,11 +2552,11 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
         )
         .await;
     assert_eq!(body_json(res).await["error"]["code"], -32700);
-    // Bodies over the router's 64 KiB limit never reach it.
+    // Bodies over its limit (a whole legal document and the call, about 1 MiB) never reach it.
     let res = app
         .send(with_token(
             req(Method::POST, "/v1/admin/mcp").json(json!({
-                "jsonrpc": "2.0", "id": 5, "method": "ping", "params": { "pad": "p".repeat(70 * 1024) }
+                "jsonrpc": "2.0", "id": 5, "method": "ping", "params": { "pad": "p".repeat(1200 * 1024) }
             })),
             &token,
         ))
@@ -2570,7 +2570,7 @@ async fn the_admin_mcp_endpoint_speaks_json_rpc_to_staff_only(db: PgPool) {
         assert_eq!(res.status(), StatusCode::PAYLOAD_TOO_LARGE);
     }
     let big = json!({
-        "jsonrpc": "2.0", "id": 5, "method": "ping", "params": { "pad": "p".repeat(70 * 1024) }
+        "jsonrpc": "2.0", "id": 5, "method": "ping", "params": { "pad": "p".repeat(1200 * 1024) }
     });
     let res = app
         .send(
@@ -2718,7 +2718,6 @@ async fn staff_signed_in_on_the_website_can_drive_the_admin_mcp_tools(db: PgPool
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "b60: the router's 64 KiB body limit refuses legal documents (and MCP calls) that legal.rs and serve_mcp accept"]
 async fn a_long_legal_document_can_be_published_over_mcp(db: PgPool) {
     let app = agents_app(db, 1).await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
@@ -2732,6 +2731,21 @@ async fn a_long_legal_document_can_be_published_over_mcp(db: PgPool) {
                 "jsonrpc": "2.0", "id": 1, "method": "tools/call",
                 "params": { "name": "publish_legal_document",
                             "arguments": { "kind": "terms", "summary": "Spells everything out.", "body_md": body } }
+            })),
+            &token,
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let reply = body_json(res).await;
+    assert_eq!(reply["result"]["isError"], false, "{reply}");
+    // The longest text there may be, in 4-byte characters, fits too.
+    let body = "\u{1F98A}".repeat(200_000);
+    let res = app
+        .send(with_token(
+            req(Method::POST, "/v1/admin/mcp").json(json!({
+                "jsonrpc": "2.0", "id": 2, "method": "tools/call",
+                "params": { "name": "publish_legal_document",
+                            "arguments": { "kind": "privacy", "summary": "Foxes.", "body_md": body } }
             })),
             &token,
         ))
