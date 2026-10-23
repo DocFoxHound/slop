@@ -632,18 +632,27 @@ async fn wake_contacts(state: &AppState, user: Uuid) -> sqlx::Result<()> {
 // Conversations
 
 /// Everyone in every chat: direct, group and self chats from `chat_members`, team chats from
-/// the team's members.
+/// the team's members. A team chat is only for an invite-only player team, and never includes
+/// anyone in the under-18 view (`friends::under18`): anyone can join an open team, and a
+/// teen's teammates aren't all their friends (2026-10-23). A chat whose team became open has
+/// no one in it, so it's closed.
 pub const PARTICIPANTS: &str = "select m.conversation_id, m.user_id from chat_members m
      union all
      select c.id, tm.user_id from chat_conversations c join team_members tm on tm.team_id = c.team_id
-     where c.kind = 'team'";
+     join teams t on t.id = c.team_id
+     where c.kind = 'team' and t.kind = 'player' and t.join_policy = 'invite'
+       and not coalesce((select cp.under18_view_default from users uu join country_policies cp on cp.country_code = uu.country_code
+                         where uu.id = tm.user_id), true)";
 
 /// `PARTICIPANTS` with when each joined: new members get nothing from before (who wrote, from
 /// which devices, when), only what was sent since (security review, 2026-10-22).
 const PARTICIPANTS_SINCE: &str = "select m.conversation_id, m.user_id, m.joined_at as since from chat_members m
      union all
      select c.id, tm.user_id, tm.joined_at from chat_conversations c join team_members tm on tm.team_id = c.team_id
-     where c.kind = 'team'";
+     join teams t on t.id = c.team_id
+     where c.kind = 'team' and t.kind = 'player' and t.join_policy = 'invite'
+       and not coalesce((select cp.under18_view_default from users uu join country_policies cp on cp.country_code = uu.country_code
+                         where uu.id = tm.user_id), true)";
 
 async fn is_member(conn: &mut PgConnection, conversation: Uuid, user: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -904,15 +913,28 @@ async fn start(
         }
         "team" => {
             let slug = b.team.as_deref().unwrap_or("").to_ascii_lowercase();
-            let team: Option<Uuid> = sqlx::query_scalar(
-                "select t.id from teams t join team_members m on m.team_id = t.id
-                 where t.slug = $1 and t.kind = 'player' and t.hidden_reason is null and m.user_id = $2",
-            )
-            .bind(&slug)
-            .bind(user.id)
-            .fetch_optional(&mut *tx)
-            .await?;
-            let team = team.ok_or(ApiError::NotFound)?;
+            let team: Option<(Uuid, String, bool)> =
+                sqlx::query_as(sqlx::AssertSqlSafe(format!(
+                    "select t.id, t.join_policy, {} from teams t join team_members m on m.team_id = t.id
+                     where t.slug = $1 and t.kind = 'player' and t.hidden_reason is null and m.user_id = $2",
+                    friends::under18("$2")
+                )))
+                .bind(&slug)
+                .bind(user.id)
+                .fetch_optional(&mut *tx)
+                .await?;
+            let (team, policy, minor) = team.ok_or(ApiError::NotFound)?;
+            // Not where anyone can join, and not in the under-18 view (see `PARTICIPANTS`).
+            if policy != "invite" {
+                return Err(ApiError::Conflict(
+                    "team chats are for invite-only teams".into(),
+                ));
+            }
+            if minor {
+                return Err(ApiError::Conflict(
+                    "team chats aren't available in the under-18 view".into(),
+                ));
+            }
             let found: Option<Uuid> =
                 sqlx::query_scalar("select id from chat_conversations where team_id = $1")
                     .bind(team)

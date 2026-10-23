@@ -429,6 +429,8 @@ export interface TeamPage {
   }>;
   shared: AppSummary[];
   hidden: boolean;
+  /** Whether you have this team's chat: invite-only player teams, outside the under-18 view. */
+  chat: boolean;
 }
 
 /** A notification in the bell (crates/slop-api/src/notify.rs). */
@@ -3222,7 +3224,7 @@ export const api = {
   teams: {
     list: () => request<TeamCard[]>("GET", "/v1/teams"),
     mine: () =>
-      request<{ teams: TeamCard[]; invites: TeamCard[] }>(
+      request<{ teams: TeamCard[]; invites: TeamCard[]; team_chats: boolean }>(
         "GET",
         "/v1/me/teams",
       ),

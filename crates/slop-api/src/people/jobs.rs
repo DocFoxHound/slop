@@ -37,7 +37,7 @@ use crate::{
 
 /// The Service Agreement template (versioned: change the version with the text).
 pub const TEMPLATE: &str = include_str!("service_agreement.md");
-pub const TEMPLATE_VERSION: &str = "2026-10-19b";
+pub const TEMPLATE_VERSION: &str = "2026-10-23";
 /// The client has this long after delivery to accept it or ask for a change (DESIGN §15.2).
 pub const COMPLETION_WINDOW: Duration = Duration::days(7);
 const MAX_OPEN_REQUESTS: i64 = 3;
@@ -529,6 +529,16 @@ const ACTIVE: &[&str] = &[
 ];
 const ENDED: &[&str] = &["declined", "cancelled", "withdrawn"];
 
+/// Whether the client may still withdraw (HUM-2, HUM-4): within the period, while the job is
+/// under way or after it completed, since completing (on its own after 7 days, too) never
+/// shortens the period. With the start-now acknowledgement, the right ends once the work is
+/// fully delivered, as the agreement says.
+fn may_withdraw(j: &JobRow, now: OffsetDateTime) -> bool {
+    j.withdrawal_until.is_some_and(|u| u > now)
+        && (ACTIVE.contains(&j.status.as_str()) || j.status == "completed")
+        && !(j.start_now_ack_at.is_some() && j.delivered_at.is_some())
+}
+
 #[derive(Serialize, sqlx::FromRow)]
 struct PaymentView {
     part: String,
@@ -827,11 +837,10 @@ async fn view(state: &AppState, j: JobRow, role: Role, viewer: Uuid) -> ApiResul
     let problem = super::mediation::problem_view(&state.db, j.id, viewer).await?;
     let now = OffsetDateTime::now_utc();
     let due = payments.iter().find(|p| p.status == "due");
-    let active = ACTIVE.contains(&j.status.as_str());
     let ended = ENDED.contains(&j.status.as_str());
     let withdrawal = j.withdrawal_until.map(|until| Withdrawal {
         until,
-        open: until > now && active,
+        open: may_withdraw(&j, now),
         started_early: j.start_now_ack_at.is_some(),
     });
     let open_change = changes
@@ -879,12 +888,13 @@ async fn view(state: &AppState, j: JobRow, role: Role, viewer: Uuid) -> ApiResul
         (Role::Client, Some("offered")) => actions.extend(["accept_change", "decline_change"]),
         _ => {}
     }
-    // Conversations: the client asks, the creative opens.
+    // Conversations: the client asks, the creative opens; not once the job has ended.
     match role {
-        Role::Client if !j.conversation_open && j.conversation_requested_at.is_none() => {
+        Role::Client if !j.conversation_open && j.conversation_requested_at.is_none() && !ended => {
             actions.push("request_conversation")
         }
-        Role::Creative if !j.conversation_open => actions.push("open_conversation"),
+        Role::Creative if !j.conversation_open && !ended => actions.push("open_conversation"),
+        Role::Creative if !j.conversation_open => {}
         Role::Creative => actions.push("close_conversation"),
         _ => {}
     }
@@ -961,7 +971,8 @@ async fn view(state: &AppState, j: JobRow, role: Role, viewer: Uuid) -> ApiResul
         withdrawal_days,
         signed_off_at: j.signed_off_at,
         final_files_at: j.final_files_at,
-        auto_complete_at: (j.status == "delivered")
+        // An open problem holds it off.
+        auto_complete_at: (j.status == "delivered" && !problem_open)
             .then(|| j.delivered_at.map(|d| d + COMPLETION_WINDOW))
             .flatten(),
         completed_at: j.completed_at,
@@ -2134,7 +2145,9 @@ async fn cancel(
     reload(&state, id, &user).await
 }
 
-/// Ends an active job (cancelled or withdrawn): nothing more is due, open changes lapse.
+/// Ends an active job (cancelled or withdrawn): nothing more is due, open changes lapse. A
+/// consumer may also withdraw from a completed job within the period (HUM-4), which takes its
+/// credit away.
 pub(crate) async fn end_job(
     conn: &mut sqlx::PgConnection,
     id: Uuid,
@@ -2142,9 +2155,15 @@ pub(crate) async fn end_job(
     status: &str,
     text: Option<&str>,
 ) -> ApiResult<()> {
-    set_status(conn, id, ACTIVE, status).await?;
+    let from: Vec<&str> = if status == "withdrawn" {
+        ACTIVE.iter().copied().chain(["completed"]).collect()
+    } else {
+        ACTIVE.to_vec()
+    };
+    set_status(conn, id, &from, status).await?;
     sqlx::query(
         "update jobs set ended_at = now(), ended_by = $2, withdrawn_at = case when $3 = 'withdrawn' then now() end,
+                credited_at = case when $3 = 'withdrawn' then null else credited_at end,
                 conversation_closed_at = case when conversation_open then now() else conversation_closed_at end,
                 conversation_open = false
          where id = $1",
@@ -2175,10 +2194,7 @@ async fn withdraw(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<JobView>> {
     let (j, role) = load(&state, id, &user).await?;
-    let open = j
-        .withdrawal_until
-        .is_some_and(|u| u > OffsetDateTime::now_utc());
-    if role != Role::Client || !open {
+    if role != Role::Client || !may_withdraw(&j, OffsetDateTime::now_utc()) {
         return Err(wrong_step("withdraw"));
     }
     let mut tx = state.db.begin().await?;
@@ -2581,6 +2597,11 @@ async fn request_conversation(
     if role != Role::Client || j.conversation_open {
         return Err(wrong_step("ask for a conversation"));
     }
+    if ENDED.contains(&j.status.as_str()) {
+        return Err(ApiError::Conflict(
+            "the job has ended, so its conversation stays closed".into(),
+        ));
+    }
     if j.conversation_requested_at.is_some() {
         return Err(ApiError::Conflict(
             "you've already asked; the creative decides when to open it".into(),
@@ -2617,6 +2638,12 @@ async fn open_conversation(
     let (j, role) = load(&state, id, &user).await?;
     if role != Role::Creative || j.conversation_open {
         return Err(wrong_step("open a conversation"));
+    }
+    // Ending a job closed its conversation for good: no writing to a client who declined.
+    if ENDED.contains(&j.status.as_str()) {
+        return Err(ApiError::Conflict(
+            "the job has ended, so its conversation stays closed".into(),
+        ));
     }
     let mut tx = state.db.begin().await?;
     sqlx::query(
@@ -3384,13 +3411,15 @@ pub async fn dispute_recorded(
 }
 
 /// Completes delivered jobs whose 7 days have passed (hourly, cleanup.rs). Anything still owed
-/// stays owed, and the final files wait for it.
+/// stays owed, and the final files wait for it. An open problem holds it off until it closes.
 pub async fn auto_complete(db: &sqlx::PgPool, now: OffsetDateTime) -> anyhow::Result<u64> {
-    let ids: Vec<Uuid> =
-        sqlx::query_scalar("select id from jobs where status = 'delivered' and delivered_at < $1")
-            .bind(now - COMPLETION_WINDOW)
-            .fetch_all(db)
-            .await?;
+    let ids: Vec<Uuid> = sqlx::query_scalar(
+        "select j.id from jobs j where j.status = 'delivered' and j.delivered_at < $1
+           and not exists (select 1 from job_problems p where p.job_id = j.id and p.status = 'open')",
+    )
+    .bind(now - COMPLETION_WINDOW)
+    .fetch_all(db)
+    .await?;
     let mut n = 0;
     for id in ids {
         let mut tx = db.begin().await?;
