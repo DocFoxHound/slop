@@ -111,6 +111,17 @@ export function ReportForm({
         {error.message}
       </span>
     ) : null;
+  // Errors about a field the form shows go next to it; any other (such as reporting your own
+  // bounty) goes at the end, so none is lost.
+  const inline = [
+    "reason",
+    "details",
+    "good_faith",
+    ...(reason === "copyright"
+      ? ["copyright.work", "copyright.address", "copyright.phone", "copyright.statements", "copyright.signature"]
+      : []),
+    ...(signedOut ? ["name", "email"] : []),
+  ];
 
   if (done) {
     return (
@@ -229,7 +240,7 @@ export function ReportForm({
       </label>
       {fieldError("good_faith")}
 
-      {error && !error.field && (
+      {error && !(error.field && inline.includes(error.field)) && (
         <p className="form-error" role="alert">
           {error.message}
         </p>

@@ -11,13 +11,21 @@ import { ErrorState, Loading } from "../../components/ui";
 import { useLoad } from "../../hooks";
 import { ActionMessages, ReasonButton, useAction } from "./shared";
 
-export function ProfileFix({ id }: { id: string }) {
+/** `onSaved` lets the account's record show a new display name. */
+export function ProfileFix({ id, onSaved }: { id: string; onSaved?: () => void }) {
   const profile = useLoad(() => api.admin.profile(id), [id]);
   if (profile.error) return <ErrorState error={profile.error} onRetry={profile.reload} />;
   if (!profile.data) return <Loading />;
   return (
     <>
-      <ProfileForm id={id} profile={profile.data} onSaved={profile.reload} />
+      <ProfileForm
+        id={id}
+        profile={profile.data}
+        onSaved={() => {
+          profile.reload();
+          onSaved?.();
+        }}
+      />
       {profile.data.teams.map((t) => (
         <TeamForm key={t.slug} team={t} onSaved={profile.reload} />
       ))}

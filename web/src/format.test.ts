@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { query } from "./api";
-import { artFor, deadlineText, money, toMinor } from "./format";
+import { accountId, artFor, deadlineText, money, toMinor } from "./format";
 
 const now = Date.parse("2026-10-18T12:00:00Z");
 
@@ -48,5 +48,22 @@ describe("money", () => {
     expect(toMinor("$1,200.5")).toBe(120050);
     expect(toMinor("12.345")).toBeNull();
     expect(toMinor("ten")).toBeNull();
+  });
+});
+
+describe("accountId", () => {
+  const id = "01a16951-24a3-735a-aec1-8a29b00986cd";
+  it("takes an ID or a link to the profile", () => {
+    expect(accountId(id)).toBe(id);
+    expect(accountId(`  ${id.toUpperCase()} `)).toBe(id);
+    expect(accountId(`https://slop.example/u/${id}`)).toBe(id);
+    expect(accountId(`/u/${id}?tab=apps`)).toBe(id);
+  });
+
+  it("refuses anything else", () => {
+    expect(accountId("")).toBeUndefined();
+    expect(accountId("Olly Overdue")).toBeUndefined();
+    expect(accountId("https://slop.example/people/vera-pixels")).toBeUndefined();
+    expect(accountId(id.slice(0, -1))).toBeUndefined();
   });
 });
