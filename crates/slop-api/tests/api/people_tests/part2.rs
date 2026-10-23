@@ -5909,7 +5909,6 @@ async fn admin_agents_decide_portfolios_and_fix_profiles_and_teams_within_their_
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "new-1: anyone who joins an open team can message every member (teens too) in its team chat; needs a product decision"]
 async fn joining_an_open_team_is_not_a_way_to_message_its_members(db: PgPool) {
     let app = test_app_with(db, chat_limits).await;
     let (_, owner_web) = app.user("Tess Owner", "US").await;
@@ -5925,7 +5924,6 @@ async fn joining_an_open_team_is_not_a_way_to_message_its_members(db: PgPool) {
     add_to_team(&app, "open-crew", teen_id, "member").await;
     let owner = first_device(&app, &owner_web).await;
     let teen = first_device(&app, &teen_web).await;
-    chat_id(&app, &owner, json!({ "kind": "team", "team": "open-crew" })).await;
     // Neither may message the teen directly (friends.rs connected: open teams aren't connections).
     assert_eq!(
         connection(&app, &stranger_web, teen_id).await["can_message"],
@@ -5935,35 +5933,131 @@ async fn joining_an_open_team_is_not_a_way_to_message_its_members(db: PgPool) {
         connection(&app, &owner_web, teen_id).await["can_message"],
         false
     );
+    // An open team has no chat: not for the people running it either.
+    let (status, _) =
+        start_chat(&app, &owner, json!({ "kind": "team", "team": "open-crew" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let page = |web: &str| {
+        let r = req(Method::GET, "/v1/teams/open-crew").cookie(web);
+        let app = &app;
+        async move { body_json(app.send(r).await).await }
+    };
+    assert_eq!(page(&owner_web).await["chat"], false);
 
-    // A stranger joins and writes in the team chat: that reaches the teen all the same.
+    // A stranger joins and tries to write in the team chat.
     app.send(req(Method::POST, "/v1/teams/open-crew/join").cookie(&stranger_web))
         .await;
     let stranger = first_device(&app, &stranger_web).await;
-    let (status, team) = start_chat(
+    let (status, _) = start_chat(
         &app,
         &stranger,
         json!({ "kind": "team", "team": "open-crew" }),
     )
     .await;
-    let refused = !status.is_success()
-        || send_message(
-            &app,
-            &stranger,
-            team["id"].as_str().unwrap().parse().unwrap(),
-            "hi, how old are you?",
-        )
-        .await
-        .status()
-            != StatusCode::OK;
-    assert!(
-        refused,
+    assert_eq!(
+        status,
+        StatusCode::CONFLICT,
         "a stranger reached a teen through an open team's chat"
     );
+
+    // A chat started while the team was invite-only closes when it opens up.
+    sqlx::query("update teams set join_policy = 'invite' where slug = 'open-crew'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let team = chat_id(&app, &owner, json!({ "kind": "team", "team": "open-crew" })).await;
+    assert_eq!(page(&owner_web).await["chat"], true);
+    sqlx::query("update teams set join_policy = 'open' where slug = 'open-crew'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    for dev in [&owner, &stranger] {
+        assert_eq!(
+            send_message(&app, dev, team, "hi, how old are you?")
+                .await
+                .status(),
+            StatusCode::NOT_FOUND
+        );
+    }
     assert!(
         sync_now(&app, &teen).await["events"]
             .as_array()
             .unwrap()
             .is_empty()
     );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn people_in_the_under_18_view_are_kept_out_of_team_chats(db: PgPool) {
+    let app = test_app_with(db, chat_limits).await;
+    let (_, owner_web) = app.user("Tess Owner", "US").await;
+    let (mate_id, mate_web) = app.user("Mo Mate", "US").await;
+    let (teen_id, teen_web) = app.user("Tia Teen", "GB").await;
+    make_team(&app, &owner_web, "night-owls", json!({})).await;
+    add_to_team(&app, "night-owls", mate_id, "member").await;
+    add_to_team(&app, "night-owls", teen_id, "member").await;
+    let owner = first_device(&app, &owner_web).await;
+    let mate = first_device(&app, &mate_web).await;
+    let teen = first_device(&app, &teen_web).await;
+    // The teen can't start, see or write in it, and isn't listed in it.
+    let (status, _) =
+        start_chat(&app, &teen, json!({ "kind": "team", "team": "night-owls" })).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    let team = chat_id(
+        &app,
+        &owner,
+        json!({ "kind": "team", "team": "night-owls" }),
+    )
+    .await;
+    // Away from the app, so a teammate would get a "new messages" notice.
+    sqlx::query(
+        "update chat_devices set last_seen_at = now() - interval '1 hour' where user_id = $1",
+    )
+    .bind(teen_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let ok = |r: Response| r.status() == StatusCode::OK;
+    assert!(ok(send_message(&app, &owner, team, "Game night?").await));
+    assert!(ok(send_message(&app, &mate, team, "Yes!").await));
+    assert_eq!(
+        send_message(&app, &teen, team, "me too").await.status(),
+        StatusCode::NOT_FOUND
+    );
+    let res = app
+        .send(teen.call(Method::GET, format!("/v1/chat/conversations/{team}")))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+    let res = app
+        .send(owner.call(Method::GET, format!("/v1/chat/conversations/{team}")))
+        .await;
+    let members: Vec<Value> = body_json(res).await["members"].as_array().unwrap().clone();
+    assert_eq!(members.len(), 2);
+    assert!(members.iter().all(|m| m["id"] != json!(teen_id)));
+    assert!(
+        sync_now(&app, &teen).await["events"]
+            .as_array()
+            .unwrap()
+            .is_empty()
+    );
+    // No "new messages" notice either, and the website hides it.
+    assert!(notifications(&app, teen_id).await.is_empty());
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/teams").cookie(&teen_web))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["team_chats"], false);
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/teams/night-owls").cookie(&teen_web))
+            .await,
+    )
+    .await;
+    assert_eq!(page["chat"], false);
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/teams").cookie(&mate_web))
+            .await,
+    )
+    .await;
+    assert_eq!(mine["team_chats"], true);
 }

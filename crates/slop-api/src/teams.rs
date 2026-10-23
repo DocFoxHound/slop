@@ -110,6 +110,8 @@ struct Mine {
     teams: Vec<TeamCard>,
     /// Invitations waiting for an answer.
     invites: Vec<TeamCard>,
+    /// Whether the viewer can have team chats at all: not in the under-18 view.
+    team_chats: bool,
 }
 
 async fn mine(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Mine>> {
@@ -126,6 +128,7 @@ async fn mine(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Jso
         .bind(user.id)
         .fetch_all(&state.db)
         .await?,
+        team_chats: !viewer_under18(&state.db, user.id).await?,
     }))
 }
 
@@ -348,6 +351,9 @@ struct Page {
     /// Private Slop shared with this player team (members only).
     shared: Vec<AppSummary>,
     hidden: bool,
+    /// Whether the viewer has this team's chat: members of an invite-only player team, outside
+    /// the under-18 view (`chat::PARTICIPANTS`).
+    chat: bool,
 }
 
 async fn page(
@@ -465,6 +471,12 @@ async fn page(
     } else {
         (Vec::new(), Vec::new(), Vec::new())
     };
+    let chat = match viewer {
+        Some(v) if is_member && t.kind == "player" && t.join_policy == "invite" && !t.hidden => {
+            !viewer_under18(&state.db, v).await?
+        }
+        _ => false,
+    };
     Ok(Json(Page {
         slug,
         name: t.name.clone(),
@@ -487,7 +499,18 @@ async fn page(
         events,
         shared,
         hidden: t.hidden,
+        chat,
     }))
+}
+
+async fn viewer_under18(db: &PgPool, user: Uuid) -> sqlx::Result<bool> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {}",
+        crate::friends::under18("$1")
+    )))
+    .bind(user)
+    .fetch_one(db)
+    .await
 }
 
 /// An official team's apps: in the store, from repositories inside its organization, published by

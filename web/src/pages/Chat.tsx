@@ -583,6 +583,7 @@ function NewChat({ onStarted }: { onStarted: (id: string) => void }) {
   const [tab, setTab] = useState<"direct" | "group" | "team">("direct");
   const [friends, setFriends] = useState<FriendPerson[]>();
   const [teams, setTeams] = useState<TeamCard[]>();
+  const [teamChats, setTeamChats] = useState(true);
   const [picked, setPicked] = useState<string[]>([]);
   const [name, setName] = useState("");
   const [link, setLink] = useState("");
@@ -590,7 +591,14 @@ function NewChat({ onStarted }: { onStarted: (id: string) => void }) {
   const [busy, setBusy] = useState(false);
   useEffect(() => {
     api.friends.list().then((f) => setFriends(f.friends), () => setFriends([]));
-    api.teams.mine().then((t) => setTeams(t.teams.filter((x) => x.kind === "player")), () => setTeams([]));
+    // Team chats are for invite-only player teams, and not in the under-18 view.
+    api.teams.mine().then(
+      (t) => {
+        setTeamChats(t.team_chats);
+        setTeams(t.teams.filter((x) => x.kind === "player" && x.join_policy === "invite"));
+      },
+      () => setTeams([]),
+    );
   }, []);
   const start = async (action: Parameters<typeof desktop.chat>[0]) => {
     setBusy(true);
@@ -667,11 +675,12 @@ function NewChat({ onStarted }: { onStarted: (id: string) => void }) {
           </button>
         </>
       )}
-      {tab === "team" && (
+      {tab === "team" && !teamChats && <p className="muted">Team chats aren't available in the under-18 view.</p>}
+      {tab === "team" && teamChats && (
         <>
           {teams?.length === 0 && (
             <p className="muted">
-              You're not in a player team yet. <Link to="/teams">Find or start one</Link>.
+              You're not in an invite-only player team yet. <Link to="/teams">Find or start one</Link>.
             </p>
           )}
           <ul className="pick-list">
@@ -683,7 +692,9 @@ function NewChat({ onStarted }: { onStarted: (id: string) => void }) {
               </li>
             ))}
           </ul>
-          <p className="muted small">Everyone in the team is in its chat, and it follows who joins and leaves.</p>
+          <p className="muted small">
+            Invite-only teams have a chat. Everyone in the team is in it, and it follows who joins and leaves.
+          </p>
         </>
       )}
       {error && (
