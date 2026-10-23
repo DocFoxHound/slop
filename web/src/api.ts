@@ -1381,10 +1381,60 @@ export interface StaffList {
     display_name: string;
     roles: StaffRole[];
     suspended: boolean;
+    /** AI agents writing to the admins see their name, not only their roles. */
+    listed_by_name: boolean;
   }>;
   roles: StaffRole[];
   my_roles: StaffRole[];
+  me: string;
   approvals_required: number;
+}
+
+/** Kinds of messages AI agents write to the admins (crates/slop-api/src/admin_messages.rs). */
+export type AiMessageCategory = "suggestion" | "report" | "other";
+/** A thread from an AI agent, as the admin list shows it. */
+export interface AiThreadSummary {
+  id: string;
+  category: AiMessageCategory;
+  /** Written by the sender's agent: show as plain text only. */
+  untrusted_subject: string;
+  status: "open" | "closed";
+  /** The kind of token it came with. */
+  via: "maker_agent" | "admin_agent";
+  /** The staff member it's for; null: every admin. */
+  to: { id: string; display_name: string } | null;
+  sender: {
+    id: string;
+    display_name: string;
+    apps: number;
+    joined_at: string;
+    account_age_days: number;
+    blocked: boolean;
+  };
+  message_count: number;
+  /** Something new since you last read it. */
+  unread: boolean;
+  created_at: string;
+  last_message_at: string;
+  closed_at: string | null;
+}
+export interface AiThread extends AiThreadSummary {
+  note: string;
+  messages: Array<{
+    id: string;
+    from_staff: boolean;
+    author_id: string;
+    author: string;
+    /** Written with an AI agent's token. */
+    by_agent: boolean;
+    /** The sender's words (plain text only); staff replies are `text`. */
+    untrusted_text?: string;
+    text?: string;
+    /** The token it was sent with, in words; null for staff signed in. */
+    sent_with: string | null;
+    provenance: { kind: "maker" | "admin"; id: string; name: string; scope: string; created_at: string } | null;
+    created_at: string;
+  }>;
 }
 
 export interface AdminFeatured {
@@ -2651,6 +2701,26 @@ export const api = {
       request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/lift-suspension`, { reason }),
     passkeyGrace: (id: string, reason: string) =>
       request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/passkey-grace`, { reason }),
+    /** Threads AI agents wrote to the admins that you can see, newest activity first. */
+    aiMessages: (category?: AiMessageCategory, status: "open" | "closed" = "open") =>
+      request<AiThreadSummary[]>("GET", `/v1/admin/ai-messages${query({ category, status })}`),
+    /** One thread with every message; reading it marks it read for you. */
+    aiMessage: (id: string) => request<AiThread>("GET", `/v1/admin/ai-messages/${encodeURIComponent(id)}`),
+    replyAiMessage: (id: string, body: string) =>
+      request<{ id: string }>("POST", `/v1/admin/ai-messages/${encodeURIComponent(id)}/reply`, { body }),
+    closeAiMessage: (id: string) => request<void>("POST", `/v1/admin/ai-messages/${encodeURIComponent(id)}/close`),
+    reopenAiMessage: (id: string) => request<void>("POST", `/v1/admin/ai-messages/${encodeURIComponent(id)}/reopen`),
+    fileAiMessage: (id: string, category: AiMessageCategory) =>
+      request<void>("PUT", `/v1/admin/ai-messages/${encodeURIComponent(id)}/category`, { category }),
+    /** Removes the whole thread (audit-logged without its text). */
+    deleteAiMessage: (id: string) => request<void>("DELETE", `/v1/admin/ai-messages/${encodeURIComponent(id)}`),
+    blockAiSender: (userId: string, reason: string) =>
+      request<void>("POST", `/v1/admin/ai-senders/${encodeURIComponent(userId)}/block`, { reason }),
+    /** Whether AI agents see this staff member's name (yours, or anyone's for an owner). */
+    setListedByName: (userId: string, listed: boolean) =>
+      request<void>("PUT", `/v1/admin/staff/${encodeURIComponent(userId)}/listed-by-name`, { listed }),
+    unblockAiSender: (userId: string) =>
+      request<void>("DELETE", `/v1/admin/ai-senders/${encodeURIComponent(userId)}/block`),
     approve: (id: string) =>
       request<void>("POST", `/v1/admin/releases/${id}/approve`),
     reject: (id: string, reason: string) =>
