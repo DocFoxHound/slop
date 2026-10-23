@@ -708,13 +708,15 @@ struct StaffMember {
     display_name: String,
     roles: Vec<String>,
     suspended: bool,
+    /// AI agents writing to the admins see their name, not only their roles (admin_messages.rs).
+    listed_by_name: bool,
 }
 
 async fn list_staff(State(state): State<AppState>, admin: AdminUser) -> ApiResult<Json<Value>> {
     let staff: Vec<StaffMember> = sqlx::query_as(
         "select u.id, u.display_name,
                 coalesce(array(select r.role from staff_roles r where r.user_id = u.id order by r.role), '{}') as roles,
-                u.suspended_at is not null as suspended
+                u.suspended_at is not null as suspended, u.staff_listed_by_name as listed_by_name
          from users u where u.is_admin and u.closed_at is null order by u.display_name",
     )
     .fetch_all(&state.db)
@@ -723,6 +725,7 @@ async fn list_staff(State(state): State<AppState>, admin: AdminUser) -> ApiResul
         "staff": staff,
         "roles": ROLES.iter().map(|r| r.name()).collect::<Vec<_>>(),
         "my_roles": admin.roles.iter().map(|r| r.name()).collect::<Vec<_>>(),
+        "me": admin.user_id,
         "approvals_required": state.config.approvals_required.max(1),
     })))
 }

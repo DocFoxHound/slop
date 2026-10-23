@@ -988,6 +988,76 @@ fn tool_cases(ids: &ToolIds) -> Vec<(&'static str, Value, &'static str, &'static
             "review",
             &["id"],
         ),
+        // Messages from AI agents (admin_messages.rs): Troll's thread, then Olive's own.
+        (
+            "list_ai_messages",
+            json!({ "category": "report" }),
+            "read",
+            &[],
+        ),
+        (
+            "read_ai_message",
+            json!({ "id": ids.thread.to_string() }),
+            "read",
+            &["id"],
+        ),
+        (
+            "reply_to_ai_message",
+            json!({ "id": ids.thread.to_string(), "body": "Thanks." }),
+            "review",
+            &["id"],
+        ),
+        (
+            "file_ai_message",
+            json!({ "id": ids.thread.to_string(), "category": "other" }),
+            "review",
+            &["id"],
+        ),
+        (
+            "close_ai_message",
+            json!({ "id": ids.thread.to_string() }),
+            "review",
+            &["id"],
+        ),
+        (
+            "reopen_ai_message",
+            json!({ "id": ids.thread.to_string() }),
+            "review",
+            &["id"],
+        ),
+        (
+            "block_ai_sender",
+            json!({ "user_id": troll, "reason": "Junk." }),
+            "moderate",
+            &["user_id"],
+        ),
+        (
+            "unblock_ai_sender",
+            json!({ "user_id": troll }),
+            "moderate",
+            &["user_id"],
+        ),
+        (
+            "delete_ai_message",
+            json!({ "id": ids.thread.to_string() }),
+            "moderate",
+            &["id"],
+        ),
+        ("list_staff_contacts", json!({}), "read", &[]),
+        ("list_my_admin_messages", json!({}), "read", &[]),
+        (
+            "reply_to_admin_message",
+            json!({ "id": ids.own_thread.to_string(), "body": "More detail." }),
+            "read",
+            &["id"],
+        ),
+        (
+            // After the reply above: one post an hour, so this one meets the limit.
+            "send_admin_message",
+            json!({ "category": "suggestion", "subject": "An idea", "body": "Batch approvals." }),
+            "read",
+            &[],
+        ),
     ]
 }
 
@@ -997,6 +1067,9 @@ struct ToolIds {
     hold: Uuid,
     request: Uuid,
     action: Uuid,
+    /// Troll's agent's thread to the admins, and Olive's own agent's.
+    thread: Uuid,
+    own_thread: Uuid,
 }
 
 /// Owner Olive with read, review and moderate tokens; Troll; the maker's draft "game"; donation
@@ -1010,10 +1083,32 @@ async fn tool_fixtures(db: PgPool) -> (TestApp, [String; 3], ToolIds) {
         c.rate_limits.read_per_minute = 100_000;
     })
     .await;
-    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (olive, owner) = make_admin(&app, "Olive Owner").await;
     let (troll, _) = app.user("Troll", "US").await;
     let (maker, _) = maker_with_app(&app, "released").await;
     let (hold, asked, request) = (Uuid::now_v7(), Uuid::now_v7(), Uuid::now_v7());
+    let (thread, own_thread) = (Uuid::now_v7(), Uuid::now_v7());
+    for (id, sender) in [(thread, troll), (own_thread, olive)] {
+        sqlx::query(
+            "insert into admin_threads (id, sender_id, via, category, subject) values ($1, $2, 'maker_agent', 'report', 'It broke')",
+        )
+        .bind(id)
+        .bind(sender)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        sqlx::query(
+            "insert into admin_thread_messages (id, thread_id, author_id, from_staff, by_agent, body,
+                    token_kind, token_id, token_name, token_scope, token_created_at)
+             values ($1, $2, $3, false, true, 'Details.', 'maker', $1, 'Agent', 'read', now() - interval '1 day')",
+        )
+        .bind(Uuid::now_v7())
+        .bind(id)
+        .bind(sender)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
     for (id, slug) in [(hold, "held-game"), (asked, "asked-game")] {
         listed_with(&app, maker, slug, "released", "").await;
         sqlx::query(
@@ -1051,12 +1146,24 @@ async fn tool_fixtures(db: PgPool) -> (TestApp, [String; 3], ToolIds) {
         token(&app, &owner, "review").await,
         token(&app, &owner, "moderate").await,
     ];
+    // Writing to the admins takes an account a week old and a token an hour old.
+    sqlx::query("update users set created_at = now() - interval '30 days' where id = $1")
+        .bind(olive)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("update admin_tokens set created_at = now() - interval '2 hours'")
+        .execute(&app.db)
+        .await
+        .unwrap();
     let ids = ToolIds {
         troll,
         game: app_id(&app, "game").await,
         hold,
         request,
         action,
+        thread,
+        own_thread,
     };
     (app, tokens, ids)
 }
@@ -1113,7 +1220,8 @@ async fn every_admin_tool_reaches_its_route_within_its_tokens_scope(db: PgPool) 
             assert!(!text.contains(wrong), "{name} at {scope}: {text}");
         }
         if *scope == "read" {
-            assert!(!error, "{name}: {text}");
+            let limited = *name == "send_admin_message" && text.contains("rate_limited");
+            assert!(!error || limited, "{name}: {text}");
         }
     }
     // What the tools did, in the owner's name through each token.

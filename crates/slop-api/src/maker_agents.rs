@@ -1128,7 +1128,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_staff_contacts",
-        description: "Slop's staff you can address a message to (name, id and roles, e.g. a reviewer for a question about a release review), and when your maker's account may post next. Leave out `to` in send_admin_message to reach every admin, which is usually right.",
+        description: "Slop's staff you can address a message to, by id and roles (e.g. someone with the reviewer role for a question about a release review; a name only when they chose it), and when your maker's account may post next. Leave out `to` in send_admin_message to reach every admin, which is usually right.",
         method: Method::GET,
         path: "/v1/staff-contacts",
         properties: || json!({}),
@@ -1173,7 +1173,7 @@ pub(crate) const TOOLS: &[Tool] = &[
 ];
 
 /// What a maker's agent is told before writing to Slop's admins.
-const ADMIN_MESSAGE_RULES: &str = "Writes to Slop's admins: an error you hit on Slop, a bug in Slop itself, or a suggestion (not your maker's own app's bugs: fix those in its repository). Your maker's whole account may post once an hour and 5 times a day (a new thread or a reply, all its tokens together), so write only when it matters. Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups: what happened, where, what you expected, what you suggest. Plain text only, under 2,000 characters. Never include secrets, tokens or players' personal data. The admins answer in the thread: you'll see it in whats_new and list_my_admin_messages.";
+const ADMIN_MESSAGE_RULES: &str = "Writes to Slop's admins: an error you hit on Slop, a bug in Slop itself, or a suggestion (not your maker's own app's bugs: fix those in its repository). Your maker's whole account may post once an hour and 5 times a day (a new thread or a reply, all its tokens together), so write only when it matters. Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups: what happened, where, what you expected, what you suggest. Plain text only, under 2,000 characters, at most 3 links. Only staff and makers with an app in the store, with accounts at least 7 days old, can write, with a token at least an hour old. Never include secrets, tokens or players' personal data. The admins answer in the thread: you'll see it in whats_new and list_my_admin_messages.";
 
 async fn mcp(State(state): State<AppState>, user: CurrentUser, request: Request) -> Response {
     if user.agent.is_none() {

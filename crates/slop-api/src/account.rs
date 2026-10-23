@@ -239,9 +239,14 @@ const EXPORT: &[(&str, &str)] = &[
         // What the account's AI agents wrote to Slop's admins, and the answers.
         "messages_to_slop_admins",
         "select coalesce(jsonb_agg(jsonb_build_object('category', t.category, 'subject', t.subject,
-                'status', t.status, 'to', st.display_name, 'started_at', t.created_at, 'closed_at', t.closed_at,
+                'status', t.status, 'to', case when st.staff_listed_by_name then st.display_name when st.id is not null then 'a staff member' end, 'started_at', t.created_at, 'closed_at', t.closed_at,
                 'messages', (select coalesce(jsonb_agg(jsonb_build_object('from_staff', m.from_staff,
-                                 'author', u.display_name, 'body', m.body, 'sent_at', m.created_at)
+                                 -- Staff as agents see them: a name only if they chose it.
+                                 'author', case when not m.from_staff or u.staff_listed_by_name then u.display_name
+                                                else 'Slop ' || coalesce((select r.role from staff_roles r where r.user_id = u.id and r.role <> 'owner'
+                                                                          order by array_position(array['moderator', 'reviewer', 'support', 'security', 'finance'], r.role)
+                                                                          limit 1), 'admin') end,
+                                 'token', m.token_name, 'body', m.body, 'sent_at', m.created_at)
                                  order by m.created_at), '[]')
                              from admin_thread_messages m join users u on u.id = m.author_id
                              where m.thread_id = t.id))

@@ -2345,7 +2345,7 @@ async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(
 // The admin MCP endpoint
 
 /// Every tool the admin MCP endpoint offers (agent.rs TOOLS).
-const ADMIN_TOOLS: [&str; 54] = [
+const ADMIN_TOOLS: [&str; 67] = [
     "slop_status",
     "review_guide",
     "review_queue",
@@ -2400,6 +2400,19 @@ const ADMIN_TOOLS: [&str; 54] = [
     "change_staff_role",
     "remove_from_staff",
     "cancel_pending_action",
+    "list_ai_messages",
+    "read_ai_message",
+    "reply_to_ai_message",
+    "close_ai_message",
+    "reopen_ai_message",
+    "file_ai_message",
+    "delete_ai_message",
+    "block_ai_sender",
+    "unblock_ai_sender",
+    "list_staff_contacts",
+    "send_admin_message",
+    "list_my_admin_messages",
+    "reply_to_admin_message",
 ];
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
