@@ -82,9 +82,15 @@ export async function tweak<T = any>(page: Page, path: string, change: (body: T)
     (url) => url.pathname === path,
     async (route) => {
       if (route.request().method() !== "GET") return route.fallback();
-      const res = await route.fetch();
-      const body = (await res.json()) as T;
-      await route.fulfill({ response: res, json: change(body) });
+      // A navigation (an old /account#… link moving to its section, say) can cancel a request
+      // that's still on its way; only the page's next one matters then.
+      try {
+        const res = await route.fetch();
+        const body = (await res.json()) as T;
+        await route.fulfill({ response: res, json: change(body) });
+      } catch {
+        // Cancelled by the navigation.
+      }
     },
   );
 }
