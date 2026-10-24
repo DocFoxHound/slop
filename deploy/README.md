@@ -1,20 +1,91 @@
-# The test deployment
+# The test server and production
 
-Slop runs on the development server at **https://slop.188-68-41-241.sslip.io** and updates
-itself from GitHub.
+Slop runs in two places:
+
+- **The test server**, **https://slop.188-68-41-241.sslip.io** (this machine), deploys every
+  push to the `dev` branch by itself, within minutes. No GitHub involved.
+- **Production**, **https://slopai.games** (its own server, "Production" below), deploys only
+  commits on `main` that passed every check on GitHub and that the owner approved.
+
+## How changes ship
+
+```
+push to dev ──► the test server (no GitHub involved)
+                 build → deploy → build "Slop Dev" for Linux and Windows here
+                 → installed Slop Dev apps offer the update             ~5–10 min
+
+dev → main ──► GitHub's pipeline (.github/workflows/pipeline.yml)
+               all checks on GitHub's runners, and the Windows "Slop" app built
+               → ⏸ Approve "production" (a GitHub environment with a required reviewer)
+               → production deploys → its Windows app is published → Slop apps update
+```
+
+1. **Work lands on `dev`.** Push signed commits there ("Signed commits", below). Within two
+   minutes the test server's `update.sh` fetches it, builds it **without the tests** (they run on
+   GitHub, step 3) in about 3 minutes, snapshots the database, switches over, restarts and rolls
+   back if it isn't healthy. If the app changed, it then builds the **Slop Dev** desktop app for Linux and Windows
+   on this machine and publishes it here ("The desktop app", below).
+2. **When dev is good, send it on:** from your own checkout, with your GitHub access,
+
+   ```sh
+   cd /srv/Development/Projects/slop
+   deploy/promote.sh     # shows what's new on dev, asks, fast-forwards main to dev and pushes it
+   ```
+
+   It refuses anything that isn't a fast-forward, so main only ever gets commits that are already
+   on dev. Don't merge dev into main on GitHub instead: GitHub's merge, squash and rebase buttons
+   all make new commits, signed by GitHub rather than by you, and production refuses commits that
+   aren't signed by a key in its `allowed_signers`.
+3. **GitHub runs the pipeline** on the push to main (https://github.com/DocFoxHound/slop/actions):
+   `checks` runs the same tests, lints, builds and browser tests the deploy's old test mode ran
+   (`deploy/build/build.sh` in the `deploy/build/Containerfile` image, against a Postgres
+   service), while `build-windows` builds production's Windows installer. About 20–30 minutes.
+4. **Approve.** The run then waits at the `production` job: open it, **Review deployments**, tick
+   **production**, **Approve and deploy**. The job moves the annotated tag `production` to the
+   commit (refusing to take production back to an older one), production's `update.sh` deploys it
+   within a few minutes, and once slopai.games runs it the job uploads the Windows installer
+   there. Reject it, or just leave it, and nothing changes; a later approved run ships everything
+   up to its own commit.
+
+### Setting up GitHub (once)
+
+Do step 2 before `pipeline.yml` first reaches main: GitHub creates an environment a job names if
+it doesn't exist yet, with no reviewers, and that first run would ship without asking.
+
+1. **The `dev` branch:** `git push origin main:refs/heads/dev`. Optionally make it the default
+   branch (**Settings → General → Default branch**) so pull requests and clones start from it.
+2. **The `production` environment:** **Settings → Environments → New environment**, name it
+   `production`, **Configure environment**. Tick **Required reviewers** and add yourself
+   (DocFoxHound); leave **Prevent self-review** off while you're the only reviewer. Under
+   **Deployment branches and tags** choose **Selected branches and tags → Add deployment branch or
+   tag rule**, `main`. **Save protection rules.** No environment secrets are needed: the upload to
+   slopai.games is authenticated with the job's GitHub OIDC token, which names the environment.
+3. **Actions:** **Settings → Actions → General**. Actions permissions: **Allow DocFoxHound, and
+   select non-DocFoxHound, actions and reusable workflows** with **Allow actions created by
+   GitHub** ticked (the pipeline uses only `actions/*`, pinned by commit), or allow all.
+   **Workflow permissions: Read repository contents and packages permissions** (the production
+   job asks for write access to push the tag itself); leave **Allow GitHub Actions to create and
+   approve pull requests** off. For forks, keep **Require approval for all external
+   contributors** (the pipeline doesn't run on pull requests anyway).
+4. **Rules on main and tags** (**Settings → Rules → Rulesets**, or branch protection): `promote.sh`
+   pushes main directly and the production job pushes the `production` tag with the run's own
+   token, so don't require pull requests or status checks on main for yourself, and don't put a
+   rule on the `production` tag that GitHub Actions can't bypass. Do block force-pushes and
+   deletion on main.
 
 ## What runs
 
 | Unit (systemd, user `brian`) | What it does |
 |---|---|
 | `slop-pg.service` | Production Postgres in podman (`~/.config/containers/systemd/slop-pg.container`, `127.0.0.1:5433`); data in the `slop-pg-data` volume. The `slop_prod` database and role, and `slop_sim`. Its superuser `slop` has a random password (`~/.config/slop/pg-superuser`); maintenance uses it through `podman exec` |
-| `slop-pg-dev.service` | Development and test Postgres (`slop-pg-dev.container`, `127.0.0.1:5434`, user `slop:slop`); the deploy's tests create their throwaway databases here, never in the production cluster. Install: copy `deploy/systemd/slop-pg-dev.container` to `~/.config/containers/systemd/` and `systemctl --user daemon-reload && systemctl --user start slop-pg-dev` |
+| `slop-pg-dev.service` | Development and test Postgres (`slop-pg-dev.container`, `127.0.0.1:5434`, user `slop:slop`); tests create their throwaway databases here, never in the production cluster. Install: copy `deploy/systemd/slop-pg-dev.container` to `~/.config/containers/systemd/` and `systemctl --user daemon-reload && systemctl --user start slop-pg-dev` |
 | `slop-api.service` | The API, the website (`SLOP_WEB_DIR`) and the release fetcher, on `127.0.0.1:8090` |
 | `slop-sim.service`, `slop-sim-pulse.service` | The simulation sandbox (`docs/SIMULATION.md`): the same build on the `slop_sim` database at `sim.188-68-41-241.sslip.io` (`127.0.0.1:8092`), and its simulated live players. Settings in `~/.config/slop/slop-sim.env`. Restarted with each deploy |
 | `slop-backup.timer` → `slop-backup.service` | Every night at 03:30 UTC, `slop-backup`: the `slop_prod` database, roles and `~/.config/slop` into `~/slop-backups` (below) |
 | `slop-restore-check.timer` → `slop-restore-check.service` | Every Sunday, restores the newest backup into a scratch database and compares it with the live one |
 | `slop-scan-update.timer` → `slop-scan-update.service` | Every six hours, fresh ClamAV signatures and YARA-Forge rules for the release scanner (below), in the `slop-scan-db` volume |
-| `slop-deploy.timer` → `slop-deploy.service` | Every two minutes, `update.sh`: if `main` has a new commit, run the tests (Rust, web, and the browser tests in `web/e2e` against a throwaway Slop on the test database), build, switch over, restart, and roll back if it isn't healthy. A failing commit is skipped (marked in `~/slop-deploy/builds/failed-<sha>`) until the next push |
+| `slop-deploy.timer` → `slop-deploy.service` | Every two minutes, `update.sh` in build mode (the drop-in `slop-deploy.service.d/test-server.conf`, from `deploy/systemd/slop-deploy-test-server.conf`): if `dev` has a new commit, build it (no tests), snapshot the database, switch over, restart, and roll back if it isn't healthy. A failing commit is skipped (marked in `~/slop-deploy/builds/failed-<sha>`) until the next push |
+| `slop-desktop-linux@<commit>.service`, `slop-desktop-windows@<commit>.service` | Started by a deploy that changed the app: build the Slop Dev app for Linux (`.deb`, `.rpm`) and Windows (cross-compiled) and publish them here ("The desktop app") |
 
 Caddy (`/etc/caddy/Caddyfile.d/slop.caddyfile`) serves it with a Let's Encrypt certificate. The
 server's own `*.happysrv.de` name can't get certificates (the host's customers share, and have
@@ -26,30 +97,70 @@ must include `SLOP_CLIENT_IP_HEADER=x-forwarded-for` (Caddy replaces any value t
 or every visitor shares one rate limit; the admin panel raises an alert when it's missing. The release
 signing key's public half, which desktop builds trust, is in `~/.config/slop/desktop-build.env`.
 
+**The deploy's modes.** `update.sh` is the same file on both servers and picks its mode from
+`SLOP_DEPLOY_MODE`: `build` here (with `SLOP_DEPLOY_BRANCH=dev`), `production` in production
+(with `SLOP_DEPLOY_REF=production`), and `test`, the default, which runs the whole test suite
+first (about 20 minutes): how this server worked before the GitHub pipeline, kept for a server
+without one. `SLOP_DEPLOY_DESKTOP` lists the desktop apps a deploy builds afterwards: `linux`
+by default, `linux windows` here.
+
 ## The desktop app
 
-`.github/workflows/desktop.yml` builds the Windows installer on every push to `main` that touches
-the app, and uploads it to the deployment with the run's GitHub OIDC token. Production's app is
-built the same way when the `production` tag moves (below, "Production"). The server signs it
-with the updater key (`SLOP_UPDATER_KEY`, only on the server). The app checks for updates shortly
-after it starts and every 3 hours, and shows a notice ("Slop 0.1.N is available: Update and restart
-/ Later"); updates are never installed without the player choosing to. The website's store page
-links the newest installers.
+There are two apps, and they install side by side:
 
-Linux packages are built here after each deploy that changes the app
-(`slop-desktop-linux@<commit>.service`, `deploy/desktop-linux/build.sh`), each in a container of the
-oldest system it supports: a `.deb` on Ubuntu 22.04 (for Ubuntu 22.04+ and Debian 12+) and an
-`.rpm` on Rocky Linux 10 (for RHEL/Rocky/Alma 10 with EPEL and CRB enabled; EL9 lacks WebKitGTK 4.1, which
-Tauri 2 needs). They're published with `slop-api desktop publish`. All platforms share one version
-number: `0.1.<number of commits>`.
+| | **Slop** | **Slop Dev** |
+|---|---|---|
+| Talks to and updates from | slopai.games | this test server |
+| Identifier, program | `dev.ironpoint.slop`, `slop-desktop` | `dev.ironpoint.slopdev`, `slop-dev` |
+| Windows installer | built on GitHub's Windows runner by the pipeline, uploaded once the owner approved | cross-compiled here after each deploy that changed the app |
+| Linux `.deb`, `.rpm` | built on the production server after each deploy that changed the app | built here after each deploy that changed the app |
+| Releases without maker signatures | refused | accepted (private test repositories can't make attestations, docs/TESTING.md) |
+
+Every build sets up `crates/slop-desktop/tauri.conf.json` with `deploy/desktop-config.js` just
+before `tauri build`: the version (`0.1.<number of commits>`, shared by all platforms), the site,
+and, for a test site (`*.sslip.io`, `localhost`), the **Slop Dev** name, window title, identifier
+and program name. The identifier keeps the two apart: each has its own settings, library and
+chat folders, its own sign-in and chat keys in the system keychain (named after the identifier),
+its own single-instance lock and its own entry in Programs and Features or the package manager.
+Sign-in opens the browser and polls the site, so there's no link scheme to share.
+
+Each server signs its builds for the app's updater with `SLOP_UPDATER_KEY` (only on the servers)
+when they're published. The app checks for updates shortly after it starts and every 3 hours, and
+shows a notice ("Slop 0.1.N is available: Update and restart / Later"); updates are never
+installed without the player choosing to. The website's store page links the newest installers.
+
+**Uploads.** Production takes Windows builds only from `pipeline.yml` on main, from a job in the
+approved `production` environment (`SLOP_DESKTOP_REPO`, `SLOP_DESKTOP_WORKFLOW`,
+`SLOP_DESKTOP_REF`, `SLOP_DESKTOP_ENVIRONMENT`; "Production" below), and never an older version
+than it has. This server leaves `SLOP_DESKTOP_ENVIRONMENT` unset and so takes no uploads at all:
+everything it offers was built here and published with `slop-api desktop publish`.
+
+**Linux packages** (`deploy/desktop-linux/build.sh`) are each built in a container of the oldest
+system they support: a `.deb` on Ubuntu 22.04 (for Ubuntu 22.04+ and Debian 12+) and an `.rpm`
+on Rocky Linux 10 (for RHEL/Rocky/Alma 10 with EPEL and CRB enabled; EL9 lacks WebKitGTK 4.1,
+which Tauri 2 needs).
+
+**The Windows installer** (`deploy/desktop-windows/build.sh`) is cross-compiled the way Tauri
+documents it ("Build Windows apps on Linux and macOS"): the MSVC target with `cargo-xwin`, LLVM's
+`lld` and `llvm-rc`, and NSIS's `makensis`, in `deploy/desktop-windows/Containerfile.windows`
+(rootless podman, no capabilities; the container gets the version, the site and the
+release-signing public key, never the updater key). Its caches, including Microsoft's CRT and
+Windows SDK files that `cargo-xwin` downloads on first use (accepting Microsoft's licence for
+them, https://go.microsoft.com/fwlink/?LinkId=2086102), are in the `slop-build-cache-windows`
+volume. The first build takes about 7 minutes (the image, the SDK download and every crate),
+later ones about 2. Tauri calls cross-compiling experimental, so production's app is still built
+on a real Windows machine.
+Neither installer is Authenticode-signed yet, so Windows SmartScreen warns on first install.
 
 ## Day to day
 
 ```sh
 journalctl --user -u slop-deploy -f          # watch deploys
 journalctl --user -u slop-api -f             # the API's log
+journalctl --user -u 'slop-desktop-*' -f     # the desktop builds
 systemctl --user start slop-deploy           # deploy now instead of waiting
 rm ~/slop-deploy/builds/failed-*             # retry a commit that failed
+deploy/promote.sh                            # send dev to production (asks; then approve on GitHub)
 ```
 
 Reviewing and moderating is done in the website's **Admin** panel (accounts with admin rights).
@@ -73,21 +184,14 @@ Production runs at **https://slopai.games** on its own server (Fedora, user `slo
 podman), laid out like this one: `~/slop-deploy`, `~/.config/slop/slop.env`, the user units from
 `deploy/systemd`, Postgres in `slop-pg` on `127.0.0.1:5433`, the API on `127.0.0.1:8090`.
 
-**How shipping works.** Every push to `main` goes to this test server first, which runs all the
-tests. Production deploys only a commit that's already live here, and only when the `production`
-tag is moved to it. To ship, on this server, from your own checkout with your GitHub access:
+**What it deploys.** Only the commit the `production` tag points to, which the pipeline moves
+when the owner approves a run ("How changes ship", above). Within two minutes production's
+`update.sh` fetches the tag, refuses a commit that isn't on `main` or isn't signed (as here),
+builds it without the tests (they passed on GitHub, and production has no test database),
+snapshots the database, switches, and rolls back if it isn't healthy. Its Linux packages are
+built afterwards on that server.
 
-```sh
-cd /srv/Development/Projects/slop
-deploy/ship-to-production.sh     # shows what's new since the last ship, asks, moves the tag
-```
-
-It takes the commit in `~/slop-deploy/current`, checks it's on `main`, and pushes only the tag.
-Within two minutes production's `update.sh` fetches the tag, refuses a commit that isn't on `main`
-or isn't signed (as here), builds it without the tests (it passed them here, and production has no
-test database), snapshots the database, switches, and rolls back if it isn't healthy.
-
-**The deploy's settings.** `update.sh` is the same file; production picks its mode in a drop-in
+**The deploy's settings.** Production picks its mode in a drop-in
 (`systemctl --user edit slop-deploy.service`), with the read-only deploy key ("A read-only deploy
 key", below):
 
@@ -98,16 +202,15 @@ Environment=SLOP_DEPLOY_MODE=production
 Environment=SLOP_DEPLOY_REMOTE=git@github-slop-deploy:DocFoxHound/slop.git
 ```
 
-**The desktop app has two channels.** Pushes to `main` build an app that talks to and updates from
-this test server; moving the `production` tag builds one for slopai.games (`tauri.conf.json`'s
-default). Linux packages are built after each deploy on each server, for that server's
-`SLOP_PUBLIC_URL`. Each server takes uploads only from its own channel: this one leaves
-`SLOP_DESKTOP_REF` unset (`refs/heads/main`). In production's `slop.env`:
+**The desktop app's settings**, in production's `slop.env`: Windows builds only from approved
+pipeline runs on main ("The desktop app", above).
 
 ```sh
 SLOP_PUBLIC_URL=https://slopai.games
 SLOP_DESKTOP_REPO=DocFoxHound/slop
-SLOP_DESKTOP_REF=refs/tags/production
+SLOP_DESKTOP_REF=refs/heads/main
+SLOP_DESKTOP_WORKFLOW=pipeline.yml
+SLOP_DESKTOP_ENVIRONMENT=production
 SLOP_DESKTOP_DIR=/home/slop/slop-desktop
 ```
 
@@ -300,7 +403,7 @@ while there's one person; set it to 2 and restart once there's a second.
 
 The API checks every five minutes (`ops.rs`) and tells every admin under the 🔔, by phone push,
 and by email once SMTP is set: a missing or stale backup or restore check
-(`SLOP_OPS_BACKUP_DIR=/home/brian/slop-backups`), a commit whose tests failed
+(`SLOP_OPS_BACKUP_DIR=/home/brian/slop-backups`), a commit that failed to build or deploy
 (`SLOP_OPS_DEPLOY_DIR=/home/brian/slop-deploy`), a nearly full disk, the scanner failing,
 urgent and serious reports as they arrive and any report past its deadline, releases waiting
 over a day, revocations, admin changes, and payments not matching Stripe. The admin queue lists
@@ -349,14 +452,15 @@ The simulation sandbox (`slop_sim`) wipes its own ledgers, so it keeps the owner
 
 ## The build container
 
-`update.sh` never runs a commit's code on the server itself. Tests, lints, the release build, the
-website build and the browser tests run in `deploy/build/Containerfile` (rootless podman, as the
+`update.sh` never runs a commit's code on the server itself. The release build and the website
+build (and in test mode the tests, lints and browser tests) run in `deploy/build/Containerfile` (rootless podman, as the
 deploying user but with no capabilities), which sees only the deploy clone, a cache folder
 (`~/slop-deploy/cache`) and an output folder (`~/slop-deploy/out`, with each step's log). It has
 the host's network so it can fetch crates and reach the test database on `127.0.0.1:5434`, but no
-home folder, secrets or keys. The image is rebuilt when the Containerfile changes. A commit's
-code still runs with the API's rights once it's deployed: that's what branch protection and
-signed commits are for.
+home folder, secrets or keys. The image is rebuilt when the Containerfile changes. GitHub's
+pipeline runs the same image and script for its checks. A commit's code still runs with the
+API's rights once it's deployed: that's what branch protection and signed commits are for. The
+desktop builds work the same way, each in its own container ("The desktop app").
 
 ## Signed commits
 
@@ -444,7 +548,10 @@ builds with `SLOP_COMMIT`, so the page then links the exact commit running.
 ## Setting it up again
 
 ```sh
-cp deploy/systemd/* ~/.config/systemd/user/ && systemctl --user daemon-reload  # incl. slop-desktop-linux@.service
+cp deploy/systemd/*.service deploy/systemd/*.timer ~/.config/systemd/user/  # incl. slop-desktop-linux@ and -windows@
+mkdir -p ~/.config/systemd/user/slop-deploy.service.d   # the test server only; production has its own drop-in
+cp deploy/systemd/slop-deploy-test-server.conf ~/.config/systemd/user/slop-deploy.service.d/test-server.conf
+systemctl --user daemon-reload
 install -m 755 deploy/update.sh ~/slop-deploy/bin/update.sh
 cp deploy/slop.caddyfile /etc/caddy/Caddyfile.d/ && caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile
 systemctl --user enable --now slop-api.service slop-deploy.timer
