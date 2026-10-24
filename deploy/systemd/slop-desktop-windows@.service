@@ -1,0 +1,9 @@
+[Unit]
+Description=Build and publish Slop's Windows desktop app (cross-compiled) for commit %i
+After=slop-api.service
+
+[Service]
+Type=oneshot
+ExecStart=%h/slop-deploy/current/desktop-windows/build.sh %i
+TimeoutStartSec=2h
+Nice=15
