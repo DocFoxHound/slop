@@ -232,12 +232,17 @@ impl fmt::Debug for StripeConfig {
     }
 }
 
-/// Store-page pictures and videos (media.rs).
+/// Store-page pictures and videos (media.rs), and profile pictures (avatars.rs).
 #[derive(Clone, Debug)]
 pub struct MediaConfig {
     /// Where GitHub serves repository files: `<base><owner>/<repo>/<commit>/<path>`. Not the
     /// API, so it doesn't use Slop's request allowance. Changed only by tests.
     pub github_raw_base: Url,
+    /// Where GitHub serves account pictures: `<base>u/<account ID>`. Changed only by tests.
+    pub github_avatar_base: Url,
+    /// Hosts (with any port, over http too) profile pictures may also come from, besides each
+    /// sign-in provider's own. Only for tests, whose fake providers run on this machine.
+    pub avatar_test_hosts: Vec<String>,
 }
 
 impl Default for MediaConfig {
@@ -246,6 +251,10 @@ impl Default for MediaConfig {
             github_raw_base: "https://raw.githubusercontent.com/"
                 .parse()
                 .expect("valid URL"),
+            github_avatar_base: "https://avatars.githubusercontent.com/"
+                .parse()
+                .expect("valid URL"),
+            avatar_test_hosts: Vec::new(),
         }
     }
 }
@@ -653,6 +662,7 @@ impl Config {
                 github_raw_base: var_or("GITHUB_RAW_BASE", "https://raw.githubusercontent.com/")
                     .parse()
                     .context("GITHUB_RAW_BASE")?,
+                ..MediaConfig::default()
             },
             payments: PaymentsConfig {
                 stripe: match (

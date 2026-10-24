@@ -120,6 +120,17 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "forgetting job conversations failed"),
         }
+        // Profile pictures last read over a day ago (avatars.rs), slowly, beside the rest.
+        tokio::spawn({
+            let state = state.clone();
+            async move {
+                match crate::avatars::refresh_due(&state).await {
+                    Ok(n) if n > 0 => tracing::info!(updated = n, "profile pictures"),
+                    Ok(_) => {}
+                    Err(err) => tracing::error!(error = ?err, "profile picture checks failed"),
+                }
+            }
+        });
         state.rate_limiter.prune();
         tokio::time::sleep(StdDuration::from_secs(3600)).await;
     }

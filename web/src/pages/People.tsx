@@ -7,7 +7,8 @@ import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, type CreativePage, type PeopleQuery, type Section, type Work } from "../api";
-import { AI_USE, AiBadge, Avatar, Lightbox, PersonCard, RatingLine, WorkTile, accentStyle } from "../components/People";
+import { Avatar } from "../components/Avatar";
+import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, WorkTile, accentStyle } from "../components/People";
 import { ReportButton } from "../components/Report";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading, SectionHeader, Shelf } from "../components/ui";
@@ -242,7 +243,7 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
         {p.banner_url && <img src={p.banner_url} alt="" />}
       </div>
       <div className="person-head panel">
-        <Avatar name={p.name} url={p.avatar_url} big />
+        <Avatar name={p.name} url={p.avatar_url} className="p-avatar big" />
         <div className="person-head-main">
           <div className="title-row">
             <h1>{p.name}</h1>

@@ -20,6 +20,7 @@ import {
   AccountDecisions,
   AccountDonations,
   AccountNotifications,
+  AccountPicture,
   AccountReports,
 } from "../components/AccountSections";
 
@@ -487,6 +488,8 @@ export function Account() {
         </dl>
       </div>
 
+      <AccountPicture />
+
       <h2 className="section-title" id="privacy">Privacy</h2>
       <div className="panel panel-pad">
         <label className="check">
@@ -699,7 +702,9 @@ export function SignIns() {
             repositories it owns are yours.
           </p>
         )}
-        {linked === "already" && <p className="notice">That account was already linked.</p>}
+        {linked === "already" && params.get("picture") !== "refresh" && (
+          <p className="notice">That account was already linked.</p>
+        )}
         {failed === "provider" && <p className="form-error">That sign-in didn't work. Please try again.</p>}
         {confirmLink && PROVIDER_LABEL[confirmLink] && (
           <div className="notice" role="status">

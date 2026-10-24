@@ -55,8 +55,14 @@ const EXPORT: &[(&str, &str)] = &[
     (
         "sign_ins",
         "select coalesce(jsonb_agg(jsonb_build_object('provider', provider, 'account_id', provider_subject,
-                'linked_at', created_at, 'last_sign_in_at', last_sign_in_at)), '[]')
+                'linked_at', created_at, 'last_sign_in_at', last_sign_in_at, 'picture_url', picture_url)), '[]')
          from identities where user_id = $1",
+    ),
+    (
+        "profile_picture",
+        "select jsonb_build_object('from', provider, 'account_id', provider_subject, 'source_url', source_url,
+                'fetched_at', fetched_at, 'checked_at', checked_at, 'png_base64', translate(encode(image, 'base64'), E'\\n', ''))
+         from user_avatars where user_id = $1",
     ),
     (
         "sessions",
@@ -450,6 +456,16 @@ pub async fn close_account(
     .execute(&mut *tx)
     .await?;
     sqlx::query("delete from passkeys where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    // The profile picture goes, and where each sign-in's picture was (the sign-ins stay only to
+    // be refused).
+    sqlx::query("delete from user_avatars where user_id = $1")
+        .bind(user_id)
+        .execute(&mut *tx)
+        .await?;
+    sqlx::query("update identities set picture_url = null where user_id = $1")
         .bind(user_id)
         .execute(&mut *tx)
         .await?;

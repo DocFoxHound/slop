@@ -962,10 +962,10 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "edit_profile",
-        description: "Fix an account's display name or People page (for impersonation, slurs, scam links): give only what changes, and a reason the person is told. Needs a review or moderate token.",
+        description: "Fix an account's display name, profile picture or People page (for impersonation, slurs, scam links): give only what changes, and a reason the person is told. Needs a review or moderate token.",
         method: Method::PATCH,
         path: "/v1/admin/users/{id}/profile",
-        properties: || json!({ "id": s("The account ID"), "display_name": s("Optional"), "creative": { "type": "object", "description": "Optional: their People page", "properties": { "name": s("Optional"), "headline": s("Optional"), "about_md": s("Optional"), "location": s("Optional"), "remove_links": { "type": "boolean", "description": "Optional: true removes every link" } } }, "reason": s("Why, for the person") }),
+        properties: || json!({ "id": s("The account ID"), "display_name": s("Optional"), "creative": { "type": "object", "description": "Optional: their People page", "properties": { "name": s("Optional"), "headline": s("Optional"), "about_md": s("Optional"), "location": s("Optional"), "remove_links": { "type": "boolean", "description": "Optional: true removes every link" } } }, "remove_picture": { "type": "boolean", "description": "Optional: true removes their profile picture (back to the letter)" }, "reason": s("Why, for the person") }),
         required: &["id", "reason"],
     },
     Tool {
