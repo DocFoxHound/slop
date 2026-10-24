@@ -5,7 +5,7 @@ Thanks for helping. Before you open a pull request:
 1. **Read [`AGENTS.md`](AGENTS.md).** It holds the project's rules (plain wording, 404 not 403,
    bound SQL, accessibility, and how personal data is recorded). They apply to people too.
 2. **Run the checks** the deploy runs: `cargo fmt --check`, `cargo clippy --all-targets -- -D
-   warnings`, `cargo test --workspace` (with a test database, see the README), and in `web/`:
+   warnings`, `cargo test --workspace` (with a test database, see [`docs/DEVELOPING.md`](docs/DEVELOPING.md)), and in `web/`:
    `npm run typecheck`, `npm test`, `npm run build` and `npm run e2e`.
 3. **Sign off every commit** (below).
 

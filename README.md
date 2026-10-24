@@ -1,214 +1,120 @@
-# Slop
+<p align="center">
+  <img src="web/public/logo.svg" alt="Slop logo" width="96" height="96">
+</p>
 
-A store, like Steam, for software made with AI: open source, scanned before it's listed, free to
-download, and voted **Slop** or **Not Slop** by people who've used it. What it is and why:
-[`docs/OVERVIEW.md`](docs/OVERVIEW.md). The full plan: [`docs/DESIGN.md`](docs/DESIGN.md).
+<h1 align="center">Slop</h1>
 
-Based on the mockup in `Mockup/mockups/slop`. A copy is kept in [`mockup/`](mockup/) as the
-reference for screens and behaviour (open `mockup/index.html` in a browser). Its data is fake;
-don't copy it into real code.
+<p align="center">
+  <b>The store for apps and games made with AI.</b><br>
+  Open source, every one. Checked before it's listed. Free to download. Rated by the people who played it.
+</p>
 
-## Status
+<p align="center">
+  <a href="https://slopai.games"><b>slopai.games</b></a> ·
+  <a href="docs/OVERVIEW.md">What Slop is</a> ·
+  <a href="docs/DESIGN.md">The full design</a> ·
+  <a href="docs/DEVELOPING.md">Developing</a>
+</p>
 
-| Part | State |
-|---|---|
-| API server (`crates/slop-api`, Rust + axum + Postgres) | Working |
-| Identity: GitHub sign-in (PKCE), sign-up (16+, country), sessions, devices page | Done |
-| Desktop sign-in through the system browser (RFC 8252), rotating refresh tokens | Done |
-| Catalog: categories, tags, listing, search, store pages, makers' drafts | Done |
-| Per-country age policy (UK under-18 view), stage deadlines, dead projects | Done |
-| Releases: submit, fetch-and-hash, staff review, Ed25519-signed manifests | Done (phase 1: review is by a person) |
-| Revocation (kill switch), audit log, library | Done |
-| Admin panel (review queue, listing, moderation, audit log) and makers' publishing progress | Done |
-| Slop Pulse (optional): launch tokens, heartbeats, playing now, monthly peaks, playtime; "Share my playtime" | Done |
-| Public publishing guide (`/publish/guide`, `/publishing.md`, `/llms.txt`) | Done |
-| Rate limits per client IP (strictest on sign-in); hourly cleanup of expired sign-ins, sessions and tokens | Done |
-| Desktop client core (`crates/slop-client`): verified install, launch, revocation checks | Done, tested |
-| Web UI (`web/`): store, library, install controls, publishing, releases, device approval | Done |
-| Desktop app (`crates/slop-desktop`, Tauri 2) | Written; needs the Linux libraries below to build |
-| Maker signatures: GitHub artifact attestations (Sigstore), verified by the API and again by the client | Done (GitHub repos) |
-| Scan step in the pipeline; scanning itself off for now (files marked "not scanned") | Placeholder (`docs/ARCHITECTURE.md` §6.7) |
-| Slop Build: shared GitHub Actions recipe (`slop-build/`), OIDC-authenticated submissions, "Add Slop Build" setup | Written and linted; first real run needs a sample repo |
-| Self-hosted scan service, Slop Build for Godot/web/Electron/Python, maker keys for hand-built files, ratings, Pulse, payments… | Later (`docs/ARCHITECTURE.md` §8) |
+---
 
-## Test deployment
+AI has made it easy for anyone to make software. It hasn't made it easy to tell what's worth
+installing. Some of it is brilliant, a lot of it is slop, and most stores either ban it or bury
+it.
 
-Running at **https://slop.188-68-41-241.sslip.io**, updated automatically from `main`
-(`deploy/README.md`). The Windows app is built on every push and updates itself. Testing with
-private repositories: `docs/TESTING.md`.
+**Slop puts it all in the open and lets players decide.** Every app shows its source code. Every
+build is checked before anyone can install it. And every app carries one honest number: how many
+of the people who actually played it say it's **👍 Not Slop**.
 
-Production, **https://slopai.games**, runs only commits that went live on the test deployment
-first, when the owner moves the `production` tag to them (`deploy/ship-to-production.sh`,
-`deploy/README.md` "Production").
+## For players
 
-## Layout
+- **Ratings you can trust.** Only people who launched an app through Slop can vote, one vote per
+  account, weighted by how long they played. Every store page shows **% Not Slop** and a chart of
+  how it changed over time, so you can see whether updates made it better.
+- **Checked before it's listed.** Every release file is scanned (ClamAV, YARA rules and capa for
+  what a program can do), Windows builds are checked with Microsoft Defender, and a person reviews
+  each app before it reaches the store. Slop signs what it approved, and the Slop app checks that
+  signature, and the maker's own build signature, every time it installs or starts an app. If
+  something bad slips through, Slop can switch it off everywhere.
+- **Source for everything.** Every public app is open source under an OSI-approved licence, with
+  its code one click away. Don't like something? Anyone can fix it.
+- **Free, with nothing to buy.** No prices, no in-app purchases, no loot boxes, no pay-to-win, no
+  premium currencies, and no paid placement in the store. Slop's checks look for them in the code.
+- **Know what an app does.** Every store page says whether it goes online and where, how it saves,
+  whether it loads outside code or runs its own installer, which accessibility features it has
+  (confirmed by players), and what Slop's checks found.
+- **Play it your way.** Run any app in sandbox mode, keep your saves in sync between your
+  computers (end-to-end encrypted, so Slop can't read them), and install community builds side by
+  side with the original.
+- **Community builds fill the gaps.** If the maker only ships Windows and someone else ports it
+  to Linux, Linux players see that build too, clearly labelled and checked the same way.
+- **Friends and chat.** Add friends, chat one-to-one or in groups, and share pictures and links.
+  Messages are end-to-end encrypted on your devices.
 
-```
-crates/slop-api/        API server, release fetcher and staff commands
-crates/slop-manifest/   Signed release manifests and revocation lists (shared)
-crates/slop-provenance/ Maker signatures: GitHub artifact attestation checks (shared)
-crates/slop-client/     Desktop client core: sign-in, verified installs, launch
-crates/slop-desktop/    Desktop app (Tauri 2): web/ plus slop-client
-  migrations/           Postgres schema (run automatically at start-up)
-  src/auth/             Identity: GitHub OAuth, sign-up, sessions
-  src/catalog.rs        Catalog: categories, tags, apps
-  src/policy.rs         What a viewer may see, from the country policy table
-  tests/api/            End-to-end tests (real Postgres, fake GitHub), one module per area
-web/                    The UI, shared by the website and the desktop app
-slop-build/             Slop Build: the shared build recipe (moves to its own repo)
-dev/                    Local Postgres and sample data
-deploy/                 The self-updating test deployment (systemd, Caddy, update script)
-docs/                   Design, architecture, security, legal and payment docs
-mockup/                 The original clickable mockup (reference only)
-```
+## For makers
 
-## Develop
+- **Free distribution, no gatekeeping on how it was made.** Made it with AI? That's the point.
+  Ship small tools, experiments or full games.
+- **One file to publish.** Link your repository and accept one ready-made pipeline file. **Slop
+  Build** then builds your app in GitHub Actions, signs it, checks it with Defender, audits its
+  dependencies, scans for leaked secrets, and sends every new release to Slop on its own.
+- **Keep 95% of what people give you.** Players can donate, once or monthly for apps with servers.
+  The money goes straight into your own Stripe account; Slop takes a flat 5% fee and never holds
+  your money. Donations unlock nothing, so your app stays free for everyone.
+- **Launch before you're done.** Put up a **Coming soon** page with just your source, move to
+  **Beta**, then **Released**. Players mark projects *Interested*, so you see the demand and they
+  hear the moment you ship. New games can offer a playable browser demo for their first two weeks.
+- **Real feedback.** See players online now and monthly peaks (with the optional, tiny Slop Pulse
+  library), bug reports with crash output, and how each release landed: its rating, reviews and
+  bug reports, version by version. Reply to reviews in public.
+- **A community that improves your work.** Players can fork your app to fix, mod, translate or
+  port it, offer their fixes back to you as pull requests, and put up **fix bounties** that pay
+  whoever builds the fix.
+- **Hire real people.** **People** is a marketplace of artists, composers, writers, voice actors
+  and testers who can replace AI-made assets with crafted ones. One offer, one payment, and their
+  credit on your store page.
+- **Work with your AI agent.** Give your coding agent a limited token and it can manage your store
+  pages, releases, checks and fixes over Slop's API or as an MCP server. Payments, agreements and
+  account settings always stay with you.
+- **Share privately.** Keep a project to yourself, or share it with friends and your team, even
+  from a private repository.
 
-Needs Rust (stable, via [rustup](https://rustup.rs)), Node 22+, and podman or Docker.
+## For artists, musicians and writers
 
-```sh
-./dev/db.sh                      # start the development Postgres on 127.0.0.1:5434
-cp .env.example .env             # then edit; at least DATABASE_URL
-set -a; . ./.env; set +a
-cargo run -p slop-api            # runs migrations, listens on SLOP_BIND (:8080)
-./dev/seed.sh                    # optional: sample apps for local browsing
+AI-made apps are full of placeholder art, music and words. **People** is where makers find you to
+replace them: a portfolio page, requests and quotes, a written contract, payment straight to your
+own Stripe account (Slop takes 5% and never holds it), and credit on every app you worked on.
 
-cd web && npm install
-npm run dev                      # website on http://localhost:5173 (proxies /v1 to the API)
-```
+## How an app gets to you
 
-For sign-in to work in development, set `SLOP_PUBLIC_URL=http://localhost:5173` so GitHub
-returns to the Vite server.
+1. **The maker pushes their code.** Slop Build turns it into a signed release on the maker's own
+   release page. Slop never stores the software itself.
+2. **Slop checks it.** Malware scans, Defender, the maker's signature, the source's licence and
+   anything that looks like a purchase or loot box, then a person reviews it.
+3. **Slop signs what it approved.** The signed record names every file by its fingerprint.
+4. **Your Slop app installs it** from the maker's release page, refuses anything that doesn't
+   match, and checks again every time you start it.
 
-### Desktop app
+Anyone can check a file against what Slop approved, at
+[slopai.games/verify](https://slopai.games/verify). Slop's server is open source too, and every
+staff decision is recorded in an append-only log.
 
-The desktop app is the same UI in a Tauri window. On Linux it needs WebKitGTK and a few other
-libraries first ([Tauri prerequisites](https://v2.tauri.app/start/prerequisites/)); on Fedora:
+## Where it's at
 
-```sh
-sudo dnf install webkit2gtk4.1-devel openssl-devel curl wget file libappindicator-gtk3-devel librsvg2-devel libxdo-devel dbus-devel
-```
+Slop is in **private testing**, at [slopai.games](https://slopai.games). The desktop app runs on
+**Windows and Linux** today; macOS and phones come later. The Slop app updates itself.
 
-Then, with the API running:
+## Get involved
 
-```sh
-cd web
-npm run desktop                  # dev window, hot reload
-npm run desktop:build            # installers in target/release/bundle/
-```
-
-The desktop app is built for one Slop site and one set of signing keys:
-
-- `SLOP_API_URL`: the Slop site (default `http://localhost:5173/`, the dev website, which proxies
-  `/v1` to the API).
-- `SLOP_TRUSTED_KEYS`: Slop's public signing key(s), comma-separated. Without one, the app can
-  browse but won't install anything.
-
-The page never talks to the API directly in the desktop app: requests go through Rust, which holds
-the user's tokens in the OS secure store.
-
-Like Steam, the app opens with a small sign-in window (`web/login.html`) before the store. If a
-remembered sign-in still works, the store opens straight away; offline, it opens anyway so installed
-apps can be played. Signing in happens in the system browser, where the user approves the device;
-the sign-in window also shows the link, in case no browser opens. Signing out closes the store and
-brings the sign-in window back. "Browse without signing in" opens the store signed out.
-
-Remembering sign-ins needs the OS secure store: Keychain on macOS, Credential Manager on Windows,
-and a Secret Service (GNOME Keyring or KWallet) on Linux. Without one the app still works but asks
-to sign in each time it starts; it never falls back to a plain file.
-
-## Releases and review
-
-1. Make a signing key once: `cargo run -p slop-api -- keys generate`. Put `SLOP_SIGNING_KEY` in
-   the API's `.env`, and `SLOP_TRUSTED_KEYS` in the environment when building the desktop app.
-2. A maker builds their files in GitHub Actions and signs them with
-   `actions/attest-build-provenance` (the Releases page shows the snippet), then submits a release
-   on **Publish → their app → Releases**: a version, the commit, and a file URL per platform on
-   their own release page. Slop downloads each file once to record its size and SHA-256, stores
-   nothing else, and looks up and verifies each file's attestation: it must be signed through
-   Sigstore by GitHub Actions, name the file's hash, and come from the app's repository at the
-   release's commit. Approval is refused for any file without one.
-3. Staff review it:
-
-   ```sh
-   cargo run -p slop-api -- review pending
-   cargo run -p slop-api -- review approve <release-id> --reviewer <you>   # signs the manifest
-   cargo run -p slop-api -- review reject <release-id> --reviewer <you> --reason "…"
-   cargo run -p slop-api -- review list <slug> --reviewer <you>            # put the app in the store
-   cargo run -p slop-api -- review stage <slug> beta --reviewer <you>
-   cargo run -p slop-api -- revoke <release-id> --reviewer <you> --reason "…"   # the kill switch
-   ```
-
-   Every decision goes into the append-only `audit_log` table.
-4. The desktop app downloads from the maker's release page, refuses anything that doesn't match
-   the signed manifest, installs into the user's library folder, and re-checks the signature, the
-   revocation list and the program's hash at every launch.
-
-The desktop app checks the attestation again itself before downloading, and refuses an update
-whose source repository differs from the installed app's, so even a compromised Slop server can't
-push a build the maker didn't sign.
-
-For local testing with release files served over plain http and without attestations, set
-`SLOP_ALLOW_HTTP_DOWNLOADS=true` and `SLOP_REQUIRE_MAKER_SIGNATURE=false` on the API (never in
-production). Debug builds of the desktop app pointed at `localhost` relax the same two checks.
-
-## Test
-
-```sh
-DATABASE_URL=postgres://slop:slop@127.0.0.1:5434/slop cargo test
-cargo clippy --all-targets
-cargo fmt --check
-cd web && npm test && npm run typecheck
-cd web && npm run build && npm run e2e
-```
-
-Integration tests create a fresh database per test on the server in `DATABASE_URL`. The browser
-tests (`web/e2e`, Playwright) start a throwaway Slop (`crates/slop-api/examples/e2e_server/`)
-on a new `slop_e2e_…_sim` database there, with GitHub faked, and drop it afterwards; they also
-check the main pages for accessibility problems (axe). Set `SLOP_TEST_GODOT` to a Godot 4 binary
-to run Slop Pong against the real Slop Link too.
-
-## API (v1)
-
-| Method & path | Who | What |
-|---|---|---|
-| `GET /healthz` | anyone | 204 when the database is reachable |
-| `GET /v1/auth/github/start?return_to=/path` | anyone | Redirects to GitHub |
-| `GET /v1/auth/github/callback` | GitHub | Signs in, or sends a new user to `/signup` |
-| `GET /v1/auth/signup` | new user | Suggested name, email, allowed countries |
-| `POST /v1/auth/signup` | new user | `{display_name, country_code, age_confirmed}` creates the account |
-| `POST /v1/auth/signout` | signed in | Ends this session |
-| `GET /v1/auth/providers` | anyone | Which sign-in providers are set up |
-| `GET /v1/countries` | anyone | Countries where sign-up is open |
-| `GET /v1/me` | signed in | The account |
-| `GET /v1/me/sessions`, `DELETE /v1/me/sessions/{id}` | signed in | Devices page |
-| `GET /v1/categories` | anyone | Categories with their tags |
-| `GET /v1/apps?q=&tag=&category=&stage=&kind=&sort=&limit=&offset=` | anyone | Store listing and search |
-| `GET /v1/apps/{slug}` | anyone | Store page (makers also see their drafts) |
-| `POST /v1/apps`, `PATCH /v1/apps/{slug}` | maker | Create and edit drafts |
-| `GET /v1/me/apps` | signed in | Your apps, including drafts |
-| `GET /v1/apps/{slug}/releases`, `POST …` | anyone / maker | Approved releases (makers see all, with status); submit a release |
-| `GET /v1/apps/{slug}/manifest` | anyone | Newest approved release's signed manifest |
-| `GET /v1/revocations` | anyone | Signed revocation list (valid 6 hours) |
-| `GET /v1/keys` | anyone | Slop's public signing key |
-| `GET /v1/verify/{sha256}` | anyone | Signed answer: the public releases with this file, their scans, and whether they were revoked (valid 24 hours) |
-| `GET /v1/source` | anyone | Where the source code is, and the commit running |
-| `GET /v1/server` | anyone | What this server checks (scanning, maker signatures) |
-| `POST /v1/apps/{slug}/launch` | signed in (desktop app) | Records a launch; issues a Pulse token |
-| `POST /v1/pulse/start`, `/heartbeat`, `/end` | the game (Pulse token) | Slop Pulse pings |
-| `GET /v1/apps/{slug}/players` | anyone | Playing now, peak this month, daily peaks |
-| `PATCH /v1/me` | signed in | Settings ("Share my playtime") |
-| `POST /v1/slop-build/releases` | Slop Build (GitHub OIDC token) | A release built by the recipe |
-| `GET /v1/apps/{slug}/slop-build` | maker | Detected project type and the workflow to add |
-| `GET /v1/me/library`, `PUT`/`DELETE /v1/me/library/{slug}` | signed in | The library |
-| `POST /v1/auth/desktop/requests` | desktop app | Start desktop sign-in |
-| `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |
-| `POST /v1/auth/desktop/token` | desktop app | Code or refresh token → access + refresh tokens |
-
-The signed documents are the [Slop open standard](docs/standard/README.md); `slop-verify` checks them.
-
-Errors are `{"error": {"code", "message", "field"?}}`. The desktop app authenticates with
-`Authorization: Bearer <access token>`; the website with its session cookie.
+- **Build it:** [`docs/DEVELOPING.md`](docs/DEVELOPING.md) has setup, tests, the API and what's
+  built so far. Start with [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md).
+- **Read the plans:** [`DESIGN.md`](docs/DESIGN.md) (what and why),
+  [`ARCHITECTURE.md`](docs/ARCHITECTURE.md), [`SECURITY.md`](docs/SECURITY.md),
+  [`PAYMENTS.md`](docs/PAYMENTS.md) and the [Slop open standard](docs/standard/README.md) for
+  signed releases.
+- **Found a security problem?** See [`CONTRIBUTING.md`](CONTRIBUTING.md#security-problems) and
+  please don't open a public issue.
+- **Questions:** [slopaigames@outlook.com](mailto:slopaigames@outlook.com).
 
 ## License
 
