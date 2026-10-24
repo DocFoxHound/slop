@@ -101,6 +101,97 @@ test.describe("AI agent tokens", () => {
   });
 });
 
+test.describe("AI agent tokens and the Publisher Agreement", () => {
+  test("a first publishing token shows the agreement right here, and is made once it's accepted", async ({ page }) => {
+    // Nia accepted only the Terms of Service (e2e_server/seed.rs).
+    await signIn(page, "newcomer");
+    await openAccount(page, "agents");
+    const section = page.locator("#ai-agents");
+    const hint = section.getByText("Publishing tokens need the Publisher Agreement: it's shown when you make the token.");
+    await expect(hint).toBeVisible();
+    await section.getByRole("combobox", { name: "Can" }).selectOption("read");
+    await expect(hint).toHaveCount(0);
+    await section.getByRole("combobox", { name: "Can" }).selectOption("publish");
+    await section.getByRole("textbox", { name: "Name" }).fill("First agent");
+    await section.getByRole("combobox", { name: "Expires after" }).selectOption("1");
+    await section.getByRole("button", { name: "Make token" }).click();
+
+    const dialog = page.getByRole("dialog", { name: "Publisher Agreement" });
+    await expect(dialog.getByRole("heading", { name: "Before you continue: the Publisher Agreement" })).toBeVisible();
+    // Not now: no token, and the page says why.
+    await dialog.getByRole("button", { name: "Not now" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(section.getByRole("alert")).toHaveText(
+      "A token that publishes needs the Publisher Agreement: accept it to make one, or choose Look.",
+    );
+    await expect(section.getByText("Copy it now")).toHaveCount(0);
+    expect(await call("newcomer", "GET", "/v1/me/maker-tokens")).toEqual([]);
+
+    // Again, accepting it this time: the token is made, nothing retyped.
+    const made = page.waitForResponse((r) => r.url().endsWith("/v1/me/maker-tokens") && r.request().method() === "POST" && r.status() === 201);
+    await section.getByRole("button", { name: "Make token" }).click();
+    const accept = dialog.getByRole("button", { name: "Accept and continue" });
+    await expect(accept).toBeDisabled();
+    await dialog.getByRole("checkbox", { name: "I've read and accept the Publisher Agreement." }).check();
+    await accept.click();
+    await made;
+    await expect(dialog).toBeHidden();
+    await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(section.getByRole("alert")).toHaveCount(0);
+    await expect(hint).toHaveCount(0);
+    await section.getByRole("button", { name: "Done" }).click();
+    const row = section.getByRole("listitem").filter({ hasText: "First agent" });
+    await expect(row).toContainText("publishes · all apps");
+    expect((await call("newcomer", "GET", "/v1/me/legal/publisher")).accepted).toBe(true);
+    // Nothing waits on the AI agents page now.
+    await expect(section.getByRole("button", { name: /Review and accept/ })).toHaveCount(0);
+
+    await row.getByRole("button", { name: "Remove" }).click();
+    await expect(row).toHaveCount(0);
+  });
+
+  test("a changed agreement waits on the AI agents page, with its accept control", async ({ page }) => {
+    const publisher = await call<{ version: string }>(null, "GET", "/v1/legal/publisher");
+    let accepted = false;
+    // As legal.rs answers once a new version Mia hasn't accepted is in effect.
+    await fake(page, "GET", "/v1/me/legal", () => ({
+      status: 200,
+      body: accepted
+        ? []
+        : [
+            {
+              kind: "publisher",
+              title: "Publisher Agreement",
+              version: publisher.version,
+              summary: "Clearer rules for AI agents.",
+              effective_at: "2026-10-01T00:00:00Z",
+              in_effect: true,
+              first: false,
+              action: "accept",
+            },
+          ],
+    }));
+    page.on("request", (r) => {
+      if (r.url().endsWith("/v1/me/legal/accept") && r.method() === "POST") accepted = true;
+    });
+    await signIn(page, "maker");
+    await openAccount(page, "agents");
+    const section = page.locator("#ai-agents");
+    const notice = section.getByRole("status").filter({ hasText: "Your AI agent can't publish until you accept the Publisher Agreement" });
+    await expect(notice).toContainText("it changed on Oct 1, 2026. Clearer rules for AI agents.");
+    const badge = page.getByRole("navigation", { name: "Account settings" }).getByText("1 to accept");
+    await expect(badge).toHaveCount(1);
+    await notice.getByRole("button", { name: `Review and accept version ${publisher.version}` }).click();
+    const dialog = page.getByRole("dialog", { name: "Publisher Agreement" });
+    await dialog.getByRole("checkbox", { name: "I've read and accept the Publisher Agreement." }).check();
+    await dialog.getByRole("button", { name: "Accept and continue" }).click();
+    await expect(dialog).toBeHidden();
+    await expect(notice).toHaveCount(0);
+    // The account's agreements badge is reloaded too.
+    await expect(badge).toHaveCount(0);
+  });
+});
+
 test.describe("signing keys", () => {
   test("a key added counts after 72 hours, and can be removed", async ({ page }) => {
     await signIn(page, "support");

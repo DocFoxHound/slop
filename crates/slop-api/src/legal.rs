@@ -9,7 +9,8 @@
 //! version is never changed: edit the file and give it a new version.
 //!
 //! - **Terms of Service:** accepted at sign-up.
-//! - **Publisher Agreement:** accepted before a first app is created.
+//! - **Publisher Agreement:** accepted before a first app is created, or a first AI agent token
+//!   that publishes (maker_agents.rs).
 //! - **People Terms:** accepted before making a creative profile or hiring.
 //! - **Privacy Policy** and **Content Policy:** read, not accepted; changes are announced.
 //!
@@ -63,6 +64,7 @@ pub fn routes() -> Router<AppState> {
         .route("/legal/{kind}", get(document))
         .route("/me/legal", get(my_notices))
         .route("/me/legal/accept", post(accept))
+        .route("/me/legal/{kind}", get(my_document))
         .route("/admin/legal", get(admin_index))
         .route(
             "/admin/legal/{kind}/{version}/withdraw",
@@ -313,6 +315,8 @@ struct Document {
     #[serde(with = "time::serde::rfc3339")]
     effective_at: OffsetDateTime,
     in_effect: bool,
+    /// Accepted rather than only read (as in the index).
+    accepted: bool,
     /// Every version, newest first.
     versions: Vec<VersionInfo>,
 }
@@ -346,6 +350,7 @@ async fn document(
         row.ok_or(ApiError::NotFound)?;
     Ok(Json(Document {
         in_effect: effective_at <= OffsetDateTime::now_utc(),
+        accepted: accepted_kind(&kind),
         versions: versions(&state.db, &kind).await?,
         kind,
         title,
@@ -436,6 +441,54 @@ async fn my_notices(
         }
     }
     Ok(Json(out))
+}
+
+#[derive(Serialize)]
+struct MyDocument {
+    kind: &'static str,
+    /// An agreement the user accepts, rather than a policy they read.
+    accepts: bool,
+    /// The version in effect, if one is.
+    version: Option<String>,
+    /// The user has accepted the version in effect (always false for policies), so nothing
+    /// behind it waits (`require`).
+    accepted: bool,
+}
+
+/// Where the signed-in user stands with one document, whether or not they're party to it yet:
+/// so the legal page can offer to accept an agreement nobody asked them for so far.
+async fn my_document(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(kind): Path<String>,
+) -> ApiResult<Json<MyDocument>> {
+    let (kind, _, accepts) = DOCUMENTS
+        .iter()
+        .find(|(k, _, _)| *k == kind)
+        .ok_or(ApiError::NotFound)?;
+    let mut conn = state.db.acquire().await?;
+    let version = current_version(&mut conn, kind).await?;
+    let accepted = *accepts
+        && match &version {
+            Some(v) => {
+                sqlx::query_scalar(
+                    "select exists (select 1 from legal_acceptances
+                                    where user_id = $1 and kind = $2 and version = $3)",
+                )
+                .bind(user.id)
+                .bind(kind)
+                .bind(v)
+                .fetch_one(&mut *conn)
+                .await?
+            }
+            None => false,
+        };
+    Ok(Json(MyDocument {
+        kind,
+        accepts: *accepts,
+        version,
+        accepted,
+    }))
 }
 
 #[derive(Deserialize)]

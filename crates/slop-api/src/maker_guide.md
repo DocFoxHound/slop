@@ -20,6 +20,10 @@ reviews it. Read only the guide sections you need (`publishing_guide`).
 3. `create_store_page`. It's a draft until a release is approved.
 4. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`.
 
+If a tool answers `terms_required` (field `publisher`: the Publisher Agreement changed since your
+maker accepted it), tell them it's waiting for them on Slop under **Account → AI agents** (the
+website also shows it when they next publish). Carry on once they've accepted it.
+
 ## Every release
 
 1. Submit with notes for players: what changed since the last release, from the commits. Plain, short, no hype.

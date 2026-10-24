@@ -80,7 +80,7 @@ export function Account() {
           {section.id === "device" && <ThisDevice />}
           {section.id === "agents" && (
             <>
-              <AiAgents />
+              <AiAgents notices={notices} />
               <SigningKeys />
             </>
           )}

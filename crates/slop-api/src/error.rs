@@ -26,7 +26,13 @@ pub enum ApiError {
     #[error("{0}")]
     Unavailable(&'static str),
     /// The action needs the current version of a legal document accepted first (legal.rs).
-    #[error("accept the current {} first", crate::legal::title(.0))]
+    /// The Publisher Agreement's message also says where: an agent's tools get it too, and its
+    /// owner accepts it on the AI agents page (or the website shows it when they next publish).
+    #[error("{}", if *.0 == "publisher" {
+        "accept the current Publisher Agreement first: it's waiting on the website, under Account → AI agents".to_string()
+    } else {
+        format!("accept the current {} first", crate::legal::title(.0))
+    })]
     TermsRequired(&'static str),
     #[error("your account is suspended: see the decision on your account page")]
     Suspended,

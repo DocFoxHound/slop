@@ -698,7 +698,20 @@ export interface LegalDocument extends LegalVersion {
   body_md: string;
   sha256: string;
   in_effect: boolean;
+  /** Accepted (an agreement) rather than only read (a policy). */
+  accepted: boolean;
   versions: LegalVersion[];
+}
+
+/** Where the signed-in user stands with one document (GET /v1/me/legal/{kind}). */
+export interface MyLegalDocument {
+  kind: LegalKind;
+  /** An agreement they accept, rather than a policy they read. */
+  accepts: boolean;
+  /** The version in effect, if one is. */
+  version: string | null;
+  /** They've accepted the version in effect (always false for policies). */
+  accepted: boolean;
 }
 
 export interface LegalIndexEntry {
@@ -3562,6 +3575,8 @@ export const api = {
         `/v1/legal/${encodeURIComponent(kind)}${query({ version })}`,
       ),
     notices: () => request<LegalNotice[]>("GET", "/v1/me/legal"),
+    mine: (kind: LegalKind) =>
+      request<MyLegalDocument>("GET", `/v1/me/legal/${encodeURIComponent(kind)}`),
     accept: (kind: LegalKind, version: string) =>
       request<void>("POST", "/v1/me/legal/accept", { kind, version }),
   },

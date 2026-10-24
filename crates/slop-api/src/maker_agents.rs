@@ -14,7 +14,10 @@
 //!   money, sign-ins, tokens, chat, People or account settings. Releases still go through Slop's
 //!   scans and a person's review.
 //! - **Making one** needs only a signed-in session, not a recent sign-in: what a token can do is
-//!   limited enough that the owner chose not to ask "confirm it's you" for it.
+//!   limited enough that the owner chose not to ask "confirm it's you" for it. A `publish` token
+//!   needs the Publisher Agreement accepted (`terms_required` until it is), since the agent
+//!   can't accept it; if a new version takes effect later, the agent's tools get
+//!   `terms_required` until the owner accepts it on the AI agents page.
 //! - **Passkeys:** a token made within 12 hours of confirming with a passkey counts as
 //!   passkey-proven for its lifetime (passkeys.rs `require`), so the agent can publish.
 //! - **Writing to Slop's admins** (admin_messages.rs) works with any token, read or publish, for
@@ -411,6 +414,12 @@ async fn create(
     let days = body.days.unwrap_or(MAX_DAYS);
     if !(1..=MAX_DAYS).contains(&days) {
         return Err(ApiError::invalid("days", "1 to 30"));
+    }
+    // An agent that publishes acts under the Publisher Agreement, so the owner accepts it here,
+    // where they can (the website shows it and makes the token once it's accepted); the agent
+    // can't accept agreements.
+    if body.scope == "publish" {
+        crate::legal::require(&state.db, user.id, "publisher").await?;
     }
     let mut app_ids = Vec::new();
     for slug in &body.apps {
