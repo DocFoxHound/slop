@@ -133,7 +133,7 @@ export function ReportForm({
         </p>
         {me ? (
           <p className="muted small">
-            You'll see what we decided under <Link to="/account#reports" onClick={onClose}>Your reports</Link> on your
+            You'll see what we decided under <Link to="/account/moderation#reports" onClick={onClose}>Your reports</Link> on your
             account page.
           </p>
         ) : (

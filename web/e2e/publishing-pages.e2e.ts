@@ -114,7 +114,7 @@ test("signing keys: add one (it works 72 hours later), refuse a bad one, remove 
   await add.click();
   const alert = section.getByRole("alert");
   await expect(alert).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-  await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%23signing-keys");
+  await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fagents%23signing-keys");
 
   // Signed in again: an RSA key is refused.
   fresh = true;

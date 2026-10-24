@@ -924,22 +924,71 @@ async fn maker_tokens_are_checked_when_made(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::FORBIDDEN);
 
-    // An old session must sign in again (or confirm) first.
-    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1 and kind = 'web'")
+    // An old session makes one without signing in again or confirming (no step-up).
+    sqlx::query("update sessions set created_at = now() - interval '1 hour', stepped_up_at = null where user_id = $1 and kind = 'web'")
         .bind(maker_id)
         .execute(&app.db)
         .await
         .unwrap();
-    let (status, err) = refused(json!({ "name": "Late", "scope": "read" })).await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(err["error"]["code"], "step_up_required");
-    sqlx::query("update sessions set stepped_up_at = now() where user_id = $1 and kind = 'web'")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let (status, _) = refused(json!({ "name": "Confirmed", "scope": "read" })).await;
+    let (status, _) = refused(json!({ "name": "Late", "scope": "read" })).await;
     assert_eq!(status, StatusCode::CREATED);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_maker_token_needs_only_a_signed_in_session(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    // Signed in three days ago and never confirmed since.
+    sqlx::query(
+        "update sessions set created_at = now() - interval '3 days', stepped_up_at = null where user_id = $1",
+    )
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&maker)
+                .json(json!({ "name": "Claude", "scope": "publish" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let made = body_json(res).await;
+    assert!(made["secret"].as_str().unwrap().starts_with("slopmk_"));
+    // Not passkey-proven: no confirmation was made.
+    assert_eq!(made["passkey_proved"], json!(false));
+    // It still lasts at most 30 days.
+    let lifetime = OffsetDateTime::parse(made["expires_at"].as_str().unwrap(), &Rfc3339).unwrap()
+        - OffsetDateTime::now_utc();
+    assert!(lifetime <= time::Duration::days(30));
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&maker)
+                .json(json!({ "name": "Too long", "scope": "read", "days": 31 })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    // Signed out: no token.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens").json(json!({ "name": "x", "scope": "read" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+
+    // The other step-ups stay: the same old session can't add a signing key.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/signing-keys")
+                .cookie(&maker)
+                .json(json!({ "name": "Laptop", "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl x@y" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

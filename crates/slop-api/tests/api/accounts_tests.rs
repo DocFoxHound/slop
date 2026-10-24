@@ -1483,9 +1483,9 @@ async fn a_recent_sign_in_means_the_last_ten_minutes(db: PgPool) {
     assert_eq!(
         error_code(
             &app,
-            req(Method::POST, "/v1/me/maker-tokens")
+            req(Method::POST, "/v1/me/signing-keys")
                 .cookie(&cookie)
-                .json(json!({ "name": "Claude", "scope": "read" }))
+                .json(json!({ "name": "Laptop", "public_key": "ssh-ed25519 AAAA x@y" }))
         )
         .await,
         "step_up_required"
@@ -1502,9 +1502,22 @@ async fn a_recent_sign_in_means_the_last_ten_minutes(db: PgPool) {
         .await,
         "step_up_required"
     );
+    // Making an AI agent token doesn't: a signed-in session is enough (maker_agents.rs).
     assert_eq!(
         count(&app, "select count(*) from sessions where kind = 'agent'").await,
         0
+    );
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/maker-tokens")
+                .cookie(&cookie)
+                .json(json!({ "name": "Claude", "scope": "read" })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    assert_eq!(
+        count(&app, "select count(*) from sessions where kind = 'agent'").await,
+        1
     );
 }
 
@@ -5115,16 +5128,20 @@ async fn making_an_agent_token_checks_its_scope_lifetime_and_count(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::CREATED);
 
-    // An old sign-in can't make one.
+    // An old sign-in makes one too: no step-up (below the limit again).
     age_sessions(&app, mia_id).await;
-    assert_eq!(
-        error_code(
-            &app,
-            new_agent_token(&mia, json!({ "name": "Late", "scope": "read" }))
-        )
-        .await,
-        "step_up_required"
-    );
+    sqlx::query("update sessions set revoked_at = now() where user_id = $1 and kind = 'agent'")
+        .bind(mia_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(new_agent_token(
+            &mia,
+            json!({ "name": "Late", "scope": "read" }),
+        ))
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

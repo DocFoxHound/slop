@@ -110,10 +110,28 @@ test.describe("the app shell", () => {
         })),
       });
     });
+    // Sue's reports, below them.
+    await page.route("**/v1/me/reports", (route) =>
+      route.fulfill({
+        json: [1, 2].map((n) => ({
+          reference: `R-TEST-000${n}`,
+          subject_kind: "app",
+          subject_label: `Made-up app ${n}`,
+          reason: "spam",
+          reason_label: "Spam",
+          status: "open",
+          outcome: null,
+          created_at: "2026-10-20T10:00:00Z",
+          decided_at: null,
+        })),
+      }),
+    );
     await signIn(page, "support");
-    await page.goto("/account#data");
+    // An old link to the reports: the Moderation section, at the reports.
+    await page.goto("/account#reports");
+    await expect(page).toHaveURL(/\/account\/moderation#reports$/);
     await expect(page.getByRole("heading", { name: "Decisions about your content or account" })).toBeAttached();
-    await expect(page.getByRole("heading", { name: "Your data" })).toBeInViewport();
+    await expect(page.getByRole("heading", { name: "Your reports" })).toBeInViewport();
   });
 
   test("a new page starts at the top", async ({ page }) => {
@@ -266,7 +284,7 @@ test.describe("notices about your account", () => {
     await page.goto("/bounties");
     const notice = page.locator(".account-notices");
     await expect(notice).toContainText("Your account is suspended. You can read Slop, download your data and appeal.");
-    await expect(notice.getByRole("link", { name: "See why, and appeal" })).toHaveAttribute("href", "/account#decisions");
+    await expect(notice.getByRole("link", { name: "See why, and appeal" })).toHaveAttribute("href", "/account/moderation#decisions");
     // The link stands out by more than its colour.
     await expect(notice.getByRole("link", { name: "See why, and appeal" })).toHaveCSS("text-decoration-line", "underline");
   });
@@ -276,7 +294,7 @@ test.describe("notices about your account", () => {
     await signIn(page, "player");
     await page.goto("/");
     await expect(page.locator(".account-notices")).toContainText("Slop made 2 decisions about your content.");
-    await expect(page.getByRole("link", { name: "See what, why, and how to appeal" })).toHaveAttribute("href", "/account#decisions");
+    await expect(page.getByRole("link", { name: "See what, why, and how to appeal" })).toHaveAttribute("href", "/account/moderation#decisions");
   });
 
   test("changed agreements: upcoming ones can be dismissed for good, ones to accept now can't", async ({ page }) => {
@@ -386,7 +404,7 @@ test.describe("the notifications page", () => {
     await page.goto("/notifications");
     await expect(page.getByText("Nothing yet. Job steps, apps you're Interested in and decisions about your content show up here.")).toBeVisible();
     await expect(page.getByRole("button", { name: "Mark all as read" })).toHaveCount(0);
-    await expect(page.getByRole("link", { name: "your account page" })).toHaveAttribute("href", "/account#notifications");
+    await expect(page.getByRole("link", { name: "your account page" })).toHaveAttribute("href", "/account/notifications");
   });
 
   test("opening one reads it and goes to it; Mark all as read reads the rest", async ({ page }) => {

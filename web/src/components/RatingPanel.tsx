@@ -254,7 +254,7 @@ function MyReview({
         <b className="small">Your review</b>
         {review.hidden && (
           <p className="small warn">
-            Hidden by a moderation decision: see why on your <Link to="/account#decisions">account page</Link>.
+            Hidden by a moderation decision: see why on your <Link to="/account/moderation#decisions">account page</Link>.
           </p>
         )}
         <p className="pre">{review.body}</p>

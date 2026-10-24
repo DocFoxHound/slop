@@ -53,14 +53,16 @@ export function AiAgents() {
   };
 
   return (
-    <section id="ai-agents">
-      <h2 className="section-title">AI agents</h2>
-      <p className="muted">
+    <section id="ai-agents" className="account-panel" aria-labelledby="ai-agents-title">
+      <h3 className="account-panel-title" id="ai-agents-title">
+        AI agents
+      </h3>
+      <p className="muted small">
         Let your own AI coding agent (such as Claude Code) publish and fix your apps from your editor: create store pages,
         submit releases with notes, read Slop's checks and get exact fixes, register community builds and mods, and
         offer fixes to other apps. With <b>People</b> access it can also watch your jobs, send quotes and talk in job
         conversations. It can never pay, accept agreements, change payouts or your account. Your agent does the work on
-        your side; Slop runs no AI for it.
+        your side; Slop runs no AI for it. Each token lasts at most 30 days, and you can remove it any time.
       </p>
       <form
         className="panel panel-pad form"

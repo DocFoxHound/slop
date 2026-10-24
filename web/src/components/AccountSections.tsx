@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The account page's sections for moderation, agreements and the user's own data (DESIGN §4,
-// §16): their picture, decisions about them with the statement of reasons and an appeal, the
-// reports they sent, the agreements waiting for them, downloading their data and closing the
-// account.
+// Parts of the account page (pages/Account.tsx) for moderation, money, agreements and the user's
+// own data (DESIGN §4, §16): their picture, decisions about them with the statement of reasons and
+// an appeal, the reports they sent, donations and fee statements, the agreements waiting for them,
+// notifications, downloading their data and closing the account.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
@@ -12,15 +12,17 @@ import {
   ApiError,
   PROVIDER_LABEL,
   type CounterNotice,
+  type DonationAccount,
   type FeeStatement,
   type LegalNotice,
   type ModerationDecision,
   type MyPicture,
+  type MyReport,
   type SignInProvider,
   type VatTreatment,
 } from "../api";
 import { formatDate } from "../format";
-import { useLoad } from "../hooks";
+import { useLoad, type Loaded } from "../hooks";
 import { isDesktop, openExternal, saveFile } from "../platform";
 import { disablePush, enablePush, pushState, type PushState } from "../push";
 import { useSession } from "../session";
@@ -79,8 +81,10 @@ export function AccountPicture() {
     }
   };
   return (
-    <section id="picture">
-      <h2 className="section-title">Picture</h2>
+    <section id="picture" className="account-panel" aria-labelledby="picture-title">
+      <h3 className="account-panel-title" id="picture-title">
+        Picture
+      </h3>
       <div className="panel panel-pad">
         <div className="picture-current">
           <Avatar name={me.display_name} url={p ? p.avatar_url : me.avatar_url} />
@@ -139,7 +143,7 @@ export function AccountPicture() {
         </fieldset>
         {p && p.choices.length === 0 && (
           <p className="muted small">
-            Link a sign-in under <a href="#sign-ins">Sign-ins</a> to use its picture.
+            Link a sign-in under <Link to="/account/security#sign-ins">Sign-in &amp; security</Link> to use its picture.
           </p>
         )}
         {error && (
@@ -156,26 +160,42 @@ export function AccountPicture() {
   );
 }
 
-export function AccountDecisions() {
+/** Account → Moderation: decisions about the user, and the reports they sent. */
+export function AccountModeration() {
   const { refresh } = useSession();
   const decisions = useLoad(() => api.decisions.mine(), []);
+  const reports = useLoad(() => api.reports.mine(), []);
   // Opening the list marks them seen; the notice on every page goes away.
   useEffect(() => {
     if (decisions.data?.some((d) => d.new)) void refresh();
   }, [decisions.data, refresh]);
-  if (decisions.error) return <ErrorState error={decisions.error} onRetry={decisions.reload} />;
-  if (!decisions.data?.length) return null;
+  const none = decisions.data?.length === 0 && reports.data?.length === 0;
   return (
-    <section id="decisions">
-      <h2 className="section-title">Decisions about your content or account</h2>
-      <p className="muted small">
-        Each one says what we did, why, and which rule it was under. You can appeal each one once, within six months; a
-        person looks at it again.
-      </p>
-      {decisions.data.map((d) => (
-        <Decision key={d.id} d={d} onChange={decisions.reload} />
-      ))}
-    </section>
+    <>
+      {decisions.error && <ErrorState error={decisions.error} onRetry={decisions.reload} />}
+      {decisions.data && decisions.data.length > 0 && (
+        <section id="decisions" className="account-panel" aria-labelledby="decisions-title">
+          <h3 className="account-panel-title" id="decisions-title">
+            Decisions about your content or account
+          </h3>
+          <p className="muted small">
+            Each one says what we did, why, and which rule it was under. You can appeal each one once, within six months; a
+            person looks at it again.
+          </p>
+          {decisions.data.map((d) => (
+            <Decision key={d.id} d={d} onChange={decisions.reload} />
+          ))}
+        </section>
+      )}
+      {reports.error && <ErrorState error={reports.error} onRetry={reports.reload} />}
+      {reports.data && reports.data.length > 0 && <AccountReports reports={reports.data} />}
+      {none && (
+        <p className="empty-state account-empty">
+          Nothing here: Slop hasn't made any decisions about your content or account, and you haven't reported anything.
+          Use ⚑ Report on an app, review or profile that breaks the rules.
+        </p>
+      )}
+    </>
   );
 }
 
@@ -184,9 +204,9 @@ function Decision({ d, onChange }: { d: ModerationDecision; onChange: () => void
   return (
     <article className={`panel panel-pad decision${d.new ? " is-new" : ""}`} aria-labelledby={`decision-${d.id}`}>
       <div className="decision-head">
-        <h3 id={`decision-${d.id}`}>
+        <h4 id={`decision-${d.id}`}>
           {d.action_label}: {d.subject_label}
-        </h3>
+        </h4>
         {d.new && <span className="badge warn">NEW</span>}
         {d.reversed_at && <span className="badge official">REVERSED</span>}
       </div>
@@ -349,15 +369,14 @@ function AppealForm({ d, onDone, onCancel }: { d: ModerationDecision; onDone: ()
 
 const REPORT_STATUS = { open: "Waiting for review", actioned: "Acted on", dismissed: "No action" } as const;
 
-export function AccountReports() {
-  const reports = useLoad(() => api.reports.mine(), []);
-  if (reports.error) return <ErrorState error={reports.error} onRetry={reports.reload} />;
-  if (!reports.data?.length) return null;
+function AccountReports({ reports }: { reports: MyReport[] }) {
   return (
-    <section id="reports">
-      <h2 className="section-title">Your reports</h2>
+    <section id="reports" className="account-panel" aria-labelledby="reports-title">
+      <h3 className="account-panel-title" id="reports-title">
+        Your reports
+      </h3>
       <ul className="panel report-list">
-        {reports.data.map((r) => (
+        {reports.map((r) => (
           <li key={r.reference}>
             <div>
               <b>{r.subject_label}</b> <span className="muted small">· {r.reason_label}</span>
@@ -375,12 +394,12 @@ export function AccountReports() {
   );
 }
 
-export function AccountAgreements() {
-  const notices = useLoad(() => api.legal.notices(), []);
+/** Account → Agreements. `notices` is loaded by the page, which counts the ones to accept. */
+export function AccountAgreements({ notices }: { notices: Loaded<LegalNotice[]> }) {
   const [accepting, setAccepting] = useState<LegalNotice>();
   return (
     <section id="agreements">
-      <h2 className="section-title">Terms and policies</h2>
+      {notices.error && <ErrorState error={notices.error} onRetry={notices.reload} />}
       <div className="panel panel-pad">
         {notices.data?.length ? (
           <ul className="legal-notices">
@@ -458,7 +477,6 @@ export function AccountData() {
 
   return (
     <section id="data">
-      <h2 className="section-title">Your data</h2>
       <div className="panel panel-pad">
         <p>
           <button type="button" className="btn" onClick={() => void download()}>
@@ -532,8 +550,7 @@ export function AccountNotifications() {
   };
   return (
     <section id="notifications">
-      <h2 className="section-title">Notifications</h2>
-      <div className="panel panel-pad">
+      <div className="panel panel-pad switch-list">
         <p className="muted small">
           Everything shows under the 🔔 in Slop. Choose what's also emailed to you
           {p.has_email ? "" : " (you don't have an email on your account, so nothing is emailed)"}
@@ -556,13 +573,19 @@ export function AccountNotifications() {
   );
 }
 
-export function AccountDonations() {
+/** Account → Money: donations given, where donations are received, and Slop's fee statements. */
+export function AccountMoney() {
   const mine = useLoad(() => api.donations.mine(), []);
   const statements = useLoad(() => api.donations.feeStatements(), []);
+  const account = useLoad(() => api.donations.account(), []);
   const [cancelling, setCancelling] = useState<string>();
   const [error, setError] = useState<string>();
   if (mine.error) return <ErrorState error={mine.error} onRetry={mine.reload} />;
   const d = mine.data;
+  const receiving = Boolean(account.data && account.data.status !== "none" && account.data.payments !== "off");
+  const loaded = d && (statements.data || statements.error) && (account.data || account.error);
+  const none =
+    loaded && d.donations.length === 0 && d.server_donations.length === 0 && !receiving && !statements.data?.statements.length;
   const cancel = async (id: string) => {
     setError(undefined);
     try {
@@ -580,8 +603,10 @@ export function AccountDonations() {
   return (
     <>
       {d && (d.donations.length > 0 || d.server_donations.length > 0) && (
-        <section id="donations">
-          <h2 className="section-title">Your donations</h2>
+        <section id="donations" className="account-panel" aria-labelledby="donations-title">
+          <h3 className="account-panel-title" id="donations-title">
+            Your donations
+          </h3>
           {d.server_donations.length > 0 && (
             <ul className="panel report-list">
               {d.server_donations.map((s) => (
@@ -655,9 +680,15 @@ export function AccountDonations() {
           <p className="faint small">Receipts for real payments come by email from the maker's Stripe account.</p>
         </section>
       )}
-      <ReceivingDonations />
+      {receiving && <ReceivingDonations account={account} />}
       {statements.data && statements.data.statements.length > 0 && (
         <FeeStatements statements={statements.data.statements} vat={statements.data.vat} onVat={statements.reload} />
+      )}
+      {none && (
+        <p className="empty-state account-empty">
+          No donations yet. Donations you give, and donations to your apps once you set them up, show here with Slop's fee
+          statements.
+        </p>
       )}
     </>
   );
@@ -669,13 +700,12 @@ export function AccountDonations() {
  */
 function StepUp({ error }: { error: ApiError }) {
   if (error.code !== "step_up_required") return <>{error.message}</>;
-  const back = window.location.pathname + "#receiving";
+  const back = "/account/money#receiving";
   return <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent(back)}`} />;
 }
 
 /** Where donations are paid, and switching or disconnecting it: 72 hours' wait (SECURITY §9). */
-function ReceivingDonations() {
-  const account = useLoad(() => api.donations.account(), []);
+function ReceivingDonations({ account }: { account: Loaded<DonationAccount> }) {
   const gate = useTermsGate();
   const [confirm, setConfirm] = useState<"switch" | "disconnect">();
   const [error, setError] = useState<ApiError | string>();
@@ -698,9 +728,11 @@ function ReceivingDonations() {
   };
   const c = a.change;
   return (
-    <section id="receiving">
+    <section id="receiving" className="account-panel" aria-labelledby="receiving-title">
       {gate.prompt}
-      <h2 className="section-title">Receiving donations</h2>
+      <h3 className="account-panel-title" id="receiving-title">
+        Receiving donations
+      </h3>
       <div className="panel panel-pad">
         <p>
           Donations to your apps go to your own Stripe account
@@ -739,7 +771,7 @@ function ReceivingDonations() {
                 type="button"
                 className={confirm === "disconnect" ? "btn small danger" : "btn small slime"}
                 disabled={busy}
-                onClick={() => void run(() => api.donations.changeAccount(confirm, "/account#receiving"))}
+                onClick={() => void run(() => api.donations.changeAccount(confirm, "/account/money#receiving"))}
               >
                 {confirm === "switch" ? "Set up the new account" : "Disconnect in 72 hours"}
               </button>
@@ -777,8 +809,10 @@ const money = (minor: number, currency: string) => {
 function FeeStatements({ statements, vat, onVat }: { statements: FeeStatement[]; vat: VatTreatment; onVat: () => void }) {
   const showVat = vat.kind !== "none";
   return (
-    <section id="fee-statements">
-      <h2 className="section-title">Fee statements</h2>
+    <section id="fee-statements" className="account-panel" aria-labelledby="fee-statements-title">
+      <h3 className="account-panel-title" id="fee-statements-title">
+        Fee statements
+      </h3>
       <p className="muted small">
         Slop's 5% fee on the donations and People payments you received, by month.{" "}
         {vat.kind === "none" && "There's no VAT on Slop's fee where you are."}

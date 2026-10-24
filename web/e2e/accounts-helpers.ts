@@ -155,3 +155,23 @@ export async function desktopSignInRequest(deviceName: string, port: number) {
 
 /** A unique, valid address for something a test makes. */
 export const unique = (prefix: string) => `${prefix}-${randomBytes(3).toString("hex")}`;
+
+/**
+ * The account page's sections (web/src/accountNav.ts): each at its own address, one shown at a
+ * time. Profile is /account itself.
+ */
+export type AccountSection = "profile" | "security" | "device" | "agents" | "notifications" | "money" | "moderation" | "agreements" | "data";
+
+/** The address of a section, with a part of it (`#passkeys`) if given. */
+export const accountUrl = (section: AccountSection, part = "") => (section === "profile" ? "/account" : `/account/${section}`) + part;
+
+/** Opens the account page at a section, and waits for it to show. */
+export async function openAccount(page: Page, section: AccountSection = "profile", part = "") {
+  await page.goto(accountUrl(section, part));
+  await accountNav(page).locator('[aria-current="page"]').waitFor();
+}
+
+/** The list of the account page's sections. */
+export function accountNav(page: Page) {
+  return page.getByRole("navigation", { name: "Account settings" });
+}

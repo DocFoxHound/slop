@@ -86,7 +86,7 @@ test("switching or disconnecting the Stripe account asks first, needs a fresh si
     return route.fulfill(json(403, { error: { code: "step_up_required", message: "confirm it's you first" } }));
   });
   await section.getByRole("button", { name: "Disconnect in 72 hours" }).click();
-  expect(asked).toEqual({ kind: "disconnect", return_to: "/account#receiving" });
+  expect(asked).toEqual({ kind: "disconnect", return_to: "/account/money#receiving" });
   await expect(section.getByRole("alert")).toContainText("For your safety, this needs a sign-in from the last few minutes.");
 
   // Once asked for, the change waits, says when it happens, and can be cancelled.
@@ -127,7 +127,7 @@ test("switching or disconnecting the Stripe account asks first, needs a fresh si
 
 test("someone who receives nothing has no receiving or fee sections", async ({ page }) => {
   await signIn(page, "player");
-  await page.goto("/account");
+  await page.goto("/account/money");
   await expect(page.getByRole("heading", { name: "Your donations" })).toBeVisible();
   await expect(page.locator("section#receiving")).toHaveCount(0);
   await expect(page.locator("section#fee-statements")).toHaveCount(0);

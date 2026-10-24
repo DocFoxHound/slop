@@ -106,7 +106,7 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
     return (
       <div className="panel panel-pad donate-box">
         <h3>♥ Thank you</h3>
-        <p>Your donation goes straight to {d.maker}. Your receipt is on your <Link to="/account#donations">account page</Link>.</p>
+        <p>Your donation goes straight to {d.maker}. Your receipt is on your <Link to="/account/money#donations">account page</Link>.</p>
       </div>
     );
   }

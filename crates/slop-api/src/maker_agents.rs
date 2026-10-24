@@ -13,6 +13,8 @@
 //! - **Only maker work:** a token may call the routes in `ALLOWED` and nothing else: never
 //!   money, sign-ins, tokens, chat, People or account settings. Releases still go through Slop's
 //!   scans and a person's review.
+//! - **Making one** needs only a signed-in session, not a recent sign-in: what a token can do is
+//!   limited enough that the owner chose not to ask "confirm it's you" for it.
 //! - **Passkeys:** a token made within 12 hours of confirming with a passkey counts as
 //!   passkey-proven for its lifetime (passkeys.rs `require`), so the agent can publish.
 //! - **Writing to Slop's admins** (admin_messages.rs) works with any token, read or publish, for
@@ -396,7 +398,9 @@ async fn create(
     user: CurrentUser,
     Json(body): Json<NewToken>,
 ) -> ApiResult<(StatusCode, Json<Created>)> {
-    session::require_recent_sign_in(&state.db, &user).await?;
+    // A signed-in session is enough (no step-up): a token lasts at most 30 days, is listed and
+    // signed out with the maker's devices, and can't pay, accept agreements, change payouts,
+    // tokens or the account. Agent sessions can't make tokens (`ALLOWED`).
     let name = body.name.trim().to_string();
     if name.is_empty() || name.chars().count() > 60 {
         return Err(ApiError::invalid("name", "1 to 60 characters"));

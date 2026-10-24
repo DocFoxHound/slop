@@ -2,8 +2,9 @@
 // The account page (web/src/pages/Auth.tsx Account, components/AccountSections.tsx): privacy,
 // where you're signed in, sign-ins and passkeys, notifications, agreements, your data.
 // Sue Support is the account these tests change, and each test puts back what it changed.
-import { apiError, call, fake, noPasskeys, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
+import { accountNav, apiError, call, fake, noPasskeys, openAccount, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
 import type { Page } from "@playwright/test";
+import { asDesktop } from "./desktop-helpers";
 
 import { expect, server, signIn, test } from "./fixtures";
 
@@ -100,7 +101,7 @@ test.describe("where you're signed in", () => {
       },
     ]);
     await signIn(page, "support");
-    await page.goto("/account");
+    await openAccount(page, "security");
     const sessions = page.locator("ul.sessions").last();
     await expect(sessions.getByRole("listitem").filter({ hasText: "Claude on my laptop" })).toBeVisible();
     await expect(sessions.getByRole("listitem").filter({ hasText: "Slop app" })).toBeVisible();
@@ -136,13 +137,13 @@ test.describe("sign-ins", () => {
     // The seed's accounts have no linked sign-ins, so none can be unlinked.
     await expect(section.getByRole("button", { name: "Unlink" })).toHaveCount(0);
     const link = section.getByRole("link", { name: "Link GitHub" });
-    await expect(link).toHaveAttribute("href", "/v1/auth/github/link?return_to=%2Faccount%23sign-ins");
+    await expect(link).toHaveAttribute("href", "/v1/auth/github/link?return_to=%2Faccount%2Fsecurity%23sign-ins");
     await link.click();
     await page.waitForURL(`${server.fake}login/oauth/authorize?**`);
     const state = new URL(page.url()).searchParams.get("state")!;
     // Back from GitHub; the fake can't finish signing in.
     await page.goto(`/v1/auth/github/callback?code=not-a-real-code&state=${encodeURIComponent(state)}`);
-    await expect(page).toHaveURL(`${server.url}/account?error=provider#sign-ins`);
+    await expect(page).toHaveURL(`${server.url}/account/security?error=provider#sign-ins`);
     await expect(section.getByText("That sign-in didn't work. Please try again.")).toBeVisible();
   });
 
@@ -183,7 +184,7 @@ test.describe("sign-ins", () => {
     await gitlab.getByRole("button", { name: "Unlink" }).click();
     const alert = section.getByRole("alert");
     await expect(alert).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-    await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%23sign-ins");
+    await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fsecurity%23sign-ins");
     await alert.getByRole("button", { name: "Confirm with a passkey" }).click();
     await expect(section.getByRole("alert")).toHaveCount(0);
     await gitlab.getByRole("button", { name: "Unlink" }).click();
@@ -567,5 +568,169 @@ test.describe("your data", () => {
     await expect(page).toHaveURL(`${server.url}/`);
     await expect(page.getByRole("navigation", { name: "Main" }).first().getByRole("link", { name: "Sign in" })).toBeVisible();
     expect(closed.calls[0].body).toEqual({ confirm: "close my account" });
+  });
+});
+
+test.describe("sections", () => {
+  test("the list switches sections, each at its own address; Back and reloading work", async ({ page }) => {
+    await signIn(page, "support");
+    await openAccount(page);
+    const nav = accountNav(page);
+    await expect(nav.getByRole("link", { name: "Profile" })).toHaveAttribute("aria-current", "page");
+    await expect(page.getByRole("heading", { name: "Profile", level: 2 })).toBeVisible();
+    await expect(page.locator("#privacy")).toBeVisible();
+    // Grouped, and each group is labelled.
+    await expect(nav.getByRole("list", { name: "Account" })).toBeVisible();
+    await expect(nav.getByRole("list", { name: "Records" })).toBeVisible();
+
+    await nav.getByRole("link", { name: "Sign-in & security" }).click();
+    await expect(page).toHaveURL(`${server.url}/account/security`);
+    const heading = page.getByRole("heading", { name: "Sign-in & security", level: 2 });
+    // Focus moves to the new section's heading.
+    await expect(heading).toBeFocused();
+    await expect(nav.getByRole("link", { name: "Sign-in & security" })).toHaveAttribute("aria-current", "page");
+    await expect(nav.getByRole("link", { name: "Profile" })).not.toHaveAttribute("aria-current", "page");
+    // One section at a time.
+    await expect(page.locator("#sign-ins")).toBeVisible();
+    await expect(page.locator("#privacy")).toHaveCount(0);
+
+    // By keyboard.
+    await nav.getByRole("link", { name: "Your data" }).focus();
+    await page.keyboard.press("Enter");
+    await expect(page).toHaveURL(`${server.url}/account/data`);
+    await expect(page.getByRole("heading", { name: "Your data", level: 2 })).toBeFocused();
+    await expect(page).toHaveTitle("Your data · Your account · Slop");
+    await expect(page.getByRole("button", { name: "Download my data" })).toBeVisible();
+
+    await page.goBack();
+    await expect(page).toHaveURL(`${server.url}/account/security`);
+    await expect(heading).toBeVisible();
+    await page.goBack();
+    await expect(page).toHaveURL(`${server.url}/account`);
+    await expect(page.getByRole("heading", { name: "Profile", level: 2 })).toBeVisible();
+    await page.goForward();
+    await page.reload();
+    await expect(page.getByRole("heading", { name: "Sign-in & security", level: 2 })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Sign-in & security" })).toHaveAttribute("aria-current", "page");
+
+    // A section that doesn't exist goes to Profile; This computer is only in the desktop app.
+    for (const nope of ["/account/nope", "/account/device"]) {
+      await page.goto(nope);
+      await expect(page).toHaveURL(`${server.url}/account`);
+      await expect(page.getByRole("heading", { name: "Profile", level: 2 })).toBeVisible();
+    }
+    await expect(nav.getByRole("link", { name: "This computer" })).toHaveCount(0);
+  });
+
+  test("old links to a part of the page open its section, at that part", async ({ page }) => {
+    await signIn(page, "support");
+    for (const [old, to, label] of [
+      ["/account#picture", "/account#picture", "Profile"],
+      ["/account#privacy", "/account#privacy", "Profile"],
+      ["/account?picture=refresh#picture", "/account?picture=refresh#picture", "Profile"],
+      ["/account#sign-ins", "/account/security#sign-ins", "Sign-in & security"],
+      ["/account?linked=already#sign-ins", "/account/security?linked=already#sign-ins", "Sign-in & security"],
+      ["/account#ai-agents", "/account/agents#ai-agents", "AI agents & keys"],
+      ["/account#signing-keys", "/account/agents#signing-keys", "AI agents & keys"],
+      ["/account#notifications", "/account/notifications#notifications", "Notifications"],
+      ["/account#donations", "/account/money#donations", "Money"],
+      ["/account#receiving", "/account/money#receiving", "Money"],
+      ["/account#fee-statements", "/account/money#fee-statements", "Money"],
+      ["/account#decisions", "/account/moderation#decisions", "Moderation"],
+      ["/account#reports", "/account/moderation#reports", "Moderation"],
+      ["/account#agreements", "/account/agreements#agreements", "Agreements"],
+      ["/account#data", "/account/data#data", "Your data"],
+    ]) {
+      await page.goto(old);
+      await expect(page, old).toHaveURL(`${server.url}${to}`);
+      await expect(accountNav(page).locator('[aria-current="page"]'), old).toHaveText(label);
+    }
+    // The part is scrolled to, below the rest of its section.
+    await page.goto("/account#data");
+    await expect(page.locator("#data")).toBeInViewport();
+    await page.goto("/account#privacy");
+    await expect(page.getByRole("heading", { name: "Privacy" })).toBeInViewport();
+    // Back from a redirected link goes to where you were, not the old address.
+    await page.goto("/account/security");
+    await page.goto("/account#data");
+    await expect(page).toHaveURL(`${server.url}/account/data#data`);
+    await page.goBack();
+    await expect(page).toHaveURL(`${server.url}/account/security`);
+  });
+
+  test("sections that need you say so in the list, in words as well as a mark", async ({ page }) => {
+    await tweak(page, "/v1/me", (me) => ({ ...me, new_decisions: 2, has_passkey: false, passkey_due_at: "2026-12-01T00:00:00Z" }));
+    // Listing the decisions would mark them seen; this test only looks at the list.
+    await fake(page, "GET", "/v1/me/decisions", { status: 200, body: [] });
+    const terms = await call<{ version: string }>(null, "GET", "/v1/legal/terms");
+    await fake(page, "GET", "/v1/me/legal", {
+      status: 200,
+      body: [
+        { kind: "terms", title: "Terms of Service", version: terms.version, summary: "", effective_at: "2026-10-01T00:00:00Z", in_effect: true, first: false, action: "accept" },
+      ],
+    });
+    await signIn(page, "support");
+    await openAccount(page);
+    const nav = accountNav(page);
+    await expect(nav.getByRole("link", { name: "Moderation (2 new)" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Sign-in & security (add a passkey)" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Agreements (1 to accept)" })).toBeVisible();
+    await expect(nav.getByRole("link", { name: "Money", exact: true })).toBeVisible();
+    // The passkey reminder is in its section too.
+    await nav.getByRole("link", { name: /Sign-in & security/ }).click();
+    await expect(page.getByRole("note").filter({ hasText: "need a passkey" })).toBeVisible();
+  });
+
+  test("the header shows who you are, with your public profile", async ({ page }) => {
+    await signIn(page, "support");
+    await openAccount(page, "money");
+    const head = page.locator("header.account-head");
+    await expect(head.getByRole("heading", { name: "Your account", level: 1 })).toBeVisible();
+    await expect(head).toContainText("Sue Support");
+    await expect(head).toContainText("United States");
+    await head.getByRole("link", { name: "Your public profile" }).click();
+    await expect(page).toHaveURL(new RegExp(`/u/${server.ids.support}$`));
+  });
+
+  test("on a phone the sections are a row along the top that scrolls sideways", async ({ browser }) => {
+    const context = await browser.newContext({ baseURL: server.url, viewport: { width: 390, height: 844 }, hasTouch: true, isMobile: true });
+    const page = await context.newPage();
+    await signIn(page, "support");
+    await openAccount(page);
+    const nav = accountNav(page);
+    const links = nav.getByRole("link");
+    const first = (await links.first().boundingBox())!;
+    const second = (await links.nth(1).boundingBox())!;
+    // One row above the content, not a column beside it.
+    expect(Math.abs(first.y - second.y)).toBeLessThan(2);
+    expect(second.x).toBeGreaterThan(first.x);
+    const content = (await page.locator(".account-content").boundingBox())!;
+    expect(content.y).toBeGreaterThan(first.y + first.height);
+    expect(content.width).toBeGreaterThan(330);
+    // The page itself doesn't scroll sideways; the row does.
+    expect(await page.evaluate(() => document.documentElement.scrollWidth <= window.innerWidth)).toBe(true);
+    const row = page.locator(".account-nav-scroll");
+    expect(await row.evaluate((r) => r.scrollWidth > r.clientWidth)).toBe(true);
+    // The chosen section is scrolled into view in the row.
+    await page.goto("/account/data");
+    await expect(nav.getByRole("link", { name: "Your data" })).toBeInViewport();
+    expect(await row.evaluate((r) => r.scrollLeft)).toBeGreaterThan(0);
+    await nav.getByRole("link", { name: "Notifications" }).click();
+    await expect(page).toHaveURL(`${server.url}/account/notifications`);
+    await expect(page.getByRole("heading", { name: "Notifications", level: 2 })).toBeVisible();
+    await context.close();
+  });
+
+  test("the desktop app has This computer, and its old link", async ({ page }) => {
+    await asDesktop(page, { state: "none" });
+    await signIn(page, "support");
+    await openAccount(page);
+    const nav = accountNav(page);
+    await nav.getByRole("link", { name: "This computer" }).click();
+    await expect(page.getByRole("heading", { name: "This computer", level: 2 })).toBeVisible();
+    await expect(page.getByRole("checkbox", { name: /In-game overlay/ })).toBeVisible();
+    await page.goto("/account#this-device");
+    await expect(page).toHaveURL(`${server.url}/account/device#this-device`);
+    await expect(nav.locator('[aria-current="page"]')).toHaveText("This computer");
   });
 });

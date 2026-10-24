@@ -84,10 +84,11 @@ test.describe("your donations", () => {
     await expect(section.getByRole("alert")).toHaveText("that donation is already cancelled");
   });
 
-  test("with no donations, there's no donations section", async ({ page }) => {
+  test("with no donations, the Money section says so", async ({ page }) => {
     await signIn(page, "support");
-    await page.goto("/account");
-    await expect(page.getByRole("heading", { name: "Terms and policies" })).toBeVisible();
+    await page.goto("/account/money");
+    await expect(page.getByRole("heading", { name: "Money", level: 2 })).toBeVisible();
+    await expect(page.getByText(/^No donations yet\./)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Your donations" })).toHaveCount(0);
     await expect(page.getByRole("heading", { name: "Receiving donations" })).toHaveCount(0);
   });
@@ -163,7 +164,7 @@ test.describe("receiving donations", () => {
     const alert = section.getByRole("alert");
     await expect(alert).toContainText("For your safety, this needs a sign-in from the last few minutes.");
     // Someone who signs in with Google, GitLab or a passkey can't use GitHub to do it.
-    await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%23receiving");
+    await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fmoney%23receiving");
     await alert.getByRole("button", { name: "Confirm with a passkey" }).click();
     await expect(section.getByRole("status")).toHaveText("Confirmed. Try once more.");
     expect(change.calls).toHaveLength(1);
@@ -288,8 +289,8 @@ test.describe("fee statements", () => {
 
   test("a maker with nothing received has no statements", async ({ page }) => {
     await signIn(page, "support");
-    await page.goto("/account");
-    await expect(page.getByRole("heading", { name: "Terms and policies" })).toBeVisible();
+    await page.goto("/account/money");
+    await expect(page.getByText(/^No donations yet\./)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Fee statements" })).toHaveCount(0);
   });
 });
