@@ -5,11 +5,14 @@
 #   build.sh <commit> [deb|rpm ...]
 #
 # Each package is built in its own container, on the oldest system it supports, from a clean
-# export of the commit. Caches live in podman volumes (slop-build-cache-<kind>).
+# export of the commit. Caches live in podman volumes (slop-build-cache-<kind>; another prefix in
+# SLOP_DESKTOP_CACHE_PREFIX). SLOP_CONFIG_DIR (default ~/.config/slop) holds slop.env and
+# desktop-build.env.
 set -euo pipefail
 
 ROOT="${SLOP_DEPLOY_ROOT:-$HOME/slop-deploy}"
 REPO="$ROOT/repo"
+CONFIG="${SLOP_CONFIG_DIR:-$HOME/.config/slop}"
 HERE="$(cd "$(dirname "$0")" && pwd)"
 COMMIT="$1"; shift
 KINDS=("${@:-deb rpm}")
@@ -19,18 +22,25 @@ log() { echo "slop-desktop-linux: $*"; }
 exec 9>"$ROOT/.desktop-linux.lock"
 flock 9
 
-set -a; . "$HOME/.config/slop/slop.env"; . "$HOME/.config/slop/desktop-build.env"; set +a
+# The server's own settings: the site, and the release-signing public key to trust.
+set -a
+# shellcheck source=/dev/null
+. "$CONFIG/slop.env"
+# shellcheck source=/dev/null
+. "$CONFIG/desktop-build.env"
+set +a
 VERSION="0.1.$(git -C "$REPO" rev-list --count "$COMMIT")"
 SITE="${SLOP_PUBLIC_URL%/}"
-# Private repositories can't make GitHub attestations (docs/TESTING.md), so a test site's app
-# accepts releases without them. Only a test site's: the same rule as crates/slop-desktop/build.rs,
-# which refuses to build it for any other.
+# A test site's app is "Slop Dev" (deploy/desktop-config.js), which installs beside "Slop", and
+# accepts releases without GitHub attestations (private repositories can't make them,
+# docs/TESTING.md). Only a test site's: the same rule as crates/slop-desktop/build.rs, which
+# refuses to build an unsigned app for any other.
 host=${SITE#*://}; host=${host%%[/:]*}
 case "$host" in
-  localhost | 127.0.0.1 | *.sslip.io) unsigned=(-e SLOP_ALLOW_UNSIGNED=true) ;;
-  *) unsigned=() ;;
+  localhost | 127.0.0.1 | *.sslip.io) channel=dev; unsigned=(-e SLOP_ALLOW_UNSIGNED=true) ;;
+  *) channel=production; unsigned=() ;;
 esac
-log "building $VERSION from ${COMMIT:0:12} for $SITE: ${KINDS[*]}"
+log "building $VERSION ($channel) from ${COMMIT:0:12} for $SITE: ${KINDS[*]}"
 
 for kind in "${KINDS[@]}"; do
   podman build -q -t "slop-build-$kind" -f "$HERE/Containerfile.$kind" "$HERE" >/dev/null
@@ -39,20 +49,16 @@ for kind in "${KINDS[@]}"; do
   out="$ROOT/desktop-out/$kind"
   rm -rf "$out" && mkdir -p "$out"
   podman run --rm \
-    -v "$src:/src:Z" -v "$out:/out:Z" -v "slop-build-cache-$kind:/cache" \
+    -v "$src:/src:Z" -v "$out:/out:Z" -v "${SLOP_DESKTOP_CACHE_PREFIX:-slop-build-cache-}$kind:/cache" \
     -e CARGO_HOME=/cache/cargo -e CARGO_TARGET_DIR=/cache/target -e npm_config_cache=/cache/npm \
-    -e VERSION="$VERSION" -e KIND="$kind" -e SITE="$SITE" \
+    -e VERSION="$VERSION" -e KIND="$kind" -e SITE="$SITE" -e CHANNEL="$channel" \
     -e SLOP_API_URL="$SITE/" -e SLOP_TRUSTED_KEYS="$SLOP_TRUSTED_KEYS" "${unsigned[@]}" \
     "slop-build-$kind" bash -euo pipefail -c '
       export PATH=/root/.cargo/bin:$PATH
       cd /src
-      # The version, and the site the app talks to and updates from (this server).
-      node -e "
-        const fs = require(\"fs\"); const f = \"crates/slop-desktop/tauri.conf.json\";
-        const c = JSON.parse(fs.readFileSync(f, \"utf8\")); c.version = process.env.VERSION;
-        c.bundle.homepage = process.env.SITE;
-        c.plugins.updater.endpoints = c.plugins.updater.endpoints.map((e) => process.env.SITE + e.slice(e.indexOf(\"/v1/\")));
-        fs.writeFileSync(f, JSON.stringify(c, null, 2));"
+      # The version, the site the app talks to and updates from (this server), and for a test
+      # site the "Slop Dev" name and identifier.
+      node deploy/desktop-config.js
       cd web && npm ci --no-audit --no-fund --silent
       # The cache keeps earlier builds; clear their packages so only this version is published.
       rm -rf "/cache/target/release/bundle/$KIND"

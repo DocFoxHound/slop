@@ -1,0 +1,35 @@
+# Cross-compiles Slop's Windows installer on Linux (deploy/desktop-windows/build.sh), the way
+# Tauri documents it ("Build Windows apps on Linux and macOS"): the MSVC target, linked with
+# LLVM's lld, resources compiled with llvm-rc, the C parts (ring, aws-lc) built with clang-cl
+# through cargo-xwin, and the NSIS installer made with makensis. Only NSIS installers can be made
+# this way, which is what Slop ships for Windows. The Linux appindicator library is never built in:
+# Tauri's CLI, running on Linux, looks for it whenever the app uses a tray icon (Slop's Windows
+# build does), even when making a Windows installer.
+#
+# cargo-xwin downloads Microsoft's CRT and Windows SDK headers and libraries into the build's
+# cache volume on first use; using them means accepting Microsoft's licence for them
+# (https://go.microsoft.com/fwlink/?LinkId=2086102). Nothing secret is in this image.
+FROM docker.io/library/ubuntu:24.04@sha256:68ee22004a9109b44973313b02ff7b1de250f1de0f5ecb628d73f579aaff33ac
+ARG RUST_VERSION=1.99.1
+ARG CARGO_XWIN_VERSION=0.23.1
+ARG NODE_VERSION=22.23.1
+ENV DEBIAN_FRONTEND=noninteractive
+RUN apt-get update && apt-get install -y --no-install-recommends \
+      build-essential ca-certificates curl xz-utils pkg-config git \
+      nsis clang lld llvm cmake ninja-build nasm \
+      libayatana-appindicator3-dev \
+    && rm -rf /var/lib/apt/lists/*
+RUN curl -fsSL "https://nodejs.org/dist/v$NODE_VERSION/node-v$NODE_VERSION-linux-x64.tar.xz" | tar -xJ -C /opt \
+    && ln -s "/opt/node-v$NODE_VERSION-linux-x64/bin/"* /usr/local/bin/
+ENV RUSTUP_HOME=/opt/rustup PATH=/opt/cargo/bin:$PATH
+RUN curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs \
+    | CARGO_HOME=/opt/cargo sh -s -- -y --profile minimal --default-toolchain "$RUST_VERSION" \
+        --target x86_64-pc-windows-msvc --no-modify-path \
+    && CARGO_HOME=/opt/cargo cargo install --locked --version "$CARGO_XWIN_VERSION" cargo-xwin \
+    && rm -rf /opt/cargo/registry /opt/cargo/git \
+    && chmod -R a+rX /opt/cargo /opt/rustup
+# Tauri looks for llvm-rc by that name; check it and the rest are here. (cargo-xwin makes its own
+# clang-cl link to clang.)
+RUN for tool in llvm-rc lld-link clang makensis cargo-xwin; do \
+      command -v "$tool" >/dev/null || { echo "missing: $tool"; exit 1; }; \
+    done
