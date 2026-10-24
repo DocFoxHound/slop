@@ -26,17 +26,18 @@ The diagram in §2 is the target. Today everything runs on **one server** (detai
 
 | Part | Today | Target |
 |---|---|---|
-| API and website | One Rust program (`crates/slop-api`) behind Caddy, deployed by a systemd timer from `main` after the tests pass | The same program on a cloud container service |
+| API and website | One Rust program (`crates/slop-api`) behind Caddy, deployed by a systemd timer: the test server from `dev`, production from the `production` tag after GitHub's checks and the owner's approval | The same program on a cloud container service |
 | Database | Postgres in podman on the same server, nightly backups with a weekly restore check | Managed Postgres with point-in-time recovery |
 | Job queue, search | In Postgres (as planned) | The same |
 | Files | None stored: builds stay on makers' release pages; store-page pictures and videos are read from the repository (`GITHUB_RAW_BASE`); profile pictures are small re-encoded copies in Postgres (`avatars.rs`) | Object storage + CDN for manifests and reports |
 | Scanning | A locked-down container per file on the same server (ClamAV, YARA, capa), plus Microsoft Defender results from makers' GitHub runs (§6.7) | A separate cloud account, signed verdicts |
-| Desktop app | Windows (built on GitHub, signed updates) and Linux (`.deb`, `.rpm`, built on the server) | Plus macOS, Android, and iOS if it goes ahead |
+| Desktop app | Windows (production's built on GitHub, the test server's "Slop Dev" cross-compiled on it; signed updates) and Linux (`.deb`, `.rpm`, built on each server) | Plus macOS, Android, and iOS if it goes ahead |
 | Slop Build | GitHub Actions on makers' repositories (§6.2) | Plus Slop-run builders for other hosts |
 
-The `sslip.io` server is the test deployment, which every commit on `main` reaches first;
-production (`slopai.games`, its own server set up the same way) runs only commits already live
-there, when the `production` tag is moved to them (`deploy/README.md`, "Production").
+The `sslip.io` server is the test deployment, which deploys every push to `dev` within minutes;
+production (`slopai.games`, its own server set up the same way) runs only commits that reached
+`main`, passed GitHub's pipeline and were approved, which moves the `production` tag to them
+(`deploy/README.md`, "How changes ship").
 
 ## 1. Goals and constraints
 
