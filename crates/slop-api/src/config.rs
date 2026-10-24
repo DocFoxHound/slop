@@ -122,16 +122,23 @@ pub struct DesktopConfig {
     pub dir: Option<std::path::PathBuf>,
     /// Signs builds for the app's updater (`slop-api keys generate-updater`).
     pub updater_key: Option<minisign::SecretKey>,
-    /// Slop's own repository (`owner/repo`); only its desktop workflow on `git_ref` may upload.
+    /// Slop's own repository (`owner/repo`); only its `workflow` on `git_ref` may upload.
     pub repo: Option<String>,
-    /// The git ref whose desktop workflow runs may upload (`SLOP_DESKTOP_REF`): pushes to main
-    /// build the test server's app, and the `production` tag builds production's, so each server
-    /// takes only its own channel's builds (deploy/README.md, "Production").
+    /// The git ref whose workflow runs may upload (`SLOP_DESKTOP_REF`, main by default).
     pub git_ref: String,
+    /// The workflow file in `.github/workflows` that builds the app (`SLOP_DESKTOP_WORKFLOW`).
+    pub workflow: String,
+    /// The GitHub environment the uploading job must run in (`SLOP_DESKTOP_ENVIRONMENT`): in
+    /// production `production`, which needs the owner's approval, so only an approved run can
+    /// update production's players. Unset, the server takes no uploads from GitHub at all: the
+    /// test server builds its own apps (deploy/README.md, "The desktop app").
+    pub environment: Option<String>,
 }
 
-/// The test server's channel: every push to main.
+/// Production's channel: approved pipeline runs on main.
 pub const DEFAULT_DESKTOP_REF: &str = "refs/heads/main";
+/// The workflow that builds production's Windows app (.github/workflows/pipeline.yml).
+pub const DEFAULT_DESKTOP_WORKFLOW: &str = "pipeline.yml";
 
 impl Default for DesktopConfig {
     fn default() -> Self {
@@ -140,6 +147,8 @@ impl Default for DesktopConfig {
             updater_key: None,
             repo: None,
             git_ref: DEFAULT_DESKTOP_REF.to_string(),
+            workflow: DEFAULT_DESKTOP_WORKFLOW.to_string(),
+            environment: None,
         }
     }
 }
@@ -154,6 +163,8 @@ impl fmt::Debug for DesktopConfig {
             )
             .field("repo", &self.repo)
             .field("git_ref", &self.git_ref)
+            .field("workflow", &self.workflow)
+            .field("environment", &self.environment)
             .finish()
     }
 }
@@ -657,6 +668,10 @@ impl Config {
                 },
                 repo: env::var("SLOP_DESKTOP_REPO").ok().filter(|s| !s.is_empty()),
                 git_ref: desktop_ref(&env::var("SLOP_DESKTOP_REF").unwrap_or_default())?,
+                workflow: desktop_workflow(&env::var("SLOP_DESKTOP_WORKFLOW").unwrap_or_default())?,
+                environment: desktop_environment(
+                    &env::var("SLOP_DESKTOP_ENVIRONMENT").unwrap_or_default(),
+                )?,
             },
             media: MediaConfig {
                 github_raw_base: var_or("GITHUB_RAW_BASE", "https://raw.githubusercontent.com/")
@@ -832,9 +847,9 @@ fn email_address(raw: &str) -> Option<String> {
     ok.then(|| v.to_string())
 }
 
-/// `SLOP_DESKTOP_REF`: a full ref name such as `refs/tags/production`, or main when unset. A bare
-/// name like `production` would never match a run's workflow ref and silently refuse every
-/// upload, so it stops the server instead.
+/// `SLOP_DESKTOP_REF`: a full ref name such as `refs/heads/main` (the default when unset). A bare
+/// name like `main` would never match a run's workflow ref and silently refuse every upload, so
+/// it stops the server instead.
 fn desktop_ref(value: &str) -> anyhow::Result<String> {
     let v = value.trim();
     if v.is_empty() {
@@ -847,9 +862,60 @@ fn desktop_ref(value: &str) -> anyhow::Result<String> {
     Ok(v.to_string())
 }
 
+/// `SLOP_DESKTOP_WORKFLOW`: a workflow's file name, like `pipeline.yml` (the default when unset).
+/// A path or a ref in it would never match a run's workflow ref, so it stops the server instead.
+fn desktop_workflow(value: &str) -> anyhow::Result<String> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Ok(DEFAULT_DESKTOP_WORKFLOW.to_string());
+    }
+    anyhow::ensure!(
+        (v.ends_with(".yml") || v.ends_with(".yaml"))
+            && v.len() > 4
+            && v.chars()
+                .all(|c| c.is_ascii_alphanumeric() || "._-".contains(c)),
+        "SLOP_DESKTOP_WORKFLOW must be a workflow file name, like pipeline.yml"
+    );
+    Ok(v.to_string())
+}
+
+/// `SLOP_DESKTOP_ENVIRONMENT`: a GitHub environment's name, or none (no uploads from GitHub).
+fn desktop_environment(value: &str) -> anyhow::Result<Option<String>> {
+    let v = value.trim();
+    if v.is_empty() {
+        return Ok(None);
+    }
+    anyhow::ensure!(
+        v.len() <= 255 && !v.chars().any(|c| c.is_control() || "'\"`,;".contains(c)),
+        "SLOP_DESKTOP_ENVIRONMENT must be a GitHub environment's name, like production"
+    );
+    Ok(Some(v.to_string()))
+}
+
 #[cfg(test)]
 mod tests {
-    use super::{desktop_ref, email_address};
+    use super::{desktop_environment, desktop_ref, desktop_workflow, email_address};
+
+    #[test]
+    fn desktop_workflows_are_file_names_and_environments_optional() {
+        assert_eq!(desktop_workflow("").unwrap(), "pipeline.yml");
+        assert_eq!(desktop_workflow(" release.yaml ").unwrap(), "release.yaml");
+        for bad in [
+            ".github/workflows/pipeline.yml",
+            "pipeline.yml@refs/heads/main",
+            "pipeline",
+            ".yml",
+            "pipe line.yml",
+        ] {
+            assert!(desktop_workflow(bad).is_err(), "{bad}");
+        }
+        assert_eq!(desktop_environment("  ").unwrap(), None);
+        assert_eq!(
+            desktop_environment(" production ").unwrap().as_deref(),
+            Some("production")
+        );
+        assert!(desktop_environment("prod\nuction").is_err());
+    }
 
     #[test]
     fn desktop_refs_are_full_ref_names() {

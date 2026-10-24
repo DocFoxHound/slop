@@ -2971,6 +2971,7 @@ async fn desktop_builds_are_uploaded_signed_and_offered(db: PgPool) {
         dir: Some(dir.clone()),
         updater_key: Some(slop_api::desktop_updates::updater_key_from_base64(&secret).unwrap()),
         repo: Some("octo/slop".into()),
+        environment: Some("production".into()),
         ..Default::default()
     };
     let router = router(AppState::new(base.db.clone(), config).unwrap()).unwrap();
@@ -2979,7 +2980,8 @@ async fn desktop_builds_are_uploaded_signed_and_offered(db: PgPool) {
     let ci = |overrides: Value| {
         let mut claims = json!({
             "repository": "octo/slop",
-            "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/heads/main",
+            "job_workflow_ref": "octo/slop/.github/workflows/pipeline.yml@refs/heads/main",
+            "environment": "production",
             "sha": BUILD_COMMIT,
         });
         for (k, v) in overrides.as_object().unwrap() {
@@ -3009,13 +3011,17 @@ async fn desktop_builds_are_uploaded_signed_and_offered(db: PgPool) {
         StatusCode::NO_CONTENT
     );
 
-    // Only the desktop workflow on main (this server's channel) in Slop's repository may upload.
+    // Only the pipeline on main in Slop's repository, in the approved environment, may upload.
     for bad in [
-        json!({ "repository": "mallory/slop", "job_workflow_ref": "mallory/slop/.github/workflows/desktop.yml@refs/heads/main" }),
+        json!({ "repository": "mallory/slop", "job_workflow_ref": "mallory/slop/.github/workflows/pipeline.yml@refs/heads/main" }),
         json!({ "job_workflow_ref": "octo/slop/.github/workflows/other.yml@refs/heads/main" }),
-        json!({ "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/heads/feature" }),
-        // Production's channel uploads only to production (SLOP_DESKTOP_REF).
+        json!({ "job_workflow_ref": "octo/slop/.github/workflows/pipeline.yml@refs/heads/feature" }),
+        // The old desktop workflow's channels.
+        json!({ "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/heads/main" }),
         json!({ "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/tags/production" }),
+        // Not approved (SLOP_DESKTOP_ENVIRONMENT).
+        json!({ "environment": null }),
+        json!({ "environment": "staging" }),
     ] {
         assert_eq!(
             upload(ci(bad.clone()), "0.1.5", b"x")
