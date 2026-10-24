@@ -25,8 +25,6 @@ use slop_client::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
-const APP_ID: &str = "dev.ironpoint.slop";
-
 /// The Slop site and API. Set SLOP_API_URL when building a release; the default is the local
 /// development site (Vite on :5173, which proxies /v1 to the API).
 const API_URL: &str = match option_env!("SLOP_API_URL") {
@@ -58,6 +56,10 @@ struct Desktop {
     /// Chat for the signed-in user, opened on first use (DESIGN §19).
     chat: tokio::sync::Mutex<Option<Arc<Chat>>>,
     chat_dir: std::path::PathBuf,
+    /// The app's identifier from tauri.conf.json: "dev.ironpoint.slop", or the test server's
+    /// "Slop Dev" app's own (deploy/desktop-config.js). The OS keychain entries (the sign-in and
+    /// chat keys) are named after it, so the two apps never read each other's.
+    keychain_service: String,
     /// Slop Link: running games ask for mods here (DESIGN §9).
     link: Link,
 }
@@ -308,7 +310,7 @@ fn open_login(app: &AppHandle) {
         LOGIN_WINDOW,
         tauri::WebviewUrl::App("login.html".into()),
     )
-    .title("Sign in to Slop")
+    .title(format!("Sign in to {}", app.package_info().name))
     .decorations(false)
     .shadow(true)
     .inner_size(420.0, 560.0)
@@ -332,11 +334,13 @@ fn make_tray(app: &tauri::App) -> tauri::Result<()> {
         menu::{Menu, MenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
-    let open = MenuItem::with_id(app, "open", "Open Slop", true, None::<&str>)?;
-    let quit = MenuItem::with_id(app, "quit", "Quit Slop", true, None::<&str>)?;
+    // "Slop", or "Slop Dev" for the test server's app (deploy/desktop-config.js).
+    let name = app.package_info().name.clone();
+    let open = MenuItem::with_id(app, "open", format!("Open {name}"), true, None::<&str>)?;
+    let quit = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
     let mut tray = TrayIconBuilder::with_id("slop")
-        .tooltip("Slop")
+        .tooltip(&name)
         .menu(&menu)
         .show_menu_on_left_click(false)
         .on_menu_event(|app, event| match event.id.as_ref() {
@@ -1283,7 +1287,7 @@ async fn chat_for(app: &AppHandle, desktop: &Desktop) -> CommandResult<Arc<Chat>
     let chat = Arc::new(Chat::open(
         desktop.api.clone(),
         desktop.chat_dir.clone(),
-        &KeyringSecrets::new(APP_ID),
+        &KeyringSecrets::new(&desktop.keychain_service),
         user,
     )?);
     *slot = Some(chat.clone());
@@ -1593,7 +1597,8 @@ fn main() {
         .plugin(tauri_plugin_updater::Builder::new().build())
         .setup(|app| {
             let base = API_URL.parse().expect("SLOP_API_URL is a valid URL");
-            let api = ApiClient::new(base, Arc::new(KeyringTokenStore::new(APP_ID)))?;
+            let keychain_service = app.config().identifier.clone();
+            let api = ApiClient::new(base, Arc::new(KeyringTokenStore::new(&keychain_service)))?;
             let root = app.path().app_data_dir()?.join("library");
             let chat_dir = app.path().app_data_dir()?.join("chat");
             // Plain-http downloads only in debug builds pointed at a local API.
@@ -1625,6 +1630,7 @@ fn main() {
                 update: tokio::sync::Mutex::new(None),
                 chat: tokio::sync::Mutex::new(None),
                 chat_dir,
+                keychain_service,
             });
             #[cfg(windows)]
             if let Err(e) = make_tray(app) {

@@ -60,4 +60,7 @@ cd web && npm run build && npm run e2e   # browser tests, for changes to the web
 ```
 
 Add tests for new behaviour, especially who may see or change what. Commit only when the user
-asks, and don't push or deploy without their say-so.
+asks, and don't push or deploy without their say-so. Work lands on `dev` (the test server deploys
+it without running the tests, so run them first); `main`, and so production, only moves forward
+to dev through `deploy/promote.sh` and an approved pipeline run (`deploy/README.md`, "How changes
+ship").

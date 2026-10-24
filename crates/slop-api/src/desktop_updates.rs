@@ -1,12 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Updates for the Slop desktop app itself (SECURITY §7: self-updates are signed and verified).
 //!
-//! CI builds the app on every push to main (the test server's channel) and when the `production`
-//! tag moves (production's), and uploads it to that channel's server, proving where it came from
-//! with the run's GitHub OIDC token (no secrets in CI). The server signs each build with the
-//! updater key, which never leaves this server, and answers the app's update checks in the format
-//! Tauri's updater expects. The signature records the version, and the app requires that it
-//! matches what it was offered, so an old build can't be passed off as a new one.
+//! Production's Windows app is built on GitHub by the pipeline (.github/workflows/pipeline.yml),
+//! after the owner approves the run's `production` environment, and uploaded here with the run's
+//! GitHub OIDC token (no secrets in CI). Linux packages, and the test server's "Slop Dev" app for
+//! every platform, are built on the server itself and published with `slop-api desktop publish`;
+//! the test server takes no uploads from GitHub (deploy/README.md, "The desktop app"). The server
+//! signs each build with the updater key, which never leaves the server, and answers the app's
+//! update checks in the format Tauri's updater expects. The signature records the version, and
+//! the app requires that it matches what it was offered, so an old build can't be passed off as
+//! a new one.
 
 use std::{io::Write, path::PathBuf};
 
@@ -140,6 +143,11 @@ async fn upload(
             "desktop updates aren't set up on this server",
         ));
     };
+    let Some(environment) = cfg.environment.as_deref() else {
+        return Err(ApiError::Unavailable(
+            "this server builds its own desktop apps and takes no uploads",
+        ));
+    };
     let dir = dir(&state)?.clone();
     let token = headers
         .get(header::AUTHORIZATION)
@@ -147,12 +155,7 @@ async fn upload(
         .and_then(|v| v.strip_prefix("Bearer "))
         .ok_or(ApiError::Unauthorized)?;
     let claims = verify_github_token(&state, token.trim()).await?;
-    // Only the desktop workflow in Slop's own repository, run for this server's channel: main
-    // on the test server, the `production` tag in production (SLOP_DESKTOP_REF).
-    let workflow = format!("{repo}/.github/workflows/desktop.yml@{}", cfg.git_ref);
-    if !claims.repository.eq_ignore_ascii_case(repo)
-        || !claims.job_workflow_ref.eq_ignore_ascii_case(&workflow)
-    {
+    if !uploader_allowed(&claims, repo, &cfg.workflow, &cfg.git_ref, environment) {
         return Err(ApiError::Forbidden);
     }
     if !claims.sha.eq_ignore_ascii_case(&q.commit) {
@@ -197,6 +200,27 @@ async fn upload(
     let published = publish(&state.db, &dir, key, &q.platform, &version, &q.commit, &tmp).await;
     let _ = std::fs::remove_file(&tmp);
     Ok((StatusCode::CREATED, Json(published?)))
+}
+
+/// Only Slop's own pipeline on main (SLOP_DESKTOP_WORKFLOW, SLOP_DESKTOP_REF) in Slop's own
+/// repository, and only a job in the approved environment (SLOP_DESKTOP_ENVIRONMENT): a run
+/// waiting for, or refused, the owner's approval never gets that far, and no other workflow,
+/// branch or fork can update the players.
+fn uploader_allowed(
+    claims: &crate::slop_build::GithubClaims,
+    repo: &str,
+    workflow: &str,
+    git_ref: &str,
+    environment: &str,
+) -> bool {
+    let expected = format!("{repo}/.github/workflows/{workflow}@{git_ref}");
+    claims.repository.eq_ignore_ascii_case(repo)
+        && claims.job_workflow_ref.eq_ignore_ascii_case(&expected)
+        // GitHub's environment names ignore case.
+        && claims
+            .environment
+            .as_deref()
+            .is_some_and(|e| e.eq_ignore_ascii_case(environment))
 }
 
 /// Platforms the desktop app is published for. Linux builds are per package format, because
@@ -406,6 +430,74 @@ async fn download(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn only_the_approved_pipeline_on_main_may_upload() {
+        let claims = |repo: &str, workflow_ref: &str, environment: Option<&str>| {
+            crate::slop_build::GithubClaims {
+                repository: repo.into(),
+                sha: "1".repeat(40),
+                job_workflow_ref: workflow_ref.into(),
+                repository_id: None,
+                repository_owner_id: None,
+                environment: environment.map(Into::into),
+            }
+        };
+        let allowed = |c: &crate::slop_build::GithubClaims| {
+            uploader_allowed(
+                c,
+                "octo/slop",
+                "pipeline.yml",
+                "refs/heads/main",
+                "production",
+            )
+        };
+        let ok = "octo/slop/.github/workflows/pipeline.yml@refs/heads/main";
+        assert!(allowed(&claims("octo/slop", ok, Some("production"))));
+        assert!(allowed(&claims("Octo/Slop", ok, Some("Production"))));
+        for (repo, workflow_ref, environment) in [
+            // Not approved: no environment, or another one.
+            ("octo/slop", ok, None),
+            ("octo/slop", ok, Some("dev")),
+            ("octo/slop", ok, Some("production-old")),
+            // Another repository, workflow, branch or tag.
+            (
+                "mallory/slop",
+                "mallory/slop/.github/workflows/pipeline.yml@refs/heads/main",
+                Some("production"),
+            ),
+            (
+                "octo/slop",
+                "mallory/slop/.github/workflows/pipeline.yml@refs/heads/main",
+                Some("production"),
+            ),
+            (
+                "octo/slop",
+                "octo/slop/.github/workflows/desktop.yml@refs/heads/main",
+                Some("production"),
+            ),
+            (
+                "octo/slop",
+                "octo/slop/.github/workflows/pipeline.yml@refs/heads/dev",
+                Some("production"),
+            ),
+            (
+                "octo/slop",
+                "octo/slop/.github/workflows/pipeline.yml@refs/tags/production",
+                Some("production"),
+            ),
+            (
+                "octo/slop",
+                "octo/slop/.github/workflows/pipeline.yml@refs/pull/7/merge",
+                Some("production"),
+            ),
+        ] {
+            assert!(
+                !allowed(&claims(repo, workflow_ref, environment)),
+                "{repo} {workflow_ref} {environment:?}"
+            );
+        }
+    }
 
     /// The signature must verify exactly the way Tauri's updater checks it (tauri-plugin-updater
     /// `verify_signature`): base64-decode, parse with minisign-verify, verify, then read the

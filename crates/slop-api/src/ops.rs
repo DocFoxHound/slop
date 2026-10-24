@@ -5,7 +5,7 @@
 //!
 //! What it watches:
 //! - backups (`SLOP_OPS_BACKUP_DIR`): the nightly backup and the weekly restore check;
-//! - deploys (`SLOP_OPS_DEPLOY_DIR`): a commit whose tests failed, and known-vulnerable
+//! - deploys (`SLOP_OPS_DEPLOY_DIR`): a commit that failed to deploy, and known-vulnerable
 //!   dependencies in the running build (OSV, checked on every deploy);
 //! - free disk space;
 //! - the scanner failing on a release;
@@ -104,7 +104,7 @@ pub fn backup_alerts(dir: &Path, now: OffsetDateTime) -> Vec<Alert> {
     out
 }
 
-/// Deploys whose tests failed in the last two days (update.sh marks them `failed-<sha>`).
+/// Commits that failed to build or deploy in the last two days (update.sh marks them `failed-<sha>`).
 fn deploy_alerts(dir: &Path) -> Vec<Alert> {
     let Ok(entries) = std::fs::read_dir(dir.join("builds")) else {
         return Vec::new();
@@ -120,7 +120,7 @@ fn deploy_alerts(dir: &Path) -> Vec<Alert> {
                 alert(
                     format!("deploy-failed-{sha}"),
                     format!("Commit {} didn't deploy", &sha[..sha.len().min(7)]),
-                    "Its tests failed, so the server kept running the previous build. See ~/slop-deploy/out/ (test.log, lint.log, e2e.log, container.log).",
+                    "It failed to build or deploy, so the server kept running the previous build. See journalctl --user -u slop-deploy and ~/slop-deploy/out/ (build.log, web.log, container.log).",
                     "/admin",
                     true,
                 )

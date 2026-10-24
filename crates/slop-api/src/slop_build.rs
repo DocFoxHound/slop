@@ -83,6 +83,10 @@ pub(crate) struct GithubClaims {
     pub repository_id: Option<String>,
     #[serde(default)]
     pub repository_owner_id: Option<String>,
+    /// The GitHub environment the job runs in, if any (the desktop app's production uploads
+    /// need the `production` environment's approval, desktop_updates.rs).
+    #[serde(default)]
+    pub environment: Option<String>,
 }
 
 /// The run is in the very repository the app was linked to, not one registered again under its

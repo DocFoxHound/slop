@@ -1,0 +1,292 @@
+# Slop's pipeline to production (deploy/README.md, "How changes ship"). Work lands on `dev`,
+# which the test server deploys by itself; fast-forwarding main to dev (deploy/promote.sh) runs:
+#
+#   checks ─────────┐
+#                   ├─► production: waits for the owner's approval, moves the `production` tag
+#   build-windows ──┘   (slopai.games deploys it), then publishes the Windows app there
+#
+# checks         The same tests, lints, builds and browser tests the deploy's test mode runs:
+#                deploy/build/build.sh in the deploy/build/Containerfile image, against a Postgres
+#                service, so CI and the old test-server checks are one and the same.
+# build-windows  The "Slop" Windows installer for slopai.games, built while the checks run, with
+#                no write access and no tokens.
+# production     Runs in the `production` environment, which needs the owner's approval (set up
+#                in the repository's settings, deploy/README.md). Moves the annotated tag
+#                `production` to this commit (production's update.sh deploys it within minutes),
+#                waits until slopai.games runs it, then uploads the Windows installer with this
+#                job's GitHub OIDC token. slopai.games takes desktop uploads only from this
+#                workflow on main, in the approved environment (SLOP_DESKTOP_WORKFLOW,
+#                SLOP_DESKTOP_REF, SLOP_DESKTOP_ENVIRONMENT; desktop_updates.rs).
+#
+# Nothing here runs for pull requests, and nothing runs on self-hosted runners. (A tag pushed
+# with this run's token starts no other workflow, which is why the Windows app is published here
+# and not by a workflow on the tag.)
+name: Pipeline
+
+on:
+  push:
+    branches: [main]
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+env:
+  SLOP_URL: https://slopai.games
+
+jobs:
+  checks:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    services:
+      postgres:
+        # The same Postgres as the test server's slop-pg-dev (deploy/systemd/slop-pg-dev.container).
+        image: docker.io/library/postgres:17@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
+        env:
+          POSTGRES_USER: slop
+          POSTGRES_PASSWORD: slop
+          POSTGRES_DB: slop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U slop -q"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+
+      # Rust's debug and release builds, the browsers and the build image need more disk than the
+      # runner has free; these preinstalled toolchains aren't used.
+      - name: Make room
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/slop-cache/cargo/registry
+            ~/slop-cache/cargo/git
+            ~/slop-cache/npm
+            target
+          key: checks-${{ hashFiles('deploy/build/Containerfile', 'Cargo.lock', 'web/package-lock.json') }}
+          restore-keys: checks-
+
+      - name: Build the build image
+        run: docker build -q -t slop-build -f deploy/build/Containerfile deploy/build
+
+      # As deploy/update.sh runs it: the source, a cache folder and an output folder, no
+      # capabilities, the host's network for the crates, npm and the Postgres service.
+      - name: Tests, lints, build and browser tests
+        run: |
+          mkdir -p ~/slop-cache/cargo ~/slop-cache/npm "$RUNNER_TEMP/out"
+          docker run --rm --network=host --user "$(id -u):$(id -g)" \
+            --cap-drop=all --security-opt=no-new-privileges \
+            -e HOME=/tmp/home -e CARGO_HOME=/cache/cargo -e npm_config_cache=/cache/npm \
+            -e CARGO_INCREMENTAL=0 \
+            -e SLOP_TEST_DATABASE_URL=postgres://slop:slop@127.0.0.1:5432/slop \
+            -e SLOP_COMMIT="$GITHUB_SHA" \
+            -v "$GITHUB_WORKSPACE:/src" -v "$HOME/slop-cache:/cache" -v "$RUNNER_TEMP/out:/out" \
+            -w /src slop-build bash deploy/build/build.sh >"$RUNNER_TEMP/out/container.log" 2>&1 || true
+          out="$RUNNER_TEMP/out"
+          if [ -e "$out/ok" ] && [ ! -e "$out/failed" ]; then
+            echo "All checks passed."
+            exit 0
+          fi
+          step=$(head -c 40 "$out/failed" 2>/dev/null | tr -cd 'a-z ' || true)
+          step=${step:-container}
+          # The same summary as deploy/update.sh; every log is in the job's artifacts.
+          case "$step" in
+            tests) grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$out/test.log" | tail -n 30 ;;
+            lint) tail -n 30 "$out/lint.log" ;;
+            "browser tests") grep -E "✘|Error:|failed" "$out/e2e.log" | head -n 30 ;;
+            *) tail -n 30 "$out/container.log" ;;
+          esac || true
+          echo "::error::failed at: $step"
+          exit 1
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: checks-logs
+          path: |
+            ${{ runner.temp }}/out/*.log
+            web/e2e/.results
+          retention-days: 14
+          if-no-files-found: ignore
+
+  build-windows:
+    runs-on: windows-latest
+    timeout-minutes: 60
+    outputs:
+      version: ${{ steps.version.outputs.version }}
+    defaults:
+      run:
+        shell: bash
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+          # Full history: the version is the commit count, shared with the Linux builds.
+          fetch-depth: 0
+
+      - name: Choose the version
+        id: version
+        run: |
+          version="0.1.$(git rev-list --count HEAD)"
+          echo "VERSION=$version" >> "$GITHUB_ENV"
+          echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: web/package-lock.json
+
+      - uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: windows-cargo-${{ hashFiles('Cargo.lock') }}
+          restore-keys: windows-cargo-
+
+      # The version and site, as every desktop build sets them; "Slop", not the test server's
+      # "Slop Dev".
+      - name: Set up the app for slopai.games
+        env:
+          SITE: ${{ env.SLOP_URL }}
+          CHANNEL: production
+        run: node deploy/desktop-config.js
+
+      - name: Install web dependencies
+        working-directory: web
+        run: npm ci
+
+      - name: Build the installer
+        working-directory: web
+        env:
+          SLOP_API_URL: ${{ env.SLOP_URL }}/
+          # The release-signing public key (not a secret); the test server and production share it.
+          SLOP_TRUSTED_KEYS: Y4ONcDe13CHu7blM2TpRSTcxuQ3Jc5yl2jrSLfJkav0=
+        # Never SLOP_ALLOW_UNSIGNED: production's app accepts only signed releases (build.rs).
+        run: npm run desktop:build:windows
+
+      - name: Check the installer
+        run: |
+          exe="target/release/bundle/nsis/Slop_${VERSION}_x64-setup.exe"
+          test -f "$exe" || { echo "::error::no installer at $exe"; ls target/release/bundle/nsis; exit 1; }
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        with:
+          name: slop-windows
+          path: target/release/bundle/nsis/Slop_${{ env.VERSION }}_x64-setup.exe
+          retention-days: 7
+          if-no-files-found: error
+
+  production:
+    needs: [checks, build-windows]
+    # Production doesn't wait on the Windows build: if that failed, the server still ships and
+    # only the app's upload is skipped (re-run the failed job to publish it; the tag step then
+    # finds it already done).
+    if: ${{ !cancelled() && needs.checks.result == 'success' && github.ref == 'refs/heads/main' }}
+    runs-on: ubuntu-latest
+    timeout-minutes: 90
+    environment:
+      name: production
+      url: https://slopai.games
+    # One at a time, and never cancelled halfway.
+    concurrency:
+      group: production
+      cancel-in-progress: false
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      # Only this repository's own shell steps run with write access: nothing is built here.
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          fetch-depth: 0
+
+      - name: Move the production tag
+        run: |
+          set -euo pipefail
+          tag=production
+          # The tag as GitHub has it now: the tag object (for the push's lease) and its commit.
+          remote_tag=$(git ls-remote --refs origin "refs/tags/$tag" | cut -f1)
+          old=
+          if [ -n "$remote_tag" ]; then
+            git fetch -q origin "+refs/tags/$tag:refs/tags/$tag"
+            old=$(git rev-parse "refs/tags/$tag^{commit}")
+          fi
+          if [ "$old" = "$GITHUB_SHA" ]; then
+            echo "Production already has ${GITHUB_SHA:0:12}."
+            exit 0
+          fi
+          # An older run approved after a newer one would take production back: refused.
+          if [ -n "$old" ] && ! git merge-base --is-ancestor "$old" "$GITHUB_SHA"; then
+            echo "::error::production has ${old:0:12}, which this commit doesn't include; not taking it back"
+            exit 1
+          fi
+          echo "New on production${old:+ (since ${old:0:12})}:"
+          git log --oneline -n 100 "${old:+$old..}$GITHUB_SHA"
+          git -c user.name="github-actions[bot]" -c user.email="41898282+github-actions[bot]@users.noreply.github.com" \
+            tag -f -a -m "Production: ${GITHUB_SHA:0:12}, approved in $GITHUB_SERVER_URL/$GITHUB_REPOSITORY/actions/runs/$GITHUB_RUN_ID" \
+            "$tag" "$GITHUB_SHA"
+          # Only the tag, and only if nobody moved it since it was read above.
+          git push -q --force-with-lease="refs/tags/$tag:$remote_tag" origin "refs/tags/$tag:refs/tags/$tag"
+          echo "production -> ${GITHUB_SHA:0:12}; slopai.games deploys it within a few minutes."
+
+      # The app talks to the server, so it's published only once the server runs the same commit.
+      - name: Wait for slopai.games to run it
+        id: live
+        run: |
+          set -uo pipefail
+          live=
+          for _ in $(seq 120); do
+            live=$(curl -sf "$SLOP_URL/v1/source" | jq -r '.commit // empty' || true)
+            if [ "$live" = "$GITHUB_SHA" ]; then
+              echo "slopai.games runs ${GITHUB_SHA:0:12}."
+              exit 0
+            fi
+            # A newer approved run got there first; its own Windows build is the one to publish.
+            if [ -n "$live" ]; then
+              git cat-file -e "$live^{commit}" 2>/dev/null || git fetch -q origin main || true
+              if git merge-base --is-ancestor "$GITHUB_SHA" "$live" 2>/dev/null; then
+                echo "slopai.games already runs a newer commit, ${live:0:12}."
+                echo "superseded=1" >> "$GITHUB_OUTPUT"
+                exit 0
+              fi
+            fi
+            sleep 30
+          done
+          echo "::error::slopai.games still runs ${live:0:12} after an hour; see its deploy log (journalctl --user -u slop-deploy)"
+          exit 1
+
+      - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        if: needs.build-windows.result == 'success' && steps.live.outputs.superseded != '1'
+        with:
+          name: slop-windows
+          path: ${{ runner.temp }}/windows
+
+      - name: Publish the Windows app to slopai.games
+        if: needs.build-windows.result == 'success' && steps.live.outputs.superseded != '1'
+        env:
+          VERSION: ${{ needs.build-windows.outputs.version }}
+        run: |
+          set -euo pipefail
+          exe="$RUNNER_TEMP/windows/Slop_${VERSION}_x64-setup.exe"
+          test -f "$exe" || { echo "::error::no installer at $exe"; ls "$RUNNER_TEMP/windows"; exit 1; }
+          token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
+            "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$SLOP_URL" | jq -r .value)
+          echo "::add-mask::$token"
+          curl -sS --fail-with-body -X POST \
+            "$SLOP_URL/v1/desktop/builds?platform=windows&version=$VERSION&commit=$GITHUB_SHA" \
+            -H "Authorization: Bearer $token" -H "Content-Type: application/octet-stream" \
+            --data-binary @"$exe"
+          echo
+          echo "Published Slop $VERSION for Windows."
+
+      - name: No Windows app this time
+        if: needs.build-windows.result != 'success'
+        run: echo "::warning::The Windows build didn't finish, so production's app wasn't updated. Re-run the failed jobs to publish it."

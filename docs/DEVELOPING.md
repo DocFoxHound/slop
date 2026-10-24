@@ -32,13 +32,16 @@ don't copy it into real code.
 
 ## Test deployment
 
-Running at **https://slop.188-68-41-241.sslip.io**, updated automatically from `main`
-(`deploy/README.md`). The Windows app is built on every push and updates itself. Testing with
-private repositories: `docs/TESTING.md`.
+Work lands on the `dev` branch. The test server, **https://slop.188-68-41-241.sslip.io**,
+deploys every push to `dev` within minutes, without running the tests, and then builds the
+**Slop Dev** desktop app for Linux and Windows, which installs beside the real Slop and updates
+itself from the test server. Testing with private repositories: `docs/TESTING.md`.
 
-Production, **https://slopai.games**, runs only commits that went live on the test deployment
-first, when the owner moves the `production` tag to them (`deploy/ship-to-production.sh`,
-`deploy/README.md` "Production").
+Production, **https://slopai.games**, runs only what reaches `main`: `deploy/promote.sh`
+fast-forwards main to dev, GitHub's pipeline (`.github/workflows/pipeline.yml`) runs every check
+and builds the Windows app, and production deploys once the owner approves the run's
+`production` environment (`deploy/README.md`, "How changes ship"). Run the checks yourself
+before pushing to dev (below): nothing on the test server does any more.
 
 ## Layout
 
