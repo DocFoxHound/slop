@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
-import { Link } from "react-router";
+import { Link, useLocation } from "react-router";
 
 import { api } from "../api";
 import { FeaturedCarousel } from "../components/Featured";
-import { Sidebar } from "../components/Layout";
-import { ErrorState, SectionHeader, Shelf } from "../components/ui";
+import { StoreFrame } from "../components/StoreNav";
+import { ErrorState, Loading, SectionHeader, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
-import { isDesktop } from "../platform";
+import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
 
 /**
@@ -78,171 +78,166 @@ export function Store() {
   );
 
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar />
-        <div>
-          {server.data && !server.data.scanning && (
-            <p className="notice" role="note">
-              <b>Test server.</b> Automatic scanning isn't running here yet, so uploads are not scanned.
-            </p>
+    <StoreFrame>
+      {server.data && !server.data.scanning && (
+        <p className="notice" role="note">
+          <b>Test server.</b> Automatic scanning isn't running here yet, so uploads are not scanned.
+        </p>
+      )}
+      {/* What Slop is: for visitors who haven't signed in, and never in the desktop app. */}
+      {me === null && !isDesktop && (
+      <section className="intro panel">
+        <h1>
+          Apps and games made with AI. <span className="slime">Open source, every one.</span>
+        </h1>
+        <ul>
+          <li>
+            <b>Source you can read.</b> Every app links its code, under an open-source licence.
+          </li>
+          {server.data?.scanning ? (
+            <li>
+              <b>Scanned before it's listed.</b> Malware, stolen code and scams are checked on every upload.
+            </li>
+          ) : (
+            <li>
+              <b>Reviewed before it's listed.</b>{" "}
+              {server.data?.maker_signatures_required
+                ? "Every build is signed by its maker and checked by a person."
+                : "Every build is checked by a person."}
+            </li>
           )}
-          {/* What Slop is: for visitors who haven't signed in, and never in the desktop app. */}
-          {me === null && !isDesktop && (
-          <section className="intro panel">
-            <h1>
-              Apps and games made with AI. <span className="slime">Open source, every one.</span>
-            </h1>
-            <ul>
-              <li>
-                <b>Source you can read.</b> Every app links its code, under an open-source licence.
-              </li>
-              {server.data?.scanning ? (
-                <li>
-                  <b>Scanned before it's listed.</b> Malware, stolen code and scams are checked on every upload.
-                </li>
-              ) : (
-                <li>
-                  <b>Reviewed before it's listed.</b>{" "}
-                  {server.data?.maker_signatures_required
-                    ? "Every build is signed by its maker and checked by a person."
-                    : "Every build is checked by a person."}
-                </li>
-              )}
-              <li>
-                <b>Free to download.</b> Makers can take donations. Nothing is ever for sale.
-              </li>
-            </ul>
-          </section>
-          )}
+          <li>
+            <b>Free to download.</b> Makers can take donations. Nothing is ever for sale.
+          </li>
+        </ul>
+      </section>
+      )}
 
-          {featured.data && <FeaturedCarousel slides={featured.data} />}
+      {featured.data && <FeaturedCarousel slides={featured.data} />}
 
-          {me && <ForYouShelf />}
+      {me && <ForYouShelf />}
 
-          {shelves.data?.shelves.map((s) => (
-            <section key={s.slug} aria-label={s.title}>
-              <SectionHeader title={s.title} sub={s.blurb || undefined}>
-                <Link to={`/shelf/${s.slug}`} className="sub">
-                  See all →
-                </Link>
-              </SectionHeader>
-              <Shelf apps={s.apps.slice(0, 8)} empty="" />
-            </section>
-          ))}
-
-          {show("popular") && (
-          <>
-          <SectionHeader title="Popular this month" sub="Most added to libraries this month">
-            <Link to="/search?sort=popular" className="sub">
+      {shelves.data?.shelves.map((s) => (
+        <section key={s.slug} aria-label={s.title}>
+          <SectionHeader title={s.title} sub={s.blurb || undefined}>
+            <Link to={`/shelf/${s.slug}`} className="sub">
               See all →
             </Link>
           </SectionHeader>
-          {popular.error ? (
-            <ErrorState error={popular.error} onRetry={popular.reload} />
-          ) : (
-            <Shelf apps={popular.data} empty="Nothing to play yet." />
-          )}
-          </>
-          )}
+          <Shelf apps={s.apps.slice(0, 8)} empty="" />
+        </section>
+      ))}
 
-          {show("upcoming") && (
-          <>
-          <SectionHeader title="Coming soon & in beta" sub="Projects on their way to release">
-            <Link to="/upcoming" className="sub">
-              See all →
-            </Link>
-          </SectionHeader>
-          <UpcomingShelf />
-          </>
-          )}
+      {show("popular") && (
+      <>
+      <SectionHeader title="Popular this month" sub="Most added to libraries this month">
+        <Link to="/search?sort=popular" className="sub">
+          See all →
+        </Link>
+      </SectionHeader>
+      {popular.error ? (
+        <ErrorState error={popular.error} onRetry={popular.reload} />
+      ) : (
+        <Shelf apps={popular.data} empty="Nothing to play yet." />
+      )}
+      </>
+      )}
 
-          {show("categories") && (
-          <>
-          <SectionHeader title="Browse by category">
-            <Link to="/browse" className="sub">
-              All tags →
-            </Link>
-          </SectionHeader>
-          <div className="cat-grid">
-            {categories.data?.map((c) => (
-              <Link className="cat" key={c.slug} to={`/browse/${c.slug}`}>
-                <b>{c.name}</b>
-                <span>{c.description}</span>
-              </Link>
-            ))}
-          </div>
-          </>
-          )}
+      {show("upcoming") && (
+      <>
+      <SectionHeader title="Coming soon & in beta" sub="Projects on their way to release">
+        <Link to="/upcoming" className="sub">
+          See all →
+        </Link>
+      </SectionHeader>
+      <UpcomingShelf />
+      </>
+      )}
 
-          {show("not_slop") && (
-          <>
-          <SectionHeader title="Most Not Slop right now" sub="Best rated by votes from the last 30 days" />
-          {notSlop.error ? (
-            <ErrorState error={notSlop.error} onRetry={notSlop.reload} />
-          ) : (
-            <Shelf apps={notSlop.data} empty="Not enough recent votes yet." />
-          )}
-          </>
-          )}
-
-          {show("barely_seen") && barelySeen.data && barelySeen.data.length > 0 && (
-            <>
-              <SectionHeader title="New and barely seen" sub="Released lately, in few libraries yet. A different pick every day." />
-              <Shelf apps={barelySeen.data} empty="" />
-            </>
-          )}
-
-          {show("glow_ups") && glowUps.data && glowUps.data.length > 0 && (
-            <>
-              <SectionHeader title="Glow-ups" sub="Updates turned these from Slop toward Not Slop in the last 60 days" />
-              <Shelf apps={glowUps.data} empty="" />
-            </>
-          )}
-
-          {show("community") && (
-          <>
-          <SectionHeader title="Community branches worth installing" sub="Mods, fixes, translations and ports from forks">
-            <Link to="/community" className="sub">
-              See all →
-            </Link>
-          </SectionHeader>
-          {community.error ? (
-            <ErrorState error={community.error} onRetry={community.reload} />
-          ) : (
-            <Shelf apps={community.data} empty="No community builds yet." />
-          )}
-          </>
-          )}
-
-          {show("fresh") && (
-          <>
-          <SectionHeader title="New & updated" />
-          {fresh.error ? (
-            <ErrorState error={fresh.error} onRetry={fresh.reload} />
-          ) : (
-            <Shelf
-              apps={fresh.data?.apps}
-              empty={
-                <>
-                  Nothing released yet. <Link to="/publish">Be the first to publish</Link>.
-                </>
-              }
-            />
-          )}
-
-          </>
-          )}
-
-          {show("fresh_slop") && freshSlop.data && freshSlop.data.length > 0 && (
-            <>
-              <SectionHeader title="Fresh slop" sub="The most 👎 Slop votes this month. For fun: be kind in reviews." />
-              <Shelf apps={freshSlop.data} empty="" />
-            </>
-          )}
-        </div>
+      {show("categories") && (
+      <>
+      <SectionHeader title="Browse by category">
+        <Link to="/browse" className="sub">
+          All tags →
+        </Link>
+      </SectionHeader>
+      <div className="cat-grid">
+        {categories.data?.map((c) => (
+          <Link className="cat" key={c.slug} to={`/browse/${c.slug}`}>
+            <b>{c.name}</b>
+            <span>{c.description}</span>
+          </Link>
+        ))}
       </div>
-    </div>
+      </>
+      )}
+
+      {show("not_slop") && (
+      <>
+      <SectionHeader title="Most Not Slop right now" sub="Best rated by votes from the last 30 days" />
+      {notSlop.error ? (
+        <ErrorState error={notSlop.error} onRetry={notSlop.reload} />
+      ) : (
+        <Shelf apps={notSlop.data} empty="Not enough recent votes yet." />
+      )}
+      </>
+      )}
+
+      {show("barely_seen") && barelySeen.data && barelySeen.data.length > 0 && (
+        <>
+          <SectionHeader title="New and barely seen" sub="Released lately, in few libraries yet. A different pick every day." />
+          <Shelf apps={barelySeen.data} empty="" />
+        </>
+      )}
+
+      {show("glow_ups") && glowUps.data && glowUps.data.length > 0 && (
+        <>
+          <SectionHeader title="Glow-ups" sub="Updates turned these from Slop toward Not Slop in the last 60 days" />
+          <Shelf apps={glowUps.data} empty="" />
+        </>
+      )}
+
+      {show("community") && (
+      <>
+      <SectionHeader title="Community branches worth installing" sub="Mods, fixes, translations and ports from forks">
+        <Link to="/community" className="sub">
+          See all →
+        </Link>
+      </SectionHeader>
+      {community.error ? (
+        <ErrorState error={community.error} onRetry={community.reload} />
+      ) : (
+        <Shelf apps={community.data} empty="No community builds yet." />
+      )}
+      </>
+      )}
+
+      {show("fresh") && (
+      <>
+      <SectionHeader title="New & updated" />
+      {fresh.error ? (
+        <ErrorState error={fresh.error} onRetry={fresh.reload} />
+      ) : (
+        <Shelf
+          apps={fresh.data?.apps}
+          empty={
+            <>
+              Nothing released yet. <Link to="/publish">Be the first to publish</Link>.
+            </>
+          }
+        />
+      )}
+
+      </>
+      )}
+
+      {show("fresh_slop") && freshSlop.data && freshSlop.data.length > 0 && (
+        <>
+          <SectionHeader title="Fresh slop" sub="The most 👎 Slop votes this month. For fun: be kind in reviews." />
+          <Shelf apps={freshSlop.data} empty="" />
+        </>
+      )}
+    </StoreFrame>
   );
 }
 
@@ -264,6 +259,98 @@ function ForYouShelf() {
         </Link>
       </SectionHeader>
       <Shelf apps={f?.items} empty="Nothing to recommend yet." />
+    </>
+  );
+}
+
+/**
+ * Recommended (the store bar): the person's own picks, from what's in their library and what
+ * they play (foryou.rs), with discovery mixed in. Visitors get popular picks and a way to sign in.
+ */
+export function Recommended() {
+  useDocumentTitle("Recommended");
+  const { me } = useSession();
+  const location = useLocation();
+  return (
+    <StoreFrame>
+      <h1 className="page-title">Recommended</h1>
+      {me === undefined ? (
+        <Loading />
+      ) : me ? (
+        <RecommendedForYou />
+      ) : (
+        <>
+          <div className="panel panel-pad signin-nudge">
+            <p>
+              <b>Picks of your own.</b> Sign in and Slop recommends apps from what's in your library and what you play, with
+              something different mixed in. You can turn it off on your account page.
+            </p>
+            {isDesktop ? (
+              <button className="btn slime" onClick={() => void desktop.showLogin()}>
+                Sign in
+              </button>
+            ) : (
+              <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(location.pathname)}`}>
+                Sign in for your picks
+              </Link>
+            )}
+          </div>
+          <PopularPicks />
+        </>
+      )}
+    </StoreFrame>
+  );
+}
+
+function RecommendedForYou() {
+  const feed = useLoad(() => api.forYou(), []);
+  const upcoming = useLoad(() => api.interested.forYou().then((apps) => apps.slice(0, 8)), []);
+  if (feed.error) return <ErrorState error={feed.error} onRetry={feed.reload} />;
+  const f = feed.data;
+  const sub = !f
+    ? undefined
+    : f.personalized
+      ? `Based on ${f.based_on.join(", ")}, plus something different every fourth`
+      : "Popular, well rated and new. Add apps to your library and play them for picks of your own.";
+  return (
+    <>
+      <SectionHeader title="For you" sub={sub}>
+        <Link to="/account" className="sub">
+          Settings
+        </Link>
+      </SectionHeader>
+      <Shelf apps={f?.items} empty="Nothing to recommend yet." />
+      {upcoming.data && upcoming.data.length > 0 && (
+        <>
+          <SectionHeader title="Coming soon, for you" sub="Upcoming projects like the ones in your library and Interested list">
+            <Link to="/upcoming" className="sub">
+              See all →
+            </Link>
+          </SectionHeader>
+          <Shelf apps={upcoming.data} empty="" />
+        </>
+      )}
+    </>
+  );
+}
+
+/** What players add most this month: for visitors, until they have picks of their own. */
+function PopularPicks() {
+  const popular = useLoad(
+    () =>
+      api
+        .apps({ sort: "popular", limit: 24 })
+        .then((page) => page.apps.filter((a) => a.stage !== "coming_soon" && !a.is_dead).slice(0, 16)),
+    [],
+  );
+  return (
+    <>
+      <SectionHeader title="Popular picks" sub="Most added to libraries this month">
+        <Link to="/search?sort=popular" className="sub">
+          See all →
+        </Link>
+      </SectionHeader>
+      {popular.error ? <ErrorState error={popular.error} onRetry={popular.reload} /> : <Shelf apps={popular.data} empty="Nothing to play yet." />}
     </>
   );
 }

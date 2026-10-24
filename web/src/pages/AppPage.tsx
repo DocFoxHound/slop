@@ -17,6 +17,7 @@ import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LA
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
+import { StoreNav } from "../components/StoreNav";
 import { ModControls } from "../components/ModControls";
 import { DonateBox } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
@@ -70,6 +71,7 @@ function AppView({ app }: { app: AppDetail }) {
 
   return (
     <div className="page">
+      <StoreNav />
       <div className="crumbs">
         <Link to="/">Store</Link> ›{" "}
         {upcoming ? <Link to="/upcoming">Upcoming</Link> : firstCategory ? <Link to={`/browse/${firstCategory.slug}`}>{firstCategory.name}</Link> : <Link to="/search">Apps</Link>} ›{" "}

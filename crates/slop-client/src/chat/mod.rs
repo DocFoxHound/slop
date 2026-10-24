@@ -15,6 +15,7 @@
 //!   with the recovery code when every device is lost.
 
 pub mod content;
+pub mod device_name;
 pub mod links;
 pub mod mls;
 

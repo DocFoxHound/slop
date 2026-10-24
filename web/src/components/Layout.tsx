@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useRef, useState, type FormEvent } from "react";
-import { Link, NavLink, Outlet, useLocation, useNavigate } from "react-router";
+import { useEffect, useRef, useState } from "react";
+import { Link, NavLink, Outlet, useLocation } from "react-router";
 
-import { api, type Category } from "../api";
+import { api } from "../api";
 import { useLoad } from "../hooks";
 import { formatDate } from "../format";
 import { desktop, isDesktop } from "../platform";
 import { useAutoUpdates } from "./AppUpdates";
+import { ChatDock } from "./ChatDock";
 import { ModRequests } from "./ModRequests";
 import { CrashPrompt } from "./BugReports";
 import { SaveSyncEvents } from "./Sandbox";
@@ -31,15 +32,21 @@ const TABS = [
     match: (p: string) => p.startsWith("/people") || p.startsWith("/jobs"),
   },
   { to: "/library", label: "Library", icon: "📚", end: false, match: (p: string) => p.startsWith("/library") },
-  {
-    to: "/chat",
-    label: "Chat",
-    icon: "💬",
-    end: false,
-    match: (p: string) => p.startsWith("/chat") || p.startsWith("/friends"),
-  },
   { to: "/publish", label: "Publish", icon: "⬆️", end: false, match: (p: string) => p.startsWith("/publish") },
 ];
+
+/**
+ * On phone-sized screens, chat is a bottom tab; elsewhere it's the Friends & Chat bar in the
+ * bottom right (ChatDock.tsx), so it isn't a top tab.
+ */
+const CHAT_TAB = {
+  to: "/chat",
+  label: "Chat",
+  icon: "💬",
+  end: false,
+  match: (p: string) => p.startsWith("/chat") || p.startsWith("/friends"),
+};
+const BOTTOM_TABS = [...TABS.slice(0, 3), CHAT_TAB, ...TABS.slice(3)];
 
 /** Unread chat messages, in the desktop app once chat is running (pages/Chat.tsx). */
 function useChatUnread(): number {
@@ -134,17 +141,11 @@ export function Layout() {
           {TABS.map((t) => (
             <NavLink key={t.to} to={t.to} end={t.end} className={() => (t.match(location.pathname) ? "on" : "")}>
               {t.label.toUpperCase()}
-              {t.to === "/chat" && chatUnread > 0 && (
-                <span className="unread-badge tab-badge" aria-label={`${chatUnread} unread`}>
-                  {chatUnread > 99 ? "99+" : chatUnread}
-                </span>
-              )}
             </NavLink>
           ))}
           <AdminTab />
         </div>
         <div className="grow" data-tauri-drag-region />
-        <SearchBox />
         <Bell />
         <MeMenu />
         <WindowControls />
@@ -160,11 +161,21 @@ export function Layout() {
         <Outlet />
       </main>
 
+      <ChatDock unread={chatUnread} />
+
       <nav className="bottom-tabs" aria-label="Main">
-        {TABS.map((t) => (
+        {BOTTOM_TABS.map((t) => (
           <NavLink key={t.to} to={t.to} end={t.end} className={() => (t.match(location.pathname) ? "on" : "")}>
             <span aria-hidden="true">{t.icon}</span>
             {t.label}
+            {t === CHAT_TAB && chatUnread > 0 && (
+              <>
+                <b className="unread-badge bottom-badge" aria-hidden="true">
+                  {chatUnread > 99 ? "99+" : chatUnread}
+                </b>
+                <span className="sr-only">, {chatUnread} unread</span>
+              </>
+            )}
           </NavLink>
         ))}
         <NavLink to="/account" className={({ isActive }) => (isActive ? "on" : "")}>
@@ -183,31 +194,6 @@ function AdminTab() {
     <NavLink to="/admin" className={({ isActive }) => (isActive ? "on" : "")}>
       ADMIN
     </NavLink>
-  );
-}
-
-function SearchBox() {
-  const navigate = useNavigate();
-  const location = useLocation();
-  const current = location.pathname === "/search" ? (new URLSearchParams(location.search).get("q") ?? "") : "";
-  const [value, setValue] = useState(current);
-  useEffect(() => setValue(current), [current]);
-
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    navigate(`/search?q=${encodeURIComponent(value.trim())}`);
-  };
-  return (
-    <form className="search" role="search" onSubmit={submit}>
-      <input
-        type="search"
-        placeholder="Search apps, games, tags…"
-        aria-label="Search the store"
-        value={value}
-        maxLength={100}
-        onChange={(e) => setValue(e.target.value)}
-      />
-    </form>
   );
 }
 
@@ -271,39 +257,6 @@ function Bell() {
         </span>
       )}
     </Link>
-  );
-}
-
-/** Left-hand navigation on store pages. */
-export function Sidebar({ active }: { active?: string }) {
-  const categories = useLoad(() => api.categories(), []);
-  return (
-    <aside className="sidebar" aria-label="Browse">
-      <h4>Discover</h4>
-      <Link to="/upcoming">🔭 Coming soon &amp; beta</Link>
-      <Link to="/search">✨ Everything</Link>
-      <Link to="/made-with-people">✋ Made with people</Link>
-      <Link to="/community">🍴 Community builds</Link>
-      <Link to="/teams">👥 Teams</Link>
-      <h4>Browse</h4>
-      <Link to="/browse">🧭 All categories</Link>
-      {categories.data?.map((c: Category) => (
-        <Link key={c.slug} to={`/browse/${c.slug}`} className={active === c.slug ? "on" : ""}>
-          {c.name}
-        </Link>
-      ))}
-      <h4>Makers</h4>
-      <Link to="/publish">⬆️ Publish your app</Link>
-      <Link to="/publish/guide">📖 How to publish</Link>
-      <Link to="/people">🎨 Hire artists &amp; composers</Link>
-      <Link to="/bounties">💰 Fix bounties</Link>
-      <h4>Slop</h4>
-      <Link to="/legal">📜 Terms &amp; policies</Link>
-      <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>
-      <Link to="/verify">🔎 Check a file</Link>
-      <Link to="/source">🧾 Source code</Link>
-      <Link to="/contact">✉️ Contact</Link>
-    </aside>
   );
 }
 

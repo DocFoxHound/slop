@@ -59,13 +59,16 @@ code { font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; background:
 .tabs a:hover { color: var(--text); }
 .tabs a.on { color: var(--text); border-bottom-color: var(--slime); }
 .nav .grow { flex: 1; }
-.search { position: relative; width: min(320px, 30vw); }
+.search { position: relative; width: min(320px, 100%); }
 .search input { width: 100%; background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px 8px 32px; }
 .search input:focus { outline: 2px solid var(--slime); outline-offset: -1px; }
 .search::before { content: "⌕"; position: absolute; left: 11px; top: 50%; transform: translateY(-52%); color: var(--muted); font-size: 16px; }
-.me { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text); text-decoration: none !important; min-width: 32px; }
-.me .avatar { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; }
-.me .who b { display: block; font-size: 13px; }
+.me { display: flex; align-items: center; gap: 10px; font-size: 12px; color: var(--text); text-decoration: none !important; min-width: 32px; flex: 0 1 auto; }
+/* Avatars keep their size however narrow the window: the name beside them gives way instead. */
+.avatar { flex: none; aspect-ratio: 1; overflow: hidden; }
+.me .avatar { width: 32px; height: 32px; min-width: 32px; min-height: 32px; border-radius: 8px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; }
+.me .who { min-width: 0; }
+.me .who b { display: block; font-size: 13px; max-width: 180px; white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 
 .view { flex: 1; overflow-y: auto; }
 /* Desktop app: the nav doubles as the title bar (the window is borderless). */
@@ -138,6 +141,33 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .sidebar a { display: flex; gap: 8px; align-items: center; padding: 5px 8px; margin: 0 -8px; border-radius: 6px; color: var(--text-2); font-size: 13px; text-decoration: none; }
 .sidebar a:hover { background: var(--panel-2); color: var(--text); }
 .sidebar a.on { color: var(--slime); }
+
+/* The store bar (components/StoreNav.tsx): the store's sections and its search, like Steam's. */
+.store-nav { display: flex; align-items: center; gap: 4px; margin: -8px 0 22px; padding: 6px; background: linear-gradient(90deg, var(--panel-2), var(--panel)); border: 1px solid var(--line); border-radius: var(--radius); }
+.store-nav-links { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
+.store-nav-links::-webkit-scrollbar { display: none; }
+.store-nav-links a, .store-more-btn { flex: none; display: inline-flex; align-items: center; gap: 6px; padding: 7px 14px; border-radius: 7px; border: 0; background: none; color: var(--text-2); font-weight: 700; font-size: 13px; text-decoration: none; cursor: pointer; white-space: nowrap; }
+.store-nav-links a:hover, .store-more-btn:hover { background: var(--panel-3); color: var(--text); text-decoration: none; }
+.store-nav-links a.on, .store-more-btn.on { color: var(--slime); background: var(--slime-soft); }
+.store-more { position: relative; flex: none; }
+.store-more-btn[aria-expanded="true"] { background: var(--panel-3); color: var(--text); }
+.store-more-menu { position: absolute; z-index: 30; top: calc(100% + 6px); left: 0; display: grid; grid-template-columns: repeat(3, minmax(170px, auto)); gap: 4px 18px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 14px 40px rgba(0, 0, 0, 0.5); }
+.store-more-menu[hidden] { display: none; }
+.more-group { display: flex; flex-direction: column; }
+.more-group h4 { font-size: 11px; letter-spacing: 0.1em; color: var(--faint); text-transform: uppercase; margin: 0 0 6px; }
+.more-group a { padding: 5px 8px; margin: 0 -8px; border-radius: 6px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
+.more-group a:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
+.store-search { margin-left: auto; flex: 0 1 300px; min-width: 160px; }
+.store-footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); }
+.store-footer nav { display: flex; flex-wrap: wrap; gap: 6px 20px; }
+.store-footer a { color: var(--muted); font-size: 13px; }
+.store-footer a:hover { color: var(--text); }
+.signin-nudge { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin: 6px 0 4px; }
+.signin-nudge p { margin: 0; max-width: 60ch; }
+
+/* People: its own search, first thing on the page. */
+.people-search { display: flex; gap: 8px; width: 100%; max-width: 640px; margin: 4px 0 14px; }
+.people-search input { flex: 1; min-width: 0; padding-top: 10px; padding-bottom: 10px; font-size: 15px; }
 
 .intro { padding: 26px 28px; background: radial-gradient(circle at 100% 0, rgba(163, 230, 53, 0.12), transparent 55%), var(--panel); }
 .intro h1 { font-size: 26px; letter-spacing: -0.02em; max-width: 26ch; margin-bottom: 14px; }
@@ -278,13 +308,22 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
   .library-actions { grid-column: 1 / -1; }
   .sidebar { display: none; }
   .nav { gap: 12px; padding: 0 12px; }
-  .search { width: auto; flex: 1; min-width: 0; }
   .me .who { display: none; }
   .tabs a { padding: 0 8px; font-size: 12px; }
 }
+@media (max-width: 760px) {
+  /* The search takes a row of its own; the sections scroll sideways if they don't fit, with More
+     always in reach, its menu as wide as the bar. */
+  .store-nav { flex-wrap: wrap; position: relative; }
+  .store-more { position: static; }
+  .store-search { flex: 1 1 100%; margin-left: 0; order: 3; }
+  .store-more-menu { grid-template-columns: 1fr 1fr; left: 6px; right: 6px; top: 52px; }
+}
 @media (max-width: 600px) {
+  .store-nav { margin-top: 0; }
+  .store-nav-links { mask-image: linear-gradient(90deg, #000 85%, transparent); }
+  .store-more-menu { grid-template-columns: 1fr; max-height: 60vh; overflow-y: auto; }
   .tabs, .me { display: none; }
-  .nav .grow { display: none; }
   .bottom-tabs { display: flex; }
   .nav { height: 52px; }
   .logo span { display: none; }
@@ -724,7 +763,8 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .review-list p { margin: 6px 0; }
 .review-who { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
 .profile-head { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
-.profile-head .avatar { width: 64px; height: 64px; border-radius: 14px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; font-size: 28px; flex: none; }
+.profile-head > div { min-width: 0; }
+.profile-head .avatar { width: 64px; height: 64px; min-width: 64px; border-radius: 14px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; font-size: 28px; flex: none; }
 .profile-votes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .profile-votes li { display: grid; grid-template-columns: 260px 1fr; gap: 16px; padding: 12px; }
 .profile-vote-text p { margin: 8px 0 0; }
@@ -769,7 +809,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .chat-item { display: flex; align-items: center; gap: 10px; padding: 8px 10px; border-radius: 8px; color: var(--text); }
 .chat-item:hover { background: var(--panel-2); text-decoration: none; }
 .chat-item.on { background: var(--panel-3); }
-.chat-item .avatar { width: 36px; height: 36px; border-radius: 10px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; flex: none; }
+.chat-item .avatar { width: 36px; height: 36px; min-width: 36px; border-radius: 10px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; flex: none; }
 .chat-item-text { display: flex; flex-direction: column; min-width: 0; flex: 1; }
 .chat-item-text span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 .unread-badge { background: var(--slime); color: var(--slime-ink); border-radius: 999px; font-size: 11px; font-weight: 800; padding: 1px 7px; }
@@ -832,6 +872,48 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
   .chat-layout:not(:has(.conversation)) .chat-main { display: none; }
 }
 .tab-badge { margin-left: 6px; font-size: 10px; vertical-align: middle; }
+.bottom-tabs a { position: relative; }
+.bottom-badge { position: absolute; top: -4px; left: 50%; margin-left: 4px; font-size: 10px; padding: 0 5px; }
+
+/* Friends & Chat (components/ChatDock.tsx): a bar in the bottom right and a panel docked above
+   it, over the page, which carries on underneath. */
+.view { scroll-padding-bottom: 56px; }
+.chat-dock { position: fixed; right: 24px; bottom: 0; z-index: 40; display: flex; flex-direction: column; align-items: flex-end; pointer-events: none; }
+.chat-dock > * { pointer-events: auto; }
+.chat-dock-bar { display: flex; align-items: center; gap: 8px; width: 240px; padding: 9px 14px; border: 1px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0; background: linear-gradient(#1f2731, #171d25); color: var(--text); font-weight: 700; font-size: 13px; cursor: pointer; box-shadow: 0 -4px 18px rgba(0, 0, 0, 0.35); }
+.chat-dock-bar:hover, .chat-dock-bar.on { background: var(--panel-3); }
+.chat-dock-caret { margin-left: auto; color: var(--muted); }
+.chat-dock-panel { width: min(380px, calc(100vw - 32px)); height: min(560px, calc(100vh - 110px)); display: flex; flex-direction: column; background: var(--bg); border: 1px solid var(--line); border-radius: 12px 12px 0 12px; box-shadow: 0 20px 50px rgba(0, 0, 0, 0.55); overflow: hidden; }
+.chat-dock-head { display: flex; align-items: center; gap: 4px; padding: 8px 8px 8px 14px; border-bottom: 1px solid var(--line); background: var(--panel); }
+.chat-dock-head h2 { font-size: 15px; margin-right: auto; }
+.chat-dock-tabs { align-self: flex-start; margin: 8px 10px 0; }
+.chat-dock-body { flex: 1; min-height: 0; overflow-y: auto; display: flex; flex-direction: column; }
+.chat-layout.compact { display: flex; flex-direction: column; flex: 1; height: auto; min-height: 0; }
+.chat-layout.compact .chat-list { border-right: 0; background: none; flex: 1; }
+.chat-layout.compact .chat-list-head { justify-content: flex-end; padding: 8px 10px 4px; }
+.chat-layout.compact .chat-main { flex: 1; }
+.chat-layout.compact .conversation-head { padding: 8px 12px; gap: 6px; }
+.chat-layout.compact .conversation-head h2 { font-size: 15px; }
+.conversation-nav { display: flex; justify-content: space-between; width: 100%; }
+.chat-layout.compact .message-log { padding: 8px 12px; }
+.chat-layout.compact .composer { padding: 8px 10px 10px; }
+.chat-layout.compact .composer-foot > span { display: none; }
+.chat-layout.compact .typing { padding: 0 12px 2px; }
+.chat-layout.compact .chat-error, .chat-layout.compact .chat-closed { margin: 0 12px 8px; }
+.dock-screen { padding: 14px; }
+.dock-screen h3 { font-size: 16px; margin-bottom: 10px; }
+.dock-screen .panel-pad { padding: 14px; }
+.dock-screen .recovery-code { font-size: 15px; padding: 10px; }
+.dock-friends { padding: 10px 12px 14px; }
+.dock-friends .section-title { font-size: 12px; margin: 14px 0 8px; }
+.dock-friends .report-list li { padding: 8px 12px; align-items: center; }
+.dock-friends .empty-state { padding: 20px 12px; }
+.dock-note p { margin-bottom: 8px; }
+.dock-foot { margin: 12px 0 0; }
+@media (max-width: 600px) {
+  /* Phones: chat is a bottom tab instead. */
+  .chat-dock { display: none; }
+}
 .typing { margin: 0; padding: 0 18px 2px; min-height: 18px; }
 
 /* The in-game overlay (src/overlay.tsx): the game shows through, dimmed. */

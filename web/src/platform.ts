@@ -219,7 +219,8 @@ export interface ChatChanges {
 
 export type ChatAction =
   | { action: "status" }
-  | { action: "setup"; name: string }
+  /** Without a name, the app names the device after the computer (its hostname). */
+  | { action: "setup"; name?: string }
   | { action: "approve"; device: string; code: string }
   | { action: "start_over" }
   | { action: "remove_device"; device: string }

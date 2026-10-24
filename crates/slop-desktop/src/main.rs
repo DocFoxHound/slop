@@ -1067,8 +1067,10 @@ async fn run_installer(desktop: State<'_, Desktop>, slug: String) -> CommandResu
 #[serde(tag = "action", rename_all = "snake_case")]
 enum ChatAction {
     Status,
+    /// Sets chat up on this device, named after the computer unless the page names it.
     Setup {
-        name: String,
+        #[serde(default)]
+        name: Option<String>,
     },
     Approve {
         device: uuid::Uuid,
@@ -1348,7 +1350,13 @@ async fn chat(
     let ok = || Ok(Value::Null);
     match action {
         ChatAction::Status => to_value(chat.status().await?),
-        ChatAction::Setup { name } => to_value(chat.setup(&name).await?),
+        ChatAction::Setup { name } => {
+            let name = name
+                .map(|n| n.trim().to_string())
+                .filter(|n| !n.is_empty())
+                .unwrap_or_else(slop_client::chat::device_name::this_device_name);
+            to_value(chat.setup(&name).await?)
+        }
         ChatAction::Approve { device, code } => {
             chat.approve(device, &code).await?;
             ok()

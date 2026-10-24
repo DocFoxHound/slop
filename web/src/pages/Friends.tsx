@@ -5,12 +5,13 @@
 import { useState, type FormEvent } from "react";
 import { Link, useNavigate } from "react-router";
 
-import { api, ApiError } from "../api";
+import { api, ApiError, type Friends } from "../api";
 import { ErrorState, Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
+import { ensureChat } from "./Chat";
 
 export function FriendsPage() {
   useDocumentTitle("Friends");
@@ -57,8 +58,7 @@ export function FriendsPage() {
   };
   const message = async (id: string) => {
     try {
-      const conv = await desktop.chat<string>({ action: "start_direct", user: id });
-      navigate(`/chat/${conv}`);
+      navigate(await startDirectChat(id));
     } catch (err) {
       setError(err instanceof Error ? err.message : String(err));
     }
@@ -86,82 +86,7 @@ export function FriendsPage() {
           </p>
         )}
       </form>
-      {!f ? (
-        <Loading />
-      ) : (
-        <>
-          {f.incoming.length > 0 && (
-            <section id="requests">
-              <h2 className="section-title">Requests ({f.incoming.length})</h2>
-              <ul className="panel report-list">
-                {f.incoming.map((p) => (
-                  <li key={p.id} id={p.id}>
-                    <span>
-                      <Link to={`/u/${p.id}`}>
-                        <b>{p.name}</b>
-                      </Link>{" "}
-                      <span className="muted small">asked {formatDate(p.since)}</span>
-                    </span>
-                    <span className="row-actions">
-                      <button className="btn small slime" onClick={() => void run(() => api.friends.accept(p.id), `You and ${p.name} are friends.`)}>
-                        Accept
-                      </button>
-                      <button className="btn small ghost" onClick={() => void run(() => api.friends.remove(p.id))}>
-                        Decline
-                      </button>
-                      <button className="btn small ghost" onClick={() => void run(() => api.friends.block(p.id), `${p.name} is blocked.`)}>
-                        Block
-                      </button>
-                    </span>
-                  </li>
-                ))}
-              </ul>
-            </section>
-          )}
-          <h2 className="section-title">Your friends ({f.friends.length})</h2>
-          {f.friends.length === 0 ? (
-            <div className="empty-state">No friends yet. Add someone with their profile link, or from their profile.</div>
-          ) : (
-            <ul className="panel report-list">
-              {f.friends.map((p) => (
-                <li key={p.id}>
-                  <span>
-                    <Link to={`/u/${p.id}`}>
-                      <b>{p.name}</b>
-                    </Link>{" "}
-                    <span className="muted small">since {formatDate(p.since)}</span>
-                  </span>
-                  <span className="row-actions">
-                    {isDesktop && (
-                      <button className="btn small" onClick={() => void message(p.id)}>
-                        💬 Message
-                      </button>
-                    )}
-                    <button className="btn small ghost" onClick={() => void run(() => api.friends.remove(p.id))}>
-                      Remove
-                    </button>
-                  </span>
-                </li>
-              ))}
-            </ul>
-          )}
-          {f.outgoing.length > 0 && (
-            <>
-              <h2 className="section-title">Waiting for an answer</h2>
-              <ul className="panel report-list">
-                {f.outgoing.map((p) => (
-                  <li key={p.id}>
-                    <Link to={`/u/${p.id}`}>{p.name}</Link>
-                    <button className="btn small ghost" onClick={() => void run(() => api.friends.remove(p.id))}>
-                      Cancel
-                    </button>
-                  </li>
-                ))}
-              </ul>
-            </>
-          )}
-        </>
-      )}
+      <FriendsList friends={f} run={run} onMessage={isDesktop ? (id) => void message(id) : undefined} />
       <h2 className="section-title" id="settings">
         Who can message you
       </h2>
@@ -197,6 +122,112 @@ export function FriendsPage() {
       )}
     </div>
   );
+}
+
+/**
+ * Requests, friends and sent requests. The Friends page shows everything; the Friends & Chat
+ * panel (components/ChatDock.tsx) is compact: requests to answer and friends to message.
+ */
+export function FriendsList({
+  friends: f,
+  run,
+  compact = false,
+  onMessage,
+}: {
+  friends: Friends | undefined;
+  run: (f: () => Promise<unknown>, done?: string) => void;
+  compact?: boolean;
+  /** Message a friend (the app only). */
+  onMessage?: (id: string) => void;
+}) {
+  if (!f) return <Loading />;
+  const Heading = compact ? "h3" : "h2";
+  return (
+    <>
+      {f.incoming.length > 0 && (
+        <section id={compact ? undefined : "requests"}>
+          <Heading className="section-title">Requests ({f.incoming.length})</Heading>
+          <ul className="panel report-list">
+            {f.incoming.map((p) => (
+              <li key={p.id} id={compact ? undefined : p.id}>
+                <span>
+                  <Link to={`/u/${p.id}`}>
+                    <b>{p.name}</b>
+                  </Link>{" "}
+                  {!compact && <span className="muted small">asked {formatDate(p.since)}</span>}
+                </span>
+                <span className="row-actions">
+                  <button className="btn small slime" onClick={() => run(() => api.friends.accept(p.id), `You and ${p.name} are friends.`)}>
+                    Accept
+                  </button>
+                  <button className="btn small ghost" onClick={() => run(() => api.friends.remove(p.id))}>
+                    Decline
+                  </button>
+                  {!compact && (
+                    <button className="btn small ghost" onClick={() => run(() => api.friends.block(p.id), `${p.name} is blocked.`)}>
+                      Block
+                    </button>
+                  )}
+                </span>
+              </li>
+            ))}
+          </ul>
+        </section>
+      )}
+      <Heading className="section-title">Your friends ({f.friends.length})</Heading>
+      {f.friends.length === 0 ? (
+        <div className="empty-state">No friends yet. Add someone with their profile link, or from their profile.</div>
+      ) : (
+        <ul className="panel report-list">
+          {f.friends.map((p) => (
+            <li key={p.id}>
+              <span>
+                <Link to={`/u/${p.id}`}>
+                  <b>{p.name}</b>
+                </Link>{" "}
+                {!compact && <span className="muted small">since {formatDate(p.since)}</span>}
+              </span>
+              <span className="row-actions">
+                {onMessage && (
+                  <button className="btn small" onClick={() => onMessage(p.id)} aria-label={`Message ${p.name}`}>
+                    💬 Message
+                  </button>
+                )}
+                {!compact && (
+                  <button className="btn small ghost" onClick={() => run(() => api.friends.remove(p.id))}>
+                    Remove
+                  </button>
+                )}
+              </span>
+            </li>
+          ))}
+        </ul>
+      )}
+      {!compact && f.outgoing.length > 0 && (
+        <>
+          <h2 className="section-title">Waiting for an answer</h2>
+          <ul className="panel report-list">
+            {f.outgoing.map((p) => (
+              <li key={p.id}>
+                <Link to={`/u/${p.id}`}>{p.name}</Link>
+                <button className="btn small ghost" onClick={() => run(() => api.friends.remove(p.id))}>
+                  Cancel
+                </button>
+              </li>
+            ))}
+          </ul>
+        </>
+      )}
+    </>
+  );
+}
+
+/** Starts (or opens) a direct chat in the app, setting chat up first if needed; where to go. */
+async function startDirectChat(user: string): Promise<string> {
+  const status = await ensureChat();
+  // Not ready on this computer yet (waiting for approval, or removed): the chat page says why.
+  if (status.state !== "active") return "/chat";
+  return `/chat/${await desktop.chat<string>({ action: "start_direct", user })}`;
 }
 
 /** Friend and message buttons on someone's profile. */
@@ -240,9 +271,7 @@ export function ConnectionButtons({ userId, name }: { userId: string; name: stri
             (isDesktop ? (
               <button
                 className="btn small"
-                onClick={() =>
-                  void run(async () => navigate(`/chat/${await desktop.chat<string>({ action: "start_direct", user: userId })}`))
-                }
+                onClick={() => void run(async () => navigate(await startDirectChat(userId)))}
               >
                 💬 Message
               </button>
