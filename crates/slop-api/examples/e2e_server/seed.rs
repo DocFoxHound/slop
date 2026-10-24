@@ -311,6 +311,17 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.cookies.insert("pictured", pictured.cookie.clone());
     s.ids.insert("pictured", json!(pictured.id));
 
+    // Nia Newcomer: accepted only the Terms of Service, as at sign-up: no Publisher Agreement or
+    // People Terms yet (AI agent tokens that publish, and the legal page's Accept).
+    let newcomer = ctx.user("Nia Newcomer", "US").await?;
+    ctx.sql(
+        "delete from legal_acceptances where user_id = $1 and kind <> 'terms'",
+        &[&newcomer.id],
+    )
+    .await?;
+    s.cookies.insert("newcomer", newcomer.cookie.clone());
+    s.ids.insert("newcomer", json!(newcomer.id));
+
     let p = people(ctx, &admin).await.context("People")?;
     s.cookies.insert("creative", p.creative.cookie.clone());
     s.cookies.insert("client", p.client.cookie.clone());

@@ -30,6 +30,8 @@
 //   suspended       Sid Suspended: suspended by staff for harassment; appealed.
 //   pictured        Pia Picture: the only account with a linked sign-in (GitHub "pia-gh", whose
 //                   picture the fake GitHub serves), for the profile picture tests.
+//   newcomer        Nia Newcomer: accepted only the Terms of Service (no Publisher Agreement or
+//                   People Terms yet), no apps.
 // Without a sign-in: Sam Seed (castle-rock; neon-drift, which plays online), and players Kai
 // Kestrel, Lu Lark and Noor Nightjar (votes, a review and bug reports on Lantern Keep, bounty
 // pledges, reports).
@@ -84,7 +86,8 @@ export type Who =
   | "finance"
   | "security"
   | "suspended"
-  | "pictured";
+  | "pictured"
+  | "newcomer";
 
 export type Id =
   | Who

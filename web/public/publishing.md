@@ -11,7 +11,8 @@ publish: what Slop asks of your project, how to set it up, and what happens afte
 > there."*
 
 **Want your agent to do all of it, store page included?** Make it a token under **Account → AI
-agents** (publish, all your apps) and connect it with the command that page shows; see
+agents** (`/account/agents`: publish, all your apps), accept the Publisher Agreement that page
+shows you, and connect it with the command it gives; see
 [Working with your AI agent](#working-with-your-ai-agent). With a token it creates the store page,
 submits releases and follows the review itself. Without one it can only prepare the repository.
 
@@ -1209,7 +1210,9 @@ register community builds and mods, and offer fixes to the apps you build on. Cr
 watch People jobs, send quotes and talk in job conversations.
 
 1. **Account → AI agents → Make token.** Choose what it can do (look, or also publish), which
-   apps, whether it handles People jobs, and how long it lasts (at most 30 days).
+   apps, whether it handles People jobs, and how long it lasts (at most 30 days). A token that
+   publishes needs the Publisher Agreement: the page shows it for you to accept when you make
+   the token. If it changes later, your agent is told it's waiting, and the page shows it again.
 2. **Connect it.** Claude Code: run the `claude mcp add …` command the page shows. Other agents
    can use the same MCP address, or Slop's API with `Authorization: Bearer slopmk_…`.
 3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on Slop",
@@ -1611,8 +1614,9 @@ project owner; steps marked **(token)** are yours if the owner gave you a Slop t
 if not.
 
 0. **Ask for a token first** if you don't have Slop's tools (`maker_guide`, `create_store_page`…).
-   The owner signs in to Slop, opens **Account → AI agents → Make token**, chooses **Publish**
-   and **All my apps** (a token for some apps can't create new ones), and runs the
+   The owner signs in to Slop, opens **Account → AI agents → Make token** (`/account/agents`),
+   chooses **Publish** and **All my apps** (a token for some apps can't create new ones),
+   accepts the Publisher Agreement the page shows them, and runs the
    `claude mcp add …` command the page shows in your terminal themselves (other agents: the MCP
    address, or the API with `Authorization: Bearer slopmk_…`). Never ask them to paste the token
    into the chat. Then read `maker_guide`. Without a token, do steps 1–6 and 10 and hand the
@@ -1642,9 +1646,10 @@ if not.
 7. **(token)** Create the store page (`create_store_page`, or **Publish → New app** on the
    website) with the same store address, the repository URL, licence, type, stage, age rating,
    tags, and **Online** if the project connects to anything (see step 3). Write the description
-   from the repository. **(person)** Before their first app, the owner accepts the Publisher
-   Agreement on the website once; if Slop answers that it's needed, tell them where
-   (`/legal/publisher`) and wait.
+   from the repository. If a tool answers `terms_required` (the Publisher Agreement changed
+   since the owner accepted it), tell them it's waiting for them on Slop under **Account → AI
+   agents** (the website also shows it when they next publish), wait until they've accepted it,
+   then carry on.
 8. Option A: **(token)** submit the GitHub release (`submit_github_release`, or on the website
    under **Releases & progress → Submit a release**).
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.

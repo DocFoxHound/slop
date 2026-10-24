@@ -57,6 +57,11 @@ export function LegalPage() {
   const { me } = useSession();
   const doc = useLoad(() => api.legal.document(kind, version), [kind, version]);
   const notices = useLoad(() => (me ? api.legal.notices() : Promise.resolve([])), [me?.id]);
+  // Where they stand with it, even when nothing asked them yet (a first Publisher Agreement).
+  const mine = useLoad(
+    () => (me && doc.data?.accepted ? api.legal.mine(doc.data.kind) : Promise.resolve(undefined)),
+    [me?.id, doc.data?.kind, doc.data?.accepted],
+  );
   const [accepting, setAccepting] = useState<string>();
   useDocumentTitle(doc.data?.title);
 
@@ -64,6 +69,11 @@ export function LegalPage() {
   if (!doc.data) return <Loading />;
   const d = doc.data;
   const toAccept = notices.data?.filter((n) => n.kind === d.kind && n.action === "accept") ?? [];
+  // The version in effect, not yet accepted, and not already offered by a notice.
+  const current = mine.data?.kind === d.kind ? mine.data : undefined;
+  const notYet =
+    current?.version && !current.accepted && !toAccept.some((n) => n.version === current.version) ? current.version : undefined;
+  const returnTo = `/legal/${d.kind}`;
 
   return (
     <div className="page narrow legal-page">
@@ -89,6 +99,22 @@ export function LegalPage() {
           </button>
         </div>
       ))}
+      {d.accepted && me === null && (
+        <p className="notice">
+          <Link to={`/signin?return_to=${encodeURIComponent(returnTo)}`}>Sign in to accept the {d.title}</Link>.
+        </p>
+      )}
+      {notYet && (
+        <div className="notice">
+          You haven't accepted the {d.title} yet.{" "}
+          <button type="button" className="btn small slime" onClick={() => setAccepting(notYet)}>
+            Review and accept version {notYet}
+          </button>
+        </div>
+      )}
+      {current?.accepted && current.version && toAccept.length === 0 && (
+        <p className="small muted">You've accepted version {current.version}, the one in effect.</p>
+      )}
       {accepting && (
         <AcceptDocument
           kind={d.kind as LegalKind}
@@ -96,6 +122,7 @@ export function LegalPage() {
           onAccepted={() => {
             setAccepting(undefined);
             notices.reload();
+            mine.reload();
           }}
           onCancel={() => setAccepting(undefined)}
         />

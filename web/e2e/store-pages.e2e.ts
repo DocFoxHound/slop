@@ -90,6 +90,39 @@ test("a document's earlier versions can be read, and an announced change is show
   await expect(page.locator(".legal-index li").filter({ hasText: "Terms of Service" }).getByText(/^Changes on .+: Clearer words about refunds\.$/)).toBeVisible();
 });
 
+test("an agreement never accepted can be accepted on its page; signed out, it asks to sign in", async ({ page }) => {
+  // Signed out: a way to sign in, only on agreements.
+  await page.goto("/legal/publisher");
+  await expect(page.getByRole("heading", { name: "Publisher Agreement", level: 1 })).toBeVisible();
+  await expect(page.getByRole("link", { name: "Sign in to accept the Publisher Agreement" })).toHaveAttribute(
+    "href",
+    "/signin?return_to=%2Flegal%2Fpublisher",
+  );
+  await page.goto("/legal/privacy");
+  await expect(page.getByRole("heading", { name: "Privacy Policy", level: 1 })).toBeVisible();
+  await expect(page.getByRole("link", { name: /Sign in to accept/ })).toHaveCount(0);
+
+  // Nia accepted only the Terms of Service (e2e_server/seed.rs): no notice asks her for the
+  // People Terms, but their page offers them.
+  await signIn(page, "newcomer");
+  await page.goto("/legal/people");
+  const people = await call<{ version: string }>(null, "GET", "/v1/legal/people");
+  const notice = page.locator(".notice").filter({ hasText: "You haven't accepted the People Terms yet." });
+  await notice.getByRole("button", { name: `Review and accept version ${people.version}` }).click();
+  const dialog = page.getByRole("dialog", { name: "People Terms" });
+  await dialog.getByRole("checkbox", { name: "I've read and accept the People Terms." }).check();
+  await dialog.getByRole("button", { name: "Accept and continue" }).click();
+  await expect(dialog).toBeHidden();
+  await expect(notice).toHaveCount(0);
+  await expect(page.getByText(`You've accepted version ${people.version}, the one in effect.`)).toBeVisible();
+  expect((await call("newcomer", "GET", "/v1/me/legal/people")).accepted).toBe(true);
+  // Policies are only read.
+  await page.goto("/legal/content");
+  await expect(page.getByRole("heading", { name: "Content Policy", level: 1 })).toBeVisible();
+  await expect(page.getByRole("button", { name: /Review and accept/ })).toHaveCount(0);
+  await expect(page.getByText(/You've accepted version/)).toHaveCount(0);
+});
+
 test("the terms list offers Try again when it can't load", async ({ page }) => {
   let fail = true;
   await page.route(path("/v1/legal"), (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } }) : route.fallback()));

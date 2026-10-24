@@ -992,6 +992,137 @@ async fn a_maker_token_needs_only_a_signed_in_session(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_publishing_token_needs_the_publisher_agreement(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Nia Newcomer", "US").await;
+    sqlx::query("delete from legal_acceptances where user_id = $1 and kind = 'publisher'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let make = |scope: &str| {
+        req(Method::POST, "/v1/me/maker-tokens")
+            .cookie(&maker)
+            .json(json!({ "name": format!("Claude {scope}"), "scope": scope }))
+    };
+    let mine = || async {
+        body_json(
+            app.send(req(Method::GET, "/v1/me/legal/publisher").cookie(&maker))
+                .await,
+        )
+        .await
+    };
+    let status = mine().await;
+    assert_eq!(status["accepts"], json!(true));
+    assert_eq!(status["accepted"], json!(false));
+    let version = status["version"].as_str().unwrap().to_string();
+
+    // Publishing: refused until it's accepted, naming the agreement and where to accept it.
+    let res = app.send(make("publish")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let err = body_json(res).await;
+    assert_eq!(err["error"]["code"], "terms_required");
+    assert_eq!(err["error"]["field"], "publisher");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Account → AI agents"),
+        "{err}"
+    );
+    assert_eq!(
+        count(&app, "select count(*) from maker_tokens").await,
+        0,
+        "nothing was made"
+    );
+    // Looking doesn't need it.
+    assert_eq!(app.send(make("read")).await.status(), StatusCode::CREATED);
+
+    // Accepted: the same request makes the token.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/legal/accept")
+                .cookie(&maker)
+                .json(json!({ "kind": "publisher", "version": version })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(mine().await["accepted"], json!(true));
+    let (agent, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Claude", "scope": "publish" }),
+    )
+    .await;
+
+    // A new version takes effect: the agent's tools wait for the owner, and say where.
+    sqlx::query(
+        "insert into legal_documents (kind, version, title, summary, body_md, sha256, effective_at)
+         values ('publisher', '2099-01-01', 'Publisher Agreement', 'Clearer AI rules.', 'New words.', 'x', now())",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let status = mine().await;
+    assert_eq!(status["version"], "2099-01-01");
+    assert_eq!(status["accepted"], json!(false));
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps")
+                .header("authorization", agent.clone())
+                .json(new_app("agent-made")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let err = body_json(res).await;
+    assert_eq!(err["error"]["code"], "terms_required");
+    assert_eq!(err["error"]["field"], "publisher");
+    assert!(
+        err["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("Account → AI agents"),
+        "{err}"
+    );
+    // The token can't accept it itself.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/me/legal/accept")
+                .header("authorization", agent.clone())
+                .json(json!({ "kind": "publisher", "version": "2099-01-01" })),
+        )
+        .await;
+    assert!(res.status().is_client_error());
+    assert_eq!(mine().await["accepted"], json!(false));
+
+    // Policies are read, not accepted; unknown documents aren't found; signed out: no.
+    let privacy = body_json(
+        app.send(req(Method::GET, "/v1/me/legal/privacy").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(privacy["accepts"], json!(false));
+    assert_eq!(privacy["accepted"], json!(false));
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/legal/nothing").cookie(&maker))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/me/legal/publisher"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // The document says whether it's accepted or read.
+    let doc = body_json(app.send(req(Method::GET, "/v1/legal/people")).await).await;
+    assert_eq!(doc["accepted"], json!(true));
+    let doc = body_json(app.send(req(Method::GET, "/v1/legal/content")).await).await;
+    assert_eq!(doc["accepted"], json!(false));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn a_recent_passkey_confirmation_carries_over_to_a_maker_token(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = app.user("Mia Maker", "US").await;

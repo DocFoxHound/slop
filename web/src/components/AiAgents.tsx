@@ -1,17 +1,32 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Account → AI agents: tokens for a maker's or creative's own AI agent (crates/slop-api/src/
 // maker_agents.rs). The agent does the work in its own session; Slop gives it tools and checks.
+// An agent can't accept agreements, so a publishing token needs the Publisher Agreement accepted
+// here: it's shown when the token is made, and again here whenever a new version waits.
 
 import { useState } from "react";
 
-import { api, ApiError, type AgentToken, type AppSummary } from "../api";
+import { api, ApiError, type AgentToken, type AppSummary, type LegalNotice } from "../api";
 import { formatDate } from "../format";
-import { useLoad } from "../hooks";
+import { useLoad, type Loaded } from "../hooks";
+import { AcceptDocument, useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
 
-export function AiAgents() {
+/** The Publisher Agreement, waiting to be accepted (a version in effect or announced). */
+interface Waiting {
+  version: string;
+  title: string;
+  /** Null: never accepted (a token made before publishing tokens needed it). */
+  notice: LegalNotice | null;
+}
+
+/** `notices`: the account page's agreements to hear about, reloaded here once one is accepted. */
+export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
   const tokens = useLoad(() => api.agentTokens(), []);
   const apps = useLoad(() => api.myApps(), []);
+  const publisher = useLoad(() => api.legal.mine("publisher"), []);
+  const terms = useTermsGate();
+  const [accepting, setAccepting] = useState<string>();
   const [name, setName] = useState("");
   const [scope, setScope] = useState<AgentToken["scope"]>("publish");
   const [only, setOnly] = useState<string[]>([]);
@@ -31,16 +46,40 @@ export function AiAgents() {
     setBusy(true);
     setError(undefined);
     try {
-      const t = await api.createAgentToken({ name, scope, apps: only, people, days });
+      // A publishing token needs the Publisher Agreement: shown here, then the token is made.
+      const t = await terms.guard(() => api.createAgentToken({ name, scope, apps: only, people, days }));
       setCreated(t);
       setName("");
       tokens.reload();
+      if (t.scope === "publish") agreementsChanged();
     } catch (e) {
-      setError(e instanceof ApiError ? e.message : "Couldn't make the token.");
+      setError(
+        e instanceof ApiError && e.code === "terms_required"
+          ? "A token that publishes needs the Publisher Agreement: accept it to make one, or choose Look."
+          : e instanceof ApiError
+            ? e.message
+            : "Couldn't make the token.",
+      );
     } finally {
       setBusy(false);
     }
   };
+
+  const agreementsChanged = () => {
+    publisher.reload();
+    notices.reload();
+  };
+
+  // What the agent's publishing tools wait for: a change announced or in effect, or (for a token
+  // made before tokens needed it) the agreement never accepted.
+  const publishes = (tokens.data ?? []).some((t) => t.scope === "publish");
+  const waiting: Waiting[] = (notices.data ?? [])
+    .filter((n) => n.kind === "publisher" && n.action === "accept")
+    .map((n) => ({ version: n.version, title: n.title, notice: n }));
+  const p = publisher.data;
+  if (publishes && p?.version && !p.accepted && !waiting.some((w) => w.version === p.version)) {
+    waiting.unshift({ version: p.version, title: "Publisher Agreement", notice: null });
+  }
 
   const revoke = async (id: string) => {
     setError(undefined);
@@ -64,6 +103,38 @@ export function AiAgents() {
         conversations. It can never pay, accept agreements, change payouts or your account. Your agent does the work on
         your side; Slop runs no AI for it. Each token lasts at most 30 days, and you can remove it any time.
       </p>
+      {terms.prompt}
+      {waiting.map((w) => (
+        <div className="notice" key={w.version} role="status">
+          {w.notice && !w.notice.in_effect ? (
+            <>
+              The {w.title} changes on {formatDate(w.notice.effective_at)}: {w.notice.summary} Accept it before then so
+              your AI agent can keep publishing.{" "}
+            </>
+          ) : w.notice ? (
+            <>
+              Your AI agent can't publish until you accept the {w.title}: it changed on{" "}
+              {formatDate(w.notice.effective_at)}. {w.notice.summary}{" "}
+            </>
+          ) : (
+            <>Your AI agent can't publish until you accept the {w.title}. </>
+          )}
+          <button type="button" className="btn small slime" onClick={() => setAccepting(w.version)}>
+            Review and accept version {w.version}
+          </button>
+        </div>
+      ))}
+      {accepting && (
+        <AcceptDocument
+          kind="publisher"
+          version={accepting}
+          onAccepted={() => {
+            setAccepting(undefined);
+            agreementsChanged();
+          }}
+          onCancel={() => setAccepting(undefined)}
+        />
+      )}
       <form
         className="panel panel-pad form"
         onSubmit={(e) => {
@@ -84,6 +155,9 @@ export function AiAgents() {
             </select>
           </label>
         </div>
+        {scope === "publish" && !publisher.data?.accepted && (
+          <p className="small muted">Publishing tokens need the Publisher Agreement: it's shown when you make the token.</p>
+        )}
         <fieldset>
           <legend>Apps</legend>
           <label className="check">
