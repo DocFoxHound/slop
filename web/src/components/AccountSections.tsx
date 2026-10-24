@@ -1,17 +1,30 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The account page's sections for moderation, agreements and the user's own data (DESIGN §4,
-// §16): decisions about them with the statement of reasons and an appeal, the reports they sent,
-// the agreements waiting for them, downloading their data and closing the account.
+// §16): their picture, decisions about them with the statement of reasons and an appeal, the
+// reports they sent, the agreements waiting for them, downloading their data and closing the
+// account.
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, useNavigate } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 
-import { api, ApiError, type CounterNotice, type FeeStatement, type LegalNotice, type ModerationDecision, type VatTreatment } from "../api";
+import {
+  api,
+  ApiError,
+  PROVIDER_LABEL,
+  type CounterNotice,
+  type FeeStatement,
+  type LegalNotice,
+  type ModerationDecision,
+  type MyPicture,
+  type SignInProvider,
+  type VatTreatment,
+} from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { isDesktop, openExternal, saveFile } from "../platform";
 import { disablePush, enablePush, pushState, type PushState } from "../push";
 import { useSession } from "../session";
+import { Avatar } from "./Avatar";
 import { AcceptDocument, useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
 import { StepUpPrompt } from "./PasskeyStepUp";
@@ -24,6 +37,123 @@ function ruleLink(title: string): string {
     .trim()
     .replace(/\s+/g, "-");
   return `/legal/content#${slug}`;
+}
+
+/** What keeps a sign-in's picture current, or why there isn't one. */
+function pictureHint(c: MyPicture["choices"][number]): string {
+  const label = PROVIDER_LABEL[c.provider] ?? c.provider;
+  if (c.updates === "never") return `${label} doesn't share a picture with Slop.`;
+  if (!c.available) {
+    return c.can_refresh
+      ? `Slop gets this picture when you sign in with ${label}: press Refresh picture.`
+      : `Slop gets this picture when you sign in with ${label}.`;
+  }
+  return c.updates === "daily"
+    ? "Kept up to date: Slop checks it every day."
+    : `Updated each time you sign in with ${label}.`;
+}
+
+/** Account → Picture: a linked sign-in's picture, or the letter (crates/slop-api/src/avatars.rs). */
+export function AccountPicture() {
+  const { me, refresh } = useSession();
+  const loaded = useLoad(() => api.picture(), [me?.id]);
+  const [saved, setSaved] = useState<MyPicture>();
+  // The choice being saved, shown at once; if it fails, the saved one shows again.
+  const [pending, setPending] = useState<string>();
+  const [error, setError] = useState<string>();
+  const [params] = useSearchParams();
+  if (!me) return null;
+  const p = saved ?? loaded.data;
+  const current = pending ?? (p?.provider ? `${p.provider}:${p.subject}` : "letter");
+  const choose = async (provider: SignInProvider | null, subject?: string) => {
+    setPending(provider ? `${provider}:${subject}` : "letter");
+    setError(undefined);
+    try {
+      setSaved(await api.setPicture(provider, subject));
+      // The menu's picture too.
+      await refresh();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setPending(undefined);
+    }
+  };
+  return (
+    <section id="picture">
+      <h2 className="section-title">Picture</h2>
+      <div className="panel panel-pad">
+        <div className="picture-current">
+          <Avatar name={me.display_name} url={p ? p.avatar_url : me.avatar_url} />
+          <p className="muted small">
+            Shown next to your name wherever people see it on Slop: your profile, friends lists, chats, teams and
+            People.
+          </p>
+        </div>
+        {loaded.error && <ErrorState error={loaded.error} onRetry={loaded.reload} />}
+        {params.get("picture") === "refresh" && !params.get("error") && (
+          <p className="notice" role="status">
+            Signed in again: Slop has your newest picture from there.
+          </p>
+        )}
+        <fieldset className="picture-choices" disabled={pending !== undefined || !p} aria-busy={pending !== undefined}>
+          <legend>Use</legend>
+          <label className="check">
+            <input
+              type="radio"
+              name="picture"
+              checked={current === "letter"}
+              onChange={() => void choose(null)}
+            />{" "}
+            <span>
+              <b>The letter</b>
+              <span className="muted small" style={{ display: "block" }}>
+                The first letter of your name on a coloured square.
+              </span>
+            </span>
+          </label>
+          {p?.choices.map((c) => (
+            <div className="picture-choice" key={`${c.provider}:${c.subject}`}>
+              <label className="check">
+                <input
+                  type="radio"
+                  name="picture"
+                  checked={current === `${c.provider}:${c.subject}`}
+                  disabled={!c.available}
+                  onChange={() => void choose(c.provider, c.subject)}
+                />{" "}
+                <span>
+                  <b>Your {PROVIDER_LABEL[c.provider] ?? c.provider} picture</b>{" "}
+                  {c.login && <span className="mono">{c.login}</span>}
+                  <span className="muted small" style={{ display: "block" }}>
+                    {pictureHint(c)}
+                  </span>
+                </span>
+              </label>
+              {c.can_refresh && (
+                <a className="btn small ghost" href={api.linkUrl(c.provider, "/account?picture=refresh#picture")}>
+                  Refresh picture
+                </a>
+              )}
+            </div>
+          ))}
+        </fieldset>
+        {p && p.choices.length === 0 && (
+          <p className="muted small">
+            Link a sign-in under <a href="#sign-ins">Sign-ins</a> to use its picture.
+          </p>
+        )}
+        {error && (
+          <p className="form-error" role="alert">
+            {error}
+          </p>
+        )}
+        <p className="muted small">
+          Slop keeps its own small copy and shows that, so people who see your picture never contact GitHub, Google or
+          the others.
+        </p>
+      </div>
+    </section>
+  );
 }
 
 export function AccountDecisions() {

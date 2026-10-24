@@ -299,6 +299,8 @@ struct Member {
     role: String,
     #[serde(with = "time::serde::rfc3339")]
     joined_at: OffsetDateTime,
+    /// Their profile picture (avatars.rs); null: the letter.
+    avatar_url: Option<String>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -393,17 +395,23 @@ async fn page(
     // (security review, 2026-10-22).
     let show_runners = !show_members && t.kind == "player" && t.join_policy == "open";
     let members: Vec<Member> = if show_members || show_runners {
-        sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "select m.user_id, u.display_name as name, m.role, m.joined_at from team_members m join users u on u.id = m.user_id
+        let mut members: Vec<Member> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select m.user_id, u.display_name as name, m.role, m.joined_at, {} as avatar_url
+             from team_members m join users u on u.id = m.user_id
              where m.team_id = $1 and u.closed_at is null
                and (not $2 or (m.role in ('owner', 'admin') and not {}))
              order by case m.role when 'owner' then 0 when 'admin' then 1 else 2 end, u.display_name",
+            crate::avatars::path_sql("m.user_id"),
             crate::friends::under18("m.user_id")
         )))
         .bind(t.id)
         .bind(show_runners)
         .fetch_all(&state.db)
-        .await?
+        .await?;
+        for m in &mut members {
+            m.avatar_url = crate::avatars::absolute(&state.config, m.avatar_url.take());
+        }
+        members
     } else {
         Vec::new()
     };

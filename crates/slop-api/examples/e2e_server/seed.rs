@@ -300,6 +300,17 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.ids.insert("teen", json!(teen.id));
     s.ids.insert("maker2", json!(maker2.id));
 
+    // Pia Picture: a linked GitHub sign-in, whose picture the fake GitHub serves, for the profile
+    // picture tests (accounts-picture.e2e.ts). Nobody else has a linked sign-in.
+    let pictured = ctx.user("Pia Picture", "US").await?;
+    ctx.sql(
+        "insert into identities (provider, provider_subject, user_id, login) values ('github', '5150', $1, 'pia-gh')",
+        &[&pictured.id],
+    )
+    .await?;
+    s.cookies.insert("pictured", pictured.cookie.clone());
+    s.ids.insert("pictured", json!(pictured.id));
+
     let p = people(ctx, &admin).await.context("People")?;
     s.cookies.insert("creative", p.creative.cookie.clone());
     s.cookies.insert("client", p.client.cookie.clone());

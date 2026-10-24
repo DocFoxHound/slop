@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Staff fixes to what people wrote, and freezing an app by hand (built 2026-10-22).
 //!
-//! - **Profiles:** an account's display name, and a creative's People page (name, headline,
+//! - **Profiles:** an account's display name and profile picture, and a creative's People page (name, headline,
 //!   about, location, links). For an impersonating name, a slur in a headline, a scam link: the
 //!   smallest fix instead of hiding the whole page. Teams likewise (name and about).
 //! - **Freezing:** stops an app taking new releases while staff look into it (frozen.rs is the
@@ -94,6 +94,8 @@ struct TeamRow {
 #[derive(Serialize)]
 struct Profile {
     display_name: String,
+    /// Their profile picture from a linked sign-in (avatars.rs); null: the letter.
+    avatar_url: Option<String>,
     /// Their People page, if they have one.
     creative: Option<Creative>,
     /// Teams they run (owner or admin), which staff can fix from here.
@@ -129,6 +131,7 @@ async fn profile(
     .await?;
     Ok(Json(Profile {
         display_name,
+        avatar_url: crate::avatars::url_of(&state, id).await?,
         creative,
         teams,
     }))
@@ -151,6 +154,9 @@ struct CreativeEdit {
 struct ProfileEdit {
     display_name: Option<String>,
     creative: Option<CreativeEdit>,
+    /// true takes their profile picture off (back to the letter).
+    #[serde(default)]
+    remove_picture: bool,
     /// Why, for the person.
     reason: String,
 }
@@ -257,6 +263,12 @@ async fn edit_profile(
             changed.insert("links".into(), json!({ "from": now.links, "to": [] }));
             fields.push("links");
         }
+    }
+    if b.remove_picture
+        && let Some(from) = crate::avatars::remove(&mut tx, id).await?
+    {
+        changed.insert("picture".into(), json!({ "from": from, "to": null }));
+        fields.push("picture");
     }
     if fields.is_empty() {
         return Err(ApiError::invalid("reason", "nothing changed"));

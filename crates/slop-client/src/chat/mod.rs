@@ -179,6 +179,9 @@ struct Message {
 pub struct Person {
     pub id: Uuid,
     pub name: String,
+    /// Their profile picture, served by Slop; None: the letter.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Deserialize, Clone, Debug)]
@@ -1533,6 +1536,7 @@ impl Chat {
                 sender: Person {
                     id: m.sender,
                     name: name(&m.sender),
+                    avatar_url: None,
                 },
                 mine: m.sender == me,
                 at: m.at.clone(),
@@ -1603,6 +1607,7 @@ impl Chat {
                 sender: Person {
                     id: Uuid::nil(),
                     name: String::new(),
+                    avatar_url: None,
                 },
                 mine: false,
                 at: String::new(),

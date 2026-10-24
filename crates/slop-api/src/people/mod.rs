@@ -680,6 +680,9 @@ struct CardRow {
     services: Vec<Service>,
     #[sqlx(json(nullable))]
     avatar: Option<media::Picture>,
+    /// An individual's profile picture from their account (avatars.rs), when the portfolio has
+    /// no avatar.
+    account_avatar: Option<String>,
     #[sqlx(json(nullable))]
     works: Option<Vec<Work>>,
     portfolio_order: Vec<String>,
@@ -689,7 +692,7 @@ struct CardRow {
 }
 
 impl CardRow {
-    fn into_card(self) -> Card {
+    fn into_card(self, config: &crate::config::Config) -> Card {
         let mut works = self.works.unwrap_or_default();
         portfolio::arrange(&mut works, &self.portfolio_order);
         let preview = works
@@ -717,7 +720,10 @@ impl CardRow {
             taking_work: self.taking_work,
             can_hire: self.can_hire,
             accent: self.accent,
-            avatar_url: self.avatar.map(|a| a.url),
+            avatar_url: self
+                .avatar
+                .map(|a| a.url)
+                .or_else(|| crate::avatars::absolute(config, self.account_avatar)),
             preview,
             from_price,
             rating: CreativeRating::new(self.not_slop, self.slop),
@@ -733,6 +739,10 @@ fn push_card_select(qb: &mut QueryBuilder<Postgres>, extra: &'static str) {
                 c.taking_work, (c.taking_work and c.stripe_status = 'active') as can_hire, c.accent,
                 c.services, ps.avatar, ps.works, c.portfolio_order, ",
     )
+    .push(format!(
+        "case when c.kind <> 'studio' then {} end as account_avatar, ",
+        crate::avatars::path_sql("c.user_id")
+    ))
     .push(RATING_SQL)
     .push(extra)
     .push(" from creatives c left join portfolio_sets ps on ps.id = c.portfolio_set_id");
@@ -822,7 +832,10 @@ async fn directory(
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Directory {
-        people: rows.into_iter().map(CardRow::into_card).collect(),
+        people: rows
+            .into_iter()
+            .map(|r| r.into_card(&state.config))
+            .collect(),
         skills: SKILLS
             .iter()
             .map(|(s, _)| SkillCount {
@@ -996,7 +1009,7 @@ async fn page(
         status,
         hidden_reason: if is_me { row.hidden_reason } else { None },
         closed: row.closed,
-        card: row.card.into_card(),
+        card: row.card.into_card(&state.config),
     }))
 }
 

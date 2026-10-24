@@ -12,6 +12,7 @@ import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent,
 import { Link, useNavigate, useParams } from "react-router";
 
 import { api, ApiError, type FriendPerson, type ReportReason, type TeamCard } from "../api";
+import { Avatar } from "../components/Avatar";
 import { Loading } from "../components/ui";
 import { useDocumentTitle } from "../hooks";
 import { renderChat } from "../markdown";
@@ -330,6 +331,7 @@ function Restore({ onDone }: { onDone: () => void }) {
 
 function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () => void }) {
   const { id } = useParams();
+  const { me } = useSession();
   const navigate = useNavigate();
   const [list, setList] = useState<ChatConversation[]>();
   const [error, setError] = useState<string>();
@@ -406,9 +408,13 @@ function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () 
             {list.map((c) => (
               <li key={c.id}>
                 <Link to={`/chat/${c.id}`} className={`chat-item ${c.id === id ? "on" : ""}`} aria-current={c.id === id ? "page" : undefined}>
-                  <span className="avatar" aria-hidden="true">
-                    {c.kind === "team" ? "👥" : c.kind === "group" ? "#" : c.title.charAt(0).toUpperCase()}
-                  </span>
+                  {c.kind === "team" || c.kind === "group" ? (
+                    <span className="avatar" aria-hidden="true">
+                      {c.kind === "team" ? "👥" : "#"}
+                    </span>
+                  ) : (
+                    <Avatar name={c.title} url={c.members.find((m) => m.id !== me?.id)?.avatar_url} />
+                  )}
                   <span className="chat-item-text">
                     <b>{c.title}</b>
                     <span className="muted small">{c.ready ? (c.last ?? "No messages yet") : "Waiting to be added…"}</span>

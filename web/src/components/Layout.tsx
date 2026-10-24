@@ -7,6 +7,7 @@ import { useLoad } from "../hooks";
 import { formatDate } from "../format";
 import { desktop, isDesktop } from "../platform";
 import { useAutoUpdates } from "./AppUpdates";
+import { Avatar } from "./Avatar";
 import { ModRequests } from "./ModRequests";
 import { CrashPrompt } from "./BugReports";
 import { SaveSyncEvents } from "./Sandbox";
@@ -236,9 +237,7 @@ function MeMenu() {
   }
   return (
     <Link className="me" to="/account" title="Your account">
-      <span className="avatar" aria-hidden="true">
-        {me.display_name.charAt(0).toUpperCase()}
-      </span>
+      <Avatar name={me.display_name} url={me.avatar_url} />
       <span className="who">
         <b>{me.display_name}</b>
       </span>

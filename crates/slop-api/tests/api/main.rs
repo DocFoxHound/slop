@@ -32,6 +32,7 @@ mod agents_tests;
 mod messages_tests;
 mod money_tests;
 mod people_tests;
+mod pictures_tests;
 mod publishing_tests;
 mod store_tests;
 
@@ -322,6 +323,10 @@ async fn fake_github() -> String {
                 axum::Json(json!({ "valid": b["countryCode"] == "DE" && b["vatNumber"] == "123456789" }))
             }),
         )
+        // Picture hosts for profile pictures (avatars.rs, pictures_tests.rs): GitHub's account
+        // pictures at /avatars/u/<id>, and any other host's at /pics/<name>.
+        .route("/avatars/{*path}", get(pictures_tests::serve_picture))
+        .route("/pics/{*path}", get(pictures_tests::serve_picture))
         // GitHub's raw files (media.rs): whatever a test put in RAW_FILES.
         .route(
             "/raw/{*path}",
@@ -563,6 +568,9 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         demos: Default::default(),
         media: slop_api::config::MediaConfig {
             github_raw_base: format!("{github_base}raw/").parse().unwrap(),
+            // Profile pictures (avatars.rs) come from the fake GitHub on this machine.
+            github_avatar_base: format!("{github_base}avatars/").parse().unwrap(),
+            avatar_test_hosts: vec!["127.0.0.1".into()],
         },
         payments: Default::default(),
         email: None,
