@@ -3,7 +3,7 @@
 // built to sell a service — banner, accent colour, their own section order — so it isn't an app
 // page with a different header.
 
-import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, type CreativePage, type PeopleQuery, type Section, type Work } from "../api";
@@ -26,6 +26,7 @@ export function People() {
     ai: (params.get("ai") as PeopleQuery["ai"]) ?? undefined,
     studios: params.get("studios") === "1" || undefined,
     sort: (params.get("sort") as PeopleQuery["sort"]) ?? undefined,
+    q: params.get("q")?.trim() || undefined,
   };
   const list = useLoad(() => api.people.list(q), [params.toString()]);
   const set = (key: string, value: string | null) => {
@@ -55,6 +56,8 @@ export function People() {
           </Link>
         </div>
       </div>
+
+      <PeopleSearch value={q.q ?? ""} onSearch={(text) => set("q", text.trim() || null)} />
 
       <div className="seg wrap" role="group" aria-label="Skill">
         <button type="button" className={!q.skill ? "on" : ""} aria-pressed={!q.skill} onClick={() => set("skill", null)}>
@@ -104,7 +107,7 @@ export function People() {
       ) : !list.data ? (
         <Loading />
       ) : list.data.people.length === 0 ? (
-        <div className="empty-state">Nobody matches those filters yet.</div>
+        <div className="empty-state">{q.q ? `Nobody matches “${q.q}” with those filters.` : "Nobody matches those filters yet."}</div>
       ) : (
         <div className="people-grid">
           {list.data.people.map((c) => (
@@ -126,6 +129,33 @@ export function People() {
         </p>
       </div>
     </div>
+  );
+}
+
+/** The People search: names, handles and headlines (/people?q=…). The store search is the store's. */
+function PeopleSearch({ value, onSearch }: { value: string; onSearch: (text: string) => void }) {
+  const [text, setText] = useState(value);
+  useEffect(() => setText(value), [value]);
+  const submit = (e: FormEvent) => {
+    e.preventDefault();
+    onSearch(text);
+  };
+  return (
+    <form className="search people-search" role="search" onSubmit={submit}>
+      <input
+        type="search"
+        placeholder="Search people by name or what they do…"
+        aria-label="Search people"
+        value={text}
+        maxLength={100}
+        onChange={(e) => {
+          setText(e.target.value);
+          // Clearing the box shows everyone again.
+          if (!e.target.value && value) onSearch("");
+        }}
+      />
+      <button className="btn slime">Search</button>
+    </form>
   );
 }
 

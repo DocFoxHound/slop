@@ -217,5 +217,6 @@ test("a failed category list offers Try again", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("Slop is busy. Try again soon.");
   await page.unrouteAll();
   await page.getByRole("button", { name: "Try again" }).click();
-  await expect(page.getByRole("link", { name: "Games", exact: true })).toBeVisible();
+  // The categories' own list (the store bar always has Games).
+  await expect(page.locator(".browse-group").getByRole("link", { name: "Games", exact: true })).toBeVisible();
 });

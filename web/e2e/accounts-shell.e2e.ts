@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// What's on every page (web/src/components/Layout.tsx, main.tsx): the tabs, search, sign-in and
-// the bell, notices about the account, the sidebar, and the notifications page.
+// What's on every page (web/src/components/Layout.tsx, main.tsx): the tabs, sign-in and the bell,
+// notices about the account, the store's search and sidebar, and the notifications page.
 import AxeBuilder from "@axe-core/playwright";
 
 import { apiError, call, fake, tweak } from "./accounts-helpers";
@@ -24,15 +24,40 @@ test.describe("the app shell", () => {
       ["/people", "PEOPLE"],
       [`/jobs/${ids.requestedJob}`, "PEOPLE"],
       ["/library", "LIBRARY"],
-      ["/chat", "CHAT"],
-      ["/friends", "CHAT"],
       ["/publish", "PUBLISH"],
     ]) {
       await page.goto(path);
       await expect(top.locator(".tabs a.on")).toHaveText(tab);
     }
-    await page.goto("/account");
-    await expect(top.locator(".tabs a.on")).toHaveCount(0);
+    // Chat isn't a top tab: it's the Friends & Chat bar (and a bottom tab on phones).
+    await expect(top.getByRole("link", { name: "CHAT" })).toHaveCount(0);
+    for (const path of ["/account", "/chat", "/friends"]) {
+      await page.goto(path);
+      await expect(top.locator(".tabs a.on")).toHaveCount(0);
+    }
+  });
+
+  test("the top bar has no search: the store and People have their own", async ({ page }) => {
+    await page.goto("/");
+    const top = page.getByRole("navigation", { name: "Main" }).first();
+    await expect(page.getByRole("navigation", { name: "Store" }).getByRole("searchbox", { name: "Search the store" })).toBeVisible();
+    await expect(top.getByRole("searchbox")).toHaveCount(0);
+    await page.goto("/library");
+    await expect(page.getByRole("searchbox")).toHaveCount(0);
+    await page.goto("/people");
+    await expect(page.getByRole("searchbox", { name: "Search people" })).toBeVisible();
+    await expect(page.getByRole("searchbox", { name: "Search the store" })).toHaveCount(0);
+  });
+
+  test("the avatar keeps its size however narrow the window", async ({ page }) => {
+    await signIn(page, "player");
+    for (const width of [1280, 900, 700, 620]) {
+      await page.setViewportSize({ width, height: 700 });
+      await page.goto("/");
+      const box = await page.locator(".me .avatar").boundingBox();
+      expect(box?.width, `at ${width}px`).toBe(32);
+      expect(box?.height, `at ${width}px`).toBe(32);
+    }
   });
 
   test("on a phone, the tabs are at the bottom, with Account", async ({ page }) => {
@@ -44,6 +69,12 @@ test.describe("the app shell", () => {
     await bottom.getByRole("link", { name: "Library" }).click();
     await expect(page).toHaveURL(/\/library$/);
     await expect(bottom.getByRole("link", { name: "Library" })).toHaveClass(/on/);
+    // Chat is a bottom tab on a phone, instead of the Friends & Chat bar.
+    await expect(page.getByRole("button", { name: /^Friends & Chat/ })).toBeHidden();
+    await bottom.getByRole("link", { name: "Chat" }).click();
+    await expect(page).toHaveURL(/\/chat$/);
+    await expect(page.getByText("Chat is in the Slop app.")).toBeVisible();
+    await expect(bottom.getByRole("link", { name: "Chat" })).toHaveClass(/on/);
     await bottom.getByRole("link", { name: "Account" }).click();
     await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
     await expect(bottom.getByRole("link", { name: "Account" })).toHaveClass(/on/);
@@ -128,7 +159,7 @@ test.describe("the app shell", () => {
 
 test.describe("search", () => {
   test("Enter searches for what was typed, trimmed and encoded", async ({ page }) => {
-    await page.goto("/library");
+    await page.goto("/browse");
     const box = page.getByRole("searchbox", { name: "Search the store" });
     await expect(box).toHaveAttribute("maxlength", "100");
     await box.fill("  castle & rock  ");
@@ -141,8 +172,24 @@ test.describe("search", () => {
     await page.goto("/search?q=neon");
     const box = page.getByRole("searchbox", { name: "Search the store" });
     await expect(box).toHaveValue("neon");
-    await page.goto("/bounties");
+    await page.goto("/upcoming");
     await expect(box).toHaveValue("");
+  });
+
+  test("People has its own search, by name, handle or headline", async ({ page }) => {
+    await page.goto("/people");
+    const box = page.getByRole("searchbox", { name: "Search people" });
+    await box.fill("vera");
+    await box.press("Enter");
+    await expect(page).toHaveURL(/\/people\?q=vera$/);
+    await expect(page.getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+    await box.fill("nobody-is-called-this");
+    await page.getByRole("search").getByRole("button", { name: "Search" }).click();
+    await expect(page.getByText("Nobody matches “nobody-is-called-this” with those filters.")).toBeVisible();
+    // Clearing the box shows everyone again.
+    await box.fill("");
+    await expect(page).toHaveURL(/\/people$/);
+    await expect(page.getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
   });
 });
 
@@ -307,9 +354,15 @@ test.describe("the simulation sandbox", () => {
 });
 
 test.describe("the store sidebar", () => {
-  test("lists the categories, and marks the one you're in", async ({ page }) => {
-    const categories = await call<Array<{ slug: string; name: string }>>(null, "GET", "/v1/categories");
+  test("isn't on the front page, which is all apps", async ({ page }) => {
     await page.goto("/");
+    await expect(page.getByRole("navigation", { name: "Store" })).toBeVisible();
+    await expect(page.getByRole("complementary", { name: "Browse" })).toHaveCount(0);
+  });
+
+  test("lists the categories on list pages, and marks the one you're in", async ({ page }) => {
+    const categories = await call<Array<{ slug: string; name: string }>>(null, "GET", "/v1/categories");
+    await page.goto("/browse");
     const sidebar = page.getByRole("complementary", { name: "Browse" });
     for (const c of categories) {
       await expect(sidebar.getByRole("link", { name: c.name, exact: true })).toHaveAttribute("href", `/browse/${c.slug}`);

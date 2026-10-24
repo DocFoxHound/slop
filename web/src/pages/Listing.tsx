@@ -6,7 +6,7 @@ import { Link, useParams, useSearchParams } from "react-router";
 
 import { ACCESSIBILITY, api, ApiError, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
 import { detectOs, OS_LABEL } from "../platform";
-import { Sidebar } from "../components/Layout";
+import { StoreFrame } from "../components/StoreNav";
 import { ErrorState, Loading, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 
@@ -168,62 +168,47 @@ export function Search() {
   const q = (params.get("q") ?? "").trim();
   useDocumentTitle(q ? `Search: ${q}` : "Everything");
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar />
-        <div>
-          <div className="crumbs">
-            <Link to="/">Store</Link> › Search
-          </div>
-          <h1 className="page-title">{q ? `Results for “${q}”` : "Everything"}</h1>
-          <AppGrid base={{ q: q || undefined }} />
-        </div>
+    <StoreFrame sidebar>
+      <div className="crumbs">
+        <Link to="/">Store</Link> › Search
       </div>
-    </div>
+      <h1 className="page-title">{q ? `Results for “${q}”` : "Everything"}</h1>
+      <AppGrid base={{ q: q || undefined }} />
+    </StoreFrame>
   );
 }
 
 export function MadeWithPeople() {
   useDocumentTitle("Made with people");
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar />
-        <div>
-          <div className="crumbs">
-            <Link to="/">Store</Link> › Made with people
-          </div>
-          <h1 className="page-title">✋ Made with people</h1>
-          <p className="muted">
-            Apps whose makers hired artists, composers, writers and other creatives through <Link to="/people">People</Link>. Their pages
-            credit who made what.
-          </p>
-          <AppGrid base={{ made_with_people: true }} />
-        </div>
+    <StoreFrame sidebar>
+      <div className="crumbs">
+        <Link to="/">Store</Link> › Made with people
       </div>
-    </div>
+      <h1 className="page-title">✋ Made with people</h1>
+      <p className="muted">
+        Apps whose makers hired artists, composers, writers and other creatives through <Link to="/people">People</Link>. Their pages
+        credit who made what.
+      </p>
+      <AppGrid base={{ made_with_people: true }} />
+    </StoreFrame>
   );
 }
 
 export function Community() {
   useDocumentTitle("Community builds");
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar />
-        <div>
-          <div className="crumbs">
-            <Link to="/">Store</Link> › Community builds
-          </div>
-          <h1 className="page-title">Community builds</h1>
-          <p className="muted">
-            Branches of apps, built from forks: mods, fixes, translations and ports. Each is made by its author, not the
-            original publisher, and checked the same way as every app on Slop.
-          </p>
-          <AppGrid base={{ community: true }} sorts={["rating", "recent", "title"]} />
-        </div>
+    <StoreFrame sidebar>
+      <div className="crumbs">
+        <Link to="/">Store</Link> › Community builds
       </div>
-    </div>
+      <h1 className="page-title">Community builds</h1>
+      <p className="muted">
+        Branches of apps, built from forks: mods, fixes, translations and ports. Each is made by its author, not the
+        original publisher, and checked the same way as every app on Slop.
+      </p>
+      <AppGrid base={{ community: true }} sorts={["rating", "recent", "title"]} />
+    </StoreFrame>
   );
 }
 
@@ -232,35 +217,30 @@ export function Upcoming() {
   const [params, setParams] = useSearchParams();
   const stage = params.get("stage") === "beta" ? "beta" : "coming_soon";
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar />
-        <div>
-          <div className="crumbs">
-            <Link to="/">Store</Link> › Upcoming
-          </div>
-          <h1 className="page-title">Coming soon &amp; beta</h1>
-          <p className="muted">
-            Coming soon pages have 30 days to reach beta, and betas have a year to fully release. Projects with no code
-            changes for 90 days are marked dead.
-          </p>
-          <div className="seg" role="tablist">
-            {(["coming_soon", "beta"] as const).map((s) => (
-              <button
-                key={s}
-                role="tab"
-                aria-selected={stage === s}
-                className={stage === s ? "on" : ""}
-                onClick={() => setParams({ stage: s }, { replace: true })}
-              >
-                {s === "beta" ? "Beta" : "Coming soon"}
-              </button>
-            ))}
-          </div>
-          <AppGrid base={{ stage }} sorts={["anticipated", "recent", "title"]} />
-        </div>
+    <StoreFrame sidebar>
+      <div className="crumbs">
+        <Link to="/">Store</Link> › Upcoming
       </div>
-    </div>
+      <h1 className="page-title">Coming soon &amp; beta</h1>
+      <p className="muted">
+        Coming soon pages have 30 days to reach beta, and betas have a year to fully release. Projects with no code
+        changes for 90 days are marked dead.
+      </p>
+      <div className="seg" role="tablist">
+        {(["coming_soon", "beta"] as const).map((s) => (
+          <button
+            key={s}
+            role="tab"
+            aria-selected={stage === s}
+            className={stage === s ? "on" : ""}
+            onClick={() => setParams({ stage: s }, { replace: true })}
+          >
+            {s === "beta" ? "Beta" : "Coming soon"}
+          </button>
+        ))}
+      </div>
+      <AppGrid base={{ stage }} sorts={["anticipated", "recent", "title"]} />
+    </StoreFrame>
   );
 }
 
@@ -268,25 +248,20 @@ export function Browse() {
   useDocumentTitle("Categories");
   const categories = useLoad(() => api.categories(), []);
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar />
-        <div>
-          <h1 className="page-title">All categories</h1>
-          <p className="muted">Broad categories on top, specific tags underneath. Apps have several tags, so they show up in more than one place.</p>
-          {categories.error && <ErrorState error={categories.error} onRetry={categories.reload} />}
-          {!categories.data && !categories.error && <Loading />}
-          {categories.data?.map((c) => (
-            <div className="browse-group" key={c.slug}>
-              <h3>
-                <Link to={`/browse/${c.slug}`}>{c.name}</Link> <span className="muted">{c.description}</span>
-              </h3>
-              <TagCloud category={c} />
-            </div>
-          ))}
+    <StoreFrame sidebar>
+      <h1 className="page-title">All categories</h1>
+      <p className="muted">Broad categories on top, specific tags underneath. Apps have several tags, so they show up in more than one place.</p>
+      {categories.error && <ErrorState error={categories.error} onRetry={categories.reload} />}
+      {!categories.data && !categories.error && <Loading />}
+      {categories.data?.map((c) => (
+        <div className="browse-group" key={c.slug}>
+          <h3>
+            <Link to={`/browse/${c.slug}`}>{c.name}</Link> <span className="muted">{c.description}</span>
+          </h3>
+          <TagCloud category={c} />
         </div>
-      </div>
-    </div>
+      ))}
+    </StoreFrame>
   );
 }
 
@@ -309,20 +284,15 @@ export function CategoryPage() {
   useDocumentTitle(category?.name);
   if (categories.data && !category) return <NotFound />;
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar active={slug} />
-        <div>
-          <div className="crumbs">
-            <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> › {category?.name}
-          </div>
-          <h1 className="page-title">{category?.name ?? " "}</h1>
-          <div className="muted">{category?.description}</div>
-          {category && <TagCloud category={category} />}
-          <AppGrid base={{ category: slug }} />
-        </div>
+    <StoreFrame sidebar active={slug}>
+      <div className="crumbs">
+        <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> › {category?.name}
       </div>
-    </div>
+      <h1 className="page-title">{category?.name ?? " "}</h1>
+      <div className="muted">{category?.description}</div>
+      {category && <TagCloud category={category} />}
+      <AppGrid base={{ category: slug }} />
+    </StoreFrame>
   );
 }
 
@@ -334,19 +304,14 @@ export function TagPage() {
   useDocumentTitle(tag?.name);
   if (categories.data && !tag) return <NotFound />;
   return (
-    <div className="page">
-      <div className="store">
-        <Sidebar active={category?.slug} />
-        <div>
-          <div className="crumbs">
-            <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> ›{" "}
-            {category && <Link to={`/browse/${category.slug}`}>{category.name}</Link>} › {tag?.name}
-          </div>
-          <h1 className="page-title"># {tag?.name ?? slug}</h1>
-          <AppGrid base={{ tag: slug }} />
-        </div>
+    <StoreFrame sidebar active={category?.slug}>
+      <div className="crumbs">
+        <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> ›{" "}
+        {category && <Link to={`/browse/${category.slug}`}>{category.name}</Link>} › {tag?.name}
       </div>
-    </div>
+      <h1 className="page-title"># {tag?.name ?? slug}</h1>
+      <AppGrid base={{ tag: slug }} />
+    </StoreFrame>
   );
 }
 

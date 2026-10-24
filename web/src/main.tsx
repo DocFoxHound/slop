@@ -30,7 +30,7 @@ import { Source } from "./pages/Source";
 import { Contact } from "./pages/Contact";
 import { Verify } from "./pages/Verify";
 import { BountiesPage, BountyPage } from "./pages/Bounties";
-import { Store } from "./pages/Store";
+import { Recommended, Store } from "./pages/Store";
 import { ShelfPage } from "./pages/ShelfPage";
 import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
@@ -42,6 +42,7 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <Store /> },
       { path: "/search", element: <Search /> },
+      { path: "/recommended", element: <Recommended /> },
       { path: "/ratings", element: <HowRatings /> },
       { path: "/upcoming", element: <Upcoming /> },
       { path: "/community", element: <Community /> },

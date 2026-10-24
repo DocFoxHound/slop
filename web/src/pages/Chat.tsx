@@ -8,7 +8,20 @@
 // dropped or attached), links to memes shown inline, link previews made by the sender's app,
 // replies, reactions, edits and deletes, mute, security codes, blocking and reporting.
 
-import { useCallback, useEffect, useMemo, useRef, useState, type ClipboardEvent, type DragEvent, type FormEvent, type KeyboardEvent } from "react";
+import {
+  createContext,
+  useCallback,
+  useContext,
+  useEffect,
+  useMemo,
+  useRef,
+  useState,
+  useSyncExternalStore,
+  type ClipboardEvent,
+  type DragEvent,
+  type FormEvent,
+  type KeyboardEvent,
+} from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import { api, ApiError, type FriendPerson, type ReportReason, type TeamCard } from "../api";
@@ -39,6 +52,9 @@ function chat<T>(action: Parameters<typeof desktop.chat>[0]) {
   return desktop.chat<T>(action);
 }
 
+/** Chat shown in a corner panel (components/ChatDock.tsx) rather than as its own page. */
+const Compact = createContext(false);
+
 export function ChatPage() {
   useDocumentTitle("Chat");
   const { me } = useSession();
@@ -58,35 +74,120 @@ export function ChatPage() {
 
 /** The website: chat is in the app only (SECURITY §8.5). Friends work here too. */
 function ChatOnWeb() {
-  const os = detectOs();
   return (
     <div className="page narrow">
       <h1 className="page-title">💬 Chat</h1>
-      <div className="panel panel-pad">
+      <ChatInAppNote />
+    </div>
+  );
+}
+
+/** Why chat isn't on the website, and where to get the app. In the full page and the panel. */
+export function ChatInAppNote({ compact = false }: { compact?: boolean }) {
+  const os = detectOs();
+  const get = `⬇ Get Slop for ${os === "mac" || os === "windows" || os === "linux" ? OS_LABEL[os] : "your computer"}`;
+  if (compact) {
+    return (
+      <div className="notice dock-note">
         <p>
-          <b>Chat is in the Slop app.</b> Messages are end-to-end encrypted on your devices, so Slop can't read them, and a
-          website can't keep the keys as safely as the app can.
+          <b>Chat is in the Slop app.</b> Messages are end-to-end encrypted on your devices, so Slop can't read them.
         </p>
-        <p className="muted">
-          Message friends, teammates and the people you work with on People; share pictures, GIFs and links; start group
-          chats and team chats.
-        </p>
-        <div className="row-actions">
-          <Link className="btn slime" to="/download">
-            ⬇ Get Slop for {os === "mac" || os === "windows" || os === "linux" ? OS_LABEL[os] : "your computer"}
-          </Link>
-          <Link className="btn" to="/friends">
-            Your friends
-          </Link>
-        </div>
+        <Link className="btn small slime" to="/download">
+          {get}
+        </Link>
+      </div>
+    );
+  }
+  return (
+    <div className="panel panel-pad">
+      <p>
+        <b>Chat is in the Slop app.</b> Messages are end-to-end encrypted on your devices, so Slop can't read them, and a
+        website can't keep the keys as safely as the app can.
+      </p>
+      <p className="muted">
+        Message friends, teammates and the people you work with on People; share pictures, GIFs and links; start group chats
+        and team chats.
+      </p>
+      <div className="row-actions">
+        <Link className="btn slime" to="/download">
+          {get}
+        </Link>
+        <Link className="btn" to="/friends">
+          Your friends
+        </Link>
       </div>
     </div>
   );
 }
 
+/** Chat as a page (and in the in-game overlay): the open chat is in the address. */
 export function ChatApp() {
+  const { id } = useParams();
+  const navigate = useNavigate();
+  return <ChatView selected={id} onOpen={(c) => navigate(`/chat/${c}`)} onBack={() => navigate("/chat")} />;
+}
+
+// ---------------------------------------------------------------------------------------------
+// Setting up this device: automatic, the first time chat is opened (page or panel)
+
+/** The recovery code from setting up the user's first device, until they say they saved it. */
+let recoveryCode: string | undefined;
+const recoveryListeners = new Set<() => void>();
+function setRecoveryCode(code: string | undefined) {
+  recoveryCode = code;
+  recoveryListeners.forEach((l) => l());
+}
+function useRecoveryCode() {
+  return useSyncExternalStore(
+    (l) => {
+      recoveryListeners.add(l);
+      return () => recoveryListeners.delete(l);
+    },
+    () => recoveryCode,
+  );
+}
+
+let settingUp: Promise<ChatStatus> | undefined;
+
+/**
+ * Makes sure chat is set up on this device, and says where it stands. A device that never had
+ * chat is set up, named after the computer (the app fills in its name); the user's first device
+ * turns history backups on, with a recovery code shown once. A later device waits for approval
+ * from one of the user's others. A removed device is left alone: setting it up again is the
+ * user's choice (`again`). Calls at the same time share one setup.
+ */
+export function ensureChat(again = false): Promise<ChatStatus> {
+  settingUp ??= (async () => {
+    const before = await chat<ChatStatus>({ action: "status" });
+    if (before.state !== "none" && !(again && before.state === "revoked")) return before;
+    const s = await chat<ChatStatus>({ action: "setup" });
+    if (s.state !== "active") return s;
+    const code = await chat<string | null>({ action: "set_backups", on: true });
+    if (code) setRecoveryCode(code);
+    return { ...s, backups: true };
+  })().finally(() => {
+    settingUp = undefined;
+  });
+  return settingUp;
+}
+
+/** Chat, wherever it's shown: sets the device up if needed, then the chats. */
+export function ChatView({
+  selected,
+  onOpen,
+  onBack,
+  compact = false,
+}: {
+  selected?: string;
+  onOpen: (id: string) => void;
+  onBack: () => void;
+  compact?: boolean;
+}) {
   const [status, setStatus] = useState<ChatStatus>();
   const [error, setError] = useState<string>();
+  const [setupError, setSetupError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const recovery = useRecoveryCode();
   const load = useCallback(() => {
     chat<ChatStatus>({ action: "status" }).then(
       (s) => {
@@ -94,6 +195,20 @@ export function ChatApp() {
         setError(undefined);
       },
       (e) => setError(errorText(e)),
+    );
+  }, []);
+  const setUp = useCallback((again: boolean) => {
+    setBusy(true);
+    setSetupError(undefined);
+    ensureChat(again).then(
+      (s) => {
+        setStatus(s);
+        setBusy(false);
+      },
+      (e) => {
+        setSetupError(errorText(e));
+        setBusy(false);
+      },
     );
   }, []);
   useEffect(() => {
@@ -107,80 +222,101 @@ export function ChatApp() {
       window.clearInterval(timer);
     };
   }, [load]);
-  if (error) {
-    return (
-      <div className="page narrow">
+  // Never set up on this computer: do it now, no questions.
+  const state = status?.state;
+  useEffect(() => {
+    if (state === "none" && !setupError) setUp(false);
+  }, [state, setupError, setUp]);
+
+  let body: React.ReactNode;
+  if (recovery) {
+    body = (
+      <RecoveryCode
+        code={recovery}
+        onDone={() => {
+          setRecoveryCode(undefined);
+          load();
+        }}
+      />
+    );
+  } else if (error && !status) {
+    body = (
+      <Screen title="Chat">
         <p className="form-error" role="alert">
           {error}
         </p>
         <button className="btn" onClick={load}>
           Try again
         </button>
+      </Screen>
+    );
+  } else if (!status) {
+    body = <Loading />;
+  } else if (status.state === "none") {
+    body = (
+      <Screen title="Setting up chat">
+        {setupError ? (
+          <>
+            <p className="form-error" role="alert">
+              Chat couldn't be set up on this computer: {setupError}
+            </p>
+            <button className="btn" onClick={() => setSetupError(undefined)}>
+              Try again
+            </button>
+          </>
+        ) : (
+          <Loading label="Setting up chat on this computer…" />
+        )}
+      </Screen>
+    );
+  } else if (status.state === "revoked") {
+    body = <SetUpAgain busy={busy} error={setupError} onSetUp={() => setUp(true)} />;
+  } else if (status.state === "pending") {
+    body = <Waiting status={status} onDone={load} />;
+  } else {
+    body = <Chats status={status} reloadStatus={load} selected={selected} onOpen={onOpen} onBack={onBack} />;
+  }
+  return <Compact.Provider value={compact}>{body}</Compact.Provider>;
+}
+
+/** A screen before the chats: a page of its own, or the panel's contents. */
+function Screen({ title, children }: { title: string; children: React.ReactNode }) {
+  const compact = useContext(Compact);
+  if (compact) {
+    return (
+      <div className="dock-screen">
+        <h3>{title}</h3>
+        {children}
       </div>
     );
   }
-  if (!status) return <Loading />;
-  if (status.state === "none" || status.state === "revoked") return <SetUp status={status} onDone={setStatus} />;
-  if (status.state === "pending") return <Waiting status={status} onDone={load} />;
-  return <Chats status={status} reloadStatus={load} />;
-}
-
-// ---------------------------------------------------------------------------------------------
-// Setting up this device
-
-function SetUp({ status, onDone }: { status: ChatStatus; onDone: (s: ChatStatus) => void }) {
-  const os = detectOs();
-  const [name, setName] = useState(`Slop for ${OS_LABEL[os]}`);
-  const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
-  const [code, setCode] = useState<string>();
-  const [result, setResult] = useState<ChatStatus>();
-  const go = async (e: FormEvent) => {
-    e.preventDefault();
-    setBusy(true);
-    setError(undefined);
-    try {
-      const s = await chat<ChatStatus>({ action: "setup", name: name.trim() });
-      if (s.state === "active") {
-        // The user's first device: backups are on by default, with a recovery code shown once.
-        setCode((await chat<string | null>({ action: "set_backups", on: true })) ?? undefined);
-        setResult(s);
-      } else {
-        onDone(s);
-      }
-    } catch (err) {
-      setError(errorText(err));
-    } finally {
-      setBusy(false);
-    }
-  };
-  if (result && code) return <RecoveryCode code={code} onDone={() => onDone({ ...result, backups: true })} />;
   return (
     <div className="page narrow">
-      <h1 className="page-title">💬 Set up chat</h1>
-      {status.state === "revoked" && (
+      <h1 className="page-title">{title}</h1>
+      {children}
+    </div>
+  );
+}
+
+/** This device was removed from chat: setting it up again is one click, never automatic. */
+function SetUpAgain({ busy, error, onSetUp }: { busy: boolean; error?: string; onSetUp: () => void }) {
+  return (
+    <Screen title="💬 Chat">
+      <div className="panel panel-pad">
         <p className="notice">This device was removed from chat. Set it up again to keep chatting here.</p>
-      )}
-      <form className="panel panel-pad form" onSubmit={(e) => void go(e)}>
-        <p>
-          Messages are encrypted on this device with keys only it has. Slop delivers them but can't read them, and neither can
-          anyone who gets into your Slop account without one of your devices.
+        <p className="muted small">
+          It starts with new keys and no history. If you chat on another computer, you'll approve this one from there.
         </p>
-        <label>
-          Name this device
-          <input value={name} maxLength={60} onChange={(e) => setName(e.target.value)} required />
-        </label>
-        <p className="muted small">If you already chat on another computer, you'll approve this one from there.</p>
         {error && (
           <p className="form-error" role="alert">
             {error}
           </p>
         )}
-        <button className="btn slime" disabled={busy || !name.trim()}>
-          {busy ? "Setting up…" : "Set up chat"}
+        <button className="btn slime" disabled={busy} onClick={onSetUp}>
+          {busy ? "Setting up…" : "Set up chat again"}
         </button>
-      </form>
-    </div>
+      </div>
+    </Screen>
   );
 }
 
@@ -197,12 +333,11 @@ function RecoveryCode({ code, onDone }: { code: string; onDone: () => void }) {
     }
   };
   return (
-    <div className="page narrow">
-      <h1 className="page-title">Save your recovery code</h1>
+    <Screen title="Save your recovery code">
       <div className="panel panel-pad">
         <p>
-          Your chat history is backed up to Slop, encrypted with this code. Slop never sees it. If you lose every device you
-          chat on, this code is the only way to get your history back.
+          Chat is ready on this computer. Your chat history is backed up to Slop, encrypted with this code. Slop never sees
+          it. If you lose every device you chat on, this code is the only way to get your history back.
         </p>
         <p className="recovery-code mono" aria-label="Recovery code">
           {code}
@@ -221,7 +356,7 @@ function RecoveryCode({ code, onDone }: { code: string; onDone: () => void }) {
           </button>
         </div>
       </div>
-    </div>
+    </Screen>
   );
 }
 
@@ -240,8 +375,7 @@ function Waiting({ status, onDone }: { status: ChatStatus; onDone: () => void })
   };
   if (restore) return <Restore onDone={onDone} />;
   return (
-    <div className="page narrow">
-      <h1 className="page-title">Approve this device</h1>
+    <Screen title="Approve this device">
       <div className="panel panel-pad">
         <p>
           Open <b>Chat → Devices</b> in Slop on a computer where you already chat, and approve this one. Check the code there
@@ -278,7 +412,7 @@ function Waiting({ status, onDone }: { status: ChatStatus; onDone: () => void })
           </p>
         )}
       </div>
-    </div>
+    </Screen>
   );
 }
 
@@ -300,8 +434,7 @@ function Restore({ onDone }: { onDone: () => void }) {
     }
   };
   return (
-    <div className="page narrow">
-      <h1 className="page-title">Restore your history</h1>
+    <Screen title="Restore your history">
       <form className="panel panel-pad form" onSubmit={(e) => void go(e)}>
         <label>
           Recovery code
@@ -321,16 +454,27 @@ function Restore({ onDone }: { onDone: () => void }) {
           </button>
         </div>
       </form>
-    </div>
+    </Screen>
   );
 }
 
 // ---------------------------------------------------------------------------------------------
 // The chats
 
-function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () => void }) {
-  const { id } = useParams();
-  const navigate = useNavigate();
+function Chats({
+  status,
+  reloadStatus,
+  selected,
+  onOpen,
+  onBack,
+}: {
+  status: ChatStatus;
+  reloadStatus: () => void;
+  selected?: string;
+  onOpen: (id: string) => void;
+  onBack: () => void;
+}) {
+  const compact = useContext(Compact);
   const [list, setList] = useState<ChatConversation[]>();
   const [error, setError] = useState<string>();
   const [changed, setChanged] = useState<{ ids: string[]; n: number }>({ ids: [], n: 0 });
@@ -368,81 +512,109 @@ function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () 
       window.clearInterval(tick);
     };
   }, [load]);
-  const current = list?.find((c) => c.id === id);
-  useDocumentTitle(current ? `${current.title} · Chat` : "Chat");
+  const current = list?.find((c) => c.id === selected);
+  // The panel leaves the page's title alone: the page behind it is what's open.
+  const title = current ? `${current.title} · Chat` : "Chat";
+  useEffect(() => {
+    if (!compact) document.title = `${title} · Slop`;
+  }, [compact, title]);
+
+  // In the panel, one thing at a time: the list, or the open chat.
+  const showList = !compact || !current;
+  const showChat = !compact || current;
 
   return (
-    <div className="chat-layout">
-      <aside className="chat-list" aria-label="Chats">
-        <div className="chat-list-head">
-          <h1>Chat</h1>
-          <div className="row-actions">
-            <button className="btn small slime" onClick={() => setPanel("new")}>
-              ＋ New
-            </button>
-            <button className="btn small ghost" onClick={() => setPanel("devices")} aria-label="Devices and backups">
-              ⚙{status.pending.length > 0 && <span className="dot-badge">{status.pending.length}</span>}
-            </button>
+    <div className={`chat-layout ${compact ? "compact" : ""}`}>
+      {showList && (
+        <aside className="chat-list" aria-label="Chats">
+          <div className="chat-list-head">
+            {compact ? <h3 className="sr-only">Chats</h3> : <h1>Chat</h1>}
+            <div className="row-actions">
+              <button className="btn small slime" onClick={() => setPanel("new")}>
+                ＋ New
+              </button>
+              <button className="btn small ghost" onClick={() => setPanel("devices")} aria-label="Devices and backups">
+                ⚙{status.pending.length > 0 && <span className="dot-badge">{status.pending.length}</span>}
+              </button>
+            </div>
           </div>
-        </div>
-        {status.pending.length > 0 && (
-          <button className="notice chat-pending" onClick={() => setPanel("devices")}>
-            A new device wants to join your chats. Check its code and approve it.
-          </button>
-        )}
-        {error && (
-          <p className="form-error" role="alert">
-            {error}
-          </p>
-        )}
-        {!list ? (
-          <Loading />
-        ) : list.length === 0 ? (
-          <div className="empty-state small">
-            No chats yet. <button className="link-btn" onClick={() => setPanel("new")}>Start one</button> with a friend or your team.
-          </div>
-        ) : (
-          <ul>
-            {list.map((c) => (
-              <li key={c.id}>
-                <Link to={`/chat/${c.id}`} className={`chat-item ${c.id === id ? "on" : ""}`} aria-current={c.id === id ? "page" : undefined}>
-                  <span className="avatar" aria-hidden="true">
-                    {c.kind === "team" ? "👥" : c.kind === "group" ? "#" : c.title.charAt(0).toUpperCase()}
-                  </span>
-                  <span className="chat-item-text">
-                    <b>{c.title}</b>
-                    <span className="muted small">{c.ready ? (c.last ?? "No messages yet") : "Waiting to be added…"}</span>
-                  </span>
-                  {c.muted && <span aria-label="Muted">🔕</span>}
-                  {c.unread > 0 && (
-                    <span className="unread-badge" aria-label={`${c.unread} unread`}>
-                      {c.unread > 99 ? "99+" : c.unread}
+          {status.pending.length > 0 && (
+            <button className="notice chat-pending" onClick={() => setPanel("devices")}>
+              A new device wants to join your chats. Check its code and approve it.
+            </button>
+          )}
+          {error && (
+            <p className="form-error" role="alert">
+              {error}
+            </p>
+          )}
+          {!list ? (
+            <Loading />
+          ) : list.length === 0 ? (
+            <div className="empty-state small">
+              No chats yet.{" "}
+              <button className="link-btn" onClick={() => setPanel("new")}>
+                Start one
+              </button>{" "}
+              with a friend or your team.
+            </div>
+          ) : (
+            <ul>
+              {list.map((c) => (
+                <li key={c.id}>
+                  <Link
+                    to={`/chat/${c.id}`}
+                    className={`chat-item ${c.id === selected ? "on" : ""}`}
+                    aria-current={c.id === selected ? "page" : undefined}
+                    onClick={(e) => {
+                      // In the panel the chat opens there; a modified click still opens the page.
+                      if (compact && !e.metaKey && !e.ctrlKey && !e.shiftKey && e.button === 0) {
+                        e.preventDefault();
+                        onOpen(c.id);
+                      }
+                    }}
+                  >
+                    <span className="avatar" aria-hidden="true">
+                      {c.kind === "team" ? "👥" : c.kind === "group" ? "#" : c.title.charAt(0).toUpperCase()}
                     </span>
-                  )}
-                </Link>
-              </li>
-            ))}
-          </ul>
-        )}
-        <p className="muted small chat-list-foot">
-          🔒 End-to-end encrypted. <Link to="/friends">Friends</Link>
-        </p>
-      </aside>
-      <section className="chat-main">
-        {current ? (
-          <Conversation
-            key={current.id}
-            conv={current}
-            changed={changed}
-            typing={typing.filter((t) => t.conversation === current.id).map((t) => t.name)}
-            onListChanged={load}
-          />
-        ) : (
-          <div className="empty-state chat-empty">
-            {list && list.length > 0 ? "Pick a chat." : "Your chats will show here."}
-          </div>
-        )}
-      </section>
+                    <span className="chat-item-text">
+                      <b>{c.title}</b>
+                      <span className="muted small">{c.ready ? (c.last ?? "No messages yet") : "Waiting to be added…"}</span>
+                    </span>
+                    {c.muted && <span aria-label="Muted">🔕</span>}
+                    {c.unread > 0 && (
+                      <span className="unread-badge" aria-label={`${c.unread} unread`}>
+                        {c.unread > 99 ? "99+" : c.unread}
+                      </span>
+                    )}
+                  </Link>
+                </li>
+              ))}
+            </ul>
+          )}
+          {!compact && (
+            <p className="muted small chat-list-foot">
+              🔒 End-to-end encrypted. <Link to="/friends">Friends</Link>
+            </p>
+          )}
+        </aside>
+      )}
+      {showChat && (
+        <section className="chat-main">
+          {current ? (
+            <Conversation
+              key={current.id}
+              conv={current}
+              changed={changed}
+              typing={typing.filter((t) => t.conversation === current.id).map((t) => t.name)}
+              onListChanged={load}
+              onBack={onBack}
+            />
+          ) : (
+            <div className="empty-state chat-empty">{list && list.length > 0 ? "Pick a chat." : "Your chats will show here."}</div>
+          )}
+        </section>
+      )}
       {panel === "devices" && (
         <Panel title="Devices and backups" onClose={() => setPanel(null)}>
           <Devices status={status} onChanged={reloadStatus} />
@@ -454,7 +626,7 @@ function Chats({ status, reloadStatus }: { status: ChatStatus; reloadStatus: () 
             onStarted={(cid) => {
               setPanel(null);
               load();
-              navigate(`/chat/${cid}`);
+              onOpen(cid);
             }}
           />
         </Panel>
@@ -714,13 +886,15 @@ function Conversation({
   changed,
   typing,
   onListChanged,
+  onBack,
 }: {
   conv: ChatConversation;
   changed: { ids: string[]; n: number };
   typing: string[];
   onListChanged: () => void;
+  onBack: () => void;
 }) {
-  const navigate = useNavigate();
+  const compact = useContext(Compact);
   const { me } = useSession();
   const [messages, setMessages] = useState<ChatMessage[]>();
   const [older, setOlder] = useState<ChatMessage[]>([]);
@@ -789,6 +963,16 @@ function Conversation({
   return (
     <div className="conversation">
       <header className="conversation-head">
+        {compact && (
+          <div className="conversation-nav">
+            <button className="btn small ghost" onClick={onBack}>
+              ‹ Chats
+            </button>
+            <Link className="btn small ghost" to={`/chat/${conv.id}`}>
+              Open full chat ↗
+            </Link>
+          </div>
+        )}
         <div>
           <h2>{conv.title}</h2>
           <p className="muted small">
@@ -820,7 +1004,7 @@ function Conversation({
                   void run(async () => {
                     await chat({ action: "leave", conversation: conv.id });
                     onListChanged();
-                    navigate("/chat");
+                    onBack();
                   })
                 }
               >
@@ -835,7 +1019,7 @@ function Conversation({
                 void run(async () => {
                   await chat({ action: "hide", conversation: conv.id });
                   onListChanged();
-                  navigate("/chat");
+                  onBack();
                 })
               }
             >
@@ -1238,7 +1422,11 @@ function Composer({
       e.preventDefault();
       void send();
     }
-    if (e.key === "Escape") onCancel();
+    // Escape cancels a reply or an edit; otherwise it's left to the panel around chat, to close it.
+    if (e.key === "Escape" && (replyTo || editing)) {
+      e.preventDefault();
+      onCancel();
+    }
   };
   const onPaste = (e: ClipboardEvent) => {
     if (e.clipboardData.files.length > 0) {
