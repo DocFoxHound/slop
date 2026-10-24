@@ -8,11 +8,14 @@
 #   /out/shipped.json    the shipped dependencies, for the dependency audit (on success)
 # The built files stay in /src (target/release/slop-api, web/dist) for update.sh to copy.
 #
-# SLOP_BUILD_ONLY=1 (production, deploy/README.md "Production") skips the tests, lints and browser
-# tests: production deploys only commits that already passed them on the test server, and it has
-# no test database. The build, the SBOM and shipped.json are the same either way.
+# GitHub's pipeline runs it the same way for its checks (.github/workflows/pipeline.yml).
+#
+# SLOP_BUILD_ONLY=1 (update.sh's build and production modes, deploy/README.md) skips the tests,
+# lints and browser tests: the test server deploys dev quickly and leaves them to GitHub's
+# pipeline, production deploys only commits that passed them there, and neither has a test
+# database. The build, the SBOM and shipped.json are the same either way.
 set -uo pipefail
-cd /src
+cd /src || exit 1
 out=/out
 mkdir -p "$HOME"
 fail() { echo "$1" >"$out/failed"; exit 1; }

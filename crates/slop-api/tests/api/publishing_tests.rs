@@ -5148,25 +5148,31 @@ async fn ownership_checks_refuse_private_network_hosts(db: PgPool) {
 // ---------------------------------------------------------------------------------------------
 // Desktop app builds (desktop_updates.rs)
 
-/// A test app that keeps desktop builds in a fresh folder on disk (under target/tmp, not a
-/// RAM-backed /tmp), signing them with a new updater key, for uploads from octo/slop's CI.
+/// A test app set up like production: it keeps desktop builds in a fresh folder on disk (under
+/// target/tmp, not a RAM-backed /tmp), signing them with a new updater key, for uploads from
+/// octo/slop's approved pipeline runs on main.
 async fn desktop_app(db: PgPool) -> (TestApp, std::path::PathBuf, String) {
-    desktop_app_on(db, slop_api::config::DEFAULT_DESKTOP_REF).await
+    desktop_app_in(db, Some("production")).await
 }
 
-/// `desktop_app` for one channel: the git ref whose desktop workflow may upload.
-async fn desktop_app_on(db: PgPool, git_ref: &str) -> (TestApp, std::path::PathBuf, String) {
+/// `desktop_app` with the GitHub environment uploads must come from (SLOP_DESKTOP_ENVIRONMENT);
+/// none on the test server, which builds its own apps.
+async fn desktop_app_in(
+    db: PgPool,
+    environment: Option<&str>,
+) -> (TestApp, std::path::PathBuf, String) {
     let dir = std::path::Path::new(env!("CARGO_TARGET_TMPDIR"))
         .join(format!("slop-desktop-{}", Uuid::now_v7()));
     let (secret, public) = slop_api::desktop_updates::generate_updater_key().unwrap();
     let key_dir = dir.clone();
-    let git_ref = git_ref.to_string();
+    let environment = environment.map(str::to_string);
     let app = test_app_with(db, move |c| {
         c.desktop = slop_api::config::DesktopConfig {
             dir: Some(key_dir),
             updater_key: Some(slop_api::desktop_updates::updater_key_from_base64(&secret).unwrap()),
             repo: Some("octo/slop".into()),
-            git_ref,
+            environment,
+            ..Default::default()
         };
     })
     .await;
@@ -5176,7 +5182,8 @@ async fn desktop_app_on(db: PgPool, git_ref: &str) -> (TestApp, std::path::PathB
 fn desktop_ci(app: &TestApp, overrides: Value) -> String {
     let mut claims = json!({
         "repository": "octo/slop",
-        "job_workflow_ref": "octo/slop/.github/workflows/desktop.yml@refs/heads/main",
+        "job_workflow_ref": "octo/slop/.github/workflows/pipeline.yml@refs/heads/main",
+        "environment": "production",
         "sha": BUILD_COMMIT,
     });
     for (k, v) in overrides.as_object().unwrap() {
@@ -5281,20 +5288,25 @@ async fn desktop_uploads_are_checked_and_leave_nothing_when_refused(db: PgPool) 
     let _ = std::fs::remove_dir_all(&dir);
 }
 
-/// Production takes builds only from the `production` tag's runs (SLOP_DESKTOP_REF), so a push
-/// to main, which goes to the test server first, can never update production's players.
+/// Production takes builds only from pipeline runs on main that the owner approved (the
+/// `production` environment), so no other branch, tag, workflow or unapproved run can update
+/// production's players.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn production_takes_desktop_builds_only_from_the_production_tag(db: PgPool) {
-    let (app, dir, _) = desktop_app_on(db, "refs/tags/production").await;
+async fn production_takes_desktop_builds_only_from_approved_pipeline_runs(db: PgPool) {
+    let (app, dir, _) = desktop_app(db).await;
     let query = format!("platform=windows&version=0.3.0&commit={BUILD_COMMIT}");
-    let workflow = |r: &str| json!({ "job_workflow_ref": format!("octo/slop/.github/workflows/desktop.yml@{r}") });
+    let workflow =
+        |w: &str| json!({ "job_workflow_ref": format!("octo/slop/.github/workflows/{w}") });
     for refused in [
-        "refs/heads/main",
-        "refs/tags/production-old",
-        "refs/heads/production",
-        "refs/tags/v1",
+        workflow("pipeline.yml@refs/heads/dev"),
+        workflow("pipeline.yml@refs/tags/production"),
+        workflow("pipeline.yml@refs/pull/1/merge"),
+        workflow("desktop.yml@refs/tags/production"),
+        workflow("desktop.yml@refs/heads/main"),
+        json!({ "environment": null }),
+        json!({ "environment": "dev" }),
     ] {
-        let token = desktop_ci(&app, workflow(refused));
+        let token = desktop_ci(&app, refused.clone());
         assert_eq!(
             upload_build(&app, Some(&token), &query, Body::from("x"))
                 .await
@@ -5305,10 +5317,23 @@ async fn production_takes_desktop_builds_only_from_the_production_tag(db: PgPool
     }
     assert_eq!(count(&app, "select count(*) from desktop_builds").await, 0);
 
-    let token = desktop_ci(&app, workflow("refs/tags/production"));
+    let token = desktop_ci(&app, json!({}));
     let res = upload_build(&app, Some(&token), &query, Body::from("installer 0.3.0")).await;
     assert_eq!(res.status(), StatusCode::CREATED);
     assert_eq!(body_json(res).await["version"], "0.3.0");
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// The test server builds its own "Slop Dev" apps and takes no uploads from GitHub at all, not
+/// even from the approved production pipeline (SLOP_DESKTOP_ENVIRONMENT unset).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_test_server_takes_no_desktop_uploads_from_github(db: PgPool) {
+    let (app, dir, _) = desktop_app_in(db, None).await;
+    let token = desktop_ci(&app, json!({}));
+    let query = format!("platform=windows&version=0.3.0&commit={BUILD_COMMIT}");
+    let res = upload_build(&app, Some(&token), &query, Body::from("x")).await;
+    assert_eq!(res.status(), StatusCode::SERVICE_UNAVAILABLE);
+    assert_eq!(count(&app, "select count(*) from desktop_builds").await, 0);
     let _ = std::fs::remove_dir_all(&dir);
 }
 
