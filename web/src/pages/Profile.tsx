@@ -6,6 +6,7 @@
 import { Link, useParams } from "react-router";
 
 import { api } from "../api";
+import { Avatar } from "../components/Avatar";
 import { AppTile, ErrorState, Loading, Shelf } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -22,9 +23,7 @@ export function Profile() {
   return (
     <div className="page profile-page">
       <div className="profile-head">
-        <span className="avatar big" aria-hidden="true">
-          {p.name.charAt(0).toUpperCase()}
-        </span>
+        <Avatar name={p.name} url={p.avatar_url} className="avatar big" />
         <div>
           <h1 className="page-title">{p.name}</h1>
           <p className="muted small">

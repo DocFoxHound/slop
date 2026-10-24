@@ -300,6 +300,26 @@ export interface LinkedIdentity {
   last_sign_in_at: string;
 }
 
+/** The account's picture and the linked sign-ins it can come from (crates/slop-api/src/avatars.rs). */
+export interface MyPicture {
+  /** Slop's copy of the chosen picture; null: the letter. */
+  avatar_url: string | null;
+  provider: SignInProvider | null;
+  subject: string | null;
+  fetched_at: string | null;
+  choices: Array<{
+    provider: SignInProvider;
+    subject: string;
+    login: string | null;
+    /** Slop can show this sign-in's picture now. */
+    available: boolean;
+    /** How it's kept current: read daily, or updated when they sign in with it. */
+    updates: "daily" | "sign_in" | "never";
+    /** "Refresh picture" can send them through this sign-in again. */
+    can_refresh: boolean;
+  }>;
+}
+
 export interface CombinePreview {
   provider: SignInProvider;
   name: string;
@@ -326,6 +346,8 @@ export interface FriendPerson {
   id: string;
   name: string;
   since: string;
+  /** Their profile picture; null: the letter. */
+  avatar_url: string | null;
 }
 
 export interface Friends {
@@ -371,6 +393,8 @@ export interface AppReview {
 export interface UserProfile {
   id: string;
   name: string;
+  /** Their profile picture; null: the letter. */
+  avatar_url: string | null;
   joined: string;
   public: boolean;
   is_me: boolean;
@@ -414,6 +438,7 @@ export interface TeamPage {
     name: string;
     role: "owner" | "admin" | "member";
     joined_at: string;
+    avatar_url: string | null;
   }>;
   member_count: number;
   apps: AppSummary[];
@@ -652,6 +677,8 @@ export interface Me {
   passkey_grace_until: string | null;
   /** This browser sent a Global Privacy Control signal. */
   gpc: boolean;
+  /** Their profile picture from a linked sign-in, served by Slop; null: the letter. */
+  avatar_url: string | null;
 }
 
 /** Slop's legal documents (crates/slop-api/src/legal.rs). */
@@ -1689,6 +1716,8 @@ export interface Frozen {
 /** What staff can fix about an account (admin_tools.rs). */
 export interface AdminProfile {
   display_name: string;
+  /** Their profile picture; null: the letter. */
+  avatar_url: string | null;
   creative: {
     handle: string;
     name: string;
@@ -1704,6 +1733,8 @@ export interface AdminProfile {
 export interface ProfileEdit {
   display_name?: string;
   creative?: { name?: string; headline?: string; about_md?: string; location?: string; remove_links?: boolean };
+  /** Takes their profile picture off (back to the letter). */
+  remove_picture?: boolean;
   reason: string;
 }
 
@@ -2960,6 +2991,11 @@ export const api = {
       "DELETE",
       `/v1/me/identities/${encodeURIComponent(provider)}/${encodeURIComponent(subject)}`,
     ),
+  /** The profile picture (crates/slop-api/src/avatars.rs). */
+  picture: () => request<MyPicture>("GET", "/v1/me/avatar"),
+  /** A linked sign-in's picture, or the letter (provider null). */
+  setPicture: (provider: SignInProvider | null, subject?: string) =>
+    request<MyPicture>("PUT", "/v1/me/avatar", { provider, subject }),
   /** Combining with the account of a sign-in being linked (auth/merge.rs). */
   combine: {
     preview: () => request<CombinePreview>("GET", "/v1/auth/combine"),

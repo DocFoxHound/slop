@@ -765,6 +765,15 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .profile-head { display: flex; gap: 16px; align-items: center; margin-bottom: 12px; }
 .profile-head > div { min-width: 0; }
 .profile-head .avatar { width: 64px; height: 64px; min-width: 64px; border-radius: 14px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; font-size: 28px; flex: none; }
+/* A person's picture or letter (components/Avatar.tsx): a fixed square that never shrinks. The rules
+   for each place (.me, .profile-head, .chat-item, .picture-current, .p-avatar) set its size. */
+.avatar { width: 32px; height: 32px; border-radius: 8px; background: linear-gradient(135deg, #a3e635, #0ea5e9); display: grid; place-items: center; color: #08130a; font-weight: 900; flex: none; overflow: hidden; }
+.avatar img, .p-avatar img { display: block; width: 100%; height: 100%; object-fit: cover; }
+.picture-current { display: flex; gap: 14px; align-items: center; margin-bottom: 12px; }
+.picture-current .avatar { width: 64px; height: 64px; border-radius: 14px; font-size: 28px; }
+.picture-choices { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
+.picture-choices legend { font-weight: 600; font-size: 13px; margin-bottom: 6px; }
+.picture-choice { display: flex; gap: 10px; align-items: flex-start; justify-content: space-between; flex-wrap: wrap; }
 .profile-votes { list-style: none; margin: 0; padding: 0; display: flex; flex-direction: column; gap: 10px; }
 .profile-votes li { display: grid; grid-template-columns: 260px 1fr; gap: 16px; padding: 12px; }
 .profile-vote-text p { margin: 8px 0 0; }

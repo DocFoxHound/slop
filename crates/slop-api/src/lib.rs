@@ -10,6 +10,7 @@ pub mod admin_tools;
 pub mod admin_web;
 pub mod agent;
 pub mod auth;
+pub mod avatars;
 pub mod bad_links;
 pub mod bounties;
 pub mod branches;
@@ -104,6 +105,9 @@ pub struct AppState {
     /// For fetching release files from makers' release pages: long timeout, a few redirects
     /// (GitHub release downloads redirect to its file storage).
     pub fetch_http: reqwest::Client,
+    /// For profile pictures (avatars.rs): short timeout, public addresses only, and no redirects
+    /// of its own (avatars.rs follows them itself, checking each host).
+    pub avatar_http: reqwest::Client,
     /// Wakes the release fetcher when a release is submitted.
     pub fetch_wakeup: Arc<tokio::sync::Notify>,
     /// Wakes the bounty charger when a delivery is confirmed (bounties.rs).
@@ -182,6 +186,15 @@ impl AppState {
             );
         }
         let fetch_http = fetch_http.build()?;
+        let mut avatar_http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(5))
+            .timeout(Duration::from_secs(15))
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(!config.releases.allow_http_downloads);
+        if !config.releases.allow_http_downloads {
+            avatar_http = avatar_http.dns_resolver(Arc::new(PublicOnly));
+        }
+        let avatar_http = avatar_http.build()?;
         let rate_limiter = Arc::new(ratelimit::RateLimiter::new(config.rate_limits));
         let account_limiter = Arc::new(limits::AccountLimiter::new(config.account_limit_scale));
         Ok(Self {
@@ -189,6 +202,7 @@ impl AppState {
             config: Arc::new(config),
             http,
             fetch_http,
+            avatar_http,
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
             bounty_wakeup: Arc::new(tokio::sync::Notify::new()),
             watch_wakeup: Arc::new(tokio::sync::Notify::new()),
@@ -216,6 +230,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .route("/contact", get(contact))
         .merge(abuse::routes())
         .merge(auth::routes())
+        .merge(avatars::routes())
         .merge(catalog::routes())
         .merge(releases::routes())
         .merge(library::routes())

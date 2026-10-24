@@ -2,8 +2,9 @@
 //! Sign-in providers: GitHub, Google, GitLab, Bitbucket, Microsoft and Discord (SECURITY §4.1).
 //!
 //! The same authorization-code flow for each (with PKCE where the provider supports it). Slop
-//! reads the account's stable ID, its name at the provider and, where the provider has verified
-//! it, the email; the provider's token is used once and never stored.
+//! reads the account's stable ID, its name at the provider, where its picture is (avatars.rs)
+//! and, where the provider has verified it, the email; the provider's token is used once and
+//! never stored.
 
 use anyhow::{Context, anyhow};
 use serde::Deserialize;
@@ -98,6 +99,8 @@ pub struct Profile {
     pub name: String,
     /// Only if the provider has verified it.
     pub email: Option<String>,
+    /// Where the account's picture is, if it has one (avatars.rs).
+    pub picture: Option<String>,
 }
 
 pub fn callback_url(state: &AppState, provider: Provider) -> String {
@@ -258,6 +261,7 @@ pub async fn profile(
                 .unwrap_or_else(|| user.login.clone()),
             login: Some(user.login),
             email,
+            picture: crate::avatars::github_source(state, &user.id.to_string()).map(String::from),
         });
     }
     let cfg = provider
@@ -273,6 +277,7 @@ pub async fn profile(
                 email: Option<String>,
                 #[serde(default)]
                 email_verified: bool,
+                picture: Option<String>,
             }
             let u: User = get(state, &cfg.api_base, "userinfo", &token).await?;
             Ok(Profile {
@@ -288,6 +293,7 @@ pub async fn profile(
                 login: u.email.clone().filter(|_| u.email_verified),
                 email: u.email.filter(|_| u.email_verified),
                 subject: u.sub,
+                picture: u.picture,
             })
         }
         Provider::Gitlab => {
@@ -298,6 +304,7 @@ pub async fn profile(
                 name: Option<String>,
                 email: Option<String>,
                 confirmed_at: Option<String>,
+                avatar_url: Option<String>,
             }
             let u: User = get(state, &cfg.api_base, "user", &token).await?;
             Ok(Profile {
@@ -308,6 +315,7 @@ pub async fn profile(
                     .unwrap_or_else(|| u.username.clone()),
                 login: Some(u.username),
                 email: u.email.filter(|_| u.confirmed_at.is_some()),
+                picture: u.avatar_url,
             })
         }
         Provider::Bitbucket => {
@@ -316,6 +324,15 @@ pub async fn profile(
                 uuid: String,
                 username: Option<String>,
                 display_name: Option<String>,
+                links: Option<Links>,
+            }
+            #[derive(Deserialize)]
+            struct Links {
+                avatar: Option<Href>,
+            }
+            #[derive(Deserialize)]
+            struct Href {
+                href: String,
             }
             #[derive(Deserialize)]
             struct Emails {
@@ -338,6 +355,7 @@ pub async fn profile(
                     .or_else(|| u.username.clone())
                     .unwrap_or_else(|| "Player".into()),
                 login: u.username,
+                picture: u.links.and_then(|l| l.avatar).map(|a| a.href),
                 email: emails.and_then(|e| {
                     e.values
                         .into_iter()
@@ -364,6 +382,8 @@ pub async fn profile(
                     .unwrap_or_else(|| "Player".into()),
                 login: None,
                 email: None,
+                // Microsoft's picture is only in Microsoft Graph, which needs another permission.
+                picture: None,
             })
         }
         Provider::Discord => {
@@ -375,8 +395,15 @@ pub async fn profile(
                 email: Option<String>,
                 #[serde(default)]
                 verified: bool,
+                avatar: Option<String>,
+                discriminator: Option<String>,
             }
             let u: User = get(state, &cfg.api_base, "users/@me", &token).await?;
+            let picture = crate::avatars::discord_source(
+                &u.id,
+                u.avatar.as_deref(),
+                u.discriminator.as_deref(),
+            );
             Ok(Profile {
                 subject: u.id,
                 name: u
@@ -385,6 +412,7 @@ pub async fn profile(
                     .unwrap_or_else(|| u.username.clone()),
                 login: Some(u.username),
                 email: u.email.filter(|_| u.verified),
+                picture,
             })
         }
         Provider::Github => unreachable!(),

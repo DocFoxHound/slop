@@ -8,6 +8,7 @@ import { Link } from "react-router";
 import type { Accent, AiUse, CreativeCard, CreativeRating, Work } from "../api";
 import { money } from "../format";
 import { isDesktop, openExternal } from "../platform";
+import { Avatar } from "./Avatar";
 
 /** Accent colours a creative can pick; each keeps dark text readable on it (A11Y-1). */
 export const ACCENTS: Record<Accent, { name: string; color: string; ink: string }> = {
@@ -61,19 +62,11 @@ export function RatingLine({ rating, clients }: { rating: CreativeRating; client
   );
 }
 
-export function Avatar({ name, url, big = false }: { name: string; url: string | null; big?: boolean }) {
-  return (
-    <div className={`p-avatar ${big ? "big" : ""}`} aria-hidden="true">
-      {url ? <img src={url} alt="" loading="lazy" /> : <span>{name.trim().charAt(0).toUpperCase()}</span>}
-    </div>
-  );
-}
-
 export function PersonCard({ c }: { c: CreativeCard }) {
   return (
     <Link className="panel person-card" to={`/people/${c.handle}`} style={accentStyle(c.accent)}>
       <div className="person-top">
-        <Avatar name={c.name} url={c.avatar_url} />
+        <Avatar name={c.name} url={c.avatar_url} className="p-avatar" />
         <div className="person-who">
           <b>{c.name}</b>
           <span className="muted small">

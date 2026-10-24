@@ -1,12 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Fixing what someone wrote (crates/slop-api/src/admin_tools.rs): their display name, their People
-// page and the teams they run, and making them staff or taking them off staff (staff.rs). Every
+// Fixing what someone wrote (crates/slop-api/src/admin_tools.rs): their display name and profile
+// picture, their People page and the teams they run, and making them staff or taking them off staff (staff.rs). Every
 // fix needs a reason the person is told, and is in the audit log with the old words.
 
 import { useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
 import { api, type AdminProfile, type StaffRole } from "../../api";
+import { Avatar } from "../../components/Avatar";
 import { ErrorState, Loading } from "../../components/ui";
 import { useLoad } from "../../hooks";
 import { ActionMessages, ReasonButton, useAction } from "./shared";
@@ -41,13 +42,15 @@ function ProfileForm({ id, profile, onSaved }: { id: string; profile: AdminProfi
   const [about, setAbout] = useState(c?.about_md ?? "");
   const [location, setLocation] = useState(c?.location ?? "");
   const [removeLinks, setRemoveLinks] = useState(false);
+  const [removePicture, setRemovePicture] = useState(false);
   const [reason, setReason] = useState("");
   const [saved, setSaved] = useState<string>();
   const action = useAction(onSaved);
   const changed =
     name !== profile.display_name ||
     (c && (peopleName !== c.name || headline !== c.headline || about !== c.about_md || location !== c.location)) ||
-    removeLinks;
+    removeLinks ||
+    removePicture;
   const submit = (e: FormEvent) => {
     e.preventDefault();
     setSaved(undefined);
@@ -63,24 +66,37 @@ function ProfileForm({ id, profile, onSaved }: { id: string; profile: AdminProfi
               remove_links: removeLinks || undefined,
             }
           : undefined,
+        remove_picture: removePicture || undefined,
         reason: reason.trim(),
       });
       setSaved(`Changed ${res.changed.join(", ")}. They've been told why.`);
       setReason("");
       setRemoveLinks(false);
+      setRemovePicture(false);
     });
   };
   return (
     <details className="panel panel-pad">
       <summary>
         <b>Fix their profile</b>{" "}
-        <span className="muted small">display name{c ? " and People page" : ""}</span>
+        <span className="muted small">display name, picture{c ? " and People page" : ""}</span>
       </summary>
       <form className="form" onSubmit={submit}>
         <label>
           Display name
           <input value={name} maxLength={40} required onChange={(e) => setName(e.target.value)} />
         </label>
+        {profile.avatar_url ? (
+          <div className="picture-current">
+            <Avatar name={profile.display_name} url={profile.avatar_url} />
+            <label className="check small">
+              <input type="checkbox" checked={removePicture} onChange={(e) => setRemovePicture(e.target.checked)} />
+              <span>Remove their picture (they're back to the letter, and can choose a picture again)</span>
+            </label>
+          </div>
+        ) : (
+          <p className="muted small">No picture: they show the letter.</p>
+        )}
         {c ? (
           <>
             <p className="muted small">
