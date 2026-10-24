@@ -149,7 +149,7 @@ test("a review hidden by moderation tells its writer where to read why", async (
   await page.goto(`/app/${rated}`);
   await expect(ratings(page).getByText("Hidden in this test only.")).toBeVisible();
   await expect(ratings(page).getByText(/Hidden by a moderation decision/)).toBeVisible();
-  await expect(ratings(page).getByRole("link", { name: "account page" })).toHaveAttribute("href", "/account#decisions");
+  await expect(ratings(page).getByRole("link", { name: "account page" })).toHaveAttribute("href", "/account/moderation#decisions");
 });
 
 test("reviews filter by vote, hide private names, and page in more", async ({ page }) => {

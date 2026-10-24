@@ -96,7 +96,7 @@ export function Notifications() {
         </ul>
       )}
       <p className="muted small">
-        Choose which of these are also emailed to you on <Link to="/account#notifications">your account page</Link>.
+        Choose which of these are also emailed to you on <Link to="/account/notifications">your account page</Link>.
       </p>
     </div>
   );

@@ -14,7 +14,7 @@ test("past the deadline, publishing asks for a passkey first, and keeps what was
   await page.getByRole("button", { name: "Create draft" }).click();
   const dialog = page.getByRole("dialog", { name: "Passkey needed" });
   await expect(dialog.getByRole("heading", { name: "Add a passkey first" })).toBeVisible();
-  await expect(dialog.getByRole("link", { name: "Add a passkey" })).toHaveAttribute("href", "/account#sign-ins");
+  await expect(dialog.getByRole("link", { name: "Add a passkey" })).toHaveAttribute("href", "/account/security#passkeys");
   await dialog.getByRole("button", { name: "Cancel" }).click();
   await expect(dialog).toBeHidden();
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Late Game");

@@ -5,7 +5,7 @@
 import AxeBuilder from "@axe-core/playwright";
 import { generateKeyPairSync } from "node:crypto";
 
-import { apiError, call, fake, noPasskeys, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
+import { apiError, call, fake, noPasskeys, openAccount, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
 import { expect, server, signIn, test } from "./fixtures";
 
 /** A new Ed25519 public key, as the line in id_ed25519.pub. */
@@ -66,14 +66,38 @@ test.describe("AI agent tokens", () => {
   });
 
   test("a refused token says why", async ({ page }) => {
-    await fake(page, "POST", "/v1/me/maker-tokens", { status: 403, body: apiError("step_up_required", "this needs a recent sign-in") });
+    await fake(page, "POST", "/v1/me/maker-tokens", { status: 409, body: apiError("conflict", "you have 10 tokens: remove one first") });
     await signIn(page, "maker");
     await page.goto("/account#ai-agents");
     const section = page.locator("#ai-agents");
-    await section.getByRole("textbox", { name: "Name" }).fill("Too late");
+    await section.getByRole("textbox", { name: "Name" }).fill("One too many");
     await section.getByRole("button", { name: "Make token" }).click();
-    await expect(section.getByRole("alert")).toHaveText("this needs a recent sign-in");
+    await expect(section.getByRole("alert")).toHaveText("you have 10 tokens: remove one first");
     await expect(section.getByText("Copy it now")).toHaveCount(0);
+  });
+
+  test("making a token never asks to confirm it's you", async ({ page }) => {
+    // The server no longer asks for a recent sign-in (maker_agents.rs; the API tests sign in days
+    // before). Here: the page goes straight from Make token to the token, with no passkey or
+    // sign-in prompt on the way.
+    await stubPasskeys(page);
+    const stepUp = await fake(page, "POST", /^\/v1\/me\/step-up\//, { status: 500, body: apiError("internal", "not expected") });
+    await signIn(page, "maker");
+    await openAccount(page, "agents");
+    const section = page.locator("#ai-agents");
+    await section.getByRole("textbox", { name: "Name" }).fill("Straight through");
+    await section.getByRole("combobox", { name: "Expires after" }).selectOption("1");
+    const made = page.waitForResponse((r) => r.url().endsWith("/v1/me/maker-tokens") && r.request().method() === "POST");
+    await section.getByRole("button", { name: "Make token" }).click();
+    expect((await made).status()).toBe(201);
+    await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(page.getByText(/For your safety|confirm it's you/i)).toHaveCount(0);
+    await expect(section.getByRole("alert")).toHaveCount(0);
+    expect(stepUp.calls).toHaveLength(0);
+    expect(await page.evaluate(() => (window as unknown as { __passkeyPrompts: number }).__passkeyPrompts)).toBe(0);
+    await section.getByRole("button", { name: "Done" }).click();
+    await section.getByRole("listitem").filter({ hasText: "Straight through" }).getByRole("button", { name: "Remove" }).click();
+    await expect(section.getByRole("listitem").filter({ hasText: "Straight through" })).toHaveCount(0);
   });
 });
 
@@ -113,7 +137,7 @@ test.describe("signing keys", () => {
     await section.getByRole("textbox", { name: /Public key/ }).fill(sshPublicKey());
     await section.getByRole("button", { name: "Add signing key" }).click();
     await expect(section.getByRole("alert")).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-    await expect(section.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%23signing-keys");
+    await expect(section.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fagents%23signing-keys");
   });
 });
 
@@ -201,7 +225,7 @@ test.describe("the passkey deadline", () => {
     const note = page.getByRole("note").filter({ hasText: "need a passkey" });
     const date = new Date(due).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
     await expect(note).toContainText(`From ${date}, publishing and changing where money goes need a passkey`);
-    await expect(note.getByRole("link", { name: "Add a passkey" })).toHaveAttribute("href", "/account#sign-ins");
+    await expect(note.getByRole("link", { name: "Add a passkey" })).toHaveAttribute("href", "/account/security#passkeys");
     // The notice's link was told apart by colour alone (axe link-in-text-block).
     await page.waitForLoadState("networkidle");
     const results = await new AxeBuilder({ page }).include(".notice").withRules(["link-in-text-block"]).analyze();

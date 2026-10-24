@@ -170,7 +170,7 @@ test("back from Stripe, the thanks show even when checking the payment fails", a
   await expect(page.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/app/${ids.listedApp}$`));
   await page.getByRole("link", { name: "account page" }).click();
-  await expect(page).toHaveURL(/\/account#donations$/);
+  await expect(page).toHaveURL(/\/account\/money#donations$/);
 });
 
 test("a monthly server donation states its terms, needs a fresh tick for each amount, and is cancelled in two clicks", async ({ page }) => {

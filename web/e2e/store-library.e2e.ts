@@ -125,7 +125,7 @@ test("notifications: the bell counts them, opening one goes there, and Mark all 
   await expect(page.getByRole("button", { name: "Mark all as read" })).toHaveCount(0);
   await expect(page.locator(".notifications li.unread")).toHaveCount(0);
   await expect(bell(0)).toBeVisible();
-  await expect(page.getByRole("link", { name: "your account page" })).toHaveAttribute("href", "/account#notifications");
+  await expect(page.getByRole("link", { name: "your account page" })).toHaveAttribute("href", "/account/notifications");
 
   // Signed out, it asks you to sign in.
   const visitor = await browser.newPage();
@@ -203,7 +203,7 @@ test("privacy switches save to the account and show where they matter", async ({
     // A change that doesn't save says so, and the switch shows what's saved.
     await failApi(sue, path("/v1/me"), { method: "PATCH" });
     await publicProfile.click();
-    await expect(sue.locator("#privacy + .panel").getByRole("alert")).toHaveText("Something broke on Slop's side.");
+    await expect(sue.locator("#privacy").getByRole("alert")).toHaveText("Something broke on Slop's side.");
     await expect(publicProfile).toBeChecked();
   } finally {
     await tryCall("support", "PATCH", "/v1/me", { profile_public: true, share_playtime: true });

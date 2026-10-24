@@ -28,8 +28,10 @@ export function SigningKeys() {
     }
   };
   return (
-    <section id="signing-keys">
-      <h2 className="section-title">Signing keys</h2>
+    <section id="signing-keys" className="account-panel" aria-labelledby="signing-keys-title">
+      <h3 className="account-panel-title" id="signing-keys-title">
+        Signing keys
+      </h3>
       <div className="panel panel-pad">
         <p className="muted small">
           For builds you make yourself instead of in GitHub Actions (on GitLab, Bitbucket, your own server or your computer). Sign
@@ -87,7 +89,7 @@ export function SigningKeys() {
             {typeof error === "string" ? (
               error
             ) : error.code === "step_up_required" ? (
-              <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent("/account#signing-keys")}`} onDone={() => setError(undefined)} />
+              <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent("/account/agents#signing-keys")}`} onDone={() => setError(undefined)} />
             ) : (
               error.message
             )}

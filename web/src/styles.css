@@ -225,7 +225,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .playing { font-size: 13px; color: var(--muted); }
 .playing b { color: var(--good); }
 .panel label.check { display: flex; gap: 10px; align-items: flex-start; cursor: pointer; }
-.panel label.check input { margin-top: 3px; width: 18px; height: 18px; accent-color: var(--slime); }
+.panel label.check input { flex: none; margin-top: 3px; width: 18px; height: 18px; accent-color: var(--slime); }
 .stage-panel b { display: block; }
 .kv { display: grid; grid-template-columns: auto 1fr; gap: 6px 14px; font-size: 13px; margin: 0; }
 .kv dt { color: var(--muted); }
@@ -706,7 +706,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .decision { margin-bottom: 12px; }
 .decision.is-new { border-color: var(--warn); }
 .decision-head { display: flex; gap: 8px; align-items: center; flex-wrap: wrap; }
-.decision-head h3 { margin: 0; font-size: 16px; }
+.decision-head h3, .decision-head h4 { margin: 0; font-size: 16px; }
 .report-row { margin: 10px 0 0; text-align: right; }
 .review-report { text-align: right; }
 .decide-form { margin-top: 10px; border-top: 1px solid var(--line); padding-top: 10px; }
@@ -1018,3 +1018,64 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .admin-record section { margin-bottom: 14px; }
 .admin-record h3 { margin-top: 0; }
 .admin .seg { flex-wrap: wrap; }
+
+/* ---- account page (pages/Account.tsx) ------------------------------------
+   A settings page: the person on top, the sections listed on the left (a row that scrolls
+   sideways on phones), one section at a time on the right. */
+.account-page { max-width: 1080px; }
+.account-head { display: flex; align-items: center; gap: 18px; padding: 18px 20px; margin-bottom: 22px; background: linear-gradient(120deg, var(--slime-soft), transparent 55%), var(--panel); }
+.account-head .avatar { width: 72px; height: 72px; min-width: 72px; border-radius: 16px; font-size: 32px; }
+.account-head-text { flex: 1; min-width: 0; }
+.account-head-title { font-size: 12px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--muted); margin-bottom: 2px; }
+.account-head-name { font-size: 24px; font-weight: 800; letter-spacing: -0.01em; margin: 0 0 2px; overflow-wrap: anywhere; }
+.account-head-meta { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; }
+.account-head-meta span + span::before { content: "·"; margin-right: 12px; color: var(--faint); }
+.account-head-actions { display: flex; gap: 8px; flex-wrap: wrap; justify-content: flex-end; }
+
+.account-layout { display: grid; grid-template-columns: 224px minmax(0, 1fr); gap: 28px; align-items: start; }
+.account-nav { position: sticky; top: 16px; }
+.account-nav-group + .account-nav-group { margin-top: 16px; }
+.account-nav-heading { font-size: 11px; font-weight: 700; text-transform: uppercase; letter-spacing: 0.08em; color: var(--faint); margin: 0 0 6px 12px; }
+.account-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.account-nav-link { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 8px 12px; border-radius: 8px; color: var(--text-2); font-weight: 600; border-left: 3px solid transparent; text-decoration: none !important; }
+.account-nav-link:hover { background: var(--panel-2); color: var(--text); }
+.account-nav-link.on { background: var(--panel-2); color: var(--text); border-left-color: var(--slime); }
+.account-nav-badge { min-width: 20px; padding: 1px 7px; border-radius: 999px; background: var(--slime); color: var(--slime-ink); font-size: 11px; font-weight: 800; text-align: center; line-height: 18px; }
+.account-nav-badge.warn { background: var(--warn); color: #2b1d02; }
+.account-nav-badge.bad { background: var(--bad); color: #2a0707; }
+
+.account-content { min-width: 0; }
+.account-section-head { margin-bottom: 18px; padding-bottom: 14px; border-bottom: 1px solid var(--line); }
+.account-section-head h2 { font-size: 22px; margin-bottom: 6px; }
+.account-section-head h2:focus { outline: none; }
+.account-section-head h2:focus-visible { outline: 2px solid var(--slime); outline-offset: 4px; border-radius: 4px; }
+.account-section-head p { margin: 0; font-size: 13px; }
+.account-panel + .account-panel, .account-content > .notice + .account-panel { margin-top: 26px; }
+.account-panel-title { font-size: 15px; font-weight: 700; margin: 0 0 8px; }
+.account-panel > .muted.small { margin-bottom: 10px; }
+.account-panel > .panel, .account-panel > .table { margin-bottom: 0; }
+.account-panel > .panel + .table, .account-panel > .panel + .panel { margin-top: 10px; }
+.account-content .switch-list { display: grid; gap: 14px; }
+.account-content .switch-list > p { margin: 0; }
+.account-content .sessions { margin-bottom: 0; }
+.account-empty { padding: 36px 20px; }
+.account-content > .account-panel:first-of-type .account-panel-title { margin-top: 0; }
+
+@media (max-width: 760px) {
+  .account-head { flex-wrap: wrap; gap: 14px; padding: 16px; }
+  .account-head .avatar { width: 56px; height: 56px; min-width: 56px; font-size: 26px; border-radius: 14px; }
+  .account-head-name { font-size: 20px; }
+  .account-head-actions { width: 100%; justify-content: flex-start; }
+  /* One column; the sections become a row along the top that scrolls sideways. */
+  .account-layout { grid-template-columns: minmax(0, 1fr); gap: 16px; }
+  .account-nav { top: 0; z-index: 3; padding: 6px 0; background: var(--bg); border-bottom: 1px solid var(--line); }
+  .account-nav-scroll { display: flex; gap: 6px; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+  .account-nav-scroll::-webkit-scrollbar { display: none; }
+  .account-nav-group { display: flex; }
+  .account-nav-group + .account-nav-group { margin-top: 0; }
+  .account-nav-heading { position: absolute; width: 1px; height: 1px; overflow: hidden; clip: rect(0 0 0 0); white-space: nowrap; }
+  .account-nav ul { display: flex; gap: 6px; }
+  .account-nav-link { white-space: nowrap; border-left: 0; border: 1px solid var(--line); border-radius: 999px; padding: 6px 12px; font-size: 13px; }
+  .account-nav-link.on { border-color: var(--slime); background: var(--slime-soft); color: var(--slime); }
+  .account-section-head h2 { font-size: 19px; }
+}

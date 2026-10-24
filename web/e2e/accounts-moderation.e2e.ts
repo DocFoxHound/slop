@@ -28,7 +28,7 @@ test.describe("decisions about you", () => {
       const notice = page.locator(".account-notices");
       await expect(notice).toContainText("Slop made 2 decisions about your content.");
       await notice.getByRole("link", { name: "See what, why, and how to appeal" }).click();
-      await expect(page).toHaveURL(/\/account#decisions$/);
+      await expect(page).toHaveURL(/\/account\/moderation#decisions$/);
       const section = page.locator("#decisions");
       await expect(section.getByRole("heading", { name: "Decisions about your content or account" })).toBeInViewport();
       // Seen now: the notice goes.
@@ -112,8 +112,9 @@ test.describe("decisions about you", () => {
 
   test("an account without decisions has no decisions section", async ({ page }) => {
     await signIn(page, "support");
-    await page.goto("/account");
-    await expect(page.getByRole("heading", { name: "Terms and policies" })).toBeVisible();
+    await page.goto("/account/moderation");
+    await expect(page.getByRole("heading", { name: "Moderation", level: 2 })).toBeVisible();
+    await page.waitForLoadState("networkidle");
     await expect(page.getByRole("heading", { name: "Decisions about your content or account" })).toHaveCount(0);
   });
 });
@@ -152,8 +153,9 @@ test.describe("your reports", () => {
 
   test("with none sent, there's no reports section", async ({ page }) => {
     await signIn(page, "finance");
-    await page.goto("/account");
-    await expect(page.getByRole("heading", { name: "Terms and policies" })).toBeVisible();
+    await page.goto("/account/moderation");
+    await expect(page.getByRole("heading", { name: "Moderation", level: 2 })).toBeVisible();
+    await page.waitForLoadState("networkidle");
     await expect(page.getByRole("heading", { name: "Your reports" })).toHaveCount(0);
   });
 });
@@ -252,7 +254,7 @@ test.describe("the Report dialog", () => {
     });
     await dialog.getByRole("link", { name: "Your reports" }).click();
     await expect(dialog).toBeHidden();
-    await expect(page).toHaveURL(/\/account#reports$/);
+    await expect(page).toHaveURL(/\/account\/moderation#reports$/);
   });
 
   test("reasons that won't load say so", async ({ page }) => {

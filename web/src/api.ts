@@ -3167,7 +3167,7 @@ export const api = {
   signInUrl: (provider: SignInProvider, returnTo: string) =>
     `${API_BASE}/v1/auth/${provider}/start${query({ return_to: returnTo })}`,
   /** Linking another sign-in: signs in again first if needed, then to the provider. */
-  linkUrl: (provider: SignInProvider, returnTo = "/account#sign-ins") =>
+  linkUrl: (provider: SignInProvider, returnTo = "/account/security#sign-ins") =>
     `${API_BASE}/v1/auth/${provider}/link${query({ return_to: returnTo })}`,
   signupInfo: () => request<SignupInfo>("GET", "/v1/auth/signup"),
   signup: (body: {

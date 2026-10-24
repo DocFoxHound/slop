@@ -8,7 +8,8 @@ import { Admin } from "./pages/Admin";
 import { AppPage } from "./pages/AppPage";
 import { RegisterBranch } from "./pages/Branch";
 import { Guide } from "./pages/Guide";
-import { Account, CombineAccounts, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
+import { Account } from "./pages/Account";
+import { CombineAccounts, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
 import { LegalIndex, LegalPage } from "./pages/Legal";
 import { Library } from "./pages/Library";
 import { Notifications } from "./pages/Notifications";
@@ -65,6 +66,7 @@ const router = createBrowserRouter([
       { path: "/signup", element: <SignUp /> },
       { path: "/account", element: <Account /> },
       { path: "/account/combine", element: <CombineAccounts /> },
+      { path: "/account/:section", element: <Account /> },
       { path: "/legal", element: <LegalIndex /> },
       { path: "/notifications", element: <Notifications /> },
       { path: "/u/:id", element: <Profile /> },

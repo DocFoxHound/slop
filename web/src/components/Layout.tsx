@@ -267,7 +267,7 @@ function Bell() {
 function AccountNotices() {
   const { me } = useSession();
   const location = useLocation();
-  const notices = useLoad(() => (me ? api.legal.notices() : Promise.resolve([])), [me?.id, location.pathname === "/account"]);
+  const notices = useLoad(() => (me ? api.legal.notices() : Promise.resolve([])), [me?.id, location.pathname.startsWith("/account")]);
   const [dismissed, setDismissed] = useState<string[]>(() => {
     try {
       return JSON.parse(localStorage.getItem("slop.dismissed-notices") ?? "[]") as string[];
@@ -292,13 +292,13 @@ function AccountNotices() {
       {me.suspended && (
         <div className="account-notice bad-notice">
           <b>Your account is suspended.</b> You can read Slop, download your data and appeal.{" "}
-          <Link to="/account#decisions">See why, and appeal</Link>
+          <Link to="/account/moderation#decisions">See why, and appeal</Link>
         </div>
       )}
       {!me.suspended && me.new_decisions > 0 && (
         <div className="account-notice">
           Slop made {me.new_decisions === 1 ? "a decision" : `${me.new_decisions} decisions`} about your content.{" "}
-          <Link to="/account#decisions">See what, why, and how to appeal</Link>
+          <Link to="/account/moderation#decisions">See what, why, and how to appeal</Link>
         </div>
       )}
       {legal.map((n) => (

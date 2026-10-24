@@ -1,28 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Sign-in, sign-up and the account page (with the devices list, docs/SECURITY.md §4.2).
+// Sign-in, sign-up, approving the desktop app, combining accounts, and the account page's
+// sign-ins and passkeys (the page itself is Account.tsx).
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
 import { StepUpPrompt } from "../components/PasskeyStepUp";
-import { AiAgents } from "../components/AiAgents";
-import { SigningKeys } from "../components/SigningKeys";
 import { createPasskey, passkeysSupported, signWithPasskey } from "../passkeys";
-import { ErrorState, Loading } from "../components/ui";
+import { Loading } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
-import {
-  AccountAgreements,
-  AccountData,
-  AccountDecisions,
-  AccountDonations,
-  AccountNotifications,
-  AccountPicture,
-  AccountReports,
-} from "../components/AccountSections";
 
 const SIGNIN_ERRORS: Record<string, string> = {
   cancelled: "Sign-in was cancelled.",
@@ -119,8 +109,8 @@ function PasskeySignIn({ returnTo }: { returnTo: string }) {
   );
 }
 
-/** Account → Sign-ins: passkeys on this account. Adding or removing one needs a recent sign-in. */
-function Passkeys() {
+/** Account → Sign-in & security: passkeys on this account. Adding or removing one needs a recent sign-in. */
+export function Passkeys() {
   const keys = useLoad(() => api.passkeys.list(), []);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
@@ -146,54 +136,58 @@ function Passkeys() {
     });
   if (!passkeysSupported()) return null;
   return (
-    <div className="passkeys">
-      <h3>Passkeys</h3>
-      <p className="muted small">
-        Sign in with Face ID, Touch ID, Windows Hello or a security key instead of a provider, and confirm sensitive changes
-        without signing in again. Slop keeps only the public half.
-      </p>
-      {keys.data && keys.data.length > 0 && (
-        <ul className="report-list">
-          {keys.data.map((k) => (
-            <li key={k.id}>
-              <span>
-                <b>{k.name}</b>{" "}
-                <span className="muted small">
-                  added {formatDate(k.created_at)}
-                  {k.last_used_at && ` · last used ${formatDate(k.last_used_at)}`}
-                </span>
-              </span>
-              <button className="btn small ghost" disabled={busy} onClick={() => void run(() => api.passkeys.remove(k.id))}>
-                Remove
-              </button>
-            </li>
-          ))}
-        </ul>
-      )}
-      <form
-        className="reason-form"
-        onSubmit={(e) => {
-          e.preventDefault();
-          void add();
-        }}
-      >
-        <input aria-label="Name for the passkey" placeholder="e.g. MacBook, YubiKey" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
-        <button className="btn small" disabled={busy}>
-          {busy ? "Waiting for your device…" : "Add a passkey"}
-        </button>
-      </form>
-      {error && (
-        <p className="form-error" role="alert">
-          {typeof error === "string" ? (
-            error
-          ) : error.code === "step_up_required" ? (
-            <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent("/account#sign-ins")}`} onDone={() => setError(undefined)} />
-          ) : (
-            error.message
-          )}
+    <section id="passkeys" className="account-panel passkeys" aria-labelledby="passkeys-title">
+      <h3 className="account-panel-title" id="passkeys-title">
+        Passkeys
+      </h3>
+      <div className="panel panel-pad">
+        <p className="muted small">
+          Sign in with Face ID, Touch ID, Windows Hello or a security key instead of a provider, and confirm sensitive changes
+          without signing in again. Slop keeps only the public half.
         </p>
-      )}
-    </div>
+        {keys.data && keys.data.length > 0 && (
+          <ul className="report-list">
+            {keys.data.map((k) => (
+              <li key={k.id}>
+                <span>
+                  <b>{k.name}</b>{" "}
+                  <span className="muted small">
+                    added {formatDate(k.created_at)}
+                    {k.last_used_at && ` · last used ${formatDate(k.last_used_at)}`}
+                  </span>
+                </span>
+                <button className="btn small ghost" disabled={busy} onClick={() => void run(() => api.passkeys.remove(k.id))}>
+                  Remove
+                </button>
+              </li>
+            ))}
+          </ul>
+        )}
+        <form
+          className="reason-form"
+          onSubmit={(e) => {
+            e.preventDefault();
+            void add();
+          }}
+        >
+          <input aria-label="Name for the passkey" placeholder="e.g. MacBook, YubiKey" maxLength={60} value={name} onChange={(e) => setName(e.target.value)} />
+          <button className="btn small" disabled={busy}>
+            {busy ? "Waiting for your device…" : "Add a passkey"}
+          </button>
+        </form>
+        {error && (
+          <p className="form-error" role="alert">
+            {typeof error === "string" ? (
+              error
+            ) : error.code === "step_up_required" ? (
+              <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent("/account/security#passkeys")}`} onDone={() => setError(undefined)} />
+            ) : (
+              error.message
+            )}
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
 
@@ -432,243 +426,6 @@ export function SignUp() {
   );
 }
 
-export function Account() {
-  useDocumentTitle("Your account");
-  const navigate = useNavigate();
-  const { me, signOut, refresh } = useSession();
-  const sessions = useLoad(() => (me ? api.sessions() : Promise.resolve([])), [me?.id]);
-  const [privacyError, setPrivacyError] = useState<string>();
-  const [sessionError, setSessionError] = useState<string>();
-
-  if (me === undefined) return <Loading />;
-  if (!me) {
-    return (
-      <div className="page narrow">
-        <div className="panel panel-pad">
-          <h1>Your account</h1>
-          <p>
-            <Link to="/signin?return_to=/account">Sign in</Link> to see your account.
-          </p>
-        </div>
-      </div>
-    );
-  }
-
-  const revoke = async (id: string) => {
-    setSessionError(undefined);
-    try {
-      await api.revokeSession(id);
-      sessions.reload();
-    } catch (err) {
-      setSessionError(err instanceof ApiError ? err.message : String(err));
-    }
-  };
-  const savePrivacy = async (changes: Parameters<typeof api.updateMe>[0]) => {
-    setPrivacyError(undefined);
-    try {
-      await api.updateMe(changes);
-    } catch (err) {
-      setPrivacyError(err instanceof ApiError ? err.message : String(err));
-    }
-    // Either way, the switches show what's saved.
-    await refresh();
-  };
-
-  return (
-    <div className="page narrow">
-      <h1 className="page-title">Your account</h1>
-      <div className="panel panel-pad">
-        <dl className="kv">
-          <dt>Name</dt>
-          <dd>{me.display_name}</dd>
-          <dt>Email</dt>
-          <dd>{me.email ?? <span className="muted">None shared by GitHub</span>}</dd>
-          <dt>Country</dt>
-          <dd>{me.country_code}</dd>
-        </dl>
-      </div>
-
-      <AccountPicture />
-
-      <h2 className="section-title" id="privacy">Privacy</h2>
-      <div className="panel panel-pad">
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={me.profile_public}
-            onChange={(e) => void savePrivacy({ profile_public: e.target.checked })}
-          />{" "}
-          <span>
-            <b>Show my votes and reviews on my profile</b>
-            <span className="muted small" style={{ display: "block" }}>
-              Off: your profile shows only your name and apps, and your reviews show as "A player".{" "}
-              <Link to={`/u/${me.id}`}>See your profile</Link>
-            </span>
-          </span>
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={me.share_playtime}
-            onChange={(e) => void savePrivacy({ share_playtime: e.target.checked })}
-          />{" "}
-          <span>
-            <b>Share my playtime</b>
-            <span className="muted small" style={{ display: "block" }}>
-              Games you launch from Slop can count you in their "playing now" numbers, and your playtime makes your
-              votes count more. Slop gets nothing but a launch token and a heartbeat; never what you do in the game.
-            </span>
-          </span>
-        </label>
-        <label className="check">
-          <input
-            type="checkbox"
-            checked={me.personalize}
-            onChange={(e) => void savePrivacy({ personalize: e.target.checked })}
-          />{" "}
-          <span>
-            <b>Recommendations based on my activity</b>
-            <span className="muted small" style={{ display: "block" }}>
-              "For you" uses your library, what you've played and how you voted. Off: everyone sees the same popular,
-              well-rated and new apps.
-            </span>
-          </span>
-        </label>
-        {privacyError && (
-          <p className="form-error" role="alert">
-            {privacyError}
-          </p>
-        )}
-        {me.gpc && (
-          <p className="muted small">
-            Your browser sends Global Privacy Control, asking sites not to sell or share your data. Slop never does, and
-            because of it, recommendations based on your activity stay off unless you turn them on.
-          </p>
-        )}
-      </div>
-
-      <SignIns />
-      <SigningKeys />
-      <AiAgents />
-      <AccountNotifications />
-      {isDesktop && <ThisDevice />}
-      <AccountDecisions />
-      <AccountDonations />
-      <AccountReports />
-      <AccountAgreements />
-
-      <h2 className="section-title">Where you're signed in</h2>
-      {sessions.error && <ErrorState error={sessions.error} onRetry={sessions.reload} />}
-      {sessionError && (
-        <p className="form-error" role="alert">
-          {sessionError}
-        </p>
-      )}
-      <ul className="sessions panel">
-        {sessions.data?.map((s) => (
-          <li key={s.id}>
-            <div>
-              <b>
-                {s.kind === "desktop"
-                  ? (s.user_agent ?? "Slop app")
-                  : s.kind === "agent"
-                    ? (s.user_agent ?? "AI agent")
-                    : describeAgent(s.user_agent)}
-              </b>{" "}
-              {s.current && <span className="badge official">THIS DEVICE</span>}
-              <div className="muted small">
-                Signed in {formatDate(s.created_at)} · last used {formatDate(s.last_seen_at)}
-              </div>
-            </div>
-            {!s.current && (
-              <button className="btn small" onClick={() => void revoke(s.id)}>
-                Sign out
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
-
-      <button
-        className="btn ghost danger"
-        onClick={() =>
-          void signOut().then(() => navigate("/", { replace: true }))
-        }
-      >
-        Sign out
-      </button>
-
-      <AccountData />
-    </div>
-  );
-}
-
-function describeAgent(ua: string | null): string {
-  if (!ua) return "Unknown device";
-  const browser = /Firefox\//.test(ua) ? "Firefox" : /Edg\//.test(ua) ? "Edge" : /Chrome\//.test(ua) ? "Chrome" : /Safari\//.test(ua) ? "Safari" : "Browser";
-  const os = /Windows/.test(ua) ? "Windows" : /Mac OS/.test(ua) ? "macOS" : /Android/.test(ua) ? "Android" : /iPhone|iPad/.test(ua) ? "iOS" : /Linux/.test(ua) ? "Linux" : "";
-  return os ? `${browser} on ${os}` : browser;
-}
-
-/** The desktop app's own settings: chat notifications and the in-game overlay. */
-function ThisDevice() {
-  const [notify, setNotify] = useState<{ on: boolean; show_text: boolean }>();
-  const [overlay, setOverlay] = useState<boolean>();
-  useEffect(() => {
-    desktop.chat<{ on: boolean; show_text: boolean }>({ action: "notification_settings" }).then(setNotify, () => undefined);
-    desktop.overlaySetting().then(setOverlay, () => undefined);
-  }, []);
-  const saveNotify = (next: { on: boolean; show_text: boolean }) => {
-    setNotify(next);
-    void desktop.chat({ action: "notifications", ...next }).catch(() => undefined);
-  };
-  return (
-    <section id="this-device">
-      <h2 className="section-title">This computer</h2>
-      <div className="panel panel-pad">
-        {notify && (
-          <>
-            <label className="check">
-              <input type="checkbox" checked={notify.on} onChange={(e) => saveNotify({ ...notify, on: e.target.checked })} />
-              <span>
-                <b>Notifications for new chat messages</b>
-                <span className="muted small" style={{ display: "block" }}>
-                  Shown when Slop isn't in front. Muted chats never notify.
-                </span>
-              </span>
-            </label>
-            <label className="check">
-              <input
-                type="checkbox"
-                checked={notify.show_text}
-                disabled={!notify.on}
-                onChange={(e) => saveNotify({ ...notify, show_text: e.target.checked })}
-              />
-              <span>Show the message in the notification (otherwise just who it's from)</span>
-            </label>
-          </>
-        )}
-        {overlay !== undefined && (
-          <label className="check">
-            <input
-              type="checkbox"
-              checked={overlay}
-              onChange={(e) => void desktop.overlaySetting(e.target.checked).then(setOverlay, () => undefined)}
-            />
-            <span>
-              <b>In-game overlay (Shift+Tab)</b>
-              <span className="muted small" style={{ display: "block" }}>
-                Chats and friends over a game you started from Slop, when it's fullscreen or maximized. Shift+Tab works as
-                usual everywhere else.
-              </span>
-            </span>
-          </label>
-        )}
-      </div>
-    </section>
-  );
-}
-
 /** Account → Sign-ins: the accounts you can sign in with, and linking more. */
 export function SignIns() {
   const identities = useLoad(() => api.identities(), []);
@@ -693,8 +450,10 @@ export function SignIns() {
   };
   const available = (Object.keys(PROVIDER_LABEL) as SignInProvider[]).filter((p) => providers.data?.[p]);
   return (
-    <section id="sign-ins">
-      <h2 className="section-title">Sign-ins</h2>
+    <section id="sign-ins" className="account-panel" aria-labelledby="sign-ins-title">
+      <h3 className="account-panel-title" id="sign-ins-title">
+        Sign-ins
+      </h3>
       <div className="panel panel-pad">
         {linked && linked !== "already" && (
           <p className="notice" role="status">
@@ -712,26 +471,28 @@ export function SignIns() {
               To link {PROVIDER_LABEL[confirmLink]}, confirm it's you with one of your passkeys.
             </p>
             <StepUpPrompt
-              signInAgain={`/signin?return_to=${encodeURIComponent("/account#sign-ins")}`}
+              signInAgain={`/signin?return_to=${encodeURIComponent("/account/security#sign-ins")}`}
               onDone={() => window.location.assign(api.linkUrl(confirmLink))}
             />
           </div>
         )}
-        <ul className="report-list">
-          {identities.data?.map((i) => (
-            <li key={`${i.provider}:${i.provider_subject}`}>
-              <span>
-                <b>{PROVIDER_LABEL[i.provider] ?? i.provider}</b> {i.login && <span className="mono">{i.login}</span>}{" "}
-                <span className="muted small">linked {formatDate(i.created_at)}</span>
-              </span>
-              {(identities.data?.length ?? 0) > 1 && (
-                <button className="btn small ghost" onClick={() => void unlink(i.provider, i.provider_subject)}>
-                  Unlink
-                </button>
-              )}
-            </li>
-          ))}
-        </ul>
+        {(identities.data?.length ?? 0) > 0 && (
+          <ul className="report-list">
+            {identities.data?.map((i) => (
+              <li key={`${i.provider}:${i.provider_subject}`}>
+                <span>
+                  <b>{PROVIDER_LABEL[i.provider] ?? i.provider}</b> {i.login && <span className="mono">{i.login}</span>}{" "}
+                  <span className="muted small">linked {formatDate(i.created_at)}</span>
+                </span>
+                {(identities.data?.length ?? 0) > 1 && (
+                  <button className="btn small ghost" onClick={() => void unlink(i.provider, i.provider_subject)}>
+                    Unlink
+                  </button>
+                )}
+              </li>
+            ))}
+          </ul>
+        )}
         <p className="muted small">
           Link the accounts you use: to sign in with any of them, and to publish repositories they own (GitHub, GitLab and
           Bitbucket check who owns a repository by the linked account). Linking asks you to sign in to that account, so
@@ -748,7 +509,7 @@ export function SignIns() {
           <p className="form-error" role="alert">
             {stepUp ? (
               <StepUpPrompt
-                signInAgain={`/signin?return_to=${encodeURIComponent("/account#sign-ins")}`}
+                signInAgain={`/signin?return_to=${encodeURIComponent("/account/security#sign-ins")}`}
                 onDone={() => {
                   setStepUp(false);
                   setError(undefined);
@@ -759,7 +520,6 @@ export function SignIns() {
             )}
           </p>
         )}
-        <Passkeys />
       </div>
     </section>
   );
@@ -777,7 +537,7 @@ export function CombineAccounts() {
     return (
       <div className="page narrow">
         <div className="empty-state">
-          Nothing to combine (it may have expired). <Link to="/account#sign-ins">Back to your account</Link>
+          Nothing to combine (it may have expired). <Link to="/account/security#sign-ins">Back to your account</Link>
         </div>
       </div>
     );
@@ -790,7 +550,7 @@ export function CombineAccounts() {
     try {
       await api.combine.confirm();
       await refresh();
-      navigate("/account?linked=" + p.provider + "#sign-ins");
+      navigate("/account/security?linked=" + p.provider + "#sign-ins");
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -799,7 +559,7 @@ export function CombineAccounts() {
   };
   const keep = async () => {
     await api.combine.cancel().catch(() => undefined);
-    navigate("/account#sign-ins");
+    navigate("/account/security#sign-ins");
   };
   const things = [
     [p.apps, "app"],

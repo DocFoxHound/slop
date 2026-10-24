@@ -27,7 +27,7 @@ export function PasskeyNotice() {
           who gets into your sign-in elsewhere can't do either.{" "}
         </>
       )}
-      <Link to="/account#sign-ins">Add a passkey</Link>
+      <Link to="/account/security#passkeys">Add a passkey</Link>
     </div>
   );
 }

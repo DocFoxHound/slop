@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Signing in, signing up, approving the desktop app and combining accounts (web/src/pages/Auth.tsx).
-import { apiError, call, desktopSignInRequest, fake, noPasskeys, passkeyOptions, stubPasskeys, tryCall } from "./accounts-helpers";
+import { apiError, call, desktopSignInRequest, fake, noPasskeys, openAccount, passkeyOptions, stubPasskeys, tryCall } from "./accounts-helpers";
 import { expect, server, signIn, test } from "./fixtures";
 
 test.describe("the sign-in page", () => {
@@ -234,7 +234,7 @@ test.describe("approving the desktop app", () => {
     await expect(page.getByRole("heading", { name: "This sign-in link has expired" })).toBeVisible();
 
     // The account page lists it by the app's name, and signs it out.
-    await page.goto("/account");
+    await openAccount(page, "security");
     const sessions = page.locator("ul.sessions").last();
     const app = sessions.getByRole("listitem").filter({ hasText: "Sue's test PC" });
     await expect(app).toBeVisible();
@@ -331,7 +331,7 @@ test.describe("combining accounts", () => {
       "its sign-ins, reports, donations and everything else",
     ]);
     await page.getByRole("button", { name: "Combine them" }).click();
-    await expect(page).toHaveURL(/\/account\?linked=github#sign-ins$/);
+    await expect(page).toHaveURL(/\/account\/security\?linked=github#sign-ins$/);
     await expect(page.getByRole("status").filter({ hasText: "GitHub is linked" })).toBeVisible();
     expect(confirm.calls).toHaveLength(1);
   });
@@ -349,7 +349,7 @@ test.describe("combining accounts", () => {
     );
     await expect(page.getByRole("button", { name: "Combine them" })).toBeDisabled();
     await page.getByRole("button", { name: "Keep them separate" }).click();
-    await expect(page).toHaveURL(/\/account#sign-ins$/);
+    await expect(page).toHaveURL(/\/account\/security#sign-ins$/);
     expect(cancel.calls).toHaveLength(1);
   });
 
@@ -368,6 +368,6 @@ test.describe("combining accounts", () => {
     await page.goto("/account/combine");
     await expect(page.getByText("Nothing to combine (it may have expired).")).toBeVisible();
     await page.getByRole("link", { name: "Back to your account" }).click();
-    await expect(page).toHaveURL(/\/account#sign-ins$/);
+    await expect(page).toHaveURL(/\/account\/security#sign-ins$/);
   });
 });

@@ -51,7 +51,7 @@ export function PasskeyRequired({ add, onDone, onCancel }: { add: boolean; onDon
         </button>
         {add ? (
           <>
-            <a className="btn" href="/account#sign-ins" target="_blank" rel="noopener">
+            <a className="btn" href="/account/security#passkeys" target="_blank" rel="noopener">
               Add a passkey
             </a>
             <button type="button" className="btn slime" onClick={onDone}>
