@@ -2,7 +2,7 @@
 
 **Status:** Draft · companion to [`DESIGN.md`](DESIGN.md) §10–11, §16
 **Last updated:** 2026-10-17
-**Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`PAYMENTS.md`](PAYMENTS.md) · [`METRICS.md`](METRICS.md) · [`LEGAL.md`](LEGAL.md)
+**Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) · [`PAYMENTS.md`](PAYMENTS.md) · [`METRICS.md`](METRICS.md) · `LEGAL.md` (private)
 
 ---
 

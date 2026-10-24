@@ -2,7 +2,7 @@
 
 **Status:** Built and running as a test deployment (§0); the cloud setup below is still the plan · companion to [`DESIGN.md`](DESIGN.md)
 **Last updated:** 2026-10-21
-**Related:** [`PAYMENTS.md`](PAYMENTS.md) · [`SECURITY.md`](SECURITY.md) · [`METRICS.md`](METRICS.md) · [`LEGAL.md`](LEGAL.md)
+**Related:** [`PAYMENTS.md`](PAYMENTS.md) · [`SECURITY.md`](SECURITY.md) · [`METRICS.md`](METRICS.md) · `LEGAL.md` (private)
 
 ---
 

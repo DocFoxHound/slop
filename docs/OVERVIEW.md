@@ -15,4 +15,4 @@
 
 Players who want AI-made apps they can trust, makers who want a free place to ship them, and creatives who want to be hired to make them better.
 
-The full plan is in `DESIGN.md`. Technical drafts: `ARCHITECTURE.md`, `PAYMENTS.md` (donations and People payments), `SECURITY.md`, `METRICS.md` (donation & vote history), `LEGAL.md` (legal framework, draft for a lawyer) and `LEGAL-GUIDANCE.md` (legal rules for development, until the lawyer review).
+The full plan is in `DESIGN.md`. Technical drafts: `ARCHITECTURE.md`, `PAYMENTS.md` (donations and People payments), `SECURITY.md`, `METRICS.md` (donation & vote history), `LEGAL.md` (legal framework, draft for a lawyer) and `LEGAL-GUIDANCE.md` (legal rules for development, until the lawyer review); those two are private and not in the public repository.
