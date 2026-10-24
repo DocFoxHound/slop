@@ -23,6 +23,9 @@ done
 die() { echo "ship-to-production: $*" >&2; exit 1; }
 
 cd "$(dirname "$0")/.."
+# The lists below print straight out: in a terminal, git would open a pager and wait there, and
+# Ctrl+C in the pager stops the ship halfway.
+export GIT_PAGER=cat PAGER=cat
 git rev-parse --git-dir >/dev/null 2>&1 || die "run it from a Slop checkout"
 
 # What the test server is running: current -> builds/<commit>.
