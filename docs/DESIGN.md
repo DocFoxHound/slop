@@ -2,7 +2,7 @@
 
 **Status:** Built and running as a private test deployment; sections say what's built and when. The original clickable mockup is kept in `mockup/` for reference
 **Last updated:** 2026-10-21
-**Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) (how it's built) · [`PAYMENTS.md`](PAYMENTS.md) (donations and People payments) · [`SECURITY.md`](SECURITY.md) (security and trust) · [`METRICS.md`](METRICS.md) (donation & vote history) · [`LEGAL.md`](LEGAL.md) (legal framework)
+**Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) (how it's built) · [`PAYMENTS.md`](PAYMENTS.md) (donations and People payments) · [`SECURITY.md`](SECURITY.md) (security and trust) · [`METRICS.md`](METRICS.md) (donation & vote history) · `LEGAL.md` (private) (legal framework)
 
 ---
 

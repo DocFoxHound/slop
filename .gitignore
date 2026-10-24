@@ -1,3 +1,7 @@
 /target
 .env
 *.local
+
+# Legal drafts: kept on the dev server only, never in the public repository.
+/docs/LEGAL.md
+/docs/LEGAL-GUIDANCE.md

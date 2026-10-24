@@ -3,6 +3,9 @@
 Read `README.md` first. The design docs in `docs/` are the source of truth for behaviour;
 `docs/LEGAL-GUIDANCE.md` §1–2 lists rules that code must not break, and things that need the
 lawyer before anyone builds them.
+`docs/LEGAL.md` and `docs/LEGAL-GUIDANCE.md` are private: they live only in the checkout on Slop's
+dev server (they're in `.gitignore`), never in the public repository. Where they aren't there, ask
+the owner before changing anything they cover (payments, moderation, age rules, wording, personal data).
 
 ## Stack
 

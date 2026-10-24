@@ -2,7 +2,7 @@
 
 **Status:** Draft · companion to [`DESIGN.md`](DESIGN.md) §7 (ratings) and §12 (money)
 **Last updated:** 2026-10-17
-**Related:** [`PAYMENTS.md`](PAYMENTS.md) · [`LEGAL.md`](LEGAL.md) §7 · [`SECURITY.md`](SECURITY.md) §10 · [`ARCHITECTURE.md`](ARCHITECTURE.md)
+**Related:** [`PAYMENTS.md`](PAYMENTS.md) · `LEGAL.md` (private) §7 · [`SECURITY.md`](SECURITY.md) §10 · [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ---
 

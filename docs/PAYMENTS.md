@@ -2,7 +2,7 @@
 
 **Status:** Draft · companion to [`DESIGN.md`](DESIGN.md) §12 and §15
 **Last updated:** 2026-10-19
-**Related:** [`LEGAL.md`](LEGAL.md) (legal positions behind every rule here) · [`SECURITY.md`](SECURITY.md) §9 · [`METRICS.md`](METRICS.md)
+**Related:** `LEGAL.md` (private) (legal positions behind every rule here) · [`SECURITY.md`](SECURITY.md) §9 · [`METRICS.md`](METRICS.md)
 
 > Wherever this document says "must" or "never", the reason is usually a legal position in `LEGAL.md`. Check there before changing it.
 
