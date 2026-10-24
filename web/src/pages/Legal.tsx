@@ -99,7 +99,8 @@ export function LegalPage() {
           </button>
         </div>
       ))}
-      {d.accepted && me === null && (
+      {/* Signing up accepts the Terms of Service, so visitors aren't asked to sign in for those. */}
+      {d.accepted && me === null && d.kind !== "terms" && (
         <p className="notice">
           <Link to={`/signin?return_to=${encodeURIComponent(returnTo)}`}>Sign in to accept the {d.title}</Link>.
         </p>
