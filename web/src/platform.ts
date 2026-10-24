@@ -165,6 +165,8 @@ export interface ChatStatus {
 export interface ChatPerson {
   id: string;
   name: string;
+  /** Their profile picture, served by Slop; null: the letter. */
+  avatar_url?: string | null;
 }
 
 export interface ChatConversation {

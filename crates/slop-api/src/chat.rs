@@ -677,6 +677,9 @@ async fn participants(conn: &mut PgConnection, conversation: Uuid) -> sqlx::Resu
 pub struct Member {
     pub id: Uuid,
     pub name: String,
+    /// Their profile picture (avatars.rs); null: the letter.
+    #[serde(default)]
+    pub avatar_url: Option<String>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -704,7 +707,7 @@ pub struct Conversation {
 }
 
 const CONVERSATION_SQL: &str = "select c.id, c.kind, t.slug as team_slug, t.name as team_name, c.epoch, c.created_by, c.last_message_at,
-        coalesce((select json_agg(json_build_object('id', u.id, 'name', u.display_name) order by u.display_name)
+        coalesce((select json_agg(json_build_object('id', u.id, 'name', u.display_name, 'avatar_url', {AVATAR}) order by u.display_name)
                   from ({PARTICIPANTS}) p join users u on u.id = p.user_id where p.conversation_id = c.id), '[]') as members,
         coalesce((select max(seq) from chat_messages m where m.conversation_id = c.id and m.kind = 'application'), 0) as last_seq,
         coalesce(s.read_seq, 0) as read_seq,
@@ -718,7 +721,9 @@ const CONVERSATION_SQL: &str = "select c.id, c.kind, t.slug as team_slug, t.name
 fn conversation_sql(filter: &str) -> String {
     format!(
         "{} where exists (select 1 from ({PARTICIPANTS}) p where p.conversation_id = c.id and p.user_id = $1) {filter}",
-        CONVERSATION_SQL.replace("{PARTICIPANTS}", PARTICIPANTS)
+        CONVERSATION_SQL
+            .replace("{PARTICIPANTS}", PARTICIPANTS)
+            .replace("{AVATAR}", &crate::avatars::path_sql("u.id"))
     )
 }
 
@@ -763,9 +768,24 @@ async fn conversations(
         {
             continue;
         }
-        out.push(with_closed(&mut conn, user.id, c).await?);
+        out.push(
+            with_closed(&mut conn, user.id, c)
+                .await?
+                .with_avatars(&state.config),
+        );
     }
     Ok(Json(out))
+}
+
+impl Conversation {
+    /// Members' pictures as full addresses (the desktop app, the only one showing chats, needs
+    /// them so).
+    fn with_avatars(mut self, config: &crate::config::Config) -> Self {
+        for m in &mut self.members {
+            m.avatar_url = crate::avatars::absolute(config, m.avatar_url.take());
+        }
+        self
+    }
 }
 
 pub async fn load_conversation(
@@ -788,7 +808,11 @@ async fn conversation(
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Conversation>> {
     let mut conn = state.db.acquire().await?;
-    Ok(Json(load_conversation(&mut conn, user.id, id).await?))
+    Ok(Json(
+        load_conversation(&mut conn, user.id, id)
+            .await?
+            .with_avatars(&state.config),
+    ))
 }
 
 #[derive(Deserialize)]
@@ -972,7 +996,7 @@ async fn start(
         } else {
             StatusCode::CREATED
         },
-        Json(c),
+        Json(c.with_avatars(&state.config)),
     ))
 }
 
@@ -1055,7 +1079,7 @@ async fn add_members(
     let everyone = participants(&mut tx, id).await?;
     tx.commit().await?;
     state.chat_hub.wake(everyone);
-    Ok(Json(c))
+    Ok(Json(c.with_avatars(&state.config)))
 }
 
 /// Leaving a group chat (yourself), or its owner removing someone. Their devices are removed from

@@ -25,6 +25,7 @@ import {
 import { Link, useNavigate, useParams } from "react-router";
 
 import { api, ApiError, type FriendPerson, type ReportReason, type TeamCard } from "../api";
+import { Avatar } from "../components/Avatar";
 import { Loading } from "../components/ui";
 import { useDocumentTitle } from "../hooks";
 import { renderChat } from "../markdown";
@@ -475,6 +476,7 @@ function Chats({
   onBack: () => void;
 }) {
   const compact = useContext(Compact);
+  const { me } = useSession();
   const [list, setList] = useState<ChatConversation[]>();
   const [error, setError] = useState<string>();
   const [changed, setChanged] = useState<{ ids: string[]; n: number }>({ ids: [], n: 0 });
@@ -574,9 +576,13 @@ function Chats({
                       }
                     }}
                   >
-                    <span className="avatar" aria-hidden="true">
-                      {c.kind === "team" ? "👥" : c.kind === "group" ? "#" : c.title.charAt(0).toUpperCase()}
-                    </span>
+                    {c.kind === "team" || c.kind === "group" ? (
+                      <span className="avatar" aria-hidden="true">
+                        {c.kind === "team" ? "👥" : "#"}
+                      </span>
+                    ) : (
+                      <Avatar name={c.title} url={c.members.find((m) => m.id !== me?.id)?.avatar_url} />
+                    )}
                     <span className="chat-item-text">
                       <b>{c.title}</b>
                       <span className="muted small">{c.ready ? (c.last ?? "No messages yet") : "Waiting to be added…"}</span>

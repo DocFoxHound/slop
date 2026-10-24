@@ -2,7 +2,7 @@
 //! A throwaway Slop for the browser tests (web/e2e). Never for real use.
 //!
 //! Makes a new database (`slop_e2e_<random>_sim`) on the test Postgres, migrates it, starts a
-//! fake GitHub (release files, repository pictures) and a fake Stripe (fake_stripe.rs), runs the
+//! fake GitHub (release files, repository and account pictures) and a fake Stripe (fake_stripe.rs), runs the
 //! API with the release fetcher on a free port, serving the built website (`web/dist`), and
 //! seeds it (seed.rs: accounts for every kind of person, apps, money, People, teams, chat and
 //! admin queues). Prints one line of JSON (`url`, `fake`, `stripe`, `cookie_name`, `cookies`,
@@ -87,6 +87,17 @@ async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
 async fn fake_github() -> anyhow::Result<String> {
     let zip = Bytes::from(release_zip());
     let app = Router::new()
+        // Account pictures (avatars.rs): GitHub's at /avatars/u/<id>, one colour per account.
+        .route(
+            "/avatars/u/{id}",
+            get(|Path(id): Path<u64>| async move {
+                let shade = (id % 200) as u8;
+                (
+                    [("content-type", "image/png")],
+                    png(240, 240, [40, 120 + shade / 4, 200]),
+                )
+            }),
+        )
         // The newest commit, for store pictures (media.rs).
         .route(
             "/repos/{owner}/{repo}/commits/HEAD",
@@ -206,6 +217,9 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
         media: slop_api::config::MediaConfig {
             // Served by this server (raw_file), not the fake GitHub: see there.
             github_raw_base: format!("http://{addr}/raw/").parse()?,
+            // Profile pictures (avatars.rs) from the fake GitHub, on this machine.
+            github_avatar_base: format!("{fake}avatars/").parse()?,
+            avatar_test_hosts: vec!["127.0.0.1".into()],
         },
         // Stripe, faked (fake_stripe.rs): checkout links lead to its pay page.
         payments: slop_api::config::PaymentsConfig {

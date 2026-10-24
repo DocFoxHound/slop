@@ -255,6 +255,8 @@ struct Profile {
     is_me: bool,
     /// Their People page, when they have a live one.
     creative_handle: Option<String>,
+    /// Their profile picture (avatars.rs); null: the letter.
+    avatar_url: Option<String>,
     /// Apps they make, in the store.
     apps: Vec<AppSummary>,
     votes: Vec<ProfileVote>,
@@ -326,6 +328,7 @@ async fn profile(
         public,
         is_me,
         creative_handle,
+        avatar_url: crate::avatars::url_of(&state, id).await?,
         apps,
         votes,
     }))

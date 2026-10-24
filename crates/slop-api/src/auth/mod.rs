@@ -285,15 +285,22 @@ async fn callback(
             return Ok((jar, Redirect::to(&with_param(back, "error=provider"))).into_response());
         }
     };
+    // The picture's address can change at every sign-in (Google, Discord and Bitbucket say where
+    // it is only then), so a chosen picture is brought up to date here (avatars.rs).
+    let picture = crate::avatars::clean_picture(profile.picture.as_deref());
     let existing: Option<Uuid> = sqlx::query_scalar(
-        "update identities set last_sign_in_at = now(), login = coalesce($3, login)
+        "update identities set last_sign_in_at = now(), login = coalesce($3, login), picture_url = $4
          where provider = $1 and provider_subject = $2 returning user_id",
     )
     .bind(provider.name())
     .bind(&profile.subject)
     .bind(&profile.login)
+    .bind(&picture)
     .fetch_optional(&state.db)
     .await?;
+    if existing.is_some() {
+        crate::avatars::signed_in(&state, provider, &profile.subject).await;
+    }
 
     // Linking: still the same account and session that started it.
     if let Some(into) = link_user {
@@ -306,12 +313,13 @@ async fn callback(
         return match existing {
             None => {
                 sqlx::query(
-                    "insert into identities (provider, provider_subject, user_id, login) values ($1, $2, $3, $4)",
+                    "insert into identities (provider, provider_subject, user_id, login, picture_url) values ($1, $2, $3, $4, $5)",
                 )
                 .bind(provider.name())
                 .bind(&profile.subject)
                 .bind(into)
                 .bind(&profile.login)
+                .bind(&picture)
                 .execute(&state.db)
                 .await?;
                 Ok((
@@ -379,8 +387,8 @@ async fn callback(
         .await?;
     sqlx::query(
         "insert into pending_signups
-             (token_hash, provider, provider_subject, suggested_name, email, return_to, expires_at, login)
-         values ($1, $2, $3, $4, $5, $6, now() + $7, $8)",
+             (token_hash, provider, provider_subject, suggested_name, email, return_to, expires_at, login, picture_url)
+         values ($1, $2, $3, $4, $5, $6, now() + $7, $8, $9)",
     )
     .bind(hash_token(&signup_token))
     .bind(provider.name())
@@ -390,6 +398,7 @@ async fn callback(
     .bind(&return_to)
     .bind(SIGNUP_LIFETIME)
     .bind(&profile.login)
+    .bind(&picture)
     .execute(&state.db)
     .await?;
 
@@ -582,15 +591,23 @@ async fn signup(
     }
 
     let mut tx = state.db.begin().await?;
-    type Pending = (String, String, Option<String>, String, Option<String>);
+    type Pending = (
+        String,
+        String,
+        Option<String>,
+        String,
+        Option<String>,
+        Option<String>,
+    );
     let pending: Option<Pending> = sqlx::query_as(
         "delete from pending_signups where token_hash = $1 and expires_at > now()
-         returning provider, provider_subject, email, return_to, login",
+         returning provider, provider_subject, email, return_to, login, picture_url",
     )
     .bind(hash_token(&token))
     .fetch_optional(&mut *tx)
     .await?;
-    let (provider, subject, email, return_to, login) = pending.ok_or(ApiError::Unauthorized)?;
+    let (provider, subject, email, return_to, login, picture) =
+        pending.ok_or(ApiError::Unauthorized)?;
 
     let user_id = Uuid::now_v7();
     sqlx::query(
@@ -603,11 +620,12 @@ async fn signup(
     .bind(&country_code)
     .execute(&mut *tx)
     .await?;
-    sqlx::query("insert into identities (provider, provider_subject, user_id, login) values ($1, $2, $3, $4)")
+    sqlx::query("insert into identities (provider, provider_subject, user_id, login, picture_url) values ($1, $2, $3, $4, $5)")
         .bind(&provider)
         .bind(&subject)
         .bind(user_id)
         .bind(&login)
+        .bind(&picture)
         .execute(&mut *tx)
         .await
         .map_err(|err| {
@@ -651,6 +669,7 @@ async fn signup(
         passkey_due_at: None,
         passkey_grace_until: None,
         gpc: false,
+        avatar_url: None,
     };
     Ok((
         StatusCode::CREATED,
@@ -713,6 +732,9 @@ struct Me {
     /// This browser sent a Global Privacy Control signal; the account page says it's honoured.
     #[sqlx(skip)]
     gpc: bool,
+    /// Their profile picture (avatars.rs); null: the letter.
+    #[sqlx(skip)]
+    avatar_url: Option<String>,
 }
 
 async fn me(
@@ -745,6 +767,7 @@ async fn me(
     me.new_decisions = crate::moderation::unseen(&state.db, user.id).await?;
     me.unread_notifications = crate::notify::unread(&state.db, &user).await?;
     me.profile_public = crate::reviews::is_public(&state.db, user.id).await?;
+    me.avatar_url = crate::avatars::url_of(&state, user.id).await?;
     Ok(Json(me))
 }
 

@@ -35,6 +35,8 @@ pub enum Action {
     Offer,
     Lookup,
     Bounty,
+    /// Choosing a profile picture: each one is downloaded from the provider.
+    Picture,
 }
 
 impl Action {
@@ -64,6 +66,7 @@ impl Action {
             Self::Lookup => (30, HOUR),
             // Opening fix bounties (pledging counts as Donation).
             Self::Bounty => (10, HOUR),
+            Self::Picture => (20, HOUR),
         };
         (n, Duration::from_secs(secs))
     }
@@ -87,6 +90,7 @@ impl Action {
             Self::Offer => "offers to other makers",
             Self::Lookup => "repository lookups",
             Self::Bounty => "new bounties",
+            Self::Picture => "picture changes",
         }
     }
 }

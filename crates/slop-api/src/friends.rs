@@ -152,6 +152,20 @@ struct Person {
     name: String,
     #[serde(with = "time::serde::rfc3339")]
     since: OffsetDateTime,
+    /// Their profile picture (avatars.rs); null: the letter.
+    avatar_url: Option<String>,
+}
+
+/// The picture column for people listed as `u`.
+fn avatar_column() -> String {
+    format!("{} as avatar_url", crate::avatars::path_sql("u.id"))
+}
+
+fn with_avatars(state: &AppState, mut people: Vec<Person>) -> Vec<Person> {
+    for p in &mut people {
+        p.avatar_url = crate::avatars::absolute(&state.config, p.avatar_url.take());
+    }
+    people
 }
 
 #[derive(Serialize)]
@@ -164,32 +178,33 @@ struct Friends {
 }
 
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Friends>> {
-    let friends = sqlx::query_as(
-        "select u.id, u.display_name as name, f.since from friends f
+    let avatar = avatar_column();
+    let friends = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select u.id, u.display_name as name, f.since, {avatar} from friends f
          join users u on u.id = case when f.user_a = $1 then f.user_b else f.user_a end
          where $1 in (f.user_a, f.user_b) and u.closed_at is null order by lower(u.display_name)",
-    )
+    )))
     .bind(user.id)
     .fetch_all(&state.db)
     .await?;
-    let incoming = sqlx::query_as(
-        "select u.id, u.display_name as name, r.created_at as since from friend_requests r
+    let incoming = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select u.id, u.display_name as name, r.created_at as since, {avatar} from friend_requests r
          join users u on u.id = r.from_id where r.to_id = $1 and u.closed_at is null order by r.created_at desc",
-    )
+    )))
     .bind(user.id)
     .fetch_all(&state.db)
     .await?;
-    let outgoing = sqlx::query_as(
-        "select u.id, u.display_name as name, r.created_at as since from friend_requests r
+    let outgoing = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select u.id, u.display_name as name, r.created_at as since, {avatar} from friend_requests r
          join users u on u.id = r.to_id where r.from_id = $1 and u.closed_at is null order by r.created_at desc",
-    )
+    )))
     .bind(user.id)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(Friends {
-        friends,
-        incoming,
-        outgoing,
+        friends: with_avatars(&state, friends),
+        incoming: with_avatars(&state, incoming),
+        outgoing: with_avatars(&state, outgoing),
     }))
 }
 
@@ -373,15 +388,15 @@ async fn unfriend(conn: &mut PgConnection, a: Uuid, b: Uuid) -> sqlx::Result<()>
 }
 
 async fn blocks(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<Person>>> {
-    Ok(Json(
-        sqlx::query_as(
-            "select u.id, u.display_name as name, b.created_at as since from user_blocks b
-             join users u on u.id = b.blocked_id where b.user_id = $1 order by b.created_at desc",
-        )
-        .bind(user.id)
-        .fetch_all(&state.db)
-        .await?,
-    ))
+    let blocked = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select u.id, u.display_name as name, b.created_at as since, {} from user_blocks b
+         join users u on u.id = b.blocked_id where b.user_id = $1 order by b.created_at desc",
+        avatar_column()
+    )))
+    .bind(user.id)
+    .fetch_all(&state.db)
+    .await?;
+    Ok(Json(with_avatars(&state, blocked)))
 }
 
 async fn block(
