@@ -10,13 +10,17 @@ publish: what Slop asks of your project, how to set it up, and what happens afte
 > and what's optional for publishing on Slop, then set up my project so it's ready to deploy
 > there."*
 
+**Want your agent to do all of it, store page included?** Make it a token under **Account → AI
+agents** (publish, all your apps) and connect it with the command that page shows; see
+[Working with your AI agent](#working-with-your-ai-agent). With a token it creates the store page,
+submits releases and follows the review itself. Without one it can only prepare the repository.
+
 It's written so that a person or an AI agent can follow it from start to finish. Agents: the
 [checklist for agents](#checklist-for-agents) near the end lists every step in order, and
 [What Slop asks of your project](#what-slop-asks-of-your-project) says what's required and what's
 optional.
 
-> **This is a test server.** Builds aren't automatically scanned yet and maker signatures aren't
-> required. Each app's first release is reviewed by a person. Things marked *(coming)* below are planned
+> Each app's first release is reviewed by a person. Things marked *(coming)* below are planned
 > but not built yet.
 
 ## Why publish on Slop
@@ -76,9 +80,9 @@ optional.
    Slop's source check reports where each release saves.
 6. **A maker signature** on each build: a GitHub artifact attestation, made by your GitHub Actions
    build (Slop Build does this for you). It proves the file came from your repository at that
-   commit, so someone who only stole your Slop password can't publish anything. *Not required on
-   this test server; GitHub only makes attestations for private repositories on its Enterprise
-   plan.*
+   commit, so someone who only stole your Slop password can't publish anything. *Test servers
+   may not require it (`/v1/server` says); GitHub only makes attestations for private repositories
+   on its Enterprise plan.*
 
 ### Recommended
 
@@ -1602,8 +1606,17 @@ curl -i -X POST "$SLOP_PULSE_URL/start" -H 'Content-Type: application/json' -d "
 
 ## Checklist for agents
 
-To prepare someone's project for Slop, in order. Steps marked **(person)** need the project owner.
+To prepare someone's project for Slop, in order. Steps marked **(person)** always need the
+project owner; steps marked **(token)** are yours if the owner gave you a Slop token, and theirs
+if not.
 
+0. **Ask for a token first** if you don't have Slop's tools (`maker_guide`, `create_store_page`…).
+   The owner signs in to Slop, opens **Account → AI agents → Make token**, chooses **Publish**
+   and **All my apps** (a token for some apps can't create new ones), and runs the
+   `claude mcp add …` command the page shows in your terminal themselves (other agents: the MCP
+   address, or the API with `Authorization: Bearer slopmk_…`). Never ask them to paste the token
+   into the chat. Then read `maker_guide`. Without a token, do steps 1–6 and 10 and hand the
+   rest to the owner.
 1. Confirm the project is open source in a Git repository, and that it has a `LICENSE` file with an
    OSI-approved licence. If not, ask the owner which licence to use; don't choose one for them.
 2. Make sure the project builds to a runnable program for each target platform, from a clean
@@ -1626,17 +1639,22 @@ To prepare someone's project for Slop, in order. Steps marked **(person)** need 
    GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option C. For
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
-7. **(person)** Sign in to Slop, go to **Publish → New app**, and create the store page with the
-   same store address, the repository URL, licence, type, stage, age rating, tags, and **Online**
-   if the project connects to anything (see step 3).
-8. Option A: **(person)** on **Releases & progress**, pick the release under **Submit a release**.
+7. **(token)** Create the store page (`create_store_page`, or **Publish → New app** on the
+   website) with the same store address, the repository URL, licence, type, stage, age rating,
+   tags, and **Online** if the project connects to anything (see step 3). Write the description
+   from the repository. **(person)** Before their first app, the owner accepts the Publisher
+   Agreement on the website once; if Slop answers that it's needed, tell them where
+   (`/legal/publisher`) and wait.
+8. Option A: **(token)** submit the GitHub release (`submit_github_release`, or on the website
+   under **Releases & progress → Submit a release**).
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
-9. **(person)** Watch **Publish** (each app's current step) or **Releases & progress** until the
-   first release is approved and the app is in the store. Later releases are picked up and
-   approved automatically if they pass every check.
+9. **(token)** Follow the first release (`list_releases`, `get_fixes`; on the website **Publish**
+   or **Releases & progress**) until it's approved and the app is in the store, and fix what
+   Slop's checks find. A person reviews the first release; later ones are picked up and approved
+   automatically if they pass every check.
 10. Optional but recommended, ideally before step 8: add `.slop/media.json` with a 920×430
-   thumbnail and some screenshots (see **Pictures and videos**), push it, and have the owner press **Check my
-   repository now** under **Edit store page**. An agent can capture screenshots from the
+   thumbnail and some screenshots (see **Pictures and videos**), push it, and run `check_repository` (or have the owner press **Check my
+   repository now** under **Edit store page**). An agent can capture screenshots from the
    running app if the owner wants. Leave the gallery order to the owner; they set it on the
    website.
 
@@ -1661,7 +1679,7 @@ Facts an agent may need:
 **Can my app be closed source?** No. Every app on Slop links its source.
 
 **Can I charge for my app or sell things in it?** No. Apps on Slop are free and sell nothing.
-*(coming: optional donations.)*
+Players can donate to you if you turn donations on; donations unlock nothing.
 
 **Does Slop host my builds?** No. They stay on your release page; Slop records each file's hash
 and players' apps download from you and check it.
