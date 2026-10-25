@@ -241,6 +241,25 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
     [existing?.slug],
   ).data;
   const [slugTouched, setSlugTouched] = useState(Boolean(existing));
+  // A new app's address is checked as it's typed, with a free one offered when it's taken.
+  const [address, setAddress] = useState<{ slug: string; available: boolean; suggestion: string | null }>();
+  useEffect(() => {
+    if (existing || !/^[a-z0-9]+(-[a-z0-9]+)*$/.test(form.slug) || form.slug.length < 3) {
+      setAddress(undefined);
+      return;
+    }
+    let stale = false;
+    const timer = window.setTimeout(() => {
+      api.addressAvailable(form.slug).then(
+        (a) => !stale && setAddress(a),
+        () => !stale && setAddress(undefined),
+      );
+    }, 350);
+    return () => {
+      stale = true;
+      window.clearTimeout(timer);
+    };
+  }, [existing, form.slug]);
   const [error, setError] = useState<ApiError>();
   const [busy, setBusy] = useState(false);
   const terms = useTermsGate();
@@ -363,7 +382,35 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
               }}
             />
           </div>,
-          existing ? "The address can't change once created." : "Lowercase letters, numbers and dashes.",
+          existing ? (
+            "The address can't change once created."
+          ) : (
+            <>
+              Lowercase letters, numbers and dashes. It can't change once created.{" "}
+              <span role="status">
+                {address?.slug === form.slug &&
+                  (address.available ? (
+                    <span className="good">✓ slop/app/{address.slug} is free.</span>
+                  ) : (
+                    <span className="bad">
+                      Taken.{" "}
+                      {address.suggestion && (
+                        <button
+                          type="button"
+                          className="link-btn"
+                          onClick={() => {
+                            setSlugTouched(true);
+                            set("slug", address.suggestion!);
+                          }}
+                        >
+                          Use {address.suggestion}
+                        </button>
+                      )}
+                    </span>
+                  ))}
+              </span>
+            </>
+          ),
         )}
         {field(
           "summary",

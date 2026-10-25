@@ -1038,6 +1038,74 @@ async fn categories_include_their_tags(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_taken_store_address_comes_with_a_free_one(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = app.user("Maker", "US").await;
+    let (_, other) = app.user("Other", "US").await;
+    let check =
+        |slug: &str, who: &str| req(Method::GET, &format!("/v1/apps/{slug}/available")).cookie(who);
+
+    // Signed in only, and only well-formed addresses.
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/herds/available"))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    let res = app.send(check("Bad_Address", &maker)).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+
+    let free = body_json(app.send(check("angryherds", &maker)).await).await;
+    assert_eq!(
+        free,
+        json!({"slug": "angryherds", "available": true, "suggestion": null})
+    );
+
+    for slug in ["angryherds", "angryherds-2"] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps")
+                    .cookie(&maker)
+                    .json(new_app(slug)),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
+    // Taken: the next free one, whether asked about the address or a numbered copy of it.
+    let taken = body_json(app.send(check("angryherds", &other)).await).await;
+    assert_eq!(taken["available"], false);
+    assert_eq!(taken["suggestion"], "angryherds-3");
+    let taken = body_json(app.send(check("angryherds-2", &other)).await).await;
+    assert_eq!(taken["suggestion"], "angryherds-3");
+
+    // Creating it anyway says the same, so a maker's agent can pick the free one.
+    let res = app
+        .send(req(Method::POST, "/v1/apps").cookie(&other).json({
+            let mut again = new_app("angryherds");
+            again["repo_url"] = json!("https://github.com/other/angryherds");
+            again
+        }))
+        .await;
+    let body = body_json(res).await;
+    assert_eq!(body["error"]["field"], "slug");
+    assert_eq!(
+        body["error"]["message"],
+        "that address is taken; angryherds-3 is free"
+    );
+
+    // A long address stays within 60 characters.
+    let long = "a".repeat(60);
+    app.send(
+        req(Method::POST, "/v1/apps")
+            .cookie(&maker)
+            .json(new_app(&long)),
+    )
+    .await;
+    let taken = body_json(app.send(check(&long, &other)).await).await;
+    assert_eq!(taken["suggestion"], format!("{}-2", "a".repeat(58)));
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn drafts_are_private_until_listed(db: PgPool) {
     let app = test_app(db).await;
     let (_, maker) = app.user("Maker", "US").await;

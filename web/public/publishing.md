@@ -1665,7 +1665,8 @@ if not.
 
 Facts an agent may need:
 
-- Store addresses: 3–60 lowercase letters, numbers and single dashes.
+- Store addresses: 3–60 lowercase letters, numbers and single dashes. Unique: if one is taken, Slop's answer
+  names a free one (`that address is taken; my-game-2 is free`). The name itself needn't be unique.
 - Versions: up to 40 characters of letters, numbers, `.`, `_`, `+` and `-`, starting with a letter
   or number (e.g. `1.2.0`, `build.17`).
 - Store page platforms (the `platforms` field): `windows`, `linux`, `linux-deb`, `linux-rpm`.
