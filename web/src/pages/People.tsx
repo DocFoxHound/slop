@@ -8,7 +8,8 @@ import { Link, useLocation, useNavigate, useParams, useSearchParams } from "reac
 
 import { api, ApiError, type AiUse, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
 import { Avatar } from "../components/Avatar";
-import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, WorkTile, accentStyle } from "../components/People";
+import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, ServicesList, WorkTile, accentStyle } from "../components/People";
+import { DesignArea, slopParts } from "../components/PeopleDesign";
 import { MyPeoplePageCard, PageStatusDetails, useMyPeoplePage, type PeopleSaved } from "../components/PeopleStatus";
 import { ReportButton } from "../components/Report";
 import { useTermsGate } from "../components/Terms";
@@ -238,6 +239,17 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
     }
   };
 
+  const servicesList = () =>
+    p.services.length > 0 ? (
+      <ServicesList services={p.services} onHire={!p.is_me && p.can_hire ? (s) => setHiring({ serviceId: s.id, skill: s.skill }) : undefined} />
+    ) : null;
+  // With their own design, the creative's page is: Slop's header, their design (which places
+  // their works, and maybe their services), then Slop's services (unless placed), reviews and
+  // credits, which a design can't hide or restyle.
+  const shown: Section[] = p.design
+    ? (["services", "reviews", "worked_on"] as Section[]).filter((s) => s !== "services" || !p.design?.has_services)
+    : p.sections;
+
   const sections: Record<Section, ReactNode> = {
     portfolio:
       p.works.length > 0 ? (
@@ -254,26 +266,7 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
       p.services.length > 0 ? (
         <section key="services">
           <SectionHeader title="Services" sub="Starting prices; the offer has the exact one" />
-          <div className="services">
-            {p.services.map((s) => (
-              <div className="panel panel-pad service" key={s.id}>
-                <div className="service-head">
-                  <b>{s.name}</b>
-                  <span className="service-price">from {money(s.price_minor, s.currency)}</span>
-                </div>
-                {s.description && <p className="muted small">{s.description}</p>}
-                <div className="service-foot">
-                  <span className="chip">{s.skill_name}</span>
-                  <span className="muted small">about {s.days} day{s.days === 1 ? "" : "s"}</span>
-                  {!p.is_me && p.can_hire && (
-                    <button type="button" className="btn small accent" onClick={() => setHiring({ serviceId: s.id, skill: s.skill })}>
-                      Hire for this
-                    </button>
-                  )}
-                </div>
-              </div>
-            ))}
-          </div>
+          {servicesList()}
         </section>
       ) : null,
     reviews: (
@@ -392,8 +385,12 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
         />
       )}
 
+      {p.design && (
+        <DesignArea design={p.design} label={`${p.name}'s page`} parts={slopParts({ works: p.works, onOpen: setOpen, services: servicesList })} />
+      )}
+
       <div className="two-col person-body">
-        <div className="person-sections">{p.sections.map((s) => sections[s])}</div>
+        <div className="person-sections">{shown.map((s) => sections[s])}</div>
         <aside className="side-col">
           <div className="panel panel-pad">
             <b>AI use</b>
