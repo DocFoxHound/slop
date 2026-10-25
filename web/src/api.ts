@@ -1005,7 +1005,10 @@ export interface CreativePage extends CreativeCard {
   reviews: CreativeReview[];
   worked_on: Array<AppSummary & { role: string }>;
   is_me: boolean;
-  status: "live" | "waiting" | "hidden";
+  /** Always live for others; the creative's own `mine.state` for themselves. */
+  status: PageState;
+  /** Only for the creative themselves: where their page is. */
+  mine: PageStatus | null;
   hidden_reason: string | null;
   /** The account was closed: the page is kept, frozen, and takes no new work. */
   closed: boolean;
@@ -1039,6 +1042,27 @@ export interface MyProfile extends Omit<ProfileInput, "confirm_adult"> {
   hidden_reason: string | null;
   /** stripe, simulated (sandbox/development) or off. */
   payments: "stripe" | "simulated" | "off";
+  status: PageStatus;
+}
+
+/**
+ * Where a creative's People page is (people/mod.rs `PageStatus`). Only portfolios are reviewed:
+ * draft (no portfolio sent yet), waiting (the first one waits for review), turned_down (the newest
+ * was turned down, none approved yet), live (an approved portfolio; everyone sees the page), or
+ * hidden (a moderation decision, or the account is suspended).
+ */
+export type PageState = "draft" | "waiting" | "turned_down" | "live" | "hidden";
+
+export interface PageStatus {
+  state: PageState;
+  /** turned_down: the reviewer's reason; live: why a newer portfolio was turned down; hidden: the decision's reason. */
+  reason: string | null;
+  /** live: a newer portfolio waits for review. */
+  update_waiting: boolean;
+  waiting_since: string | null;
+  /** What went wrong the last time Slop read the portfolio. */
+  problem: string | null;
+  suspended: boolean;
 }
 
 export type PortfolioWork =

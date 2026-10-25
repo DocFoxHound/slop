@@ -3,12 +3,13 @@
 // built to sell a service — banner, accent colour, their own section order — so it isn't an app
 // page with a different header.
 
-import { useEffect, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
-import { Link, useNavigate, useParams, useSearchParams } from "react-router";
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { api, ApiError, type CreativePage, type PeopleQuery, type Section, type Work } from "../api";
+import { api, ApiError, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
 import { Avatar } from "../components/Avatar";
 import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, WorkTile, accentStyle } from "../components/People";
+import { MyPeoplePageCard, PageStatusDetails, useMyPeoplePage, type PeopleSaved } from "../components/PeopleStatus";
 import { ReportButton } from "../components/Report";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading, SectionHeader, Shelf } from "../components/ui";
@@ -30,6 +31,8 @@ export function People() {
     q: params.get("q")?.trim() || undefined,
   };
   const list = useLoad(() => api.people.list(q), [params.toString()]);
+  // A signed-in creative's own page, so it's always easy to find again (with where it stands).
+  const mine = useMyPeoplePage();
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
@@ -52,11 +55,15 @@ export function People() {
           <Link className="btn" to="/people/jobs">
             Your jobs
           </Link>
-          <Link className="btn slime" to="/people/me">
-            Offer your services
-          </Link>
+          {!mine.data && (
+            <Link className="btn slime" to="/people/me">
+              Offer your services
+            </Link>
+          )}
         </div>
       </div>
+
+      {mine.data && <MyPeoplePageCard profile={mine.data} />}
 
       <PeopleSearch value={q.q ?? ""} onSearch={(text) => set("q", text.trim() || null)} />
 
@@ -174,8 +181,35 @@ export function PersonPage() {
   return <PersonView p={page.data} reload={page.reload} />;
 }
 
+/** After saving in the editor: the page says so, with where it stands now. */
+function savedMessage(saved: PeopleSaved, status: PageStatus): string {
+  const done = saved === "created" ? "Your People page is created" : "Your People page is saved";
+  switch (status.state) {
+    case "draft":
+      return `${done}. Only you can see it for now: add your portfolio next, and Slop reviews it before your page goes public.`;
+    case "waiting":
+      return `${done} and waiting for Slop's review of your portfolio. Only you can see it until then.`;
+    case "turned_down":
+      return `${done}. Only you can see it until a portfolio is approved.`;
+    case "live":
+      return `${done}. Everyone sees the changes now.`;
+    case "hidden":
+      return `${done}. It's still hidden.`;
+  }
+}
+
 function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
   const { me } = useSession();
+  const location = useLocation();
+  const navigate = useNavigate();
+  // Arrived here from the editor's Save: say so once (not again on reload or Back).
+  const [saved] = useState(() => (location.state as { peopleSaved?: PeopleSaved } | null)?.peopleSaved);
+  const savedRef = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (!saved) return;
+    navigate(location.pathname, { replace: true, state: null });
+    savedRef.current?.focus({ preventScroll: true });
+  }, []);
   const [hiring, setHiring] = useState<{ serviceId?: string; skill?: string }>();
   const [open, setOpen] = useState<Work>();
   const onProseClick = (e: MouseEvent) => {
@@ -255,13 +289,20 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
       <div className="crumbs">
         <Link to="/people">People</Link> › {p.name}
       </div>
-      {p.is_me && (
-        <div className="notice">
-          This is your page.{" "}
-          {p.status === "waiting" && "Only you can see it until your first portfolio is approved. "}
-          {p.status === "hidden" && `It's hidden: ${p.hidden_reason ?? "it broke Slop's rules"}. `}
-          <Link to="/people/me">Edit your page</Link>
+      {saved && p.mine && (
+        <div className="notice people-saved" role="status" tabIndex={-1} ref={savedRef}>
+          <span aria-hidden="true">✓ </span>
+          {savedMessage(saved, p.mine)}
         </div>
+      )}
+      {p.is_me && p.mine && (
+        <section className="notice people-status" aria-label="Your page's status">
+          <p className="muted small">This is your page. Only you see this box.</p>
+          <PageStatusDetails status={p.mine} notHireable={p.mine.state === "live" && p.taking_work && !p.can_hire && !p.closed} />
+          <p>
+            <Link to="/people/me">Edit your page</Link>
+          </p>
+        </section>
       )}
       {p.closed && (
         <div className="notice">

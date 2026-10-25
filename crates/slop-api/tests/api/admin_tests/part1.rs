@@ -3065,13 +3065,13 @@ async fn reviewers_turn_down_pictures_and_portfolios_with_a_reason(db: PgPool) {
             (
                 "moderation".to_string(),
                 "Your portfolio wasn't approved".to_string(),
-                "The works are someone else's.".to_string(),
-                "/people/me".to_string()
+                "The works are someone else's.\n\nFix it in your repository, then use \"Check my portfolio now\" on your People page's editor: the new one is reviewed again. Only you can see your page until a portfolio is approved.".to_string(),
+                "/people/me#portfolio".to_string()
             ),
             (
                 "moderation".to_string(),
                 "Your People page is live".to_string(),
-                "A reviewer approved your portfolio, so anyone can find your People page now."
+                "Slop approved your portfolio: makers can find your page on People now. To be hired, set up payments under Get paid on your page's editor."
                     .to_string(),
                 "/people/cass".to_string()
             ),
@@ -3093,7 +3093,7 @@ async fn reviewers_turn_down_pictures_and_portfolios_with_a_reason(db: PgPool) {
     .fetch_one(&app.db)
     .await
     .unwrap();
-    assert_eq!(last, "Your new portfolio is on your People page");
+    assert_eq!(last, "Your new portfolio was approved");
     let actions = audit_actions(&app).await;
     for action in ["media.reject", "portfolio.reject", "portfolio.approve"] {
         assert!(actions.contains(&action.to_string()), "{action}");

@@ -3,7 +3,7 @@
 // Three steps for a new creative: describe yourself, point Slop at your portfolio, set up Stripe.
 
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, useSearchParams } from "react-router";
+import { Link, useNavigate, useSearchParams } from "react-router";
 
 import {
   api,
@@ -20,6 +20,7 @@ import {
 } from "../api";
 import { ACCENTS, AI_USE, accentStyle } from "../components/People";
 import { PasskeyNotice } from "../components/PasskeyNotice";
+import { PageStatusDetails, type PeopleSaved } from "../components/PeopleStatus";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, money, toMinor } from "../format";
@@ -95,12 +96,18 @@ export function PeopleEdit() {
           <li className={current.stripe_status === "active" ? "done" : ""}>Get paid</li>
         </ol>
       )}
-      {current?.live && (
-        <p>
-          Your page is live: <Link to={`/people/${current.handle}`}>/people/{current.handle}</Link>
-        </p>
+      {current && (
+        <section className="panel panel-pad people-status" aria-label="Your page's status">
+          <PageStatusDetails
+            status={current.status}
+            inEditor
+            notHireable={current.status.state === "live" && current.taking_work && current.stripe_status !== "active"}
+          />
+          <p className="small">
+            Your page: <Link to={`/people/${current.handle}`}>/people/{current.handle}</Link>
+          </p>
+        </section>
       )}
-      {current?.hidden_reason && <div className="notice">Your page is hidden: {current.hidden_reason}</div>}
       {current && <GetPaid profile={current} onChange={(status) => setProfile({ ...current, stripe_status: status })} />}
       {current && <PortfolioPanel />}
       <ProfileForm initial={current} skills={skills.data} adultConfirmed={Boolean(me?.adult_confirmed)} onSaved={setProfile} />
@@ -229,7 +236,7 @@ function PortfolioPanel() {
     }
   };
   return (
-    <section className="panel panel-pad">
+    <section className="panel panel-pad" id="portfolio">
       <h2>Portfolio</h2>
       <p className="muted">
         Slop doesn't host your files. Put them in a <b>public GitHub repository</b> (any one, e.g. <code>you/portfolio</code>) under a{" "}
@@ -302,6 +309,15 @@ function WorkThumb({ w }: { w: PortfolioWork }) {
   );
 }
 
+/**
+ * Only what the form sends: the server refuses fields it doesn't know (its status, Stripe and
+ * portfolio details), so a page loaded from the server couldn't be saved as it came.
+ */
+export function toInput(m: MyProfile): ProfileInput {
+  const { handle, name, kind, team_size, headline, about_md, location, skills, ai_use, ai_note, trader, taking_work, turnaround, services, accent, sections, links } = m;
+  return { handle, name, kind, team_size, headline, about_md, location, skills, ai_use, ai_note, trader, taking_work, turnaround, services, accent, sections, links };
+}
+
 function ProfileForm({
   initial,
   skills,
@@ -313,16 +329,13 @@ function ProfileForm({
   adultConfirmed: boolean;
   onSaved: (p: MyProfile) => void;
 }) {
-  const [p, setP] = useState<ProfileInput>(initial ?? EMPTY);
+  const [p, setP] = useState<ProfileInput>(() => (initial ? toInput(initial) : EMPTY));
   const [adult, setAdult] = useState(false);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [saved, setSaved] = useState(false);
+  const navigate = useNavigate();
   const terms = useTermsGate();
-  const set = <K extends keyof ProfileInput>(k: K, v: ProfileInput[K]) => {
-    setSaved(false);
-    setP((x) => ({ ...x, [k]: v }));
-  };
+  const set = <K extends keyof ProfileInput>(k: K, v: ProfileInput[K]) => setP((x) => ({ ...x, [k]: v }));
   const submit = async (e: FormEvent) => {
     e.preventDefault();
     setBusy(true);
@@ -330,10 +343,11 @@ function ProfileForm({
     try {
       const out = await terms.guard(() => api.people.save({ ...p, confirm_adult: adult }));
       onSaved(out);
-      setSaved(true);
+      // Saved: to the page itself, which says so and where it stands (draft, waiting for review…).
+      const saved: PeopleSaved = initial ? "saved" : "created";
+      navigate(`/people/${out.handle}`, { state: { peopleSaved: saved } });
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
-    } finally {
       setBusy(false);
     }
   };
@@ -532,7 +546,6 @@ function ProfileForm({
         <button className="btn slime big" disabled={busy}>
           {initial ? "Save" : "Create my page"}
         </button>
-        {saved && <span className="good">Saved.</span>}
         {initial && (
           <Link className="btn" to={`/people/${initial.handle}`}>
             View my page

@@ -1289,3 +1289,23 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
   .inbox-actions { grid-area: actions; }
 }
 /* ---- end of the review inbox ---- */
+/* ---- People: the page's status, and the editor's colour and skill pickers (2026-10-25) ----
+   The pickers' radio and checkbox inputs are hidden over their swatch or chip. They used to be
+   absolutely positioned with no positioned parent, so they were placed against the document:
+   they made the document itself scrollable, and focusing one (clicking a colour, arrow keys)
+   scrolled the whole window away from the page. Now each sits inside its own label. */
+.swatch, .chip.toggle { position: relative; }
+.swatch input, .chip.toggle input { inset: 0; width: 100%; height: 100%; margin: 0; cursor: pointer; }
+.people-status { display: grid; gap: 6px; }
+.people-status p, .people-status-details p { margin: 0; }
+.people-status-details { display: grid; gap: 6px; }
+.people-status-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.people-status-details q { font-style: italic; }
+.people-status-details .row-actions { margin-top: 4px; }
+.people-saved { border-color: var(--slime); }
+.people-saved:focus { outline: none; }
+.people-mine { margin: 0 0 16px; display: grid; gap: 6px; }
+.people-mine h2 { margin: 0; font-size: 17px; }
+.people-mine p { margin: 0; }
+.people-mine-who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.account-panel .people-mine { margin: 0; }

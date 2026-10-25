@@ -12,6 +12,7 @@ import { tokenBadge } from "../agentTokens";
 import { AiAgents } from "../components/AiAgents";
 import { Avatar } from "../components/Avatar";
 import { PasskeyNotice } from "../components/PasskeyNotice";
+import { MyPeoplePageCard, useMyPeoplePage } from "../components/PeopleStatus";
 import { SigningKeys } from "../components/SigningKeys";
 import { ErrorState, Loading } from "../components/ui";
 import {
@@ -250,6 +251,8 @@ function ProfileSection() {
 
       <AccountPicture />
 
+      <PeoplePage />
+
       <section id="privacy" className="account-panel" aria-labelledby="privacy-title">
         <h3 className="account-panel-title" id="privacy-title">
           Privacy
@@ -300,6 +303,12 @@ function ProfileSection() {
       </section>
     </>
   );
+}
+
+/** A creative's People page and where it stands; nothing for everyone else. */
+function PeoplePage() {
+  const mine = useMyPeoplePage();
+  return mine.data ? <MyPeoplePageCard profile={mine.data} inAccount /> : null;
 }
 
 /** Sign-in & security: linked sign-ins, passkeys, and the sessions signed in now. */

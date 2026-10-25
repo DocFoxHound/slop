@@ -563,11 +563,30 @@ async fn creative_pages_hide_for_rule_breaking_and_freeze_when_the_account_close
     assert_eq!(status, StatusCode::OK);
     assert_eq!(own["status"], "hidden");
     assert_eq!(own["hidden_reason"], "Copied someone else's portfolio");
+    assert_eq!(
+        (
+            own["mine"]["state"].as_str(),
+            own["mine"]["reason"].as_str(),
+            own["mine"]["suspended"].as_bool()
+        ),
+        (
+            Some("hidden"),
+            Some("Copied someone else's portfolio"),
+            Some(false)
+        )
+    );
+    // Only the creative sees where their page is.
+    assert_eq!(
+        page(Some(&vera_cookie), "vera").await.1["mine"]["state"],
+        "hidden"
+    );
+    assert_eq!(body["mine"], Value::Null);
     let (_, mine) = call(&app, fetch("/v1/me/creative", &vera_cookie)).await;
     assert_eq!(
         (mine["live"].as_bool(), mine["hidden_reason"].as_str()),
         (Some(false), Some("Copied someone else's portfolio"))
     );
+    assert_eq!(mine["status"]["state"], "hidden");
     exec(&app, "update creatives set hidden_reason = null").await;
 
     // Suspended: the same, without a reason on the page (the decision says why).
@@ -581,6 +600,13 @@ async fn creative_pages_hide_for_rule_breaking_and_freeze_when_the_account_close
     assert_eq!(status, StatusCode::OK);
     assert_eq!(own["status"], "hidden");
     assert_eq!(own["hidden_reason"], Value::Null);
+    assert_eq!(
+        (
+            own["mine"]["state"].as_str(),
+            own["mine"]["suspended"].as_bool()
+        ),
+        (Some("hidden"), Some(true))
+    );
     sqlx::query("update users set suspended_at = null where id = $1")
         .bind(vera)
         .execute(&app.db)
@@ -1308,10 +1334,31 @@ async fn staff_who_review_approve_or_turn_down_portfolios(db: PgPool) {
         &files,
         json!([{ "image": "knight.png", "title": "Knight" }]),
     );
+    let state = || async {
+        let (_, mine) = call(&app, fetch("/v1/me/creative", &cookie)).await;
+        let (_, own) = call(&app, fetch("/v1/people/vera", &cookie)).await;
+        assert_eq!(mine["status"], own["mine"], "the editor and the page agree");
+        mine["status"].clone()
+    };
+    // Saved, no portfolio yet: a draft only Vera sees.
+    assert_eq!(
+        state().await,
+        json!({ "state": "draft", "reason": null, "update_waiting": false, "waiting_since": null,
+                "problem": null, "suspended": false })
+    );
     let set = check().await.1["pending"]["id"]
         .as_str()
         .unwrap()
         .to_string();
+    let waiting = state().await;
+    assert_eq!(
+        (
+            waiting["state"].as_str(),
+            waiting["waiting_since"].is_string(),
+            waiting["update_waiting"].as_bool()
+        ),
+        (Some("waiting"), true, Some(false))
+    );
     let approve = |cookie: Option<&str>, set: &str| {
         let mut r = req(Method::POST, format!("/v1/admin/portfolio/{set}/approve"));
         if let Some(c) = cookie {
@@ -1365,6 +1412,7 @@ async fn staff_who_review_approve_or_turn_down_portfolios(db: PgPool) {
         call(&app, fetch("/v1/people/vera", &stranger)).await.1["status"],
         "live"
     );
+    assert_eq!(state().await["state"], "live");
     let audit: (String, String) =
         sqlx::query_as("select actor, subject from audit_log where action = 'portfolio.approve'")
             .fetch_one(&app.db)
@@ -1397,6 +1445,15 @@ async fn staff_who_review_approve_or_turn_down_portfolios(db: PgPool) {
         .to_string();
     let page = call(&app, fetch("/v1/people/vera", &stranger)).await.1;
     assert_eq!(page["works"].as_array().unwrap().len(), 1);
+    let update = state().await;
+    assert_eq!(
+        (
+            update["state"].as_str(),
+            update["update_waiting"].as_bool(),
+            update["reason"].as_str()
+        ),
+        (Some("live"), Some(true), None)
+    );
     assert_eq!(
         reject(&reviewer, &newer, "   ").await.status(),
         StatusCode::CONFLICT,
@@ -1421,6 +1478,20 @@ async fn staff_who_review_approve_or_turn_down_portfolios(db: PgPool) {
         overview["rejected"]["status_reason"],
         "The video isn't your work."
     );
+    // Still live, with why the newer one was turned down.
+    let turned_down = state().await;
+    assert_eq!(
+        (
+            turned_down["state"].as_str(),
+            turned_down["update_waiting"].as_bool(),
+            turned_down["reason"].as_str()
+        ),
+        (
+            Some("live"),
+            Some(false),
+            Some("The video isn't your work.")
+        )
+    );
     assert_eq!(overview["live"]["id"], set.as_str());
     assert_eq!(
         count(
@@ -1440,7 +1511,8 @@ async fn staff_who_review_approve_or_turn_down_portfolios(db: PgPool) {
             .contains("The video isn't your work.")
     );
 
-    // A profile whose first portfolio is turned down stays waiting.
+    // A profile whose first portfolio is turned down stays out of sight, turned down until the
+    // creative sends a new one.
     let (_, second) = live_creative(&app, "other", "US", false).await;
     exec(
         &app,
@@ -1465,15 +1537,23 @@ async fn staff_who_review_approve_or_turn_down_portfolios(db: PgPool) {
         call(&app, fetch("/v1/people/other", &stranger)).await.0,
         StatusCode::NOT_FOUND
     );
+    let (_, own) = call(&app, fetch("/v1/people/other", &second)).await;
     assert_eq!(
-        call(&app, fetch("/v1/people/other", &second)).await.1["status"],
-        "waiting"
+        (
+            own["status"].as_str(),
+            own["mine"]["state"].as_str(),
+            own["mine"]["reason"].as_str()
+        ),
+        (
+            Some("turned_down"),
+            Some("turned_down"),
+            Some("Not your work.")
+        )
     );
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "nb1: a creative isn't told when their portfolio is turned down (or approved); only the portfolio page shows it"]
-async fn creatives_hear_when_their_portfolio_is_turned_down(db: PgPool) {
+async fn creatives_hear_when_their_portfolio_is_turned_down_or_approved(db: PgPool) {
     let (app, files, vera, cookie) = portfolio_app(db).await;
     link_github(&app, vera, "42").await;
     let (_, reviewer) = staff(&app, "Rae Reviewer", "reviewer").await;
@@ -1500,6 +1580,79 @@ async fn creatives_hear_when_their_portfolio_is_turned_down(db: PgPool) {
             .iter()
             .any(|t| t.contains("portfolio")),
         "the creative is told, with the reason"
+    );
+    type Notice = (String, String, String, String);
+    let newest = || async {
+        sqlx::query_as::<_, Notice>(
+            "select category, title, body, link from notifications where user_id = $1
+             order by created_at desc limit 1",
+        )
+        .bind(vera)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+    };
+    let (category, title, body, link) = newest().await;
+    assert_eq!(
+        (category.as_str(), title.as_str(), link.as_str()),
+        (
+            "moderation",
+            "Your portfolio wasn't approved",
+            "/people/me#portfolio"
+        )
+    );
+    assert!(body.starts_with("Not your work."), "{body}");
+    assert!(body.contains("Only you can see your page"), "{body}");
+    assert_eq!(
+        call(&app, fetch("/v1/me/creative", &cookie)).await.1["status"]["state"],
+        "turned_down"
+    );
+
+    // A new one, approved: the page is live, and payments are still to set up.
+    manifest(
+        &files,
+        json!([{ "image": "knight.png", "title": "My own knight" }]),
+    );
+    let (_, body) = call(
+        &app,
+        post("/v1/me/creative/portfolio/check", &cookie, json!({})),
+    )
+    .await;
+    let set = body["pending"]["id"].as_str().unwrap().to_string();
+    let res = app
+        .send(req(Method::POST, format!("/v1/admin/portfolio/{set}/approve")).cookie(&reviewer))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let (category, title, body, link) = newest().await;
+    assert_eq!(
+        (category.as_str(), title.as_str(), link.as_str()),
+        ("moderation", "Your People page is live", "/people/vera")
+    );
+    assert!(body.contains("set up payments"), "{body}");
+
+    // Later ones say so, and a turned-down update keeps the approved one.
+    manifest(
+        &files,
+        json!([{ "image": "knight.png", "title": "My own knight" }, { "image": "tiny.png" }]),
+    );
+    put_file(&files, "tiny.png", png(64, 64));
+    let (_, body) = call(
+        &app,
+        post("/v1/me/creative/portfolio/check", &cookie, json!({})),
+    )
+    .await;
+    let set = body["pending"]["id"].as_str().unwrap().to_string();
+    app.send(post(
+        format!("/v1/admin/portfolio/{set}/reject"),
+        &reviewer,
+        json!({ "reason": "The second picture is blurry." }),
+    ))
+    .await;
+    let (_, title, body, _) = newest().await;
+    assert_eq!(title, "Your portfolio wasn't approved");
+    assert!(
+        body.contains("keeps showing the portfolio approved before"),
+        "{body}"
     );
 }
 

@@ -109,7 +109,10 @@ test("a page waiting for its first portfolio shows only to its creative", async 
   await signIn(remy, "pendingCreative");
   await remy.goto(`/people/${ids.pendingCreativeHandle}`);
   await expect(remy.getByRole("heading", { name: "Remy Pending", level: 1 })).toBeVisible();
-  await expect(remy.getByText(/This is your page\. Only you can see it until your first portfolio is approved\./)).toBeVisible();
+  const status = remy.getByRole("region", { name: "Your page's status" });
+  await expect(status).toContainText("This is your page.");
+  await expect(status).toContainText("Waiting for Slop's review");
+  await expect(status).toContainText("Only you can see your page until it's approved");
   await expect(remy.getByRole("link", { name: "Edit your page" })).toHaveAttribute("href", "/people/me");
   // Your own page has no Hire or Report buttons, and can't be hired yet.
   await expect(remy.getByRole("button", { name: /^Hire/ })).toHaveCount(0);
@@ -122,10 +125,15 @@ test("a hidden page tells its creative why; a closed account's page takes no wor
   await signIn(vera, "creative");
   await vera.route(`**/v1/people/${ids.creativeHandle}`, async (route) => {
     const res = await route.fetch();
-    await route.fulfill({ response: res, json: { ...(await res.json()), status: "hidden", hidden_reason: "a link to a gold seller" } });
+    const page = await res.json();
+    const mine = { ...page.mine, state: "hidden", reason: "a link to a gold seller" };
+    await route.fulfill({ response: res, json: { ...page, status: "hidden", hidden_reason: "a link to a gold seller", mine } });
   });
   await vera.goto(`/people/${ids.creativeHandle}`);
-  await expect(vera.getByText(/This is your page\. It's hidden: a link to a gold seller\./)).toBeVisible();
+  const status = vera.getByRole("region", { name: "Your page's status" });
+  await expect(status).toContainText("Hidden: only you can see your page");
+  await expect(status).toContainText("Slop hid your page: a link to a gold seller.");
+  await expect(status.getByRole("link", { name: "see it in your account" })).toHaveAttribute("href", "/account#decisions");
   // Her own reviews have Reply and, if not yet disputed, Dispute; no Report.
   const review = vera.locator(`#review-${ids.completedJob}`);
   await expect(review.getByRole("button", { name: "Reply" })).toBeVisible();
