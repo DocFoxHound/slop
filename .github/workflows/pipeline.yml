@@ -124,6 +124,11 @@ jobs:
             # Browser tests that passed only on their retry: named, to be fixed, not hidden.
             awk '/^ +[0-9]+ flaky$/ {f=1; next} /^ +[0-9]+ (passed|failed|skipped|did not run|interrupted)/ {f=0} f && /›/' \
               "$out/e2e.log" 2>/dev/null | head -n 8 | sed 's/^ */::warning::flaky (passed on retry): /' || true
+            # Their failed first tries, with the page as it was, in the run's summary.
+            for f in web/e2e/.results/*/error-context.md; do
+              [ -e "$f" ] || continue
+              { echo "### Flaky: $(basename "$(dirname "$f")")"; echo '```'; head -n 120 "$f"; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+            done
             echo "All checks passed."
             exit 0
           fi
@@ -138,7 +143,12 @@ jobs:
               # The failing tests' names as annotations, readable on the run page without the logs.
               grep -E "✘" "$out/e2e.log" | head -n 5 | sed 's/^/::error::/'
               # And what went wrong: the error and the test line it stopped at.
-              grep -E "Error:|^ *> *[0-9]+ \|" "$out/e2e.log" | head -n 4 | sed 's/^ */::error::/' ;;
+              grep -E "Error:|^ *> *[0-9]+ \|" "$out/e2e.log" | head -n 4 | sed 's/^ */::error::/'
+              # Each failure's error and page snapshot in the run's summary, readable by anyone.
+              for f in web/e2e/.results/*/error-context.md; do
+                [ -e "$f" ] || continue
+                { echo "### $(basename "$(dirname "$f")")"; echo '```'; head -n 120 "$f"; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+              done ;;
             *) tail -n 30 "$out/container.log" ;;
           esac || true
           echo "::error::failed at: $step"
