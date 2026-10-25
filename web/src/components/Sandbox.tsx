@@ -8,7 +8,7 @@ import { useEffect, useState } from "react";
 import { Link } from "react-router";
 
 import { api } from "../api";
-import { useLoad } from "../hooks";
+import { useChosen, useLoad } from "../hooks";
 import { desktop, isDesktop, type Launched, type SandboxStatus, type SaveSyncOutcome } from "../platform";
 
 /** What the store knows about an app, for sandbox suggestions. */
@@ -70,16 +70,24 @@ export function SandboxSwitch({
   onChanged: () => void;
 }) {
   const [error, setError] = useState<string>();
+  const [on, chooseOn] = useChosen(status.available ? isOn(status, slug) : false);
+  const blockedNow = status.available ? (status.settings.apps[slug]?.block_network ?? false) : false;
+  const [blocked, chooseBlocked] = useChosen(blockedNow);
   if (!status.available) {
     return hint?.suggested ? <p className="muted small">Sandbox mode: {status.reason}.</p> : null;
   }
-  const on = isOn(status, slug);
-  const blocked = status.settings.apps[slug]?.block_network ?? false;
-  const set = (nextOn: boolean, block: boolean) =>
+  const set = (nextOn: boolean, block: boolean) => {
+    chooseOn(nextOn);
+    chooseBlocked(block);
     void desktop
       .setSandbox(slug, nextOn, block)
       .then(onChanged)
-      .catch((err: unknown) => setError(err instanceof Error ? err.message : String(err)));
+      .catch((err: unknown) => {
+        chooseOn(undefined);
+        chooseBlocked(undefined);
+        setError(err instanceof Error ? err.message : String(err));
+      });
+  };
   return (
     <div className="sandbox-switch small">
       <label className="check">

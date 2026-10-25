@@ -123,7 +123,7 @@ test("the kinds down the side with what's unread in each, and the notifications 
   await expect(nav.getByRole("listitem")).toHaveCount(12);
   await expect(page.getByRole("heading", { name: "All notifications", level: 2 })).toBeVisible();
 
-  await expect(page.locator(".inbox-list").getByRole("heading", { level: 3 })).toHaveText(["Today", "Yesterday", "This week", "Earlier"]);
+  await expect(page.locator(".nbox-list").getByRole("heading", { level: 3 })).toHaveText(["Today", "Yesterday", "This week", "Earlier"]);
   const today = page.getByRole("region", { name: "Today" });
   await expect(today.getByRole("listitem")).toHaveCount(4);
   await expect(page.getByRole("region", { name: "Earlier" }).getByRole("listitem")).toHaveText(/A passkey was added to your account/);

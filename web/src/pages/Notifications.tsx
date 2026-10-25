@@ -306,7 +306,7 @@ export function Notifications() {
   const badge = (n: number) =>
     n > 0 ? (
       // Read as "Friends 2 unread".
-      <span className="inbox-count">
+      <span className="nbox-count">
         {n > 99 ? "99+" : n}
         <span className="sr-only"> unread</span>
       </span>
@@ -316,23 +316,23 @@ export function Notifications() {
   const groups = DAY_GROUPS.map((g) => ({ name: g, items: items.filter((n) => dayGroup(n.created_at, now) === g) })).filter((g) => g.items.length > 0);
 
   return (
-    <div className="page inbox-page">
+    <div className="page nbox-page">
       <h1 className="page-title">Notifications</h1>
-      <div className="inbox">
-        <nav className="inbox-nav" aria-label="Kinds of notification" ref={kindsRow}>
+      <div className="nbox">
+        <nav className="nbox-nav" aria-label="Kinds of notification" ref={kindsRow}>
           <ul>
             <li>
-              <NavLink to={kindLink("/notifications")} end className="inbox-kind">
+              <NavLink to={kindLink("/notifications")} end className="nbox-kind">
                 <Icon d={BELL} />
-                <span className="inbox-kind-name">All</span>
+                <span className="nbox-kind-name">All</span>
                 {badge(allUnread)}
               </NavLink>
             </li>
             {KINDS.map((k) => (
               <li key={k.id}>
-                <NavLink to={kindLink(`/notifications/${k.id}`)} className="inbox-kind">
+                <NavLink to={kindLink(`/notifications/${k.id}`)} className="nbox-kind">
                   <Icon d={k.icon} />
-                  <span className="inbox-kind-name">{k.label}</span>
+                  <span className="nbox-kind-name">{k.label}</span>
                   {badge(counts[k.id] ?? 0)}
                 </NavLink>
               </li>
@@ -340,12 +340,12 @@ export function Notifications() {
           </ul>
         </nav>
 
-        <section className="inbox-main" aria-labelledby="inbox-heading">
-          <div className="inbox-head">
+        <section className="nbox-main" aria-labelledby="nbox-heading">
+          <div className="nbox-head">
             <h2 id="inbox-heading" ref={heading} tabIndex={-1}>
               {kindName}
             </h2>
-            <label className="inbox-toggle">
+            <label className="nbox-toggle">
               <input type="checkbox" role="switch" checked={unreadOnly} onChange={(e) => setUnreadOnly(e.target.checked)} />
               Unread only
             </label>
@@ -383,7 +383,7 @@ export function Notifications() {
           ) : !data || me === undefined ? (
             <Loading />
           ) : items.length === 0 ? (
-            <div className="empty-state inbox-empty">
+            <div className="empty-state nbox-empty">
               {unreadOnly ? (
                 <p>{kind ? `Nothing unread in ${KIND[kind].label}.` : "You're all caught up: nothing unread."}</p>
               ) : kind ? (
@@ -397,9 +397,9 @@ export function Notifications() {
               )}
             </div>
           ) : (
-            <div className="inbox-list" ref={list} onKeyDown={onListKey}>
+            <div className="nbox-list" ref={list} onKeyDown={onListKey}>
               {groups.map((g) => (
-                <section key={g.name} className="inbox-day" aria-labelledby={`inbox-day-${g.name.replace(/\W+/g, "-")}`}>
+                <section key={g.name} className="nbox-day" aria-labelledby={`inbox-day-${g.name.replace(/\W+/g, "-")}`}>
                   <h3 id={`inbox-day-${g.name.replace(/\W+/g, "-")}`}>{g.name}</h3>
                   <ul className="notifications panel">
                     {g.items.map((n) => (
@@ -409,13 +409,13 @@ export function Notifications() {
                 </section>
               ))}
               {data.more && (
-                <button type="button" className="btn inbox-more" disabled={state.loadingMore} onClick={() => void loadMore()}>
+                <button type="button" className="btn nbox-more" disabled={state.loadingMore} onClick={() => void loadMore()}>
                   {state.loadingMore ? "Loading…" : "Load older notifications"}
                 </button>
               )}
             </div>
           )}
-          <p className="muted small inbox-settings">
+          <p className="muted small nbox-settings">
             Choose which of these are also emailed to you on <Link to="/account/notifications">your account page</Link>.
           </p>
         </section>
