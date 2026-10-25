@@ -45,7 +45,8 @@ pub async fn run_once(db: &PgPool) -> anyhow::Result<Deleted> {
         "delete from sessions
          where revoked_at < now() - $1
             or expires_at < now() - $1
-            or last_seen_at < now() - (case when kind in ('desktop', 'agent') then $3 else $2 end) - $1",
+            or (kind <> 'agent'
+                and last_seen_at < now() - (case when kind = 'desktop' then $3 else $2 end) - $1)",
     )
     .bind(ENDED_SESSION_RETENTION)
     .bind(session::IDLE_TIMEOUT)
@@ -87,6 +88,11 @@ pub async fn run(state: crate::AppState) {
             Ok(n) if n > 0 => tracing::info!(hashed = n, "old thumbnails"),
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "hashing old thumbnails failed"),
+        }
+        match crate::maker_agents::warn_expiring(&state.db).await {
+            Ok(n) if n > 0 => tracing::info!(sent = n, "AI agent token expiry warnings"),
+            Ok(_) => {}
+            Err(err) => tracing::error!(error = ?err, "AI agent token expiry warnings failed"),
         }
         match crate::passkeys::remind(&state.db).await {
             Ok(n) if n > 0 => tracing::info!(sent = n, "passkey reminders"),

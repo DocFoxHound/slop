@@ -1043,7 +1043,7 @@ async fn a_taken_store_address_comes_with_a_free_one(db: PgPool) {
     let (_, maker) = app.user("Maker", "US").await;
     let (_, other) = app.user("Other", "US").await;
     let check =
-        |slug: &str, who: &str| req(Method::GET, &format!("/v1/apps/{slug}/available")).cookie(who);
+        |slug: &str, who: &str| req(Method::GET, format!("/v1/apps/{slug}/available")).cookie(who);
 
     // Signed in only, and only well-formed addresses.
     assert_eq!(
@@ -13992,12 +13992,9 @@ async fn a_makers_agent_does_maker_work_only(db: PgPool) {
     let created = body_json(res).await;
     let secret = created["secret"].as_str().unwrap().to_string();
     assert!(secret.starts_with("slopmk_"));
-    assert!(
-        created["claude_command"]
-            .as_str()
-            .unwrap()
-            .contains(&secret)
-    );
+    // No ready-made command with the secret in it (the website shows how to keep it out of
+    // AI chats).
+    assert!(created.get("claude_command").is_none(), "{created}");
     assert_eq!(created["people"], true);
     let bearer = format!("Bearer {secret}");
     let agent = |m: Method, path: &str| req(m, path).header("authorization", bearer.clone());

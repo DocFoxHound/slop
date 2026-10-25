@@ -3415,10 +3415,12 @@ async fn cleanup_deletes_ended_sign_in_leftovers_and_keeps_live_ones(db: PgPool)
     assert_eq!(deleted.refresh_tokens, 2, "{deleted:?}");
 }
 
-/// b01: AI agent tokens are sessions that count as unused only after 30 days, like the desktop
-/// app's. Cleanup used the website's 7 days for them, deleting a token left alone for 15 days.
+/// b01: desktop sessions count as unused only after 30 days (cleanup used the website's 7 days for
+/// them). AI agent tokens have no idle limit at all: they last until the expiry their owner chose.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn cleanup_keeps_agent_and_desktop_sessions_for_their_thirty_idle_days(db: PgPool) {
+async fn cleanup_keeps_desktop_sessions_for_thirty_idle_days_and_agent_tokens_until_they_expire(
+    db: PgPool,
+) {
     let app = test_app(db).await;
     let (_, web) = app.user("Mia Maker", "US").await;
     let res = app
@@ -3452,13 +3454,30 @@ async fn cleanup_keeps_agent_and_desktop_sessions_for_their_thirty_idle_days(db:
             "still signed in after 20 unused days"
         );
     }
-    // 30 idle days and the week's keeping after: gone.
+    // 30 idle days and the week's keeping after: the desktop session is gone, the agent's token
+    // (made for 30 days, so still live) stays.
     sqlx::query("update sessions set last_seen_at = now() - interval '38 days' where kind in ('agent', 'desktop')")
         .execute(&app.db)
         .await
         .unwrap();
     let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
-    assert_eq!(deleted.sessions, 2, "{deleted:?}");
+    assert_eq!(deleted.sessions, 1, "{deleted:?}");
+    assert_eq!(
+        status(
+            &app,
+            req(Method::GET, "/v1/me").header("authorization", agent.clone())
+        )
+        .await,
+        StatusCode::OK,
+        "an agent token works until its expiry, however long unused"
+    );
+    // Expired, and the week's keeping after: gone too.
+    sqlx::query("update sessions set expires_at = now() - interval '8 days' where kind = 'agent'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let deleted = slop_api::cleanup::run_once(&app.db).await.unwrap();
+    assert_eq!(deleted.sessions, 1, "{deleted:?}");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -4948,7 +4967,9 @@ fn new_agent_token(cookie: &str, body: Value) -> Req {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn agent_tokens_listed_are_the_live_ones_and_say_whether_a_passkey_was_proved(db: PgPool) {
+async fn agent_tokens_listed_are_the_live_and_just_expired_ones_and_say_whether_a_passkey_was_proved(
+    db: PgPool,
+) {
     let app = test_app(db).await;
     let (mia_id, mia) = app.user("Mia Maker", "US").await;
     let (_, other) = app.user("Other", "US").await;
@@ -5008,8 +5029,21 @@ async fn agent_tokens_listed_are_the_live_ones_and_say_whether_a_passkey_was_pro
         .collect();
     assert_eq!(
         rows,
-        [("Proved".to_string(), true), ("Plain".to_string(), false)]
+        [
+            ("Proved".to_string(), true),
+            ("Plain".to_string(), false),
+            ("Expired".to_string(), false)
+        ]
     );
+    // An expired token stays listed for a week, marked expired, so it can be replaced; a removed
+    // one doesn't.
+    let expired: Vec<bool> = listed
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["expired"].as_bool().unwrap())
+        .collect();
+    assert_eq!(expired, [false, false, true]);
     assert!(listed[0].get("secret").is_none());
     let theirs = body_json(
         app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&other))
@@ -5040,7 +5074,7 @@ async fn making_an_agent_token_checks_its_scope_lifetime_and_count(db: PgPool) {
         field(json!({ "name": "Claude", "scope": "" })).await,
         "scope"
     );
-    for days in [0, 31, -1] {
+    for days in [0, 366, -1] {
         assert_eq!(
             field(json!({ "name": "Claude", "scope": "read", "days": days })).await,
             "days",

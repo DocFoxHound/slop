@@ -9,7 +9,12 @@
 //!
 //! - **Tokens** (`slopmk_…`) are sessions of kind `agent`, so they show on the maker's devices
 //!   page and sign out like any session. Each has a scope (`read`, or `publish` to also change
-//!   store pages and submit releases), an optional list of apps, and expires within 30 days.
+//!   store pages and submit releases), an optional list of apps, and expires when its owner
+//!   chose: a day to a year (`MAX_DAYS`). It has no idle limit (auth/session.rs), so it works
+//!   until then. The owner is told a week and a day before it expires, and when it has
+//!   (`warn_expiring`, hourly), and the agent sees its expiry in `whats_new` and `maker_guide`
+//!   so it can tell them too. A replacement is a new token with the same settings; the old one
+//!   keeps working until its own expiry or until it's removed.
 //! - **Only maker work:** a token may call the routes in `ALLOWED` and nothing else: never
 //!   money, sign-ins, tokens, chat, People or account settings. Releases still go through Slop's
 //!   scans and a person's review.
@@ -47,8 +52,12 @@ use crate::{
 
 /// Maker tokens start with this, so they're recognisable (and secret scanners can find them).
 pub const PREFIX: &str = "slopmk_";
-/// The longest a token lives.
-pub const MAX_DAYS: i64 = 30;
+/// The longest a token lives: a year.
+pub const MAX_DAYS: i64 = 365;
+/// A token's lifetime when none is given.
+const DEFAULT_DAYS: i64 = 30;
+/// Tokens that expire or expired within this are listed (expired ones until cleanup deletes them).
+const LISTED_AFTER_EXPIRY: Duration = crate::cleanup::ENDED_SESSION_RETENTION;
 /// Live tokens per maker.
 const MAX_TOKENS: i64 = 10;
 
@@ -324,11 +333,13 @@ struct TokenInfo {
     expires_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
     last_used_at: OffsetDateTime,
+    /// Past its expiry: it no longer works (listed for a week, to be replaced or removed).
+    expired: bool,
 }
 
 const TOKEN_COLUMNS: &str = "s.id, m.name, m.scope,
     array(select a.slug from apps a where a.id = any(m.app_ids) order by a.slug), m.people,
-    s.passkey_at is not null, s.created_at, s.expires_at, s.last_seen_at";
+    s.passkey_at is not null, s.created_at, s.expires_at, s.last_seen_at, s.expires_at <= now()";
 
 type TokenRow = (
     Uuid,
@@ -340,6 +351,7 @@ type TokenRow = (
     OffsetDateTime,
     OffsetDateTime,
     OffsetDateTime,
+    bool,
 );
 
 fn info(r: TokenRow) -> TokenInfo {
@@ -353,16 +365,21 @@ fn info(r: TokenRow) -> TokenInfo {
         created_at: r.6,
         expires_at: r.7,
         last_used_at: r.8,
+        expired: r.9,
     }
 }
 
+/// The caller's tokens: live ones, and ones that expired in the last week (so the page can say so
+/// and offer a replacement).
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<TokenInfo>>> {
     let rows: Vec<TokenRow> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select {TOKEN_COLUMNS} from sessions s join maker_tokens m on m.session_id = s.id
-         where s.user_id = $1 and s.kind = 'agent' and s.revoked_at is null and s.expires_at > now()
+         where s.user_id = $1 and s.kind = 'agent' and s.revoked_at is null
+           and s.expires_at > now() - $2
          order by s.created_at desc"
     )))
     .bind(user.id)
+    .bind(LISTED_AFTER_EXPIRY)
     .fetch_all(&state.db)
     .await?;
     Ok(Json(rows.into_iter().map(info).collect()))
@@ -377,7 +394,7 @@ struct NewToken {
     /// App addresses it may touch; empty or absent: all the maker's apps.
     #[serde(default)]
     apps: Vec<String>,
-    /// 1 to 30; 30 by default.
+    /// Days it lasts: 1 to 365; 30 by default.
     #[serde(default)]
     days: Option<i64>,
     /// Also handle People jobs: requests, quotes, changes and the job conversation.
@@ -391,9 +408,9 @@ struct Created {
     token: TokenInfo,
     /// Shown once; Slop keeps only its hash.
     secret: String,
+    /// The MCP address. The website shows how to connect each kind of agent with the token kept
+    /// in an environment variable, so the token itself never goes into a command or a chat.
     mcp_url: String,
-    /// Connects Claude Code to Slop with this token.
-    claude_command: String,
 }
 
 async fn create(
@@ -401,9 +418,9 @@ async fn create(
     user: CurrentUser,
     Json(body): Json<NewToken>,
 ) -> ApiResult<(StatusCode, Json<Created>)> {
-    // A signed-in session is enough (no step-up): a token lasts at most 30 days, is listed and
-    // signed out with the maker's devices, and can't pay, accept agreements, change payouts,
-    // tokens or the account. Agent sessions can't make tokens (`ALLOWED`).
+    // A signed-in session is enough (no step-up): a token lasts at most a year, is listed with its
+    // expiry and signed out with the maker's devices, and can't pay, accept agreements, change
+    // payouts, tokens or the account. Agent sessions can't make tokens (`ALLOWED`).
     let name = body.name.trim().to_string();
     if name.is_empty() || name.chars().count() > 60 {
         return Err(ApiError::invalid("name", "1 to 60 characters"));
@@ -411,9 +428,9 @@ async fn create(
     if body.scope != "read" && body.scope != "publish" {
         return Err(ApiError::invalid("scope", "read or publish"));
     }
-    let days = body.days.unwrap_or(MAX_DAYS);
+    let days = body.days.unwrap_or(DEFAULT_DAYS);
     if !(1..=MAX_DAYS).contains(&days) {
-        return Err(ApiError::invalid("days", "1 to 30"));
+        return Err(ApiError::invalid("days", format!("1 to {MAX_DAYS}")));
     }
     // An agent that publishes acts under the Publisher Agreement, so the owner accepts it here,
     // where they can (the website shows it and makes the token once it's accepted); the agent
@@ -491,9 +508,6 @@ async fn create(
         StatusCode::CREATED,
         Json(Created {
             token: info(row),
-            claude_command: format!(
-                "claude mcp add --transport http slop {mcp_url} --header \"Authorization: Bearer {secret}\""
-            ),
             mcp_url,
             secret,
         }),
@@ -520,19 +534,175 @@ async fn revoke(
 }
 
 // ---------------------------------------------------------------------------------------------
+// Expiry: the owner is told in time, and so is the agent
+
+/// The owner is warned this long before a token expires (`maker_tokens.expiry_warning` 1), then
+/// this long before (2), then when it has expired (3).
+const WARN_WEEK: Duration = Duration::days(7);
+const WARN_DAY: Duration = Duration::days(1);
+/// Tokens this short aren't warned about: they were made to be short.
+const WARNED_LIFETIME: Duration = Duration::days(8);
+
+/// Whole days left before `expires_at`, rounded up (0 once it has passed).
+pub fn days_left(expires_at: OffsetDateTime, now: OffsetDateTime) -> i64 {
+    let secs = (expires_at - now).whole_seconds();
+    if secs <= 0 {
+        0
+    } else {
+        (secs + 86_399) / 86_400
+    }
+}
+
+/// "in 3 days", "within a day", "has expired".
+fn when(expires_at: OffsetDateTime, now: OffsetDateTime) -> String {
+    match days_left(expires_at, now) {
+        0 => "has expired".into(),
+        1 => "expires within a day".into(),
+        n => format!("expires in {n} days"),
+    }
+}
+
+/// The calling agent's own token: its name and expiry, and a line saying what to tell its person.
+pub(crate) struct OwnToken {
+    pub name: String,
+    pub expires_at: OffsetDateTime,
+    pub note: String,
+}
+
+pub(crate) async fn own_token(
+    db: &sqlx::PgPool,
+    session_id: Uuid,
+) -> sqlx::Result<Option<OwnToken>> {
+    let row: Option<(String, OffsetDateTime)> = sqlx::query_as(
+        "select m.name, s.expires_at from maker_tokens m join sessions s on s.id = m.session_id
+         where m.session_id = $1",
+    )
+    .bind(session_id)
+    .fetch_optional(db)
+    .await?;
+    Ok(row.map(|(name, expires_at)| {
+        let now = OffsetDateTime::now_utc();
+        let mut note = format!(
+            "This token (\"{name}\") {} ({}).",
+            when(expires_at, now),
+            expires_at.date()
+        );
+        if days_left(expires_at, now) <= 7 {
+            note.push_str(
+                " Tell the person you work for to make a replacement on Slop under Account → AI \
+                 agents (Make a replacement fills in the same settings) and set it up on their \
+                 computer the same way, before this one stops working.",
+            );
+        }
+        OwnToken {
+            name,
+            expires_at,
+            note,
+        }
+    }))
+}
+
+/// Hourly (cleanup.rs): tells owners a week and a day before a token expires, and when it has.
+/// Each warning is sent once (`maker_tokens.expiry_warning`); a server that was down sends only
+/// the latest one due. Nothing for a token removed, made for a week or less, or already replaced
+/// (a newer live token with the same name that lasts longer). Returns the warnings sent.
+pub async fn warn_expiring(db: &sqlx::PgPool) -> anyhow::Result<usize> {
+    let mut tx = db.begin().await?;
+    let due: Vec<(Uuid, Uuid, String, OffsetDateTime, i16, bool)> = sqlx::query_as(
+        "select m.session_id, s.user_id, m.name, s.expires_at,
+                (case when s.expires_at <= now() then 3
+                      when s.expires_at <= now() + $1 then 2
+                      else 1 end)::int2,
+                exists (select 1 from sessions r join maker_tokens rm on rm.session_id = r.id
+                        where r.user_id = s.user_id and r.kind = 'agent' and r.id <> s.id
+                          and rm.name = m.name and r.revoked_at is null
+                          and r.created_at > s.created_at and r.expires_at > s.expires_at)
+         from maker_tokens m join sessions s on s.id = m.session_id
+         where s.kind = 'agent' and s.revoked_at is null
+           and s.expires_at - s.created_at > $3
+           and s.expires_at > now() - $4
+           and s.expires_at <= now() + $2
+           and m.expiry_warning < (case when s.expires_at <= now() then 3
+                                        when s.expires_at <= now() + $1 then 2
+                                        else 1 end)
+         for update of m skip locked",
+    )
+    .bind(WARN_DAY)
+    .bind(WARN_WEEK)
+    .bind(WARNED_LIFETIME)
+    .bind(LISTED_AFTER_EXPIRY)
+    .fetch_all(&mut *tx)
+    .await?;
+    let now = OffsetDateTime::now_utc();
+    let mut sent = 0;
+    for (id, user_id, name, expires_at, stage, replaced) in due {
+        sqlx::query("update maker_tokens set expiry_warning = $2 where session_id = $1")
+            .bind(id)
+            .bind(stage)
+            .execute(&mut *tx)
+            .await?;
+        if replaced {
+            continue;
+        }
+        let (title, body) = if stage == 3 {
+            (
+                format!("Your AI agent token \"{name}\" has expired"),
+                "Your AI agent can't reach Slop with it any more. Make a replacement on Account → AI \
+                 agents: it fills in the same settings. Then set it up on your computer the same way \
+                 as before (never paste it into an AI chat)."
+                    .to_string(),
+            )
+        } else {
+            (
+                format!("Your AI agent token \"{name}\" {}", when(expires_at, now)),
+                format!(
+                    "It stops working on {}. Make a replacement on Account → AI agents: it fills in \
+                     the same settings, and the old one keeps working until then. Then set it up on \
+                     your computer the same way as before (never paste it into an AI chat).",
+                    expires_at.date()
+                ),
+            )
+        };
+        crate::notify::send(
+            &mut tx,
+            crate::notify::Notice {
+                user_id,
+                category: "agents",
+                title,
+                body,
+                link: "/account/agents".into(),
+                collapse_key: None,
+            },
+        )
+        .await?;
+        sent += 1;
+    }
+    tx.commit().await?;
+    Ok(sent)
+}
+
+// ---------------------------------------------------------------------------------------------
 // Guides: short, so an agent reads only what it needs
 
 const GUIDE: &str = include_str!("maker_guide.md");
 const PUBLISHING: &str = include_str!("../../../web/public/publishing.md");
 
-async fn guide(_user: CurrentUser) -> impl IntoResponse {
-    (
+/// The guide, with the agent's own token's expiry at the end, so it can tell its person in time.
+async fn guide(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Response> {
+    let mut text = GUIDE.to_string();
+    if user.agent.is_some()
+        && let Some(own) = own_token(&state.db, user.session_id).await?
+    {
+        text.push_str(&format!("\n## Your token\n\n{}\n", own.note));
+    }
+    Ok((
         [(
             axum::http::header::CONTENT_TYPE,
             "text/markdown; charset=utf-8",
         )],
-        GUIDE,
+        text,
     )
+        .into_response())
 }
 
 /// The publishing guide's `##` and `###` sections: (heading, its text up to the next heading of
@@ -665,7 +835,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "whats_new",
-        description: "The notifications of the person you work for, newest first: releases approved or rejected, reviews, offered fixes, job requests and messages. One call to see what needs attention; check it now and then rather than polling every tool.",
+        description: "The notifications of the person you work for, newest first: releases approved or rejected, reviews, offered fixes, job requests and messages. One call to see what needs attention; check it now and then rather than polling every tool. `your_token` says when your own token expires: within 7 days, tell your person to make a replacement on Account → AI agents.",
         method: Method::GET,
         path: "/v1/me/notifications",
         properties: || json!({}),

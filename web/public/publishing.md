@@ -1210,13 +1210,30 @@ register community builds and mods, and offer fixes to the apps you build on. Cr
 watch People jobs, send quotes and talk in job conversations.
 
 1. **Account → AI agents → Make token.** Choose what it can do (look, or also publish), which
-   apps, whether it handles People jobs, and how long it lasts (at most 30 days). A token that
-   publishes needs the Publisher Agreement: the page shows it for you to accept when you make
-   the token. If it changes later, your agent is told it's waiting, and the page shows it again.
-2. **Connect it.** Claude Code: run the `claude mcp add …` command the page shows. Other agents
-   can use the same MCP address, or Slop's API with `Authorization: Bearer slopmk_…`.
+   apps, whether it handles People jobs, and how long it lasts (a day up to 12 months). A token
+   that publishes needs the Publisher Agreement: the page shows it for you to accept when you
+   make the token. If it changes later, your agent is told it's waiting, and the page shows it
+   again.
+2. **Set it up on your computer, never in an AI chat.** The token is a password for your Slop
+   account: don't paste it into a chat with Claude, ChatGPT, Codex, Grok or any AI. The page
+   walks you through it for Windows, macOS and Linux: save the token once in an environment
+   variable, `SLOP_TOKEN`, in your own terminal window (not inside the AI chat, and not with
+   Claude Code's `!`), then connect your tool with a reference to that variable, so the token
+   itself never appears in a command or setting the AI sees. For example, Claude Code:
+   `claude mcp add --transport http --scope user slop <MCP address> --header 'Authorization: Bearer ${SLOP_TOKEN}'`
+   (keep the single quotes); Codex: `codex mcp add slop --url <MCP address> --bearer-token-env-var SLOP_TOKEN`.
+   Other tools: the MCP address the page shows, with the header
+   `Authorization: Bearer <your token>`, set in the tool's MCP or connector settings (or Slop's
+   API with the same header).
 3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on Slop",
-   "fix what Slop found in my last release", "offer this fix to the original".
+   "fix what Slop found in my last release", "offer this fix to the original". No token is
+   needed in the chat.
+
+**When a token runs out:** the page shows how long each token has left. Slop tells you a week
+and a day before one expires (and when it has), and so does your agent. **Make a replacement**
+on the token fills in the same settings; set the new one up the same way (save it in
+`SLOP_TOKEN` again: the commands that connect your tools stay the same), then remove the old
+one. If a token ever ends up in a chat, remove it at once and make a new one.
 
 The agent works in your session and your repository; Slop runs no AI for it. It can't pay,
 accept agreements or offers, change where money goes, or change your account: those stay with
@@ -1616,11 +1633,13 @@ if not.
 0. **Ask for a token first** if you don't have Slop's tools (`maker_guide`, `create_store_page`…).
    The owner signs in to Slop, opens **Account → AI agents → Make token** (`/account/agents`),
    chooses **Publish** and **All my apps** (a token for some apps can't create new ones),
-   accepts the Publisher Agreement the page shows them, and runs the
-   `claude mcp add …` command the page shows in your terminal themselves (other agents: the MCP
-   address, or the API with `Authorization: Bearer slopmk_…`). Never ask them to paste the token
-   into the chat. Then read `maker_guide`. Without a token, do steps 1–6 and 10 and hand the
-   rest to the owner.
+   accepts the Publisher Agreement the page shows them, and follows the setup steps it shows, in
+   their own terminal window: the token goes into the `SLOP_TOKEN` environment variable, and
+   your tool is connected with a reference to it (see
+   [Working with your AI agent](#working-with-your-ai-agent)). Never ask them to paste the token
+   into the chat, and never print `SLOP_TOKEN`; if a token shows up in the conversation, tell
+   them to remove it on Account → AI agents and make a new one. Then read `maker_guide`. Without
+   a token, do steps 1–6 and 10 and hand the rest to the owner.
 1. Confirm the project is open source in a Git repository, and that it has a `LICENSE` file with an
    OSI-approved licence. If not, ask the owner which licence to use; don't choose one for them.
 2. Make sure the project builds to a runnable program for each target platform, from a clean

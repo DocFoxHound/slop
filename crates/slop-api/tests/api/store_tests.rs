@@ -1298,7 +1298,8 @@ async fn email_preferences_default_on_and_change_one_at_a_time(db: PgPool) {
     assert_eq!(prefs["email_on"], false, "no SMTP on this server");
     assert_eq!(prefs["has_email"], false);
     let cats = prefs["categories"].as_array().unwrap();
-    assert_eq!(cats.len(), 10);
+    assert_eq!(cats.len(), 11);
+    assert!(cats.iter().any(|c| c["category"] == "agents"), "{prefs}");
     assert!(
         cats.iter()
             .all(|c| c["email"] == true && c["label"].is_string())

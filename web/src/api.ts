@@ -470,7 +470,9 @@ export interface Notification {
     | "teams"
     | "apps"
     | "chat"
-    | "friends";
+    | "friends"
+    | "security"
+    | "agents";
   title: string;
   body: string;
   link: string;
@@ -2001,6 +2003,8 @@ export interface AgentToken {
   created_at: string;
   expires_at: string;
   last_used_at: string;
+  /** Past its expiry: it no longer works (listed for a week after). */
+  expired: boolean;
 }
 
 /** A community build's fix offered to the original (crates/slop-api/src/offers.rs). */
@@ -3610,7 +3614,7 @@ export const api = {
   exportData: () => requestText("GET", "/v1/me/export"),
   agentTokens: () => request<AgentToken[]>("GET", "/v1/me/maker-tokens"),
   createAgentToken: (body: { name: string; scope: AgentToken["scope"]; apps: string[]; people: boolean; days: number }) =>
-    request<AgentToken & { secret: string; mcp_url: string; claude_command: string }>(
+    request<AgentToken & { secret: string; mcp_url: string }>(
       "POST",
       "/v1/me/maker-tokens",
       body,
