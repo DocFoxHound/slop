@@ -69,6 +69,7 @@ const router = createBrowserRouter([
       { path: "/account/:section", element: <Account /> },
       { path: "/legal", element: <LegalIndex /> },
       { path: "/notifications", element: <Notifications /> },
+      { path: "/notifications/:kind", element: <Notifications /> },
       { path: "/u/:id", element: <Profile /> },
       { path: "/chat", element: <ChatPage /> },
       { path: "/chat/:id", element: <ChatPage /> },

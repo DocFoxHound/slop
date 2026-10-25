@@ -15,6 +15,42 @@ export function formatDate(iso: string): string {
   return new Date(iso).toLocaleDateString(undefined, { month: "short", day: "numeric", year: "numeric" });
 }
 
+/** The full date and time, for a tooltip beside a relative time. */
+export function formatDateTime(iso: string): string {
+  return new Date(iso).toLocaleString(undefined, { dateStyle: "full", timeStyle: "short" });
+}
+
+/** "just now", "5 min ago", "3 h ago", "2 days ago", then the date ("Oct 3", with the year when it isn't this year's). */
+export function timeAgo(iso: string, now: number = Date.now()): string {
+  const then = new Date(iso);
+  const minutes = Math.floor((now - then.getTime()) / 60_000);
+  if (minutes < 1) return "just now";
+  if (minutes < 60) return `${minutes} min ago`;
+  const hours = Math.floor(minutes / 60);
+  if (hours < 24) return `${hours} h ago`;
+  const days = Math.floor(hours / 24);
+  if (days < 7) return `${days} day${days === 1 ? "" : "s"} ago`;
+  const sameYear = then.getFullYear() === new Date(now).getFullYear();
+  return then.toLocaleDateString(undefined, sameYear ? { month: "short", day: "numeric" } : { month: "short", day: "numeric", year: "numeric" });
+}
+
+export type DayGroup = "Today" | "Yesterday" | "This week" | "Earlier";
+export const DAY_GROUPS: DayGroup[] = ["Today", "Yesterday", "This week", "Earlier"];
+
+/** Which of the inbox's day groups a time falls in, by the viewer's own calendar days. */
+export function dayGroup(iso: string, now: number = Date.now()): DayGroup {
+  const midnight = (t: number) => {
+    const d = new Date(t);
+    return new Date(d.getFullYear(), d.getMonth(), d.getDate()).getTime();
+  };
+  // Calendar days, so a day with a clock change still counts as one.
+  const days = Math.round((midnight(now) - midnight(new Date(iso).getTime())) / DAY);
+  if (days <= 0) return "Today";
+  if (days === 1) return "Yesterday";
+  if (days < 7) return "This week";
+  return "Earlier";
+}
+
 /**
  * An account's ID from what staff paste: the ID itself, or a link to the profile (…/u/<id>).
  * Undefined when it's neither, so the form can say so instead of sending it.

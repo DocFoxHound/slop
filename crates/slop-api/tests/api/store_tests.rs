@@ -1276,6 +1276,211 @@ async fn marking_notifications_read_touches_only_the_callers_own(db: PgPool) {
     );
 }
 
+/// The inbox's filters: unread per kind, one kind, unread only, and older pages after a given
+/// notification (which must be the caller's own); an unknown kind is refused.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_bell_filters_by_kind_and_unread_and_pages_older(db: PgPool) {
+    let app = test_app(db).await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    let (sam_id, sam) = app.user("Sam", "US").await;
+    for i in 0..5 {
+        notice(
+            &app,
+            pat_id,
+            "apps",
+            &format!("app {i}"),
+            &format!("{} minutes", 10 + i),
+        )
+        .await;
+    }
+    let friend = notice(&app, pat_id, "friends", "friend", "1 minute").await;
+    let read_one = notice(&app, pat_id, "friends", "old friend", "1 day").await;
+    sqlx::query("update notifications set read_at = now() where id = $1")
+        .bind(read_one)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let theirs = notice(&app, sam_id, "apps", "theirs", "2 minutes").await;
+    let get = |q: &str| req(Method::GET, format!("/v1/me/notifications{q}")).cookie(&pat);
+
+    let all = inbox(&app, get("")).await;
+    assert_eq!(all["unread"], 6);
+    assert_eq!(all["counts"], json!({ "apps": 5, "friends": 1 }));
+    assert_eq!(all["more"], false);
+    assert_eq!(titles(&all).len(), 7);
+
+    let friends = inbox(&app, get("?category=friends")).await;
+    assert_eq!(titles(&friends), ["friend", "old friend"]);
+    assert_eq!(friends["unread"], 6, "the counts are of every kind");
+    let unread = inbox(&app, get("?category=friends&unread=true")).await;
+    assert_eq!(titles(&unread), ["friend"]);
+    assert_eq!(titles(&inbox(&app, get("?unread=true")).await).len(), 6);
+
+    // Two at a time, newest first, each page after the last one shown.
+    let first = inbox(&app, get("?category=apps&limit=2")).await;
+    assert_eq!(titles(&first), ["app 0", "app 1"]);
+    assert_eq!(first["more"], true);
+    let last = first["items"][1]["id"].as_str().unwrap().to_string();
+    let second = inbox(&app, get(&format!("?category=apps&limit=2&before={last}"))).await;
+    assert_eq!(titles(&second), ["app 2", "app 3"]);
+    assert_eq!(second["more"], true);
+    let last = second["items"][1]["id"].as_str().unwrap().to_string();
+    let third = inbox(&app, get(&format!("?category=apps&limit=2&before={last}"))).await;
+    assert_eq!(titles(&third), ["app 4"]);
+    assert_eq!(third["more"], false);
+    // Across kinds, after the friend request.
+    let after = inbox(&app, get(&format!("?limit=1&before={friend}"))).await;
+    assert_eq!(titles(&after), ["app 0"]);
+
+    // Someone else's notification isn't a place to page from.
+    let nothing = inbox(&app, get(&format!("?before={theirs}"))).await;
+    assert_eq!(titles(&nothing).len(), 0);
+    assert_eq!(nothing["more"], false);
+    let res = app.send(get("?category=marketing")).await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    assert_eq!(
+        body_json(res).await["error"]["message"],
+        "\"marketing\" isn't a kind of notification"
+    );
+    // At most 100 a page.
+    assert_eq!(titles(&inbox(&app, get("?limit=1000")).await).len(), 7);
+    let sams = inbox(&app, req(Method::GET, "/v1/me/notifications").cookie(&sam)).await;
+    assert_eq!(titles(&sams), ["theirs"]);
+    assert_eq!(sams["counts"], json!({ "apps": 1 }));
+}
+
+/// Mark all as read for one kind leaves the others; marking unread again and dismissing touch
+/// only the caller's own. An unread one that a newer unread one of the same thread would merge
+/// with stays on its own, and isn't pushed to phones again.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn notifications_read_by_kind_unread_again_and_dismissed(db: PgPool) {
+    let app = test_app(db).await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    let (sam_id, sam) = app.user("Sam", "US").await;
+    let a = notice(&app, pat_id, "apps", "a", "3 minutes").await;
+    let f = notice(&app, pat_id, "friends", "f", "2 minutes").await;
+    let theirs = notice(&app, sam_id, "friends", "theirs", "1 minute").await;
+    let post = |path: &str, cookie: &str, body: Value| {
+        req(Method::POST, format!("/v1/me/notifications/{path}"))
+            .cookie(cookie)
+            .json(body)
+    };
+    let mine = |cookie: &str| req(Method::GET, "/v1/me/notifications").cookie(cookie);
+
+    let res = app
+        .send(post("read", &pat, json!({ "category": "nope" })))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    let res = app
+        .send(post("read", &pat, json!({ "category": "friends" })))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let inbox_now = inbox(&app, mine(&pat)).await;
+    assert_eq!(inbox_now["counts"], json!({ "apps": 1 }));
+    assert_eq!(inbox(&app, mine(&sam)).await["unread"], 1);
+
+    // Unread again: only read ones of the caller's; between 1 and 100 ids.
+    for body in [json!({ "ids": [] }), json!({})] {
+        let res = app.send(post("unread", &pat, body)).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
+    }
+    let res = app
+        .send(post("unread", &pat, json!({ "ids": [f, theirs, a] })))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let inbox_now = inbox(&app, mine(&pat)).await;
+    assert_eq!(inbox_now["counts"], json!({ "apps": 1, "friends": 1 }));
+    sqlx::query("update notifications set read_at = now() where id = $1")
+        .bind(theirs)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    app.send(post("unread", &pat, json!({ "ids": [theirs] })))
+        .await;
+    assert_eq!(
+        inbox(&app, mine(&sam)).await["unread"],
+        0,
+        "not Pat's to change"
+    );
+
+    // A thread: read, then a newer message came in on its own row (only one unread row per
+    // thread). The old one marked unread keeps both, and isn't pushed.
+    let old = notice(&app, pat_id, "chat", "1 new message", "1 hour").await;
+    let newer = notice(&app, pat_id, "chat", "another message", "1 minute").await;
+    sqlx::query(
+        "update notifications set collapse_key = 'chat:1', read_at = case when id = $1 then now() end
+         where id = any($2)",
+    )
+    .bind(old)
+    .bind(vec![old, newer])
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let res = app
+        .send(post("unread", &pat, json!({ "ids": [old] })))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let rows: Vec<(Uuid, Option<String>, bool)> = sqlx::query_as(
+        "select id, collapse_key, pushed_at is not null from notifications
+         where id = any($1) order by created_at",
+    )
+    .bind(vec![old, newer])
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        rows,
+        [(old, None, true), (newer, Some("chat:1".into()), false)]
+    );
+    assert_eq!(inbox(&app, mine(&pat)).await["counts"]["chat"], 2);
+
+    // Dismissed: gone for its owner; someone else's is not found and stays.
+    let dismiss = |id: Uuid, cookie: &str| {
+        req(Method::DELETE, format!("/v1/me/notifications/{id}")).cookie(cookie)
+    };
+    assert_eq!(
+        app.send(dismiss(a, &pat)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    assert_eq!(
+        app.send(dismiss(a, &pat)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(dismiss(theirs, &pat)).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    assert_eq!(
+        app.send(req(Method::DELETE, format!("/v1/me/notifications/{f}")))
+            .await
+            .status(),
+        StatusCode::UNAUTHORIZED
+    );
+    assert!(!titles(&inbox(&app, mine(&pat)).await).contains(&"a".to_string()));
+    assert_eq!(titles(&inbox(&app, mine(&sam)).await), ["theirs"]);
+
+    // A maker's AI agent can only read the bell, not change it.
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let m = notice(&app, maker_id, "apps", "m", "1 minute").await;
+    let token = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Claude", "scope": "publish" }),
+    )
+    .await;
+    for r in [
+        req(Method::DELETE, format!("/v1/me/notifications/{m}")),
+        req(Method::POST, "/v1/me/notifications/read").json(json!({})),
+    ] {
+        let res = app.send(r.header("authorization", token.clone())).await;
+        assert!(res.status().is_client_error(), "{}", res.status());
+    }
+    assert_eq!(
+        inbox(&app, mine(&maker)).await["counts"],
+        json!({ "apps": 1 })
+    );
+}
+
 /// Email choices: every category on by default, whether this Slop sends email and whether the
 /// account has an address; only known categories and true/false, and a change keeps the rest.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

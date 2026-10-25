@@ -418,7 +418,7 @@ test.describe("the notifications page", () => {
       const sue = page.getByRole("listitem").filter({ hasText: "Sue Support wants to be friends" });
       await expect(sue).toHaveClass(/unread/);
       await expect(sue).toContainText("Friends can message each other in the Slop app.");
-      await sue.getByRole("button").click();
+      await sue.getByRole("button", { name: /Sue Support wants to be friends/ }).click();
       await expect(page).toHaveURL(new RegExp(`/friends#${ids.support}$`));
       await expect(page.getByRole("heading", { name: /Requests \(2\)/ })).toBeVisible();
       await expect(page.getByRole("link", { name: "Notifications, 1 unread" })).toBeVisible();

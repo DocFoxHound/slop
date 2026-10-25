@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import { Link, NavLink, Outlet, useLocation } from "react-router";
 
 import { api } from "../api";
@@ -8,7 +8,9 @@ import { formatDate } from "../format";
 import { desktop, isDesktop } from "../platform";
 import { useAutoUpdates } from "./AppUpdates";
 import { ChatDock } from "./ChatDock";
+import { DownloadsStatus } from "./Downloads";
 import { Avatar } from "./Avatar";
+import { BrowserBar } from "./BrowserBar";
 import { ModRequests } from "./ModRequests";
 import { CrashPrompt } from "./BugReports";
 import { SaveSyncEvents } from "./Sandbox";
@@ -77,7 +79,15 @@ export function Layout() {
   const location = useLocation();
   const view = useRef<HTMLElement>(null);
   const chatUnread = useChatUnread();
+  const { refresh } = useSession();
   useAutoUpdates();
+  // Reload this page (the page bar, F5 in the desktop app): the page is made again, so it loads
+  // its data again, without reloading the whole app.
+  const [reloads, setReloads] = useState(0);
+  const reload = useCallback(() => {
+    setReloads((n) => n + 1);
+    void refresh();
+  }, [refresh]);
 
   // New page, back to the top. The page scrolls inside <main>, not the window.
   useEffect(() => {
@@ -151,6 +161,7 @@ export function Layout() {
         <MeMenu />
         <WindowControls />
       </nav>
+      <BrowserBar onReload={reload} />
 
       <UpdateNotice />
       <ModRequests />
@@ -159,9 +170,14 @@ export function Layout() {
       <SimulationBanner />
       <AccountNotices />
       <main className="view" id="main" ref={view} tabIndex={-1}>
-        <Outlet />
+        <Outlet key={reloads} />
       </main>
 
+      {isDesktop && (
+        <div className="downloads-dock">
+          <DownloadsStatus />
+        </div>
+      )}
       <ChatDock unread={chatUnread} />
 
       <nav className="bottom-tabs" aria-label="Main">
@@ -245,7 +261,7 @@ function Bell() {
   return (
     <Link
       to="/notifications"
-      className={`bell ${location.pathname === "/notifications" ? "on" : ""}`}
+      className={`bell ${location.pathname === "/notifications" || location.pathname.startsWith("/notifications/") ? "on" : ""}`}
       aria-label={n > 0 ? `Notifications, ${n} unread` : "Notifications"}
       title="Notifications"
     >

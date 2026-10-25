@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import { query } from "./api";
-import { accountId, artFor, deadlineText, money, toMinor } from "./format";
+import { accountId, artFor, dayGroup, deadlineText, money, timeAgo, toMinor } from "./format";
 
 const now = Date.parse("2026-10-18T12:00:00Z");
 
@@ -65,5 +65,37 @@ describe("accountId", () => {
     expect(accountId("Olly Overdue")).toBeUndefined();
     expect(accountId("https://slop.example/people/vera-pixels")).toBeUndefined();
     expect(accountId(id.slice(0, -1))).toBeUndefined();
+  });
+});
+
+describe("timeAgo", () => {
+  const at = (minutesAgo: number) => new Date(now - minutesAgo * 60_000).toISOString();
+  it("says how long ago, then the date", () => {
+    expect(timeAgo(at(0), now)).toBe("just now");
+    expect(timeAgo(at(-5), now)).toBe("just now");
+    expect(timeAgo(at(5), now)).toBe("5 min ago");
+    expect(timeAgo(at(59), now)).toBe("59 min ago");
+    expect(timeAgo(at(180), now)).toBe("3 h ago");
+    expect(timeAgo(at(60 * 24), now)).toBe("1 day ago");
+    expect(timeAgo(at(60 * 24 * 6), now)).toBe("6 days ago");
+    expect(timeAgo("2026-10-03T12:00:00Z", now)).toBe(new Date("2026-10-03T12:00:00Z").toLocaleDateString(undefined, { month: "short", day: "numeric" }));
+    expect(timeAgo("2025-10-03T12:00:00Z", now)).toMatch(/2025/);
+  });
+});
+
+describe("dayGroup", () => {
+  // Local times, as the viewer's calendar has them.
+  const local = (d: number, h: number) => new Date(2026, 9, d, h).getTime();
+  const iso = (t: number) => new Date(t).toISOString();
+  it("groups by calendar day", () => {
+    const noon = local(18, 12);
+    expect(dayGroup(iso(local(18, 0)), noon)).toBe("Today");
+    expect(dayGroup(iso(local(18, 13)), noon)).toBe("Today");
+    expect(dayGroup(iso(local(17, 23)), noon)).toBe("Yesterday");
+    expect(dayGroup(iso(local(17, 0)), noon)).toBe("Yesterday");
+    expect(dayGroup(iso(local(16, 23)), noon)).toBe("This week");
+    expect(dayGroup(iso(local(12, 0)), noon)).toBe("This week");
+    expect(dayGroup(iso(local(11, 23)), noon)).toBe("Earlier");
+    expect(dayGroup("2025-01-01T00:00:00Z", noon)).toBe("Earlier");
   });
 });

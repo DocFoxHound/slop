@@ -113,7 +113,7 @@ test("notifications: the bell counts them, opening one goes there, and Mark all 
   await expect(shared.first().getByText("It's Private Slop: only the people it's shared with can see it.")).toBeVisible();
 
   // Opening one marks it read and goes to what it's about.
-  await shared.first().getByRole("button").click();
+  await shared.first().getByRole("button", { name: /Vera Okafor shared Note Nook with you/ }).click();
   await expect(page).toHaveURL(new RegExp(`/app/${nook}$`));
   await expect(page.getByRole("heading", { name: "Note Nook", level: 1 })).toBeVisible();
   await expect(bell(before + 1)).toBeVisible();

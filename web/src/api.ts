@@ -486,6 +486,17 @@ export interface Notification {
   read: boolean;
 }
 
+/** A page of the bell's notifications (crates/slop-api/src/notify.rs `list`). */
+export interface NotificationInbox {
+  /** Unread, of every kind. */
+  unread: number;
+  /** Unread per kind (kinds with none are left out). */
+  counts?: Partial<Record<Notification["category"], number>>;
+  items: Notification[];
+  /** Whether there are older ones. */
+  more?: boolean;
+}
+
 export interface EmailPrefs {
   /** Whether this server sends email at all. */
   email_on: boolean;
@@ -3620,13 +3631,35 @@ export const api = {
       ),
   },
   notifications: {
-    list: () =>
-      request<{ unread: number; items: Notification[] }>(
+    /** Newest first; `before` (a notification's id) for the next, older page. */
+    list: (
+      filter: {
+        category?: Notification["category"];
+        unread?: boolean;
+        before?: string;
+        limit?: number;
+      } = {},
+    ) =>
+      request<NotificationInbox>(
         "GET",
-        "/v1/me/notifications",
+        `/v1/me/notifications${query({
+          category: filter.category,
+          unread: filter.unread ? "true" : undefined,
+          before: filter.before,
+          limit: filter.limit === undefined ? undefined : String(filter.limit),
+        })}`,
       ),
-    read: (ids: string[] = []) =>
-      request<void>("POST", "/v1/me/notifications/read", { ids }),
+    /** These, or every unread one (of a kind, with `category`) when there are no ids. */
+    read: (ids: string[] = [], category?: Notification["category"]) =>
+      request<void>(
+        "POST",
+        "/v1/me/notifications/read",
+        category ? { ids, category } : { ids },
+      ),
+    unread: (ids: string[]) =>
+      request<void>("POST", "/v1/me/notifications/unread", { ids }),
+    dismiss: (id: string) =>
+      request<void>("DELETE", `/v1/me/notifications/${encodeURIComponent(id)}`),
     prefs: () => request<EmailPrefs>("GET", "/v1/me/email-prefs"),
     setPrefs: (changes: Partial<Record<Notification["category"], boolean>>) =>
       request<EmailPrefs>("PUT", "/v1/me/email-prefs", changes),
