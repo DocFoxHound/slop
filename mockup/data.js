@@ -43,7 +43,7 @@ const SCAN_CHECKS = [
 ];
 
 // Release stages. Days are the limits a publisher has before they must move on.
-const STAGE_RULES = { soonDays: 30, betaDays: 365, deadAfterDays: 90 };
+const STAGE_RULES = { soonDays: 365, betaDays: 365, deadAfterDays: 90 };
 const DAY = 864e5;
 const daysAgo = n => new Date(Date.now() - n * DAY).toISOString().slice(0, 10);
 

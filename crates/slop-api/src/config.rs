@@ -460,7 +460,7 @@ impl Default for CatalogRules {
     fn default() -> Self {
         Self {
             dead_after_days: 90,
-            coming_soon_days: 30,
+            coming_soon_days: 365,
             beta_days: 365,
         }
     }

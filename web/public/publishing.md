@@ -96,7 +96,7 @@ optional.
 
 | Stage | What it means | Time limit |
 |---|---|---|
-| **Coming soon** | A store page with no build yet. Players can mark it Interested. | 30 days, then it must reach Beta |
+| **Coming soon** | A store page with no build yet. Players can mark it Interested. | 12 months, then it must reach Beta |
 | **Beta** | Playable builds, still changing | 12 months, then it must be released |
 | **Released** | Finished (and still updated) | none |
 

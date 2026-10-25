@@ -145,10 +145,11 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 
 | Stage | Needs | Time limit |
 |---|---|---|
-| **Coming soon** | Source + every scan (games: Pulse SDK found in source). No build. | 30 days, then must move to Beta |
+| **Coming soon** | Source + every scan (games: Pulse SDK found in source). No build. | 12 months, then must move to Beta |
 | **Beta** | At least one build + every scan (games: live Pulse handshake) | 12 months, then must fully release |
 | **Released** | Same as Beta | — |
 
+- **Time limits (2026-10-25):** Coming soon went from 30 days to a year, the same as Beta, while we decide what to do about the two stages. Both are configurable (`SLOP_COMING_SOON_DAYS`, `SLOP_BETA_DAYS`).
 - **Dead project:** a Coming soon or Beta project with **no commits for 90 days** is labelled dead (decided; **only** for Coming soon and Beta, never Released; the value is configurable). It stays visible but is never recommended, and it comes back with the next commit.
 - **Missed deadline:** the page is **delisted** (hidden from the store, search and recommendations) until it moves to the next stage (decided). Existing installs and libraries keep working.
 - People can mark Coming soon and Beta apps **Interested**, which puts them in their library and gives publishers a demand signal. (Built 2026-10-20: the count shows on tiles and pages, "Most anticipated" sorts by it, Interested tags count double in "For you", and everyone Interested is notified when the app reaches beta or release.)
