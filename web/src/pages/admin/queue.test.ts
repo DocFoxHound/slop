@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdminQueue, ReleaseFile } from "../../api";
-import { BOXES, boxCounts, defaultBox, inboxUrl, releaseBlurb, rowsFor, sortRows, totalWaiting, waited } from "./inbox";
+import { BOXES, boxCounts, defaultBox, inboxUrl, releaseBlurb, rowsFor, sortRows, totalWaiting, waited } from "./queue";
 
 const NOW = Date.parse("2026-10-25T12:00:00Z");
 

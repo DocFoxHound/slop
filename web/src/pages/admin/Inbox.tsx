@@ -2,7 +2,7 @@
 // Admin → Review queue, as an inbox: categories down the left with how many wait in each, one line
 // per item (what it is, a short blurb, its status, how long it has waited) with quick Approve and
 // Deny where an item has them, and the full item (QueueCards.tsx) when a line is opened. The
-// category and the item are in the address (inbox.ts), so a view can be linked and Back works.
+// category and the item are in the address (queue.ts), so a view can be linked and Back works.
 // On a phone the categories become a menu. Denying always asks "Are you sure?" first, with the
 // reason the person will read.
 
@@ -39,7 +39,7 @@ import {
   type InboxData,
   type Order,
   type RowInfo,
-} from "./inbox";
+} from "./queue";
 import {
   AbuseCard,
   AppealCard,

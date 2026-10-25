@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The review queue as an inbox (Inbox.tsx): its categories, how many wait in each, and the one
 // line each item gets (what it is, a short blurb, its status and how long it has waited). Kept
-// free of React so it can be tested on its own (inbox.test.ts).
+// free of React so it can be tested on its own (queue.test.ts).
 
 import type {
   AdminDonationHold,
