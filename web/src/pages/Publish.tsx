@@ -22,6 +22,7 @@ import {
   PROVIDER_LABEL,
   type Release,
   type RepoOwnership as Ownership,
+  type DonationSettings,
 } from "../api";
 import { LicensePicker } from "../components/LicensePicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
@@ -29,7 +30,7 @@ import { MediaEditor } from "../components/MediaEditor";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
 import { ErrorState, Loading } from "../components/ui";
 import { CONTENT_LABEL, ONLINE_LABEL } from "../format";
-import { useDocumentTitle, useLoad } from "../hooks";
+import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { PasskeyNotice } from "../components/PasskeyNotice";
 import { useTermsGate } from "../components/Terms";
@@ -61,13 +62,14 @@ export function Publish() {
   const { me } = useSession();
   const mine = useLoad(() => (me ? loadStatuses() : Promise.resolve([])), [me?.id]);
 
-  // While something is moving (files being fetched, a review pending), check again now and then.
+  // While something is moving, check again now and then: often while files are being checked,
+  // every minute while a review or staff are awaited; never once nothing is under way.
+  const checking = mine.data?.some((a) => a.latest?.status === "fetching") ?? false;
   const moving = mine.data?.some((a) => a.current.state === "active") ?? false;
-  useEffect(() => {
-    if (!moving) return;
-    const timer = setInterval(mine.reload, 20_000);
-    return () => clearInterval(timer);
-  }, [moving, mine.reload]);
+  useInterval(mine.reload, checking ? 15_000 : moving ? 60_000 : null);
+  // Released and beta apps without donations get a pointer to where they're turned on.
+  const offerable = (mine.data ?? []).filter((a) => a.app.stage !== "coming_soon").map((a) => a.app.slug);
+  const donations = useLoad(() => loadDonations(offerable), [offerable.join(",")]);
 
   if (me === undefined) return <Loading />;
   if (!me) return <SignInFirst what="/publish" />;
@@ -113,9 +115,18 @@ export function Publish() {
                   {latest && <span className="muted small">v{latest.version}</span>}
                 </div>
                 <div className="small">
-                  {statusHeadline(current)} <span className="step-state">{STEP_LABEL[current.state]}</span>
+                  {statusHeadline(current)} <span className="step-state">{current.stateLabel ?? STEP_LABEL[current.state]}</span>
                 </div>
                 <div className="muted small">{current.detail}</div>
+                {current.more && <div className="muted small step-more">{current.more}</div>}
+                {donationsOff(donations.data?.[app.slug]) && (
+                  <div className="small donations-off">
+                    Donations: off ·{" "}
+                    <Link to={`/publish/${app.slug}/manage#donations`} aria-label={`Set up donations for ${app.title}`}>
+                      Set up
+                    </Link>
+                  </div>
+                )}
               </div>
             </div>
             <div className="row-actions">
@@ -152,6 +163,24 @@ async function loadStatuses(): Promise<AppStatusRow[]> {
       return { app, latest: releases[0], current: currentStep(progressSteps(app, releases, server)) };
     }),
   );
+}
+
+/** Each app's donation settings, by slug; null where they couldn't be read. */
+async function loadDonations(slugs: string[]): Promise<Record<string, DonationSettings | null>> {
+  const pairs = await Promise.all(
+    slugs.map((slug) =>
+      api.donations.settings(slug).then(
+        (s): [string, DonationSettings | null] => [slug, s],
+        (): [string, DonationSettings | null] => [slug, null],
+      ),
+    ),
+  );
+  return Object.fromEntries(pairs);
+}
+
+/** Donations could be on for this app, but aren't (a private app takes none). */
+function donationsOff(s: DonationSettings | null | undefined): boolean {
+  return Boolean(s && !s.donations_on && !s.private && s.payments !== "off");
 }
 
 function statusHeadline(step: Step): string {

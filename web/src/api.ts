@@ -210,6 +210,8 @@ export interface DonationSettings {
   servers_shut_down_at: string | null;
   account_status: "none" | "pending" | "active" | "restricted";
   active_server_donations: number;
+  /** A private app takes no donations until it goes public. */
+  private?: boolean;
   payments: "stripe" | "simulated" | "off";
 }
 
@@ -1890,6 +1892,36 @@ export interface ReleaseFile {
   defender: DefenderCheck | null;
   /** A reviewer cleared a finding as a false positive, and why. */
   cleared_reason: string | null;
+  /** What Slop is doing with this file right now (crates/slop-api/src/release_progress.rs). */
+  check_stage?: FileCheckStage | null;
+  check_started_at?: string | null;
+  checked_at?: string | null;
+  /** waiting, checking, checked, or not_checked (the release stopped before this file). */
+  check?: "waiting" | "checking" | "checked" | "not_checked";
+}
+
+export type FileCheckStage = "downloading" | "signature" | "scanning";
+
+/** Where a release is in Slop's checks, file by file (crates/slop-api/src/release_progress.rs). */
+export interface ReleaseProgress {
+  stage: "queued" | "checking_files" | "waiting_for_review" | "approved" | "rejected" | "failed" | "revoked" | "withdrawn";
+  files_total: number;
+  files_checked: number;
+  current?: {
+    number: number;
+    platform: Platform;
+    label: string;
+    step: FileCheckStage;
+    step_label: string;
+    started_at: string;
+  };
+  /** When Slop started checking the first file. */
+  started_at: string | null;
+  /** About how long one file takes on this server; null when there's nothing to go on. */
+  seconds_per_file: number | null;
+  remaining_seconds: number | null;
+  /** A sentence for the maker (and their AI agent). */
+  summary: string;
 }
 
 export interface ScanReport {
@@ -2012,6 +2044,8 @@ export interface Release {
   repo_scan: RepoScan | null;
   /** Advisories for its packages, from the daily watch (makers and reviewers). */
   advisories: Advisory[];
+  /** Where it is in Slop's checks, file by file. */
+  progress?: ReleaseProgress;
 }
 
 /** A token for a maker's or creative's AI agent (crates/slop-api/src/maker_agents.rs). */

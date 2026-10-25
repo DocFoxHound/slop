@@ -6641,3 +6641,229 @@ fn the_scanner_notes_capabilities_worth_a_reviewers_look() {
     assert_eq!(plain["result"], "passed", "{plain}");
     remove_scanner_dir(&dir);
 }
+
+// ---------------------------------------------------------------------------------------------
+// Progress while Slop checks a release, file by file (release_progress.rs)
+
+/// A scanner stand-in that waits until `gate` exists, then passes the file; it holds any file
+/// whose name has "held" in it.
+fn gated_scanner(dir: &std::path::Path, gate: &std::path::Path) -> String {
+    use std::os::unix::fs::PermissionsExt;
+    let script = dir.join("scan.sh");
+    std::fs::write(
+        &script,
+        format!(
+            "#!/bin/sh\nwhile [ ! -f '{}' ]; do sleep 0.05; done\ncase \"$2\" in *held*) echo '{{\"result\":\"on_hold\",\"detail\":\"YARA: Packed_UPX\"}}';; *) echo '{{\"result\":\"passed\",\"detail\":\"clean\"}}';; esac\n",
+            gate.display()
+        ),
+    )
+    .unwrap();
+    std::fs::set_permissions(&script, std::fs::Permissions::from_mode(0o755)).unwrap();
+    script.to_str().unwrap().to_string()
+}
+
+/// While a release's files are checked, its maker (and their agent) see which file is being
+/// scanned, which are done and which wait, with an estimate; then that it waits for a person.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn release_progress_is_shown_file_by_file(db: PgPool) {
+    let dir = std::env::temp_dir().join(format!("slop-progress-{}", Uuid::now_v7()));
+    std::fs::create_dir_all(&dir).unwrap();
+    let gate = dir.join("go");
+    let scanner = gated_scanner(&dir, &gate);
+    let app = test_app_with(db, |c| {
+        c.releases.scanner = slop_api::scan::Scanner::from_setting("local", &scanner).unwrap();
+    })
+    .await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    sqlx::query("update apps set platforms = '{linux,linux-deb,windows}'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let base = format!("{}octo/game/releases/download/v1", app.fake_base);
+    let body = |version: &str, held: &str| {
+        json!({
+            "version": version,
+            "commit_sha": "a".repeat(40),
+            "files": [
+                { "platform": "linux", "kind": "archive", "url": format!("{base}/game.tar.gz"), "exec": "game" },
+                { "platform": "linux-deb", "kind": "installer", "url": format!("{base}/game{held}.deb") },
+                { "platform": "windows", "kind": "archive", "url": format!("{base}/game.zip"), "exec": "game.exe" }
+            ]
+        })
+    };
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(body("1.0.0", "-held")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let created = body_json(res).await;
+    // Not started yet.
+    assert_eq!(created["progress"]["stage"], "queued", "{created}");
+    assert_eq!(created["progress"]["files_total"], 3);
+    assert!(
+        created["progress"]["summary"]
+            .as_str()
+            .unwrap()
+            .starts_with("Waiting its turn: Slop checks one release at a time. Then its 3 files")
+    );
+    let list = || async {
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/game/releases").cookie(&maker))
+                .await,
+        )
+        .await
+    };
+
+    let state = app.state.clone();
+    let fetch = tokio::spawn(async move { releases::fetch_next(&state).await.unwrap() });
+    // The first file (in the order Slop checks them) reaches the scanner, and waits there.
+    let mut now = Value::Null;
+    for _ in 0..200 {
+        now = list().await;
+        if now[0]["progress"]["current"]["step"] == "scanning" {
+            break;
+        }
+        tokio::time::sleep(std::time::Duration::from_millis(25)).await;
+    }
+    let p = &now[0]["progress"];
+    assert_eq!(p["stage"], "checking_files", "{now}");
+    assert_eq!(p["current"]["number"], 1);
+    assert_eq!(p["current"]["label"], "Linux (.tar.gz)");
+    assert_eq!(p["current"]["step_label"], "Scanning for malware");
+    assert_eq!(p["files_checked"], 0);
+    assert!(p["started_at"].is_string());
+    // No history on this server yet: a typical scan, 5 minutes a file.
+    assert_eq!(p["seconds_per_file"], 300);
+    assert_eq!(
+        p["summary"],
+        "Checking file 1 of 3: Linux (.tar.gz), scanning for malware. 0 of 3 done. Each file takes about 5 minutes here; about 15 minutes left."
+    );
+    let checks: Vec<&str> = now[0]["files"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|f| f["check"].as_str().unwrap())
+        .collect();
+    assert_eq!(checks, ["checking", "waiting", "waiting"]);
+    assert_eq!(now[0]["files"][0]["check_stage"], "scanning");
+    assert!(now[0]["files"][0]["check_started_at"].is_string());
+    assert!(now[0]["files"][1]["check_started_at"].is_null());
+
+    // A second release waits its turn behind this one.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(body("1.0.1", "")),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let now = list().await;
+    assert_eq!(now[0]["version"], "1.0.1");
+    assert_eq!(now[0]["progress"]["stage"], "queued");
+    // How many releases come first is not told to makers.
+    assert!(now[0]["progress"].get("queue_ahead").is_none());
+    assert!(
+        !now[0]["progress"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("ahead"),
+        "{}",
+        now[0]["progress"]
+    );
+
+    // Their agent reads the same.
+    let agent = agent_token(&app, &maker, "read", None).await;
+    let seen = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/releases").header("authorization", agent))
+            .await,
+    )
+    .await;
+    assert_eq!(seen[1]["progress"]["current"]["label"], "Linux (.tar.gz)");
+
+    // Let the scanner go: every file is checked, one is on hold, and it waits for a person.
+    std::fs::write(&gate, b"").unwrap();
+    assert!(fetch.await.unwrap());
+    let now = list().await;
+    let r = &now[1];
+    assert_eq!(r["status"], "awaiting_review", "{r}");
+    assert_eq!(r["progress"]["stage"], "waiting_for_review");
+    assert_eq!(r["progress"]["files_checked"], 3);
+    assert!(r["progress"]["current"].is_null());
+    assert!(r["progress"]["seconds_per_file"].is_null());
+    assert_eq!(
+        r["progress"]["summary"],
+        "Linux (.deb) is on hold: YARA: Packed_UPX. A person at Slop looks at it, and can clear a false positive; you'll get a notification when the release is decided."
+    );
+    for f in r["files"].as_array().unwrap() {
+        assert_eq!(f["check"], "checked", "{f}");
+        assert!(f["check_stage"].is_null());
+        assert!(f["checked_at"].as_str().unwrap() >= f["check_started_at"].as_str().unwrap());
+    }
+    // The queued release now goes by how long these took (well under a minute each here).
+    assert!(now[0]["progress"]["seconds_per_file"].as_i64().unwrap() >= 1);
+
+    // A clean release: waiting for review by a person, with when to expect it.
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    let now = list().await;
+    assert!(
+        now[0]["progress"]["summary"]
+            .as_str()
+            .unwrap()
+            .contains("Waiting for review by a person at Slop, usually within a day or two"),
+        "{}",
+        now[0]["progress"]
+    );
+    let _ = std::fs::remove_dir_all(&dir);
+}
+
+/// A fetch that died part-way (the server restarted) starts again from the first file, and
+/// shows it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_fetch_started_again_resets_each_files_progress(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(release_body(&app, "1.0.0", "game-windows.zip")),
+        )
+        .await;
+    let id: Uuid = body_json(res).await["id"]
+        .as_str()
+        .unwrap()
+        .parse()
+        .unwrap();
+    // As a dead fetch leaves it: a file mid-scan, and the lease long gone.
+    sqlx::query(
+        "update release_files set check_stage = 'scanning', check_started_at = now() - interval '2 hours'
+         where release_id = $1",
+    )
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update releases set fetch_started_at = now() - interval '2 hours' where id = $1")
+        .bind(id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    let (stage, started, checked): (Option<String>, OffsetDateTime, OffsetDateTime) = sqlx::query_as(
+        "select check_stage, check_started_at, checked_at from release_files where release_id = $1",
+    )
+    .bind(id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(stage, None);
+    assert!(
+        OffsetDateTime::now_utc() - started < time::Duration::minutes(1),
+        "started again"
+    );
+    assert!(checked >= started);
+}

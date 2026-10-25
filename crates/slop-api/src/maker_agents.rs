@@ -849,7 +849,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_releases",
-        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and Slop's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans.",
+        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and Slop's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases",
         properties: slug_only,
