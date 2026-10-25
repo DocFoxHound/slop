@@ -1226,7 +1226,9 @@ jobs:
   notify:
     name: Tell Slop
     needs: [prepare, release, source-checks]
-    if: inputs.publish
+    # Without !cancelled(), GitHub needs every job upstream to have succeeded, and the unity job
+    # is skipped for every other project type, so Slop would never be told.
+    if: ${{ !cancelled() && inputs.publish && needs.prepare.result == 'success' && needs.release.result == 'success' && needs.source-checks.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
       id-token: write
