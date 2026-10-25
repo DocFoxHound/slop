@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// After an AI agent token is made (AiAgents.tsx): how to set it up on your own computer, step by
-// step, for people who've never used a terminal. The token goes into an environment variable
+// After an AI agent token is made (AiAgents.tsx for makers, Admin → AI reviewers for staff): how
+// to set it up on your own computer, step by step, for people who've never used a terminal. The token goes into an environment variable
 // once, in the person's own terminal; every AI tool is then connected with a reference to that
 // variable (agentSetup.ts), so the token never goes into an AI chat or a command the AI sees.
 
@@ -8,9 +8,8 @@ import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "rea
 
 import {
   OSES,
+  SETUPS,
   TOOLS,
-  VARIABLE,
-  FIRST_PROMPT,
   checkCommand,
   codexConfig,
   connectCommand,
@@ -18,6 +17,7 @@ import {
   openTerminal,
   profileFile,
   saveCommand,
+  type SetupKind,
   type SetupOs,
   type SetupTool,
 } from "../agentSetup";
@@ -28,7 +28,17 @@ export interface MadeToken {
   name: string;
 }
 
-export function AgentSetup({ token, footer }: { token: MadeToken; footer?: ReactNode }) {
+/** `kind`: a maker's token (the default) or a staff member's (`SETUPS.staff`). */
+export function AgentSetup({
+  token,
+  footer,
+  kind = SETUPS.maker,
+}: {
+  token: MadeToken;
+  footer?: ReactNode;
+  kind?: SetupKind;
+}) {
+  const VARIABLE = kind.variable;
   const [os, setOs] = useState<SetupOs>(() => guessOs(typeof navigator === "undefined" ? "" : navigator.userAgent));
   const [tool, setTool] = useState<SetupTool>("claude");
   const id = useId();
@@ -42,13 +52,13 @@ export function AgentSetup({ token, footer }: { token: MadeToken; footer?: React
         <p>
           <b>Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.</b>
         </p>
-        <p>It's a password for your Slop account. Set it up on your computer instead, with the steps below.</p>
+        <p>It's a password for {kind.account}. Set it up on your computer instead, with the steps below.</p>
       </div>
 
       <div className="agent-setup-token">
         <p className="small">
-          <b>Your token.</b> Copy it now: Slop won't show this token again. If you lose it, remove it below and make a
-          new one.
+          <b>Your token.</b> Copy it now: Slop won't show this token again. If you lose it, {kind.remove} it below and
+          make a new one.
         </p>
         <CopyRow text={token.secret} what="the token" secret />
       </div>
@@ -69,7 +79,7 @@ export function AgentSetup({ token, footer }: { token: MadeToken; footer?: React
           {os === "windows" ? (
             <>
               <p className="small">In PowerShell, run this. It's the only step with the token in it:</p>
-              <CopyRow text={saveCommand(os, token.secret)} what="the command that saves your token" />
+              <CopyRow text={saveCommand(os, token.secret, kind)} what="the command that saves your token" />
               <details className="small agent-setup-more">
                 <summary>Or without a command: Windows settings</summary>
                 <ol>
@@ -92,7 +102,7 @@ export function AgentSetup({ token, footer }: { token: MadeToken; footer?: React
           ) : (
             <>
               <p className="small">Run this. It's the only step with the token in it:</p>
-              <CopyRow text={saveCommand(os, token.secret)} what="the command that saves your token" />
+              <CopyRow text={saveCommand(os, token.secret, kind)} what="the command that saves your token" />
               <p className="small muted">
                 It adds the token to {profileFile(os)}, which your terminal reads when it opens.
                 {os === "linux" ? " If your terminal uses zsh, put ~/.zshrc instead." : ""}
@@ -103,18 +113,18 @@ export function AgentSetup({ token, footer }: { token: MadeToken; footer?: React
             Then <b>close the terminal and open a new one</b>: only new windows see the saved token. To check it's there
             (without showing it):
           </p>
-          <CopyRow text={checkCommand(os)} what="the command that checks the token is saved" />
+          <CopyRow text={checkCommand(os, kind)} what="the command that checks the token is saved" />
         </li>
         <li>
           <h5>Connect your AI tool</h5>
           <Tabs label="Your AI tool" items={TOOLS} current={tool} onChange={setTool} idBase={`${id}-tool`}>
-            <ConnectSteps tool={tool} os={os} mcpUrl={token.mcp_url} />
+            <ConnectSteps tool={tool} os={os} mcpUrl={token.mcp_url} kind={kind} />
           </Tabs>
         </li>
         <li>
           <h5>Start working</h5>
           <p className="small">Open your AI tool and ask it (no token needed in the chat):</p>
-          <CopyRow text={FIRST_PROMPT} what="what to ask your AI" />
+          <CopyRow text={kind.firstPrompt} what="what to ask your AI" />
         </li>
       </ol>
       {footer}
@@ -122,8 +132,10 @@ export function AgentSetup({ token, footer }: { token: MadeToken; footer?: React
   );
 }
 
-function ConnectSteps({ tool, os, mcpUrl }: { tool: SetupTool; os: SetupOs; mcpUrl: string }) {
-  const command = connectCommand(tool, mcpUrl);
+function ConnectSteps({ tool, os, mcpUrl, kind }: { tool: SetupTool; os: SetupOs; mcpUrl: string; kind: SetupKind }) {
+  const VARIABLE = kind.variable;
+  const server = kind.server;
+  const command = connectCommand(tool, mcpUrl, kind);
   const shell = os === "windows" ? "In PowerShell (not the old Command Prompt), run" : "In the new terminal, run";
   switch (tool) {
     case "claude":
@@ -136,10 +148,10 @@ function ConnectSteps({ tool, os, mcpUrl }: { tool: SetupTool; os: SetupOs; mcpU
             time it starts.
           </p>
           <p className="small">
-            Then start Claude Code from a new terminal (type <code>claude</code>) and type <code>/mcp</code>: <b>slop</b>{" "}
+            Then start Claude Code from a new terminal (type <code>claude</code>) and type <code>/mcp</code>: <b>{server}</b>{" "}
             should say connected. If Claude Code was already open, quit it and start it again.
           </p>
-          <NotConnecting os={os} />
+          <NotConnecting os={os} kind={kind} />
         </>
       );
     case "codex":
@@ -149,16 +161,16 @@ function ConnectSteps({ tool, os, mcpUrl }: { tool: SetupTool; os: SetupOs; mcpU
           <CopyRow text={command!} what="the Codex command" />
           <p className="small muted">Codex saves only the name {VARIABLE} and reads the token from it when it starts.</p>
           <p className="small">
-            Then start Codex from a new terminal (type <code>codex</code>) and type <code>/mcp</code> to see slop listed.
+            Then start Codex from a new terminal (type <code>codex</code>) and type <code>/mcp</code> to see {server} listed.
           </p>
           <details className="small agent-setup-more">
             <summary>Or add it to Codex's settings file</summary>
             <p>
               Add this to <code>{os === "windows" ? "%USERPROFILE%\\.codex\\config.toml" : "~/.codex/config.toml"}</code>:
             </p>
-            <CopyRow text={codexConfig(mcpUrl)} what="the Codex settings" />
+            <CopyRow text={codexConfig(mcpUrl, kind)} what="the Codex settings" />
           </details>
-          <NotConnecting os={os} />
+          <NotConnecting os={os} kind={kind} />
         </>
       );
     case "grok":
@@ -168,10 +180,10 @@ function ConnectSteps({ tool, os, mcpUrl }: { tool: SetupTool; os: SetupOs; mcpU
           <CopyRow text={command!} what="the Grok Build command" />
           <p className="small muted">Keep the single quotes: Grok Build then reads the token from {VARIABLE} when it starts.</p>
           <p className="small">
-            Then run <code>grok mcp doctor slop</code> to check it connects, and start Grok Build from a new terminal (type{" "}
+            Then run <code>grok mcp doctor {server}</code> to check it connects, and start Grok Build from a new terminal (type{" "}
             <code>grok</code>).
           </p>
-          <NotConnecting os={os} />
+          <NotConnecting os={os} kind={kind} />
         </>
       );
     case "other":
@@ -193,8 +205,7 @@ function ConnectSteps({ tool, os, mcpUrl }: { tool: SetupTool; os: SetupOs; mcpU
             </dd>
           </dl>
           <p className="small">
-            Tools that call web APIs instead can use Slop's API with the same header (see the publishing guide, “Working
-            with your AI agent”).
+            Tools that call web APIs instead can use Slop's API with the same header (see {kind.apiGuide}).
           </p>
           <p className="small">
             <b>If a tool asks for the token in its chat, don't paste it there:</b> look for its MCP or connector settings
@@ -205,7 +216,7 @@ function ConnectSteps({ tool, os, mcpUrl }: { tool: SetupTool; os: SetupOs; mcpU
   }
 }
 
-function NotConnecting({ os }: { os: SetupOs }) {
+function NotConnecting({ os, kind }: { os: SetupOs; kind: SetupKind }) {
   return (
     <details className="small agent-setup-more">
       <summary>If it doesn't connect</summary>
@@ -216,7 +227,10 @@ function NotConnecting({ os }: { os: SetupOs }) {
           token.
           {os === "macos" ? " If it still can't, start the editor from a new Terminal window (for VS Code: type code)." : ""}
         </li>
-        <li>Still nothing? Remove the token below, make a new one, and follow these steps again.</li>
+        <li>
+          Still nothing? {kind.remove === "revoke" ? "Revoke" : "Remove"} the token below, make a new one, and follow these
+          steps again.
+        </li>
       </ul>
     </details>
   );

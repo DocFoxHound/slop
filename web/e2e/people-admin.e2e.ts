@@ -10,7 +10,8 @@ import { call } from "./people-helpers";
 test("staff look at a first portfolio's works, then approve or turn it down", async ({ page }) => {
   await signIn(page, "admin");
   await page.goto("/admin");
-  await page.getByRole("link", { name: /People portfolios to review$/ }).click();
+  await page.getByRole("link", { name: /People pages$/ }).click();
+  await page.locator(".inbox-row").filter({ hasText: "Remy Pending" }).getByRole("link").click();
   const row = page.locator("li.panel").filter({ hasText: "Remy Pending" });
   await expect(row).toContainText(`@${ids.pendingCreativeHandle}`);
   await expect(row).toContainText("AI: NONE");

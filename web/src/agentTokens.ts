@@ -2,10 +2,14 @@
 // AI agent tokens' lifetimes and expiry (crates/slop-api/src/maker_agents.rs): the choices on
 // Account → AI agents, the countdown each token shows, which ones need replacing, and the
 // account section's badge. The server warns the owner a week and a day before, and on expiry.
+// Staff tokens (Admin → AI reviewers, review.rs) use the same choices, countdown and flags.
 
 import type { AgentToken } from "./api";
 
 const DAY = 86_400_000;
+
+/** What expiry needs to know about a token: a maker's (`AgentToken`) or a staff member's. */
+export type ExpiringToken = Pick<AgentToken, "id" | "name" | "created_at" | "expires_at">;
 
 /** How long a token can last (the server allows 1 to 365 days). */
 export const LIFETIMES: { days: number; label: string }[] = [
@@ -44,7 +48,7 @@ export function expiryText(expiresAt: string, now: number = Date.now()): string 
  * The token that replaces this one: the same name, made after it, lasting longer, still working.
  * (The server doesn't warn about a replaced token either.)
  */
-export function replacementOf(t: AgentToken, all: AgentToken[], now: number = Date.now()): AgentToken | undefined {
+export function replacementOf<T extends ExpiringToken>(t: T, all: T[], now: number = Date.now()): T | undefined {
   return all.find(
     (o) =>
       o.id !== t.id &&
@@ -64,7 +68,7 @@ export function isShortLived(t: Pick<AgentToken, "created_at" | "expires_at">): 
 }
 
 /** Expired, or (unless short-lived) expiring within `days`, and not replaced yet. */
-export function needsReplacing(t: AgentToken, all: AgentToken[], days: number, now: number = Date.now()): boolean {
+export function needsReplacing<T extends ExpiringToken>(t: T, all: T[], days: number, now: number = Date.now()): boolean {
   if (replacementOf(t, all, now)) return false;
   if (isExpired(t, now)) return true;
   return !isShortLived(t) && daysLeft(t.expires_at, now) <= days;

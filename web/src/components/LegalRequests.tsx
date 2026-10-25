@@ -46,51 +46,58 @@ export function LegalRequestsTab() {
       </div>
       <ul className="release-list">
         {list.data.map((r) => (
-          <li key={r.id} className="panel panel-pad">
-            <div className="title-row spread">
-              <div className="title-row">
-                <span className={`badge ${r.status === "open" ? "warn" : "neutral"}`}>{STATUS_LABEL[r.status]}</span>
-                <b>
-                  {r.reference} · {KIND_LABEL[r.kind]}
-                </b>
-              </div>
-              <span className={`small ${r.status === "open" && r.deadline && Date.parse(r.deadline) < Date.now() ? "bad" : "muted"}`}>
-                {r.country} · {r.authority} · received {formatDate(r.received_at)}
-                {r.deadline && ` · due ${new Date(r.deadline).toLocaleString()}`}
-              </span>
-            </div>
-            <dl className="kv">
-              <dt>Asked</dt>
-              <dd className="pre">{r.asked}</dd>
-              {r.legal_basis && (
-                <>
-                  <dt>Legal basis</dt>
-                  <dd>{r.legal_basis}</dd>
-                </>
-              )}
-              {r.subject_name && (
-                <>
-                  <dt>Account</dt>
-                  <dd>{r.subject_name}</dd>
-                </>
-              )}
-              {r.response && (
-                <>
-                  <dt>Response</dt>
-                  <dd className="pre">
-                    {r.response}
-                    <div className="muted small">
-                      {r.answered_by} · {r.answered_at && formatDate(r.answered_at)} · person {r.user_notice.replace("_", " ")}
-                    </div>
-                  </dd>
-                </>
-              )}
-            </dl>
-            {r.status === "open" && <AnswerForm r={r} onAnswered={list.reload} />}
-          </li>
+          <LegalRequestCard key={r.id} r={r} onAnswered={list.reload} />
         ))}
       </ul>
     </>
+  );
+}
+
+/** One request: what was asked and, while it's open, the form to record the answer. */
+export function LegalRequestCard({ r, onAnswered }: { r: LegalRequest; onAnswered: () => void }) {
+  return (
+    <li className="panel panel-pad">
+      <div className="title-row spread">
+        <div className="title-row">
+          <span className={`badge ${r.status === "open" ? "warn" : "neutral"}`}>{STATUS_LABEL[r.status]}</span>
+          <b>
+            {r.reference} · {KIND_LABEL[r.kind]}
+          </b>
+        </div>
+        <span className={`small ${r.status === "open" && r.deadline && Date.parse(r.deadline) < Date.now() ? "bad" : "muted"}`}>
+          {r.country} · {r.authority} · received {formatDate(r.received_at)}
+          {r.deadline && ` · due ${new Date(r.deadline).toLocaleString()}`}
+        </span>
+      </div>
+      <dl className="kv">
+        <dt>Asked</dt>
+        <dd className="pre">{r.asked}</dd>
+        {r.legal_basis && (
+          <>
+            <dt>Legal basis</dt>
+            <dd>{r.legal_basis}</dd>
+          </>
+        )}
+        {r.subject_name && (
+          <>
+            <dt>Account</dt>
+            <dd>{r.subject_name}</dd>
+          </>
+        )}
+        {r.response && (
+          <>
+            <dt>Response</dt>
+            <dd className="pre">
+              {r.response}
+              <div className="muted small">
+                {r.answered_by} · {r.answered_at && formatDate(r.answered_at)} · person {r.user_notice.replace("_", " ")}
+              </div>
+            </dd>
+          </>
+        )}
+      </dl>
+      {r.status === "open" && <AnswerForm r={r} onAnswered={onAnswered} />}
+    </li>
   );
 }
 

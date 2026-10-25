@@ -257,19 +257,10 @@ async fn making_an_admin_token_checks_the_person_the_name_the_scope_and_the_days
         StatusCode::FORBIDDEN
     );
 
-    // An old session must sign in again or confirm with a passkey first.
+    // An old session needn't sign in again (decided 2026-10-25; see
+    // staff_tokens_need_no_fresh_sign_in_and_come_without_a_command): every check below is made
+    // with one.
     sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
-        .bind(ada_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let res = app
-        .send(make(&ada, json!({ "name": "Claude", "scope": "read" })))
-        .await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-    assert_eq!(count(&app, "select count(*) from admin_tokens").await, 0);
-    sqlx::query("update sessions set stepped_up_at = now() where user_id = $1")
         .bind(ada_id)
         .execute(&app.db)
         .await

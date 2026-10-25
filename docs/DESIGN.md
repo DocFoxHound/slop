@@ -344,7 +344,7 @@ Hiring people **never changes how votes count**. A rating is what players say (`
 The maker pays the creative **directly** (Stripe, the creative's own account). Slop takes **5%** as its platform fee, out of what the creative receives, and never holds the money. Details: `PAYMENTS.md` §7.
 
 ### 15.8 Review and safety
-- New portfolios and portfolio changes wait for review in the admin panel, like app pictures, and AI reviewers can see and decide them (`review.rs`).
+- New portfolios and portfolio changes wait for review in the admin panel (Review queue → People pages), like app pictures, and AI reviewers can see and decide them (`review.rs`). The creative is notified either way: their page is live, or why the portfolio was turned down.
 - 18+ to sell or hire (confirmed on first use). Rules from `LEGAL-GUIDANCE.md` §4 (trader declaration, withdrawal, independence of creatives) apply.
 - **Slop doesn't settle disputes.** It acts on rule-breaking (scams, fraud, repeated non-delivery).
 
