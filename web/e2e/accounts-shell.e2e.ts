@@ -408,7 +408,12 @@ test.describe("the notifications page", () => {
   });
 
   test("opening one reads it and goes to it; Mark all as read reads the rest", async ({ page }) => {
-    // Two people ask Mo to be friends: two notifications.
+    // Mo starts with nothing unread and no friend notifications (other tests leave him some:
+    // notifications.e2e.ts asks him to be friends too, money-bounties.e2e.ts has him open a
+    // bounty), then two people ask Mo to be friends: two notifications.
+    await call("moderator", "POST", "/v1/me/notifications/read", {});
+    const old = await call<{ items: Array<{ id: string }> }>("moderator", "GET", "/v1/me/notifications?category=friends&limit=100");
+    for (const n of old.items) await call("moderator", "DELETE", `/v1/me/notifications/${n.id}`);
     await call("support", "POST", "/v1/me/friends", { user: ids.moderator });
     await call("security", "POST", "/v1/me/friends", { user: ids.moderator });
     try {
@@ -432,6 +437,7 @@ test.describe("the notifications page", () => {
     } finally {
       await call("support", "DELETE", `/v1/me/friends/${ids.moderator}`);
       await call("security", "DELETE", `/v1/me/friends/${ids.moderator}`);
+      await call("moderator", "POST", "/v1/me/notifications/read", {});
     }
   });
 

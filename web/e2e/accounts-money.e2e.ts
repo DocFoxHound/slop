@@ -85,7 +85,8 @@ test.describe("your donations", () => {
   });
 
   test("with no donations, the Money section says so", async ({ page }) => {
-    await signIn(page, "support");
+    // Bea: nobody donates as her, in any file.
+    await signIn(page, "bystander");
     await page.goto("/account/money");
     await expect(page.getByRole("heading", { name: "Money", level: 2 })).toBeVisible();
     await expect(page.getByText(/^No donations yet\./)).toBeVisible();
@@ -266,7 +267,7 @@ test.describe("fee statements", () => {
   });
 
   test("a maker with nothing received has no statements", async ({ page }) => {
-    await signIn(page, "support");
+    await signIn(page, "bystander");
     await page.goto("/account/money");
     await expect(page.getByText(/^No donations yet\./)).toBeVisible();
     await expect(page.getByRole("heading", { name: "Fee statements" })).toHaveCount(0);

@@ -152,7 +152,8 @@ test.describe("your reports", () => {
   });
 
   test("with none sent, there's no reports section", async ({ page }) => {
-    await signIn(page, "finance");
+    // Bea: nobody reports anything as her, in any file.
+    await signIn(page, "bystander");
     await page.goto("/account/moderation");
     await expect(page.getByRole("heading", { name: "Moderation", level: 2 })).toBeVisible();
     await page.waitForLoadState("networkidle");
@@ -280,7 +281,9 @@ test.describe("legal requests and the transparency report", () => {
     await form.getByRole("textbox", { name: "Country" }).fill("US");
     await form.getByRole("textbox", { name: "From" }).fill("Springfield Police Department");
     await form.getByRole("combobox", { name: "Kind" }).selectOption("subpoena");
-    await form.getByRole("textbox", { name: "Legal basis (optional)" }).fill("Grand jury subpoena 26-114");
+    // Its own legal basis, to find it again: admin-legal.e2e.ts logs requests too.
+    const basis = `Grand jury subpoena ${unique("26")}`;
+    await form.getByRole("textbox", { name: "Legal basis (optional)" }).fill(basis);
     await form.getByRole("textbox", { name: "What they ask for" }).fill("Sign-in records for one account, October 2026.");
     await form.getByRole("textbox", { name: /Account ID/ }).fill("01a00000-0000-7000-8000-000000000000");
     await form.getByRole("button", { name: "Log it" }).click();
@@ -289,10 +292,10 @@ test.describe("legal requests and the transparency report", () => {
     await form.getByRole("button", { name: "Log it" }).click();
     await expect(form).toHaveCount(0);
 
-    const logged = page.getByRole("listitem").filter({ hasText: "Springfield Police Department" }).first();
+    const logged = page.getByRole("listitem").filter({ hasText: basis });
     await expect(logged).toContainText("OPEN");
     await expect(logged).toContainText("Subpoena");
-    await expect(logged).toContainText("Grand jury subpoena 26-114");
+    await expect(logged).toContainText("Springfield Police Department");
     await expect(logged).toContainText("Fin Finance");
     await logged.getByText("Record the answer").click();
     await logged.getByRole("combobox", { name: "Outcome" }).selectOption("partly_answered");
@@ -316,8 +319,12 @@ test.describe("legal requests and the transparency report", () => {
     await order.getByRole("textbox", { name: "Which" }).fill(slug);
     await order.getByRole("button", { name: "Take it down now" }).click();
     await expect(order.getByRole("status")).toContainText(/Team: Removal Test Team is down \(LR-[0-9A-F]+\), \d+ minutes after the order arrived\./);
+    // Found again by its reference: admin-legal.e2e.ts logs orders from OCLCTIC too.
+    const reference = /\((LR-[0-9A-F]+)\)/.exec(await order.getByRole("status").innerText())![1];
     await order.getByRole("button", { name: "Close" }).click();
-    await expect(page.getByRole("listitem").filter({ hasText: "OCLCTIC" })).toContainText("Terrorist content removal order");
+    const loggedOrder = page.getByRole("listitem").filter({ hasText: reference });
+    await expect(loggedOrder).toContainText("OCLCTIC");
+    await expect(loggedOrder).toContainText("Terrorist content removal order");
 
     // The team's owner sees it's hidden.
     const owner = await page.context().browser()!.newPage();

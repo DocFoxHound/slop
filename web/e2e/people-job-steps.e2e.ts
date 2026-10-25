@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import type { Browser, Page } from "@playwright/test";
 import { expect, ids, signIn, test, type Who } from "./fixtures";
-import { call, hireVera, offerAndAccept, offerBody, payOnFakeStripe } from "./people-helpers";
+import { call, hireVera, jobStatus, offerAndAccept, offerBody, payOnFakeStripe } from "./people-helpers";
 
 async function as(browser: Browser, who: Who, path: string): Promise<Page> {
   const page = await browser.newPage();
@@ -72,7 +72,7 @@ test("changes to the agreement: asked for, declined, offered with a price, accep
   await expect(accept).toBeDisabled();
   await cleoChanges.getByRole("checkbox", { name: /This change too\./ }).check();
   await accept.click();
-  await expect(cleo.getByRole("status")).toContainText("Pay $25 to start the work.");
+  await expect(jobStatus(cleo)).toContainText("Pay $25 to start the work.");
   await cleo.getByRole("button", { name: "Pay $25" }).click();
   await payOnFakeStripe(cleo, job);
   await expect(cleo.locator(".pay-table tr").filter({ hasText: "Change 2" })).toContainText("Paid");
@@ -96,7 +96,7 @@ test("changes to the agreement: asked for, declined, offered with a price, accep
   await expect(cancel).toBeDisabled();
   await vera.getByRole("textbox", { name: "Cancel the job" }).fill("I'm ill and can't finish; refunding in full.");
   await cancel.click();
-  await expect(vera.getByRole("status")).toContainText("Cancelled. Any refund comes from Vera Okafor through Stripe.");
+  await expect(jobStatus(vera)).toContainText("Cancelled. Any refund comes from Vera Okafor through Stripe.");
 });
 
 test("the conversation: asked for, opened, recorded, kept on a failed send (b66), copied, reported, closed", async ({ browser }) => {
@@ -185,7 +185,7 @@ test("the conversation: asked for, opened, recorded, kept on a failed send (b66)
   await vera.locator(".job-secondary").getByRole("button", { name: "Cancel the job" }).click();
   await vera.getByRole("textbox", { name: "Cancel the job" }).fill("Ending the test job.");
   await vera.locator(".job-secondary").getByRole("button", { name: "Cancel the job" }).click();
-  await expect(vera.getByRole("status")).toContainText("Cancelled.");
+  await expect(jobStatus(vera)).toContainText("Cancelled.");
   // Ended: nobody can ask to talk or open a conversation again.
   await expect(conv(vera).getByRole("button", { name: "Open a conversation" })).toHaveCount(0);
 });
@@ -276,7 +276,7 @@ test("a problem: proposals, an answer, a mediator's suggestion, closed unresolve
   await problem(vera).getByRole("button", { name: "Propose" }).click();
   await cleo.reload();
   await problem(cleo).locator(".proposals li").filter({ hasText: "Let's cancel" }).getByRole("button", { name: "Accept" }).click();
-  await expect(cleo.getByRole("status")).toContainText("Cancelled.");
+  await expect(jobStatus(cleo)).toContainText("Cancelled.");
   await expect(problem(cleo)).toContainText("Both agreed: cancel — Let's cancel; nothing was paid.");
 });
 
@@ -288,7 +288,7 @@ test("the client declines an offer, and cancels before paying; payments off can'
   await cleo.locator(".job-secondary").getByRole("button", { name: "Decline" }).click();
   await cleo.getByRole("textbox", { name: "Decline" }).fill("Too dear for a cat, sorry.");
   await cleo.locator(".job-secondary").getByRole("button", { name: "Decline" }).click();
-  await expect(cleo.getByRole("status")).toContainText("Declined.");
+  await expect(jobStatus(cleo)).toContainText("Declined.");
   await expect(cleo.locator(".offer-summary")).toHaveCount(0);
   const vera = await as(browser, "creative", `/jobs/${declined}`);
   await expect(vera.locator(".timeline")).toContainText("Too dear for a cat, sorry.");
@@ -311,7 +311,7 @@ test("the client declines an offer, and cancels before paying; payments off can'
   // The client may cancel before paying, without a reason.
   await cleo.locator(".job-secondary").getByRole("button", { name: "Cancel the job" }).click();
   await cleo.locator(".job-secondary").getByRole("button", { name: "Cancel the job" }).click();
-  await expect(cleo.getByRole("status")).toContainText("Cancelled.");
+  await expect(jobStatus(cleo)).toContainText("Cancelled.");
 });
 
 test("withdrawing from a contract asks first (consumer cancellation right)", async ({ page }) => {
@@ -339,7 +339,7 @@ test("withdrawing from a contract asks first (consumer cancellation right)", asy
   // Saying no to the question does nothing.
   page.once("dialog", (d) => void d.dismiss());
   await withdraw.click();
-  await expect(page.getByRole("status")).not.toContainText("Withdrawn");
+  await expect(jobStatus(page)).not.toContainText("Withdrawn");
   expect(withdrew).toBe(false);
 
   page.once("dialog", (d) => {
@@ -347,6 +347,6 @@ test("withdrawing from a contract asks first (consumer cancellation right)", asy
     void d.accept();
   });
   await withdraw.click();
-  await expect(page.getByRole("status")).toContainText("Withdrawn by the client.");
+  await expect(jobStatus(page)).toContainText("Withdrawn by the client.");
   expect(withdrew).toBe(true);
 });

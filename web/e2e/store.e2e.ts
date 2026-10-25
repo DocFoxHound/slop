@@ -2,8 +2,11 @@
 import { expect, test } from "./fixtures";
 
 test("the store lists games, search finds them, and a game has its page", async ({ page }) => {
+  // The front page lists games: which ones depends on what other files published before (their
+  // apps are newer, and push the seed's off the shelves), so any of them.
   await page.goto("/");
-  await expect(page.getByText("Castle Rock").first()).toBeVisible();
+  await expect(page.getByRole("heading", { name: "New & updated" })).toBeVisible();
+  await expect(page.locator("a.tile[href^='/app/']").first()).toBeVisible();
   await page.goto("/search?q=Castle");
   await expect(page.getByRole("link", { name: /Castle Rock/ }).first()).toBeVisible();
   await page.goto("/app/castle-rock");

@@ -278,11 +278,11 @@ function StaffTab() {
           )}
         </form>
       )}
-      <h2 className="section-title">Sensitive actions</h2>
+      <h2 className="section-title" id="sensitive-actions">Sensitive actions</h2>
       {history.data?.actions.length === 0 && (
         <div className="empty-state">None yet.</div>
       )}
-      <ul className="release-list">
+      <ul className="release-list" aria-labelledby="sensitive-actions">
         {history.data?.actions.map((a) => (
           <li key={a.id} className="small">
             <span

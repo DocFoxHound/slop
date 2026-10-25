@@ -21,6 +21,15 @@ export async function call<T = any>(who: Who, method: string, path: string, body
   return (text ? JSON.parse(text) : null) as T;
 }
 
+/**
+ * A job page's next step (its status panel). Scoped to the page itself: the notices above every
+ * page are a status too, and an account may have one from another test (a moderation decision
+ * when another file takes its app out of the store, say).
+ */
+export function jobStatus(page: Page) {
+  return page.getByRole("main").getByRole("status");
+}
+
 /** Fourteen days from now, as the offer form's date field wants it. */
 export function inDays(days: number): string {
   return new Date(Date.now() + days * 86400_000).toISOString().slice(0, 10);
