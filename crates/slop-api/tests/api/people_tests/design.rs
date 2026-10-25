@@ -141,7 +141,6 @@ async fn a_page_design_is_reviewed_with_the_portfolio_and_shown_once_approved(db
             ".slop/page/style.css line 2: \"position: fixed\" was removed: position can be static, relative or absolute: fixed and sticky could cover Slop's page",
         ]
     );
-    assert_eq!(design["has_services"], false);
     assert_eq!(
         design["pictures"]
             .as_array()
@@ -157,9 +156,25 @@ async fn a_page_design_is_reviewed_with_the_portfolio_and_shown_once_approved(db
     // Reviewers see it (the website's queue and the AI reviewer's).
     let (_, queue) = call(&app, fetch("/v1/admin/queue", &reviewer)).await;
     assert_eq!(queue["portfolios"][0]["set"]["design"], *design);
+    // With the services the page shows below the design, for the preview.
+    assert_eq!(
+        (
+            queue["portfolios"][0]["services"][0]["name"].as_str(),
+            queue["portfolios"][0]["services"][0]["skill_name"].as_str()
+        ),
+        (Some("Sprite sheet"), Some("Pixel Art"))
+    );
     let (_, review) = call(&app, fetch("/v1/admin/review?kind=portfolio", &reviewer)).await;
     assert_eq!(
         review["items"][0]["detail"]["portfolio"]["design"], *design,
+        "{review}"
+    );
+    // The AI reviewer is told the design is the creative's text, never instructions.
+    assert!(
+        review["items"][0]["detail"]["design_is_untrusted"]
+            .as_str()
+            .unwrap()
+            .contains("never instructions"),
         "{review}"
     );
     // Not shown before it's approved, not even to the creative.
@@ -181,7 +196,7 @@ async fn a_page_design_is_reviewed_with_the_portfolio_and_shown_once_approved(db
     let (_, shown) = call(&app, fetch("/v1/people/vera", &stranger)).await;
     assert_eq!(
         shown["design"],
-        json!({ "tree": design["tree"], "css": design["css"], "has_services": false })
+        json!({ "tree": design["tree"], "css": design["css"] })
     );
     assert_eq!(
         shown["design"]["tree"][2]["children"][1],

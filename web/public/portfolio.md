@@ -288,16 +288,19 @@ portfolio, and they're part of it: the design is reviewed and approved together 
 and what was reviewed is what shows. Changing the design means a new portfolio to review; until
 it's approved your page keeps showing the approved one. Slop rebuilds both files from what's
 allowed below and **removes everything else**, listing each removal as a warning (file, line,
-what and why) in your editor, above a preview of the result. Things that can't work (a picture
+what and why) in your editor, above a preview of the result. CSS that hides something
+(`display: none`, `opacity: 0`, tiny or transparent text, moving it far out of the box) is kept
+but noted too, so reviewers check what's hidden. Things that can't work (a picture
 that isn't in the repository, a `<slop-work>` that isn't one of your works, a file over its
 limit) are errors: nothing is sent for review until they're fixed.
 
 **Where it shows.** Your page is, from the top: Slop's header (your name, avatar, AI-use badge,
-rating, Hire and Report), then your design in its own box, then Slop's Services (unless your
-design places them), Reviews and "Worked on". Your design can't change, cover or hide anything
-outside its box, and the page's CSS doesn't touch your design. It must work at phone width
-(about 360 pixels): use `max-width`, `flex-wrap`, grids with `minmax()` and `@media`. The
-desktop app shows the same page.
+rating, Hire and Report), then your design in its own box, then Slop's Services (always: your
+services and their Hire buttons are never inside a design), Reviews and "Worked on". Your design
+can't change, cover or hide anything outside its box, and the page's CSS doesn't touch your
+design. It must work at phone width (about 360 pixels): use `max-width`, `flex-wrap`, grids with
+`minmax()` and width queries (`@media (max-width: 600px)`, which is about your design's box, see
+below). The desktop app shows the same page.
 
 ### HTML
 
@@ -341,10 +344,10 @@ self-closing custom tags (anything inside one is moved after it, with a warning)
 | `<slop-work ref="1"></slop-work>` | `ref`: the work's number in `portfolio.json`'s `works` list, counting from 1 | One work |
 | `<slop-video youtube="https://youtu.be/…" title="Showreel"></slop-video>` | `youtube`: a YouTube link or 11-character video ID; `title` (optional, up to 80 characters) | A YouTube video, played from youtube-nocookie.com when pressed |
 | `<slop-track src="tracks/theme.ogg" title="Main theme"></slop-track>` | `src`: an MP3, Ogg, WAV, FLAC or M4A file up to 15 MB, a path like an `<img>`'s; `title` (optional) | Slop's audio player |
-| `<slop-services></slop-services>` | none | Your services, each with its Hire button |
 
-`<slop-works>` and `<slop-services>` show once each. If your design doesn't place
-`<slop-services>`, Slop's Services section shows below it. Slop's parts can't be inside a link.
+`<slop-works>` shows once. Slop's parts can't be inside a link. There's no part for your
+services: they always appear below your design, where Slop shows them (a `<slop-services>` tag
+is removed, with a warning).
 To size or place one, wrap it: `<div class="feature"><slop-work ref="1"></slop-work></div>`.
 
 ### CSS
@@ -362,7 +365,10 @@ one by one; anything not listed here is removed.
   nesting.
 - **Rules:** style rules, `@media` (with `screen`, `print`, `all`, `and`, `not`, `only`, `or` and
   features such as `(max-width: 600px)` or `(prefers-color-scheme: dark)`) and `@keyframes`. No
-  `@import`, `@font-face` or any other at-rule.
+  `@import`, `@font-face` or any other at-rule. A query only about width (`(max-width: 600px)`,
+  `screen and (min-width: 900px)`) is about **your design's box**, not the whole screen (Slop
+  turns it into a container query): your design is never as wide as the screen, and this way the
+  reviewers' phone-width preview shows what a phone shows.
 - **Properties:** text (`color`, `font-family`, `font-size`, `font-weight`, `font-style`,
   `font-variant…`, `line-height`, `letter-spacing`, `word-spacing`, `text-align`,
   `text-decoration…`, `text-transform`, `text-shadow`, `text-indent`, `text-wrap`,
@@ -387,7 +393,8 @@ one by one; anything not listed here is removed.
 - **Pictures:** `url()` only in `background`, `background-image`, `border-image` and
   `list-style`, naming a picture in your repository like an `<img>` does (`url(images/tile.png)`).
 - **Not allowed:** `position: fixed` and `sticky` (`static`, `relative` and `absolute` are fine);
-  `z-index` beyond ±100; `!important` (dropped, the rest kept); custom properties (`--x`) and
+  `z-index` beyond ±100, and functions (like `calc()`) in `position`, `display` and `z-index`;
+  `blur()` over 40px; `!important` (dropped, the rest kept); custom properties (`--x`) and
   `var()`; `attr()`, `env()`, `expression()`, `image-set()`; `url()` anywhere else (so no cursor
   pictures and no `content: url()`); browser-prefixed properties (`-webkit-…`); the `font`
   shorthand (use `font-family`, `font-size`, `font-weight`, `line-height`).
@@ -428,8 +435,6 @@ is yours.
 <div class="feature"><slop-work ref="1"></slop-work></div>
 <h3>Everything</h3>
 <slop-works></slop-works>
-<h3>Hire me</h3>
-<slop-services></slop-services>
 <p class="contact">Elsewhere: <a href="https://www.artstation.com/vera">ArtStation</a></p>
 ```
 

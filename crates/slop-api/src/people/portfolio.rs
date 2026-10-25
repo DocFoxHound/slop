@@ -703,20 +703,30 @@ pub struct QueuedPortfolio {
     pub set: PortfolioSet,
     pub live: Option<PortfolioSet>,
     pub notes: Vec<crate::review::Note>,
+    /// The creative's services, which their page shows below a design.
+    pub services: Vec<super::ServiceView>,
 }
 
 pub async fn queued(state: &AppState) -> ApiResult<Vec<QueuedPortfolio>> {
-    /// (set, handle, name, AI use, live set, order)
-    type Row = (Uuid, String, String, String, Option<Uuid>, Vec<String>);
+    /// (set, handle, name, AI use, live set, order, services)
+    type Row = (
+        Uuid,
+        String,
+        String,
+        String,
+        Option<Uuid>,
+        Vec<String>,
+        sqlx::types::Json<Vec<super::Service>>,
+    );
     let rows: Vec<Row> = sqlx::query_as(
-        "select ps.id, c.handle, c.name, c.ai_use, c.portfolio_set_id, c.portfolio_order
+        "select ps.id, c.handle, c.name, c.ai_use, c.portfolio_set_id, c.portfolio_order, c.services
          from portfolio_sets ps join creatives c on c.user_id = ps.creative_id
          where ps.status = 'pending' order by ps.created_at",
     )
     .fetch_all(&state.db)
     .await?;
     let mut out = Vec::with_capacity(rows.len());
-    for (id, handle, name, ai_use, live, order) in rows {
+    for (id, handle, name, ai_use, live, order, services) in rows {
         let mut set = load_set(&state.db, id).await?;
         arrange(&mut set.works, &order);
         let live = match live {
@@ -730,6 +740,14 @@ pub async fn queued(state: &AppState) -> ApiResult<Vec<QueuedPortfolio>> {
             set,
             live,
             notes: crate::review::notes(&state.db, "portfolio", id).await?,
+            services: services
+                .0
+                .into_iter()
+                .map(|s| super::ServiceView {
+                    skill_name: super::skill(&s.skill).name,
+                    service: s,
+                })
+                .collect(),
         });
     }
     Ok(out)

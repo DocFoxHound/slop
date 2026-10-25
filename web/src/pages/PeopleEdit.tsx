@@ -18,7 +18,7 @@ import {
   type Service,
   type Skill,
 } from "../api";
-import { ACCENTS, AI_USE, ServicesList, accentStyle } from "../components/People";
+import { ACCENTS, AI_USE, accentStyle } from "../components/People";
 import { DesignPreview, portfolioWork } from "../components/PeopleDesign";
 import { PasskeyNotice } from "../components/PasskeyNotice";
 import { PageStatusDetails, type PeopleSaved } from "../components/PeopleStatus";
@@ -444,9 +444,8 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
       <p className="muted small">
         Optional: design your page yourself with <code>.slop/page/index.html</code> (up to 64 KB) and <code>.slop/page/style.css</code> (up to
         32 KB) in the same repository. Slop checks them with your portfolio, removes anything pages can't have (scripts, forms, other sites'
-        files…) and shows the result between Slop's header and your reviews. Put your works and services where you like with{" "}
-        <code>{"<slop-works></slop-works>"}</code>, <code>{'<slop-work ref="1"></slop-work>'}</code> and{" "}
-        <code>{"<slop-services></slop-services>"}</code>. Every rule is in the guide, under <a href="/portfolio.md">Your page's design</a>.
+        files…) and shows the result between Slop's header and your services and reviews. Put your works where you like with{" "}
+        <code>{"<slop-works></slop-works>"}</code> and <code>{'<slop-work ref="1"></slop-work>'}</code>. Every rule is in the guide, under <a href="/portfolio.md">Your page's design</a>.
       </p>
       {shown?.design ? (
         <>
@@ -454,11 +453,7 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
           <DesignPreview
             design={shown.design}
             works={shown.works.map(portfolioWork)}
-            services={() =>
-              profile.services.length > 0 ? (
-                <ServicesList services={profile.services.map((s) => ({ ...s, skill_name: skills.find((k) => k.slug === s.skill)?.name ?? s.skill }))} />
-              ) : null
-            }
+            services={profile.services.map((s) => ({ ...s, skill_name: skills.find((k) => k.slug === s.skill)?.name ?? s.skill }))}
             label={`Preview of ${profile.name}'s page`}
           />
         </>
