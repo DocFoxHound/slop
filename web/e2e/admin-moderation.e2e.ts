@@ -3,7 +3,7 @@
 // reads the statement of reasons on their account page and appeals, staff keep or reverse it,
 // and the reporter reads the outcome. The things reported are made here (Olly's teams and
 // bounty, an app of Sec's); the seeded reports and appeals stay as they are.
-import { call, closePages, listedApp, newPage, newTeam, ok, report, seeDecisions, tag } from "./admin-helpers";
+import { call, closePages, listedApp, newPage, newTeam, ok, openItem, report, seeDecisions, tag } from "./admin-helpers";
 import { expect, signIn, test } from "./fixtures";
 
 test.afterEach(closePages);
@@ -41,7 +41,7 @@ test("a copyright report acted on, a counter-notice appeal, and the decision kep
   // Staff decide: hide the team, under the copyright rule and the law.
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "reports", reference);
   const card = admin.getByRole("listitem").filter({ hasText: reference });
   await expect(card.getByText("SERIOUS", { exact: true })).toBeVisible();
   await expect(card.getByText("Copyright or trademark infringement")).toBeVisible();
@@ -96,9 +96,7 @@ test("a copyright report acted on, a counter-notice appeal, and the decision kep
   await expect(olly.getByRole("link", { name: "See what, why, and how to appeal" })).toHaveCount(0);
 
   // Staff see the counter-notice and keep the decision.
-  await admin.goto("/admin?tab=queue#appeals");
-  // The same address as before but for the part: load the queue again.
-  await admin.reload();
+  await openItem(admin, "appeals", `Team: ${name}`);
   const appeal = admin.getByRole("listitem").filter({ hasText: `Team: ${name}` });
   await expect(appeal.getByText("I drew the banner myself in 2023.")).toBeVisible();
   await expect(appeal.getByText(/Olly Overdue, 2 Mill Lane, Leeds, \+44 113 000 0000 · both statements made\./)).toBeVisible();
@@ -122,7 +120,7 @@ test("a threat report closed with no action, passed on to the police; the report
 
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "reports", reference);
   const card = admin.getByRole("listitem").filter({ hasText: reference });
   await expect(card.getByText("URGENT", { exact: true })).toBeVisible();
   await expect(card.getByText(/^R-.* · due .*/)).toBeVisible();
@@ -172,7 +170,7 @@ test("a bounty: its opener can't report it; staff can hide it", async ({ browser
   const reference = await report("support", "bounty", bounty.id, "scam", "It promises coins in another game for pledges.");
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "reports", reference);
   const card = admin.getByRole("listitem").filter({ hasText: reference });
   await card.getByRole("button", { name: "Decide" }).click();
   const what = card.getByRole("combobox", { name: "What to do" });
@@ -214,7 +212,7 @@ test("an appeal reversed while the app is frozen: it stays out, and staff and ma
   await ok("admin", "POST", `/v1/admin/apps/${app.slug}/freeze`, { reason: "Checking its new release." });
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "appeals", `App: ${app.title}`);
   const appeal = admin
     .getByRole("listitem")
     .filter({ hasText: `App: ${app.title}` })

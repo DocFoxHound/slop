@@ -64,7 +64,7 @@ Since there are no passwords, high-risk actions require a **passkey (WebAuthn)**
 **Tightened 2026-10-22 (security review):**
 - Approving a desktop sign-in needs a fresh sign-in or passkey, since the new desktop session starts out fresh: an old or stolen session can no longer mint one to get past step-up.
 - When an account has a passkey, adding or removing a passkey, linking or unlinking a sign-in and combining accounts need one of its passkeys (a fresh provider sign-in isn't enough), so someone who takes over a linked GitHub can't add a passkey of their own. A new passkey sends a "security" notice. An account with passkeys can only be combined into another from itself, and combining keeps the earlier passkey deadline.
-- Closing the account and making admin API tokens need a fresh sign-in; `moderate` tokens last at most 90 days.
+- Closing the account needs a fresh sign-in. Making admin API tokens did too until 2026-10-25, when the owner dropped it (as for makers' tokens): a token needs the security role, is listed with its expiry for security staff and can be revoked any time; `moderate` tokens last at most 90 days. The website sets one up like a maker's token (a `SLOP_ADMIN_TOKEN` environment variable, never in an AI chat or a command), and the API returns no command with the token in it.
 - The sign-in flow's cookies are `__Host-` cookies on https like the session's, so another site on the same domain can't plant them.
 - `slop-api admin grant` takes an account ID only.
 

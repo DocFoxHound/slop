@@ -22,7 +22,7 @@ export function useAction(onDone: () => void) {
       // Sensitive actions may wait for another staff member (staff.rs).
       if (result && typeof result === "object" && "pending_action" in result) {
         setNotice(
-          "Recorded. It happens once another staff member approves it under Waiting for approval.",
+          "Recorded. It happens once another staff member approves it under Review queue → Second approvals.",
         );
       }
       onDone();

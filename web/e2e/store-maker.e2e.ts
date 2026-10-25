@@ -47,7 +47,8 @@ test("a maker reads pictures from the repository, orders them, and staff approve
   const admin = await browser.newPage();
   await signIn(admin, "admin");
   await admin.goto("/admin");
-  await admin.getByRole("link", { name: /Pictures to review$/ }).click();
+  await admin.getByRole("link", { name: /Store pictures$/ }).click();
+  await admin.locator(".inbox-row").filter({ hasText: "Pictures Pond" }).getByRole("link").click();
   const row = admin.locator("li").filter({ has: admin.getByRole("link", { name: "Pictures Pond" }) });
   await expect(row.getByText("FIRST PICTURES")).toBeVisible();
   await expect(row.getByRole("img", { name: "Thumbnail" })).toBeVisible();
@@ -55,7 +56,7 @@ test("a maker reads pictures from the repository, orders them, and staff approve
   await row.getByRole("button", { name: "Approve pictures" }).click();
   await expect(row).toHaveCount(0);
   // Bo's seeded pictures still wait.
-  await expect(admin.locator("li").filter({ has: admin.getByRole("link", { name: "Pocket Golf" }) }).getByRole("button", { name: "Approve pictures" })).toBeVisible();
+  await expect(admin.locator(".inbox-row").filter({ hasText: "Pocket Golf" }).getByRole("button", { name: "Approve Pocket Golf" })).toBeVisible();
 
   await maker.reload();
   const live = editor.locator(".media-set").filter({ hasText: "IN THE STORE" });
@@ -78,7 +79,8 @@ test("staff turn pictures down: the maker reads why, and the same pictures are r
   const admin = await browser.newPage();
   await signIn(admin, "admin");
   await admin.goto("/admin");
-  await admin.getByRole("link", { name: /Pictures to review$/ }).click();
+  await admin.getByRole("link", { name: /Store pictures$/ }).click();
+  await admin.locator(".inbox-row").filter({ hasText: "Pictures Puddle" }).getByRole("link").click();
   const row = admin.locator("li").filter({ has: admin.getByRole("link", { name: "Pictures Puddle" }) });
   await row.getByRole("button", { name: "Turn down" }).click();
   await row.getByRole("textbox", { name: "Turn down: reason" }).fill("The thumbnail is another game's logo.");

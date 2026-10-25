@@ -181,7 +181,8 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
   await expect(dispute).toContainText("Your answer: It arrived two days before the date.");
 
   // A mediator reads the record and keeps the review, with a note.
-  const admin = await as(browser, "admin", "/admin?tab=queue");
+  const admin = await as(browser, "admin", "/admin?tab=queue&box=disputes");
+  await admin.locator(".inbox-row").filter({ hasText: onTime }).getByRole("link").click();
   const row = admin.locator("li.panel").filter({ hasText: onTime });
   await expect(row).toContainText("It arrived two days before the date.");
   await row.getByRole("button", { name: "Read the job record (logged)" }).click();
@@ -191,7 +192,7 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
   await row.getByRole("button", { name: "Keep with a note" }).click();
   await expect(row).toHaveCount(0);
   // The seed's dispute is still waiting.
-  await expect(admin.locator("li.panel").filter({ hasText: "The client wants free work in exchange" })).toHaveCount(1);
+  await expect(admin.locator(".inbox-row").filter({ hasText: "The client wants free work in exchange" })).toHaveCount(1);
 
   await vera.reload();
   await expect(card.locator(".mediator-note")).toContainText("The record shows delivery on the due date.");

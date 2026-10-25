@@ -1602,6 +1602,8 @@ export interface AdminQueue {
       going_public: boolean;
       /** Taken out of the store, then reinstated on appeal while it couldn't be listed. */
       after_appeal: boolean;
+      /** When it last changed: how long it has waited to be listed. */
+      waiting_since: string;
       notes: ReviewNote[];
     }
   >;
@@ -2861,7 +2863,8 @@ export const api = {
       scope: AdminToken["scope"];
       days: number;
     }) =>
-      request<AdminToken & { token: string }>("POST", "/v1/admin/tokens", body),
+      // `token` once; `mcp_url` is the admin MCP address (no command with the token in it).
+      request<AdminToken & { token: string; mcp_url: string }>("POST", "/v1/admin/tokens", body),
     revokeToken: (id: string) =>
       request<void>("POST", `/v1/admin/tokens/${id}/revoke`),
     revoke: (id: string, reason: string) =>

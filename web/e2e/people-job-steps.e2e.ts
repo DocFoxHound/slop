@@ -243,7 +243,8 @@ test("a problem: proposals, an answer, a mediator's suggestion, closed unresolve
   await expect(bonus).toContainText("(rejected)");
 
   // A mediator reads the record and suggests an outcome; it binds no one. Then closes it.
-  const admin = await as(browser, "admin", "/admin?tab=queue");
+  const admin = await as(browser, "admin", "/admin?tab=queue&box=problems");
+  await admin.locator(".inbox-row").filter({ hasText: due }).getByRole("link").click();
   const row = admin.locator("li.panel").filter({ hasText: due });
   await expect(row).toContainText("Answer: Sorry: they're coming Friday.");
   await expect(row).toContainText("other — Friday delivery plus a bonus window. (rejected)");
@@ -261,7 +262,7 @@ test("a problem: proposals, an answer, a mediator's suggestion, closed unresolve
   await row.getByRole("button", { name: "Close unresolved" }).click();
   await expect(row).toHaveCount(0);
   // The seed's problem is still open.
-  await expect(admin.locator("li.panel").filter({ hasText: "Vera stopped answering a week ago" })).toHaveCount(1);
+  await expect(admin.locator(".inbox-row").filter({ hasText: "Vera stopped answering a week ago" })).toHaveCount(1);
   await cleo.reload();
   await expect(problem(cleo)).toContainText("No agreement after the suggestion.");
 

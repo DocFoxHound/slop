@@ -334,6 +334,10 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.ids
         .insert("pendingCreative", json!(p.pending_creative.id));
     s.ids.insert("pendingCreativeHandle", json!("remy-sounds"));
+    s.cookies
+        .insert("inboxCreative", p.inbox_creative.cookie.clone());
+    s.ids.insert("inboxCreative", json!(p.inbox_creative.id));
+    s.ids.insert("inboxCreativeHandle", json!("ivy-inbox"));
     s.ids.insert("deliveredJob", json!(p.delivered_job));
     s.ids.insert("workingJob", json!(p.working_job));
     s.ids.insert("requestedJob", json!(p.requested_job));
@@ -556,6 +560,8 @@ pub struct People {
     pub creative: Who,
     pub client: Who,
     pub pending_creative: Who,
+    /// Another creative whose first portfolio waits (for the review inbox's test).
+    pub inbox_creative: Who,
     /// Delivered, with a conversation: the client is asked to pay.
     pub delivered_job: Uuid,
     /// Paid up front through (fake) Stripe Checkout, and being worked on.
@@ -608,6 +614,11 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
     let pending_creative = ctx.user("Remy Pending", "US").await?;
     creative_profile(ctx, &pending_creative, "remy-sounds", "Remy Pending").await?;
     portfolio(ctx, pending_creative.id, "remy-sounds", "#1f6f8b").await?;
+    // Another, whose page the review inbox's test approves for real (admin-inbox.e2e.ts); Remy's
+    // stays waiting for the other tests.
+    let inbox_creative = ctx.user("Ivy Inbox", "US").await?;
+    creative_profile(ctx, &inbox_creative, "ivy-inbox", "Ivy Inbox").await?;
+    portfolio(ctx, inbox_creative.id, "ivy-inbox", "#8b5a1f").await?;
 
     // The client and their app.
     let client = ctx.adult("Cleo Client", "US").await?;
@@ -816,6 +827,7 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
         creative,
         client,
         pending_creative,
+        inbox_creative,
         delivered_job,
         working_job,
         requested_job,
@@ -1851,7 +1863,7 @@ async fn verify(ctx: &Ctx) -> anyhow::Result<()> {
         ),
         (
             "select string_agg(status::text, ',' order by status::text) from portfolio_sets",
-            "approved,pending",
+            "approved,pending,pending",
         ),
         (
             "select count(*)::text from media_sets where status = 'pending'",
