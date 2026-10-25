@@ -200,6 +200,7 @@ export function StoreFooter() {
         <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>
         <Link to="/verify">🔎 Check a file</Link>
         <Link to="/source">🧾 Source code</Link>
+        <a href="https://github.com/DocFoxHound/slop/blob/main/docs/CODE-SIGNING.md">✍️ Code signing policy</a>
         <Link to="/contact">✉️ Contact</Link>
       </nav>
     </footer>
