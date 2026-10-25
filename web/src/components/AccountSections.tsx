@@ -65,7 +65,8 @@ export function AccountPicture() {
   const [params] = useSearchParams();
   if (!me) return null;
   const p = saved ?? loaded.data;
-  const current = pending ?? (p?.provider ? `${p.provider}:${p.subject}` : "letter");
+  // Nothing is chosen until the saved choice has loaded (not the letter, which may be wrong).
+  const current = pending ?? (p ? (p.provider ? `${p.provider}:${p.subject}` : "letter") : undefined);
   const choose = async (provider: SignInProvider | null, subject?: string) => {
     setPending(provider ? `${provider}:${subject}` : "letter");
     setError(undefined);
