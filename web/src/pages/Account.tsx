@@ -8,6 +8,7 @@ import { Link, Navigate, useLocation, useNavigate, useParams } from "react-route
 
 import { api, ApiError } from "../api";
 import { accountPath, accountSections, redirectForOldLink, sectionFromSlug, type AccountSection, type AccountSectionId } from "../accountNav";
+import { tokenBadge } from "../agentTokens";
 import { AiAgents } from "../components/AiAgents";
 import { Avatar } from "../components/Avatar";
 import { PasskeyNotice } from "../components/PasskeyNotice";
@@ -44,6 +45,8 @@ export function Account() {
   useDocumentTitle(section && section.id !== "profile" ? `${section.label} · Your account` : "Your account");
   // Agreements waiting to be accepted, for the badge (the section shows them).
   const notices = useLoad(() => (me ? api.legal.notices() : Promise.resolve([])), [me?.id]);
+  // AI agent tokens, for the badge when one expires within a week (the section lists them).
+  const agentTokens = useLoad(() => (me ? api.agentTokens() : Promise.resolve([])), [me?.id]);
 
   if (me === undefined) return <Loading />;
   if (!me) {
@@ -68,6 +71,8 @@ export function Account() {
   if (!me.has_passkey && me.passkey_due_at) badges.security = { text: "!", label: "add a passkey", tone: "warn" };
   const toAccept = (notices.data ?? []).filter((n) => n.action === "accept").length;
   if (toAccept > 0) badges.agreements = { text: String(toAccept), label: `${toAccept} to accept` };
+  const expiring = tokenBadge(agentTokens.data ?? []);
+  if (expiring) badges.agents = expiring;
 
   return (
     <div className="page account-page">
@@ -80,7 +85,7 @@ export function Account() {
           {section.id === "device" && <ThisDevice />}
           {section.id === "agents" && (
             <>
-              <AiAgents notices={notices} />
+              <AiAgents notices={notices} tokens={agentTokens} />
               <SigningKeys />
             </>
           )}

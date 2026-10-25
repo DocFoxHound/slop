@@ -348,6 +348,40 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .ai-notice p { margin: 6px 0; }
 .ai-prompt { display: flex; gap: 10px; align-items: flex-start; margin: 8px 0; }
 .ai-prompt code { flex: 1; display: block; padding: 8px 10px; line-height: 1.5; white-space: normal; }
+/* AI agent tokens (components/AiAgents.tsx, AgentSetup.tsx) */
+.agent-setup { border-color: var(--slime); margin-bottom: 20px; }
+.agent-setup-title { margin: 0 0 10px; font-size: 16px; color: var(--text); }
+.agent-setup-warning { border: 1px solid rgba(250, 204, 21, 0.55); background: rgba(250, 204, 21, 0.08); border-radius: 8px; padding: 10px 14px; margin-bottom: 14px; }
+.agent-setup-warning p { margin: 4px 0; }
+.agent-setup-warning b { color: var(--warn); }
+.agent-setup-token p { margin: 4px 0; }
+.agent-setup-steps { margin: 16px 0 4px; padding-left: 22px; }
+.agent-setup-steps > li { margin-bottom: 18px; }
+.agent-setup-steps > li::marker { font-weight: 800; color: var(--slime); }
+.agent-setup-steps h5 { margin: 0 0 6px; font-size: 14px; color: var(--text); }
+.agent-setup-steps p { margin: 6px 0; }
+.agent-setup-panel { margin-top: 8px; }
+.agent-setup-more { margin: 8px 0; }
+.agent-setup-more summary { cursor: pointer; color: var(--text-2); }
+.agent-setup-more ol, .agent-setup-more ul { margin: 6px 0; padding-left: 20px; }
+.agent-setup-details { margin: 6px 0; }
+.agent-setup-details dt { font-weight: 700; margin-top: 8px; }
+.agent-setup-details dd { margin: 2px 0 0; }
+.copy-row { display: flex; gap: 8px; align-items: flex-start; }
+.copy-row .copy-row-text { flex: 1; min-width: 0; margin: 4px 0; }
+.copy-row .btn { flex: none; margin-top: 7px; }
+.copy-row-secret { font-size: 13px; color: var(--text); }
+.agent-replacing { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.agent-tokens li.token-soon { box-shadow: inset 3px 0 0 var(--warn); background: rgba(251, 191, 36, 0.05); }
+.agent-tokens li.token-expired { box-shadow: inset 3px 0 0 var(--bad); background: rgba(248, 113, 113, 0.05); }
+.agent-tokens .token-flag { margin-left: 6px; }
+.agent-tokens .token-expiry time { font-weight: 600; }
+.agent-tokens .token-actions { justify-content: flex-end; flex: none; }
+@media (max-width: 600px) {
+  .agent-tokens li { flex-direction: column; align-items: stretch; }
+  .agent-tokens .token-actions { justify-content: flex-start; }
+  .agent-setup-steps { padding-left: 18px; }
+}
 .doc { color: var(--text-2); line-height: 1.65; }
 .doc h1 { font-size: 32px; margin: 8px 0 16px; color: var(--text); }
 .doc h2 { font-size: 22px; margin: 36px 0 12px; color: var(--text); padding-top: 12px; border-top: 1px solid var(--line); }

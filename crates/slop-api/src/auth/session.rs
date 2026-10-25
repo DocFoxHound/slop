@@ -30,11 +30,16 @@ pub const IDLE_TIMEOUT: Duration = Duration::days(7);
 pub const DESKTOP_ABSOLUTE_LIFETIME: Duration = Duration::days(180);
 pub const DESKTOP_IDLE_TIMEOUT: Duration = Duration::days(30);
 
-/// SQL condition for a live session `s`, given `$idle` and `$desktop_idle` placeholders.
+/// SQL condition for a live session `s`, given `$idle` and `$desktop_idle` placeholders. A maker's
+/// AI agent token (kind `agent`, maker_agents.rs) has no idle limit: it lives until the expiry
+/// its owner chose (at most a year), is listed with that expiry and warned about before it, and
+/// can be removed any time; a token that stopped after a month unused would break the agent
+/// without warning.
 pub fn live_session_sql(idle: &str, desktop_idle: &str) -> String {
     format!(
         "s.revoked_at is null and s.expires_at > now()
-         and s.last_seen_at > now() - case when s.kind in ('desktop', 'agent') then {desktop_idle} else {idle} end"
+         and (s.kind = 'agent'
+              or s.last_seen_at > now() - case when s.kind = 'desktop' then {desktop_idle} else {idle} end)"
     )
 }
 /// `last_seen_at` is only written when it is older than this, to avoid a write per request.

@@ -63,6 +63,10 @@ pub const CATEGORIES: &[(&str, &str)] = &[
         "security",
         "Your account's security: passkeys added, sign-ins linked, accounts combined",
     ),
+    (
+        "agents",
+        "Your AI agent tokens: a week and a day before one expires, and when it has",
+    ),
 ];
 
 /// Pending notifications older than this aren't emailed (e.g. when email is switched on later).
@@ -221,6 +225,19 @@ struct Item {
 struct Inbox {
     unread: i64,
     items: Vec<Item>,
+    /// For a maker's AI agent: its own token's expiry, so it can tell its person in time.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    your_token: Option<YourToken>,
+}
+
+#[derive(Serialize)]
+struct YourToken {
+    name: String,
+    #[serde(with = "time::serde::rfc3339")]
+    expires_at: OffsetDateTime,
+    days_left: i64,
+    /// What to tell the person, when it's time.
+    note: String,
 }
 
 /// The categories a caller doesn't see: a maker's AI agent reads only what's about maker work,
@@ -255,9 +272,21 @@ async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Jso
     .bind(hidden_for(&user))
     .fetch_all(&state.db)
     .await?;
+    let your_token = match &user.agent {
+        Some(_) => crate::maker_agents::own_token(&state.db, user.session_id)
+            .await?
+            .map(|t| YourToken {
+                days_left: crate::maker_agents::days_left(t.expires_at, OffsetDateTime::now_utc()),
+                name: t.name,
+                expires_at: t.expires_at,
+                note: t.note,
+            }),
+        None => None,
+    };
     Ok(Json(Inbox {
         unread: unread(&state.db, &user).await?,
         items,
+        your_token,
     }))
 }
 

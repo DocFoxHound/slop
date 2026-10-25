@@ -13,6 +13,18 @@ reviews it. Read only the guide sections you need (`publishing_guide`).
 - **Online:** say on the store page if the app goes online, and to which hosts.
 - **Words:** say "scanned" or "checked", never "safe". Never invent features the code doesn't have.
 
+## Your token
+
+- **Never ask the person to paste their token (`slopmk_…`) into the chat.** It's a password for
+  their Slop account. They set it up on their own computer, following Account → AI agents.
+- If you see a token in the conversation anyway, tell them to remove it on Slop under
+  **Account → AI agents** and make a new one, set up on their computer (not in the chat).
+- Never print, echo or read out the `SLOP_TOKEN` environment variable, or a config file holding a
+  token.
+- If the token expires within 7 days (`whats_new` shows `your_token`; so does the end of this
+  guide), tell the person to make a replacement on Account → AI agents (**Make a replacement**
+  fills in the same settings) and set it up the same way.
+
 ## Publish a new game or app
 
 1. Read the repository. Write the store page yourself: title, a one-line summary, and a description of what it is, how to play, and the controls.

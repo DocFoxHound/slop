@@ -805,7 +805,8 @@ async fn maker_tokens_are_checked_when_made(db: PgPool) {
         (json!({ "name": "x".repeat(61), "scope": "read" }), "name"),
         (json!({ "name": "A", "scope": "admin" }), "scope"),
         (json!({ "name": "A", "scope": "read", "days": 0 }), "days"),
-        (json!({ "name": "A", "scope": "read", "days": 31 }), "days"),
+        (json!({ "name": "A", "scope": "read", "days": 366 }), "days"),
+        (json!({ "name": "A", "scope": "read", "days": -30 }), "days"),
     ] {
         let (status, err) = refused(body.clone()).await;
         assert_eq!(status, StatusCode::UNPROCESSABLE_ENTITY, "{body}");
@@ -831,6 +832,14 @@ async fn maker_tokens_are_checked_when_made(db: PgPool) {
     assert_eq!(created["apps"], json!([]));
     assert_eq!(created["people"], false);
     assert_eq!(created["passkey_proved"], false);
+    assert_eq!(created["expired"], false);
+    // The secret is in `secret` only: never inside a ready-made command (people pasted those into
+    // AI chats; the website shows how to keep it in an environment variable instead).
+    let secret = created["secret"].as_str().unwrap();
+    let mut without = created.clone();
+    without.as_object_mut().unwrap().remove("secret");
+    assert!(!without.to_string().contains(secret), "{without}");
+    assert!(created.get("claude_command").is_none(), "{created}");
     let lifetime = OffsetDateTime::parse(created["expires_at"].as_str().unwrap(), &Rfc3339)
         .unwrap()
         - OffsetDateTime::parse(created["created_at"].as_str().unwrap(), &Rfc3339).unwrap();
@@ -958,7 +967,7 @@ async fn a_maker_token_needs_only_a_signed_in_session(db: PgPool) {
     assert!(made["secret"].as_str().unwrap().starts_with("slopmk_"));
     // Not passkey-proven: no confirmation was made.
     assert_eq!(made["passkey_proved"], json!(false));
-    // It still lasts at most 30 days.
+    // 30 days unless chosen otherwise, and never more than a year.
     let lifetime = OffsetDateTime::parse(made["expires_at"].as_str().unwrap(), &Rfc3339).unwrap()
         - OffsetDateTime::now_utc();
     assert!(lifetime <= time::Duration::days(30));
@@ -966,7 +975,7 @@ async fn a_maker_token_needs_only_a_signed_in_session(db: PgPool) {
         .send(
             req(Method::POST, "/v1/me/maker-tokens")
                 .cookie(&maker)
-                .json(json!({ "name": "Too long", "scope": "read", "days": 31 })),
+                .json(json!({ "name": "Too long", "scope": "read", "days": 366 })),
         )
         .await;
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
@@ -1269,7 +1278,12 @@ async fn makers_list_and_revoke_only_their_own_live_tokens(db: PgPool) {
     )
     .await;
     let list = list.as_array().unwrap();
-    assert_eq!(list.len(), 1, "{list:?}");
+    // The live one, and the expired one (listed for a week, marked expired); not the removed one.
+    assert_eq!(list.len(), 2, "{list:?}");
+    assert_eq!(list[0]["id"], expired_id.as_str(), "newest first");
+    assert_eq!(list[0]["expired"], true);
+    let list = &list[1..];
+    assert_eq!(list[0]["expired"], false);
     assert_eq!(list[0]["id"], people_id.as_str());
     assert_eq!(list[0]["scope"], "publish");
     assert_eq!(list[0]["apps"], json!(["beta-app", "game"]));
@@ -1395,12 +1409,11 @@ async fn maker_tokens_sign_in_only_while_live(db: PgPool) {
     app.send(me()).await;
     assert!(OffsetDateTime::now_utc() - last_seen().await < time::Duration::minutes(1));
 
-    // Idle: agents get the desktop's 30 days, not the website's 7.
+    // Idle: no limit. A token lasts until the expiry its owner chose (up to a year), however
+    // long it goes unused.
     set("update sessions set last_seen_at = now() - interval '20 days' where id = $1::uuid").await;
     assert_eq!(app.send(me()).await.status(), StatusCode::OK);
-    set("update sessions set last_seen_at = now() - interval '31 days' where id = $1::uuid").await;
-    assert_eq!(app.send(me()).await.status(), StatusCode::UNAUTHORIZED);
-    set("update sessions set last_seen_at = now() where id = $1::uuid").await;
+    set("update sessions set last_seen_at = now() - interval '200 days' where id = $1::uuid").await;
     assert_eq!(app.send(me()).await.status(), StatusCode::OK);
 
     // Expired.
@@ -1818,6 +1831,382 @@ async fn agents_see_only_maker_notifications(db: PgPool) {
 }
 
 // ---------------------------------------------------------------------------------------------
+// Token lifetimes and expiry warnings
+
+/// Moves a token's expiry (and, so it counts as a long-lived token, when it was made).
+async fn expire_in(app: &TestApp, id: &str, made_days_ago: i64, expires_in: &str) {
+    sqlx::query(sqlx::AssertSqlSafe(format!(
+        "update sessions set created_at = now() - interval '{made_days_ago} days',
+                expires_at = now() + interval '{expires_in}' where id = $1::uuid"
+    )))
+    .bind(id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+async fn warned(app: &TestApp, id: &str) -> i16 {
+    sqlx::query_scalar("select expiry_warning from maker_tokens where session_id = $1::uuid")
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap()
+}
+
+async fn warn(app: &TestApp) -> usize {
+    slop_api::maker_agents::warn_expiring(&app.db)
+        .await
+        .unwrap()
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn maker_tokens_last_from_a_day_to_a_year(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "released").await;
+    for days in [1, 7, 30, 90, 180, 365] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/me/maker-tokens")
+                    .cookie(&maker)
+                    .json(json!({ "name": format!("{days} days"), "scope": "read", "days": days })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED, "{days}");
+        let t = body_json(res).await;
+        let lifetime = OffsetDateTime::parse(t["expires_at"].as_str().unwrap(), &Rfc3339).unwrap()
+            - OffsetDateTime::now_utc();
+        assert!(
+            (lifetime - time::Duration::days(days)).abs() < time::Duration::minutes(1),
+            "{days}: {lifetime}"
+        );
+    }
+    for days in [0, 366, 730] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/me/maker-tokens")
+                    .cookie(&maker)
+                    .json(json!({ "name": "Too long", "scope": "read", "days": days })),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{days}");
+        let err = body_json(res).await;
+        assert_eq!(err["error"]["field"], "days", "{err}");
+        assert!(err.to_string().contains("1 to 365"), "{err}");
+    }
+    assert_eq!(count(&app, "select count(*) from maker_tokens").await, 6);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn owners_are_warned_a_week_and_a_day_before_a_token_expires_and_when_it_has(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let (agent, laptop) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Laptop", "scope": "read", "days": 365 }),
+    )
+    .await;
+    let (_, short) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Short", "scope": "read", "days": 7 }),
+    )
+    .await;
+    let (_, removed) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Removed", "scope": "read", "days": 90 }),
+    )
+    .await;
+    let (_, late) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Late", "scope": "read", "days": 90 }),
+    )
+    .await;
+    let res = app
+        .send(req(Method::DELETE, format!("/v1/me/maker-tokens/{removed}")).cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+
+    // Nothing is near its expiry yet.
+    assert_eq!(warn(&app).await, 0);
+    assert!(notification_titles(&app, maker_id).await.is_empty());
+
+    // A week before: one warning, once.
+    expire_in(&app, &laptop, 300, "6 days 20 hours").await;
+    // Not for a removed token, nor one made for a week or less.
+    expire_in(&app, &removed, 80, "6 days").await;
+    sqlx::query("update sessions set expires_at = now() + interval '20 hours' where id = $1::uuid")
+        .bind(&short)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(warn(&app).await, 1);
+    assert_eq!(warn(&app).await, 0, "sent once");
+    assert_eq!(
+        notification_titles(&app, maker_id).await,
+        ["Your AI agent token \"Laptop\" expires in 7 days"]
+    );
+    assert_eq!(warned(&app, &laptop).await, 1);
+    assert_eq!(warned(&app, &short).await, 0);
+    assert_eq!(warned(&app, &removed).await, 0);
+    let (category, link, body): (String, String, String) =
+        sqlx::query_as("select category, link, body from notifications where user_id = $1")
+            .bind(maker_id)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(category, "agents");
+    assert_eq!(link, "/account/agents");
+    assert!(body.contains("Make a replacement"), "{body}");
+    assert!(body.contains("never paste it into an AI chat"), "{body}");
+
+    // The agent sees its own token's expiry, and is told to pass it on within a week.
+    let (failed, text) = maker_tool(&app, &agent, "whats_new", json!({})).await;
+    assert!(!failed, "{text}");
+    let inbox = parsed(&text);
+    assert_eq!(inbox["your_token"]["name"], "Laptop");
+    assert_eq!(inbox["your_token"]["days_left"], 7);
+    assert!(
+        inbox["your_token"]["note"]
+            .as_str()
+            .unwrap()
+            .contains("make a replacement on Slop under Account → AI agents"),
+        "{inbox}"
+    );
+    // The token-expiry kind is for the agent too (it's about maker work).
+    assert_eq!(inbox["items"][0]["category"], "agents", "{inbox}");
+    // A person's own inbox has no `your_token`.
+    let mine = body_json(
+        app.send(req(Method::GET, "/v1/me/notifications").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(mine.get("your_token").is_none(), "{mine}");
+
+    // A day before: one more, once.
+    expire_in(&app, &laptop, 300, "20 hours").await;
+    assert_eq!(warn(&app).await, 1);
+    assert_eq!(warn(&app).await, 0);
+    assert_eq!(warned(&app, &laptop).await, 2);
+    let titles = notification_titles(&app, maker_id).await;
+    assert!(
+        titles.contains(&"Your AI agent token \"Laptop\" expires within a day".to_string()),
+        "{titles:?}"
+    );
+
+    // A server that missed the week's warning sends only the latest one due.
+    expire_in(&app, &late, 80, "10 hours").await;
+    assert_eq!(warn(&app).await, 1);
+    assert_eq!(warned(&app, &late).await, 2);
+    assert_eq!(
+        count_for(
+            &app,
+            "select count(*) from notifications where user_id = $1 and title like '%\"Late\"%'",
+            maker_id
+        )
+        .await,
+        1
+    );
+
+    // Expired: it stops working, the owner is told once, and the page still lists it for a week.
+    expire_in(&app, &laptop, 300, "-1 hour").await;
+    assert_eq!(warn(&app).await, 1);
+    assert_eq!(warn(&app).await, 0);
+    assert_eq!(warned(&app, &laptop).await, 3);
+    assert!(
+        notification_titles(&app, maker_id)
+            .await
+            .contains(&"Your AI agent token \"Laptop\" has expired".to_string())
+    );
+    let res = app
+        .send(req(Method::GET, "/v1/me/apps").header("authorization", agent.clone()))
+        .await;
+    assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
+            .await,
+    )
+    .await;
+    let row = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == laptop.as_str())
+        .unwrap();
+    assert_eq!(row["expired"], true);
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["id"] != removed.as_str()),
+        "removed tokens aren't listed"
+    );
+    // A week after: gone from the list, and never warned about again.
+    expire_in(&app, &laptop, 300, "-8 days").await;
+    assert_eq!(warn(&app).await, 0);
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert!(
+        list.as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["id"] != laptop.as_str()),
+        "{list}"
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn token_expiry_emails_follow_their_own_switch(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    sqlx::query("update users set email = 'mia@example.com' where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    // The switch is listed with the others, and can be turned off.
+    let prefs = body_json(
+        app.send(req(Method::GET, "/v1/me/email-prefs").cookie(&maker))
+            .await,
+    )
+    .await;
+    let agents = prefs["categories"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["category"] == "agents")
+        .unwrap_or_else(|| panic!("{prefs}"));
+    assert_eq!(agents["email"], true);
+    assert!(
+        agents["label"]
+            .as_str()
+            .unwrap()
+            .contains("AI agent tokens")
+    );
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/email-prefs")
+                .cookie(&maker)
+                .json(json!({ "agents": false })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+
+    let (_, off) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Off", "scope": "read", "days": 90 }),
+    )
+    .await;
+    expire_in(&app, &off, 85, "5 days").await;
+    assert_eq!(warn(&app).await, 1);
+    assert_eq!(
+        slop_api::notify::queue_emails(&app.db, &app.config)
+            .await
+            .unwrap(),
+        0,
+        "switched off: in the bell only"
+    );
+    assert_eq!(count(&app, "select count(*) from email_outbox").await, 0);
+
+    // On again: emailed.
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/me/email-prefs")
+                .cookie(&maker)
+                .json(json!({ "agents": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let (_, on) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "On", "scope": "read", "days": 90 }),
+    )
+    .await;
+    expire_in(&app, &on, 85, "5 days").await;
+    assert_eq!(warn(&app).await, 1);
+    assert_eq!(
+        slop_api::notify::queue_emails(&app.db, &app.config)
+            .await
+            .unwrap(),
+        1
+    );
+    let (to, subject): (String, String) =
+        sqlx::query_as("select to_address, subject from email_outbox")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(to, "mia@example.com");
+    assert_eq!(subject, "Your AI agent token \"On\" expires in 5 days");
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_replacement_leaves_the_old_token_working_and_quiet(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = maker_with_app(&app, "released").await;
+    let settings = json!({ "name": "Laptop", "scope": "publish", "apps": ["game"], "days": 90 });
+    let (old, old_id) = maker_token(&app, &maker, settings.clone()).await;
+    expire_in(&app, &old_id, 85, "5 days").await;
+    // The replacement: the same settings, made later, lasting longer.
+    let (new, new_id) = maker_token(&app, &maker, settings).await;
+    let works = |auth: String| {
+        let r = req(Method::GET, "/v1/apps/game/manage").header("authorization", auth);
+        async { app.send(r).await.status() }
+    };
+    assert_eq!(
+        works(old.clone()).await,
+        StatusCode::OK,
+        "the old one still works"
+    );
+    assert_eq!(works(new.clone()).await, StatusCode::OK);
+    let list = body_json(
+        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(list.as_array().unwrap().len(), 2, "{list}");
+    let old_row = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == old_id.as_str())
+        .unwrap();
+    let new_row = list
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|t| t["id"] == new_id.as_str())
+        .unwrap();
+    for field in ["name", "scope", "apps", "people"] {
+        assert_eq!(old_row[field], new_row[field], "{field}");
+    }
+    // Replaced, so the owner isn't warned about the old one (but it's recorded as handled).
+    assert_eq!(warn(&app).await, 0);
+    assert_eq!(warned(&app, &old_id).await, 1);
+    assert!(notification_titles(&app, maker_id).await.is_empty());
+    // It keeps working until its own expiry, and removing the new one doesn't touch it.
+    let res = app
+        .send(req(Method::DELETE, format!("/v1/me/maker-tokens/{new_id}")).cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    assert_eq!(works(old.clone()).await, StatusCode::OK);
+    assert_eq!(works(new).await, StatusCode::UNAUTHORIZED);
+    // Without its replacement, the day-before warning comes as usual.
+    expire_in(&app, &old_id, 85, "20 hours").await;
+    assert_eq!(warn(&app).await, 1);
+    assert_eq!(
+        notification_titles(&app, maker_id).await,
+        ["Your AI agent token \"Laptop\" expires within a day"]
+    );
+}
+
+// ---------------------------------------------------------------------------------------------
 // Guides and the maker MCP endpoint
 
 async fn text_of(res: Response) -> (StatusCode, String, String) {
@@ -1860,7 +2249,15 @@ async fn the_maker_guides_are_for_signed_in_makers_and_agents(db: PgPool) {
     assert!(guide.starts_with("# Slop for makers' AI agents"), "{guide}");
     let (failed, text) = maker_tool(&app, &agent, "maker_guide", json!({})).await;
     assert!(!failed);
-    assert_eq!(text, guide);
+    // The agent's copy ends with its own token's expiry; a person's doesn't.
+    let (start, end) = text.split_at(guide.len());
+    assert_eq!(start, guide);
+    assert!(
+        end.starts_with("\n## Your token\n\nThis token (\"Claude\") expires in 30 days ("),
+        "{end}"
+    );
+    assert!(!end.contains("make a replacement"), "{end}");
+    assert!(!guide.contains("This token ("), "{guide}");
 
     // The publishing guide's sections, then one, by any capitalisation and with spaces around.
     let list = body_json(

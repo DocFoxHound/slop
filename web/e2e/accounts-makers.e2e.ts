@@ -5,7 +5,9 @@
 import AxeBuilder from "@axe-core/playwright";
 import { generateKeyPairSync } from "node:crypto";
 
-import { apiError, call, fake, noPasskeys, openAccount, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
+import { accountNav, apiError, call, fake, noPasskeys, openAccount, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
+import type { Page } from "@playwright/test";
+
 import { expect, server, signIn, test } from "./fixtures";
 
 /** A new Ed25519 public key, as the line in id_ed25519.pub. */
@@ -39,12 +41,18 @@ test.describe("AI agent tokens", () => {
     await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
     // Only a publishing token is told about passkeys.
     await expect(section.getByText(/Confirm with a passkey before making a token/)).toHaveCount(0);
-    await section.getByRole("button", { name: "Copy command" }).click();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toMatch(/^claude mcp add --transport http slop .*slopmk_/);
+    // The command connects Claude Code with the saved variable, never the token.
+    await section.getByRole("button", { name: "Copy the Claude Code command" }).click();
+    const command = await page.evaluate(() => navigator.clipboard.readText());
+    expect(command).toBe(
+      `claude mcp add --transport http --scope user slop ${server.url}/v1/maker/mcp --header 'Authorization: Bearer \${SLOP_TOKEN}'`,
+    );
     await section.getByRole("button", { name: "Done" }).click();
     const row = section.getByRole("listitem").filter({ hasText: "Read-only helper" });
     await expect(row).toContainText("looks · lantern-keep");
-    await expect(row).toContainText(`expires ${inDays(7)}`);
+    await expect(row.getByText("expires in 7 days")).toHaveAttribute("title", inDays(7));
+    // A token made for a week isn't flagged: it's meant to be short.
+    await expect(row.getByText("Expires soon")).toHaveCount(0);
     await row.getByRole("button", { name: "Remove" }).click();
     await expect(row).toHaveCount(0);
   });
@@ -60,7 +68,7 @@ test.describe("AI agent tokens", () => {
     await section.getByRole("button", { name: "Done" }).click();
     const row = section.getByRole("listitem").filter({ hasText: "Publisher bot" });
     await expect(row).toContainText("publishes · all apps");
-    await expect(row).toContainText(`expires ${inDays(1)}`);
+    await expect(row.getByText("expires within a day")).toHaveAttribute("title", inDays(1));
     await row.getByRole("button", { name: "Remove" }).click();
     await expect(row).toHaveCount(0);
   });
@@ -98,6 +106,167 @@ test.describe("AI agent tokens", () => {
     await section.getByRole("button", { name: "Done" }).click();
     await section.getByRole("listitem").filter({ hasText: "Straight through" }).getByRole("button", { name: "Remove" }).click();
     await expect(section.getByRole("listitem").filter({ hasText: "Straight through" })).toHaveCount(0);
+  });
+});
+
+const seriousProblems = async (page: Page, selector: string) => {
+  const results = await new AxeBuilder({ page }).include(selector).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  return results.violations
+    .filter((v) => v.impact === "serious" || v.impact === "critical")
+    .map((v) => `${v.id}: ${v.help} (${v.nodes.map((n) => n.target.join(" ")).slice(0, 3).join(", ")})`);
+};
+
+test.describe("AI agent token setup and expiry", () => {
+  test("a 12-month token's setup never puts the token in a command, only in the one save step", async ({ page, context }) => {
+    await context.grantPermissions(["clipboard-read", "clipboard-write"], { origin: server.url });
+    await signIn(page, "maker");
+    await openAccount(page, "agents");
+    const section = page.locator("#ai-agents");
+    await section.getByRole("textbox", { name: "Name" }).fill("Year-long helper");
+    await section.getByRole("combobox", { name: "Can" }).selectOption("read");
+    const lifetime = section.getByRole("combobox", { name: "Expires after" });
+    await expect(lifetime.locator("option")).toHaveText(["1 day", "7 days", "30 days", "3 months", "6 months", "12 months"]);
+    await lifetime.selectOption({ label: "12 months" });
+    const made = page.waitForResponse((r) => r.url().endsWith("/v1/me/maker-tokens") && r.request().method() === "POST");
+    await section.getByRole("button", { name: "Make token" }).click();
+    const res = await made;
+    expect(res.request().postDataJSON()).toMatchObject({ name: "Year-long helper", days: 365 });
+    const { secret, id } = (await res.json()) as { secret: string; id: string };
+    expect(secret).toMatch(/^slopmk_/);
+
+    const setup = section.getByRole("region", { name: "Set up “Year-long helper” on your computer" });
+    await expect(setup.getByRole("note")).toContainText("Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.");
+    await expect(setup.getByRole("note")).toContainText("It's a password for your Slop account.");
+    await expect(setup.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(setup.getByText(/not after Claude Code's/)).toBeVisible();
+    await setup.getByRole("button", { name: "Copy the token" }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(secret);
+
+    // Every computer and every tool: the token appears in the token box and the one command that
+    // saves it on the computer, and nowhere else.
+    const computers = setup.getByRole("tablist", { name: "Your computer" });
+    const tools = setup.getByRole("tablist", { name: "Your AI tool" });
+    for (const os of ["Windows", "macOS", "Linux"]) {
+      await computers.getByRole("tab", { name: os }).click();
+      await expect(computers.getByRole("tab", { name: os })).toHaveAttribute("aria-selected", "true");
+      for (const tool of ["Claude Code", "Codex (OpenAI)", "Grok Build (xAI)", "Other AI tools"]) {
+        await tools.getByRole("tab", { name: tool }).click();
+        for (const more of await setup.locator("details").all()) await more.evaluate((d) => ((d as HTMLDetailsElement).open = true));
+        const blocks = await setup.locator("pre").allTextContents();
+        const withToken = blocks.filter((b) => b.includes(secret));
+        const save = os === "Windows" ? `setx SLOP_TOKEN "${secret}"` : `echo 'export SLOP_TOKEN="${secret}"' >> ${os === "macOS" ? "~/.zshrc" : "~/.bashrc"}`;
+        expect(withToken, `${os} / ${tool}`).toEqual([secret, save]);
+        expect(blocks.join("\n"), `${os} / ${tool}`).not.toContain(`Bearer ${secret}`);
+        // Nothing else on the panel shows it either (the header help says "your token").
+        const text = (await setup.innerText()).split(secret).length - 1;
+        expect(text, `${os} / ${tool}`).toBe(2);
+      }
+    }
+    await computers.getByRole("tab", { name: "Windows" }).click();
+    await tools.getByRole("tab", { name: "Codex (OpenAI)" }).click();
+    await setup.getByRole("button", { name: "Copy the Codex command" }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+      `codex mcp add slop --url ${server.url}/v1/maker/mcp --bearer-token-env-var SLOP_TOKEN`,
+    );
+    await tools.getByRole("tab", { name: "Other AI tools" }).click();
+    await expect(setup.getByText("If a tool asks for the token in its chat, don't paste it there:")).toBeVisible();
+    await expect(setup.getByText(`${server.url}/v1/maker/mcp`, { exact: true })).toBeVisible();
+    await setup.getByRole("button", { name: "Copy what to ask your AI" }).click();
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Read maker_guide, then publish my game on Slop.");
+
+    // The tabs work by keyboard.
+    await computers.getByRole("tab", { name: "Windows" }).focus();
+    await page.keyboard.press("ArrowRight");
+    await expect(computers.getByRole("tab", { name: "macOS" })).toBeFocused();
+    await expect(computers.getByRole("tab", { name: "macOS" })).toHaveAttribute("aria-selected", "true");
+    await expect(setup.getByText("Press ⌘ Command and Space together")).toBeVisible();
+    await page.keyboard.press("End");
+    await expect(computers.getByRole("tab", { name: "Linux" })).toBeFocused();
+    await expect(setup.getByText(`echo 'export SLOP_TOKEN="${secret}"' >> ~/.bashrc`)).toBeVisible();
+
+    expect(await seriousProblems(page, "#ai-agents")).toEqual([]);
+
+    await setup.getByRole("button", { name: "Done" }).click();
+    await expect(setup).toHaveCount(0);
+    const row = section.getByRole("listitem").filter({ hasText: "Year-long helper" });
+    await expect(row.getByText("expires in 365 days")).toHaveAttribute("title", inDays(365));
+    await call("maker", "DELETE", `/v1/me/maker-tokens/${id}`);
+  });
+
+  test("a token near its expiry is flagged, badged, and Make a replacement fills in its settings", async ({ page }) => {
+    // Tokens can't be aged on the test server: the list gets one expiring in 3 days and one that
+    // expired yesterday, beside the real ones.
+    const day = 86_400_000;
+    const iso = (days: number) => new Date(Date.now() + days * day).toISOString();
+    const fakeToken = (id: string, name: string, made: number, expires: number, extra: object = {}) => ({
+      id,
+      name,
+      scope: "publish",
+      apps: ["lantern-keep"],
+      people: true,
+      passkey_proved: false,
+      created_at: iso(made),
+      expires_at: iso(expires),
+      last_used_at: iso(-1),
+      expired: expires <= 0,
+      ...extra,
+    });
+    await tweak(page, "/v1/me/maker-tokens", (list: object[]) => [
+      fakeToken("00000000-0000-7000-8000-000000000001", "Old laptop", -87, 3),
+      fakeToken("00000000-0000-7000-8000-000000000002", "Studio PC", -366, -1, { scope: "read", apps: [], people: false }),
+      ...list,
+    ]);
+    await signIn(page, "maker");
+    await openAccount(page, "agents");
+    const section = page.locator("#ai-agents");
+
+    // The section's badge, read out with its name.
+    await expect(accountNav(page).getByRole("link", { name: /AI agents & keys.*AI agent token has expired/ })).toBeVisible();
+
+    const old = section.getByRole("listitem").filter({ hasText: "Old laptop" });
+    await expect(old.getByText("Expires soon")).toBeVisible();
+    await expect(old.getByText("expires in 3 days")).toHaveAttribute("title", inDays(3));
+    await expect(old).toHaveClass(/token-soon/);
+    const studio = section.getByRole("listitem").filter({ hasText: "Studio PC" });
+    await expect(studio.getByText("Expired", { exact: true })).toBeVisible();
+    await expect(studio.getByText(/expired on .*: it no longer works/)).toBeVisible();
+    await expect(studio.getByRole("button", { name: "Make a replacement for Studio PC" })).toBeVisible();
+
+    expect(await seriousProblems(page, "#ai-agents")).toEqual([]);
+
+    await old.getByRole("button", { name: "Make a replacement for Old laptop" }).click();
+    const form = section.getByRole("form", { name: "Make a token" });
+    await expect(form.getByRole("status")).toContainText("Making a replacement for “Old laptop”, with the same settings.");
+    await expect(form.getByRole("status")).toContainText(`The old token keeps working until ${inDays(3)}`);
+    await expect(form.getByRole("textbox", { name: "Name" })).toHaveValue("Old laptop");
+    await expect(form.getByRole("textbox", { name: "Name" })).toBeFocused();
+    await expect(form.getByRole("combobox", { name: "Can" })).toHaveValue("publish");
+    await expect(form.getByRole("checkbox", { name: "Only Lantern Keep" })).toBeChecked();
+    await expect(form.getByRole("checkbox", { name: /People jobs too/ })).toBeChecked();
+    await expect(form.getByRole("combobox", { name: "Expires after" })).toHaveValue("90");
+    // Replacing the expired one picks up its own settings, a year.
+    await studio.getByRole("button", { name: "Make a replacement for Studio PC" }).click();
+    await expect(form.getByRole("textbox", { name: "Name" })).toHaveValue("Studio PC");
+    await expect(form.getByRole("combobox", { name: "Can" })).toHaveValue("read");
+    await expect(form.getByRole("radio", { name: /All my apps/ })).toBeChecked();
+    await expect(form.getByRole("checkbox", { name: /People jobs too/ })).not.toBeChecked();
+    await expect(form.getByRole("combobox", { name: "Expires after" })).toHaveValue("365");
+    await expect(form.getByRole("status")).toContainText("(it has expired)");
+
+    // Making it sends those settings; the old ones are left as they were.
+    const made = page.waitForResponse((r) => r.url().endsWith("/v1/me/maker-tokens") && r.request().method() === "POST");
+    await form.getByRole("button", { name: "Make token" }).click();
+    const res = await made;
+    expect(res.request().postDataJSON()).toEqual({ name: "Studio PC", scope: "read", apps: [], people: false, days: 365 });
+    const { id } = (await res.json()) as { id: string };
+    await expect(section.getByRole("region", { name: "Set up “Studio PC” on your computer" })).toBeVisible();
+    await expect(form.getByRole("status")).toHaveCount(0);
+    // The new one replaces the expired one, so it's no longer flagged, and the badge goes to the
+    // one still expiring.
+    await expect(studio.first().getByText(/replaced by a newer “Studio PC”/)).toBeVisible();
+    await expect(accountNav(page).getByRole("link", { name: /AI agents & keys.*an AI agent token expires soon/ })).toBeVisible();
+    expect((await call("maker", "GET", "/v1/me/maker-tokens")).map((t: { id: string }) => t.id)).toContain(id);
+    await call("maker", "DELETE", `/v1/me/maker-tokens/${id}`);
   });
 });
 

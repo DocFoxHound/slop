@@ -24,7 +24,8 @@ test("a read-only token for one app, for a day", async ({ page }) => {
   await section.getByRole("button", { name: "Make token" }).click();
 
   await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
-  await expect(section.getByText(/claude mcp add --transport http slop .*slopmk_/)).toBeVisible();
+  await expect(section.getByText("Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.")).toBeVisible();
+  await expect(section.getByText(/claude mcp add .*slopmk_/)).toHaveCount(0);
   // Looking needs no passkey.
   await expect(section.getByText(/Confirm with a passkey before making a token/)).toHaveCount(0);
   await section.getByRole("button", { name: "Done" }).click();
@@ -32,7 +33,7 @@ test("a read-only token for one app, for a day", async ({ page }) => {
   const row = section.getByRole("listitem").filter({ hasText: name });
   await expect(row.getByText("looks · pocket-golf")).toBeVisible();
   const tomorrow = new Date(Date.now() + 86_400_000).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-  await expect(row.getByText(`expires ${tomorrow}`)).toBeVisible();
+  await expect(row.getByText("expires within a day")).toHaveAttribute("title", tomorrow);
   // It really is limited to Pocket Golf.
   const [made] = (await ok("maker2", "GET", "/v1/me/maker-tokens")).filter((t: { name: string }) => t.name === name);
   expect(made.apps).toEqual(["pocket-golf"]);

@@ -3,12 +3,17 @@
 // maker_agents.rs). The agent does the work in its own session; Slop gives it tools and checks.
 // An agent can't accept agreements, so a publishing token needs the Publisher Agreement accepted
 // here: it's shown when the token is made, and again here whenever a new version waits.
+// Each token shows when it expires (agentTokens.ts); one expiring soon or expired offers Make a
+// replacement, which fills in the form with its settings. A new token's setup (AgentSetup.tsx)
+// never puts the token into an AI chat.
 
-import { useState } from "react";
+import { useRef, useState } from "react";
 
 import { api, ApiError, type AgentToken, type AppSummary, type LegalNotice } from "../api";
+import { LIFETIMES, SOON_DAYS, expiryText, isExpired, lifetimeOf, needsReplacing, replacementOf } from "../agentTokens";
 import { formatDate } from "../format";
 import { useLoad, type Loaded } from "../hooks";
+import { AgentSetup, type MadeToken } from "./AgentSetup";
 import { AcceptDocument, useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
 
@@ -20,9 +25,11 @@ interface Waiting {
   notice: LegalNotice | null;
 }
 
-/** `notices`: the account page's agreements to hear about, reloaded here once one is accepted. */
-export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
-  const tokens = useLoad(() => api.agentTokens(), []);
+/**
+ * `notices`: the account page's agreements to hear about, reloaded here once one is accepted.
+ * `tokens`: the account's agent tokens (the account page's badge counts the expiring ones).
+ */
+export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; tokens: Loaded<AgentToken[]> }) {
   const apps = useLoad(() => api.myApps(), []);
   const publisher = useLoad(() => api.legal.mine("publisher"), []);
   const terms = useTermsGate();
@@ -34,13 +41,26 @@ export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
   const [days, setDays] = useState(30);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [created, setCreated] = useState<{
-    secret: string;
-    claude_command: string;
-    mcp_url: string;
-    passkey_proved: boolean;
-    scope: AgentToken["scope"];
-  }>();
+  const [created, setCreated] = useState<MadeToken & { passkey_proved: boolean; scope: AgentToken["scope"] }>();
+  /** The token a replacement is being made for. */
+  const [replacing, setReplacing] = useState<AgentToken>();
+  const nameInput = useRef<HTMLInputElement>(null);
+  const now = Date.now();
+
+  /** Fills in the form with an expiring token's settings; the old one keeps working meanwhile. */
+  const replace = (t: AgentToken) => {
+    const mine = new Set((apps.data ?? []).map((a) => a.slug));
+    setReplacing(t);
+    setName(t.name);
+    setScope(t.scope);
+    setOnly(t.apps.filter((a) => mine.size === 0 || mine.has(a)));
+    setPeople(t.people);
+    setDays(lifetimeOf(t));
+    setCreated(undefined);
+    setError(undefined);
+    nameInput.current?.scrollIntoView({ block: "center" });
+    nameInput.current?.focus();
+  };
 
   const create = async () => {
     setBusy(true);
@@ -50,6 +70,7 @@ export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
       const t = await terms.guard(() => api.createAgentToken({ name, scope, apps: only, people, days }));
       setCreated(t);
       setName("");
+      setReplacing(undefined);
       tokens.reload();
       if (t.scope === "publish") agreementsChanged();
     } catch (e) {
@@ -101,7 +122,8 @@ export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
         submit releases with notes, read Slop's checks and get exact fixes, register community builds and mods, and
         offer fixes to other apps. With <b>People</b> access it can also watch your jobs, send quotes and talk in job
         conversations. It can never pay, accept agreements, change payouts or your account. Your agent does the work on
-        your side; Slop runs no AI for it. Each token lasts at most 30 days, and you can remove it any time.
+        your side; Slop runs no AI for it. Each token lasts up to 12 months: Slop reminds you a week and a day before it
+        expires, and you can remove it any time.
       </p>
       {terms.prompt}
       {waiting.map((w) => (
@@ -137,15 +159,33 @@ export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
       )}
       <form
         className="panel panel-pad form"
+        aria-label="Make a token"
         onSubmit={(e) => {
           e.preventDefault();
           void create();
         }}
       >
+        {replacing && (
+          <p className="notice agent-replacing" role="status">
+            Making a replacement for “{replacing.name}”, with the same settings. The old token keeps working until{" "}
+            {formatDate(replacing.expires_at)}
+            {isExpired(replacing, now) ? " (it has expired)" : ""}; remove it once the new one is set up.{" "}
+            <button type="button" className="btn small ghost" onClick={() => setReplacing(undefined)}>
+              Cancel
+            </button>
+          </p>
+        )}
         <div className="row-2">
           <label>
             Name
-            <input value={name} maxLength={60} required placeholder="e.g. Claude on my laptop" onChange={(e) => setName(e.target.value)} />
+            <input
+              ref={nameInput}
+              value={name}
+              maxLength={60}
+              required
+              placeholder="e.g. Claude on my laptop"
+              onChange={(e) => setName(e.target.value)}
+            />
           </label>
           <label>
             Can
@@ -181,9 +221,9 @@ export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
         <label>
           Expires after
           <select value={days} onChange={(e) => setDays(Number(e.target.value))}>
-            {[1, 7, 30].map((d) => (
-              <option key={d} value={d}>
-                {d} {d === 1 ? "day" : "days"}
+            {LIFETIMES.map((l) => (
+              <option key={l.days} value={l.days}>
+                {l.label}
               </option>
             ))}
           </select>
@@ -195,30 +235,24 @@ export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
         </div>
       </form>
       {created && (
-        <div className="panel panel-pad ai-notice">
-          <b>Copy it now: Slop won't show this token again.</b>
-          <p className="small">Connect Claude Code to Slop (MCP), then ask it to read maker_guide:</p>
-          <pre className="code-block ai-prompt" tabIndex={0}>
-            {created.claude_command}
-          </pre>
-          <p className="small">
-            Other agents: send <code>Authorization: Bearer {created.secret}</code> to <code>{created.mcp_url}</code>.
-          </p>
-          {!created.passkey_proved && created.scope === "publish" && (
-            <p className="small">
-              Confirm with a passkey before making a token if you want it to publish once Slop asks you for one (30
-              days after you first publish).
-            </p>
-          )}
-          <div className="row-actions">
-            <button className="btn small" type="button" onClick={() => void navigator.clipboard.writeText(created.claude_command)}>
-              Copy command
-            </button>
-            <button className="btn small ghost" type="button" onClick={() => setCreated(undefined)}>
-              Done
-            </button>
-          </div>
-        </div>
+        <AgentSetup
+          token={created}
+          footer={
+            <>
+              {!created.passkey_proved && created.scope === "publish" && (
+                <p className="small">
+                  Confirm with a passkey before making a token if you want it to publish once Slop asks you for one (30
+                  days after you first publish).
+                </p>
+              )}
+              <div className="row-actions">
+                <button className="btn small ghost" type="button" onClick={() => setCreated(undefined)}>
+                  Done
+                </button>
+              </div>
+            </>
+          }
+        />
       )}
       {error && (
         <p className="form-error" role="alert">
@@ -227,25 +261,53 @@ export function AiAgents({ notices }: { notices: Loaded<LegalNotice[]> }) {
       )}
       {tokens.error && <ErrorState error={tokens.error} onRetry={tokens.reload} />}
       {tokens.data && tokens.data.length > 0 && (
-        <ul className="sessions panel">
-          {tokens.data.map((t) => (
-            <li key={t.id}>
-              <div>
-                <b>{t.name}</b>{" "}
-                <span className="muted small">
-                  {t.scope === "publish" ? "publishes" : "looks"} · {t.apps.length ? t.apps.join(", ") : "all apps"}
-                  {t.people ? " · People jobs" : ""}
-                </span>
-                <div className="muted small">
-                  Made {formatDate(t.created_at)} · last used {formatDate(t.last_used_at)} · expires{" "}
-                  {formatDate(t.expires_at)}
+        <ul className="sessions panel agent-tokens">
+          {tokens.data.map((t) => {
+            const all = tokens.data ?? [];
+            const expired = isExpired(t, now);
+            const replaced = replacementOf(t, all, now);
+            const soon = needsReplacing(t, all, SOON_DAYS, now);
+            return (
+              <li key={t.id} className={expired ? "token-expired" : soon ? "token-soon" : undefined}>
+                <div>
+                  <b>{t.name}</b>{" "}
+                  <span className="muted small">
+                    {t.scope === "publish" ? "publishes" : "looks"} · {t.apps.length ? t.apps.join(", ") : "all apps"}
+                    {t.people ? " · People jobs" : ""}
+                  </span>
+                  {expired ? (
+                    <span className="badge token-flag bad">Expired</span>
+                  ) : soon ? (
+                    <span className="badge token-flag soon">Expires soon</span>
+                  ) : null}
+                  <div className="small token-expiry">
+                    <span className="muted">
+                      Made {formatDate(t.created_at)} · last used {formatDate(t.last_used_at)} ·{" "}
+                    </span>
+                    <time dateTime={t.expires_at} title={formatDate(t.expires_at)} className={soon || expired ? "" : "muted"}>
+                      {expired ? `expired on ${formatDate(t.expires_at)}: it no longer works` : expiryText(t.expires_at, now)}
+                    </time>
+                    {replaced && <span className="muted"> · replaced by a newer “{replaced.name}”</span>}
+                  </div>
                 </div>
-              </div>
-              <button className="btn small" type="button" onClick={() => void revoke(t.id)}>
-                Remove
-              </button>
-            </li>
-          ))}
+                <div className="row-actions token-actions">
+                  {soon && (
+                    <button
+                      className="btn small slime"
+                      type="button"
+                      aria-label={`Make a replacement for ${t.name}`}
+                      onClick={() => replace(t)}
+                    >
+                      Make a replacement
+                    </button>
+                  )}
+                  <button className="btn small" type="button" onClick={() => void revoke(t.id)}>
+                    Remove
+                  </button>
+                </div>
+              </li>
+            );
+          })}
         </ul>
       )}
     </section>
