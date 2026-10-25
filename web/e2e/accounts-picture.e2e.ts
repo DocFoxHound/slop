@@ -52,6 +52,8 @@ test("choosing the GitHub picture shows Slop's copy beside her name, and the let
   // Back to the letter: gone from the profile.
   await signIn(page, "pictured");
   await page.goto("/account#picture");
+  // Her GitHub picture shows as chosen once loaded (never the letter first, which would be wrong).
+  await expect(github).toBeChecked();
   await letter.check();
   await expect(letter).toBeChecked();
   await expect(section.locator(".picture-current img")).toHaveCount(0);
