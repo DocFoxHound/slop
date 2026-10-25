@@ -173,7 +173,8 @@ export function Layout() {
         <Outlet key={reloads} />
       </main>
 
-      {isDesktop && (
+      {/* The Library has its own, at the foot of its app list (with names for first installs). */}
+      {isDesktop && !location.pathname.startsWith("/library") && (
         <div className="downloads-dock">
           <DownloadsStatus />
         </div>
