@@ -34,7 +34,7 @@ use crate::{
 pub const CATEGORIES: &[(&str, &str)] = &[
     (
         "jobs",
-        "People jobs: offers, payments, deliveries, messages and problems",
+        "People jobs: offers, payments, deliveries, messages and problems; and your People page's review",
     ),
     (
         "interested",

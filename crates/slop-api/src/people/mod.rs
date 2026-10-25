@@ -356,6 +356,9 @@ pub struct MyProfile {
     /// Whether Stripe payments are switched on for this server (or simulated).
     #[sqlx(skip)]
     payments: &'static str,
+    /// Where the page is: draft, waiting for review, turned down, live or hidden.
+    #[sqlx(skip)]
+    status: PageStatus,
 }
 
 async fn load_my_profile(state: &AppState, user_id: Uuid) -> ApiResult<MyProfile> {
@@ -371,7 +374,86 @@ async fn load_my_profile(state: &AppState, user_id: Uuid) -> ApiResult<MyProfile
     .await?
     .ok_or(ApiError::NotFound)?;
     p.payments = stripe::mode(state).name();
+    p.status = page_status(&state.db, user_id).await?;
     Ok(p)
+}
+
+/// Where a creative's page is, for the creative themselves (their editor, their page, /people,
+/// their account). Only portfolios are reviewed (portfolio.rs): the profile's own text is saved
+/// as it is, and shows once the page is live.
+#[derive(Serialize, Default, Debug, PartialEq)]
+pub struct PageStatus {
+    /// - `draft`: no portfolio sent yet (or none could be read); only the creative sees the page.
+    /// - `waiting`: the first portfolio waits for a reviewer; only the creative sees the page.
+    /// - `turned_down`: the newest portfolio was turned down (see `reason`) and none is approved
+    ///   yet; the creative fixes it and checks again.
+    /// - `live`: an approved portfolio; everyone sees the page.
+    /// - `hidden`: hidden by a moderation decision (`reason`), or the account is suspended.
+    pub state: &'static str,
+    /// turned_down: the reviewer's reason. live: why a newer portfolio was turned down (the
+    /// approved one still shows). hidden: the decision's reason (none when suspended).
+    pub reason: Option<String>,
+    /// live: a newer portfolio waits for review; the approved one shows until it's decided.
+    pub update_waiting: bool,
+    /// When the portfolio waiting for review was read.
+    #[serde(with = "time::serde::rfc3339::option")]
+    pub waiting_since: Option<OffsetDateTime>,
+    /// What went wrong the last time Slop read the portfolio, if anything.
+    pub problem: Option<String>,
+    /// hidden: because the account is suspended.
+    pub suspended: bool,
+}
+
+pub async fn page_status(db: &sqlx::PgPool, creative_id: Uuid) -> sqlx::Result<PageStatus> {
+    #[derive(sqlx::FromRow)]
+    struct Row {
+        has_live: bool,
+        hidden_reason: Option<String>,
+        problem: Option<String>,
+        suspended: bool,
+        pending_at: Option<OffsetDateTime>,
+        rejected_reason: Option<String>,
+    }
+    // The newest turned-down portfolio counts only when it's newer than the approved one.
+    let r: Row = sqlx::query_as(
+        "select c.portfolio_set_id is not null as has_live, c.hidden_reason,
+                c.portfolio_problem as problem, u.suspended_at is not null as suspended,
+                (select max(ps.created_at) from portfolio_sets ps
+                  where ps.creative_id = c.user_id and ps.status = 'pending') as pending_at,
+                (select ps.status_reason from portfolio_sets ps
+                  where ps.creative_id = c.user_id and ps.status = 'rejected'
+                    and ps.created_at > coalesce((select l.created_at from portfolio_sets l
+                                                  where l.id = c.portfolio_set_id), '-infinity')
+                  order by ps.created_at desc limit 1) as rejected_reason
+         from creatives c join users u on u.id = c.user_id where c.user_id = $1",
+    )
+    .bind(creative_id)
+    .fetch_one(db)
+    .await?;
+    let mut s = PageStatus {
+        problem: r.problem,
+        waiting_since: r.pending_at,
+        ..PageStatus::default()
+    };
+    if r.hidden_reason.is_some() || r.suspended {
+        s.state = "hidden";
+        s.reason = r.hidden_reason;
+        s.suspended = r.suspended;
+    } else if r.has_live {
+        s.state = "live";
+        s.update_waiting = r.pending_at.is_some();
+        if r.pending_at.is_none() {
+            s.reason = r.rejected_reason;
+        }
+    } else if r.pending_at.is_some() {
+        s.state = "waiting";
+    } else if r.rejected_reason.is_some() {
+        s.state = "turned_down";
+        s.reason = r.rejected_reason;
+    } else {
+        s.state = "draft";
+    }
+    Ok(s)
 }
 
 async fn my_profile(
@@ -893,8 +975,10 @@ struct Page {
     reviews: Vec<ReviewView>,
     worked_on: Vec<WorkedOn>,
     is_me: bool,
-    /// For the creative's own view: live, waiting (for the first portfolio review) or hidden.
+    /// Always live for others; for the creative themselves, `mine.state`.
     status: &'static str,
+    /// Only for the creative themselves: where their page is (`PageStatus`).
+    mine: Option<PageStatus>,
     hidden_reason: Option<String>,
     /// The account was closed: the page is kept, frozen, and takes no new work.
     closed: bool,
@@ -956,13 +1040,12 @@ async fn page(
     if !live && !is_me {
         return Err(ApiError::NotFound);
     }
-    let status = if row.hidden_reason.is_some() || row.suspended {
-        "hidden"
-    } else if live {
-        "live"
+    let mine = if is_me {
+        Some(page_status(&state.db, row.user_id).await?)
     } else {
-        "waiting"
+        None
     };
+    let status = mine.as_ref().map_or("live", |m| m.state);
     let order = row.card.portfolio_order.clone();
     let mut works: Vec<Work> = row.card.works.clone().unwrap_or_default();
     portfolio::arrange(&mut works, &order);
@@ -1007,6 +1090,7 @@ async fn page(
         worked_on,
         is_me,
         status,
+        mine,
         hidden_reason: if is_me { row.hidden_reason } else { None },
         closed: row.closed,
         card: row.card.into_card(&state.config),

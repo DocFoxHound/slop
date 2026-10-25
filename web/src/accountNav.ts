@@ -36,7 +36,7 @@ export const ACCOUNT_SECTIONS: AccountSection[] = [
     label: "Profile",
     intro: "How you appear on Slop, and what other people can see.",
     group: "Account",
-    parts: ["profile", "details", "picture", "privacy"],
+    parts: ["profile", "details", "picture", "people-page", "privacy"],
   },
   {
     id: "security",
