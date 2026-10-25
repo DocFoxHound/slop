@@ -1113,3 +1113,132 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
   .account-nav-link.on { border-color: var(--slime); background: var(--slime-soft); color: var(--slime); }
   .account-section-head h2 { font-size: 19px; }
 }
+
+/* ==== Library, laid out like Steam's (pages/Library.tsx, components/Downloads.tsx) ============
+   A sidebar of your apps beside the selected app: banner, action bar, tabs, activity and
+   friends. The two panes scroll on their own; on a phone they're two screens. Also the rating
+   at the top of an app's page and the library's "is it Slop?" prompt (components/RatingPanel). */
+.lib { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: 100%; min-height: 0; }
+.lib-side { display: flex; flex-direction: column; min-height: 0; background: #10141a; border-right: 1px solid var(--line); }
+.lib-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 12px 8px 14px; }
+.lib-side-head h1 { font-size: 13px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); }
+.lib-side .lib-signin { margin: 0 12px 10px; }
+.lib-side .lib-pop-panel { left: 0; right: auto; }
+.lib-filters { display: grid; grid-template-columns: 1fr; gap: 6px; padding: 0 12px 10px; border-bottom: 1px solid var(--line); }
+.lib-filters select, .lib-search { width: 100%; padding: 6px 10px; background: var(--panel-2); border: 1px solid var(--line); border-radius: 6px; }
+.lib-search:focus { outline: 2px solid var(--slime); outline-offset: -1px; }
+.lib-list { flex: 1; min-height: 0; overflow-y: auto; padding: 6px 0 12px; }
+.lib-none { padding: 8px 14px; }
+.lib-group { margin: 8px 0 2px; }
+.lib-group button { display: flex; align-items: center; gap: 6px; width: 100%; padding: 4px 14px; border: 0; background: none; color: var(--text-2); font-size: 11px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; cursor: pointer; text-align: left; }
+.lib-group button:hover { color: var(--text); }
+.lib-count { color: var(--muted); font-weight: 600; }
+.lib-rows { list-style: none; margin: 0; padding: 0; }
+.lib-row { display: flex; align-items: center; gap: 8px; padding: 3px 12px 3px 22px; color: var(--text); font-size: 13px; line-height: 1.6; text-decoration: none !important; white-space: nowrap; overflow: hidden; }
+.lib-row:hover { background: var(--panel-2); }
+.lib-row.on { background: var(--panel-3); box-shadow: inset 3px 0 0 var(--slime); }
+.lib-row:focus-visible { outline-offset: -2px; }
+.lib-row.nested { padding-left: 40px; }
+.lib-row.dim { color: var(--muted); }
+.lib-row.dim .lib-app-icon { filter: grayscale(0.8); opacity: 0.75; }
+.lib-row-name { overflow: hidden; text-overflow: ellipsis; flex: 0 1 auto; min-width: 0; }
+.lib-row-status { color: var(--slime); flex: none; }
+.lib-app-icon { display: inline-grid; place-items: center; border-radius: 4px; overflow: hidden; color: #fff; font-weight: 900; line-height: 1; flex: none; }
+.lib-app-icon img { width: 100%; height: 100%; object-fit: cover; display: block; }
+
+.lib-main { min-width: 0; min-height: 0; overflow-y: auto; padding-bottom: 64px; }
+.lib-back { display: none; }
+.lib-hero { position: relative; height: clamp(200px, 34vh, 340px); overflow: hidden; display: flex; align-items: flex-end; }
+.lib-hero-img { position: absolute; inset: 0; width: 100%; height: 100%; object-fit: cover; }
+.lib-hero::after { content: ""; position: absolute; inset: 0; background: linear-gradient(180deg, rgba(13, 16, 21, 0) 35%, rgba(13, 16, 21, 0.92)); pointer-events: none; }
+.lib-hero-text { position: relative; z-index: 1; display: flex; align-items: flex-end; gap: 14px; padding: 0 24px 18px; min-width: 0; }
+.lib-hero-text .lib-app-icon { border-radius: 10px; box-shadow: 0 4px 16px rgba(0, 0, 0, 0.5); }
+.lib-hero h2 { font-size: clamp(24px, 3.4vw, 40px); font-weight: 900; letter-spacing: -0.02em; color: #fff; text-shadow: 0 2px 12px rgba(0, 0, 0, 0.7); overflow-wrap: anywhere; }
+.lib-hero h2:focus { outline: none; }
+.lib-hero-sub { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin-top: 6px; font-size: 13px; color: var(--text); text-shadow: 0 1px 6px rgba(0, 0, 0, 0.8); }
+.lib-body { padding: 0 24px; }
+.lib-body > .notice { margin: 14px 0 0; }
+.lib-controls { display: flex; flex-direction: column; gap: 10px; }
+.lib-controls > .notice { margin: 0; }
+.lib-bar { display: flex; flex-wrap: wrap; align-items: center; gap: 12px 16px; margin: 16px 0 12px; padding: 14px 16px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+.lib-primary { min-width: 170px; text-transform: uppercase; letter-spacing: 0.04em; font-weight: 800; }
+.lib-bar-status { display: flex; flex-direction: column; min-width: 0; flex: 1 1 200px; }
+.lib-bar-label { font-size: 12px; font-weight: 800; letter-spacing: 0.08em; text-transform: uppercase; color: var(--text-2); }
+.lib-bar-status progress { width: min(260px, 100%); margin-top: 4px; accent-color: var(--slime); }
+.lib-bar-pick select { max-width: 260px; }
+.lib-bar-icons { display: flex; align-items: center; gap: 8px; margin-left: auto; }
+.lib-icon-btn { width: 40px; height: 40px; padding: 0; font-size: 18px; }
+.lib-icon-btn svg { display: block; }
+.lib-icon-btn.on { background: var(--panel-3); border-color: var(--slime); }
+.lib-pop { position: relative; }
+.lib-pop-panel { position: absolute; right: 0; top: calc(100% + 6px); z-index: 30; width: min(340px, calc(100vw - 32px)); padding: 14px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); display: flex; flex-direction: column; gap: 10px; }
+.lib-menu { display: flex; flex-direction: column; align-items: flex-start; gap: 8px; }
+.lib-menu p { margin: 0; }
+.lib-info { width: 100%; }
+.rate-prompt { margin: 0 0 12px; display: flex; flex-direction: column; gap: 10px; }
+.rate-prompt.asking { border-color: rgba(163, 230, 53, 0.45); background: linear-gradient(90deg, var(--slime-soft), var(--panel) 60%); }
+.rate-prompt h3 { font-size: 16px; }
+.rate-prompt p { margin: 0; }
+.rate-prompt-done { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.lib-tabbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
+.lib-tabs { display: flex; flex-wrap: wrap; gap: 2px; }
+.lib-tabs button { padding: 10px 14px; border: 0; border-bottom: 3px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); font-weight: 600; font-size: 13px; cursor: pointer; }
+.lib-tabs button:hover { color: var(--text); }
+.lib-tabs button.on { color: var(--text); border-bottom-color: var(--slime); }
+.lib-tablinks { display: flex; gap: 14px; margin-left: auto; font-size: 13px; }
+.lib-columns { display: grid; grid-template-columns: minmax(0, 1fr) 280px; gap: 24px; align-items: start; }
+.lib-col-h { font-size: 12px; font-weight: 800; letter-spacing: 0.1em; text-transform: uppercase; color: var(--text-2); margin-bottom: 10px; }
+.lib-day h4 { font-size: 12px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--muted); padding-bottom: 6px; margin: 16px 0 8px; border-bottom: 1px solid var(--line); }
+.lib-act-item { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin-bottom: 8px; }
+.lib-act-item .prose p:last-child, .lib-act-item p:last-child { margin-bottom: 0; }
+.lib-act-title { display: flex; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 4px; }
+.lib-aside { display: flex; flex-direction: column; gap: 14px; }
+.lib-box { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; }
+.lib-box p { margin-bottom: 8px; }
+.lib-friends li { display: flex; align-items: center; gap: 8px; padding: 4px 0; }
+.lib-friends .avatar { width: 28px; height: 28px; min-width: 28px; border-radius: 6px; display: grid; place-items: center; background: linear-gradient(135deg, #a3e635, #0ea5e9); color: #08130a; font-weight: 900; font-size: 13px; }
+.lib-friends .avatar img { width: 100%; height: 100%; object-fit: cover; }
+.lib-friends .muted { margin-left: auto; }
+.lib-community-list li { padding: 4px 0; }
+.lib-empty { max-width: 560px; margin: 30px auto; display: flex; flex-direction: column; align-items: center; gap: 6px; }
+.downloads { position: relative; border-top: 1px solid var(--line); }
+.downloads-bar { display: flex; align-items: center; gap: 8px; width: 100%; padding: 10px 14px; border: 0; background: #0d1116; color: var(--text-2); font-size: 12.5px; font-weight: 600; cursor: pointer; text-align: left; }
+.downloads-bar:hover, .downloads-bar.on { background: var(--panel-2); color: var(--text); }
+.downloads-panel { position: absolute; left: 8px; bottom: calc(100% + 6px); z-index: 30; width: min(360px, calc(100vw - 32px)); max-height: 60vh; overflow-y: auto; padding: 14px; box-shadow: 0 16px 40px rgba(0, 0, 0, 0.5); }
+.downloads-panel h2 { font-size: 14px; margin-bottom: 8px; }
+.downloads-panel li { padding: 5px 0; border-bottom: 1px solid var(--line); }
+.downloads-panel progress { display: block; width: 100%; accent-color: var(--slime); }
+/* An app's page: its rating up top, beside the title. */
+.rating-head { display: flex; flex-wrap: wrap; align-items: center; gap: 8px 14px; margin-top: 10px; }
+.rating-head p { margin: 0; }
+.rating-head-score { display: flex; flex-wrap: wrap; align-items: baseline; gap: 4px 8px; }
+.rating-panel:focus { outline: none; }
+.rating-panel:focus-visible { outline: 2px solid var(--slime); outline-offset: 2px; }
+.rating-badge { display: inline-flex; padding: 2px 8px; border-radius: 999px; font-size: 11px; font-weight: 800; background: rgba(13, 16, 21, 0.75); }
+.rating-badge.good { color: var(--good); }
+.rating-badge.mixed { color: var(--warn); }
+.rating-badge.bad { color: var(--bad); }
+@media (max-width: 1100px) {
+  .lib { grid-template-columns: 250px minmax(0, 1fr); }
+  .lib-columns { grid-template-columns: 1fr; }
+}
+/* A phone: the list is one screen and the app another, with a way back. */
+@media (max-width: 760px) {
+  .lib { display: block; height: auto; }
+  .lib.has-slug .lib-side, .lib:not(.has-slug) .lib-main { display: none; }
+  .lib-side { border-right: 0; background: none; }
+  .lib-list { overflow: visible; }
+  .lib-row { padding-top: 7px; padding-bottom: 7px; font-size: 14px; }
+  .lib-main { overflow: visible; padding-bottom: 24px; }
+  .lib-back { display: inline-flex; margin: 10px 14px; }
+  .lib-hero { height: 190px; }
+  .lib-hero-text { padding: 0 14px 12px; }
+  .lib-body { padding: 0 14px; }
+  .lib-primary { flex: 1 1 100%; }
+  .lib-bar-icons { margin-left: 0; }
+  .lib-tablinks { margin-left: 0; padding-bottom: 8px; }
+  .lib-tabs { flex-wrap: nowrap; overflow-x: auto; max-width: 100%; }
+  .lib-tabs button { white-space: nowrap; }
+  .downloads-panel { left: 0; }
+}
+/* ==== end Library ============================================================================= */

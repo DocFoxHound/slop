@@ -3,7 +3,7 @@
 // one beside it), the vote buttons, and the rating, votes and players over time
 // (crates/slop-api/src/votes.rs, pulse.rs; DESIGN §7, METRICS §2).
 
-import { useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent } from "react";
 import { Link } from "react-router";
 
 import { api, ApiError, type Ratings } from "../api";
@@ -80,6 +80,194 @@ export function SinceNewWork({ s, min }: { s: NonNullable<Ratings["since_new_wor
   );
 }
 
+/** Fired on window (detail: the app's address) when the viewer's vote or review changed. */
+export const RATINGS_CHANGED = "slop:ratings-changed";
+
+function changed(slug: string) {
+  window.dispatchEvent(new CustomEvent(RATINGS_CHANGED, { detail: slug }));
+}
+
+/** An app's ratings, reloaded when the viewer votes somewhere else on the page. */
+function useRatings(slug: string, signedIn: boolean) {
+  const loaded = useLoad(() => api.ratings(slug), [slug, signedIn]);
+  const reload = loaded.reload;
+  useEffect(() => {
+    const onChange = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === slug) reload();
+    };
+    window.addEventListener(RATINGS_CHANGED, onChange);
+    return () => window.removeEventListener(RATINGS_CHANGED, onChange);
+  }, [slug, reload]);
+  return loaded;
+}
+
+function tone(percent: number): "good" | "bad" | "mixed" {
+  return percent >= 70 ? "good" : percent < 40 ? "bad" : "mixed";
+}
+
+const VOTE_LABEL = { not_slop: "👍 Not Slop", slop: "👎 Slop" } as const;
+
+/** Moves to the rating panel (id "rating") and puts focus there. */
+export function jumpToRating() {
+  const panel = document.getElementById("rating");
+  if (!panel) return;
+  panel.scrollIntoView({ block: "start", behavior: "smooth" });
+  panel.focus({ preventScroll: true });
+}
+
+/**
+ * The rating at the top of an app's page: "96% Not Slop · Overwhelmingly Not Slop · 2,914 votes",
+ * and what the viewer can do about it: rate it (jumping to the panel), or why they can't yet.
+ */
+export function RatingHeader({ slug, isMine, signedIn }: { slug: string; isMine: boolean; signedIn: boolean }) {
+  const r = useRatings(slug, signedIn).data;
+  if (!r) return null;
+  const total = r.not_slop + r.slop;
+  const mine = r.mine;
+  const why = !r.open
+    ? "Voting opens when it's released."
+    : isMine
+      ? "Makers can't rate their own app."
+      : !signedIn
+        ? null
+        : mine && !mine.can_vote
+          ? mine.reason?.startsWith("Launch it")
+            ? "Play it from the Slop app to rate it."
+            : mine.reason
+          : null;
+  return (
+    <div className="rating-head">
+      <div className="rating-head-score">
+        {r.percent_weighted !== null ? (
+          <>
+            <span className={`rating-big ${tone(r.percent_weighted)}`}>{r.percent_weighted}% Not Slop</span>{" "}
+            <span className="rating-head-label">
+              {r.label && <b>{r.label}</b>}
+              <span className="muted small">
+                {r.label && " · "}
+                {total.toLocaleString()} vote{total === 1 ? "" : "s"}
+              </span>
+            </span>
+          </>
+        ) : (
+          <>
+            <b>No ratings yet</b>
+            {total > 0 && (
+              <span className="muted small">
+                {" "}
+                · {total} vote{total === 1 ? "" : "s"} so far; a rating shows from {r.min_votes}
+              </span>
+            )}
+          </>
+        )}
+      </div>
+      {r.open && !isMine && signedIn && mine?.can_vote ? (
+        <button type="button" className={`btn ${mine.vote ? "" : "slime"}`} onClick={jumpToRating}>
+          {mine.vote ? `Your rating: ${VOTE_LABEL[mine.vote]}` : "Rate it"}
+        </button>
+      ) : r.open && !isMine && !signedIn ? (
+        <p className="muted small">
+          <Link to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>Sign in</Link> and play it from the Slop app to
+          rate it.
+        </p>
+      ) : (
+        why && <p className="muted small">{why}</p>
+      )}
+    </div>
+  );
+}
+
+/** The rating in a few words, for the library's header: "96% Not Slop", or nothing yet. */
+export function RatingBadge({ slug, signedIn }: { slug: string; signedIn: boolean }) {
+  const r = useRatings(slug, signedIn).data;
+  if (!r || r.percent_weighted === null) return null;
+  return (
+    <span className={`rating-badge ${tone(r.percent_weighted)}`} title={r.label ?? undefined}>
+      {r.percent_weighted}% Not Slop
+    </span>
+  );
+}
+
+/**
+ * Steam's "would you recommend this?" for the library: once the player has played an app and
+ * hasn't voted, ask; once they have, show their vote with Change, and their review.
+ */
+export function RatePrompt({ slug, title }: { slug: string; title: string }) {
+  const loaded = useRatings(slug, true);
+  const [busy, setBusy] = useState(false);
+  const [error, setError] = useState<string>();
+  const [changing, setChanging] = useState(false);
+  const r = loaded.data;
+  const mine = r?.mine;
+  if (!r || !r.open || !mine?.can_vote) return null;
+  const vote = async (v: "not_slop" | "slop") => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.vote(slug, v);
+      setChanging(false);
+      changed(slug);
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const asking = !mine.vote || changing;
+  return (
+    <section className={`panel panel-pad rate-prompt${asking ? " asking" : ""}`} aria-label={`Rate ${title}`}>
+      {asking ? (
+        <>
+          <h3>{mine.vote ? `Change your rating of ${title}` : `You've played ${title}: is it Slop or Not Slop?`}</h3>
+          <div className="vote-row">
+            <button
+              type="button"
+              className={`btn vote ${mine.vote === "not_slop" ? "on up" : ""}`}
+              aria-pressed={mine.vote === "not_slop"}
+              disabled={busy}
+              onClick={() => void vote("not_slop")}
+            >
+              👍 Not Slop
+            </button>
+            <button
+              type="button"
+              className={`btn vote ${mine.vote === "slop" ? "on down" : ""}`}
+              aria-pressed={mine.vote === "slop"}
+              disabled={busy}
+              onClick={() => void vote("slop")}
+            >
+              👎 Slop
+            </button>
+            {changing && (
+              <button type="button" className="btn small ghost" onClick={() => setChanging(false)}>
+                Cancel
+              </button>
+            )}
+          </div>
+          <p className="muted small">
+            Your vote counts {Math.round(mine.weight * 100)}% (more as you play). <Link to="/ratings">How ratings work</Link>
+          </p>
+        </>
+      ) : (
+        <div className="rate-prompt-done">
+          <span>
+            Your rating: <b>{VOTE_LABEL[mine.vote!]}</b>
+          </span>
+          <button type="button" className="btn small ghost" onClick={() => setChanging(true)}>
+            Change
+          </button>
+        </div>
+      )}
+      {mine.vote && !changing && <MyReview slug={slug} review={mine.review} onSaved={async () => changed(slug)} />}
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+    </section>
+  );
+}
+
 export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: boolean; signedIn: boolean }) {
   const loaded = useLoad(() => api.ratings(slug), [slug, signedIn]);
   const players = useLoad(() => api.players(slug), [slug]);
@@ -95,6 +283,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
     setError(undefined);
     try {
       setRatings(await api.vote(slug, v));
+      changed(slug);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
     } finally {
@@ -107,7 +296,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
   const peaks = players.data?.daily_peaks ?? [];
 
   return (
-    <section className="panel panel-pad rating-panel" aria-label="Ratings">
+    <section className="panel panel-pad rating-panel" aria-label="Ratings" id="rating" tabIndex={-1}>
       <h2>Slop or Not Slop?</h2>
       <RatingSummary ratings={r} />
       {r.since_new_work && <SinceNewWork s={r.since_new_work} min={r.min_votes} />}
@@ -146,7 +335,14 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
         <p className="muted small">{mine?.reason}</p>
       )}
       {r.open && signedIn && !isMine && mine?.vote && (
-        <MyReview slug={slug} review={mine.review} onSaved={async () => setRatings(await api.ratings(slug))} />
+        <MyReview
+          slug={slug}
+          review={mine.review}
+          onSaved={async () => {
+            setRatings(await api.ratings(slug));
+            changed(slug);
+          }}
+        />
       )}
       {error && (
         <p className="form-error" role="alert">

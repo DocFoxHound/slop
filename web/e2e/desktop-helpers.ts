@@ -17,9 +17,54 @@ export interface FakeChat {
   conversations?: Array<[string, string]>;
 }
 
-/** Makes the page the desktop app, before any of its scripts run. */
-export async function asDesktop(page: Page, chat: FakeChat) {
-  await page.addInitScript((opts: FakeChat) => {
+/** What the pretend app has installed and is doing, for the library (pages/Library.tsx). */
+export interface FakeLibrary {
+  /** Installed apps (platform.ts InstalledApp). */
+  installed?: Array<{
+    slug: string;
+    title: string;
+    maker?: string;
+    version?: string;
+    release_id?: string;
+    kind?: "archive" | "installer" | "apk";
+    build_of?: string | null;
+  }>;
+  /** Apps Slop started that are still running. */
+  running?: string[];
+  /** "Update apps automatically" (on unless said). */
+  autoUpdate?: boolean;
+  /** Sandbox mode works here (with nothing chosen yet). */
+  sandbox?: boolean;
+  /** What each original's Play button starts. */
+  playChoices?: Record<string, string>;
+  /** Copies of saves, for every app. */
+  saveCopies?: Array<{ id: string; taken_at: string; bytes: number }>;
+  /** What installing an app that isn't installed yet puts there (by default, its address as its name). */
+  installable?: FakeLibrary["installed"];
+  /** Installing waits for `window.__finishInstall()` instead of finishing at once. */
+  holdInstalls?: boolean;
+}
+
+/** Makes the page the desktop app, before any of its scripts run. `library` sets up what's
+ * installed; `window.__emit(event, payload)` sends the page an event from the app (install
+ * progress, say). */
+export async function asDesktop(page: Page, chat: FakeChat, library: FakeLibrary = {}) {
+  await page.addInitScript((all: { chat: FakeChat; library: FakeLibrary }) => {
+    const opts = all.chat;
+    const lib = all.library;
+    const installedApps = (lib.installed ?? []).map((a) => ({
+      maker: "Someone",
+      version: "1.0.0",
+      release_id: `release-${a.slug}`,
+      kind: "archive",
+      build_of: null,
+      installed_at: "2026-10-01T00:00:00Z",
+      ...a,
+    }));
+    const sandboxSettings = { all: false, apps: {} as Record<string, { on: boolean; block_network: boolean }> };
+    let autoUpdate = lib.autoUpdate ?? true;
+    const callbacks = new Map<number, (e: unknown) => void>();
+    const listeners: Array<{ event: string; handler: number }> = [];
     type Call = { cmd: string; args: Record<string, unknown> };
     const w = window as unknown as Record<string, unknown>;
     const calls: Call[] = [];
@@ -76,10 +121,19 @@ export async function asDesktop(page: Page, chat: FakeChat) {
       }
     };
     let callback = 0;
+    w.__emit = (event: string, payload: unknown) => {
+      for (const l of listeners) if (l.event === event) callbacks.get(l.handler)?.({ event, id: l.handler, payload });
+    };
+    let finish: (() => void) | undefined;
+    w.__finishInstall = () => finish?.();
     w.__TAURI_EVENT_PLUGIN_INTERNALS__ = { unregisterListener: () => undefined };
     w.__TAURI_INTERNALS__ = {
       metadata: { currentWindow: { label: "main" }, currentWebview: { windowLabel: "main", label: "main" } },
-      transformCallback: () => ++callback,
+      transformCallback: (cb?: (e: unknown) => void) => {
+        callback += 1;
+        if (cb) callbacks.set(callback, cb);
+        return callback;
+      },
       unregisterCallback: () => undefined,
       convertFileSrc: (p: string) => p,
       invoke: async (cmd: string, args: Record<string, unknown> = {}) => {
@@ -107,15 +161,60 @@ export async function asDesktop(page: Page, chat: FakeChat) {
           case "chat":
             return chat(args.action as Record<string, unknown>);
           case "plugin:event|listen":
+            listeners.push({ event: String(args.event), handler: Number(args.handler) });
             return ++callback;
           case "installed_apps":
-          case "installed_mods":
+            return installedApps;
           case "running_apps":
-          case "missing_runtimes":
+            return lib.running ?? [];
           case "save_copies":
+            return lib.saveCopies ?? [];
+          case "installed_mods":
+          case "missing_runtimes":
             return [];
+          case "play_choices":
+            return lib.playChoices ?? {};
+          case "save_size":
+            return 0;
+          case "sandbox_status":
+            return lib.sandbox ? { available: true, reason: null, limits: null, settings: sandboxSettings } : { available: false, reason: "not on this computer", settings: sandboxSettings };
+          case "set_sandbox": {
+            const slug = args.slug as string | null;
+            if (slug === null) sandboxSettings.all = Boolean(args.on);
+            else sandboxSettings.apps[slug] = { on: Boolean(args.on), block_network: Boolean(args.blockNetwork) };
+            return sandboxSettings;
+          }
+          case "save_sync_status":
+            return { available: false, on: false };
+          case "launch_app":
+            return { sandboxed: false, quarantined: [], copy_skipped: false, unapproved_mods: [], save_sync: null };
+          case "install_app": {
+            const slug = String(args.slug);
+            if (lib.holdInstalls) await new Promise<void>((done) => (finish = done));
+            const found = installedApps.find((a) => a.slug === slug);
+            if (found) return found;
+            const app = {
+              title: slug,
+              maker: "Someone",
+              version: "1.0.0",
+              release_id: `release-${slug}`,
+              kind: "archive",
+              build_of: null,
+              installed_at: "2026-10-01T00:00:00Z",
+              ...(lib.installable ?? []).find((a) => a.slug === slug),
+              slug,
+            };
+            installedApps.push(app);
+            return app;
+          }
+          case "uninstall_app": {
+            const at = installedApps.findIndex((a) => a.slug === args.slug);
+            if (at >= 0) installedApps.splice(at, 1);
+            return null;
+          }
           case "auto_update_setting":
-            return true;
+            if (typeof args.on === "boolean") autoUpdate = args.on;
+            return autoUpdate;
           case "platform_info":
             return { platform: "linux", can_install: false };
           default:
@@ -123,7 +222,7 @@ export async function asDesktop(page: Page, chat: FakeChat) {
         }
       },
     };
-  }, chat);
+  }, { chat, library });
 }
 
 /** What the page asked the pretend app's chat to do, in order. */

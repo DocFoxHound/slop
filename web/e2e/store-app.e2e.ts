@@ -84,6 +84,49 @@ test("only players who played it can vote; makers, visitors and upcoming apps ca
   await expect(ratings(visitor).getByText("Voting opens when the app is released.")).toBeVisible();
 });
 
+test("the rating is at the top of the page: Rate it jumps to the vote, or it says why you can't yet", async ({ page, browser }) => {
+  await tryCall("player", "POST", `/v1/apps/${rated}/vote`, { vote: null });
+  const head = (p: Page) => p.locator(".rating-head");
+  try {
+    await signIn(page, "player");
+    await page.goto(`/app/${rated}`);
+    await expect(head(page).getByText("No ratings yet")).toBeVisible();
+    // The vote comes before "What this app does".
+    const panel = await ratings(page).boundingBox();
+    const label = await page.getByRole("heading", { name: "What this app does" }).boundingBox();
+    expect(panel!.y).toBeLessThan(label!.y);
+    await head(page).getByRole("button", { name: "Rate it" }).click();
+    await expect(ratings(page)).toBeFocused();
+    await ratings(page).getByRole("button", { name: "👍 Not Slop" }).click();
+    await expect(head(page).getByRole("button", { name: "Your rating: 👍 Not Slop" })).toBeVisible();
+    await expect(head(page).getByText("1 vote so far; a rating shows from")).toBeVisible();
+  } finally {
+    await tryCall("player", "POST", `/v1/apps/${rated}/vote`, { vote: null });
+  }
+
+  // A rated app: the rating, its label and the votes.
+  await page.goto(`/app/${ids.listedApp}`);
+  await expect(head(page).locator(".rating-big")).toHaveText(/^\d+% Not Slop$/);
+  await expect(head(page).getByText(/\d+ votes$/)).toBeVisible();
+
+  // Why others can't.
+  const teen = await browser.newPage();
+  await signIn(teen, "teen");
+  await teen.goto(`/app/${rated}`);
+  await expect(head(teen).getByText("Play it from the Slop app to rate it.")).toBeVisible();
+  await expect(head(teen).getByRole("button")).toHaveCount(0);
+  const maker = await browser.newPage();
+  await signIn(maker, "pendingCreative");
+  await maker.goto(`/app/${rated}`);
+  await expect(head(maker).getByText("Makers can't rate their own app.")).toBeVisible();
+  const visitor = await browser.newPage();
+  await visitor.goto(`/app/${rated}`);
+  await expect(head(visitor).getByText(/and play it from the Slop app to rate it\./)).toBeVisible();
+  await expect(head(visitor).getByRole("link", { name: "Sign in" })).toHaveAttribute("href", `/signin?return_to=${encodeURIComponent(`/app/${rated}`)}`);
+  await visitor.goto(`/app/${soon}`);
+  await expect(head(visitor).getByText("Voting opens when it's released.")).toBeVisible();
+});
+
 test("the rating chart switches between weighted and one account, one vote", async ({ page }) => {
   await page.goto(`/app/${ids.listedApp}`);
   const weighted = ratings(page).getByRole("button", { name: "Weighted by playtime" });
@@ -667,9 +710,10 @@ test("Private Slop: its owner shares it with friends, people and invite-only tea
   await expect(pat.locator(".share-panel")).toHaveCount(0);
   await pat.goto("/library");
   await expect(pat.getByRole("heading", { name: "Private Slop" })).toBeVisible();
-  const row = pat.locator(".library-row").filter({ has: pat.locator(`a[href="/app/${secret}"]`) });
-  await expect(row.getByText("PRIVATE")).toBeVisible();
-  await expect(row.getByText("by Bo Builder")).toBeVisible();
+  await pat.getByRole("navigation", { name: "Your apps" }).getByRole("link", { name: "Secret Sloop" }).click();
+  const shared = pat.getByRole("region", { name: "Secret Sloop" });
+  await expect(shared.getByText("PRIVATE", { exact: true })).toBeVisible();
+  await expect(shared.getByText("by Bo Builder")).toBeVisible();
 
   // Stop sharing with Tia: she can't open it any more.
   await panel.locator("li").filter({ hasText: "Tia Teen" }).getByRole("button", { name: "Stop sharing" }).click();
@@ -684,6 +728,6 @@ test("Private Slop: its owner shares it with friends, people and invite-only tea
   await expect(teams.locator("option", { hasText: "Night Owls" })).toHaveCount(1);
 
   // Bo's own library lists it as his.
-  await bo.goto("/library");
-  await expect(bo.locator(".library-row").filter({ has: bo.locator(`a[href="/app/${secret}"]`) }).getByText("by you")).toBeVisible();
+  await bo.goto(`/library/${secret}`);
+  await expect(bo.getByRole("region", { name: "Secret Sloop" }).getByText("by you")).toBeVisible();
 });

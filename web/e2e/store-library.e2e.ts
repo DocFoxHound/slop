@@ -40,12 +40,15 @@ test("the library lists what you added; taking one out there removes it", async 
   try {
     await signIn(page, "player");
     await page.goto("/library");
-    const row = page.locator(".library-row").filter({ has: page.locator('a[href="/app/neon-drift"]') });
-    await expect(row.getByText("Neon Drift: a game for the browser tests.")).toBeVisible();
-    await row.getByRole("button", { name: "✓ In your library" }).click();
-    await expect(row.getByRole("button", { name: "+ Add to library" })).toBeVisible();
+    const side = page.getByRole("navigation", { name: "Your apps" });
+    await side.getByRole("link", { name: "Neon Drift" }).click();
+    await expect(page).toHaveURL(/\/library\/neon-drift$/);
+    const app = page.getByRole("region", { name: "Neon Drift" });
+    await expect(app.getByText("Neon Drift: a game for the browser tests.")).toBeVisible();
+    await app.getByRole("button", { name: "✓ In your library" }).click();
+    await expect(app.getByRole("button", { name: "+ Add to library" })).toBeVisible();
     await page.reload();
-    await expect(page.locator('.library-row a[href="/app/neon-drift"]')).toHaveCount(0);
+    await expect(page.locator('a[href="/library/neon-drift"]')).toHaveCount(0);
   } finally {
     await tryCall("player", "DELETE", "/v1/me/library/neon-drift");
   }
@@ -56,32 +59,35 @@ test("the Interested list: what you're waiting for, Not interested, and released
   await signIn(page, "player");
   await page.goto("/library");
   await expect(page.getByRole("heading", { name: "Interested" })).toBeVisible();
-  const row = page.locator(".library-row").filter({ has: page.locator(`a[href="/app/${soon}"]`) });
-  await expect(row.getByText("COMING SOON")).toBeVisible();
-  await expect(row.getByText("Kelp Keepers, made by the store's browser tests.")).toBeVisible();
+  const link = page.getByRole("navigation", { name: "Your apps" }).getByRole("link", { name: "Kelp Keepers" });
+  await link.click();
+  const app = page.getByRole("region", { name: "Kelp Keepers" });
+  await expect(app.getByText("COMING SOON", { exact: true })).toBeVisible();
+  await expect(app.getByText("Kelp Keepers, made by the store's browser tests.")).toBeVisible();
 
   // Taking it off can fail: it says so.
   await failApi(page, path(`/v1/me/interested/${soon}`), { method: "DELETE" });
-  await row.getByRole("button", { name: "Not interested" }).click();
+  await app.getByRole("button", { name: "Not interested" }).click();
   await expect(page.getByRole("alert")).toHaveText("Something broke on Slop's side.");
-  await expect(row).toBeVisible();
+  await expect(link).toBeVisible();
   await page.unrouteAll();
-  await row.getByRole("button", { name: "Not interested" }).click();
-  await expect(row).toHaveCount(0);
+  await app.getByRole("button", { name: "Not interested" }).click();
+  await expect(link).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Interested" })).toHaveCount(0);
   expect(await call<unknown[]>("player", "GET", "/v1/me/interested")).toHaveLength(0);
 
-  // Once it's released, the list offers to add it to the library.
+  // Once it's released, the library offers to add it.
   await call("player", "PUT", `/v1/me/interested/${soon}`);
   await page.route(path("/v1/me/interested"), async (route) => {
     const res = await route.fetch();
     const list = (await res.json()) as Array<{ slug: string; stage: string }>;
     await route.fulfill({ response: res, json: list.map((a) => (a.slug === soon ? { ...a, stage: "released" } : a)) });
   });
-  await page.reload();
-  await expect(row.getByText("Released: add it to your library to install it.")).toBeVisible();
-  await expect(row.getByRole("button", { name: "+ Add to library" })).toBeVisible();
-  await expect(row.getByRole("button", { name: "Not interested" })).toHaveCount(0);
+  await page.goto(`/library/${soon}`);
+  await expect(app.getByText("Released: add it to your library to install it.")).toBeVisible();
+  await expect(app.getByRole("button", { name: "+ Add to library" })).toBeVisible();
+  await expect(app.getByRole("button", { name: "Not interested" })).toHaveCount(0);
+  await expect(link).toContainText("Released");
 });
 
 test("notifications: the bell counts them, opening one goes there, and Mark all as read clears it", async ({ browser }) => {

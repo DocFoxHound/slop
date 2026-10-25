@@ -58,7 +58,7 @@ const router = createBrowserRouter([
       { path: "/publish/:slug", element: <AppEditor /> },
       { path: "/publish/:slug/releases", element: <Releases /> },
       { path: "/publish/:slug/manage", element: <Manage /> },
-      { path: "/library", element: <Library /> },
+      { path: "/library/:slug?", element: <Library /> },
       { path: "/download", element: <Download /> },
       { path: "/admin", element: <Admin /> },
       { path: "/desktop-signin/:id", element: <DesktopApprove /> },
