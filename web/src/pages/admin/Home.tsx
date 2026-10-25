@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The admin panel's first page: everything waiting for staff, with a count and a link, and one
-// box to find an app or an account.
+// The admin panel's first page: everything waiting for staff, with a count and a link to its
+// category in the review queue (Inbox.tsx), and one box to find an app or an account.
 
 import { useState } from "react";
 import { Link, useNavigate } from "react-router";
@@ -8,41 +8,35 @@ import { Link, useNavigate } from "react-router";
 import { api } from "../../api";
 import { ErrorState, Loading } from "../../components/ui";
 import { useLoad } from "../../hooks";
+import { BOXES, inboxUrl } from "./inbox";
+import type { Waiting } from "./Inbox";
 
-export function AdminHome() {
-  const queue = useLoad(() => api.admin.queue(), []);
-  const holds = useLoad(() => api.admin.donationHolds("open"), []);
-  const actions = useLoad(() => api.admin.actions(), []);
+export function AdminHome({ waiting }: { waiting: Waiting }) {
   const ops = useLoad(() => api.admin.ops(), []);
-  if (queue.error) return <ErrorState error={queue.error} onRetry={queue.reload} />;
-  if (!queue.data) return <Loading />;
-  const q = queue.data;
-  const waiting: Array<[number, string, string]> = [
-    [ops.data?.length ?? 0, "Server alerts", "/admin?tab=queue"],
-    [actions.data?.actions.filter((a) => a.status === "pending").length ?? 0, "Waiting for a second approval", "/admin?tab=queue"],
-    [q.reports.length, "Reports", "/admin?tab=queue#reports"],
-    [q.appeals.length, "Appeals", "/admin?tab=queue#appeals"],
-    [holds.data?.filter((h) => h.requests.some((r) => r.outcome === null)).length ?? 0, "Makers asking for donations back", "/admin?tab=money"],
-    [q.rescans.length, "Live releases a re-scan flagged", "/admin?tab=queue"],
-    [q.releases.length, "Releases to review", "/admin?tab=queue"],
-    [q.changes.length, "Changes to review", "/admin?tab=queue"],
-    [q.media.length, "Pictures to review", "/admin?tab=queue"],
-    [q.portfolios.length, "People portfolios to review", "/admin?tab=queue"],
-    [q.problems.length, "People problems", "/admin?tab=queue"],
-    [q.review_disputes.length, "Review disputes", "/admin?tab=queue"],
-    [q.abuse.length, "Possible abuse", "/admin?tab=queue"],
-    [q.ready_to_list.length, "Ready for the store", "/admin?tab=queue"],
-  ];
-  const todo = waiting.filter(([n]) => n > 0);
+  if (waiting.queue.error) return <ErrorState error={waiting.queue.error} onRetry={waiting.reload} />;
+  if (!waiting.queue.data) return <Loading />;
+  const todo = BOXES.map((b) => [waiting.counts[b.key] ?? 0, b.label, inboxUrl(b.key)] as const).filter(([n]) => n > 0);
+  const alerts = ops.data?.length ?? 0;
+  const paused = waiting.holds.data?.length ?? 0;
   return (
     <>
       <Find />
       <section>
-        <h2 className="section-title">Needs you</h2>
-        {todo.length === 0 ? (
+        <h2 className="section-title">
+          Needs you{" "}
+          {waiting.total !== undefined && waiting.total > 0 && <span className="muted">({waiting.total} waiting)</span>}
+        </h2>
+        {todo.length === 0 && alerts === 0 ? (
           <div className="empty-state">Nothing waiting. 🎉</div>
         ) : (
           <ul className="admin-todo">
+            {alerts > 0 && (
+              <li>
+                <Link to={inboxUrl()} className="panel panel-pad">
+                  <span className="admin-count">{alerts}</span> Server alerts
+                </Link>
+              </li>
+            )}
             {todo.map(([n, label, to]) => (
               <li key={label}>
                 <Link to={to} className="panel panel-pad">
@@ -52,9 +46,9 @@ export function AdminHome() {
             ))}
           </ul>
         )}
-        {holds.data && holds.data.length > 0 && (
+        {paused > 0 && (
           <p className="muted small">
-            {holds.data.length} apps have donations paused. <Link to="/admin?tab=money">See them under Money</Link>.
+            {paused} apps have donations paused. <Link to="/admin?tab=money">See them under Money</Link>.
           </p>
         )}
       </section>

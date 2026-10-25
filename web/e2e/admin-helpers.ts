@@ -73,6 +73,20 @@ export async function withToken(token: string, method: string, path: string, bod
   return { status: res.status, json };
 }
 
+/** A category of the review queue, the inbox (web/src/pages/admin/inbox.ts): "releases", "people"… */
+export const inbox = (box: string) => `/admin?tab=queue&box=${box}`;
+
+/** The line for an item in the inbox's list. */
+export const inboxRow = (page: Page, text: string | RegExp) => page.locator(".inbox-row").filter({ hasText: text });
+
+/** Opens an item of a review-queue category from its line, as staff would: its full card shows. */
+export async function openItem(page: Page, box: string, text: string | RegExp) {
+  await page.goto(inbox(box));
+  await inboxRow(page, text).getByRole("link").first().click();
+  await expect(page).toHaveURL(/[?&]item=/);
+  await expect(page.locator(".inbox-detail")).toBeVisible();
+}
+
 /** A repository on the fake GitHub, which serves release files (so releases can be fetched). */
 export const fakeRepo = (slug: string) => `${server.fake}bo/${slug}`;
 /** A github.com repository: its store pictures come from the test server's /raw/ (main.rs). */
@@ -172,7 +186,7 @@ export async function report(who: Who, kind: string, subject: string, reason: st
   return r.reference;
 }
 
-/** An admin API token of Ada's (making one needs a recent sign-in). */
+/** An admin API token of Ada's. */
 export async function adminToken(name: string, scope: "read" | "review" | "moderate"): Promise<{ id: string; token: string }> {
   return ok("admin", "POST", "/v1/admin/tokens", { name, scope, days: 7 });
 }

@@ -3051,6 +3051,49 @@ async fn reviewers_turn_down_pictures_and_portfolios_with_a_reason(db: PgPool) {
             .status(),
         StatusCode::OK
     );
+    // The creative was told each time, under the bell (and by email if they want it).
+    let told: Vec<(String, String, String, String)> = sqlx::query_as(
+        "select category, title, body, link from notifications where user_id = $1 order by created_at",
+    )
+    .bind(creative)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        told,
+        [
+            (
+                "moderation".to_string(),
+                "Your portfolio wasn't approved".to_string(),
+                "The works are someone else's.".to_string(),
+                "/people/me".to_string()
+            ),
+            (
+                "moderation".to_string(),
+                "Your People page is live".to_string(),
+                "A reviewer approved your portfolio, so anyone can find your People page now."
+                    .to_string(),
+                "/people/cass".to_string()
+            ),
+        ]
+    );
+    // A later portfolio approved: told it's on the page.
+    let third = Uuid::now_v7();
+    portfolio(third).await;
+    assert_eq!(
+        app.send(post(format!("portfolio/{third}/approve"), &reviewer))
+            .await
+            .status(),
+        StatusCode::NO_CONTENT
+    );
+    let last: String = sqlx::query_scalar(
+        "select title from notifications where user_id = $1 order by created_at desc limit 1",
+    )
+    .bind(creative)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(last, "Your new portfolio is on your People page");
     let actions = audit_actions(&app).await;
     for action in ["media.reject", "portfolio.reject", "portfolio.approve"] {
         assert!(actions.contains(&action.to_string()), "{action}");

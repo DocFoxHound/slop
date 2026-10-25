@@ -31,20 +31,16 @@ test("a maker creates a store page, submits a release, and staff approve it", as
   const admin = await browser.newPage();
   await signIn(admin, "admin");
   await admin.goto("/admin");
-  // Home lists what's waiting; each links to the queue.
-  await admin.getByRole("link", { name: /Releases to review$/ }).click();
-  // One release to a row; the seed has another waiting (Pocket Golf 1.1.0), which stays.
-  const row = admin.locator("li").filter({ hasText: "Pong Test" }).filter({
-    has: admin.getByRole("button", { name: "Approve and sign" }),
-  });
+  // Home lists what's waiting; each links to its category in the queue.
+  await admin.getByRole("link", { name: /New releases$/ }).click();
+  // One release to a line; the seed has another waiting (Pocket Golf 1.1.0), which stays.
+  const releases = admin.getByRole("list", { name: "New releases" });
+  const row = releases.getByRole("listitem").filter({ hasText: "Pong Test" });
   await expect(row).toHaveCount(1);
-  await row.getByRole("button", { name: "Approve and sign" }).click();
+  await row.getByRole("button", { name: "Approve Pong Test 1.0.0" }).click();
   await expect(row).toHaveCount(0, { timeout: 10_000 });
-  await expect(
-    admin.locator("li").filter({ hasText: "Pocket Golf" }).filter({
-      has: admin.getByRole("button", { name: "Approve and sign" }),
-    }),
-  ).toHaveCount(1);
+  await expect(admin.getByRole("status").filter({ hasText: "Approved and signed “Pong Test 1.0.0”." })).toBeVisible();
+  await expect(releases.getByRole("listitem").filter({ hasText: "Pocket Golf" })).toHaveCount(1);
 
   await maker.reload();
   await expect(maker.getByText("APPROVED").first()).toBeVisible();

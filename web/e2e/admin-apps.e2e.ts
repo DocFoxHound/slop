@@ -25,7 +25,7 @@ test("the Apps tab: find, filter, change the stage, take out, put back and withd
   await expect(row(listed.title).getByText("LISTED", { exact: true })).toBeVisible();
   await expect(row(listed.title).getByText(`by ${MAKER_NAME}`)).toBeVisible();
   await expect(row(`No Release ${t}`).getByText(/the maker hasn't submitted a release\. Set the stage to Coming soon/)).toBeVisible();
-  await expect(row(`Waiting Release ${t}`).getByText(/approve its release under Releases to review first/)).toBeVisible();
+  await expect(row(`Waiting Release ${t}`).getByText(/approve its release under Review queue → New releases first/)).toBeVisible();
 
   // The status filter.
   const show = page.getByRole("combobox", { name: "Show" });
@@ -205,12 +205,18 @@ test("donation pauses: turned off with a ground, the maker's request kept, lifte
   await ok(MAKER, "POST", `/v1/apps/${app.slug}/donations/hold/request`, { message: "Levels no longer need donations." });
   await admin.goto("/admin");
   await expect(admin.getByText("1 apps have donations paused.")).toBeVisible();
-  // Staff keep it for now.
-  await admin.getByRole("link", { name: /^1 Makers asking for donations back$/ }).click();
+  // Staff keep it for now, from the review queue.
+  await admin.getByRole("link", { name: /^1 Donation pause requests$/ }).click();
+  const request = admin.getByRole("list", { name: "Donation pause requests" }).getByRole("listitem").filter({ hasText: app.title });
+  await expect(request.getByText("TURNED OFF")).toBeVisible();
+  await request.getByRole("link").click();
   const card = admin.locator(".panel").filter({ has: admin.getByRole("link", { name: app.title }) });
   await expect(card.getByText("MAKER ASKS TO LIFT")).toBeVisible();
   await card.getByRole("textbox", { name: "Your answer to the maker" }).fill("Level 3 still asks for one.");
   await card.getByRole("button", { name: "Not yet: keep it" }).click();
+  // Answered, so it leaves the queue; the pause is under Money.
+  await expect(admin.getByText("Nothing waiting here.")).toBeVisible();
+  await admin.goto("/admin?tab=money");
   await expect(card.getByText("Kept: Level 3 still asks for one.")).toBeVisible();
   await expect(card.getByText("MAKER ASKS TO LIFT")).toHaveCount(0);
   // Then lifted directly, with a note.

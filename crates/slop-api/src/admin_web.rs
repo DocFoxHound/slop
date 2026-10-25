@@ -212,6 +212,10 @@ struct ReadyApp {
     going_public: bool,
     /// Taken out of the store, then reinstated on appeal while it couldn't be listed.
     after_appeal: bool,
+    /// When the app last changed (its newest approved release, its page, or the appeal): how
+    /// long it has waited, for the review queue.
+    #[serde(with = "time::serde::rfc3339")]
+    waiting_since: OffsetDateTime,
     #[sqlx(skip)]
     notes: Vec<Note>,
     #[sqlx(skip)]
@@ -291,7 +295,8 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
                 (select count(*) from releases r where r.app_id = a.id and r.status = 'approved') as approved_releases,
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending,
                 a.visibility = 'private' as going_public,
-                a.relist_after_appeal as after_appeal
+                a.relist_after_appeal as after_appeal,
+                greatest(a.updated_at, (select max(r.reviewed_at) from releases r where r.app_id = a.id and r.status = 'approved')) as waiting_since
          from apps a join users u on u.id = a.maker_id
          where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal))
            and (a.visibility = 'public' or a.public_requested_at is not null)

@@ -30,12 +30,18 @@ test("staff pause an app's donations, the maker asks for them back, and staff li
   await maker.getByRole("button", { name: "Ask for a review" }).click();
   await expect(maker.getByText("Waiting for Slop's answer.")).toBeVisible();
 
-  // Staff see the request under Money and lift the pause.
+  // Staff see the request in the review queue, open it and lift the pause.
   await admin.goto("/admin");
-  await admin.getByRole("link", { name: /Makers asking for donations back$/ }).click();
+  await admin.getByRole("link", { name: /^1 Donation pause requests$/ }).click();
+  const request = admin.getByRole("list", { name: "Donation pause requests" }).getByRole("listitem").filter({ hasText: "Mia's First Game" });
+  await expect(request.getByText("Swapped in CC0 music; licence file added.")).toBeVisible();
+  await request.getByRole("link").click();
   await expect(admin.getByText("MAKER ASKS TO LIFT")).toBeVisible();
   await admin.getByRole("textbox", { name: "Your answer to the maker" }).fill("Thanks, the licence checks out.");
   await admin.getByRole("button", { name: "It's fixed: lift the pause" }).click();
+  await expect(admin.getByText("Nothing waiting here.")).toBeVisible();
+  await expect(admin.getByRole("status").filter({ hasText: "isn't waiting any more" })).toBeVisible();
+  await admin.goto("/admin?tab=money");
   await expect(admin.getByText("No donation pauses.")).toBeVisible();
 
   await maker.reload();

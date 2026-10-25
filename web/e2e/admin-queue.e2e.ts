@@ -1,19 +1,35 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The review queue: releases (refused while frozen, scan holds cleared, approved, rejected),
-// changes (a repository move turned down, then approved), pictures (turned down, approved, then
-// listed from Ready for the store), Private Slop going public, and the seeded re-scan flag,
-// possible-abuse signal and portfolio (looked at and answered without changing them: the other
-// tests need them as they are). The apps are Sec Security's, made here (admin-helpers.ts).
+// The review queue's items opened in full from the inbox (admin-inbox.e2e.ts tests the inbox
+// itself): releases (refused while frozen, scan holds cleared, approved, rejected), changes (a
+// repository move turned down, then approved), pictures (turned down, approved, then listed from
+// Apps to list), Private Slop going public, and the seeded re-scan flag, possible-abuse signal and
+// portfolio (looked at and answered without changing them: the other tests need them as they
+// are). The apps are Sec Security's, made here (admin-helpers.ts).
 import type { Page } from "@playwright/test";
 
-import { approveRelease, closePages, fakeRepo, githubRepo, newApp, newPage, newRelease, ok, seeDecisions, tag } from "./admin-helpers";
+import {
+  approveRelease,
+  closePages,
+  fakeRepo,
+  githubRepo,
+  inbox,
+  inboxRow,
+  newApp,
+  newPage,
+  newRelease,
+  ok,
+  openItem,
+  seeDecisions,
+  tag,
+} from "./admin-helpers";
 import { expect, server, signIn, test, type Who } from "./fixtures";
 
 test.afterEach(closePages);
 
 const MAKER: Who = "security";
 
-/** A queue item: the panel with this title and this button (one whose label stays while busy). */
+/** A queue item opened in full: the panel with this title and this button (one whose label stays
+ *  while busy). */
 const item = (page: Page, title: string, button: string) =>
   page
     .getByRole("listitem")
@@ -32,7 +48,7 @@ test("releases: refused while the app is frozen, a scan hold cleared, approved; 
 
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "releases", one.title);
   const release = item(admin, one.title, "Reject");
   await expect(release.getByText("1.0.0 · by Sec Security")).toBeVisible();
   await expect(release.getByText("AWAITING REVIEW")).toBeVisible();
@@ -67,6 +83,7 @@ test("releases: refused while the app is frozen, a scan hold cleared, approved; 
   expect(statuses.find((r: { id: string }) => r.id === first).status).toBe("approved");
 
   // The other is rejected, with the reason the maker reads.
+  await openItem(admin, "releases", two.title);
   const other = item(admin, two.title, "Reject");
   await other.getByRole("button", { name: "Reject" }).click();
   await expect(other.getByRole("button", { name: "Reject" })).toBeDisabled();
@@ -96,7 +113,7 @@ test("changes: a repository move turned down, then approved", async ({ page }) =
   await move();
 
   await signIn(page, "admin");
-  await page.goto("/admin?tab=queue");
+  await openItem(page, "changes", app.title);
   const change = item(page, app.title, "Turn down");
   await expect(change.getByText("MOVE REPOSITORY")).toBeVisible();
   await expect(change.getByText("by Sec Security")).toBeVisible();
@@ -111,7 +128,7 @@ test("changes: a repository move turned down, then approved", async ({ page }) =
 
   // Asked again, and approved: the app's repository is the new one.
   await move();
-  await page.reload();
+  await openItem(page, "changes", app.title);
   await change.getByRole("button", { name: "Approve" }).click();
   await expect(change).toHaveCount(0);
   await page.goto(`/admin?tab=apps&app=${app.slug}`);
@@ -130,7 +147,7 @@ test("changes: holding players at an earlier release, approved", async ({ page }
   await ok(MAKER, "POST", `/v1/apps/${app.slug}/changes`, { kind: "release", release_id: first, note: "1.1.0 breaks old saves." });
 
   await signIn(page, "admin");
-  await page.goto("/admin?tab=queue");
+  await openItem(page, "changes", app.title);
   const change = item(page, app.title, "Turn down");
   await expect(change.getByText("SWITCH RELEASE")).toBeVisible();
   await expect(change.getByText("v1.1.0", { exact: true })).toBeVisible();
@@ -154,7 +171,7 @@ test("pictures: looked at, turned down, approved, and the app put in the store",
 
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "pictures", turned.title);
   const pictures = item(admin, turned.title, "Turn down");
   await expect(pictures.getByText("FIRST PICTURES")).toBeVisible();
   // Every picture, large enough to judge, and the video linked.
@@ -176,15 +193,18 @@ test("pictures: looked at, turned down, approved, and the app put in the store",
   await expect(maker.getByText(/These pictures were turned down: Screenshot 2 shows another game\./)).toBeVisible();
 
   // The other can't go in the store while its pictures wait.
+  await openItem(admin, "listing", app.title);
   const ready = admin
     .getByRole("listitem")
     .filter({ has: admin.getByRole("link", { name: app.title, exact: true }) })
     .filter({ hasText: "Coming soon · by Sec Security" });
   await expect(ready.getByText("Review its pictures first")).toBeVisible();
   await expect(ready.getByRole("button", { name: "Put in the store" })).toHaveCount(0);
+  await openItem(admin, "pictures", app.title);
   const waiting = item(admin, app.title, "Turn down");
   await waiting.getByRole("button", { name: "Approve pictures" }).click();
   await expect(waiting).toHaveCount(0);
+  await openItem(admin, "listing", app.title);
   await ready.getByRole("button", { name: "Put in the store" }).click();
   await expect(ready).toHaveCount(0);
   await maker.goto(`/app/${app.slug}`);
@@ -222,13 +242,14 @@ test("Private Slop going public: the maker asks, changes their mind, asks again;
 
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
-  const ready = admin.getByRole("listitem").filter({ has: admin.getByRole("link", { name: app.title, exact: true }) });
-  await expect(ready).toHaveCount(0);
+  await admin.goto(inbox("listing"));
+  await expect(admin.getByRole("heading", { name: /^Apps to list/ })).toBeVisible();
+  await expect(inboxRow(admin, app.title)).toHaveCount(0);
 
   await panel.getByRole("button", { name: "Ask to make it public" }).click();
   await expect(panel.getByRole("button", { name: "Keep it private" })).toBeVisible();
-  await admin.reload();
+  await openItem(admin, "listing", app.title);
+  const ready = admin.getByRole("listitem").filter({ has: admin.getByRole("link", { name: app.title, exact: true }) });
   await expect(ready.getByText(/Private Slop going public: check the repository and licence from scratch/)).toBeVisible();
   await ready.getByRole("button", { name: "Make public and list" }).click();
   await expect(ready).toHaveCount(0);
@@ -251,9 +272,8 @@ test("the re-scan flag, the abuse signal and the waiting portfolio: what staff s
       await route.fulfill({ status: 204 });
     });
   }
-  await page.goto("/admin?tab=queue");
-
   // The re-scan flag: keeping a release takes a real reason (this one reaches the server).
+  await openItem(page, "rescans", "Pocket Golf");
   const rescan = page.getByRole("listitem").filter({ hasText: "FILE CHANGED" });
   await expect(rescan.getByRole("link", { name: "Pocket Golf" })).toBeVisible();
   await expect(rescan.getByText("1.0.0 · windows")).toBeVisible();
@@ -281,6 +301,7 @@ test("the re-scan flag, the abuse signal and the waiting portfolio: what staff s
   await expect(rescan.getByRole("button", { name: "Withdraw release" })).toBeVisible();
 
   // Possible abuse: closed as dealt with, or as nothing wrong, with a note.
+  await openItem(page, "abuse", "Pocket Golf");
   const abuse = page.getByRole("listitem").filter({ hasText: "VOTES FROM NEW ACCOUNTS" });
   await expect(abuse.getByRole("link", { name: "Pocket Golf" })).toBeVisible();
   await abuse.getByRole("button", { name: "Dealt with" }).click();
@@ -296,6 +317,7 @@ test("the re-scan flag, the abuse signal and the waiting portfolio: what staff s
   expect(sent[2].body).toEqual({ note: "A streamer played it; real players.", acted: false });
 
   // The portfolio: every work shown, then approved, or turned down with a reason.
+  await openItem(page, "people", "Remy Pending");
   const portfolio = page.getByRole("listitem").filter({ has: page.getByRole("link", { name: "Remy Pending" }) });
   await expect(portfolio.getByText("@remy-sounds")).toBeVisible();
   await expect(portfolio.getByText("FIRST PORTFOLIO")).toBeVisible();

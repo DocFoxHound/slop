@@ -635,6 +635,89 @@ async fn only_security_staff_signed_in_themselves_list_and_revoke_tokens(db: PgP
     );
 }
 
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_tokens_need_no_fresh_sign_in_and_come_without_a_command(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (pat, _) = app.user("Pat Player", "US").await;
+    // Signed in an hour ago, never confirmed since: too old for step-up.
+    sqlx::query("update sessions set created_at = now() - interval '1 hour', stepped_up_at = null")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let res = app
+        .send(
+            req(Method::POST, "/v1/admin/tokens")
+                .cookie(&owner)
+                .json(json!({ "name": "Claude on my laptop", "scope": "moderate", "days": 90 })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let made = body_json(res).await;
+    let secret = made["token"].as_str().unwrap().to_string();
+    assert!(secret.starts_with("slopadm_"), "{made}");
+    // The MCP address, and nothing else with the token in it: the website shows how to keep it
+    // in an environment variable.
+    assert!(
+        made["mcp_url"].as_str().unwrap().ends_with("/v1/admin/mcp"),
+        "{made}"
+    );
+    let fields: Vec<&String> = made
+        .as_object()
+        .unwrap()
+        .iter()
+        .filter(|(_, v)| v.as_str().is_some_and(|v| v.contains(&secret)))
+        .map(|(k, _)| k)
+        .collect();
+    assert_eq!(fields, ["token"], "{made}");
+    assert!(!made.to_string().contains("claude mcp"), "{made}");
+    // It works.
+    assert_eq!(
+        app.send(
+            req(Method::GET, "/v1/admin/status")
+                .header("authorization", format!("Bearer {secret}"))
+        )
+        .await
+        .status(),
+        StatusCode::OK
+    );
+    // The lifetimes are still checked: moderate tokens at most 90 days, others 365.
+    for (scope, days) in [("moderate", 91), ("review", 366), ("read", 0)] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/admin/tokens")
+                    .cookie(&owner)
+                    .json(json!({ "name": "Too long", "scope": scope, "days": days })),
+            )
+            .await;
+        assert_eq!(
+            res.status(),
+            StatusCode::UNPROCESSABLE_ENTITY,
+            "{scope} {days}"
+        );
+    }
+    assert_eq!(
+        app.send(
+            req(Method::POST, "/v1/admin/tokens")
+                .cookie(&owner)
+                .json(json!({ "name": "A year", "scope": "review", "days": 365 }))
+        )
+        .await
+        .status(),
+        StatusCode::CREATED
+    );
+    // Other sensitive steps still ask for a fresh sign-in: changing staff roles.
+    let res = app
+        .send(
+            req(Method::POST, format!("/v1/admin/staff/{pat}/roles"))
+                .cookie(&owner)
+                .json(json!({ "role": "reviewer", "grant": true })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::FORBIDDEN);
+    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+}
+
 // ---------------------------------------------------------------------------------------------
 // MCP
 

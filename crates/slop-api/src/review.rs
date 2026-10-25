@@ -11,7 +11,10 @@
 //! `moderate` tokens can also suspend and reinstate accounts, withdraw releases and take apps
 //! out of the store (agent.rs).
 //! They expire, can be revoked, and stop working if their admin loses admin rights. Only an
-//! admin signed in themselves can make or revoke them (a token can't make tokens).
+//! admin signed in themselves, with the security role, can make or revoke them (a token can't
+//! make tokens). Making one takes no fresh sign-in: like a maker's agent token
+//! (maker_agents.rs), it is listed with its expiry and can be revoked at any time, and the
+//! website sets it up without the token going into an AI chat or a command the AI sees.
 
 use axum::{
     Json, Router,
@@ -155,6 +158,9 @@ struct CreatedToken {
     info: TokenInfo,
     /// Shown once; Slop keeps only its hash.
     token: String,
+    /// The admin MCP address. The website shows how to connect each kind of agent with the token
+    /// kept in an environment variable, so the token itself never goes into a command or a chat.
+    mcp_url: String,
 }
 
 async fn create_token(
@@ -162,10 +168,11 @@ async fn create_token(
     admin: AdminUser,
     Json(body): Json<NewToken>,
 ) -> ApiResult<(StatusCode, Json<CreatedToken>)> {
+    // A signed-in admin with the security role is enough (no step-up, decided 2026-10-25): the
+    // token expires (moderate ones within 90 days), is listed for security staff with its
+    // expiry, and can be revoked at any time. Tokens can't make tokens.
     admin.signed_in()?;
     admin.need(crate::staff::Perm::Security)?;
-    // A token outlives the session that made it: making one takes a fresh sign-in or passkey.
-    admin.confirm_recent(&state.db).await?;
     let name = body.name.trim();
     if name.is_empty() || name.chars().count() > 60 || name.chars().any(char::is_control) {
         return Err(ApiError::invalid(
@@ -216,7 +223,15 @@ async fn create_token(
     .fetch_one(&mut *tx)
     .await?;
     tx.commit().await?;
-    Ok((StatusCode::CREATED, Json(CreatedToken { info, token })))
+    let site = state.config.public_url.as_str().trim_end_matches('/');
+    Ok((
+        StatusCode::CREATED,
+        Json(CreatedToken {
+            info,
+            token,
+            mcp_url: format!("{site}/v1/admin/mcp"),
+        }),
+    ))
 }
 
 async fn revoke_token(

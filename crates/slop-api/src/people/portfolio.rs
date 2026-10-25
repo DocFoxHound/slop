@@ -442,14 +442,15 @@ fn strip_urls(v: &mut serde_json::Value) {
 
 pub async fn approve_set(db: &sqlx::PgPool, id: Uuid, reviewer: &str) -> anyhow::Result<()> {
     let mut tx = db.begin().await?;
-    let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "select ps.creative_id, ps.status, c.handle from portfolio_sets ps
+    let row: Option<(Uuid, String, String, bool)> = sqlx::query_as(
+        "select ps.creative_id, ps.status, c.handle, c.portfolio_set_id is not null from portfolio_sets ps
          join creatives c on c.user_id = ps.creative_id where ps.id = $1 for update of ps",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (creative_id, status, handle) = row.ok_or_else(|| anyhow::anyhow!("no such portfolio"))?;
+    let (creative_id, status, handle, was_live) =
+        row.ok_or_else(|| anyhow::anyhow!("no such portfolio"))?;
     anyhow::ensure!(
         status == "pending",
         "this portfolio isn't waiting for review ({status})"
@@ -476,6 +477,28 @@ pub async fn approve_set(db: &sqlx::PgPool, id: Uuid, reviewer: &str) -> anyhow:
         json!({ "set": id }),
     )
     .await?;
+    // The creative hears about every decision on their page, like a maker about a release.
+    crate::notify::send(
+        &mut tx,
+        crate::notify::Notice {
+            user_id: creative_id,
+            category: "moderation",
+            title: if was_live {
+                "Your new portfolio is on your People page".into()
+            } else {
+                "Your People page is live".into()
+            },
+            body: if was_live {
+                "A reviewer approved it: your People page shows it now.".into()
+            } else {
+                "A reviewer approved your portfolio, so anyone can find your People page now."
+                    .into()
+            },
+            link: format!("/people/{handle}"),
+            collapse_key: None,
+        },
+    )
+    .await?;
     tx.commit().await?;
     Ok(())
 }
@@ -489,14 +512,14 @@ pub async fn reject_set(
     let reason = reason.trim();
     anyhow::ensure!(!reason.is_empty(), "say why, for the creative");
     let mut tx = db.begin().await?;
-    let row: Option<(String, String)> = sqlx::query_as(
-        "select ps.status, c.handle from portfolio_sets ps
+    let row: Option<(Uuid, String, String)> = sqlx::query_as(
+        "select ps.creative_id, ps.status, c.handle from portfolio_sets ps
          join creatives c on c.user_id = ps.creative_id where ps.id = $1 for update of ps",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (status, handle) = row.ok_or_else(|| anyhow::anyhow!("no such portfolio"))?;
+    let (creative_id, status, handle) = row.ok_or_else(|| anyhow::anyhow!("no such portfolio"))?;
     anyhow::ensure!(
         status == "pending",
         "this portfolio isn't waiting for review ({status})"
@@ -516,6 +539,19 @@ pub async fn reject_set(
         "portfolio.reject",
         &handle,
         json!({ "set": id, "reason": reason }),
+    )
+    .await?;
+    crate::notify::send(
+        &mut tx,
+        crate::notify::Notice {
+            user_id: creative_id,
+            category: "moderation",
+            title: "Your portfolio wasn't approved".into(),
+            // The reviewer's reason, as a maker reads a rejected release's.
+            body: reason.to_string(),
+            link: "/people/me".into(),
+            collapse_key: None,
+        },
     )
     .await?;
     tx.commit().await?;

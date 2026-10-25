@@ -1,8 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// How to connect an AI tool to Slop with a maker's token (components/AgentSetup.tsx) without the
+// How to connect an AI tool to Slop with an agent token (components/AgentSetup.tsx) without the
 // token ever going into an AI chat or a command the AI sees: the person saves it once in an
-// environment variable, SLOP_TOKEN, in their own terminal, and each tool is connected with a
-// reference to that variable. Only `saveCommand` contains the token itself.
+// environment variable in their own terminal, and each tool is connected with a reference to that
+// variable. Only `saveCommand` contains the token itself. A maker's token (`slopmk_…`) goes in
+// SLOP_TOKEN and connects to the maker MCP server; a staff member's (`slopadm_…`, Admin → AI
+// reviewers) goes in SLOP_ADMIN_TOKEN and connects to the admin one (`SETUPS`).
 //
 // Checked against the tools themselves (2026-10-25):
 // - Claude Code (code.claude.com/docs/en/mcp; tried with 2.1.301): `claude mcp add` stores the
@@ -30,8 +32,45 @@ export const TOOLS: { id: SetupTool; label: string }[] = [
   { id: "other", label: "Other AI tools" },
 ];
 
-/** The environment variable the token is saved in. */
-export const VARIABLE = "SLOP_TOKEN";
+/** What differs between a maker's token and a staff member's. */
+export interface SetupKind {
+  /** The environment variable the token is saved in. */
+  variable: string;
+  /** The MCP server's name in the AI tool. */
+  server: string;
+  /** What to ask the AI once it's connected: no token needed. */
+  firstPrompt: string;
+  /** Where else the token works, for tools without MCP. */
+  apiGuide: string;
+  /** Whose account the token acts for, in the warning. */
+  account: string;
+  /** What the page's button for ending a token says. */
+  remove: "remove" | "revoke";
+}
+
+export const SETUPS = {
+  maker: {
+    variable: "SLOP_TOKEN",
+    server: "slop",
+    firstPrompt: "Read maker_guide, then publish my game on Slop.",
+    apiGuide: "the publishing guide, “Working with your AI agent”",
+    account: "your Slop account",
+    remove: "remove",
+  },
+  staff: {
+    variable: "SLOP_ADMIN_TOKEN",
+    server: "slop-admin",
+    firstPrompt: "Read review_guide, then go through the review queue and tell me what needs me.",
+    apiGuide: "the reviewer guide at /v1/admin/review/guide",
+    account: "your Slop staff account, with your admin rights",
+    remove: "revoke",
+  },
+} satisfies Record<string, SetupKind>;
+
+const MAKER: SetupKind = SETUPS.maker;
+
+/** The environment variable a maker's token is saved in. */
+export const VARIABLE = MAKER.variable;
 
 /** The visitor's system, from the browser (a guess they can change). */
 export function guessOs(userAgent: string): SetupOs {
@@ -58,38 +97,41 @@ export function openTerminal(os: SetupOs): string {
 }
 
 /** The one command with the token in it: saves it on this computer, for this user. */
-export function saveCommand(os: SetupOs, secret: string): string {
-  if (os === "windows") return `setx ${VARIABLE} "${secret}"`;
-  return `echo 'export ${VARIABLE}="${secret}"' >> ${profileFile(os)}`;
+export function saveCommand(os: SetupOs, secret: string, kind: SetupKind = MAKER): string {
+  const v = kind.variable;
+  if (os === "windows") return `setx ${v} "${secret}"`;
+  return `echo 'export ${v}="${secret}"' >> ${profileFile(os)}`;
 }
 
 /** Says whether the token is saved, without showing it. */
-export function checkCommand(os: SetupOs): string {
-  if (os === "windows") return `if ($env:${VARIABLE}) { "${VARIABLE} is saved" } else { "${VARIABLE} is missing" }`;
-  return `[ -n "$${VARIABLE}" ] && echo "${VARIABLE} is saved" || echo "${VARIABLE} is missing"`;
+export function checkCommand(os: SetupOs, kind: SetupKind = MAKER): string {
+  const v = kind.variable;
+  if (os === "windows") return `if ($env:${v}) { "${v} is saved" } else { "${v} is missing" }`;
+  return `[ -n "$${v}" ] && echo "${v} is saved" || echo "${v} is missing"`;
 }
 
 /**
  * Connects a tool to Slop's MCP address using the variable, never the token. The same on every
  * system (PowerShell reads single quotes the way bash and zsh do). Undefined: no command for it.
  */
-export function connectCommand(tool: SetupTool, mcpUrl: string): string | undefined {
+export function connectCommand(tool: SetupTool, mcpUrl: string, kind: SetupKind = MAKER): string | undefined {
+  const { variable: v, server } = kind;
   switch (tool) {
     case "claude":
-      return `claude mcp add --transport http --scope user slop ${mcpUrl} --header 'Authorization: Bearer \${${VARIABLE}}'`;
+      return `claude mcp add --transport http --scope user ${server} ${mcpUrl} --header 'Authorization: Bearer \${${v}}'`;
     case "codex":
-      return `codex mcp add slop --url ${mcpUrl} --bearer-token-env-var ${VARIABLE}`;
+      return `codex mcp add ${server} --url ${mcpUrl} --bearer-token-env-var ${v}`;
     case "grok":
-      return `grok mcp add --transport http slop ${mcpUrl} --header 'Authorization: Bearer \${${VARIABLE}}'`;
+      return `grok mcp add --transport http ${server} ${mcpUrl} --header 'Authorization: Bearer \${${v}}'`;
     case "other":
       return undefined;
   }
 }
 
 /** Codex's config file, for anyone who'd rather edit it than run `codex mcp add`. */
-export function codexConfig(mcpUrl: string): string {
-  return `[mcp_servers.slop]\nurl = "${mcpUrl}"\nbearer_token_env_var = "${VARIABLE}"`;
+export function codexConfig(mcpUrl: string, kind: SetupKind = MAKER): string {
+  return `[mcp_servers.${kind.server}]\nurl = "${mcpUrl}"\nbearer_token_env_var = "${kind.variable}"`;
 }
 
-/** What to ask the AI once it's connected: no token needed. */
-export const FIRST_PROMPT = "Read maker_guide, then publish my game on Slop.";
+/** What to ask the AI once a maker's token is connected: no token needed. */
+export const FIRST_PROMPT = MAKER.firstPrompt;
