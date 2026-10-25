@@ -47,7 +47,7 @@ fn release_zip() -> Vec<u8> {
 }
 
 /// The commit every fake repository is at.
-const MEDIA_COMMIT: &str = "d00dfeed00d00dfeed00d00dfeed00d00dfeed0";
+const MEDIA_COMMIT: &str = "d00dfeed00d00dfeed00d00dfeed00d00dfeed00";
 
 fn png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
     let mut out = Vec::new();
@@ -98,6 +98,10 @@ fn icon_png(size: u32, seed: &str) -> Vec<u8> {
 /// Every repository has the same thumbnail and gallery, and its own icon. Some don't:
 /// `neon-drift` has only an icon; a repository whose name has `noicon` in it has no icon, and one
 /// with `badicon` names one that isn't square.
+///
+/// `dee-design` is a People portfolio with its own page design (people/design.rs), for
+/// people-design.e2e.ts: three works, and `.slop/page/` with one thing in each file that Slop
+/// removes.
 async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
     use axum::response::IntoResponse;
     let Some((repo, file)) = path.split_once("/.slop/") else {
@@ -105,6 +109,12 @@ async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
     };
     // <owner>/<repo>/<commit>
     let name = repo.split('/').nth(1).unwrap_or_default();
+    if name == "dee-design" {
+        return match designed_portfolio(file) {
+            Some(body) => body.into_response(),
+            None => axum::http::StatusCode::NOT_FOUND.into_response(),
+        };
+    }
     let body = match file {
         "media.json" if name == "neon-drift" => serde_json::json!({ "icon": "icon.png" })
             .to_string()
@@ -133,6 +143,53 @@ async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
         _ => return axum::http::StatusCode::NOT_FOUND.into_response(),
     };
     body.into_response()
+}
+
+/// Dee Designer's portfolio repository (seed.rs), as raw_file serves it.
+fn designed_portfolio(file: &str) -> Option<Vec<u8>> {
+    Some(match file {
+        "portfolio.json" => serde_json::json!({
+            "avatar": "avatar.png",
+            "works": [
+                { "image": "works/lantern.png", "title": "Lantern", "skill": "pixel-art" },
+                { "image": "works/keep.png", "title": "The keep", "skill": "pixel-art" },
+                { "youtube": "https://youtu.be/dQw4w9WgXcQ", "title": "Showreel" }
+            ]
+        })
+        .to_string()
+        .into_bytes(),
+        "page/index.html" => br#"<header class="intro">
+  <h2>Hello, I'm Dee</h2>
+  <p>I paint lanterns, keeps and the little lights between them.</p>
+</header>
+<script>document.title = "not allowed"</script>
+<img class="hero" src="images/hero.png" alt="A row of lanterns at dusk">
+<section class="featured">
+  <h3>Featured</h3>
+  <slop-work ref="1"></slop-work>
+</section>
+<section>
+  <h3>Everything</h3>
+  <slop-works></slop-works>
+</section>
+<p class="contact">Say hello: <a href="https://example.com/dee">my site</a></p>
+"#
+        .to_vec(),
+        "page/style.css" => br#".page { background: #1b1430; padding: 24px; border-radius: 12px; }
+.intro h2 { font-family: "Pixelify Sans", monospace; color: #ffd166; font-size: 32px; margin: 0 0 8px; }
+.intro p, .contact { color: #f1eaff; }
+.hero { width: 100%; border-radius: 8px; }
+h3 { color: #ffd166; font-family: "Pixelify Sans", monospace; }
+.contact a { color: #ffd166; }
+.overlay { position: fixed; inset: 0; }
+"#
+        .to_vec(),
+        "avatar.png" => png(256, 256, [255, 209, 102]),
+        "works/lantern.png" => png(640, 480, [230, 150, 60]),
+        "works/keep.png" => png(640, 480, [70, 60, 120]),
+        "page/images/hero.png" => png(1200, 400, [40, 30, 70]),
+        _ => return None,
+    })
 }
 
 /// Stands in for GitHub: release files under any `/<owner>/<repo>/releases/download/...`.
@@ -185,6 +242,21 @@ async fn fake_github() -> anyhow::Result<String> {
                     "email_verified": true,
                     "picture": format!("http://{host}/avatars/u/5252"),
                 }))
+            }),
+        )
+        // A repository's owner (repo_owner.rs): only Dee Designer's portfolio repository, owned
+        // by her linked GitHub account (seed.rs). Others aren't found, as before.
+        .route(
+            "/repos/{owner}/{repo}",
+            get(|Path((owner, repo)): Path<(String, String)>| async move {
+                if repo != "dee-design" {
+                    return Err(axum::http::StatusCode::NOT_FOUND);
+                }
+                Ok(axum::Json(serde_json::json!({
+                    "name": repo,
+                    "private": false,
+                    "owner": { "id": seed::DEE_GITHUB, "login": owner, "type": "User" },
+                })))
             }),
         )
         // The newest commit, for store pictures (media.rs).

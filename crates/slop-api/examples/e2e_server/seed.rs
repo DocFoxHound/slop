@@ -23,6 +23,8 @@ use crate::fake_stripe::FakeStripe;
 
 /// Pia Picture's Google account, which the stand-in Google (main.rs) always signs in as.
 pub const PIA_GOOGLE: &str = "109876543210987654321";
+/// Dee Designer's GitHub account, which owns e2e/dee-design on the fake GitHub (main.rs).
+pub const DEE_GITHUB: i64 = 7007;
 
 pub struct Ctx {
     pub db: PgPool,
@@ -307,7 +309,7 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     // Pia Picture: a linked GitHub sign-in, whose picture the fake GitHub serves, and a linked
     // Google one with no picture yet (Slop gets it at the next sign-in: "Refresh picture" goes to
     // the stand-in Google, main.rs), for the profile picture tests (accounts-picture.e2e.ts).
-    // Nobody else has a linked sign-in.
+    // Nobody else has a linked sign-in but Dee Designer (her GitHub, for her People portfolio).
     let pictured = ctx.user("Pia Picture", "US").await?;
     ctx.sql(
         "insert into identities (provider, provider_subject, user_id, login) values ('github', '5150', $1, 'pia-gh')",
@@ -349,6 +351,9 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
         .insert("inboxCreative", p.inbox_creative.cookie.clone());
     s.ids.insert("inboxCreative", json!(p.inbox_creative.id));
     s.ids.insert("inboxCreativeHandle", json!("ivy-inbox"));
+    s.cookies.insert("designer", p.designer.cookie.clone());
+    s.ids.insert("designer", json!(p.designer.id));
+    s.ids.insert("designerHandle", json!("dee-design"));
     s.ids.insert("deliveredJob", json!(p.delivered_job));
     s.ids.insert("workingJob", json!(p.working_job));
     s.ids.insert("requestedJob", json!(p.requested_job));
@@ -565,6 +570,8 @@ pub struct People {
     pub pending_creative: Who,
     /// Another creative whose first portfolio waits (for the review inbox's test).
     pub inbox_creative: Who,
+    /// A creative with no portfolio yet, whose repository has a page design (main.rs).
+    pub designer: Who,
     /// Delivered, with a conversation: the client is asked to pay.
     pub delivered_job: Uuid,
     /// Paid up front through (fake) Stripe Checkout, and being worked on.
@@ -622,6 +629,15 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
     let inbox_creative = ctx.user("Ivy Inbox", "US").await?;
     creative_profile(ctx, &inbox_creative, "ivy-inbox", "Ivy Inbox").await?;
     portfolio(ctx, inbox_creative.id, "ivy-inbox", "#8b5a1f").await?;
+    // And one whose page design people-design.e2e.ts checks, reviews and approves for real: her
+    // GitHub account owns e2e/dee-design on the fake GitHub.
+    let designer = ctx.user("Dee Designer", "US").await?;
+    creative_profile(ctx, &designer, "dee-design", "Dee Designer").await?;
+    ctx.sql(
+        "insert into identities (provider, provider_subject, user_id, login) values ('github', $2, $1, 'dee-gh')",
+        &[&designer.id, &DEE_GITHUB.to_string()],
+    )
+    .await?;
 
     // The client and their app.
     let client = ctx.adult("Cleo Client", "US").await?;
@@ -831,6 +847,7 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
         client,
         pending_creative,
         inbox_creative,
+        designer,
         delivered_job,
         working_job,
         requested_job,

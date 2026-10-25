@@ -1,0 +1,85 @@
+/* Tracklist: a record sleeve, numbered tracks down the page, monospace liner notes. */
+.page {
+  background: linear-gradient(180deg, #13261f 0%, #0c1714 100%);
+  color: #e3f2ea;
+  padding: 36px 32px;
+  font-family: "JetBrains Mono", monospace;
+  font-size: 14px;
+}
+
+.sleeve {
+  border: 2px solid #7fd6a8;
+  border-radius: 8px;
+  padding: 20px 24px;
+  margin-bottom: 28px;
+}
+
+.sleeve h2 {
+  margin: 0 0 6px;
+  font-family: "Caveat", cursive;
+  font-size: 44px;
+  font-weight: 700;
+  line-height: 1.1;
+  color: #7fd6a8;
+}
+
+.byline {
+  margin: 0;
+  color: #b9d9c8;
+}
+
+.side h3 {
+  font-size: 13px;
+  letter-spacing: 0.18em;
+  text-transform: uppercase;
+  color: #7fd6a8;
+  margin: 28px 0 12px;
+}
+
+.tracks {
+  margin: 0;
+  padding-left: 28px;
+  display: grid;
+  gap: 14px;
+}
+
+.tracks li::marker {
+  color: #7fd6a8;
+  font-weight: 700;
+}
+
+.specs {
+  width: 100%;
+  margin-top: 32px;
+  border-collapse: collapse;
+}
+
+.specs caption {
+  text-align: start;
+  font-weight: 700;
+  color: #7fd6a8;
+  padding-bottom: 8px;
+}
+
+.specs th,
+.specs td {
+  text-align: start;
+  padding: 8px 10px;
+  border-top: 1px solid #2c4a3e;
+}
+
+.specs th {
+  width: 30%;
+  color: #b9d9c8;
+  font-weight: 400;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 24px 16px;
+  }
+
+  .sleeve h2 {
+    font-size: 34px;
+  }
+}
