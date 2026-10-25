@@ -2724,7 +2724,7 @@ async fn a_new_chat_device_is_approved_only_with_an_active_devices_signature(db:
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn starting_over_needs_a_fresh_sign_in_and_replaces_every_other_device(db: PgPool) {
+async fn starting_over_works_from_an_old_sign_in_and_replaces_every_other_device(db: PgPool) {
     let app = test_app_with(db, chat_limits).await;
     let (ann_id, ann_web) = app.user("Ann", "US").await;
     let (bob_id, bob_web) = app.user("Bob", "US").await;
@@ -2738,7 +2738,8 @@ async fn starting_over_needs_a_fresh_sign_in_and_replaces_every_other_device(db:
         dev.signed_in(Method::POST, format!("/v1/chat/devices/{id}/start-over"))
     };
 
-    // Not with a sign-in from yesterday.
+    // A sign-in from yesterday is enough (SECURITY §4.3, 2026-10-25), but only for a waiting
+    // device of their own.
     sqlx::query(
         "update sessions set created_at = now() - interval '1 day' where user_id = $1 and kind = 'desktop'",
     )
@@ -2746,15 +2747,7 @@ async fn starting_over_needs_a_fresh_sign_in_and_replaces_every_other_device(db:
     .execute(&app.db)
     .await
     .unwrap();
-    let res = app.send(start_over(&new, new.id)).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-
-    // Freshly signed in: only a waiting device of their own.
-    let fresh = Dev {
-        bearer: app_bearer(&app, &ann_web).await,
-        ..new
-    };
+    let fresh = new;
     for id in [old.id, bob.id, Uuid::now_v7()] {
         assert_eq!(
             app.send(start_over(&fresh, id)).await.status(),

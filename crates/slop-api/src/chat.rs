@@ -541,14 +541,13 @@ fn verify(public: &[u8], message: &[u8], signature: &[u8]) -> bool {
         .is_ok()
 }
 
-/// Every device lost: this pending device becomes the user's only one. It needs a fresh sign-in
+/// Every device lost: this pending device becomes the user's only one. Any signed-in session may
 /// (SECURITY §4.3), and the people they chat with see that their security code changed.
 async fn start_over(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<StatusCode> {
-    crate::auth::session::require_recent_sign_in(&state.db, &user).await?;
     let mut tx = state.db.begin().await?;
     let pending: bool = sqlx::query_scalar(
         "select exists (select 1 from chat_devices where id = $1 and user_id = $2 and status = 'pending')",

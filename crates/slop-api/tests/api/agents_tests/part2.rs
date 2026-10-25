@@ -831,7 +831,7 @@ async fn maker_tokens_are_checked_when_made(db: PgPool) {
     assert_eq!(created["mcp_url"], "http://localhost:8080/v1/maker/mcp");
     assert_eq!(created["apps"], json!([]));
     assert_eq!(created["people"], false);
-    assert_eq!(created["passkey_proved"], false);
+    assert!(created.get("passkey_proved").is_none());
     assert_eq!(created["expired"], false);
     // The secret is in `secret` only: never inside a ready-made command (people pasted those into
     // AI chats; the website shows how to keep it in an environment variable instead).
@@ -965,8 +965,6 @@ async fn a_maker_token_needs_only_a_signed_in_session(db: PgPool) {
     assert_eq!(res.status(), StatusCode::CREATED);
     let made = body_json(res).await;
     assert!(made["secret"].as_str().unwrap().starts_with("slopmk_"));
-    // Not passkey-proven: no confirmation was made.
-    assert_eq!(made["passkey_proved"], json!(false));
     // 30 days unless chosen otherwise, and never more than a year.
     let lifetime = OffsetDateTime::parse(made["expires_at"].as_str().unwrap(), &Rfc3339).unwrap()
         - OffsetDateTime::now_utc();
@@ -988,7 +986,7 @@ async fn a_maker_token_needs_only_a_signed_in_session(db: PgPool) {
         .await;
     assert_eq!(res.status(), StatusCode::UNAUTHORIZED);
 
-    // The other step-ups stay: the same old session can't add a signing key.
+    // Nor does anything else since 2026-10-25: the same old session adds a signing key.
     let res = app
         .send(
             req(Method::POST, "/v1/me/signing-keys")
@@ -996,8 +994,7 @@ async fn a_maker_token_needs_only_a_signed_in_session(db: PgPool) {
                 .json(json!({ "name": "Laptop", "public_key": "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIOMqqnkVzrm0SdG6UOoqKLsabgH5C9okWi0dh2l9GKJl x@y" })),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    assert_eq!(res.status(), StatusCode::CREATED);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -1131,109 +1128,31 @@ async fn a_publishing_token_needs_the_publisher_agreement(db: PgPool) {
     assert_eq!(doc["accepted"], json!(false));
 }
 
+/// Passkeys are optional (2026-10-25): a maker's agent publishes with a token made from a
+/// session that never used one, past the deadline publishers once had.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn a_recent_passkey_confirmation_carries_over_to_a_maker_token(db: PgPool) {
+async fn a_makers_agent_publishes_without_any_passkey(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = app.user("Mia Maker", "US").await;
-    let set_passkey_at = |sql: &'static str| {
-        let db = app.db.clone();
-        async move {
-            sqlx::query(sql).bind(maker_id).execute(&db).await.unwrap();
-        }
-    };
-    // A passkey, and the deadline to use one is past.
-    sqlx::query(
-        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(maker_id)
-    .execute(&app.db)
-    .await
-    .unwrap();
-    sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
+    sqlx::query("update users set passkey_due_at = now() - interval '60 days' where id = $1")
         .bind(maker_id)
         .execute(&app.db)
         .await
         .unwrap();
-
-    set_passkey_at(
-        "update sessions set passkey_at = now() - interval '13 hours' where user_id = $1 and kind = 'web'",
-    )
-    .await;
     let res = app
         .send(
             req(Method::POST, "/v1/me/maker-tokens")
                 .cookie(&maker)
-                .json(json!({ "name": "Old", "scope": "publish" })),
+                .json(json!({ "name": "Agent", "scope": "publish" })),
         )
         .await;
-    let old = body_json(res).await;
-    assert_eq!(old["passkey_proved"], false);
-    set_passkey_at(
-        "update sessions set passkey_at = now() - interval '11 hours' where user_id = $1 and kind = 'web'",
-    )
-    .await;
-    let res = app
-        .send(
-            req(Method::POST, "/v1/me/maker-tokens")
-                .cookie(&maker)
-                .json(json!({ "name": "Fresh", "scope": "publish" })),
-        )
-        .await;
-    let fresh = body_json(res).await;
-    assert_eq!(fresh["passkey_proved"], true);
-    let at: Option<OffsetDateTime> =
-        sqlx::query_scalar("select passkey_at from sessions where id = $1::uuid")
-            .bind(fresh["id"].as_str().unwrap())
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert!(at.is_some());
-
-    // Through the agent: the proven token publishes, even after the 12 hours; the other can't.
-    let bearer = |t: &Value| format!("Bearer {}", t["secret"].as_str().unwrap());
-    sqlx::query("update sessions set passkey_at = passkey_at - interval '2 days' where kind = 'agent' and passkey_at is not null")
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let (failed, text) = maker_tool(
-        &app,
-        &bearer(&old),
-        "create_store_page",
-        new_app("unproved"),
-    )
-    .await;
-    assert!(failed && text.contains("passkey_required"), "{text}");
-    let (failed, text) = maker_tool(
-        &app,
-        &bearer(&fresh),
-        "create_store_page",
-        new_app("proved"),
-    )
-    .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let token = body_json(res).await;
+    let bearer = format!("Bearer {}", token["secret"].as_str().unwrap());
+    let (failed, text) =
+        maker_tool(&app, &bearer, "create_store_page", new_app("no-passkey")).await;
     assert!(!failed, "{text}");
-    assert_eq!(parsed(&text)["slug"], "proved");
-    // Listing shows which is which.
-    let list = body_json(
-        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
-            .await,
-    )
-    .await;
-    let proved: Vec<(String, bool)> = list
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| {
-            (
-                t["name"].as_str().unwrap().to_string(),
-                t["passkey_proved"].as_bool().unwrap(),
-            )
-        })
-        .collect();
-    assert_eq!(
-        proved,
-        [("Fresh".to_string(), true), ("Old".to_string(), false)]
-    );
+    assert_eq!(parsed(&text)["slug"], "no-passkey");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -1288,7 +1207,6 @@ async fn makers_list_and_revoke_only_their_own_live_tokens(db: PgPool) {
     assert_eq!(list[0]["scope"], "publish");
     assert_eq!(list[0]["apps"], json!(["beta-app", "game"]));
     assert_eq!(list[0]["people"], true);
-    assert_eq!(list[0]["passkey_proved"], false);
     assert!(list[0]["last_used_at"].is_string());
     assert!(list[0].get("secret").is_none(), "the secret is shown once");
     let theirs = body_json(
@@ -3235,34 +3153,13 @@ async fn agents_submit_releases_with_notes_and_read_the_fixes(db: PgPool) {
     );
     assert_eq!(fixes["fixes"][1]["severity"], "must");
 
-    // Past the passkey deadline, only a token proven with a passkey submits.
-    sqlx::query(
-        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(maker_id)
-    .execute(&app.db)
-    .await
-    .unwrap();
+    // Past the deadline publishers once had, with no passkey ever used: it still submits.
     sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
         .bind(maker_id)
         .execute(&app.db)
         .await
         .unwrap();
     let (failed, text) = maker_tool(&app, &publish, "submit_release", release("1.0.1")).await;
-    assert!(failed && text.contains("passkey_required"), "{text}");
-    sqlx::query("update sessions set passkey_at = now() where user_id = $1 and kind = 'web'")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let (proven, _) = maker_token(
-        &app,
-        &maker,
-        json!({ "name": "Proven", "scope": "publish" }),
-    )
-    .await;
-    let (failed, text) = maker_tool(&app, &proven, "submit_release", release("1.0.1")).await;
     assert!(!failed, "{text}");
 }
 

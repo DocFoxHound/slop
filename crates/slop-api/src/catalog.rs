@@ -1461,7 +1461,6 @@ async fn create_app(
     let mods_folder = validate_mods_folder(req.mods_folder.clone())?;
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
-    crate::passkeys::require(&state, &user).await?;
     if let Some(t) = &req.repo_token {
         crate::repo_tokens::verify_given(&state, &repo_url, t).await?;
     }

@@ -237,20 +237,8 @@ test("registering a branch: the kinds, the original's age rating as the least, a
   await expect(page.locator(".community-notice")).toContainText("A translation of Lantern Keep, made by Vera Okafor, not Mia Maker.");
 });
 
-test("registering a branch asks for a passkey or an agreement first when they're due", async ({ browser }) => {
-  // Olly is past his passkey deadline.
-  const olly = await browser.newPage();
-  await signIn(olly, "overdue");
-  await olly.goto(`/app/${ids.listedApp}/branch?kind=addon`);
-  await fillMod(olly, "lantern-keep-olly-mod");
-  await olly.getByRole("button", { name: "Publish the mod" }).click();
-  const passkey = olly.getByRole("dialog", { name: "Passkey needed" });
-  await expect(passkey.getByRole("heading", { name: "Add a passkey first" })).toBeVisible();
-  await passkey.getByRole("button", { name: "Cancel" }).click();
-  await expect(passkey).toBeHidden();
-  await expect(olly.getByRole("textbox", { name: "Name", exact: true })).toHaveValue("Olly's lanterns");
-  expect((await tryCall("overdue", "GET", "/v1/apps/lantern-keep-olly-mod")).status).toBe(404);
-
+test("registering a branch asks for an agreement first when one changed", async ({ browser }) => {
+  // (It never asks for a passkey: passkeys are optional since 2026-10-25, passkeys.e2e.ts.)
   // An agreement that changed since it was accepted (as the server answers then): it's shown
   // to accept; "Not now" goes back to the form as it was, with nothing registered.
   const vera = await browser.newPage();

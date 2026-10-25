@@ -9558,7 +9558,7 @@ async fn community_builds_of_pulse_games_need_a_pulse_handshake(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn changing_where_donations_go_needs_a_fresh_sign_in_and_72_hours(db: PgPool) {
+async fn changing_where_donations_go_takes_72_hours_even_from_an_old_session(db: PgPool) {
     let app = test_app_with(db, |c| c.payments.simulated = true).await;
     let (maker_id, maker) = app.user("Mia Maker", "US").await;
     let (donor_id, donor) = app.user("Dee Donor", "US").await;
@@ -9582,16 +9582,9 @@ async fn changing_where_donations_go_needs_a_fresh_sign_in_and_72_hours(db: PgPo
             .json(json!({ "kind": kind }))
     };
 
-    // A sign-in from more than a few minutes ago isn't enough.
-    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let res = app.send(change("switch")).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-    sqlx::query("update sessions set created_at = now() where user_id = $1")
+    // A sign-in from long ago is enough (no "confirm it's you" since 2026-10-25, SECURITY §4.3):
+    // the 72 hours' wait and the announcement are what protect it.
+    sqlx::query("update sessions set created_at = now() - interval '30 days' where user_id = $1")
         .bind(maker_id)
         .execute(&app.db)
         .await
@@ -10870,25 +10863,13 @@ async fn sign_ins_link_only_after_signing_in_to_them(db: PgPool) {
     let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&other)).await).await;
     assert_eq!(me["id"], json!(ann_id));
 
-    // Not without a session, and not with an old sign-in (a stolen session can't add one).
-    // Both go to sign-in first, then straight back to linking.
+    // Not without a session: sign in first, then straight back to linking. An old sign-in goes
+    // straight on to the provider (no "confirm it's you" since 2026-10-25, SECURITY §4.3).
     let res = app.send(req(Method::GET, "/v1/auth/gitlab/link")).await;
     assert!(
         location(&res).starts_with("/signin?reason=link&return_to=%2Fv1%2Fauth%2Fgitlab%2Flink")
     );
-    sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
-        .bind(ann_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let res = app
-        .send(req(Method::GET, "/v1/auth/github/link").cookie(&ann))
-        .await;
-    assert!(
-        location(&res).starts_with("/signin?reason=link"),
-        "sign in again first"
-    );
-    sqlx::query("update sessions set created_at = now() where user_id = $1")
+    sqlx::query("update sessions set created_at = now() - interval '30 days' where user_id = $1")
         .bind(ann_id)
         .execute(&app.db)
         .await
@@ -12330,14 +12311,8 @@ async fn sensitive_actions_need_two_people_and_roles_limit_staff(db: PgPool) {
     .await;
     assert_eq!(listed["approvals_required"], 2);
     assert_eq!(listed["actions"][0]["kind"], "release.revoke");
-    // An old session must confirm first (sign in again, or a passkey).
+    // An old session needs no "confirm it's you" (SECURITY §4.3, 2026-10-25).
     sqlx::query("update sessions set created_at = now() - interval '1 hour'")
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let res = app.send(approve(&b)).await;
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-    sqlx::query("update sessions set stepped_up_at = now()")
         .execute(&app.db)
         .await
         .unwrap();
@@ -12630,12 +12605,8 @@ async fn makers_hear_about_every_release_and_security_txt_is_served(db: PgPool) 
     .unwrap();
     assert_eq!(
         titles,
-        [
-            "Add a passkey to your account",
-            "Game 1.0.0 was submitted",
-            "Game 1.0.0 is approved"
-        ],
-        "a first release starts the passkey clock (passkeys.rs)"
+        ["Game 1.0.0 was submitted", "Game 1.0.0 is approved"],
+        "no notice asks for a passkey (optional since 2026-10-25)"
     );
 
     let res = app
@@ -12657,7 +12628,7 @@ async fn makers_hear_about_every_release_and_security_txt_is_served(db: PgPool) 
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn passkeys_are_added_after_a_recent_sign_in_and_confirm_sensitive_actions(db: PgPool) {
+async fn passkeys_are_added_from_any_session_and_still_confirm_staff_tokens(db: PgPool) {
     use webauthn_authenticator_rs::{WebauthnAuthenticator, softpasskey::SoftPasskey};
     let app = test_app(db).await;
     let (user_id, cookie) = app.user("Pia", "US").await;
@@ -12698,7 +12669,7 @@ async fn passkeys_are_added_after_a_recent_sign_in_and_confirm_sensitive_actions
     .await;
     assert_eq!(listed[0]["name"], "Laptop");
 
-    // An old session can't do sensitive things until it confirms with the passkey.
+    // An old session adds another without confirming first (SECURITY §4.3, 2026-10-25).
     sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
         .bind(user_id)
         .execute(&app.db)
@@ -12707,7 +12678,8 @@ async fn passkeys_are_added_after_a_recent_sign_in_and_confirm_sensitive_actions
     let res = app
         .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
         .await;
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    assert_eq!(res.status(), StatusCode::OK);
+    // Confirming with it still works (staff making an admin API token ask for it).
     let started = body_json(
         app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
             .await,
@@ -12725,14 +12697,6 @@ async fn passkeys_are_added_after_a_recent_sign_in_and_confirm_sensitive_actions
         )
         .await;
     assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    let res = app
-        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
-        .await;
-    assert_eq!(
-        res.status(),
-        StatusCode::OK,
-        "confirmed in the last ten minutes"
-    );
     let used: bool =
         sqlx::query_scalar("select last_used_at is not null from passkeys where user_id = $1")
             .bind(user_id)
@@ -12774,7 +12738,7 @@ async fn makers_sign_hand_built_files_with_a_registered_key(db: PgPool) {
     let key = slop_manifest::ed25519_dalek::SigningKey::from_bytes(&[21; 32]);
     let (public_line, signature) = ssh_sign(&key, BUILD_BYTES);
 
-    // Adding a key: refused with an old session, then it waits 72 hours.
+    // Adding a key works from an old session (SECURITY §4.3, 2026-10-25); it waits 72 hours.
     sqlx::query("update sessions set created_at = now() - interval '1 hour' where user_id = $1")
         .bind(maker_id)
         .execute(&app.db)
@@ -12785,15 +12749,6 @@ async fn makers_sign_hand_built_files_with_a_registered_key(db: PgPool) {
             .cookie(&maker)
             .json(json!({ "name": "Laptop", "public_key": public_line }))
     };
-    assert_eq!(
-        body_json(app.send(add()).await).await["error"]["code"],
-        "step_up_required"
-    );
-    sqlx::query("update sessions set created_at = now() where user_id = $1")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
     let res = app.send(add()).await;
     assert_eq!(res.status(), StatusCode::CREATED);
     let added = body_json(res).await;
@@ -12985,11 +12940,11 @@ async fn the_apis_role_only_adds_to_the_ledgers(db: PgPool) {
     }
 }
 
-/// Publishers and creatives need a passkey (passkeys.rs `require`): 30 days from first
-/// publishing, reminders before, then publishing needs a passkey proved in the last 12 hours,
-/// unless staff gave a week's grace.
+/// Passkeys are optional (the owner's decision of 2026-10-25): publishing works without one,
+/// long after first publishing and past a deadline set before then, with no notice asking for
+/// one, and the staff "passkey grace" is gone.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn publishers_need_a_passkey_after_their_grace_period(db: PgPool) {
+async fn publishers_never_need_a_passkey(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = app.user("Mia Maker", "US").await;
     let (_, admin) = make_admin(&app, "Ada Owner").await;
@@ -12999,55 +12954,36 @@ async fn publishers_need_a_passkey_after_their_grace_period(db: PgPool) {
             .json(new_app(slug))
     };
 
-    // The first time starts the clock, with a notice.
     let res = app.send(create("one")).await;
     assert_eq!(res.status(), StatusCode::CREATED);
-    let due: OffsetDateTime = sqlx::query_scalar("select passkey_due_at from users where id = $1")
-        .bind(maker_id)
-        .fetch_one(&app.db)
-        .await
-        .unwrap();
-    assert!(
-        (due - OffsetDateTime::now_utc() - time::Duration::days(30)).abs()
-            < time::Duration::minutes(1)
-    );
-    let notices: Vec<String> =
-        sqlx::query_scalar("select title from notifications where user_id = $1")
-            .bind(maker_id)
-            .fetch_all(&app.db)
-            .await
-            .unwrap();
-    assert_eq!(notices, ["Add a passkey to your account"]);
+    let notices: i64 = sqlx::query_scalar(
+        "select count(*) from notifications where user_id = $1 and title ilike '%passkey%'",
+    )
+    .bind(maker_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(notices, 0, "no notice asks for one");
     let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&maker)).await).await;
     assert_eq!(me["has_passkey"], false);
-    assert!(me["passkey_due_at"].is_string());
+    assert!(me.get("passkey_due_at").is_none());
 
-    // A week, then a day before: one reminder each.
-    let set_due = |sql: &'static str| {
-        let db = app.db.clone();
-        async move {
-            sqlx::query(sql).bind(maker_id).execute(&db).await.unwrap();
-        }
-    };
-    set_due("update users set passkey_due_at = now() + interval '6 days' where id = $1").await;
-    assert_eq!(slop_api::passkeys::remind(&app.db).await.unwrap(), 1);
-    assert_eq!(
-        slop_api::passkeys::remind(&app.db).await.unwrap(),
-        0,
-        "once"
-    );
-    set_due("update users set passkey_due_at = now() + interval '12 hours' where id = $1").await;
-    assert_eq!(slop_api::passkeys::remind(&app.db).await.unwrap(), 1);
+    // A deadline set before 2026-10-25, long past, and an old session: still fine.
+    sqlx::query("update users set passkey_due_at = now() - interval '60 days' where id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    sqlx::query(
+        "update sessions set created_at = now() - interval '40 days', stepped_up_at = null, passkey_at = null where user_id = $1",
+    )
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(app.send(create("two")).await.status(), StatusCode::CREATED);
 
-    // Past the deadline: add one first.
-    set_due("update users set passkey_due_at = now() - interval '1 hour' where id = $1").await;
-    let res = app.send(create("two")).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    let err = body_json(res).await;
-    assert_eq!(err["error"]["code"], "passkey_required");
-    assert_eq!(err["error"]["field"], "add");
-
-    // With one, it must be used: signing in with it or confirming with it.
+    // With a passkey that hasn't been used for days: the same.
     sqlx::query(
         "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
     )
@@ -13056,73 +12992,23 @@ async fn publishers_need_a_passkey_after_their_grace_period(db: PgPool) {
     .execute(&app.db)
     .await
     .unwrap();
-    let res = app.send(create("two")).await;
-    assert_eq!(body_json(res).await["error"]["field"], "confirm");
-    sqlx::query("update sessions set passkey_at = now() - interval '13 hours' where user_id = $1")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let res = app.send(create("two")).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN, "too long ago");
-    sqlx::query("update sessions set passkey_at = now() where user_id = $1")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    assert_eq!(app.send(create("two")).await.status(), StatusCode::CREATED);
-
-    // Lost it: staff give a week, once they've checked it's them.
-    sqlx::query("update sessions set passkey_at = null where user_id = $1")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let grace = |reason: &str| {
-        req(
-            Method::POST,
-            format!("/v1/admin/users/{maker_id}/passkey-grace"),
-        )
-        .cookie(&admin)
-        .json(json!({ "reason": reason }))
-    };
-    assert_eq!(
-        app.send(grace("ok")).await.status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
-    let res = app
-        .send(grace(
-            "Video call; matched the GitHub account and recent releases.",
-        ))
-        .await;
-    assert_eq!(res.status(), StatusCode::OK, "{}", body_json(res).await);
     assert_eq!(
         app.send(create("three")).await.status(),
         StatusCode::CREATED
     );
-    let audited: i64 = sqlx::query_scalar(
-        "select count(*) from audit_log where action = 'account.passkey_grace' and subject = $1",
-    )
-    .bind(maker_id.to_string())
-    .fetch_one(&app.db)
-    .await
-    .unwrap();
-    assert_eq!(audited, 1);
-    let (_, someone) = app.user("Sam", "US").await;
-    assert_eq!(
-        app.send(
+
+    // Nothing for staff to give any more.
+    let res = app
+        .send(
             req(
                 Method::POST,
-                format!("/v1/admin/users/{maker_id}/passkey-grace")
+                format!("/v1/admin/users/{maker_id}/passkey-grace"),
             )
-            .cookie(&someone)
-            .json(json!({ "reason": "Let me in, I promise it's me." }))
+            .cookie(&admin)
+            .json(json!({ "reason": "Video call; matched the GitHub account." })),
         )
-        .await
-        .status(),
-        StatusCode::NOT_FOUND,
-        "staff only"
-    );
+        .await;
+    assert!(res.status().is_client_error(), "{}", res.status());
 }
 
 /// A new icon like another maker's live one is pointed out to the reviewer (media.rs
@@ -16250,23 +16136,28 @@ async fn a_public_site_behind_a_proxy_needs_the_client_ip_header(db: PgPool) {
     assert!(slop_api::ops::config_alerts(&config).is_empty());
 }
 
+/// The owner's decision of 2026-10-25 (SECURITY §4.3): an old session, of an account with a
+/// passkey it never used, approves a desktop sign-in and closes the account, with no "confirm
+/// it's you" first. (Adding a passkey from an old session: `passkeys_are_added_from_any_session_and_still_confirm_staff_tokens`.)
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn old_sessions_and_missing_passkeys_cant_change_what_protects_an_account(db: PgPool) {
+async fn old_sessions_approve_desktop_sign_ins_and_close_the_account(db: PgPool) {
     let app = test_app(db).await;
     let (user_id, cookie) = app.user("Pat Player", "US").await;
-    let age = |user: Uuid| {
-        let db = app.db.clone();
-        async move {
-            sqlx::query("update sessions set created_at = now() - interval '1 hour', stepped_up_at = null, passkey_at = null where user_id = $1")
-                .bind(user)
-                .execute(&db)
-                .await
-                .unwrap();
-        }
-    };
+    sqlx::query(
+        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(user_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    sqlx::query("update sessions set created_at = now() - interval '30 days', stepped_up_at = null, passkey_at = null where user_id = $1")
+        .bind(user_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
 
-    // An old (or stolen) session can't approve a desktop sign-in for itself.
-    age(user_id).await;
+    // Approving the desktop app.
     let res = app
         .send(req(Method::POST, "/v1/auth/desktop/requests").json(json!({
             "code_challenge": pkce_challenge(&"v".repeat(43)),
@@ -16285,8 +16176,15 @@ async fn old_sessions_and_missing_passkeys_cant_change_what_protects_an_account(
             .cookie(&cookie),
         )
         .await;
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-    // Nor close the account.
+    assert_eq!(res.status(), StatusCode::OK);
+    assert!(
+        body_json(res).await["redirect_url"]
+            .as_str()
+            .unwrap()
+            .starts_with("http://127.0.0.1:49152/")
+    );
+
+    // Closing the account (typing the confirmation is the safeguard).
     let res = app
         .send(
             req(Method::POST, "/v1/me/close")
@@ -16294,35 +16192,11 @@ async fn old_sessions_and_missing_passkeys_cant_change_what_protects_an_account(
                 .json(json!({ "confirm": "close my account" })),
         )
         .await;
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-
-    // With a passkey on the account, a fresh sign-in alone doesn't add another or unlink.
-    sqlx::query(
-        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, '\\x01', '{}', 'Laptop')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(user_id)
-    .execute(&app.db)
-    .await
-    .unwrap();
-    sqlx::query("update sessions set created_at = now() where user_id = $1")
+    assert!(res.status().is_success(), "{}", res.status());
+    let closed: bool = sqlx::query_scalar("select closed_at is not null from users where id = $1")
         .bind(user_id)
-        .execute(&app.db)
+        .fetch_one(&app.db)
         .await
         .unwrap();
-    let res = app
-        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
-        .await;
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-    // Confirmed with the passkey a moment ago: allowed.
-    sqlx::query("update sessions set passkey_at = now() where user_id = $1")
-        .bind(user_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let res = app
-        .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
-        .await;
-    assert_ne!(res.status(), StatusCode::FORBIDDEN);
-    assert_ne!(body_json(res).await["error"]["code"], "step_up_required");
+    assert!(closed);
 }

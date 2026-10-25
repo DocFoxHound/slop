@@ -74,20 +74,16 @@ test("Stripe still checking, Stripe wanting more, a passkey, an adult tick, or p
   await page.route("**/v1/me/donation-account", (route) => {
     if (route.request().method() !== "POST") return route.fallback();
     sent = route.request().postDataJSON();
-    // Publishers and creatives need a passkey to connect a payout account.
-    return route.fulfill(
-      json(403, { error: { code: "passkey_required", message: "add a passkey to your account first", field: "add" } }),
-    );
+    // No passkey or "confirm it's you" on the way (2026-10-25): what Stripe says is what shows.
+    return route.fulfill(json(503, { error: { code: "unavailable", message: "Stripe didn't answer: try again in a minute" } }));
   });
   await page.reload();
   await p.getByRole("checkbox", { name: /donations may be taxable income for me/ }).check();
   await p.getByRole("checkbox", { name: "I'm 18 or older." }).check();
   await p.getByRole("button", { name: "Enable donations with Stripe" }).click();
   expect(sent).toEqual({ tax_notice_ack: true, confirm_adult: true, return_to: `/publish/${SLUG}/manage#donations` });
-  const dialog = page.getByRole("dialog", { name: "Passkey needed" });
-  await expect(dialog.getByRole("heading", { name: "Add a passkey first" })).toBeVisible();
-  await dialog.getByRole("button", { name: "Cancel" }).click();
-  await expect(p.getByRole("alert")).toHaveText("add a passkey to your account first");
+  await expect(p.getByRole("alert")).toHaveText("Stripe didn't answer: try again in a minute");
+  await expect(page.getByRole("dialog")).toHaveCount(0);
   await page.unrouteAll();
 
   // Payments off on this server.

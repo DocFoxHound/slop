@@ -928,7 +928,7 @@ async fn saving_a_profile_checks_every_field(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn saving_a_profile_needs_the_people_terms_and_a_passkey_once_due(db: PgPool) {
+async fn saving_a_profile_needs_the_people_terms_but_never_a_passkey(db: PgPool) {
     let app = people_app(db).await;
     let (id, cookie) = app.user("Vera", "US").await;
     let mut p = profile("vera", true);
@@ -966,30 +966,11 @@ async fn saving_a_profile_needs_the_people_terms_and_a_passkey_once_due(db: PgPo
     .execute(&app.db)
     .await
     .unwrap();
-    // The first save starts the passkey clock.
     let (status, _) = save().await;
     assert_eq!(status, StatusCode::OK);
-    let due: Option<OffsetDateTime> =
-        sqlx::query_scalar("select passkey_due_at from users where id = $1")
-            .bind(id)
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert!(due.unwrap() > OffsetDateTime::now_utc());
-    // Past it, without a passkey: refused.
+    // No passkey is ever needed (optional since 2026-10-25), even past the deadline creatives
+    // once had.
     sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
-        .bind(id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let (status, body) = save().await;
-    assert_eq!(status, StatusCode::FORBIDDEN);
-    assert_eq!(
-        (body["error"]["code"].as_str(), field(&body)),
-        (Some("passkey_required"), "add")
-    );
-    // A grace period from staff lets it through.
-    sqlx::query("update users set passkey_grace_until = now() + interval '1 day' where id = $1")
         .bind(id)
         .execute(&app.db)
         .await
@@ -1954,17 +1935,20 @@ async fn getting_paid_sets_up_one_stripe_account(db: PgPool) {
             .unwrap();
     assert_eq!(stored, (Some("acct_vera".into()), "pending".into()));
 
-    // Once their passkey is due, "Get paid" needs one.
+    // "Get paid" never needs a passkey (optional since 2026-10-25), even past the deadline
+    // creatives once had, from an old sign-in.
     sqlx::query("update users set passkey_due_at = now() - interval '1 day' where id = $1")
         .bind(vera)
         .execute(&app.db)
         .await
         .unwrap();
+    sqlx::query("update sessions set created_at = now() - interval '30 days' where user_id = $1")
+        .bind(vera)
+        .execute(&app.db)
+        .await
+        .unwrap();
     let (status, body) = call(&app, post("/v1/me/creative/stripe", &cookie, json!({}))).await;
-    assert_eq!(
-        (status, body["error"]["code"].as_str()),
-        (StatusCode::FORBIDDEN, Some("passkey_required"))
-    );
+    assert_eq!(status, StatusCode::OK, "{body}");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

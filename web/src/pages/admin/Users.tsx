@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Finding an account and acting on it (crates/slop-api/src/agent.rs): its apps, reports and
-// decisions, and warning, suspending, reinstating or giving passkey grace; fixing its profile and
+// decisions, and warning, suspending or reinstating; fixing its profile and
 // teams, and making it staff (ProfileFix.tsx). Opening an account is written to the audit log.
 
 import { useState, type FormEvent } from "react";
@@ -116,12 +116,6 @@ function UserRecord({ id }: { id: string }) {
                 }
               />
             )}
-            <ReasonButton
-              label="Passkey grace"
-              placeholder="Why (lets them publish without a passkey for a short time)"
-              disabled={action.busy !== undefined}
-              onSubmit={(reason) => void action.run("grace", () => api.admin.passkeyGrace(u.id, reason))}
-            />
           </div>
           <p className="muted small">
             Warnings and suspensions send them a statement of reasons they can appeal. Suspending and reinstating are

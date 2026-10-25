@@ -1983,7 +1983,7 @@ struct ChangeBody {
 }
 
 /// Switching or disconnecting the Stripe account that receives donations (SECURITY §9,
-/// PAYMENTS §9): a fresh sign-in, then 72 hours' wait, announced by email at once so the real
+/// PAYMENTS §9): 72 hours' wait, announced by email at once so the real
 /// owner can cancel it if it wasn't them. A switch sets up the new account through Stripe's
 /// sign-up meanwhile.
 async fn request_change(
@@ -1994,7 +1994,6 @@ async fn request_change(
     if !["switch", "disconnect"].contains(&b.kind.as_str()) {
         return Err(ApiError::invalid("kind", "switch or disconnect"));
     }
-    crate::passkeys::require(&state, &user).await?;
     let current: Option<String> =
         sqlx::query_scalar("select stripe_account_id from donation_accounts where user_id = $1")
             .bind(user.id)
@@ -2005,7 +2004,6 @@ async fn request_change(
             "there's no donations account to change: enable donations first".into(),
         ));
     }
-    crate::auth::session::require_recent_sign_in(&state.db, &user).await?;
     let return_to = b
         .return_to
         .filter(|p| p.starts_with('/') && !p.starts_with("//") && p.len() <= 200)
@@ -2328,7 +2326,6 @@ async fn onboard(
             "receiving donations is for adults: confirm you're 18 or older",
         ));
     }
-    crate::passkeys::require(&state, &user).await?;
     let return_to = b
         .return_to
         .filter(|p| p.starts_with('/') && !p.starts_with("//") && p.len() <= 200)
@@ -2340,11 +2337,8 @@ async fn onboard(
     .bind(user.id)
     .fetch_one(&state.db)
     .await?;
-    // Connecting a Stripe account to receive money is a step-up action (SECURITY §4.3).
-    // Finishing the sign-up of one already connected isn't.
-    if existing.is_none() {
-        crate::auth::session::require_recent_sign_in(&state.db, &user).await?;
-    }
+    // Any signed-in session may connect a Stripe account, no "confirm it's you" first (the
+    // owner's decision of 2026-10-25, SECURITY §4.3).
     let save = |acct: String, status: &'static str| {
         let db = state.db.clone();
         let user_id = user.id;

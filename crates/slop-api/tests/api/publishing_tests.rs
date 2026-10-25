@@ -904,7 +904,8 @@ async fn release_with_file(
     id
 }
 
-/// Makes the user's publishing passkey overdue (passkeys.rs), so publishing needs one.
+/// Puts the user past the deadline publishers had to add a passkey by, before passkeys became
+/// optional (2026-10-25): nothing asks for one now.
 async fn passkey_overdue(app: &TestApp, user: Uuid) {
     sqlx::query("update users set passkey_due_at = now() - interval '1 hour' where id = $1")
         .bind(user)
@@ -1918,69 +1919,20 @@ async fn ownership_codes_are_read_through_gitea_gitlab_and_bitbucket_apis(db: Pg
 }
 
 // ---------------------------------------------------------------------------------------------
-// Passkeys for what decides where players' downloads come from (bug b23)
+// No passkey for what decides where players' downloads come from (bug b23, undone 2026-10-25)
 
-/// The user has a passkey and confirmed with it in their signed-in sessions (not agent tokens).
-async fn passkey_proved(app: &TestApp, user: Uuid) {
-    sqlx::query(
-        "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, $3, '{}', 'Laptop')",
-    )
-    .bind(Uuid::now_v7())
-    .bind(user)
-    .bind(Uuid::now_v7().as_bytes().to_vec())
-    .execute(&app.db)
-    .await
-    .unwrap();
-    sqlx::query("update sessions set passkey_at = now() where user_id = $1 and kind <> 'agent'")
-        .bind(user)
-        .execute(&app.db)
-        .await
-        .unwrap();
-}
-
-/// Bug b23: like publishing, moving an app to another repository, saving the token Slop reads
-/// it with, and turning on release watching or automatic updates need a passkey once the
-/// maker's grace period is over.
+/// Bug b23 made moving an app to another repository, saving the token Slop reads it with, and
+/// turning on release watching or automatic updates need a passkey once the maker's grace period
+/// was over. Passkeys are optional since 2026-10-25 (SECURITY §4.3): all three go through without
+/// one, past that old deadline.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn moving_the_repository_and_its_token_and_update_settings_need_a_passkey(db: PgPool) {
+async fn moving_the_repository_and_its_token_and_update_settings_need_no_passkey(db: PgPool) {
     let app = test_app(db).await;
     let (forge, _) = fake_forge().await;
     let (maker_id, maker) = app.user("Ann", "US").await;
-    let app_id = forge_app(&app, maker_id, &forge, "game").await;
+    forge_app(&app, maker_id, &forge, "game").await;
     passkey_overdue(&app, maker_id).await;
     let elsewhere = "https://github.com/octo/other-game";
-    let refusals = [
-        request_change(
-            &app,
-            &maker,
-            json!({ "kind": "repo", "repo_url": elsewhere }),
-        )
-        .await,
-        app.send(put_token(&maker, "gitea", "good")).await,
-        app.send(
-            req(Method::PUT, "/v1/apps/game/update-settings")
-                .cookie(&maker)
-                .json(json!({ "watch_releases": true, "auto_update": true })),
-        )
-        .await,
-    ];
-    for res in refusals {
-        assert_eq!(res.status(), StatusCode::FORBIDDEN);
-        assert_eq!(body_json(res).await["error"]["code"], "passkey_required");
-    }
-    let (repo, watch): (String, bool) =
-        sqlx::query_as("select repo_url, watch_releases from apps where id = $1")
-            .bind(app_id)
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert_eq!(repo, format!("{forge}ann/game"));
-    assert!(watch, "watching stays as it was (on by default)");
-    assert_eq!(count(&app, "select count(*) from app_changes").await, 0);
-    assert_eq!(count(&app, "select count(*) from repo_tokens").await, 0);
-
-    // Confirmed with a passkey: all three go through.
-    passkey_proved(&app, maker_id).await;
     assert_eq!(
         status_of(&app, put_token(&maker, "gitea", "good")).await,
         StatusCode::OK
@@ -3081,15 +3033,9 @@ async fn submitting_a_github_release_checks_the_tag_and_takes_its_notes(db: PgPo
         .await,
         StatusCode::UNAUTHORIZED
     );
-    // Past the passkey deadline without one.
+    // Past the deadline publishers once had, without a passkey: it doesn't matter (optional
+    // since 2026-10-25).
     passkey_overdue(&app, maker_id).await;
-    let res = app.send(from_github(&maker, "v1.1.0", None)).await;
-    assert_eq!(body_json(res).await["error"]["code"], "passkey_required");
-    sqlx::query("update users set passkey_due_at = null where id = $1")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
     assert_eq!(count(&app, "select count(*) from releases").await, 0);
 
     // The GitHub release's text, cut at 5,000 characters, and its commit.
@@ -6058,51 +6004,17 @@ async fn agents_submit_releases_and_notes_through_mcp_tools(db: PgPool) {
     assert_eq!(text, "null", "not frozen");
 }
 
-/// A token passes on its maker's passkey confirmation only if made within 12 hours of it.
+/// An agent token publishes with no passkey anywhere, past the deadline publishers once had
+/// (passkeys are optional since 2026-10-25).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn agent_tokens_carry_a_recent_passkey_confirmation(db: PgPool) {
+async fn agent_tokens_publish_without_a_passkey(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = maker_with_app(&app, "released").await;
     passkey_overdue(&app, maker_id).await;
     let mut release = release_body(&app, "1.0.0", "game.zip");
     release["slug"] = json!("game");
-
-    // Made before confirming with a passkey: it can't publish.
-    let early = agent_token(&app, &maker, "publish", None).await;
-    let (error, text) = call_tool(&app, &early, "submit_release", release.clone()).await;
-    assert!(error && text.contains("passkey_required"), "{text}");
-
-    // Confirmed 13 hours ago: too long ago to carry over.
-    passkey_proved(&app, maker_id).await;
-    sqlx::query("update sessions set passkey_at = now() - interval '13 hours' where user_id = $1 and kind <> 'agent'")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let stale = agent_token(&app, &maker, "publish", None).await;
-    let (error, text) = call_tool(&app, &stale, "submit_release", release.clone()).await;
-    assert!(error && text.contains("passkey_required"), "{text}");
-
-    // Confirmed just now: the token publishes for its lifetime.
-    sqlx::query("update sessions set passkey_at = now() where user_id = $1 and kind <> 'agent'")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let fresh = agent_token(&app, &maker, "publish", None).await;
-    let tokens = body_json(
-        app.send(req(Method::GET, "/v1/me/maker-tokens").cookie(&maker))
-            .await,
-    )
-    .await;
-    let proved: Vec<bool> = tokens
-        .as_array()
-        .unwrap()
-        .iter()
-        .map(|t| t["passkey_proved"].as_bool().unwrap())
-        .collect();
-    assert_eq!(proved.iter().filter(|p| **p).count(), 1, "{tokens}");
-    let (error, text) = call_tool(&app, &fresh, "submit_release", release).await;
+    let token = agent_token(&app, &maker, "publish", None).await;
+    let (error, text) = call_tool(&app, &token, "submit_release", release).await;
     assert!(!error, "{text}");
 }
 

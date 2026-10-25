@@ -41,7 +41,7 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
   const [days, setDays] = useState(30);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
-  const [created, setCreated] = useState<MadeToken & { passkey_proved: boolean; scope: AgentToken["scope"] }>();
+  const [created, setCreated] = useState<MadeToken & { scope: AgentToken["scope"] }>();
   /** The token a replacement is being made for. */
   const [replacing, setReplacing] = useState<AgentToken>();
   const nameInput = useRef<HTMLInputElement>(null);
@@ -239,12 +239,6 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
           token={created}
           footer={
             <>
-              {!created.passkey_proved && created.scope === "publish" && (
-                <p className="small">
-                  Confirm with a passkey before making a token if you want it to publish once Slop asks you for one (30
-                  days after you first publish).
-                </p>
-              )}
               <div className="row-actions">
                 <button className="btn small ghost" type="button" onClick={() => setCreated(undefined)}>
                   Done

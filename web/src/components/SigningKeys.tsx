@@ -7,14 +7,13 @@ import { useState } from "react";
 import { api, ApiError } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
-import { StepUpPrompt } from "./PasskeyStepUp";
 
 export function SigningKeys() {
   const keys = useLoad(() => api.signingKeys.list(), []);
   const [name, setName] = useState("");
   const [publicKey, setPublicKey] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ApiError | string>();
+  const [error, setError] = useState<string>();
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
     setError(undefined);
@@ -22,7 +21,7 @@ export function SigningKeys() {
       await action();
       keys.reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err : String(err));
+      setError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -86,13 +85,7 @@ export function SigningKeys() {
         </form>
         {error && (
           <p className="form-error" role="alert">
-            {typeof error === "string" ? (
-              error
-            ) : error.code === "step_up_required" ? (
-              <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent("/account/agents#signing-keys")}`} onDone={() => setError(undefined)} />
-            ) : (
-              error.message
-            )}
+            {error}
           </p>
         )}
       </div>
