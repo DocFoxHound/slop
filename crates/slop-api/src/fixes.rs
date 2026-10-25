@@ -27,7 +27,8 @@ pub struct Fix {
     /// A short key, e.g. `licence:no_file`, `saves`, `secret`.
     pub kind: String,
     /// `must`: Slop won't approve the release until it's fixed. `should`: a reviewer may still
-    /// approve, but players see it or it causes trouble.
+    /// approve, but players see it or it causes trouble. `recommended`: never holds anything up,
+    /// but the store page is better with it (e.g. an icon).
     pub severity: &'static str,
     pub problem: String,
     /// What to do, written for a coding agent working in the repository.
@@ -42,6 +43,9 @@ struct Fixes {
     /// The release the fixes are for (the newest), if there is one.
     release: Option<ReleaseRef>,
     fixes: Vec<Fix>,
+    /// Worth doing, but never blocking a release or the store (e.g. "no icon yet"), whether or
+    /// not there's a release.
+    recommendations: Vec<Fix>,
     /// What to do once they're fixed.
     next: &'static str,
 }
@@ -70,6 +74,7 @@ async fn fixes(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Fixes>> {
     let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
+    let recommendations = crate::media::recommendations(&state.db, app_id).await?;
     let row: Option<Row> = sqlx::query_as(
         "select id, version, status::text, status_reason, repo_scan, source_checks
          from releases where app_id = $1 order by created_at desc limit 1",
@@ -81,6 +86,7 @@ async fn fixes(
         return Ok(Json(Fixes {
             release: None,
             fixes: vec![],
+            recommendations,
             next: "Submit a release first (submit_release, or add Slop Build with slop_build_setup).",
         }));
     };
@@ -119,6 +125,7 @@ async fn fixes(
             status_reason,
         }),
         fixes: list,
+        recommendations,
         next: "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). Slop's checks run again on the new release.",
     }))
 }

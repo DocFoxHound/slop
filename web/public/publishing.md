@@ -135,7 +135,9 @@ Go to **Publish → New app** and fill in:
 
 It's saved as a draft that only you can see.
 
-### Pictures and videos (optional, but pages with them get far more clicks)
+### Pictures and videos
+
+Optional, but pages with them get far more clicks, and every app should have an **icon**.
 
 Slop doesn't host pictures. They live **in your repository**, in a `.slop/` folder at the top
 level, listed in `.slop/media.json`:
@@ -143,6 +145,7 @@ level, listed in `.slop/media.json`:
 ```
 .slop/
   media.json
+  icon.png
   thumbnail.png
   screenshots/
     title.png
@@ -152,6 +155,7 @@ level, listed in `.slop/media.json`:
 
 ```json
 {
+  "icon": "icon.png",
   "thumbnail": "thumbnail.png",
   "gallery": [
     { "image": "screenshots/title.png", "caption": "The title screen" },
@@ -163,6 +167,7 @@ level, listed in `.slop/media.json`:
 
 | Key | Notes |
 |---|---|
+| `icon` | Recommended. A **square** PNG (or JPEG or WebP), best at **512×512** (at least 256×256, at most 1024×1024, up to 4 MB). It stands for your app in players' libraries, on store tiles and next to its name on its page, shown as small as 32×32, so keep it simple and readable: a logo, a character or a symbol from the app, not a screenshot with text |
 | `thumbnail` | Optional. Your tile in the store. Best at **920×430** (at least 460×215); other shapes are cropped from the middle |
 | `gallery` | Optional. Up to **20** items, each either `image` (a screenshot) or `youtube` (a video link) |
 | `image` | A picture at least 320×180 |
@@ -173,7 +178,15 @@ level, listed in `.slop/media.json`:
 Rules:
 
 - Paths are relative to `.slop/`, using letters, numbers, `.`, `_`, `-` and `/` (no spaces, no `..`).
-- Pictures are PNG, JPEG, WebP or GIF, up to 8 MB each, and at most 8192 pixels on a side.
+- Pictures are PNG, JPEG, WebP or GIF, up to 8 MB each, and at most 8192 pixels on a side. The
+  icon can't be a GIF, and is up to 4 MB.
+- **No icon yet?** Your app still works and can go in the store: Slop shows a square crop from the
+  middle of your thumbnail instead, or your app's first letter. **Edit store page** says "No icon
+  yet" until you add one, and can make a square crop of one of your pictures for you to download
+  and commit. To add an icon to an existing `media.json`, add the line `"icon": "icon.png",` and
+  put the picture at `.slop/icon.png`.
+- The icon must be your app's own: from its art, logo or a screenshot. One that looks like another
+  maker's app is pointed out to the reviewer.
 - Each image or video can appear once.
 - The repository must be public on GitHub so players can see the pictures.
 - Slop reads `.slop/media.json` when you press **Check my repository now** (under **Edit store
@@ -1676,14 +1689,24 @@ if not.
    or **Releases & progress**) until it's approved and the app is in the store, and fix what
    Slop's checks find. A person reviews the first release; later ones are picked up and approved
    automatically if they pass every check.
-10. Optional but recommended, ideally before step 8: add `.slop/media.json` with a 920×430
-   thumbnail and some screenshots (see **Pictures and videos**), push it, and run `check_repository` (or have the owner press **Check my
-   repository now** under **Edit store page**). An agent can capture screenshots from the
-   running app if the owner wants. Leave the gallery order to the owner; they set it on the
-   website.
+10. Optional but recommended, ideally before step 8: add `.slop/media.json` with a square icon
+   (512×512 PNG, `"icon": "icon.png"`), a 920×430 thumbnail and some screenshots (see
+   [Pictures and videos](#pictures-and-videos)), push it, and run `check_pictures` (or have the
+   owner press **Check my repository now** under **Edit store page**). An agent can capture
+   screenshots from the running app if the owner wants, and can make the icon from the app's own
+   art: its logo, a character, or a square crop of a screenshot. Never invent an icon that shows
+   something the app doesn't have, or that suggests another game or brand; if there's nothing
+   suitable, leave the icon out and tell the owner (Slop crops the thumbnail until there is one).
+   `get_fixes` and `check_repository` list a missing icon under `recommendations`; it never
+   blocks a release. Leave the gallery order to the owner; they set it on the website.
 
 Facts an agent may need:
 
+- Pictures live in the repository under `.slop/`, listed in `.slop/media.json`; Slop reads them
+  at one commit (`check_pictures`, and at each release) and a person reviews each new set. The
+  icon: `"icon": "icon.png"`, square PNG/JPEG/WebP, 256×256 to 1024×1024 (512×512 is best), up to
+  4 MB. The thumbnail: 920×430 is best (at least 460×215). Screenshots: at least 320×180. Up to 20
+  gallery items, 8 MB each.
 - Store addresses: 3–60 lowercase letters, numbers and single dashes. Unique: if one is taken, Slop's answer
   names a free one (`that address is taken; my-game-2 is free`). The name itself needn't be unique.
 - Versions: up to 40 characters of letters, numbers, `.`, `_`, `+` and `-`, starting with a letter

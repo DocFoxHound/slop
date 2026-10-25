@@ -121,7 +121,7 @@ function Frozen({
     setStill(false);
     try {
       const after = await api.repoCheck(slug);
-      if (after) setStill(true);
+      if (after.frozen) setStill(true);
       else onChanged();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));

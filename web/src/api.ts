@@ -94,6 +94,8 @@ export interface AppSummary {
   tags: string[];
   /** The maker's store tile (920×430), if they set one. */
   thumbnail_url: string | null;
+  /** The app's square icon, once approved (show it with components/AppIcon). */
+  icon_url: string | null;
   /** Current 👍/👎 votes. */
   vote_count: number;
   /** Weighted % Not Slop; null below the minimum number of votes. */
@@ -535,14 +537,16 @@ export interface MediaSet {
   id: string;
   commit_sha: string;
   thumbnail: RepoPicture | null;
+  /** The square icon (256–1024 pixels a side), if media.json names one. */
+  icon: RepoPicture | null;
   gallery: MediaItem[];
   status: "pending" | "approved" | "rejected" | "superseded";
   status_reason: string | null;
   source: "maker" | "release";
   created_at: string;
   reviewed_at: string | null;
-  /** Other makers' apps whose icon looks like this thumbnail (bits differing out of 64). */
-  lookalikes?: Array<{ slug: string; title: string; distance: number }>;
+  /** Other makers' apps whose thumbnail or icon (`kind`) looks like this set's (bits differing out of 64). */
+  lookalikes?: Array<{ slug: string; title: string; distance: number; kind?: "thumbnail" | "icon" }>;
 }
 
 export interface MediaOverview {
@@ -551,6 +555,10 @@ export interface MediaOverview {
   rejected: MediaSet | null;
   checked_at: string | null;
   problem: string | null;
+  /** The problem, when it was the icon that was wrong. */
+  icon_problem: string | null;
+  /** Worth adding, never blocking: e.g. no icon yet. */
+  recommendations: Fix[];
   supported: boolean;
   manifest_path: string;
   order: string[];
@@ -2028,7 +2036,8 @@ export interface UpstreamOffer {
 /** A fix for a problem Slop's checks found (crates/slop-api/src/fixes.rs). */
 export interface Fix {
   kind: string;
-  severity: "must" | "should";
+  /** `recommended`: never blocks anything (e.g. no icon yet). */
+  severity: "must" | "should" | "recommended";
   problem: string;
   instruction: string;
   guide_section?: string;
@@ -2640,9 +2649,9 @@ export const api = {
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/manage`,
     ),
-  /** "Check now" for a frozen app's repository; the freeze if it's still frozen. */
+  /** "Check now" for a frozen app's repository: the freeze if it's still frozen. */
   repoCheck: (slug: string) =>
-    request<ManageOverview["frozen"]>(
+    request<{ frozen: ManageOverview["frozen"]; recommendations: Fix[] }>(
       "POST",
       `/v1/apps/${encodeURIComponent(slug)}/repo-check`,
     ),
@@ -3622,7 +3631,12 @@ export const api = {
   revokeAgentToken: (id: string) => request<void>("DELETE", `/v1/me/maker-tokens/${encodeURIComponent(id)}`),
   /** Fixes for the problems in an app's newest release. */
   fixes: (slug: string) =>
-    request<{ release: { id: string; version: string; status: string } | null; fixes: Fix[]; next: string }>(
+    request<{
+      release: { id: string; version: string; status: string } | null;
+      fixes: Fix[];
+      recommendations: Fix[];
+      next: string;
+    }>(
       "GET",
       `/v1/apps/${encodeURIComponent(slug)}/fixes`,
     ),

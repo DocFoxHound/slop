@@ -12,6 +12,7 @@ import { AppBounties } from "./Bounties";
 import { DemoButton } from "../components/Demo";
 import { BugReports } from "../components/BugReports";
 import { Reviews } from "../components/Reviews";
+import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
 import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -113,6 +114,7 @@ function AppView({ app }: { app: AppDetail }) {
           {hasGallery && app.thumbnail_url && <Art app={app} withName={false} className="capsule" />}
           <div>
             <div className="title-row">
+              <AppIcon {...appIconProps(app)} size={48} className="app-head-icon" />
               <h1>{app.title}</h1>
               <StageBadge app={app} />
               {age && <span className="badge neutral" title={`Rated ${age}`}>{age}</span>}

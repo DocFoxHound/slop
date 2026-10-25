@@ -4518,7 +4518,10 @@ async fn check_now_answers_with_the_freeze_still_in_place(db: PgPool) {
         ))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    let frozen = body_json(res).await;
+    let checked = body_json(res).await;
+    // Beside the freeze: what's worth adding, never blocking (no icon yet).
+    assert_eq!(checked["recommendations"][0]["kind"], "icon:missing");
+    let frozen = &checked["frozen"];
     assert!(
         frozen["reason"]
             .as_str()
@@ -4552,7 +4555,11 @@ async fn check_now_answers_with_the_freeze_still_in_place(db: PgPool) {
         .send(req(Method::POST, "/v1/apps/castle/repo-check").header("authorization", agent))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_json(res).await, Value::Null, "readable again: lifted");
+    assert_eq!(
+        body_json(res).await["frozen"],
+        Value::Null,
+        "readable again: lifted"
+    );
 
     // A freeze staff placed isn't lifted by it, however readable the repository is.
     let (_, owner) = make_admin(&app, "Olive Owner").await;
@@ -4565,7 +4572,7 @@ async fn check_now_answers_with_the_freeze_still_in_place(db: PgPool) {
     let res = app
         .send(req(Method::POST, "/v1/apps/castle/repo-check").cookie(&cookie))
         .await;
-    let frozen = body_json(res).await;
+    let frozen = body_json(res).await["frozen"].clone();
     assert_eq!(frozen["by_staff"], true);
     assert_eq!(frozen["reason"], "Checking a malware report.");
 }

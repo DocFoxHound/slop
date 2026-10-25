@@ -618,7 +618,13 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             {busy ? "Saving…" : existing ? "Save changes" : "Create draft"}
           </button>
         </div>
-        {!existing && <p className="muted small">You can add a thumbnail, screenshots and videos once the draft is created.</p>}
+        {!existing && (
+          <p className="muted small new-app-pictures">
+            Pictures come next: your app's icon, thumbnail, screenshots and videos live in your repository, listed in{" "}
+            <code>.slop/media.json</code>. Add them right after creating the draft, on its Edit store page; see{" "}
+            <Link to="/publish/guide#pictures-and-videos">Pictures and videos</Link>.
+          </p>
+        )}
       </form>
       {existing && <MediaEditor app={existing} />}
     </div>
