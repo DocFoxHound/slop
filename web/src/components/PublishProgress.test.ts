@@ -382,6 +382,8 @@ describe("progressSteps", () => {
   it("refreshes often while files are checked, now and then during review, and stops when done", () => {
     expect(refreshEvery([release({ status: "fetching" })])).toBe(10_000);
     expect(refreshEvery([release({ status: "awaiting_review" })])).toBe(60_000);
+    // Fetched, but Slop hasn't read the source yet: that shows within seconds.
+    expect(refreshEvery([release({ status: "awaiting_review", repo_scan: null })])).toBe(10_000);
     expect(refreshEvery([release({ status: "approved" })])).toBeNull();
     expect(refreshEvery([release({ status: "withdrawn" }), release({ status: "rejected" })])).toBeNull();
     expect(refreshEvery([])).toBeNull();
