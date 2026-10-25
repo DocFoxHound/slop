@@ -97,27 +97,6 @@ impl AdminUser {
         Ok(())
     }
 
-    /// A sign-in, or a passkey confirmation, from the last few minutes (SECURITY §4.3), and a
-    /// person rather than a token. Only making an admin API token (review.rs) still asks: every
-    /// other step-up went on 2026-10-25, the owner's decision.
-    pub async fn confirm_recent(&self, db: &sqlx::PgPool) -> ApiResult<()> {
-        let Some(session) = self.session_id else {
-            return Err(ApiError::Forbidden);
-        };
-        let fresh: bool = sqlx::query_scalar(
-            "select created_at > now() - $2 or coalesce(stepped_up_at > now() - $2, false) from sessions where id = $1",
-        )
-        .bind(session)
-        .bind(crate::auth::session::STEP_UP_WINDOW)
-        .fetch_one(db)
-        .await?;
-        if fresh {
-            Ok(())
-        } else {
-            Err(ApiError::StepUpRequired)
-        }
-    }
-
     /// Managing tokens: only an admin signed in themselves.
     pub fn signed_in(&self) -> ApiResult<()> {
         match self.token {

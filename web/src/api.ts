@@ -2993,16 +2993,6 @@ export const api = {
         challenge_id,
         credential,
       }),
-    stepUpStart: () =>
-      request<{
-        challenge_id: string;
-        options: { publicKey: Record<string, unknown> };
-      }>("POST", "/v1/me/step-up/start"),
-    stepUpFinish: (challenge_id: string, credential: unknown) =>
-      request<void>("POST", "/v1/me/step-up/finish", {
-        challenge_id,
-        credential,
-      }),
   },
   /** The sign-ins linked to the account (crates/slop-api/src/auth/mod.rs). */
   identities: () => request<LinkedIdentity[]>("GET", "/v1/me/identities"),

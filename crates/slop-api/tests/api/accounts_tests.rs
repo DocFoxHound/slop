@@ -2422,18 +2422,6 @@ async fn signing_in_with_a_passkey_starts_a_session_that_has_used_it(db: PgPool)
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(res).await["error"]["field"], "credential");
 
-    // A step-up ceremony isn't a sign-in.
-    let started = body_json(
-        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&ann))
-            .await,
-    )
-    .await;
-    let (_, assertion) = passkey_assertion(&app, &mut auth, &cred_id).await;
-    assert_eq!(
-        status(&app, passkey_finish(&started["challenge_id"], &assertion)).await,
-        StatusCode::CONFLICT
-    );
-
     // A passkey Slop doesn't know.
     let (_, bob) = app.user("Bob", "US").await;
     let mut other = authenticator();
@@ -2474,30 +2462,10 @@ async fn signing_in_with_a_passkey_starts_a_session_that_has_used_it(db: PgPool)
     assert!(set_cookie(&res, "slop_session").is_none());
 }
 
+/// Adding a passkey is for the session that asked for it: finished from another session of the
+/// same account, it is refused.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn confirming_with_a_passkey_needs_one_on_the_account(db: PgPool) {
-    let app = test_app(db).await;
-    let (_, cookie) = app.user("Pat", "US").await;
-    let res = app
-        .send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
-        .await;
-    assert_eq!(res.status(), StatusCode::CONFLICT);
-    assert!(
-        body_json(res).await["error"]["message"]
-            .as_str()
-            .unwrap()
-            .contains("add a passkey first")
-    );
-    assert_eq!(
-        count(&app, "select count(*) from webauthn_challenges").await,
-        0
-    );
-}
-
-/// b05: a passkey confirmation is for the session that asked for it. Finished from another
-/// session of the same account, it used to count for that other session.
-#[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn a_passkey_confirmation_counts_only_for_the_session_that_started_it(db: PgPool) {
+async fn adding_a_passkey_counts_only_for_the_session_that_started_it(db: PgPool) {
     let app = test_app(db).await;
     let (ann_id, laptop) = app.user("Ann", "US").await;
     let mut auth = authenticator();
@@ -2506,32 +2474,6 @@ async fn a_passkey_confirmation_counts_only_for_the_session_that_started_it(db: 
         .await
         .unwrap();
     let phone = format!("{}={}", phone.name(), phone.value());
-    age_sessions(&app, ann_id).await;
-
-    let started = body_json(
-        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&laptop))
-            .await,
-    )
-    .await;
-    let options = serde_json::from_value(started["options"].clone()).unwrap();
-    let assertion = auth.do_authentication(origin(), options).unwrap();
-    let res = app
-        .send(
-            req(Method::POST, "/v1/me/step-up/finish")
-                .cookie(&phone)
-                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::CONFLICT);
-    let confirmed: i64 = sqlx::query_scalar(
-        "select count(*) from sessions where user_id = $1 and (stepped_up_at is not null or passkey_at is not null)",
-    )
-    .bind(ann_id)
-    .fetch_one(&app.db)
-    .await
-    .unwrap();
-    assert_eq!(confirmed, 0);
-
     // Adding a passkey is tied to its session the same way.
     sessions_now(&app, ann_id, "created_at").await;
     sessions_now(&app, ann_id, "passkey_at").await;
@@ -2546,24 +2488,6 @@ async fn a_passkey_confirmation_counts_only_for_the_session_that_started_it(db: 
         )
         .await;
     assert_eq!(res.status(), StatusCode::CONFLICT);
-
-    // In the session that started it, it works.
-    age_sessions(&app, ann_id).await;
-    let started = body_json(
-        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&laptop))
-            .await,
-    )
-    .await;
-    let options = serde_json::from_value(started["options"].clone()).unwrap();
-    let assertion = auth.do_authentication(origin(), options).unwrap();
-    let res = app
-        .send(
-            req(Method::POST, "/v1/me/step-up/finish")
-                .cookie(&laptop)
-                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

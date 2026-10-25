@@ -636,11 +636,13 @@ async fn only_security_staff_signed_in_themselves_list_and_revoke_tokens(db: PgP
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn staff_tokens_need_no_fresh_sign_in_and_come_without_a_command(db: PgPool) {
+async fn staff_tokens_and_role_changes_need_no_fresh_sign_in_and_tokens_come_without_a_command(
+    db: PgPool,
+) {
     let app = test_app(db).await;
     let (_, owner) = make_admin(&app, "Olive Owner").await;
     let (pat, _) = app.user("Pat Player", "US").await;
-    // Signed in an hour ago, never confirmed since: too old for step-up.
+    // Signed in an hour ago, never confirmed since: no step-up is asked.
     sqlx::query("update sessions set created_at = now() - interval '1 hour', stepped_up_at = null")
         .execute(&app.db)
         .await
@@ -706,7 +708,7 @@ async fn staff_tokens_need_no_fresh_sign_in_and_come_without_a_command(db: PgPoo
         .status(),
         StatusCode::CREATED
     );
-    // Other sensitive steps still ask for a fresh sign-in: changing staff roles.
+    // Changing staff roles asks for nothing more either.
     let res = app
         .send(
             req(Method::POST, format!("/v1/admin/staff/{pat}/roles"))
@@ -714,8 +716,9 @@ async fn staff_tokens_need_no_fresh_sign_in_and_come_without_a_command(db: PgPoo
                 .json(json!({ "role": "reviewer", "grant": true })),
         )
         .await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
+    let status = res.status();
+    let body = body_json(res).await;
+    assert!(status.is_success(), "{status} {body}");
 }
 
 // ---------------------------------------------------------------------------------------------

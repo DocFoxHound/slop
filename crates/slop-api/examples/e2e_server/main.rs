@@ -337,24 +337,6 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
     .await
     .context("seeding")?;
 
-    // The whole suite takes longer than the step-up window (auth/session.rs), so the seeded
-    // sessions keep counting as recent sign-ins for the one step-up left: staff making an admin
-    // API token (review.rs). It can go when that does.
-    tokio::spawn({
-        let db = db.clone();
-        async move {
-            let mut every = tokio::time::interval(std::time::Duration::from_secs(60));
-            loop {
-                every.tick().await;
-                let _ = sqlx::query(
-                    "update sessions set stepped_up_at = now() where user_agent = 'e2e'",
-                )
-                .execute(&db)
-                .await;
-            }
-        }
-    });
-
     let cookie_name = session::cookie_name(&config);
     println!(
         "{}",
