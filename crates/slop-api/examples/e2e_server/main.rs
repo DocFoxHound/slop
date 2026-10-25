@@ -64,25 +64,69 @@ fn png(w: u32, h: u32, rgb: [u8; 3]) -> Vec<u8> {
     out
 }
 
+/// An app's icon (media.rs): a disc on a gradient, placed and coloured from `seed` (the
+/// repository's name), so each app's looks different, and unlike any other app's.
+fn icon_png(size: u32, seed: &str) -> Vec<u8> {
+    let h = seed.bytes().fold(0xcbf2_9ce4_8422_2325_u64, |h, b| {
+        (h ^ u64::from(b)).wrapping_mul(0x100_0000_01b3)
+    });
+    let hue = |shift: u32| ((h >> shift) & 0xff) as u8;
+    let (cx, cy) = (
+        0.25 + (hue(8) as f32 / 512.0),
+        0.25 + (hue(16) as f32 / 512.0),
+    );
+    let vertical = h & 1 == 1;
+    let mut out = Vec::new();
+    image::RgbImage::from_fn(size, size, |x, y| {
+        let (fx, fy) = (x as f32 / size as f32, y as f32 / size as f32);
+        if (fx - cx).powi(2) + (fy - cy).powi(2) < 0.06 {
+            image::Rgb([240, 230, hue(24) / 2 + 100])
+        } else {
+            let g = ((if vertical { fy } else { fx }) * 200.0) as u8;
+            image::Rgb([hue(32) / 2 + g / 3, hue(40) / 3 + g / 2, 255 - g])
+        }
+    })
+    .write_to(&mut std::io::Cursor::new(&mut out), image::ImageFormat::Png)
+    .expect("a PNG");
+    out
+}
+
 /// A repository's store pictures (`.slop/media.json` and the files it lists), as
 /// raw.githubusercontent.com would serve them. Served by the test server itself, so the
 /// website's content security policy lets the pictures show.
+///
+/// Every repository has the same thumbnail and gallery, and its own icon. Some don't:
+/// `neon-drift` has only an icon; a repository whose name has `noicon` in it has no icon, and one
+/// with `badicon` names one that isn't square.
 async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
     use axum::response::IntoResponse;
-    let Some((_, file)) = path.split_once("/.slop/") else {
+    let Some((repo, file)) = path.split_once("/.slop/") else {
         return axum::http::StatusCode::NOT_FOUND.into_response();
     };
+    // <owner>/<repo>/<commit>
+    let name = repo.split('/').nth(1).unwrap_or_default();
     let body = match file {
-        "media.json" => serde_json::json!({
-            "thumbnail": "thumb.png",
-            "gallery": [
-                { "image": "shots/one.png", "caption": "The keep at dusk" },
-                { "image": "shots/two.png", "caption": "Lighting the first lantern" },
-                { "youtube": "https://youtu.be/dQw4w9WgXcQ" }
-            ]
-        })
-        .to_string()
-        .into_bytes(),
+        "media.json" if name == "neon-drift" => serde_json::json!({ "icon": "icon.png" })
+            .to_string()
+            .into_bytes(),
+        "media.json" => {
+            let mut media = serde_json::json!({
+                "thumbnail": "thumb.png",
+                "gallery": [
+                    { "image": "shots/one.png", "caption": "The keep at dusk" },
+                    { "image": "shots/two.png", "caption": "Lighting the first lantern" },
+                    { "youtube": "https://youtu.be/dQw4w9WgXcQ" }
+                ]
+            });
+            if name.contains("badicon") {
+                media["icon"] = "icon-wide.png".into();
+            } else if !name.contains("noicon") {
+                media["icon"] = "icon.png".into();
+            }
+            media.to_string().into_bytes()
+        }
+        "icon.png" => icon_png(512, name),
+        "icon-wide.png" => png(600, 300, [90, 60, 160]),
         "thumb.png" => png(920, 430, [200, 120, 40]),
         "shots/one.png" => png(1280, 720, [40, 90, 160]),
         "shots/two.png" => png(1280, 720, [60, 140, 80]),

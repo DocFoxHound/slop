@@ -770,8 +770,36 @@ function PortfolioReview({ set }: { set: PortfolioSet }) {
 
 /** Every picture in a set, large enough to judge, with each video linked. */
 function MediaReview({ set }: { set: MediaSet }) {
+  // Icons: shown small, as players see them, and full size; with any other maker's like it.
+  const iconLike = (set.lookalikes ?? []).filter((l) => l.kind === "icon");
   return (
     <div className="media-review">
+      {set.icon && (
+        <figure className="media-review-icon">
+          <a href={set.icon.url} target="_blank" rel="noopener noreferrer">
+            <img src={set.icon.url} alt="Icon" />
+          </a>
+          <span className="icon-sizes" aria-hidden="true">
+            {[32, 64].map((size) => (
+              <img key={size} src={set.icon!.url} alt="" width={size} height={size} />
+            ))}
+          </span>
+          <figcaption className="muted small">
+            Icon · {set.icon.width}×{set.icon.height}
+            {iconLike.length > 0 && (
+              <div>
+                Looks like the icon of{" "}
+                {iconLike.map((l, i) => (
+                  <span key={l.slug}>
+                    {i > 0 && ", "}
+                    <Link to={`/app/${l.slug}`}>{l.title}</Link>
+                  </span>
+                ))}
+              </div>
+            )}
+          </figcaption>
+        </figure>
+      )}
       {set.thumbnail && (
         <figure>
           <a href={set.thumbnail.url} target="_blank" rel="noopener noreferrer">
@@ -804,7 +832,7 @@ function MediaReview({ set }: { set: MediaSet }) {
           </figcaption>
         </figure>
       ))}
-      {!set.thumbnail && set.gallery.length === 0 && (
+      {!set.thumbnail && !set.icon && set.gallery.length === 0 && (
         <p className="muted small">No pictures: this set removes them all.</p>
       )}
     </div>

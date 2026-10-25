@@ -24,6 +24,7 @@ import {
   type RepoOwnership as Ownership,
   type DonationSettings,
 } from "../api";
+import { AppIcon, appIconProps } from "../components/AppIcon";
 import { LicensePicker } from "../components/LicensePicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
@@ -108,9 +109,11 @@ export function Publish() {
               </span>
               <div>
                 <div className="title-row">
+                  <AppIcon {...appIconProps(app)} size={24} />
                   <Link to={`/app/${app.slug}`}>
                     <b>{app.title}</b>
                   </Link>
+                  {!app.icon_url && <span className="muted small">No icon yet</span>}
                   <span className="badge neutral">{STAGE_LABEL[app.stage]}</span>
                   {latest && <span className="muted small">v{latest.version}</span>}
                 </div>
@@ -647,7 +650,13 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             {busy ? "Saving…" : existing ? "Save changes" : "Create draft"}
           </button>
         </div>
-        {!existing && <p className="muted small">You can add a thumbnail, screenshots and videos once the draft is created.</p>}
+        {!existing && (
+          <p className="muted small new-app-pictures">
+            Pictures come next: your app's icon, thumbnail, screenshots and videos live in your repository, listed in{" "}
+            <code>.slop/media.json</code>. Add them right after creating the draft, on its Edit store page; see{" "}
+            <Link to="/publish/guide#pictures-and-videos">Pictures and videos</Link>.
+          </p>
+        )}
       </form>
       {existing && <MediaEditor app={existing} />}
     </div>

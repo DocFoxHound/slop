@@ -580,13 +580,13 @@ async fn feed(
         for (id, at, approved) in rows {
             let app = app_context(&state, id).await?;
             let shown = media::gallery(&state, id).await?;
-            let thumbnail: Option<String> = sqlx::query_scalar(
-                "select ms.thumbnail->>'url' from apps a join media_sets ms on ms.id = a.media_set_id where a.id = $1",
+            let pictures: Option<(Option<String>, Option<String>)> = sqlx::query_as(
+                "select ms.thumbnail->>'url', ms.icon->>'url' from apps a join media_sets ms on ms.id = a.media_set_id where a.id = $1",
             )
             .bind(id)
             .fetch_optional(&state.db)
-            .await?
-            .flatten();
+            .await?;
+            let (thumbnail, icon) = pictures.unwrap_or_default();
             let slug = app.slug.clone();
             items.push(Item {
                 kind: "listing",
@@ -595,7 +595,7 @@ async fn feed(
                 waiting_since: at,
                 app: Some(app),
                 creative: None,
-                detail: json!({ "approved_releases": approved, "thumbnail_url": thumbnail, "gallery": shown }),
+                detail: json!({ "approved_releases": approved, "thumbnail_url": thumbnail, "icon_url": icon, "gallery": shown }),
                 notes: notes(&state.db, "listing", id).await?,
                 approve: Action::post(format!("/v1/admin/apps/{slug}/list")),
                 reject: None,

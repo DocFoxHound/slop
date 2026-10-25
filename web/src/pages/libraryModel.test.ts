@@ -18,6 +18,7 @@ function app(slug: string, title: string, extra: Partial<AppSummary> = {}): AppS
     players_now: null,
     tags: [],
     thumbnail_url: null,
+    icon_url: null,
     vote_count: 0,
     not_slop_percent: null,
     made_with_people: false,

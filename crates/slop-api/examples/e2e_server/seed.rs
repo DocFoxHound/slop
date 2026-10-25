@@ -361,6 +361,7 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
             admin: &admin,
             maker: &maker,
             maker2: &maker2,
+            sam: &sam,
             player: &player,
             client: &p.client,
             teen: &teen,
@@ -1020,6 +1021,8 @@ pub struct StoreCast<'a> {
     pub admin: &'a Who,
     pub maker: &'a Who,
     pub maker2: &'a Who,
+    /// Sam, who made Castle Rock and Neon Drift.
+    pub sam: &'a Who,
     pub player: &'a Who,
     pub client: &'a Who,
     pub teen: &'a Who,
@@ -1061,6 +1064,28 @@ async fn store(
         .await?;
     ids.insert("listedApp", json!("lantern-keep"));
     ids.insert("listedAppId", json!(lantern));
+    // Neon Drift: an icon and nothing else (the fake GitHub's media.json for it), approved. Castle
+    // Rock has no pictures: the letter. Lantern Keep has an icon and a thumbnail; Pocket Golf's,
+    // below, wait for review.
+    let neon = ctx
+        .call(
+            Some(c.sam),
+            Method::POST,
+            "/v1/apps/neon-drift/media/check",
+            None,
+        )
+        .await?;
+    let set = neon["pending"]["id"]
+        .as_str()
+        .with_context(|| format!("no icon waiting: {neon}"))?;
+    ctx.post(admin, &format!("/v1/admin/media/{set}/approve"), json!({}))
+        .await?;
+    // Approving touched it; keep the store's "recent" order the browser tests expect.
+    ctx.sql(
+        "update apps set updated_at = created_at where slug = 'neon-drift'",
+        &[],
+    )
+    .await?;
 
     // Players: played it, voted, some wrote reviews; Mia answered one.
     let mut voters: Vec<(&Who, &str)> = vec![
