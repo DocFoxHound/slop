@@ -8,6 +8,7 @@ import type { AppSummary } from "../api";
 import { ApiError } from "../api";
 import { ageLabel, artFor, deadlineText } from "../format";
 import { openExternal } from "../platform";
+import { AppIcon, appIconProps } from "./AppIcon";
 
 /** The maker's thumbnail, or a colour made from the app's address with its initial. */
 export function Art({
@@ -55,13 +56,17 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
   return (
     <Link className="tile" to={`/app/${app.slug}`}>
       <div className="tile-art">
-        <Art app={app} />
+        <Art app={app} withName={false} />
         <span className="stage-corner">
           <StageBadge app={app} />
           <StatusBadge app={app} />
         </span>
       </div>
       <div className="tile-body">
+        <span className="tile-title">
+          <AppIcon {...appIconProps(app)} size={24} />
+          <span className="tile-name">{app.title}</span>
+        </span>
         {reason && <span className="why">{reason}</span>}
         {app.branch_of && <span className="badge neutral community-badge">COMMUNITY</span>}
         {app.made_with_people && (

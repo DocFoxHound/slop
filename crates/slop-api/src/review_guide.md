@@ -159,18 +159,23 @@ those.
 them). Each picture has a `url`, which is the file in the maker's repository at a fixed commit and
 can't change. It also has `width`, `height`, `format` and `sha256`.
 
-- Open **every** picture: the `thumbnail` and every `image` in the gallery, plus any video's
-  `poster`.
+- Open **every** picture: the `thumbnail`, the `icon` (square, shown small in players'
+  libraries, on store tiles and on the app's page), every `image` in the gallery, and any
+  video's `poster`.
 - Videos are YouTube links (`youtube_id`; watch at `https://www.youtube.com/watch?v=<id>`). If
   you can't watch a video, leave an `unsure` note naming it and don't approve the set: a person
   will.
 - Captions count as content too.
 - Pictures should show the app (screenshots, art, a logo or title), not unrelated material,
   advertising for something else, or text that breaks the rules above.
-- `detail.pictures.lookalikes` lists other makers' apps whose live icon looks like the new
-  thumbnail (`distance`: bits that differ out of 64; 0 is the same picture). Open them: an icon
-  copied to pass as another game is a reason to turn the pictures down (and to report the app
-  for impersonation). A shared style or a common shape isn't.
+- The icon should come from the app's own art (its logo, a character, a crop of a screenshot).
+  One that suggests another game, brand or maker, or shows something the app doesn't have, is a
+  reason to turn the set down.
+- `detail.pictures.lookalikes` lists other makers' apps whose live thumbnail or icon looks like
+  the new one (`kind`: `thumbnail` or `icon`; `distance`: bits that differ out of 64; 0 is the
+  same picture). Open them: a picture copied to pass as another game is a reason to turn the
+  pictures down (and to report the app for impersonation). A shared style or a common shape
+  isn't.
 
 ### `portfolio`: a creative's People portfolio
 

@@ -9,6 +9,7 @@ import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type R
 import { Link, useLocation, useNavigate, useParams } from "react-router";
 
 import { api, type AppDetail, type BugReport, type Release } from "../api";
+import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Avatar } from "../components/Avatar";
 import { checkUpdates, LIBRARY_CHANGED } from "../components/AppUpdates";
 import { BugReports } from "../components/BugReports";
@@ -222,7 +223,7 @@ export function Library() {
                             tabIndex={tabbable ? 0 : -1}
                             data-slug={e.slug}
                           >
-                            <LibraryIcon title={e.title} iconUrl={iconOf(e)} thumbnailUrl={e.app?.thumbnail_url} size={20} />
+                            <AppIcon {...appIconProps(e.app ?? { title: e.title, slug: e.slug })} size={20} className="lib-app-icon" />
                             <span className="lib-row-name">{e.title}</span>
                             {status && <span className="lib-row-status"> – {status}</span>}
                           </Link>
@@ -296,49 +297,6 @@ function useRunning(): string[] {
     };
   }, []);
   return running;
-}
-
-/** The app's own icon, once apps have one (`icon_url`); read defensively until then. */
-function iconOf(e: Entry): string | null {
-  return (e.app as { icon_url?: string | null } | undefined)?.icon_url ?? null;
-}
-
-/**
- * A small square app icon: its icon, else its store picture cropped square, else its letter.
- * A stand-in with the props of AppIcon (components/AppIcon.tsx, which comes with app icons), so
- * the two can be swapped.
- */
-function LibraryIcon({
-  title,
-  iconUrl,
-  thumbnailUrl,
-  size = 32,
-}: {
-  title: string;
-  iconUrl?: string | null;
-  thumbnailUrl?: string | null;
-  size?: number;
-}) {
-  const [failed, setFailed] = useState(false);
-  const src = iconUrl ?? thumbnailUrl ?? null;
-  const box = { width: size, height: size, minWidth: size };
-  if (src && !failed) {
-    return (
-      <span className="lib-app-icon" style={box} aria-hidden="true">
-        <img src={src} alt="" loading="lazy" decoding="async" onError={() => setFailed(true)} />
-      </span>
-    );
-  }
-  const { from, to } = artFor(title);
-  return (
-    <span
-      className="lib-app-icon letter"
-      style={{ ...box, fontSize: Math.round(size * 0.55), background: `linear-gradient(135deg, ${from}, ${to})` }}
-      aria-hidden="true"
-    >
-      {title.trim().charAt(0).toUpperCase()}
-    </span>
-  );
 }
 
 type Tab = "activity" | "community" | "saves" | "bugs" | "reviews";
@@ -418,11 +376,15 @@ function Details({
       >
         {image && <img className="lib-hero-img" src={image} alt="" />}
         <div className="lib-hero-text">
-          <LibraryIcon
-            title={entry.title}
-            iconUrl={iconOf(entry)}
-            thumbnailUrl={entry.app?.thumbnail_url ?? d?.thumbnail_url}
+          <AppIcon
+            {...appIconProps({
+              title: entry.title,
+              slug: entry.slug,
+              icon_url: entry.app?.icon_url ?? d?.icon_url,
+              thumbnail_url: entry.app?.thumbnail_url ?? d?.thumbnail_url,
+            })}
             size={48}
+            className="lib-app-icon"
           />
           <div>
             <h2 id="lib-title" ref={headingRef} tabIndex={-1}>

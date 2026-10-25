@@ -44,12 +44,26 @@ pub fn routes() -> Router<AppState> {
 }
 
 /// "Check now" for a frozen app's repository (frozen.rs).
+/// What "Check now" (and a maker's agent's `check_repository`) found.
+#[derive(Serialize)]
+struct RepoCheck {
+    /// The freeze still in place, or null.
+    frozen: Option<crate::frozen::Frozen>,
+    /// Worth adding, never blocking (media.rs): e.g. no icon yet.
+    recommendations: Vec<crate::fixes::Fix>,
+}
+
 async fn repo_check(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(slug): Path<String>,
-) -> ApiResult<Json<Option<crate::frozen::Frozen>>> {
-    Ok(Json(crate::frozen::check_now(&state, &user, &slug).await?))
+) -> ApiResult<Json<RepoCheck>> {
+    let frozen = crate::frozen::check_now(&state, &user, &slug).await?;
+    let (app_id, _) = updates::owned(&state, &slug, &user).await?;
+    Ok(Json(RepoCheck {
+        frozen,
+        recommendations: crate::media::recommendations(&state.db, app_id).await?,
+    }))
 }
 
 /// The longest reason a maker can give with a request.

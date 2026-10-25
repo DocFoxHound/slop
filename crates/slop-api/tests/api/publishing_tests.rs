@@ -6001,7 +6001,8 @@ async fn agents_submit_releases_and_notes_through_mcp_tools(db: PgPool) {
     )
     .await;
     assert!(!error, "{text}");
-    assert_eq!(text, "null", "not frozen");
+    let checked: Value = serde_json::from_str(&text).unwrap();
+    assert_eq!(checked["frozen"], Value::Null, "not frozen: {text}");
 }
 
 /// An agent token publishes with no passkey anywhere, past the deadline publishers once had

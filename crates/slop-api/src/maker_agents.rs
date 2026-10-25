@@ -857,7 +857,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "get_fixes",
-        description: "Every problem Slop's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release.",
+        description: "Every problem Slop's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release. `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
         method: Method::GET,
         path: "/v1/apps/{slug}/fixes",
         properties: slug_only,
@@ -1085,9 +1085,17 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "check_repository",
-        description: "Checks now that Slop can still read the app's repository, instead of waiting for the daily check. A freeze for lost access is lifted once Slop can read it (not one Slop's staff placed). Returns the freeze still in place, or null. It doesn't check the code: Slop's source check runs on each release.",
+        description: "Checks now that Slop can still read the app's repository, instead of waiting for the daily check. A freeze for lost access is lifted once Slop can read it (not one Slop's staff placed). Returns `frozen` (the freeze still in place, or null) and `recommendations`: what's worth adding that never blocks anything (e.g. no icon yet), with exact instructions. It doesn't check the code (Slop's source check runs on each release) or read the pictures (check_pictures does).",
         method: Method::POST,
         path: "/v1/apps/{slug}/repo-check",
+        properties: slug_only,
+        required: &["slug"],
+    },
+    Tool {
+        name: "check_pictures",
+        description: "Reads the app's .slop/media.json (icon, thumbnail, screenshots, videos) on the repository's default branch now, as the owner's \"Check my repository now\" does. New pictures wait for a person's review before they show. Returns what the store shows (`live`), what's waiting (`pending`), the last `problem` (`icon_problem` when it was the icon), and `recommendations` such as a missing icon. Push the pictures first; see the guide section \"Pictures and videos\".",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/media/check",
         properties: slug_only,
         required: &["slug"],
     },

@@ -1330,3 +1330,30 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .donations-off a, .step a, .donation-setup-list a { text-decoration: underline; }
 .donation-setup-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
 /* --- end publishing progress --- */
+/* ---------------------------------------------------------------------------------------------
+   App icons (components/AppIcon.tsx, components/IconSlot.tsx; `icon` in .slop/media.json).
+   The icon itself, or a square from the middle of the thumbnail, or the letter. Size and corner
+   radius come from AppIcon's `size`. Used on store tiles, the app page, the Edit store page's
+   Icon slot and the review queue's pictures. Everything about icons is in this block.
+   --------------------------------------------------------------------------------------------- */
+.app-icon { display: inline-grid; place-items: center; flex: none; overflow: hidden; aspect-ratio: 1; background: var(--panel-2); color: rgba(255, 255, 255, 0.9); font-weight: 900; line-height: 1; vertical-align: middle; box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06); }
+.app-icon img { display: block; width: 100%; height: 100%; object-fit: cover; object-position: center; }
+.app-icon.is-letter { text-shadow: 0 2px 6px rgba(0, 0, 0, 0.4); }
+.tile-title { display: flex; align-items: center; gap: 8px; min-width: 0; font-weight: 800; font-size: 14px; color: var(--text); }
+.tile-name { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+.app-head .title-row .app-head-icon { align-self: center; }
+.icon-slot { border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); padding: 12px 14px; margin: 4px 0 14px; display: grid; gap: 8px; }
+.icon-slot h3 { margin: 0; font-size: 15px; }
+.icon-slot p { margin: 0; }
+.icon-slot .code-block { margin: 0; }
+.icon-previews { display: flex; align-items: flex-end; gap: 16px; flex-wrap: wrap; }
+.icon-previews figure { margin: 0; display: grid; justify-items: center; gap: 4px; }
+.icon-howto { display: grid; gap: 8px; }
+.icon-howto > .btn { justify-self: start; }
+.icon-problem { color: var(--bad); }
+.icon-cropper { display: grid; gap: 8px; border-top: 1px solid var(--line); padding-top: 10px; }
+.icon-cropper label { display: grid; gap: 4px; font-size: 13px; max-width: 420px; }
+.app-icon-crop { display: block; border-radius: 20%; object-fit: cover; }
+.media-review .media-review-icon img { aspect-ratio: 1; object-fit: contain; }
+.media-review .media-review-icon .icon-sizes { display: flex; align-items: flex-end; gap: 8px; margin-top: 6px; }
+.media-review .media-review-icon .icon-sizes img { width: auto; aspect-ratio: 1; border-radius: 20%; background: none; }

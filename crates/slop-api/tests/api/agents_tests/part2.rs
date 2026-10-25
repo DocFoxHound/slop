@@ -3249,7 +3249,7 @@ async fn check_repository_checks_that_slop_can_still_read_the_repository(db: PgP
     )
     .await;
     assert!(failed && text.contains("not_found"), "{text}");
-    // Readable: not frozen (null).
+    // Readable: not frozen (null). No icon yet: a recommendation, with what to do.
     let (failed, text) = maker_tool(
         &app,
         &publish,
@@ -3258,7 +3258,21 @@ async fn check_repository_checks_that_slop_can_still_read_the_repository(db: PgP
     )
     .await;
     assert!(!failed, "{text}");
-    assert_eq!(parsed(&text), Value::Null);
+    let checked = parsed(&text);
+    assert_eq!(checked["frozen"], Value::Null);
+    assert_eq!(checked["recommendations"][0]["kind"], "icon:missing");
+    assert_eq!(checked["recommendations"][0]["severity"], "recommended");
+    assert!(
+        checked["recommendations"][0]["instruction"]
+            .as_str()
+            .unwrap()
+            .contains("\"icon\": \"icon.png\""),
+        "{text}"
+    );
+    // get_fixes says the same, apart from the release's fixes.
+    let (failed, text) = maker_tool(&app, &publish, "get_fixes", json!({ "slug": "game" })).await;
+    assert!(!failed, "{text}");
+    assert_eq!(parsed(&text)["recommendations"][0]["kind"], "icon:missing");
     let frozen: bool =
         sqlx::query_scalar("select frozen_at is not null from apps where slug = 'game'")
             .fetch_one(&app.db)
@@ -3307,7 +3321,7 @@ async fn check_repository_freezes_and_unfreezes_by_repository_access(db: PgPool)
     )
     .await;
     assert!(!failed, "{text}");
-    let freeze = parsed(&text);
+    let freeze = parsed(&text)["frozen"].clone();
     assert!(
         freeze["reason"].as_str().unwrap().contains("can't be read"),
         "{text}"
@@ -3329,7 +3343,7 @@ async fn check_repository_freezes_and_unfreezes_by_repository_access(db: PgPool)
     )
     .await;
     assert!(!failed, "{text}");
-    assert_eq!(parsed(&text), Value::Null);
+    assert_eq!(parsed(&text)["frozen"], Value::Null);
     assert!(!frozen().await);
 }
 

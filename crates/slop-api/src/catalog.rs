@@ -148,6 +148,7 @@ pub(crate) fn push_summary_columns_with(
                 coalesce(array(select t.slug from app_tags at join tags t on t.id = at.tag_id
                                where at.app_id = a.id order by t.slug), '{}') as tags,
                 (select ms.thumbnail->>'url' from media_sets ms where ms.id = a.media_set_id) as thumbnail_url,
+                (select ms.icon->>'url' from media_sets ms where ms.id = a.media_set_id) as icon_url,
                 (select count(*) from votes v where v.app_id = a.id) as vote_count,
                 (select case when count(*) >= ",
     )
@@ -193,6 +194,9 @@ pub struct AppSummary {
     pub tags: Vec<String>,
     /// The maker's store tile, if they set one (media.rs).
     thumbnail_url: Option<String>,
+    /// The app's square icon, once approved (media.rs). Without one, the website crops the
+    /// thumbnail, then shows the first letter.
+    pub icon_url: Option<String>,
     /// Current 👍/👎 votes (votes.rs).
     pub vote_count: i64,
     /// Weighted % Not Slop; null below votes::MIN_VOTES.

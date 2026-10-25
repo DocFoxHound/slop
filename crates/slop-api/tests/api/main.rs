@@ -29,6 +29,7 @@ use uuid::Uuid;
 mod accounts_tests;
 mod admin_tests;
 mod agents_tests;
+mod icons_tests;
 mod messages_tests;
 mod money_tests;
 mod people_tests;
@@ -9347,7 +9348,7 @@ async fn apps_freeze_when_slop_cannot_read_the_repository(db: PgPool) {
         .send(req(Method::POST, "/v1/apps/game/repo-check").cookie(&maker))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_json(res).await, Value::Null);
+    assert_eq!(body_json(res).await["frozen"], Value::Null);
     assert_eq!(
         list_slugs(&app, req(Method::GET, "/v1/apps")).await,
         ["game"]
@@ -13926,6 +13927,7 @@ async fn a_makers_agent_does_maker_work_only(db: PgPool) {
     for want in [
         "maker_guide",
         "get_fixes",
+        "check_pictures",
         "submit_release",
         "register_community_build",
         "send_quote",
