@@ -11,7 +11,9 @@ export default defineConfig({
   // One server, one database: tests share it, so they run one file at a time.
   workers: 1,
   fullyParallel: false,
-  retries: 0,
+  // On GitHub (CI) a test that fails gets one more try; one that then passes is reported as
+  // flaky, named on the run page to be fixed (.github/workflows/pipeline.yml). Locally, none.
+  retries: process.env.CI ? 1 : 0,
   timeout: 30_000,
   reporter: [["list"]],
   use: { ...devices["Desktop Chrome"], trace: "retain-on-failure", screenshot: "only-on-failure" },

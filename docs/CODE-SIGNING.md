@@ -16,11 +16,11 @@ Slop (their makers sign those themselves).
 
 ## How a release is built and signed
 
-1. Changes are made on the `dev` branch and tried on Slop's test server.
-2. When they're ready, `main` moves forward to them, and the
-   [pipeline](../.github/workflows/pipeline.yml) runs every check (lint, the API tests, the
-   website tests and the browser tests) on GitHub's own runners and builds the Windows app from
-   that commit on GitHub's Windows runner.
+1. Changes are made on the `dev` branch and tried on Slop's test server. Every push to `dev`
+   runs the [pipeline](../.github/workflows/pipeline.yml)'s checks (lint, the API tests, the
+   website tests and the browser tests) on GitHub's own runners.
+2. When they're ready, `main` moves forward to them, only to a commit that passed every check,
+   and the pipeline builds the Windows app from that commit on GitHub's Windows runner.
 3. **Nothing is released or signed until a release approver approves that run** (a GitHub
    environment with a required reviewer). Every release is approved by hand.
 4. The approved build is published to slopai.games, and installed Slop apps update to it. The

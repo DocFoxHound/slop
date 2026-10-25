@@ -10,21 +10,28 @@ Slop runs in two places:
 ## How changes ship
 
 ```
-push to dev ──► the test server (no GitHub involved)
-                 build → deploy → build "Slop Dev" for Linux and Windows here
-                 → installed Slop Dev apps offer the update             ~5–10 min
+push to dev ──► the test server: build → deploy → build "Slop Dev" for Linux and
+             │   Windows here → installed Slop Dev apps offer the update     ~5–10 min
+             └─► GitHub's pipeline (.github/workflows/pipeline.yml) on dev: all checks
+                 and the Windows build on GitHub's runners, never production  ~30 min
 
-dev → main ──► GitHub's pipeline (.github/workflows/pipeline.yml)
-               all checks on GitHub's runners, and the Windows "Slop" app built
+dev → main ──► (promote.sh: only once dev's run passed) GitHub's pipeline on main:
+               the checks pass at once (same commit), the Windows "Slop" app built
                → ⏸ Approve "production" (a GitHub environment with a required reviewer)
                → production deploys → its Windows app is published → Slop apps update
 ```
 
 1. **Work lands on `dev`.** Push signed commits there ("Signed commits", below). Within two
    minutes the test server's `update.sh` fetches it, builds it **without the tests** (they run on
-   GitHub, step 3) in about 3 minutes, snapshots the database, switches over, restarts and rolls
+   GitHub) in about 3 minutes, snapshots the database, switches over, restarts and rolls
    back if it isn't healthy. If the app changed, it then builds the **Slop Dev** desktop app for Linux and Windows
-   on this machine and publishes it here ("The desktop app", below).
+   on this machine and publishes it here ("The desktop app", below). At the same time **GitHub
+   runs the pipeline on dev**: `checks` runs the same tests, lints, builds and browser tests the
+   deploy's old test mode ran (`deploy/build/build.sh` in the `deploy/build/Containerfile` image,
+   against a Postgres service), and `build-windows` builds the Windows installer, about 30
+   minutes; a newer push to dev replaces the older run. A failure shows on the run page with the
+   failing test, its error and line; fix it on dev. A browser test that only passed on its retry
+   is named there as a warning: fix it too, it may be a real bug.
 2. **When dev is good, send it on:** from your own checkout, with your GitHub access,
 
    ```sh
@@ -33,13 +40,14 @@ dev → main ──► GitHub's pipeline (.github/workflows/pipeline.yml)
    ```
 
    It refuses anything that isn't a fast-forward, so main only ever gets commits that are already
-   on dev. Don't merge dev into main on GitHub instead: GitHub's merge, squash and rebase buttons
+   on dev, and it refuses until dev's pipeline run for that exact commit has passed
+   (`--without-checks` skips that, for emergencies only). Don't merge dev into main on GitHub instead: GitHub's merge, squash and rebase buttons
    all make new commits, signed by GitHub rather than by you, and production refuses commits that
    aren't signed by a key in its `allowed_signers`.
 3. **GitHub runs the pipeline** on the push to main (https://github.com/DocFoxHound/slop/actions):
-   `checks` runs the same tests, lints, builds and browser tests the deploy's old test mode ran
-   (`deploy/build/build.sh` in the `deploy/build/Containerfile` image, against a Postgres
-   service), while `build-windows` builds production's Windows installer. About 20–30 minutes.
+   `checks` passes at once, because the same commit passed them on dev (it runs them in full if
+   it can't find that run), while `build-windows` builds production's Windows installer. About
+   10–15 minutes.
 4. **Approve.** The run then waits at the `production` job: open it, **Review deployments**, tick
    **production**, **Approve and deploy**. The job moves the annotated tag `production` to the
    commit (refusing to take production back to an older one), production's `update.sh` deploys it
