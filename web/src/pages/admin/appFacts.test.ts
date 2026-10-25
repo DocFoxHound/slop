@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdminApp, AdminAppFlag } from "../../api";
-import { cantListReason, flagFact, pageQuery, quietLine, readShow, readSort, rowFacts, span } from "./apps";
+import { cantListReason, flagFact, pageQuery, quietLine, readShow, readSort, rowFacts, span } from "./appFacts";
 
 const NOW = Date.parse("2026-10-25T12:00:00Z");
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();

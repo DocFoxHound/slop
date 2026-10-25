@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Admin → Apps in words: what each flag the API sets means for staff (crates/slop-api/src/admin_web.rs,
 // FLAGS), the quiet line a healthy app gets, why an app can't go in the store yet, and the list's
-// filters as they are in the address. Pure, so it's tested on its own (apps.test.ts).
+// filters as they are in the address. Pure, so it's tested on its own (appFacts.test.ts).
 
 import type { AdminApp, AdminAppFlag, AdminAppsQuery, AppStage, AppStatus } from "../../api";
 import { daysSince, daysUntil, timeAgo } from "../../format";
