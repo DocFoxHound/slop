@@ -67,3 +67,16 @@ export function useNow(ms: number | null): number {
   useInterval(tick, ms);
   return now;
 }
+
+/**
+ * A switch that saves asynchronously: shows the choice at once and keeps showing it until the
+ * saved value catches up (or the save fails: `show(undefined)`), instead of snapping back to the
+ * old value while the save and the reload are on their way.
+ */
+export function useChosen<T>(saved: T): [T, (choice: T | undefined) => void] {
+  const [chosen, setChosen] = useState<T>();
+  useEffect(() => {
+    if (chosen !== undefined && chosen === saved) setChosen(undefined);
+  }, [saved, chosen]);
+  return [chosen ?? saved, setChosen];
+}

@@ -21,7 +21,7 @@ import { Reviews } from "../components/Reviews";
 import { isOn, useSandboxStatus } from "../components/Sandbox";
 import { ErrorState, ExternalLink, Loading, StageBadge } from "../components/ui";
 import { artFor, formatDate } from "../format";
-import { useDocumentTitle, useLoad } from "../hooks";
+import { useChosen, useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { desktop, detectOs, isDesktop, type InstalledApp, type SaveCopy } from "../platform";
 import { useSession } from "../session";
@@ -833,20 +833,26 @@ function LibrarySettings({ onChanged }: { onChanged: () => void }) {
   const auto = useLoad(() => desktop.autoUpdateSetting(), []);
   const sandbox = useSandboxStatus();
   const saveSync = useLoad(() => desktop.saveSyncStatus().catch(() => null), []);
+  const [autoOn, chooseAuto] = useChosen(auto.data ?? true);
+  const [sandboxAll, chooseSandboxAll] = useChosen(sandbox.data?.settings.all ?? false);
+  const [syncOn, chooseSync] = useChosen(saveSync.data ? saveSync.data.available && saveSync.data.on : false);
   return (
     <Popover label="Library settings" icon={GEAR_ICON}>
       <div className="lib-menu lib-settings">
         <label className="check">
           <input
             type="checkbox"
-            checked={auto.data ?? true}
-            disabled={auto.loading}
-            onChange={(e) =>
-              void desktop.autoUpdateSetting(e.target.checked).then(() => {
-                auto.reload();
-                onChanged();
-              })
-            }
+            checked={autoOn}
+            onChange={(e) => {
+              chooseAuto(e.target.checked);
+              void desktop.autoUpdateSetting(e.target.checked).then(
+                () => {
+                  auto.reload();
+                  onChanged();
+                },
+                () => chooseAuto(undefined),
+              );
+            }}
           />{" "}
           Update apps automatically <span className="muted small">(never while an app is running)</span>
         </label>
@@ -854,8 +860,11 @@ function LibrarySettings({ onChanged }: { onChanged: () => void }) {
           <label className="check">
             <input
               type="checkbox"
-              checked={sandbox.data.settings.all}
-              onChange={(e) => void desktop.setSandbox(null, e.target.checked).then(sandbox.reload)}
+              checked={sandboxAll}
+              onChange={(e) => {
+                chooseSandboxAll(e.target.checked);
+                void desktop.setSandbox(null, e.target.checked).then(sandbox.reload, () => chooseSandboxAll(undefined));
+              }}
             />{" "}
             Run every app in sandbox mode <span className="muted small">(unless you turned it off for one)</span>
           </label>
@@ -865,9 +874,12 @@ function LibrarySettings({ onChanged }: { onChanged: () => void }) {
           <label className="check">
             <input
               type="checkbox"
-              checked={saveSync.data.available && saveSync.data.on}
+              checked={syncOn}
               disabled={!saveSync.data.available}
-              onChange={(e) => void desktop.setSaveSync(e.target.checked).then(saveSync.reload)}
+              onChange={(e) => {
+                chooseSync(e.target.checked);
+                void desktop.setSaveSync(e.target.checked).then(saveSync.reload, () => chooseSync(undefined));
+              }}
             />{" "}
             Sync saves between my computers{" "}
             <span className="muted small">
