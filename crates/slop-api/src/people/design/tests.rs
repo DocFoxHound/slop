@@ -49,8 +49,19 @@ fn html(d: &Draft) -> String {
     out
 }
 
+struct CssOut {
+    css: String,
+    warnings: Vec<String>,
+    paths: Vec<(String, u32)>,
+}
+
 fn css(src: &str) -> CssOut {
-    sanitize_css(src, &HashMap::new())
+    let (css, warnings, paths) = rebuild_css(src, &HashMap::new(), Warnings::default());
+    CssOut {
+        css,
+        warnings: warnings.finish(),
+        paths,
+    }
 }
 
 fn warned(warnings: &[String], what: &str) -> bool {
@@ -264,15 +275,15 @@ fn slops_parts_are_named_strictly() {
         "<slop-works></slop-works><slop-work ref=\"2\"></slop-work>\
          <slop-video youtube=\"https://youtu.be/dQw4w9WgXcQ\" title=\"Reel\"></slop-video>\
          <slop-video youtube=\"dQw4w9WgXcQ\"></slop-video>\
-         <slop-track src=\"../tracks/theme.ogg\" title=\"Theme\"></slop-track><slop-services></slop-services>",
+         <slop-track src=\"../tracks/theme.ogg\" title=\"Theme\"></slop-track>",
     );
     assert!(d.warnings.is_empty(), "{:?}", d.warnings);
-    assert!(d.has_works && d.has_services);
+    assert!(d.has_works);
     assert_eq!(
         html(&d),
         "<slop-works></slop-works><slop-work work=\"image:works/b.png\"></slop-work>\
          <slop-video title=\"Reel\" youtube=\"dQw4w9WgXcQ\"></slop-video><slop-video youtube=\"dQw4w9WgXcQ\"></slop-video>\
-         <slop-track src=\"tracks/theme.ogg\" title=\"Theme\"></slop-track><slop-services></slop-services>"
+         <slop-track src=\"tracks/theme.ogg\" title=\"Theme\"></slop-track>"
     );
     assert_eq!(
         d.tracks,
@@ -312,24 +323,31 @@ fn slops_parts_are_named_strictly() {
 
     // Parts take nothing inside: what was there follows them. One <slop-works>, none in links.
     let d = page(
-        "<slop-works><slop-services><script>alert(1)</script><p>after</p></slop-services></slop-works>\
-         <slop-works onload=\"alert(1)\"></slop-works><a href=\"https://x.example\"><slop-services></slop-services>go</a>\
+        "<slop-works><slop-track src=\"a.ogg\"><script>alert(1)</script><p>after</p></slop-track></slop-works>\
+         <slop-works onload=\"alert(1)\"></slop-works><a href=\"https://x.example\"><slop-works></slop-works>go</a>\
          <slop-evil onload=\"alert(1)\"><b>kept</b></slop-evil>",
     );
     assert_clean(&d.tree);
     assert_eq!(
         html(&d),
-        "<slop-works></slop-works><slop-services></slop-services><p>after</p>\
+        "<slop-works></slop-works><slop-track src=\"page/a.ogg\"></slop-track><p>after</p>\
          <a href=\"https://x.example/\" rel=\"nofollow noopener noreferrer ugc\" target=\"_blank\">go</a><b>kept</b>"
     );
     for w in [
-        "<slop-services> takes nothing inside it",
+        "<slop-track> takes nothing inside it",
         "<slop-works> shows once",
-        "<slop-services> can't be inside a link",
+        "<slop-works> can't be inside a link",
         "<slop-evil> isn't one of Slop's parts",
     ] {
         assert!(warned(&d.warnings, w), "{w}: {:?}", d.warnings);
     }
+    // Services are never inside a design (it could cover or imitate them): Slop shows them below.
+    let d = page("<section><slop-services><p>Hire me</p></slop-services></section>");
+    assert_eq!(html(&d), "<section><p>Hire me</p></section>");
+    assert!(warned(
+        &d.warnings,
+        "<slop-services> was removed: your services always appear below your design"
+    ));
     // HTML has no self-closing custom tags: what follows ends up inside, and is moved back out.
     let d = page("<slop-works/><p>after</p>");
     assert_eq!(html(&d), "<slop-works></slop-works><p>after</p>");
@@ -373,7 +391,7 @@ fn allowed_css_comes_through_rebuilt() {
         out.css,
         ".card, .grid > li:nth-child(2n+1){color:#FFF;background:linear-gradient(90deg, rgb(0 0 0 / 50%), transparent);padding:1rem 2px;border-radius:8px;}\
          .card:hover::after{content:\"★ \";transform:rotate(3deg) scale(1.1);transition:transform 0.2s ease-out;}\
-         @media (max-width: 600px){.grid{display:grid;grid-template-columns:[a] 1fr [b] 2fr;}}\
+         @container (max-width: 600px){.grid{display:grid;grid-template-columns:[a] 1fr [b] 2fr;}}\
          @keyframes spin{from{transform:rotate(0deg);}50%{opacity:0.5;}to{transform:rotate(360deg);}}\
          h2{font-family:\"Fraunces\",serif;position:absolute;z-index:5;}"
     );
@@ -560,7 +578,7 @@ fn css_pictures_are_repository_paths_then_links() {
         "https://raw.githubusercontent.com/me/p/abc/.slop/page/images/bg.png".to_string(),
     )]);
     assert_eq!(
-        sanitize_css(".hero { background-image: url(images/bg.png) }", &urls).css,
+        sanitize_css(".hero { background-image: url(images/bg.png) }", &urls),
         ".hero{background-image:url(\"https://raw.githubusercontent.com/me/p/abc/.slop/page/images/bg.png\");}"
     );
     // Through `sanitize`, CSS pictures join the page's, with where they're used.
@@ -636,4 +654,255 @@ fn the_portfolio_guide_states_the_design_rules() {
         assert!(guide.contains(&w), "portfolio.md doesn't say {w}");
     }
     assert_eq!(MAX_ELEMENTS, 2_000);
+}
+
+/// Runs `f` on a thread with a 2 MiB stack, as a server worker has.
+fn on_small_stack<T: Send + 'static>(f: impl FnOnce() -> T + Send + 'static) -> T {
+    std::thread::Builder::new()
+        .stack_size(2 << 20)
+        .spawn(f)
+        .unwrap()
+        .join()
+        .expect("no stack overflow")
+}
+
+#[test]
+fn deep_nesting_is_refused_without_running_out_of_stack() {
+    let started = std::time::Instant::now();
+    for (open, close) in [
+        ("<div>", "</div>"),
+        ("<nav>", "</nav>"),
+        ("<slop-x>", "</slop-x>"),
+        ("<template>", "</template>"),
+        ("<b>", "</b>"),
+        ("<slop-works>", "</slop-works>"),
+        ("<a href=\"https://x.example\">", "</a>"),
+        ("<ul><li>", "</li></ul>"),
+        ("<table><tr><td>", "</td></tr></table>"),
+        ("<svg><g>", "</g></svg>"),
+        ("<i><b><u>", "</u></b></i>"),
+        ("<select><option>", "</option></select>"),
+    ] {
+        let html = format!("{}x{}", open.repeat(20_000), close.repeat(20_000));
+        let result = on_small_stack(move || {
+            sanitize(&html, None, &works())
+                .map(|d| d.tree.len())
+                .map_err(|p| p.0)
+        });
+        match result {
+            Err(p) => assert!(
+                p.contains("nested more than 32 deep") || p.contains("more than 2000 elements"),
+                "{open}: {p}"
+            ),
+            // Some never nest: <template> is removed whole with what's in it, HTML's own rules
+            // flatten formatting tags, links and options, <svg> is removed whole, and
+            // <slop-works> shows once.
+            Ok(_) => assert!(
+                matches!(
+                    open,
+                    "<template>"
+                        | "<b>"
+                        | "<slop-works>"
+                        | "<a href=\"https://x.example\">"
+                        | "<svg><g>"
+                        | "<select><option>"
+                        | "<i><b><u>"
+                ),
+                "{open}"
+            ),
+        }
+    }
+    // Quickly, too: parsing stops once the page is far too deep.
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(10),
+        "{:?}",
+        started.elapsed()
+    );
+    // And in CSS: nested brackets, blocks and functions.
+    for css_src in [
+        format!(
+            ".a{{width:{}1px{}}}",
+            "(".repeat(20_000),
+            ")".repeat(20_000)
+        ),
+        format!(
+            ".a{{width:{}1px{}}}",
+            "calc(".repeat(20_000),
+            ")".repeat(20_000)
+        ),
+        format!(".a{}color:red{}", "{".repeat(20_000), "}".repeat(20_000)),
+        format!("@media {}", "(".repeat(20_000)),
+        format!(
+            ".a:not({}.b{}){{color:red}}",
+            ":not(".repeat(20_000),
+            ")".repeat(20_000)
+        ),
+    ] {
+        let out = on_small_stack(move || sanitize_css(&css_src, &HashMap::new()));
+        assert!(!out.contains("width"), "{out}");
+    }
+}
+
+#[test]
+fn thousands_of_removals_are_counted_quickly() {
+    let started = std::time::Instant::now();
+    // One tag with thousands of attributes is refused before the parser sees it.
+    let attrs: String = (0..13_000).map(|i| format!(" data-a{i}=x")).collect();
+    let Err(Problem(p)) = sanitize(&format!("<p>\n<p{attrs}>hi</p>"), None, &works()) else {
+        panic!("accepted");
+    };
+    assert_eq!(
+        p,
+        ".slop/page/index.html line 2: a tag has 65 attributes or more; the most a tag can have is 64"
+    );
+    // Quoted values with spaces, = and > in them don't count as attributes.
+    let busy: String = (0..60)
+        .map(|i| format!(" title{i}=\"a b=c > d\""))
+        .collect();
+    assert!(sanitize(&format!("<p{busy}>x</p>"), None, &works()).is_ok());
+    // Thousands of removals (60 attributes on each of hundreds of elements, and a style sheet
+    // of nothing allowed) are counted, not kept.
+    let attrs: String = (0..60).map(|i| format!(" data-a{i}=x")).collect();
+    let html_src = format!("<p{attrs}>hi</p>").repeat(300);
+    let css: String = (0..3_000).map(|i| format!(".a{i}{{behavior:x}}")).collect();
+    let d = sanitize(&html_src, Some(&css), &works()).unwrap();
+    assert!(
+        started.elapsed() < std::time::Duration::from_secs(3),
+        "{:?}",
+        started.elapsed()
+    );
+    assert_eq!(d.warnings.len(), MAX_WARNINGS + 1);
+    assert!(
+        d.warnings.last().unwrap().starts_with("…and "),
+        "{:?}",
+        d.warnings.last()
+    );
+    assert_eq!(html(&d), "<p>hi</p>".repeat(300));
+}
+
+#[test]
+fn layering_and_keyword_properties_take_plain_values() {
+    for src in [
+        ".a { z-index: calc(99999) }",
+        ".a { z-index: max(1, 99999) }",
+        ".a { z-index: clamp(1, 99999, 99999) }",
+        ".a { position: calc(1) }",
+        ".a { display: min(none) }",
+    ] {
+        let out = css(src);
+        assert_eq!(out.css, "", "{src}");
+        assert!(
+            warned(&out.warnings, "takes a plain value here, not a function"),
+            "{src}: {:?}",
+            out.warnings
+        );
+    }
+    assert_eq!(css(".a { z-index: 7 }").css, ".a{z-index:7;}");
+    // blur() is capped: a huge blur hides everything under it.
+    assert_eq!(css(".a { filter: blur(4px) }").css, ".a{filter:blur(4px);}");
+    for src in [
+        ".a { filter: blur(400px) }",
+        ".a { backdrop-filter: blur(10vw) }",
+        ".a { filter: blur(9em) }",
+    ] {
+        let out = css(src);
+        assert_eq!(out.css, "", "{src}");
+        assert!(warned(&out.warnings, "blur() is at most 40px"), "{src}");
+    }
+}
+
+#[test]
+fn css_that_hides_text_is_kept_but_said() {
+    for src in [
+        ".a { display: none }",
+        ".a { visibility: hidden }",
+        ".a { opacity: 0 }",
+        ".a { opacity: 5% }",
+        ".a { font-size: 0 }",
+        ".a { font-size: 1px }",
+        ".a { color: transparent }",
+        ".a { text-indent: -9999px }",
+        ".a { position: absolute; left: -9999px }",
+        ".a { margin-top: -100em }",
+        ".a { transform: translateX(-9999px) }",
+    ] {
+        let out = css(src);
+        assert!(!out.css.is_empty(), "{src}: kept");
+        assert!(
+            warned(
+                &out.warnings,
+                "hides what it applies to: reviewers see any text hidden this way"
+            ),
+            "{src}: {:?}",
+            out.warnings
+        );
+    }
+    for src in [
+        ".a { opacity: 0.6 }",
+        ".a { font-size: 12px }",
+        ".a { left: -20px }",
+        ".a { display: grid }",
+        ".a { transform: translateX(10px) }",
+    ] {
+        assert_eq!(css(src).warnings, Vec::<String>::new(), "{src}");
+    }
+}
+
+#[test]
+fn width_queries_are_about_the_designs_own_box() {
+    assert_eq!(
+        css("@media (max-width: 640px) { .a { color: red } }").css,
+        "@container (max-width: 640px){.a{color:red;}}"
+    );
+    assert_eq!(
+        css(
+            "@media only screen and (min-width: 600px) and (max-width: 900px) { .a { color: red } }"
+        )
+        .css,
+        "@container (min-width: 600px) and (max-width: 900px){.a{color:red;}}"
+    );
+    for (src, query) in [
+        (
+            "@media (prefers-reduced-motion: reduce) { .a { color: red } }",
+            "@media (prefers-reduced-motion: reduce)",
+        ),
+        (
+            "@media print and (max-width: 600px) { .a { color: red } }",
+            "@media print and (max-width: 600px)",
+        ),
+        (
+            "@media (max-width: 600px), (orientation: portrait) { .a { color: red } }",
+            "@media (max-width: 600px), (orientation: portrait)",
+        ),
+        (
+            "@media (min-aspect-ratio: 16/9) { .a { color: red } }",
+            "@media (min-aspect-ratio: 16/9)",
+        ),
+    ] {
+        assert!(css(src).css.starts_with(query), "{src} → {}", css(src).css);
+    }
+}
+
+#[test]
+fn a_deep_dom_is_freed_without_recursion() {
+    on_small_stack(|| {
+        let node = || {
+            Rc::new(DomNode {
+                parent: RefCell::new(None),
+                children: RefCell::new(Vec::new()),
+                data: DomData::Other,
+                line: 1,
+                depth: Cell::new(0),
+            })
+        };
+        let root = node();
+        let mut at = root.clone();
+        for _ in 0..200_000 {
+            let child = node();
+            at.children.borrow_mut().push(child.clone());
+            at = child;
+        }
+        drop(at);
+        drop(root);
+    });
 }

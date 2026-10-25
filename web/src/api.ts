@@ -1123,7 +1123,8 @@ export function workKey(w: PortfolioWork): string {
 
 /**
  * One node of a creative's page design (people/design.rs): text, or an element Slop allows, or one
- * of Slop's own parts (`slop-works`, `slop-work`, `slop-video`, `slop-track`, `slop-services`).
+ * of Slop's own parts (`slop-works`, `slop-work`, `slop-video`, `slop-track`). A creative's
+ * services are never inside a design: their page shows them below it.
  */
 export type DesignNode = string | { tag: string; attrs?: Record<string, string>; children?: DesignNode[] };
 
@@ -1132,8 +1133,6 @@ export interface PageDesign {
   tree: DesignNode[];
   /** The checked style sheet, for the design's shadow root only. */
   css: string;
-  /** The design places Slop's services itself; otherwise they show below it. */
-  has_services: boolean;
 }
 
 /** A checked design, with its portfolio set: what the creative and reviewers see. */
@@ -1142,7 +1141,7 @@ export interface PortfolioDesign extends PageDesign {
   html: string;
   pictures: RepoPicture[];
   tracks: Array<{ path: string; url: string; format: string }>;
-  /** What Slop removed, and why. */
+  /** What Slop removed and why, and what the CSS hides. */
   warnings: string[];
 }
 
@@ -1627,6 +1626,8 @@ export interface AdminQueue {
     set: PortfolioSet;
     live: PortfolioSet | null;
     notes: ReviewNote[];
+    /** The creative's services, which their page shows below a design. */
+    services: Array<Service & { skill_name: string }>;
   }>;
   problems: Array<{
     id: string;

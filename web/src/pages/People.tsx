@@ -244,11 +244,8 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
       <ServicesList services={p.services} onHire={!p.is_me && p.can_hire ? (s) => setHiring({ serviceId: s.id, skill: s.skill }) : undefined} />
     ) : null;
   // With their own design, the creative's page is: Slop's header, their design (which places
-  // their works, and maybe their services), then Slop's services (unless placed), reviews and
-  // credits, which a design can't hide or restyle.
-  const shown: Section[] = p.design
-    ? (["services", "reviews", "worked_on"] as Section[]).filter((s) => s !== "services" || !p.design?.has_services)
-    : p.sections;
+  // their works), then Slop's services, reviews and credits, which a design can't reach.
+  const shown: Section[] = p.design ? ["services", "reviews", "worked_on"] : p.sections;
 
   const sections: Record<Section, ReactNode> = {
     portfolio:
@@ -386,7 +383,7 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
       )}
 
       {p.design && (
-        <DesignArea design={p.design} label={`${p.name}'s page`} parts={slopParts({ works: p.works, onOpen: setOpen, services: servicesList })} />
+        <DesignArea design={p.design} label={`${p.name}'s page`} parts={slopParts({ works: p.works, onOpen: setOpen })} />
       )}
 
       <div className="two-col person-body">

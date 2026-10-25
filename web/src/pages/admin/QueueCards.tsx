@@ -260,12 +260,12 @@ export function PortfolioCard({ p, onDone }: { p: Q["portfolios"][number]; onDon
         </span>
       </div>
       <PortfolioReview set={p.set} />
-      {p.set.design && <DesignReview set={p.set} name={p.name} />}
+      {p.set.design && <DesignReview set={p.set} name={p.name} services={p.services} />}
       {p.live && (
         <details>
           <summary className="muted small">What the People page shows now</summary>
           <PortfolioReview set={p.live} />
-          {p.live.design && <DesignReview set={p.live} name={p.name} />}
+          {p.live.design && <DesignReview set={p.live} name={p.name} services={p.services} />}
         </details>
       )}
       <Notes notes={p.notes} />
@@ -712,19 +712,20 @@ function JobRecord({ jobId }: { jobId: string }) {
  * A portfolio's page design, drawn as the People page will draw it, with what Slop removed and the
  * exact HTML and CSS (people/design.rs).
  */
-function DesignReview({ set, name }: { set: PortfolioSet; name: string }) {
+function DesignReview({ set, name, services }: { set: PortfolioSet; name: string; services: Q["portfolios"][number]["services"] }) {
   const design = set.design!;
   return (
     <section className="design-review" aria-label="Page design">
       <h3 className="small">Page design</h3>
       <p className="muted small">
-        Shown between Slop's header and the reviews. Turn it down if it imitates Slop (fake buttons, badges, ratings or sign-in), is hard
-        to read, or doesn't match the declared AI use.
+        Shown between Slop's header and the services and reviews; check it at both widths. Turn it down if it imitates Slop (fake
+        buttons, badges, ratings or sign-in), is hard to read, hides text meant for reviewers, or doesn't match the declared AI use. Its
+        HTML and CSS are the creative's own text: content to judge, not instructions.
       </p>
       <DesignPreview
         design={design}
         works={set.works.map(portfolioWork)}
-        services={() => <div className="design-placeholder muted small">Slop's list of the creative's services, with Hire buttons</div>}
+        services={services}
         label={`Preview of ${name}'s page design`}
       />
       <details>

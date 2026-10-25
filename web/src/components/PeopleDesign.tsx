@@ -6,16 +6,17 @@
 // layout and paint: nothing in it can cover Slop's header or reach outside.
 //
 // Slop's own parts (<slop-works> and the rest) are Slop's components, slotted in from outside the
-// shadow root: they keep Slop's look, behaviour and accessibility, and the design's CSS can't
-// select them.
+// shadow root: they keep Slop's behaviour and accessibility, and the design's CSS can't select
+// them (though the design can still lay things over them, so nothing that matters for trust is a
+// part: a creative's services and Hire buttons are always below the design, never inside it).
 
 import { createElement, useLayoutEffect, useRef, useState, type CSSProperties, type MouseEvent, type ReactNode } from "react";
 import { createPortal } from "react-dom";
 
-import type { DesignNode, PageDesign, PortfolioWork, Work } from "../api";
+import type { CreativePage, DesignNode, PageDesign, PortfolioWork, Work } from "../api";
 import { workKey } from "../api";
 import { isDesktop, openExternal } from "../platform";
-import { Lightbox, WorkTile } from "./People";
+import { Lightbox, ServicesList, WorkTile } from "./People";
 
 /** What draws each of Slop's parts. Returning null leaves the part out. */
 export interface DesignParts {
@@ -23,7 +24,6 @@ export interface DesignParts {
   work: (key: string) => ReactNode;
   video: (youtubeId: string, title: string | null) => ReactNode;
   track: (src: string, title: string | null) => ReactNode;
-  services: () => ReactNode;
 }
 
 // The server's allow-list again (design.rs), so nothing else is drawn even if a stored design
@@ -68,15 +68,13 @@ export function buildDesign(tree: DesignNode[], draw: DesignParts): BuiltDesign 
         const part =
           tag === "slop-works"
             ? draw.works()
-            : tag === "slop-services"
-              ? draw.services()
-              : tag === "slop-work" && attrs.work
-                ? draw.work(attrs.work)
-                : tag === "slop-video" && attrs.youtube
-                  ? draw.video(attrs.youtube, title)
-                  : tag === "slop-track" && attrs.src && /^https?:\/\//.test(attrs.src)
-                    ? draw.track(attrs.src, title)
-                    : null;
+            : tag === "slop-work" && attrs.work
+              ? draw.work(attrs.work)
+              : tag === "slop-video" && attrs.youtube
+                ? draw.video(attrs.youtube, title)
+                : tag === "slop-track" && attrs.src && /^https?:\/\//.test(attrs.src)
+                  ? draw.track(attrs.src, title)
+                  : null;
         if (part === null || part === undefined) return null;
         const slot = `slop-part-${parts.length}`;
         parts.push({ slot, node: part });
@@ -126,8 +124,13 @@ export function buildDesign(tree: DesignNode[], draw: DesignParts): BuiltDesign 
   return { content: walk(tree, ""), parts };
 }
 
-/** Under the design's own CSS: readable defaults that the design can change. */
+/**
+ * Under the design's own CSS: readable defaults that the design can change. <slop-frame> (which
+ * the design's CSS can't name) is the container its width queries ask about: the server turns
+ * width-only media queries into container queries (design.rs).
+ */
 const BASE_CSS = `
+slop-frame { display: block; container-type: inline-size; }
 .page { display: flow-root; color: var(--text); font: 15px/1.55 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; overflow-wrap: anywhere; }
 .page img { max-width: 100%; height: auto; }
 .page a { color: var(--accent); }
@@ -165,7 +168,7 @@ export function DesignArea({ design, label, parts }: { design: PageDesign; label
         createPortal(
           <>
             <style>{BASE_CSS + design.css + MOTION_CSS}</style>
-            <div className="page">{built.content}</div>
+            {createElement("slop-frame", null, <div className="page">{built.content}</div>)}
           </>,
           root,
         )}
@@ -181,8 +184,8 @@ function trackWork(src: string, title: string | null): Work {
   return { key: `audio:${src}`, kind: "audio", url: null, width: null, height: null, youtube_id: null, audio_url: src, audio_format: null, title, caption: null, skill: null };
 }
 
-/** Slop's parts for a page: its works (the grid opens pictures large), videos, tracks, services. */
-export function slopParts({ works, onOpen, services }: { works: Work[]; onOpen?: (w: Work) => void; services: () => ReactNode }): DesignParts {
+/** Slop's parts for a page: its works (the grid opens pictures large), videos and tracks. */
+export function slopParts({ works, onOpen }: { works: Work[]; onOpen?: (w: Work) => void }): DesignParts {
   return {
     works: () =>
       works.length > 0 ? (
@@ -198,7 +201,6 @@ export function slopParts({ works, onOpen, services }: { works: Work[]; onOpen?:
     },
     video: (id, title) => <WorkTile w={videoWork(id, title)} />,
     track: (src, title) => <WorkTile w={trackWork(src, title)} />,
-    services,
   };
 }
 
@@ -212,8 +214,9 @@ export function portfolioWork(w: PortfolioWork): Work {
 }
 
 /**
- * A design as it will show, for its creative (the editor) and reviewers (the queue), with what
- * Slop removed from it.
+ * A design as it will show, for its creative (the editor) and reviewers (the queue): at desktop or
+ * phone width, with the creative's services below it as on their page, and what Slop removed or
+ * noted.
  */
 export function DesignPreview({
   design,
@@ -223,16 +226,17 @@ export function DesignPreview({
 }: {
   design: PageDesign & { warnings: string[] };
   works: Work[];
-  services: () => ReactNode;
+  services: CreativePage["services"];
   label: string;
 }) {
   const [open, setOpen] = useState<Work>();
+  const [phone, setPhone] = useState(false);
   return (
     <div className="design-preview">
       {design.warnings.length > 0 ? (
         <details className="design-warnings">
           <summary>
-            Slop removed {design.warnings.length === 1 ? "one thing" : `${design.warnings.length} things`} from the design
+            {design.warnings.length === 1 ? "One note" : `${design.warnings.length} notes`} on the design: what Slop removed, and what it hides
           </summary>
           <ul className="small">
             {design.warnings.map((w) => (
@@ -243,7 +247,23 @@ export function DesignPreview({
       ) : (
         <p className="muted small">Slop didn't need to remove anything from the design.</p>
       )}
-      <DesignArea design={design} label={label} parts={slopParts({ works, onOpen: setOpen, services })} />
+      <div className="row-actions" role="group" aria-label={`Preview width: ${label}`}>
+        <button type="button" className="btn small" aria-pressed={!phone} onClick={() => setPhone(false)}>
+          Desktop
+        </button>
+        <button type="button" className="btn small" aria-pressed={phone} onClick={() => setPhone(true)}>
+          Phone
+        </button>
+      </div>
+      <div className={`design-preview-frame${phone ? " phone" : ""}`}>
+        <DesignArea design={design} label={label} parts={slopParts({ works, onOpen: setOpen })} />
+        {services.length > 0 && (
+          <section className="design-preview-services" aria-label="Services, below the design">
+            <h4 className="small">Services (always below the design, with Hire buttons)</h4>
+            <ServicesList services={services} />
+          </section>
+        )}
+      </div>
       {open && <Lightbox w={open} onClose={() => setOpen(undefined)} />}
     </div>
   );

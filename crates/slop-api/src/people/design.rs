@@ -24,7 +24,7 @@
 use std::{
     borrow::Cow,
     cell::{Cell, RefCell},
-    collections::{BTreeMap, BTreeSet, HashMap},
+    collections::{BTreeMap, BTreeSet, HashMap, HashSet},
     rc::{Rc, Weak},
 };
 
@@ -55,6 +55,10 @@ pub const MAX_CSS_BYTES: u64 = 32 * 1024;
 /// Elements in one page, Slop's parts included.
 const MAX_ELEMENTS: usize = 2_000;
 const MAX_DEPTH: usize = 32;
+/// Parsing stops past this depth (pages are refused past MAX_DEPTH anyway).
+const MAX_PARSE_DEPTH: usize = 256;
+/// Attributes on one tag; the parser checks each new one against the others.
+const MAX_ATTRIBUTES: usize = 64;
 const MAX_WARNINGS: usize = 60;
 const MAX_CLASSES: usize = 8;
 const MAX_CLASS_LEN: usize = 40;
@@ -133,13 +137,7 @@ const VOID: &[&str] = &["br", "hr", "img"];
 const NO_TEXT: &[&str] = &["table", "thead", "tbody", "tfoot", "tr"];
 
 /// Slop's own parts, drawn by the website where the design puts them.
-pub const SLOP_TAGS: &[&str] = &[
-    "slop-work",
-    "slop-works",
-    "slop-video",
-    "slop-track",
-    "slop-services",
-];
+pub const SLOP_TAGS: &[&str] = &["slop-work", "slop-works", "slop-video", "slop-track"];
 
 /// Links get these, whatever the page says.
 pub const LINK_REL: &str = "nofollow noopener noreferrer ugc";
@@ -174,10 +172,8 @@ pub struct Design {
     pub pictures: Vec<Picture>,
     /// Tracks the page plays (`<slop-track>`), checked like the works.
     pub tracks: Vec<AudioFile>,
-    /// What was removed and why, for the creative and the reviewer.
+    /// What was removed and why (and what the CSS hides), for the creative and the reviewer.
     pub warnings: Vec<String>,
-    /// The page places Slop's services itself (`<slop-services>`); otherwise they show below it.
-    pub has_services: bool,
 }
 
 /// What a People page shows of a design.
@@ -185,7 +181,6 @@ pub struct Design {
 pub struct PageDesign {
     pub tree: Vec<Node>,
     pub css: String,
-    pub has_services: bool,
 }
 
 impl From<Design> for PageDesign {
@@ -193,29 +188,33 @@ impl From<Design> for PageDesign {
         Self {
             tree: d.tree,
             css: d.css,
-            has_services: d.has_services,
         }
     }
 }
 
-/// Warnings, without repeats, up to a limit.
+/// Warnings, without repeats, up to a limit; past it, only counted (a page can make thousands).
 #[derive(Default)]
-struct Warnings(Vec<String>);
+struct Warnings {
+    list: Vec<String>,
+    seen: HashSet<String>,
+    more: usize,
+}
 
 impl Warnings {
     fn push(&mut self, w: String) {
-        if !self.0.contains(&w) {
-            self.0.push(w);
+        if self.list.len() >= MAX_WARNINGS {
+            self.more += 1;
+        } else if self.seen.insert(w.clone()) {
+            self.list.push(w);
         }
     }
 
     fn finish(mut self) -> Vec<String> {
-        if self.0.len() > MAX_WARNINGS {
-            let more = self.0.len() - MAX_WARNINGS;
-            self.0.truncate(MAX_WARNINGS);
-            self.0.push(format!("…and {more} more like these"));
+        if self.more > 0 {
+            self.list
+                .push(format!("…and {} more like these", self.more));
         }
-        self.0
+        self.list
     }
 }
 
@@ -241,7 +240,13 @@ pub(crate) async fn read(
         }
         return Ok(None);
     };
-    let draft = sanitize(&html, css.as_deref(), works)?;
+    // Parsing is CPU work: off the async workers.
+    let draft = {
+        let (html, css, works) = (html.clone(), css.clone(), works.to_vec());
+        tokio::task::spawn_blocking(move || sanitize(&html, css.as_deref(), &works))
+            .await
+            .map_err(|e| Problem(format!("couldn't check the page design: {e}")))??
+    };
 
     // Every file the design adds counts with the works.
     let mut work_files = BTreeSet::new();
@@ -310,10 +315,12 @@ pub(crate) async fn read(
     };
     let mut tree = draft.tree;
     link_files(&mut tree, &pictures, &tracks);
-    let css = css
-        .as_deref()
-        .map(|c| sanitize_css(c, &urls).css)
-        .unwrap_or_default();
+    let css = match css {
+        Some(css) => tokio::task::spawn_blocking(move || sanitize_css(&css, &urls))
+            .await
+            .map_err(|e| Problem(format!("couldn't check the page design: {e}")))?,
+        None => String::new(),
+    };
     let mut html = String::new();
     to_html(&tree, &mut html);
     Ok(Some((
@@ -324,7 +331,6 @@ pub(crate) async fn read(
             pictures,
             tracks,
             warnings: draft.warnings,
-            has_services: draft.has_services,
         },
         fingerprint,
     )))
@@ -373,7 +379,6 @@ pub struct Draft {
     pub tracks: Vec<(String, String)>,
     pub warnings: Vec<String>,
     pub has_works: bool,
-    pub has_services: bool,
 }
 
 /// Checks and rebuilds a design's files, without fetching anything: what `read` does first, and
@@ -386,23 +391,20 @@ pub fn sanitize(html: &str, css: Option<&str>, works: &[Work]) -> Result<Draft, 
         pictures: Vec::new(),
         tracks: Vec::new(),
         has_works: false,
-        has_services: false,
     };
     let tree = walk.document(html)?;
     let mut warnings = walk.warnings;
     let mut pictures = walk.pictures;
     let mut css_out = String::new();
     if let Some(css) = css {
-        let out = sanitize_css(css, &HashMap::new());
-        for w in out.warnings {
-            warnings.push(w);
-        }
-        for (path, line) in out.paths {
+        let (out, w, paths) = rebuild_css(css, &HashMap::new(), warnings);
+        warnings = w;
+        for (path, line) in paths {
             if !pictures.iter().any(|(p, _)| *p == path) {
                 pictures.push((path, format!("{CSS_PATH} line {line}")));
             }
         }
-        css_out = out.css;
+        css_out = out;
     }
     Ok(Draft {
         tree,
@@ -411,7 +413,6 @@ pub fn sanitize(html: &str, css: Option<&str>, works: &[Work]) -> Result<Draft, 
         tracks: walk.tracks,
         warnings: warnings.finish(),
         has_works: walk.has_works,
-        has_services: walk.has_services,
     })
 }
 
@@ -555,6 +556,9 @@ type Handle = Rc<DomNode>;
 
 struct DomNode {
     parent: RefCell<Option<Weak<DomNode>>>,
+    /// How deep it was put, roughly (moving a node doesn't update what's inside it): enough to
+    /// stop parsing a page that nests far too deep, before the parser's own work on it grows.
+    depth: Cell<usize>,
     children: RefCell<Vec<Handle>>,
     data: DomData,
     line: u64,
@@ -566,15 +570,35 @@ enum DomData {
     Element {
         name: QualName,
         attrs: RefCell<Vec<Attribute>>,
-        template: Option<Handle>,
+        template: RefCell<Option<Handle>>,
     },
     /// Comments, doctypes, processing instructions: never shown.
     Other,
 }
 
+/// Freed without recursion: a 64 KB page can nest thousands of elements, and dropping nested
+/// `Rc`s one inside another would run out of stack.
+impl Drop for DomNode {
+    fn drop(&mut self) {
+        let mut stack: Vec<Handle> = std::mem::take(self.children.get_mut());
+        if let DomData::Element { template, .. } = &mut self.data {
+            stack.extend(template.get_mut().take());
+        }
+        while let Some(node) = stack.pop() {
+            stack.append(&mut node.children.borrow_mut());
+            if let DomData::Element { template, .. } = &node.data {
+                stack.extend(template.borrow_mut().take());
+            }
+            // `node` drops here with nothing left inside it.
+        }
+    }
+}
+
 struct Sink {
     document: Handle,
     line: Cell<u64>,
+    /// Something was put deeper than MAX_PARSE_DEPTH.
+    too_deep: Cell<bool>,
 }
 
 impl Sink {
@@ -584,6 +608,7 @@ impl Sink {
             children: RefCell::new(Vec::new()),
             data,
             line: self.line.get(),
+            depth: Cell::new(0),
         })
     }
 
@@ -597,8 +622,13 @@ impl Sink {
         }
     }
 
-    fn adopt(parent: &Handle, child: &Handle) {
+    fn adopt(&self, parent: &Handle, child: &Handle) {
         *child.parent.borrow_mut() = Some(Rc::downgrade(parent));
+        let depth = parent.depth.get() + 1;
+        child.depth.set(depth);
+        if depth > MAX_PARSE_DEPTH {
+            self.too_deep.set(true);
+        }
     }
 }
 
@@ -632,7 +662,7 @@ impl TreeSink for Sink {
         self.node(DomData::Element {
             name,
             attrs: RefCell::new(attrs),
-            template,
+            template: RefCell::new(template),
         })
     }
 
@@ -654,12 +684,12 @@ impl TreeSink for Sink {
                     return;
                 }
                 let node = self.node(DomData::Text(RefCell::new(text.to_string())));
-                Sink::adopt(parent, &node);
+                self.adopt(parent, &node);
                 parent.children.borrow_mut().push(node);
             }
             NodeOrText::AppendNode(node) => {
                 Sink::detach(&node);
-                Sink::adopt(parent, &node);
+                self.adopt(parent, &node);
                 parent.children.borrow_mut().push(node);
             }
         }
@@ -688,9 +718,9 @@ impl TreeSink for Sink {
 
     fn get_template_contents(&self, target: &Handle) -> Handle {
         match &target.data {
-            DomData::Element {
-                template: Some(t), ..
-            } => t.clone(),
+            DomData::Element { template, .. } => {
+                template.borrow().clone().expect("a template's contents")
+            }
             _ => panic!("not a template"),
         }
     }
@@ -733,7 +763,7 @@ impl TreeSink for Sink {
             .iter()
             .position(|c| Rc::ptr_eq(c, sibling))
             .unwrap_or(0);
-        Sink::adopt(&parent, &node);
+        self.adopt(&parent, &node);
         parent.children.borrow_mut().insert(at, node);
     }
 
@@ -758,7 +788,7 @@ impl TreeSink for Sink {
     fn reparent_children(&self, node: &Handle, new_parent: &Handle) {
         let children = std::mem::take(&mut *node.children.borrow_mut());
         for child in children {
-            Sink::adopt(new_parent, &child);
+            self.adopt(new_parent, &child);
             new_parent.children.borrow_mut().push(child);
         }
     }
@@ -806,7 +836,6 @@ struct HtmlWalk<'w> {
     pictures: Vec<(String, String)>,
     tracks: Vec<(String, String)>,
     has_works: bool,
-    has_services: bool,
 }
 
 struct At {
@@ -831,10 +860,40 @@ impl HtmlWalk<'_> {
                 children: RefCell::new(Vec::new()),
                 data: DomData::Document,
                 line: 1,
+                depth: Cell::new(0),
             }),
             line: Cell::new(1),
+            too_deep: Cell::new(false),
         };
-        let doc = html5ever::parse_document(sink, Default::default()).one(src);
+        if let Some((line, n)) = crowded_tag(src) {
+            return Err(Problem(format!(
+                "{}: a tag has {n} attributes or more; the most a tag can have is {MAX_ATTRIBUTES}",
+                At { line }
+            )));
+        }
+        // Fed a little at a time, so a page nested far too deep stops early: the parser's work
+        // on each new element grows with how deep it is.
+        let mut parser = html5ever::parse_document(sink, Default::default());
+        let mut rest = src;
+        while !rest.is_empty() {
+            let mut cut = rest.len().min(1024);
+            while !rest.is_char_boundary(cut) {
+                cut += 1;
+            }
+            let (chunk, tail) = rest.split_at(cut);
+            parser.process(StrTendril::from(chunk));
+            rest = tail;
+            let sink = &parser.tokenizer.sink.sink;
+            if sink.too_deep.get() {
+                return Err(Problem(format!(
+                    "{}: elements are nested more than {MAX_DEPTH} deep; flatten the page a little",
+                    At {
+                        line: sink.line.get()
+                    }
+                )));
+            }
+        }
+        let doc = parser.finish();
         let mut out = Vec::new();
         let html = doc
             .children
@@ -942,7 +1001,7 @@ impl HtmlWalk<'_> {
                 line,
                 format!("<{tag}> isn't one of the tags pages can use, so it was taken out (what was inside it stays)"),
             );
-            return self.children(node, depth, in_link, parent, out);
+            return self.children(node, depth + 1, in_link, parent, out);
         }
         self.count(line)?;
         let Some((tag, kept)) = self.attributes(tag, &attrs, line, in_link) else {
@@ -1150,11 +1209,19 @@ impl HtmlWalk<'_> {
             .iter()
             .map(|a| (a.name.local.to_string(), a.value.trim().to_string()))
             .collect();
+        if tag == "slop-services" {
+            // Inside a design, the design could cover or fake them: they're Slop's, below it.
+            self.warn(
+                line,
+                "<slop-services> was removed: your services always appear below your design, where Slop shows them with their Hire buttons".into(),
+            );
+            return self.children(node, depth + 1, in_link, parent, out);
+        }
         let takes: &[&str] = match tag {
             "slop-work" => &["ref"],
             "slop-video" => &["youtube", "title"],
             "slop-track" => &["src", "title"],
-            "slop-works" | "slop-services" => &[],
+            "slop-works" => &[],
             _ => {
                 self.warn(
                     line,
@@ -1163,7 +1230,7 @@ impl HtmlWalk<'_> {
                         SLOP_TAGS.join(", ")
                     ),
                 );
-                return self.children(node, depth, in_link, parent, out);
+                return self.children(node, depth + 1, in_link, parent, out);
             }
         };
         let mut placed = true;
@@ -1173,9 +1240,7 @@ impl HtmlWalk<'_> {
                 format!("<{tag}> can't be inside a link: it was removed"),
             );
             placed = false;
-        } else if (tag == "slop-works" && self.has_works)
-            || (tag == "slop-services" && self.has_services)
-        {
+        } else if tag == "slop-works" && self.has_works {
             self.warn(line, format!("<{tag}> shows once: this one was removed"));
             placed = false;
         }
@@ -1213,7 +1278,6 @@ impl HtmlWalk<'_> {
                     kept.insert("work".into(), self.works[i - 1].key());
                 }
                 "slop-works" => self.has_works = true,
-                "slop-services" => self.has_services = true,
                 "slop-video" => {
                     let Some(v) = given.get("youtube") else {
                         return Err(Problem(format!(
@@ -1264,7 +1328,7 @@ impl HtmlWalk<'_> {
             });
         }
         let mut inside = Vec::new();
-        self.children(node, depth, in_link, parent, &mut inside)?;
+        self.children(node, depth + 1, in_link, parent, &mut inside)?;
         let has_content = inside
             .iter()
             .any(|n| !matches!(n, Node::Text(t) if t.trim().is_empty()));
@@ -1277,6 +1341,54 @@ impl HtmlWalk<'_> {
         }
         Ok(())
     }
+}
+
+/// The first tag with more than MAX_ATTRIBUTES attributes, as (line, count): read roughly, the
+/// way an HTML tokenizer would, before the real parser (which slows down on such a tag) sees it.
+fn crowded_tag(src: &str) -> Option<(u64, usize)> {
+    let b = src.as_bytes();
+    let mut i = 0;
+    while i < b.len() {
+        if b[i] != b'<' || !b.get(i + 1).is_some_and(u8::is_ascii_alphabetic) {
+            i += 1;
+            continue;
+        }
+        let start = i;
+        i += 1;
+        while i < b.len() && !b[i].is_ascii_whitespace() && b[i] != b'>' && b[i] != b'/' {
+            i += 1;
+        }
+        // Attribute names start after whitespace or a slash, outside values.
+        let (mut count, mut in_value, mut quote, mut in_name) = (0, false, 0u8, false);
+        while i < b.len() && (quote != 0 || b[i] != b'>') {
+            let c = b[i];
+            if quote != 0 {
+                if c == quote {
+                    quote = 0;
+                    in_value = false;
+                }
+            } else if c.is_ascii_whitespace() || c == b'/' {
+                in_name = false;
+                in_value = false;
+            } else if c == b'=' {
+                in_name = false;
+                in_value = true;
+            } else if in_value {
+                if c == b'"' || c == b'\'' {
+                    quote = c;
+                }
+            } else if !in_name {
+                in_name = true;
+                count += 1;
+                if count > MAX_ATTRIBUTES {
+                    let line = 1 + b[..start].iter().filter(|b| **b == b'\n').count();
+                    return Some((line as u64, count));
+                }
+            }
+            i += 1;
+        }
+    }
+    None
 }
 
 fn push_text(out: &mut Vec<Node>, text: &str) {
@@ -1505,25 +1617,16 @@ fn removed<'i>(input: &Parser<'i, '_>, why: impl Into<String>) -> CssError<'i> {
     input.new_custom_error(Removed(why.into()))
 }
 
-pub(crate) struct CssOut {
-    pub css: String,
-    pub warnings: Vec<String>,
-    /// Pictures `url()` names, in `.slop/`, with the line each is first on.
-    pub paths: Vec<(String, u32)>,
-}
-
 struct CssState<'u> {
-    warnings: Vec<String>,
+    warnings: Warnings,
     paths: Vec<(String, u32)>,
     urls: &'u HashMap<String, String>,
 }
 
 impl CssState<'_> {
     fn warn(&mut self, line: u32, what: String) {
-        let w = format!("{CSS_PATH} line {}: {what}", line + 1);
-        if !self.warnings.contains(&w) {
-            self.warnings.push(w);
-        }
+        self.warnings
+            .push(format!("{CSS_PATH} line {}: {what}", line + 1));
     }
 
     /// A rule or declaration that was dropped.
@@ -1552,9 +1655,19 @@ impl CssState<'_> {
 
 /// Rebuilds a style sheet from what's allowed. `urls` maps pictures' paths (in `.slop/`) to
 /// their links; a path not in it stays a path (the first pass, before the files are fetched).
-pub(crate) fn sanitize_css(src: &str, urls: &HashMap<String, String>) -> CssOut {
+pub(crate) fn sanitize_css(src: &str, urls: &HashMap<String, String>) -> String {
+    rebuild_css(src, urls, Warnings::default()).0
+}
+
+/// `sanitize_css`, adding to `warnings` (the page's, with the HTML's), and the pictures `url()`
+/// names (in `.slop/`) with the line each is first on.
+fn rebuild_css(
+    src: &str,
+    urls: &HashMap<String, String>,
+    warnings: Warnings,
+) -> (String, Warnings, Vec<(String, u32)>) {
     let mut state = CssState {
-        warnings: Vec::new(),
+        warnings,
         paths: Vec::new(),
         urls,
     };
@@ -1572,11 +1685,7 @@ pub(crate) fn sanitize_css(src: &str, urls: &HashMap<String, String>) -> CssOut 
             Err((e, text)) => state.dropped(e, text),
         }
     }
-    CssOut {
-        css: out,
-        warnings: state.warnings,
-        paths: state.paths,
-    }
+    (out, state.warnings, state.paths)
 }
 
 struct Rules<'a, 'u> {
@@ -1586,7 +1695,8 @@ struct Rules<'a, 'u> {
 }
 
 enum AtPrelude {
-    Media(String),
+    /// The query, and the same as a container query when it's only about width.
+    Media(String, Option<String>),
     Keyframes(String),
 }
 
@@ -1637,8 +1747,11 @@ impl<'i> AtRuleParser<'i> for Rules<'_, '_> {
             }
             "media" => {
                 let mut out = String::new();
-                media_query(input, &mut out)?;
-                Ok(AtPrelude::Media(out.trim().to_string()))
+                let mut features = Vec::new();
+                media_query(input, &mut out, &mut features)?;
+                let query = out.trim().to_string();
+                let container = container_condition(&query, &features);
+                Ok(AtPrelude::Media(query, container))
             }
             "keyframes" => {
                 let name = match input.next()?.clone() {
@@ -1678,7 +1791,7 @@ impl<'i> AtRuleParser<'i> for Rules<'_, '_> {
         input: &mut Parser<'i, 't>,
     ) -> Result<String, CssError<'i>> {
         match prelude {
-            AtPrelude::Media(query) => {
+            AtPrelude::Media(query, container) => {
                 let mut inner = Rules {
                     st: &mut *self.st,
                     nested: true,
@@ -1694,7 +1807,10 @@ impl<'i> AtRuleParser<'i> for Rules<'_, '_> {
                 Ok(if body.is_empty() {
                     String::new()
                 } else {
-                    format!("@media {query}{{{body}}}")
+                    match container {
+                        Some(condition) => format!("@container {condition}{{{body}}}"),
+                        None => format!("@media {query}{{{body}}}"),
+                    }
                 })
             }
             AtPrelude::Keyframes(name) => {
@@ -1853,7 +1969,46 @@ impl<'i> RuleBodyItemParser<'i, String, Removed> for Declarations<'_, '_> {
 struct Seen {
     idents: Vec<String>,
     numbers: Vec<f32>,
+    /// Percentages at the top level, as fractions.
+    percents: Vec<f32>,
+    /// Every length, at any depth (in functions too), with its unit in lower case.
+    dims: Vec<(f32, String)>,
+    /// A function, parentheses or brackets at the top level.
+    nested: bool,
+    /// Inside blur(): lengths there are capped.
+    in_blur: bool,
     important: bool,
+}
+
+/// Whether a declaration hides what it applies to, or moves it out of sight. The CSS can hide
+/// text from people but not from the HTML a reviewer (or an AI reviewer) reads, so it's noted.
+fn hides(prop: &str, seen: &Seen) -> bool {
+    let has = |word: &str| seen.idents.iter().any(|i| i == word);
+    let len = |px: f32, em: f32, test: &dyn Fn(f32, f32) -> bool| {
+        seen.dims.iter().any(|(v, u)| match u.as_str() {
+            "px" => test(*v, px),
+            "em" | "rem" => test(*v, em),
+            _ => false,
+        })
+    };
+    match prop {
+        "display" => has("none"),
+        "visibility" => has("hidden") || has("collapse"),
+        "opacity" => {
+            seen.numbers.iter().any(|n| *n < 0.1) || seen.percents.iter().any(|p| *p < 0.1)
+        }
+        "font-size" => seen.numbers.contains(&0.0) || len(4.0, 0.25, &|v, max| v < max),
+        "color" => has("transparent"),
+        "text-indent" => len(500.0, 30.0, &|v, max| v.abs() >= max),
+        _ if matches!(
+            prop,
+            "top" | "right" | "bottom" | "left" | "inset" | "transform" | "translate"
+        ) || prop.starts_with("margin") =>
+        {
+            len(500.0, 30.0, &|v, max| v <= -max)
+        }
+        _ => false,
+    }
 }
 
 fn declaration<'i>(
@@ -1899,6 +2054,12 @@ fn declaration<'i>(
     if seen.important {
         st.warn(line, format!("!important was dropped from {prop}"));
     }
+    if seen.nested && matches!(prop.as_str(), "position" | "display" | "z-index") {
+        return Err(removed(
+            input,
+            format!("{prop} takes a plain value here, not a function"),
+        ));
+    }
     let only = |allowed: &[&str]| {
         seen.idents
             .iter()
@@ -1938,6 +2099,15 @@ fn declaration<'i>(
             return Err(removed(input, "content can be text, counters and quotes"));
         }
         _ => {}
+    }
+    if hides(&prop, &seen) {
+        st.warn(
+            line,
+            format!(
+                "\"{prop}: {}\" hides what it applies to: reviewers see any text hidden this way",
+                short(&out)
+            ),
+        );
     }
     Ok(format!("{prop}:{out}"))
 }
@@ -2013,9 +2183,24 @@ fn value<'i>(
                 }
                 write_token(out, last, &token);
             }
-            Token::Percentage { .. } => write_token(out, last, &token),
-            Token::Dimension { unit, .. } => {
-                if !listed(UNITS, &unit.to_ascii_lowercase()) {
+            Token::Percentage { unit_value, .. } => {
+                if depth == 0 {
+                    seen.percents.push(*unit_value);
+                }
+                write_token(out, last, &token)
+            }
+            Token::Dimension { value, unit, .. } => {
+                let unit = unit.to_ascii_lowercase();
+                if seen.in_blur
+                    && !matches!(
+                        (unit.as_str(), *value),
+                        ("px", 0.0..=40.0) | ("em" | "rem", 0.0..=2.5)
+                    )
+                {
+                    return Err(removed(input, "blur() is at most 40px"));
+                }
+                seen.dims.push((*value, unit.clone()));
+                if !listed(UNITS, &unit) {
                     return Err(removed(input, format!("the unit \"{unit}\" isn't allowed")));
                 }
                 write_token(out, last, &token);
@@ -2067,17 +2252,23 @@ fn value<'i>(
                     return Err(removed(input, why));
                 }
                 write_token(out, last, &token);
+                seen.nested |= depth == 0;
+                let outer_blur = seen.in_blur;
+                seen.in_blur |= f == "blur";
                 input.parse_nested_block(|i| value(st, prop, i, out, seen, last, depth + 1))?;
+                seen.in_blur = outer_blur;
                 out.push(')');
                 *last = TokenSerializationType::Other;
             }
             Token::ParenthesisBlock => {
+                seen.nested |= depth == 0;
                 write_token(out, last, &token);
                 input.parse_nested_block(|i| value(st, prop, i, out, seen, last, depth + 1))?;
                 out.push(')');
                 *last = TokenSerializationType::Other;
             }
             Token::SquareBracketBlock if prop.starts_with("grid") => {
+                seen.nested |= depth == 0;
                 write_token(out, last, &token);
                 input.parse_nested_block(|i| {
                     loop {
@@ -2298,7 +2489,32 @@ fn nth<'i>(input: &mut Parser<'i, '_>, out: &mut String) -> Result<(), CssError<
     Ok(())
 }
 
-fn media_query<'i>(input: &mut Parser<'i, '_>, out: &mut String) -> Result<(), CssError<'i>> {
+/// A media query only about width, as a container query: the design's box is never the whole
+/// screen, so "narrower than 600px" means its own width (People.tsx makes the box a container).
+/// That's also what the review queue's phone-width preview needs. Others stay media queries.
+fn container_condition(query: &str, features: &[String]) -> Option<String> {
+    let width_only = !features.is_empty()
+        && features
+            .iter()
+            .all(|f| matches!(f.as_str(), "width" | "min-width" | "max-width"));
+    if !width_only || query.contains(',') {
+        return None;
+    }
+    let mut q = query.strip_prefix("only ").unwrap_or(query);
+    if let Some(rest) = q.strip_prefix("screen ").or_else(|| q.strip_prefix("all ")) {
+        q = rest.strip_prefix("and ")?;
+    }
+    let words_ok = q
+        .split_whitespace()
+        .all(|w| !matches!(w, "screen" | "print" | "all" | "only"));
+    (words_ok && q.starts_with(['(', 'n'])).then(|| q.to_string())
+}
+
+fn media_query<'i>(
+    input: &mut Parser<'i, '_>,
+    out: &mut String,
+    features: &mut Vec<String>,
+) -> Result<(), CssError<'i>> {
     let mut last = TokenSerializationType::Nothing;
     loop {
         let token = match input.next_including_whitespace() {
@@ -2312,7 +2528,7 @@ fn media_query<'i>(input: &mut Parser<'i, '_>, out: &mut String) -> Result<(), C
             }
             Token::ParenthesisBlock => {
                 write_token(out, &mut last, &token);
-                input.parse_nested_block(|i| media_feature(i, out, 0))?;
+                input.parse_nested_block(|i| media_feature(i, out, features, 0))?;
                 out.push(')');
                 last = TokenSerializationType::Other;
             }
@@ -2321,9 +2537,12 @@ fn media_query<'i>(input: &mut Parser<'i, '_>, out: &mut String) -> Result<(), C
     }
 }
 
+/// Inside a media query's parentheses. `features` gets every word in them (feature names and
+/// keyword values), and "#" for a plain number.
 fn media_feature<'i>(
     input: &mut Parser<'i, '_>,
     out: &mut String,
+    features: &mut Vec<String>,
     depth: usize,
 ) -> Result<(), CssError<'i>> {
     if depth > 3 {
@@ -2336,17 +2555,23 @@ fn media_feature<'i>(
             Err(_) => return Ok(()),
         };
         match &token {
-            Token::WhiteSpace(_)
-            | Token::Colon
-            | Token::Ident(_)
-            | Token::Number { .. }
-            | Token::Delim('>' | '=' | '/') => write_token(out, &mut last, &token),
+            Token::Ident(w) => {
+                features.push(w.to_ascii_lowercase());
+                write_token(out, &mut last, &token)
+            }
+            Token::Number { .. } => {
+                features.push("#".into());
+                write_token(out, &mut last, &token)
+            }
+            Token::WhiteSpace(_) | Token::Colon | Token::Delim('>' | '=' | '/') => {
+                write_token(out, &mut last, &token)
+            }
             Token::Dimension { unit, .. } if listed(UNITS, &unit.to_ascii_lowercase()) => {
                 write_token(out, &mut last, &token)
             }
             Token::ParenthesisBlock => {
                 write_token(out, &mut last, &token);
-                input.parse_nested_block(|i| media_feature(i, out, depth + 1))?;
+                input.parse_nested_block(|i| media_feature(i, out, features, depth + 1))?;
                 out.push(')');
                 last = TokenSerializationType::Other;
             }

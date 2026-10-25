@@ -100,8 +100,8 @@ fn icon_png(size: u32, seed: &str) -> Vec<u8> {
 /// with `badicon` names one that isn't square.
 ///
 /// `dee-design` is a People portfolio with its own page design (people/design.rs), for
-/// people-design.e2e.ts: three works, and `.slop/page/` with one thing in each file that Slop
-/// removes.
+/// people-design.e2e.ts: three works, and `.slop/page/` with things Slop removes (a script, a
+/// `<slop-services>`, fixed positioning) and a width query.
 async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
     use axum::response::IntoResponse;
     let Some((repo, file)) = path.split_once("/.slop/") else {
@@ -173,6 +173,7 @@ fn designed_portfolio(file: &str) -> Option<Vec<u8>> {
   <slop-works></slop-works>
 </section>
 <p class="contact">Say hello: <a href="https://example.com/dee">my site</a></p>
+<slop-services></slop-services>
 "#
         .to_vec(),
         "page/style.css" => br#".page { background: #1b1430; padding: 24px; border-radius: 12px; }
@@ -182,6 +183,7 @@ fn designed_portfolio(file: &str) -> Option<Vec<u8>> {
 h3 { color: #ffd166; font-family: "Pixelify Sans", monospace; }
 .contact a { color: #ffd166; }
 .overlay { position: fixed; inset: 0; }
+@media (max-width: 500px) { .intro h2 { font-size: 20px; } }
 "#
         .to_vec(),
         "avatar.png" => png(256, 256, [255, 209, 102]),

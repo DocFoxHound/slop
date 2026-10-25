@@ -675,15 +675,19 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 @font-face { font-family: "Bebas Neue"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/bebas-neue-latin-ext.woff2") format("woff2"); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 
 /* A creative's own page design (components/PeopleDesign.tsx): its own box, which contains its layout
- * and paint, so nothing in it can cover Slop's header or reach outside. Slop's parts slotted into it
- * keep Slop's look (on Slop's own panel, so they read on any background), whatever the design sets
- * around them. */
+ * and paint, so nothing in it can cover Slop's header or reach outside. Inside the box the design
+ * is in charge: the works it places start from Slop's own panel and text styles (so they read on
+ * any background), but the design can still lay its own things over them. That's why services and
+ * Hire buttons are never inside a design. */
 .person-design { display: block; position: relative; contain: layout paint; isolation: isolate; overflow: clip; max-width: 100%; margin-top: 20px; border-radius: var(--radius); }
 .person-design > .design-part { display: block; visibility: visible; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 10px; color: var(--text); font: 14px/1.5 system-ui, -apple-system, "Segoe UI", Roboto, Ubuntu, sans-serif; font-style: normal; text-align: start; text-indent: 0; text-transform: none; text-shadow: none; letter-spacing: normal; word-spacing: normal; white-space: normal; }
 .design-preview { display: flex; flex-direction: column; gap: 8px; }
 .design-preview .person-design { margin-top: 0; border: 1px dashed var(--line); }
 .design-warnings ul { margin: 6px 0 0; padding-left: 18px; }
-.design-placeholder { padding: 14px; border: 1px dashed var(--line); border-radius: 8px; text-align: center; }
+.design-preview-frame { display: flex; flex-direction: column; gap: 12px; }
+.design-preview-frame.phone { width: 375px; max-width: 100%; margin: 0 auto; }
+.design-preview-services h4 { margin: 0 0 8px; }
+.design-preview-frame.phone .services { grid-template-columns: 1fr; }
 .design-review { display: flex; flex-direction: column; gap: 8px; margin: 12px 0; }
 .person-sections { display: flex; flex-direction: column; gap: 22px; min-width: 0; }
 .ai-box { margin: 8px 0 6px; }

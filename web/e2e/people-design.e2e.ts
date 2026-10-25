@@ -44,8 +44,11 @@ test("a creative's design: previewed in the editor, reviewed with the portfolio,
   await expect(preview.getByRole("button", { name: "View larger: Lantern" })).toHaveCount(2);
   await expect(preview.getByRole("button", { name: "Play video: Showreel" })).toBeVisible();
   await expect(preview.getByRole("link", { name: /my site/ })).toHaveAttribute("rel", "nofollow noopener noreferrer ugc");
-  await dee.getByText("Slop removed 2 things from the design").click();
+  await dee.getByText("3 notes on the design: what Slop removed, and what it hides").click();
   await expect(dee.getByText(".slop/page/index.html line 5: <script> was removed with what's inside: pages can't run scripts")).toBeVisible();
+  // Services are never inside a design: the preview shows them below it, as the page does.
+  await expect(dee.getByText(/index\.html line 16: <slop-services> was removed: your services always appear below your design/)).toBeVisible();
+  await expect(dee.getByRole("region", { name: "Services, below the design" }).getByText("Sprite sheet")).toBeVisible();
   await expect(dee.getByText(/style\.css line 7: "position: fixed" was removed/)).toBeVisible();
   // Its pictures open large, like on the page.
   await preview.getByRole("button", { name: "View larger: Lantern" }).first().click();
@@ -61,7 +64,14 @@ test("a creative's design: previewed in the editor, reviewed with the portfolio,
   const card = staff.locator(".inbox-detail");
   const review = card.getByRole("region", { name: "Page design" });
   await expect(review.getByRole("region", { name: "Preview of Dee Designer's page design" }).getByRole("heading", { name: "Hello, I'm Dee" })).toBeVisible();
-  await expect(review.getByText("Slop's list of the creative's services, with Hire buttons")).toHaveCount(0);
+  await expect(review.getByRole("region", { name: "Services, below the design" }).getByText("Sprite sheet")).toBeVisible();
+  // At phone width, the design's width query applies (it's about the design's own box).
+  const reviewHeading = review.getByRole("heading", { name: "Hello, I'm Dee" });
+  expect(await reviewHeading.evaluate((h) => getComputedStyle(h).fontSize)).toBe("32px");
+  await review.getByRole("button", { name: "Phone" }).click();
+  await expect(review.getByRole("button", { name: "Phone" })).toHaveAttribute("aria-pressed", "true");
+  await expect.poll(() => reviewHeading.evaluate((h) => getComputedStyle(h).fontSize)).toBe("20px");
+  await review.getByRole("button", { name: "Desktop" }).click();
   await review.getByText("The HTML and CSS, as Slop will show them").click();
   await expect(review.getByText(/<slop-work work="image:works\/lantern.png"><\/slop-work>/)).toBeVisible();
   await axe(staff);
@@ -78,7 +88,7 @@ test("a creative's design: previewed in the editor, reviewed with the portfolio,
   const reviews = visitor.getByRole("heading", { name: "Reviews from clients" });
   const services = visitor.getByRole("heading", { name: "Services", exact: true });
   await expect(reviews).toBeVisible();
-  // The design doesn't place <slop-services>: Slop's Services section follows it.
+  // Slop's Services section follows the design, always (its <slop-services> was removed).
   await expect(services).toBeVisible();
   const head = await box(visitor.locator(".person-head"));
   const area = await box(design);

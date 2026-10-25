@@ -33,6 +33,10 @@ function configure(conf, { version, site, channel }) {
   conf.version = version;
   conf.bundle.homepage = site;
   conf.plugins.updater.endpoints = conf.plugins.updater.endpoints.map((e) => site + e.slice(e.indexOf("/v1/")));
+  // Pictures the app shows: its own, the site's (profile pictures are served by Slop itself),
+  // and repositories' (store pages, portfolios, page designs). Nothing else.
+  const csp = conf.app.security.csp;
+  if (!csp["img-src"].split(" ").includes(site)) csp["img-src"] += ` ${site}`;
   if (channel === "dev") {
     Object.assign(conf, DEV);
     for (const w of conf.app.windows) if (w.title === "Slop") w.title = DEV.productName;
