@@ -518,10 +518,13 @@ export function currentStep(steps: Step[]): Step {
 }
 
 /** How often to look again: every 10 seconds while files are checked (each takes minutes, so
- *  that's plenty), every minute while a person reviews it, otherwise not at all. */
+ *  that's plenty) and while Slop then reads the source (it starts once the files are in, so the
+ *  release is waiting for review before its source check shows), every minute while a person
+ *  reviews it, otherwise not at all. */
 export function refreshEvery(releases: Release[] | undefined): number | null {
   const latest = releases?.find((r) => r.status !== "withdrawn");
   if (latest?.status === "fetching") return 10_000;
+  if (latest?.status === "awaiting_review" && !latest.repo_scan) return 10_000;
   if (latest?.status === "awaiting_review") return 60_000;
   return null;
 }

@@ -128,18 +128,11 @@ test("a release with its rating, runtimes and notes goes through, after the agre
   await expect(release).toContainText("starts pong.exe");
   await expect(release).toContainText(/SHA-256 [0-9a-f]{16}…/);
   // This server doesn't scan files, and its fake host has no source to read. The source check
-  // runs just after the release turns In review (releases.rs), and from then on the page looks
-  // again only every minute: on a busy server its first In review answer can come before the
-  // check is stored, so wait for the check and look again.
+  // runs just after the release turns In review (releases.rs): on a busy server the page's first
+  // In review answer can come before the check is stored, and it looks again every 10 seconds
+  // until the check shows (refreshEvery), with no reload.
   await expect(release.getByText("NOT SCANNED", { exact: true })).toBeVisible();
-  await expect
-    .poll(async () => {
-      const all = await call<Array<{ version: string; repo_scan: unknown }>>("maker", "GET", `/v1/apps/${slug}/releases`);
-      return all.find((r) => r.version === "1.0.0")?.repo_scan ?? null;
-    })
-    .not.toBeNull();
-  await page.reload();
-  await expect(release.getByText("SOURCE NOT CHECKED")).toBeVisible();
+  await expect(release.getByText("SOURCE NOT CHECKED")).toBeVisible({ timeout: 20_000 });
   const saved = await call<Array<{ version: string; runtimes: string[]; files: Array<{ args: string[] }> }>>(
     "maker",
     "GET",
