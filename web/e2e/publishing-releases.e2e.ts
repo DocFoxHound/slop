@@ -263,16 +263,16 @@ test("update settings: pick up GitHub releases, approve updates automatically", 
   await expect(auto).toBeChecked();
   expect(await call("maker", "GET", `/v1/apps/${slug}/update-settings`)).toMatchObject({ watch_releases: true, auto_update: true });
 
-  // Refused (as for a maker past the passkey deadline): the reason shows, and nothing changes.
+  // Refused: the reason shows, and nothing changes.
   await answer(
     page,
     `/v1/apps/${slug}/update-settings`,
-    apiError("passkey_required", "add a passkey to your account first", "add"),
-    403,
+    apiError("unavailable", "Slop is busy: try again in a minute"),
+    503,
     "PUT",
   );
   await auto.click();
-  await expect(panel.locator(".form-error")).toHaveText("add a passkey to your account first");
+  await expect(panel.locator(".form-error")).toHaveText("Slop is busy: try again in a minute");
   await expect(auto).toBeChecked();
   await page.unroute(`**/v1/apps/${slug}/update-settings`);
 

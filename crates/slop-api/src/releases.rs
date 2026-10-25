@@ -485,7 +485,6 @@ async fn submit_release(
 ) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
     crate::limits::check(&state, user.id, crate::limits::Action::Release)?;
     let (app_id, repo_url) = owned_app(&state, &slug, &user).await?;
-    crate::passkeys::require(&state, &user).await?;
     // Checked first, so a refusal doesn't leave the release made without them.
     if let Some(notes) = &req.notes {
         check_notes(notes)?;
@@ -566,7 +565,6 @@ async fn edit_release(
 /// The maker withdraws a release that hasn't been reviewed yet: one they didn't publish (the
 /// "was submitted" notice says how), or one sent by mistake. It never reaches players, and the
 /// app's next release waits for a person (updates.rs), in case it wasn't the maker who sent it.
-/// No passkey: it only takes away a release nobody has yet.
 async fn withdraw_release(
     State(state): State<AppState>,
     user: CurrentUser,

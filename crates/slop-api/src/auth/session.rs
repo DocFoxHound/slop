@@ -190,25 +190,10 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
     }))
 }
 
-/// How recent a sign-in must be for step-up actions.
+/// How recent a sign-in must be for the one step-up left: staff making an admin API token
+/// (admin_web.rs `confirm_recent`). Everything else trusts any signed-in session: the owner's
+/// decision of 2026-10-25 (SECURITY §4.3).
 pub const STEP_UP_WINDOW: Duration = Duration::minutes(10);
-
-/// Step-up authentication (SECURITY §4.3): the session must come from a sign-in in the last few
-/// minutes, or have confirmed with a passkey in them (passkeys.rs).
-pub async fn require_recent_sign_in(db: &PgPool, user: &CurrentUser) -> ApiResult<()> {
-    let fresh: bool = sqlx::query_scalar(
-        "select created_at > now() - $2 or coalesce(stepped_up_at > now() - $2, false) from sessions where id = $1",
-    )
-            .bind(user.session_id)
-            .bind(STEP_UP_WINDOW)
-            .fetch_one(db)
-            .await?;
-    if fresh {
-        Ok(())
-    } else {
-        Err(ApiError::StepUpRequired)
-    }
-}
 
 /// What a suspended account may still do besides reading: appeal, accept terms, download its
 /// data, sign out (here or on other devices) and close the account.

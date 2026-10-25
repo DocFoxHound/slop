@@ -79,15 +79,15 @@ test("switching or disconnecting the Stripe account asks first, needs a fresh si
   await section.getByRole("button", { name: "Disconnect Stripe" }).click();
   await expect(section.getByText(/In 72 hours donations turn off on all your apps and monthly server donations end\./)).toBeVisible();
 
-  // A sign-in from more than a few minutes ago isn't enough.
+  // A refusal says why (there's no "confirm it's you" any more: SECURITY §4.3).
   let asked: unknown;
   await page.route("**/v1/me/donation-account/change", (route) => {
     asked = route.request().postDataJSON();
-    return route.fulfill(json(403, { error: { code: "step_up_required", message: "confirm it's you first" } }));
+    return route.fulfill(json(409, { error: { code: "conflict", message: "a change is already waiting: cancel it first" } }));
   });
   await section.getByRole("button", { name: "Disconnect in 72 hours" }).click();
   expect(asked).toEqual({ kind: "disconnect", return_to: "/account/money#receiving" });
-  await expect(section.getByRole("alert")).toContainText("For your safety, this needs a sign-in from the last few minutes.");
+  await expect(section.getByRole("alert")).toHaveText("a change is already waiting: cancel it first");
 
   // Once asked for, the change waits, says when it happens, and can be cancelled.
   const change = {

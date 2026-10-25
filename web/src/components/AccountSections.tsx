@@ -29,7 +29,6 @@ import { useSession } from "../session";
 import { Avatar } from "./Avatar";
 import { AcceptDocument, useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
-import { StepUpPrompt } from "./PasskeyStepUp";
 
 /** The Content Policy section a rule title points to (headings get ids from their text). */
 function ruleLink(title: string): string {
@@ -47,7 +46,7 @@ function pictureHint(c: MyPicture["choices"][number]): string {
   if (c.updates === "never") return `${label} doesn't share a picture with Slop.`;
   if (!c.available) {
     return c.can_refresh
-      ? `Slop gets this picture when you sign in with ${label}: press Refresh picture.`
+      ? `Slop gets this picture when you sign in with ${label}: press Refresh picture to fetch it now (a quick trip to ${label} and back).`
       : `Slop gets this picture when you sign in with ${label}.`;
   }
   return c.updates === "daily"
@@ -694,21 +693,11 @@ export function AccountMoney() {
   );
 }
 
-/**
- * A fresh sign-in for actions that need one (SECURITY §4.3). Through the sign-in page, which
- * offers every sign-in the account might use (and passkeys), not only GitHub.
- */
-function StepUp({ error }: { error: ApiError }) {
-  if (error.code !== "step_up_required") return <>{error.message}</>;
-  const back = "/account/money#receiving";
-  return <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent(back)}`} />;
-}
-
 /** Where donations are paid, and switching or disconnecting it: 72 hours' wait (SECURITY §9). */
 function ReceivingDonations({ account }: { account: Loaded<DonationAccount> }) {
   const gate = useTermsGate();
   const [confirm, setConfirm] = useState<"switch" | "disconnect">();
-  const [error, setError] = useState<ApiError | string>();
+  const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   const a = account.data;
   if (!a || a.status === "none" || a.payments === "off") return null;
@@ -721,7 +710,7 @@ function ReceivingDonations({ account }: { account: Loaded<DonationAccount> }) {
       if (res && res.url) await openExternal(res.url);
       account.reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err : String(err));
+      setError(err instanceof ApiError ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -792,7 +781,7 @@ function ReceivingDonations({ account }: { account: Loaded<DonationAccount> }) {
         )}
         {error && (
           <p className="form-error" role="alert">
-            {typeof error === "string" ? error : <StepUp error={error} />}
+            {error}
           </p>
         )}
       </div>

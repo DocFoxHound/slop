@@ -287,10 +287,6 @@ async fn request_change(
     Json(req): Json<ChangeRequest>,
 ) -> ApiResult<(StatusCode, Json<ChangeInfo>)> {
     let (app_id, current_repo) = updates::owned(&state, &slug, &user).await?;
-    // A new repository is where players' next downloads come from: as sensitive as publishing.
-    if matches!(req, ChangeRequest::Repo { .. }) {
-        crate::passkeys::require(&state, &user).await?;
-    }
     let approval = updates::auto_approval(&state.db, app_id).await?;
     let clean_note = |note: Option<String>| -> ApiResult<Option<String>> {
         let note = note.map(|n| n.trim().to_string()).filter(|n| !n.is_empty());

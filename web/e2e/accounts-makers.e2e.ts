@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // What makers manage on their account: AI agent tokens, signing keys, a private repository's
-// token, and the passkey and agreement asked for before publishing (components/AiAgents.tsx,
-// SigningKeys.tsx, RepoToken.tsx, PasskeyNotice.tsx, PasskeyRequired.tsx, Terms.tsx).
+// token, the optional passkey suggestion, and the agreement asked for before publishing (components/AiAgents.tsx,
+// SigningKeys.tsx, RepoToken.tsx, PasskeyNotice.tsx, Terms.tsx).
 import AxeBuilder from "@axe-core/playwright";
 import { generateKeyPairSync } from "node:crypto";
 
-import { accountNav, apiError, call, fake, noPasskeys, openAccount, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
+import { accountNav, apiError, call, fake, openAccount, stubPasskeys, tweak } from "./accounts-helpers";
 import type { Page } from "@playwright/test";
 
 import { expect, server, signIn, test } from "./fixtures";
@@ -39,8 +39,6 @@ test.describe("AI agent tokens", () => {
     await section.getByRole("button", { name: "Make token" }).click();
     expect((await made).postDataJSON()).toEqual({ name: "Read-only helper", scope: "read", apps: ["lantern-keep"], people: false, days: 7 });
     await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
-    // Only a publishing token is told about passkeys.
-    await expect(section.getByText(/Confirm with a passkey before making a token/)).toHaveCount(0);
     // The command connects Claude Code with the saved variable, never the token.
     await section.getByRole("button", { name: "Copy the Claude Code command" }).click();
     const command = await page.evaluate(() => navigator.clipboard.readText());
@@ -57,14 +55,15 @@ test.describe("AI agent tokens", () => {
     await expect(row).toHaveCount(0);
   });
 
-  test("a publishing token made without a passkey says what that means", async ({ page }) => {
+  test("a publishing token works without a passkey, and says nothing about one", async ({ page }) => {
     await signIn(page, "maker");
     await page.goto("/account#ai-agents");
     const section = page.locator("#ai-agents");
     await section.getByRole("textbox", { name: "Name" }).fill("Publisher bot");
     await section.getByRole("combobox", { name: "Expires after" }).selectOption("1");
     await section.getByRole("button", { name: "Make token" }).click();
-    await expect(section.getByText(/Confirm with a passkey before making a token/)).toBeVisible();
+    await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(section.getByText(/passkey/i)).toHaveCount(0);
     await section.getByRole("button", { name: "Done" }).click();
     const row = section.getByRole("listitem").filter({ hasText: "Publisher bot" });
     await expect(row).toContainText("publishes · all apps");
@@ -204,7 +203,6 @@ test.describe("AI agent token setup and expiry", () => {
       scope: "publish",
       apps: ["lantern-keep"],
       people: true,
-      passkey_proved: false,
       created_at: iso(made),
       expires_at: iso(expires),
       last_used_at: iso(-1),
@@ -389,15 +387,18 @@ test.describe("signing keys", () => {
     await expect(section.getByRole("listitem")).toHaveCount(0);
   });
 
-  test("an old sign-in is asked to sign in again first", async ({ page }) => {
-    await fake(page, "POST", "/v1/me/signing-keys", { status: 403, body: apiError("step_up_required", "this needs a recent sign-in") });
+  test("adding a key never asks to confirm it's you", async ({ page }) => {
+    // No recent sign-in needed (maker_keys.rs): the server's answer is whatever it is, shown as is.
+    const stepUp = await fake(page, "POST", /^\/v1\/me\/step-up\//, { status: 500, body: apiError("internal", "not expected") });
+    await fake(page, "POST", "/v1/me/signing-keys", { status: 409, body: apiError("conflict", "that key is already on your account") });
     await signIn(page, "support");
     await page.goto("/account#signing-keys");
     const section = page.locator("#signing-keys");
     await section.getByRole("textbox", { name: /Public key/ }).fill(sshPublicKey());
     await section.getByRole("button", { name: "Add signing key" }).click();
-    await expect(section.getByRole("alert")).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-    await expect(section.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fagents%23signing-keys");
+    await expect(section.getByRole("alert")).toHaveText("that key is already on your account");
+    await expect(section.getByRole("link", { name: "sign in again" })).toHaveCount(0);
+    expect(stepUp.calls).toHaveLength(0);
   });
 });
 
@@ -476,27 +477,23 @@ test.describe("a private repository's token", () => {
   });
 });
 
-test.describe("the passkey deadline", () => {
-  test("before it, publishing pages say from when, with a link that isn't only a colour", async ({ page }) => {
-    // Bo first published through the API, which started his 30 days (passkeys.rs).
-    const due = (await call("maker2", "GET", "/v1/me")).passkey_due_at as string;
+test.describe("the optional passkey suggestion", () => {
+  test("publishing pages suggest one gently, with a link that isn't only a colour", async ({ page }) => {
     await signIn(page, "maker2");
     await page.goto("/publish");
-    const note = page.getByRole("note").filter({ hasText: "need a passkey" });
-    const date = new Date(due).toLocaleDateString("en-US", { month: "short", day: "numeric", year: "numeric" });
-    await expect(note).toContainText(`From ${date}, publishing and changing where money goes need a passkey`);
-    await expect(note.getByRole("link", { name: "Add a passkey" })).toHaveAttribute("href", "/account/security#passkeys");
-    // The notice's link was told apart by colour alone (axe link-in-text-block).
+    const note = page.getByRole("note").filter({ hasText: "passkey" });
+    await expect(note).toHaveText("Optional: a passkey lets you sign in quickly, and nobody can phish it.");
+    await expect(note.getByRole("link", { name: "passkey" })).toHaveAttribute("href", "/account/security#passkeys");
     await page.waitForLoadState("networkidle");
-    const results = await new AxeBuilder({ page }).include(".notice").withRules(["link-in-text-block"]).analyze();
+    const results = await new AxeBuilder({ page }).include("[role=note]").withRules(["link-in-text-block"]).analyze();
     expect(results.violations.map((v) => v.id)).toEqual([]);
-    await expect(note.getByRole("link", { name: "Add a passkey" })).toHaveCSS("text-decoration-line", "underline");
+    await expect(note.getByRole("link", { name: "passkey" })).toHaveCSS("text-decoration-line", "underline");
   });
 
-  test("the whole publishing page passes the accessibility check with the notice", async ({ page }) => {
+  test("the whole publishing page passes the accessibility check with it", async ({ page }) => {
     await signIn(page, "maker2");
     await page.goto("/publish");
-    await expect(page.getByRole("note").filter({ hasText: "need a passkey" })).toBeVisible();
+    await expect(page.getByRole("note").filter({ hasText: "passkey" })).toBeVisible();
     await page.waitForLoadState("networkidle");
     const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
     const serious = results.violations
@@ -505,29 +502,15 @@ test.describe("the passkey deadline", () => {
     expect(serious, serious.join("\n")).toEqual([]);
   });
 
-  test("a creative's People page shows it too", async ({ page }) => {
+  test("a creative's People page suggests it too", async ({ page }) => {
     await signIn(page, "creative");
     await page.goto("/people/me");
-    await expect(page.getByRole("note").filter({ hasText: "need a passkey" })).toContainText("Add a passkey");
+    await expect(page.getByRole("note").filter({ hasText: "Optional: a passkey" })).toBeVisible();
   });
 
-  test("grace from staff says until when; with a passkey, nothing shows", async ({ page }) => {
-    const grace = new Date(Date.now() + 5 * 86_400_000).toISOString();
-    let hasPasskey = false;
-    await tweak(page, "/v1/me", (me) => ({ ...me, passkey_grace_until: grace, has_passkey: hasPasskey }));
+  test("with a passkey, nothing shows", async ({ page }) => {
+    await tweak(page, "/v1/me", (me) => ({ ...me, has_passkey: true }));
     await signIn(page, "overdue");
-    await page.goto("/publish");
-    await expect(page.getByRole("note")).toContainText(
-      `You can publish and manage payouts without a passkey until ${inDays(5)}.`,
-    );
-    hasPasskey = true;
-    await page.reload();
-    await expect(page.getByRole("heading", { name: /Your apps|Publish/ }).first()).toBeVisible();
-    await expect(page.getByRole("note").filter({ hasText: "passkey" })).toHaveCount(0);
-  });
-
-  test("an account with no deadline sees nothing", async ({ page }) => {
-    await signIn(page, "maker");
     await page.goto("/publish");
     await expect(page.getByRole("heading", { name: /Your apps|Publish/ }).first()).toBeVisible();
     await expect(page.getByRole("note").filter({ hasText: "passkey" })).toHaveCount(0);
@@ -546,74 +529,6 @@ async function newApp(page: import("@playwright/test").Page, name: string) {
 
 /** After the gate, the create call runs again; the second answer shows it did, and nothing is made. */
 const retried = { status: 422, body: apiError("invalid", "Second try reached the server.", "slug") };
-
-test.describe("asked for a passkey when publishing", () => {
-  test("confirming with a passkey runs it again", async ({ page }) => {
-    let n = 0;
-    const create = await fake(page, "POST", "/v1/apps", () =>
-      ++n === 1 ? { status: 403, body: apiError("passkey_required", "publishing needs a passkey") } : retried,
-    );
-    await stubPasskeys(page);
-    await fake(page, "POST", "/v1/me/step-up/start", { status: 200, body: { challenge_id: "s1", options: passkeyOptions } });
-    const finish = await fake(page, "POST", "/v1/me/step-up/finish", { status: 204, body: undefined });
-    await signIn(page, "maker");
-    await newApp(page, "Gated Game");
-    await page.getByRole("button", { name: "Create draft" }).click();
-    const dialog = page.getByRole("dialog", { name: "Passkey needed" });
-    await expect(dialog.getByRole("heading", { name: "Confirm with your passkey" })).toBeVisible();
-    await expect(dialog).toContainText("Use it once, and it counts for the next 12 hours.");
-    await dialog.getByRole("button", { name: "Confirm with your passkey" }).click();
-    await expect(dialog).toBeHidden();
-    await expect(page.getByText("Second try reached the server.")).toBeVisible();
-    expect(create.calls).toHaveLength(2);
-    expect(finish.calls).toHaveLength(1);
-    await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Gated Game");
-  });
-
-  test("a passkey that wasn't used says so and the dialog stays", async ({ page }) => {
-    await fake(page, "POST", "/v1/apps", { status: 403, body: apiError("passkey_required", "publishing needs a passkey") });
-    await stubPasskeys(page, "cancel");
-    await fake(page, "POST", "/v1/me/step-up/start", { status: 200, body: { challenge_id: "s1", options: passkeyOptions } });
-    await signIn(page, "maker");
-    await newApp(page, "Gated Game");
-    await page.getByRole("button", { name: "Create draft" }).click();
-    const dialog = page.getByRole("dialog", { name: "Passkey needed" });
-    await dialog.getByRole("button", { name: "Confirm with your passkey" }).click();
-    await expect(dialog.getByRole("alert")).toHaveText("The passkey wasn't used. Try again.");
-    await expect(dialog).toBeVisible();
-  });
-
-  test("with none yet: I've added one tries again", async ({ page }) => {
-    let n = 0;
-    const create = await fake(page, "POST", "/v1/apps", () =>
-      ++n === 1 ? { status: 403, body: apiError("passkey_required", "add a passkey first", "add") } : retried,
-    );
-    await signIn(page, "maker");
-    await newApp(page, "Gated Game");
-    await page.getByRole("button", { name: "Create draft" }).click();
-    const dialog = page.getByRole("dialog", { name: "Passkey needed" });
-    await expect(dialog.getByRole("heading", { name: "Add a passkey first" })).toBeVisible();
-    await expect(dialog.getByRole("link", { name: "Add a passkey" })).toHaveAttribute("target", "_blank");
-    await dialog.getByRole("button", { name: "I've added one: try again" }).click();
-    await expect(dialog).toBeHidden();
-    await expect(page.getByText("Second try reached the server.")).toBeVisible();
-    expect(create.calls).toHaveLength(2);
-  });
-
-  test("a browser without passkeys is told to use another", async ({ page }) => {
-    await noPasskeys(page);
-    await fake(page, "POST", "/v1/apps", { status: 403, body: apiError("passkey_required", "publishing needs a passkey") });
-    await signIn(page, "maker");
-    await newApp(page, "Gated Game");
-    await page.getByRole("button", { name: "Create draft" }).click();
-    const dialog = page.getByRole("dialog", { name: "Passkey needed" });
-    await expect(dialog).toContainText("This browser can't use passkeys. Try another browser or device.");
-    await expect(dialog.getByRole("button", { name: "Confirm with your passkey" })).toBeDisabled();
-    await dialog.getByRole("button", { name: "Cancel" }).click();
-    await expect(dialog).toBeHidden();
-    await expect(page.getByText("publishing needs a passkey")).toBeVisible();
-  });
-});
 
 test.describe("asked to accept the Publisher Agreement", () => {
   test("accepting runs the action again, keeping the form", async ({ page }) => {

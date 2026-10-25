@@ -270,7 +270,6 @@ async fn register(
         return Err(ApiError::NotFound);
     }
     crate::legal::require(&state.db, user.id, "publisher").await?;
-    crate::passkeys::require(&state, &user).await?;
     catalog::validate_slug(&b.slug)?;
     let title = catalog::validate_text("title", &b.title, 80, false)?;
     let summary = catalog::validate_text("summary", &b.summary, 200, false)?;

@@ -23,8 +23,6 @@
 //!   needs the Publisher Agreement accepted (`terms_required` until it is), since the agent
 //!   can't accept it; if a new version takes effect later, the agent's tools get
 //!   `terms_required` until the owner accepts it on the AI agents page.
-//! - **Passkeys:** a token made within 12 hours of confirming with a passkey counts as
-//!   passkey-proven for its lifetime (passkeys.rs `require`), so the agent can publish.
 //! - **Writing to Slop's admins** (admin_messages.rs) works with any token, read or publish, for
 //!   some apps or all: it's limited per account instead (once an hour, five a day).
 //! - **MCP:** `POST /v1/maker/mcp` speaks the Model Context Protocol, with the tools in `TOOLS`,
@@ -325,8 +323,6 @@ struct TokenInfo {
     apps: Vec<String>,
     /// Also handles People jobs.
     people: bool,
-    /// Made within 12 hours of a passkey confirmation, so it can publish (passkeys.rs).
-    passkey_proved: bool,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339")]
@@ -339,14 +335,13 @@ struct TokenInfo {
 
 const TOKEN_COLUMNS: &str = "s.id, m.name, m.scope,
     array(select a.slug from apps a where a.id = any(m.app_ids) order by a.slug), m.people,
-    s.passkey_at is not null, s.created_at, s.expires_at, s.last_seen_at, s.expires_at <= now()";
+    s.created_at, s.expires_at, s.last_seen_at, s.expires_at <= now()";
 
 type TokenRow = (
     Uuid,
     String,
     String,
     Vec<String>,
-    bool,
     bool,
     OffsetDateTime,
     OffsetDateTime,
@@ -361,11 +356,10 @@ fn info(r: TokenRow) -> TokenInfo {
         scope: r.2,
         apps: r.3,
         people: r.4,
-        passkey_proved: r.5,
-        created_at: r.6,
-        expires_at: r.7,
-        last_used_at: r.8,
-        expired: r.9,
+        created_at: r.5,
+        expires_at: r.6,
+        last_used_at: r.7,
+        expired: r.8,
     }
 }
 
@@ -470,19 +464,15 @@ async fn create(
             "you have {MAX_TOKENS} agent tokens; remove one first"
         )));
     }
-    // A passkey confirmation in the last 12 hours carries over to the token (passkeys.rs).
     sqlx::query(
-        "insert into sessions (id, user_id, token_hash, user_agent, expires_at, kind, passkey_at)
-         values ($1, $2, $3, $4, now() + $5, 'agent',
-                 (select passkey_at from sessions where id = $6 and passkey_at > now() - $7))",
+        "insert into sessions (id, user_id, token_hash, user_agent, expires_at, kind)
+         values ($1, $2, $3, $4, now() + $5, 'agent')",
     )
     .bind(id)
     .bind(user.id)
     .bind(hash_token(&secret))
     .bind(format!("AI agent: {name}"))
     .bind(Duration::days(days))
-    .bind(user.session_id)
-    .bind(crate::passkeys::PROOF_WINDOW)
     .execute(&mut *tx)
     .await?;
     sqlx::query(

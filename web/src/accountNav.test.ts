@@ -39,7 +39,6 @@ describe("account sections", () => {
     ["/account#nothing-here", undefined],
     ["/account#sign-ins", "/account/security#sign-ins"],
     ["/account?linked=github#sign-ins", "/account/security?linked=github#sign-ins"],
-    ["/account?confirm_link=gitlab#sign-ins", "/account/security?confirm_link=gitlab#sign-ins"],
     ["/account?error=provider#sign-ins", "/account/security?error=provider#sign-ins"],
     ["/account#signing-keys", "/account/agents#signing-keys"],
     ["/account#ai-agents", "/account/agents#ai-agents"],

@@ -10,7 +10,8 @@
 //                   pledged to the "Controller support" bounty, reported a bug, friends with Bo and
 //                   Tia, owns the Night Owls team, chats with Bo. Cleo's friend request waits.
 //   admin           Ada Admin: staff, owner role (everything).
-//   overdue         Olly Overdue: past the passkey deadline with no passkey (publishing asks).
+//   overdue         Olly Overdue: no passkey, past the deadline publishers had before passkeys
+//                   became optional (2026-10-25); publishing doesn't ask (passkeys.e2e.ts).
 //   teen            Tia Teen (GB): the under-18 view. Friends with Pat, invited to Night Owls.
 //   maker2          Bo Builder: Pocket Golf (pocket-golf: release 1.1.0 and pictures waiting for
 //                   review, a repository move waiting, a re-scan flag), Frozen Fjord (frozen-fjord,

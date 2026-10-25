@@ -90,7 +90,7 @@ function BranchForm({ parent: p }: { parent: AppDetail }) {
         {error.message}
       </span>
     ) : null;
-  // Fields with their own error line; any other error (an agreement or passkey declined) shows at
+  // Fields with their own error line; any other error (an agreement declined) shows at
   // the bottom.
   const shownByField = new Set<string>([
     "title",
