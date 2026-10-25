@@ -30,8 +30,13 @@ dev → main ──► (promote.sh: only once dev's run passed) GitHub's pipelin
    deploy's old test mode ran (`deploy/build/build.sh` in the `deploy/build/Containerfile` image,
    against a Postgres service), and `build-windows` builds the Windows installer, about 30
    minutes; a newer push to dev replaces the older run. A failure shows on the run page with the
-   failing test, its error and line; fix it on dev. A browser test that only passed on its retry
-   is named there as a warning: fix it too, it may be a real bug.
+   failing test, its error and line, and the run's summary has the details (for a browser test,
+   the page as it was); fix it on dev. A test (Rust or browser) that failed once and passed on its
+   retry doesn't fail the run but is named there as a warning: fix it too, it may be a real bug.
+   To see a failure here in minutes rather than push again: `deploy/ci-local.sh` runs the same
+   checks in the same container (`--e2e-only` for just the browser tests). Every night the
+   **Order check** workflow also runs the browser tests reversed and shuffled, to catch tests that
+   depend on what ran before them.
 2. **When dev is good, send it on:** from your own checkout, with your GitHub access,
 
    ```sh
