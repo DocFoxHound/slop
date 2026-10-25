@@ -56,8 +56,8 @@ test("Bo registers a port of Neon Drift, which starts from the original's answer
 });
 
 test("signing keys: add one (it works 72 hours later), refuse a bad one, remove it", async ({ page }) => {
-  // Adding a key needs a sign-in from the last ten minutes, which the seeded sessions can't promise
-  // by the time this runs: the API's answers are played here, the real ones in the API tests.
+  // A key works only 72 hours after it's added, which the test server can't wait for: the API's
+  // answers are played here, the real ones in the API tests.
   type Key = { id: string; name: string; fingerprint: string; created_at: string; active_from: string; active: boolean };
   const keys: Key[] = [
     {
@@ -69,13 +69,11 @@ test("signing keys: add one (it works 72 hours later), refuse a bad one, remove 
       active: true,
     },
   ];
-  let fresh = false;
   let added: unknown;
   await page.route("**/v1/me/signing-keys", async (route) => {
     const req = route.request();
     if (req.method() === "GET") return route.fulfill({ json: keys });
     const body = req.postDataJSON() as { name: string; public_key: string };
-    if (!fresh) return route.fulfill({ status: 403, json: apiError("step_up_required", "confirm it's you first: sign in again, or use a passkey") });
     if (!body.public_key.startsWith("ssh-ed25519 ")) {
       return route.fulfill({
         status: 422,
@@ -110,15 +108,9 @@ test("signing keys: add one (it works 72 hours later), refuse a bad one, remove 
   await section.getByRole("textbox", { name: "Name" }).fill("Build box");
   await section.getByRole("textbox", { name: /Public key/ }).fill("ssh-rsa AAAAB3NzaC1yc2E build@box");
 
-  // Signed in too long ago: asked to confirm it's them.
+  // An RSA key is refused (and nothing asks to confirm it's you first).
   await add.click();
   const alert = section.getByRole("alert");
-  await expect(alert).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-  await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fagents%23signing-keys");
-
-  // Signed in again: an RSA key is refused.
-  fresh = true;
-  await add.click();
   await expect(alert).toHaveText("paste an Ed25519 public key (the line in id_ed25519.pub, starting with ssh-ed25519)");
   await section.getByRole("textbox", { name: /Public key/ }).fill("ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAIHt6 build@box");
   await add.click();

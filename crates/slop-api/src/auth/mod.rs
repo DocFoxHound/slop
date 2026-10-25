@@ -169,7 +169,8 @@ async fn start(
 }
 
 /// Linking another sign-in to the signed-in account (SECURITY §4.1): only from a signed-in
-/// session, after a recent sign-in, and only by signing in to the account being linked.
+/// session, and only by signing in to the account being linked. Any signed-in session may link
+/// (no "confirm it's you" first: the owner's decision of 2026-10-25, SECURITY §4.3).
 async fn link_start(
     State(state): State<AppState>,
     MaybeUser(user): MaybeUser,
@@ -181,22 +182,8 @@ async fn link_start(
     let back = safe_return_to(Some(
         query.return_to.as_deref().unwrap_or("/account#sign-ins"),
     ));
-    let fresh = match &user {
-        Some(u) => session::require_recent_sign_in(&state.db, u).await.is_ok(),
-        None => false,
-    };
-    // An account with passkeys links another sign-in only after one of them confirms it: the
-    // account page asks, then comes back here.
-    if let Some(u) = user.as_ref().filter(|_| fresh)
-        && crate::passkeys::require_passkey_if_any(&state.db, u)
-            .await
-            .is_err()
-    {
-        let back = format!("/account?confirm_link={provider_name}#sign-ins");
-        return Ok(Redirect::to(&back).into_response());
-    }
-    if !fresh {
-        // Sign in (again) first, then come straight back here to link.
+    let Some(user) = user else {
+        // Sign in first, then come straight back here to link.
         let here: String = format!(
             "/v1/auth/{provider_name}/link?return_to={}",
             url::form_urlencoded::byte_serialize(back.as_bytes()).collect::<String>()
@@ -206,8 +193,7 @@ async fn link_start(
             url::form_urlencoded::byte_serialize(here.as_bytes()).collect::<String>()
         );
         return Ok(Redirect::to(&to).into_response());
-    }
-    let user = user.expect("checked above");
+    };
     Ok(begin(&state, jar, provider, Some(&back), Some(&user))
         .await?
         .into_response())
@@ -438,15 +424,13 @@ async fn identities(
     ))
 }
 
-/// Unlinks a sign-in. The last one stays (the account needs a way in), and it needs a recent
-/// sign-in, so a stolen session can't lock the owner out.
+/// Unlinks a sign-in. The last one stays (the account needs a way in). Any signed-in session
+/// may (SECURITY §4.3).
 async fn unlink(
     State(state): State<AppState>,
     user: CurrentUser,
     Path((provider, subject)): Path<(String, String)>,
 ) -> ApiResult<StatusCode> {
-    session::require_recent_sign_in(&state.db, &user).await?;
-    crate::passkeys::require_passkey_if_any(&state.db, &user).await?;
     let mut tx = state.db.begin().await?;
     let count: i64 = sqlx::query_scalar("select count(*) from identities where user_id = $1")
         .bind(user.id)
@@ -666,8 +650,6 @@ async fn signup(
         unread_notifications: 0,
         profile_public: under18 == Some(false),
         has_passkey: false,
-        passkey_due_at: None,
-        passkey_grace_until: None,
         gpc: false,
         avatar_url: None,
     };
@@ -722,13 +704,8 @@ struct Me {
     /// Votes and reviews on the public profile (reviews.rs), with its default applied.
     #[sqlx(skip)]
     profile_public: bool,
-    /// Passkeys for publishers and creatives (passkeys.rs `require`): whether they have one,
-    /// from when publishing and payouts need one, and a grace staff gave.
+    /// Whether they have a passkey (optional: the account page suggests one).
     has_passkey: bool,
-    #[serde(with = "time::serde::rfc3339::option")]
-    passkey_due_at: Option<OffsetDateTime>,
-    #[serde(with = "time::serde::rfc3339::option")]
-    passkey_grace_until: Option<OffsetDateTime>,
     /// This browser sent a Global Privacy Control signal; the account page says it's honoured.
     #[sqlx(skip)]
     gpc: bool,
@@ -745,8 +722,7 @@ async fn me(
     let mut me: Me = sqlx::query_as(
         "select id, display_name, email, country_code, is_admin, share_playtime,
                 adult_confirmed_at is not null as adult_confirmed, suspended_at is not null as suspended,
-                exists (select 1 from passkeys p where p.user_id = users.id) as has_passkey,
-                passkey_due_at, passkey_grace_until
+                exists (select 1 from passkeys p where p.user_id = users.id) as has_passkey
          from users where id = $1",
     )
     .bind(user.id)

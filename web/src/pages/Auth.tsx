@@ -5,8 +5,7 @@
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { api, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
-import { StepUpPrompt } from "../components/PasskeyStepUp";
+import { api, API_BASE, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
 import { createPasskey, passkeysSupported, signWithPasskey } from "../passkeys";
 import { Loading } from "../components/ui";
 import { formatDate } from "../format";
@@ -26,6 +25,19 @@ function safeReturnTo(value: string | null): string {
   return value && value.startsWith("/") && !value.startsWith("//") && !value.includes("\\") ? value : "/";
 }
 
+/**
+ * Goes on to `returnTo` after signing in. A server path (`/v1/…`, such as linking another sign-in)
+ * is a full page load: the website's router doesn't know it and would show "Page not found".
+ */
+function goOn(returnTo: string, navigate: (to: string, opts?: { replace?: boolean }) => void, replace = false) {
+  if (returnTo.startsWith("/v1/")) {
+    if (replace) window.location.replace(API_BASE + returnTo);
+    else window.location.assign(API_BASE + returnTo);
+  } else {
+    navigate(returnTo, { replace });
+  }
+}
+
 export function SignIn() {
   useDocumentTitle("Sign in");
   const [params] = useSearchParams();
@@ -39,7 +51,14 @@ export function SignIn() {
 function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null }) {
   const providers = useLoad(() => api.providers(), []);
   const [params] = useSearchParams();
+  const { me } = useSession();
   const linking = params.get("reason") === "link";
+  // Already signed in and on the way to the server (linking another sign-in, say): go straight on.
+  const onToServer = !!me && returnTo.startsWith("/v1/");
+  useEffect(() => {
+    if (onToServer) window.location.replace(API_BASE + returnTo);
+  }, [onToServer, returnTo]);
+  if (onToServer) return <Loading />;
   const available = (Object.keys(PROVIDER_LABEL) as SignInProvider[]).filter((p) => providers.data?.[p]);
   return (
     <div className="page narrow">
@@ -53,7 +72,7 @@ function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null
         )}
         {linking && (
           <p className="notice">
-            To link another sign-in, first sign in again with one you already use. Then you'll go straight on to linking.
+            To link another sign-in, first sign in with one you already use. Then you'll go straight on to linking.
           </p>
         )}
         {providers.data && available.length === 0 && <p className="notice">Sign-in isn't set up on this server yet.</p>}
@@ -88,7 +107,7 @@ function PasskeySignIn({ returnTo }: { returnTo: string }) {
       const credential = await signWithPasskey(started.options);
       await api.passkeys.signInFinish(started.challenge_id, credential);
       await refresh();
-      navigate(returnTo);
+      goOn(returnTo, navigate);
     } catch (err) {
       setError(err instanceof ApiError ? err.message : "The passkey wasn't used. Try again, or use another sign-in.");
     } finally {
@@ -109,12 +128,12 @@ function PasskeySignIn({ returnTo }: { returnTo: string }) {
   );
 }
 
-/** Account → Sign-in & security: passkeys on this account. Adding or removing one needs a recent sign-in. */
+/** Account → Sign-in & security: passkeys on this account. Optional: a quicker sign-in, never required. */
 export function Passkeys() {
   const keys = useLoad(() => api.passkeys.list(), []);
   const [name, setName] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<ApiError | string>();
+  const [error, setError] = useState<string>();
   const run = async (action: () => Promise<unknown>) => {
     setBusy(true);
     setError(undefined);
@@ -122,7 +141,7 @@ export function Passkeys() {
       await action();
       keys.reload();
     } catch (err) {
-      setError(err instanceof ApiError ? err : err instanceof Error ? err.message : String(err));
+      setError(err instanceof Error ? err.message : String(err));
     } finally {
       setBusy(false);
     }
@@ -142,8 +161,8 @@ export function Passkeys() {
       </h3>
       <div className="panel panel-pad">
         <p className="muted small">
-          Sign in with Face ID, Touch ID, Windows Hello or a security key instead of a provider, and confirm sensitive changes
-          without signing in again. Slop keeps only the public half.
+          Optional: sign in with Face ID, Touch ID, Windows Hello or a security key instead of a provider. Nobody can phish
+          a passkey, and Slop keeps only the public half.
         </p>
         {keys.data && keys.data.length > 0 && (
           <ul className="report-list">
@@ -177,13 +196,7 @@ export function Passkeys() {
         </form>
         {error && (
           <p className="form-error" role="alert">
-            {typeof error === "string" ? (
-              error
-            ) : error.code === "step_up_required" ? (
-              <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent("/account/security#passkeys")}`} onDone={() => setError(undefined)} />
-            ) : (
-              error.message
-            )}
+            {error}
           </p>
         )}
       </div>
@@ -221,7 +234,6 @@ export function DesktopApprove() {
   const request = useLoad(() => (me ? api.desktopRequest(id) : Promise.resolve(undefined)), [id, me?.id]);
   const [state, setState] = useState<"ask" | "sending" | "done" | "cancelled">("ask");
   const [error, setError] = useState<string>();
-  const [stepUp, setStepUp] = useState(false);
 
   if (me === undefined) return <Loading />;
   if (!me) return <Navigate to={`/signin?return_to=${encodeURIComponent(location.pathname)}`} replace />;
@@ -245,8 +257,6 @@ export function DesktopApprove() {
       // Hand the one-time code to the app listening on this computer.
       window.location.assign(redirect_url);
     } catch (err) {
-      // An old sign-in can't approve a new device: confirm it's you first.
-      setStepUp(err instanceof ApiError && err.code === "step_up_required");
       setError(err instanceof ApiError ? err.message : String(err));
       setState("ask");
     }
@@ -277,17 +287,7 @@ export function DesktopApprove() {
             </p>
             {error && (
               <p className="form-error" role="alert">
-                {stepUp ? (
-                  <StepUpPrompt
-                    signInAgain={`/signin?return_to=${encodeURIComponent(location.pathname)}`}
-                    onDone={() => {
-                      setStepUp(false);
-                      setError(undefined);
-                    }}
-                  />
-                ) : (
-                  error
-                )}
+                {error}
               </p>
             )}
             <div className="actions">
@@ -347,7 +347,7 @@ export function SignUp() {
         accept_terms: acceptTerms,
       });
       await refresh();
-      navigate(safeReturnTo(res.return_to), { replace: true });
+      goOn(safeReturnTo(res.return_to), navigate, true);
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
     } finally {
@@ -432,19 +432,14 @@ export function SignIns() {
   const providers = useLoad(() => api.providers(), []);
   const [params] = useSearchParams();
   const [error, setError] = useState<string>();
-  const [stepUp, setStepUp] = useState(false);
   const linked = params.get("linked");
   const failed = params.get("error");
-  // Linking another sign-in to an account with passkeys: one of them confirms it first.
-  const confirmLink = params.get("confirm_link") as SignInProvider | null;
   const unlink = async (provider: string, subject: string) => {
     setError(undefined);
-    setStepUp(false);
     try {
       await api.unlink(provider, subject);
       identities.reload();
     } catch (err) {
-      setStepUp(err instanceof ApiError && err.code === "step_up_required");
       setError(err instanceof ApiError ? err.message : String(err));
     }
   };
@@ -465,17 +460,6 @@ export function SignIns() {
           <p className="notice">That account was already linked.</p>
         )}
         {failed === "provider" && <p className="form-error">That sign-in didn't work. Please try again.</p>}
-        {confirmLink && PROVIDER_LABEL[confirmLink] && (
-          <div className="notice" role="status">
-            <p>
-              To link {PROVIDER_LABEL[confirmLink]}, confirm it's you with one of your passkeys.
-            </p>
-            <StepUpPrompt
-              signInAgain={`/signin?return_to=${encodeURIComponent("/account/security#sign-ins")}`}
-              onDone={() => window.location.assign(api.linkUrl(confirmLink))}
-            />
-          </div>
-        )}
         {(identities.data?.length ?? 0) > 0 && (
           <ul className="report-list">
             {identities.data?.map((i) => (
@@ -507,17 +491,7 @@ export function SignIns() {
         </div>
         {error && (
           <p className="form-error" role="alert">
-            {stepUp ? (
-              <StepUpPrompt
-                signInAgain={`/signin?return_to=${encodeURIComponent("/account/security#sign-ins")}`}
-                onDone={() => {
-                  setStepUp(false);
-                  setError(undefined);
-                }}
-              />
-            ) : (
-              error
-            )}
+            {error}
           </p>
         )}
       </div>

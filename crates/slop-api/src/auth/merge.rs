@@ -173,23 +173,11 @@ async fn confirm(
     user: CurrentUser,
 ) -> ApiResult<(StatusCode, CookieJar)> {
     let (from, _, _) = pending(&state, &jar, &user).await?;
-    crate::passkeys::require_passkey_if_any(&state.db, &user).await?;
+    // Signing in to the other account proved it's theirs; no passkey confirmation on top, from
+    // either side (the owner's decision of 2026-10-25, SECURITY §4.3).
     let mut tx = state.db.begin().await?;
     if let Some(why) = blocked(&mut tx, user.id, from).await? {
         return Err(ApiError::Conflict(why));
-    }
-    // An account with passkeys can only be combined into another from itself, signed in with
-    // one: otherwise whoever took over one of its sign-ins could move its apps and payouts into
-    // an account of their own (security review, 2026-10-22).
-    let from_has_passkeys: bool =
-        sqlx::query_scalar("select exists (select 1 from passkeys where user_id = $1)")
-            .bind(from)
-            .fetch_one(&mut *tx)
-            .await?;
-    if from_has_passkeys {
-        return Err(ApiError::Conflict(
-            "the other account has passkeys: sign in to it with one, and combine this account into it from there".into(),
-        ));
     }
     // Before combining: it moves every row naming `from`, these too, and one left behind would
     // name this account on both sides (confirming again would close it into itself).
@@ -311,13 +299,9 @@ pub async fn combine(tx: &mut PgConnection, into: Uuid, from: Uuid) -> anyhow::R
     .bind(from)
     .execute(&mut *tx)
     .await?;
-    // The earlier 18+ confirmation counts for the combined account. So does the earlier passkey
-    // deadline: combining doesn't start a new grace period for publishing without one.
+    // The earlier 18+ confirmation counts for the combined account.
     sqlx::query(
-        "update users set adult_confirmed_at = coalesce(adult_confirmed_at, (select adult_confirmed_at from users where id = $2)),
-                passkey_due_at = case
-                    when passkey_due_at is null then (select passkey_due_at from users where id = $2)
-                    else least(passkey_due_at, coalesce((select passkey_due_at from users where id = $2), passkey_due_at)) end
+        "update users set adult_confirmed_at = coalesce(adult_confirmed_at, (select adult_confirmed_at from users where id = $2))
          where id = $1",
     )
     .bind(into)

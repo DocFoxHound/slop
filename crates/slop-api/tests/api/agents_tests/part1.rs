@@ -782,30 +782,7 @@ async fn a_suspended_staff_members_token_stops_working_and_nobody_frees_themselv
     let (troll_id, _) = app.user("Troll Account", "US").await;
     let token = admin_token(&app, &ada, "moderate").await;
 
-    // Nobody lets themselves publish without a passkey, or lifts their own suspension.
-    let res = app
-        .send(with_token(
-            req(
-                Method::POST,
-                format!("/v1/admin/users/{ada_id}/passkey-grace"),
-            )
-            .json(json!({ "reason": "I checked my own ID card, honestly." })),
-            &token,
-        ))
-        .await;
-    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    let res = app
-        .send(
-            req(
-                Method::POST,
-                format!("/v1/admin/users/{ada_id}/passkey-grace"),
-            )
-            .cookie(&ada)
-            .json(json!({ "reason": "I checked my own ID card, honestly." })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-    assert_eq!(count(&app, "select count(*) from staff_actions").await, 0);
+    // Nobody lifts their own suspension.
 
     // Ben suspends Ada. Her agent can't act for her any more: not on others, not to free her.
     suspend(&app, &ben, ada_id).await;
@@ -2063,108 +2040,11 @@ async fn lifting_a_suspension_needs_a_reason_and_a_suspended_account(db: PgPool)
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn a_passkey_grace_week_lets_someone_publish_until_it_ends(db: PgPool) {
-    let app = agents_app(db, 1).await;
-    let (_, owner) = make_admin(&app, "Olive Owner").await;
-    let (mia, maker) = app.user("Mia Maker", "US").await;
-    let (gone, _) = app.user("Closed Cal", "US").await;
-    slop_api::account::close_account(&app.db, gone, "test")
-        .await
-        .unwrap();
-    let moderate = admin_token(&app, &owner, "moderate").await;
-    let reason = "Video call; matched her GitHub account.";
-    let grace = |who: Uuid, reason: String| {
-        req(Method::POST, format!("/v1/admin/users/{who}/passkey-grace"))
-            .json(json!({ "reason": reason }))
-    };
-    // Past her passkey deadline, with none: she can't publish.
-    sqlx::query("update users set passkey_due_at = now() - interval '1 hour' where id = $1")
-        .bind(mia)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let create = |slug: &str| {
-        req(Method::POST, "/v1/apps")
-            .cookie(&maker)
-            .json(new_app(slug))
-    };
-    assert_eq!(
-        app.send(create("one")).await.status(),
-        StatusCode::FORBIDDEN
-    );
-
-    for scope in ["read", "review"] {
-        let token = admin_token(&app, &owner, scope).await;
-        assert_eq!(
-            app.send(with_token(grace(mia, reason.into()), &token))
-                .await
-                .status(),
-            StatusCode::FORBIDDEN,
-            "{scope}"
-        );
-    }
-    for who in [gone, Uuid::now_v7()] {
-        assert_eq!(
-            app.send(with_token(grace(who, reason.into()), &moderate))
-                .await
-                .status(),
-            StatusCode::NOT_FOUND
-        );
-    }
-    assert_eq!(
-        app.send(with_token(grace(mia, "r".repeat(1001)), &moderate))
-            .await
-            .status(),
-        StatusCode::UNPROCESSABLE_ENTITY
-    );
-
-    // A moderate token gives it: a week, and she's told until when.
-    let res = app
-        .send(with_token(grace(mia, reason.into()), &moderate))
-        .await;
-    assert_eq!(res.status(), StatusCode::OK);
-    assert!(body_json(res).await["until"].is_string());
-    let until: OffsetDateTime =
-        sqlx::query_scalar("select passkey_grace_until from users where id = $1")
-            .bind(mia)
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert!(
-        (until - OffsetDateTime::now_utc() - time::Duration::days(7)).abs()
-            < time::Duration::minutes(1)
-    );
-    let (title, body): (String, String) = sqlx::query_as(
-        "select title, body from notifications where user_id = $1 and title like 'Add a new passkey%'",
-    )
-    .bind(mia)
-    .fetch_one(&app.db)
-    .await
-    .unwrap();
-    assert_eq!(title, "Add a new passkey this week");
-    assert!(body.contains(&until.date().to_string()), "{body}");
-    assert!(audit_actors(&app, "account.passkey_grace").await[0].contains("Agent moderate"));
-    assert_eq!(app.send(create("one")).await.status(), StatusCode::CREATED);
-
-    // Once it ends, she needs a passkey again.
-    sqlx::query("update users set passkey_grace_until = now() - interval '1 minute' where id = $1")
-        .bind(mia)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    assert_eq!(
-        app.send(create("two")).await.status(),
-        StatusCode::FORBIDDEN
-    );
-}
-
-#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(db: PgPool) {
     let app = agents_app(db, 2).await;
     let (_, ada) = make_admin(&app, "Ada Owner").await;
     let (_, ben) = make_admin(&app, "Ben Owner").await;
     let (troll, _) = app.user("Troll Account", "US").await;
-    let (mia, _) = app.user("Mia Maker", "US").await;
     let agent = admin_token(&app, &ada, "moderate").await;
     let approve = |id: &str, cookie: &str| {
         req(Method::POST, format!("/v1/admin/actions/{id}/approve")).cookie(cookie)
@@ -2241,41 +2121,6 @@ async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(
         audit_actors(&app, "moderation.lift_suspension").await[0].contains("approved by Ben Owner")
     );
 
-    // A passkey grace too.
-    let grace = pending(
-        app.send(with_token(
-            req(Method::POST, format!("/v1/admin/users/{mia}/passkey-grace"))
-                .json(json!({ "reason": "Video call; matched her GitHub account." })),
-            &agent,
-        ))
-        .await,
-    )
-    .await;
-    assert_eq!(
-        count(
-            &app,
-            &format!(
-                "select count(*) from users where id = '{mia}' and passkey_grace_until is not null"
-            )
-        )
-        .await,
-        0
-    );
-    assert_eq!(
-        app.send(approve(&grace, &ben)).await.status(),
-        StatusCode::OK
-    );
-    assert_eq!(
-        count(
-            &app,
-            &format!(
-                "select count(*) from users where id = '{mia}' and passkey_grace_until > now()"
-            )
-        )
-        .await,
-        1
-    );
-
     // Things change while a request waits: it's checked again when approved.
     let again = pending(app.send(suspend_troll()).await).await;
     sqlx::query("update users set suspended_at = now() where id = $1")
@@ -2345,7 +2190,7 @@ async fn account_actions_wait_for_a_second_person_and_check_again_when_approved(
 // The admin MCP endpoint
 
 /// Every tool the admin MCP endpoint offers (agent.rs TOOLS).
-const ADMIN_TOOLS: [&str; 67] = [
+const ADMIN_TOOLS: [&str; 66] = [
     "slop_status",
     "review_guide",
     "review_queue",
@@ -2369,7 +2214,6 @@ const ADMIN_TOOLS: [&str; 67] = [
     "user_details",
     "moderate_user",
     "lift_suspension",
-    "passkey_grace",
     "pending_actions",
     "audit_log",
     "find_apps",
@@ -3285,17 +3129,6 @@ async fn agents_moderate_reports_appeals_and_accounts_through_mcp_tools(db: PgPo
             .contains("\"field\":\"reason\"")
     );
 
-    // Passkey grace: a moderate token, not a review one.
-    let grace =
-        json!({ "id": mia.to_string(), "reason": "Video call; matched her GitHub account." });
-    assert!(
-        tool_refused(&app, &review, "passkey_grace", grace.clone())
-            .await
-            .contains("forbidden")
-    );
-    let given = tool_ok(&app, &moderate, "passkey_grace", grace).await;
-    assert!(given["until"].is_string());
-
     // Appeals: kept, or reversed; the boolean goes through as one.
     let appeal = |cookie: &str, id: &str| {
         req(Method::POST, format!("/v1/me/decisions/{id}/appeal"))
@@ -3550,10 +3383,7 @@ async fn agents_moderate_reports_appeals_and_accounts_through_mcp_tools(db: PgPo
         .iter()
         .map(|a| a["kind"].as_str().unwrap())
         .collect();
-    assert!(
-        kinds.contains(&"app.delist") && kinds.contains(&"account.passkey_grace"),
-        "{kinds:?}"
-    );
+    assert!(kinds.contains(&"app.delist"), "{kinds:?}");
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

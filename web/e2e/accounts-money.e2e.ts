@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Money on the account page (components/AccountSections.tsx): your donations, where donations to
 // your apps are paid, and Slop's fee statements with the VAT in them.
-import { apiError, call, fake, passkeyOptions, stubPasskeys, tweak } from "./accounts-helpers";
+import { apiError, call, fake, tweak } from "./accounts-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
 
 test.describe("your donations", () => {
@@ -148,45 +148,23 @@ test.describe("receiving donations", () => {
     }
   });
 
-  test("an old sign-in is sent to the sign-in page, not straight to GitHub (b64)", async ({ page }) => {
-    const change = await fake(page, "POST", "/v1/me/donation-account/change", {
-      status: 403,
-      body: apiError("step_up_required", "this needs a recent sign-in"),
-    });
-    await stubPasskeys(page);
-    await fake(page, "POST", "/v1/me/step-up/start", { status: 200, body: { challenge_id: "s1", options: passkeyOptions } });
-    await fake(page, "POST", "/v1/me/step-up/finish", { status: 204, body: undefined });
+  test("a payout change never asks to confirm it's you or for a passkey", async ({ page }) => {
+    // Dropped on 2026-10-25 (docs/SECURITY.md §4.3); the 72 hours' wait and the email stay.
+    const stepUp = await fake(page, "POST", /^\/v1\/me\/step-up\//, { status: 500, body: apiError("internal", "not expected") });
     await signIn(page, "maker");
-    await page.goto("/account#receiving");
-    const section = page.locator("#receiving");
-    await section.getByRole("button", { name: "Disconnect Stripe" }).click();
-    await section.getByRole("button", { name: "Disconnect in 72 hours" }).click();
-    const alert = section.getByRole("alert");
-    await expect(alert).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-    // Someone who signs in with Google, GitLab or a passkey can't use GitHub to do it.
-    await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fmoney%23receiving");
-    await alert.getByRole("button", { name: "Confirm with a passkey" }).click();
-    await expect(section.getByRole("status")).toHaveText("Confirmed. Try once more.");
-    expect(change.calls).toHaveLength(1);
-  });
-
-  test("a payout change asks for a passkey first", async ({ page }) => {
-    const change = await fake(page, "POST", "/v1/me/donation-account/change", {
-      status: 403,
-      body: apiError("passkey_required", "changing where money goes needs a passkey", "add"),
-    });
-    await signIn(page, "maker");
-    await page.goto("/account#receiving");
-    const section = page.locator("#receiving");
-    await section.getByRole("button", { name: "Use a different Stripe account" }).click();
-    await section.getByRole("button", { name: "Set up the new account" }).click();
-    const dialog = page.getByRole("dialog", { name: "Passkey needed" });
-    await expect(dialog.getByRole("heading", { name: "Add a passkey first" })).toBeVisible();
-    await dialog.getByRole("button", { name: "I've added one: try again" }).click();
-    await expect(dialog.getByRole("heading", { name: "Add a passkey first" })).toBeVisible();
-    expect(change.calls).toHaveLength(2);
-    await dialog.getByRole("button", { name: "Cancel" }).click();
-    await expect(section.getByRole("alert")).toHaveText("changing where money goes needs a passkey");
+    try {
+      await page.goto("/account#receiving");
+      const section = page.locator("#receiving");
+      await section.getByRole("button", { name: "Disconnect Stripe" }).click();
+      await section.getByRole("button", { name: "Disconnect in 72 hours" }).click();
+      await expect(section.getByRole("status")).toContainText("Disconnecting your Stripe account");
+      await expect(section.getByRole("alert")).toHaveCount(0);
+      await expect(page.getByRole("dialog")).toHaveCount(0);
+      expect(stepUp.calls).toHaveLength(0);
+    } finally {
+      const now = await call("maker", "GET", "/v1/me/donation-account");
+      if (now.change) await call("maker", "POST", "/v1/me/donation-account/change/cancel");
+    }
   });
 
   test("Stripe still checking, or restricted, is said", async ({ page }) => {

@@ -431,7 +431,7 @@ async fn my_donation_account_shows_its_status_and_any_change_waiting(db: PgPool)
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn connecting_a_stripe_account_for_donations_needs_an_adult_a_fresh_sign_in_and_a_passkey(
+async fn connecting_a_stripe_account_for_donations_needs_an_adult_but_no_fresh_sign_in_or_passkey(
     db: PgPool,
 ) {
     let fake = FakeStripe::start().await;
@@ -447,25 +447,12 @@ async fn connecting_a_stripe_account_for_donations_needs_an_adult_a_fresh_sign_i
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(res).await["error"]["field"], "confirm_adult");
 
-    // The first connection is a step-up action.
+    // An old sign-in, with a passkey it never used, past the deadline publishers once had: no
+    // "confirm it's you" and no passkey asked for (SECURITY §4.3, 2026-10-25).
     old_sign_in(&app, maker_id).await;
+    passkey_holder(&app, maker_id).await;
     let ok =
         json!({ "tax_notice_ack": true, "confirm_adult": true, "return_to": "//evil.example/x" });
-    let res = app.send(connect(ok.clone())).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-    sqlx::query("update sessions set created_at = now() where user_id = $1")
-        .bind(maker_id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    // Someone with a passkey confirms with it.
-    passkey_holder(&app, maker_id).await;
-    let res = app.send(connect(ok.clone())).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "passkey_required");
-    assert!(fake.calls("POST", "v1/accounts").is_empty());
-    passkey_confirmed(&app, maker_id).await;
 
     // A new account still signing up: Stripe's sign-up link, coming back to Slop only.
     let res = app.send(connect(ok)).await;
@@ -486,9 +473,7 @@ async fn connecting_a_stripe_account_for_donations_needs_an_adult_a_fresh_sign_i
     let link = fake.calls("POST", "v1/account_links");
     assert_eq!(link[0].form["return_url"], "http://localhost:8080/publish");
     assert_eq!(link[0].form["refresh_url"], "http://localhost:8080/publish");
-    // Finishing it later reuses the account and needs no fresh sign-in.
-    old_sign_in(&app, maker_id).await;
-    passkey_confirmed(&app, maker_id).await;
+    // Finishing it later reuses the account.
     for (back, want) in [
         ("https://evil.example", "http://localhost:8080/publish"),
         (
@@ -630,11 +615,9 @@ async fn creatives_connect_stripe_for_people_payments(db: PgPool) {
     // No account yet: the stored status.
     let res = body_json(app.send(refresh()).await).await;
     assert_eq!(res["status"], "none", "{res}");
+    // With a passkey it never used and an old sign-in: nothing more is asked.
     passkey_holder(&app, vera_id).await;
-    let res = app.send(connect()).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "passkey_required");
-    passkey_confirmed(&app, vera_id).await;
+    old_sign_in(&app, vera_id).await;
     fake.with(|s| s.new_account_status = Some("pending"));
     let on = body_json(app.send(connect()).await).await;
     assert_eq!(on["status"], "pending");
@@ -699,11 +682,10 @@ async fn asking_to_change_where_donations_go_is_checked_announced_and_audited(db
             .json(json!({ "tax_notice_ack": true, "confirm_adult": true })),
     )
     .await;
+    // An old sign-in with a passkey it never used switches and disconnects (the 72 hours' wait
+    // and the email protect it; SECURITY §4.3, 2026-10-25).
     passkey_holder(&app, maker_id).await;
-    let res = app.send(change(json!({ "kind": "switch" }))).await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "passkey_required");
-    passkey_confirmed(&app, maker_id).await;
+    old_sign_in(&app, maker_id).await;
 
     fake.with(|s| s.new_account_status = Some("pending"));
     let res = app

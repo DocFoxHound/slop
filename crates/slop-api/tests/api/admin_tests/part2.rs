@@ -539,83 +539,6 @@ async fn lifting_a_suspension_early_takes_a_reason_and_sensitive_rights(db: PgPo
     );
 }
 
-#[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn a_passkey_grace_week_needs_a_reason_an_open_account_and_sensitive_rights(db: PgPool) {
-    let app = test_app(db).await;
-    let (_, owner) = make_admin(&app, "Olive Owner").await;
-    let (maker, _) = app.user("Mia Maker", "US").await;
-    let (closed, _) = app.user("Gone Person", "US").await;
-    sqlx::query("update users set closed_at = now() where id = $1")
-        .bind(closed)
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let (_, reviewer) = staff(&app, "Rex Reviewer", "reviewer").await;
-    let review = token(&app, &owner, "review").await;
-    let moderate = token(&app, &owner, "moderate").await;
-    let grace = |id: Uuid, reason: &str| {
-        req(Method::POST, format!("/v1/admin/users/{id}/passkey-grace"))
-            .json(json!({ "reason": reason }))
-    };
-    let reason = "Video call with photo ID; matches the account.";
-
-    assert_eq!(
-        app.send(grace(maker, reason).header("authorization", review))
-            .await
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    assert_eq!(
-        app.send(grace(maker, reason).cookie(&reviewer))
-            .await
-            .status(),
-        StatusCode::FORBIDDEN
-    );
-    for bad in ["Trust me", &"x".repeat(1001)] {
-        let res = app.send(grace(maker, bad).cookie(&owner)).await;
-        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
-        assert_eq!(body_json(res).await["error"]["field"], "reason");
-    }
-    for id in [closed, Uuid::now_v7()] {
-        assert_eq!(
-            app.send(grace(id, reason).cookie(&owner)).await.status(),
-            StatusCode::NOT_FOUND
-        );
-    }
-    let until: Option<OffsetDateTime> =
-        sqlx::query_scalar("select passkey_grace_until from users where id = $1")
-            .bind(maker)
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert!(until.is_none());
-
-    // A moderate token may ask; with one approval configured it's done at once.
-    let res = app
-        .send(grace(maker, reason).header("authorization", moderate))
-        .await;
-    assert_eq!(res.status(), StatusCode::OK);
-    assert!(body_json(res).await["until"].is_string());
-    let until: OffsetDateTime =
-        sqlx::query_scalar("select passkey_grace_until from users where id = $1")
-            .bind(maker)
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    let left = until - OffsetDateTime::now_utc();
-    assert!(
-        left > time::Duration::days(6) && left <= time::Duration::days(7),
-        "{left}"
-    );
-    assert_eq!(notices(&app, maker, "Add a new passkey this week").await, 1);
-    let actor: String =
-        sqlx::query_scalar("select actor from audit_log where action = 'account.passkey_grace'")
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert!(actor.contains("Agent moderate"), "{actor}");
-}
-
 // ---------------------------------------------------------------------------------------------
 // Admin API tokens
 
@@ -843,12 +766,6 @@ fn tool_cases(ids: &ToolIds) -> Vec<(&'static str, Value, &'static str, &'static
         (
             "lift_suspension",
             json!({ "id": troll, "reason": "The reports were mistaken." }),
-            "moderate",
-            &["id"],
-        ),
-        (
-            "passkey_grace",
-            json!({ "id": troll, "reason": "Checked their photo ID on a call." }),
             "moderate",
             &["id"],
         ),

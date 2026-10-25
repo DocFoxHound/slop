@@ -3406,17 +3406,8 @@ async fn staff_roles_are_given_and_taken_by_security_and_owners(db: PgPool) {
         StatusCode::CONFLICT
     );
     assert_eq!(roles_of(closed_id).await, (false, vec![]));
-    // A session from a while ago confirms first.
+    // A session from a while ago needs no "confirm it's you" (SECURITY §4.3, 2026-10-25).
     sqlx::query("update sessions set created_at = now() - interval '1 hour'")
-        .execute(&app.db)
-        .await
-        .unwrap();
-    let res = app
-        .send(role(pat_id, &security, reviewer_role.clone()))
-        .await;
-    assert_eq!(res.status(), StatusCode::FORBIDDEN);
-    assert_eq!(body_json(res).await["error"]["code"], "step_up_required");
-    sqlx::query("update sessions set stepped_up_at = now()")
         .execute(&app.db)
         .await
         .unwrap();

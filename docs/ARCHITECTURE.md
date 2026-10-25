@@ -135,7 +135,7 @@ production (`slopai.games`, its own server set up the same way) runs only commit
 **Goal:** a maker only has to **verify their account and link their repo**. They shouldn't need to understand CI pipelines.
 
 **How it works:** Slop doesn't compile on its own servers by default. It **writes the build pipeline for the maker**, and the pipeline runs on the free build machines of the maker's own Git host.
-1. The maker signs in, verifies their account (passkey), and links their repo by installing the Slop GitHub App (read-only).
+1. The maker signs in (a passkey is optional) and links their repo by installing the Slop GitHub App (read-only).
 2. Slop looks at the repo and detects the project type: Godot, web/HTML5, Electron, Tauri, Python, Rust, Go, .NET, Unity…
 3. Slop shows a **one-click "Add Slop Build"** button. It opens GitHub's own "create file" page, pre-filled with a short file (`.github/workflows/slop.yml`, about 5 lines) that calls **Slop's shared build recipe**. The maker clicks **Commit**. That's their only step.
    - Because the maker commits the file themselves, the Slop GitHub App can stay **read-only**.

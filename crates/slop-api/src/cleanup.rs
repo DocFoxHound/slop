@@ -94,11 +94,6 @@ pub async fn run(state: crate::AppState) {
             Ok(_) => {}
             Err(err) => tracing::error!(error = ?err, "AI agent token expiry warnings failed"),
         }
-        match crate::passkeys::remind(&state.db).await {
-            Ok(n) if n > 0 => tracing::info!(sent = n, "passkey reminders"),
-            Ok(_) => {}
-            Err(err) => tracing::error!(error = ?err, "passkey reminders failed"),
-        }
         if let Err(err) = crate::notify::cleanup(&state.db).await {
             tracing::error!(error = ?err, "notification cleanup failed");
         }

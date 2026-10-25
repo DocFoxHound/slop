@@ -21,6 +21,9 @@ use uuid::Uuid;
 
 use crate::fake_stripe::FakeStripe;
 
+/// Pia Picture's Google account, which the stand-in Google (main.rs) always signs in as.
+pub const PIA_GOOGLE: &str = "109876543210987654321";
+
 pub struct Ctx {
     pub db: PgPool,
     pub config: Config,
@@ -226,7 +229,8 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     let player = ctx.user("Pat Player", "US").await?;
     let admin = ctx.staff("Ada Admin", &["owner"]).await?;
     let sam = ctx.user("Sam Seed", "US").await?;
-    // A publisher past their passkey deadline, with no passkey (passkeys.rs).
+    // A publisher with no passkey: once past the deadline publishers had to add one by, kept
+    // to show that publishing works without one now (passkeys are optional since 2026-10-25).
     let overdue = ctx.user("Olly Overdue", "US").await?;
     ctx.sql(
         "update users set passkey_due_at = now() - interval '1 day' where id = $1",
@@ -300,12 +304,19 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.ids.insert("teen", json!(teen.id));
     s.ids.insert("maker2", json!(maker2.id));
 
-    // Pia Picture: a linked GitHub sign-in, whose picture the fake GitHub serves, for the profile
-    // picture tests (accounts-picture.e2e.ts). Nobody else has a linked sign-in.
+    // Pia Picture: a linked GitHub sign-in, whose picture the fake GitHub serves, and a linked
+    // Google one with no picture yet (Slop gets it at the next sign-in: "Refresh picture" goes to
+    // the stand-in Google, main.rs), for the profile picture tests (accounts-picture.e2e.ts).
+    // Nobody else has a linked sign-in.
     let pictured = ctx.user("Pia Picture", "US").await?;
     ctx.sql(
         "insert into identities (provider, provider_subject, user_id, login) values ('github', '5150', $1, 'pia-gh')",
         &[&pictured.id],
+    )
+    .await?;
+    ctx.sql(
+        "insert into identities (provider, provider_subject, user_id, login) values ('google', $2, $1, 'pia@example.test')",
+        &[&pictured.id, &PIA_GOOGLE],
     )
     .await?;
     s.cookies.insert("pictured", pictured.cookie.clone());
@@ -390,15 +401,6 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     )
     .await
     .context("admin queues")?;
-    // Publishing through the API started Mia's 30 days to add a passkey (passkeys.rs). The
-    // browser tests check her /publish page for accessibility as it was before (no deadline
-    // yet), so it's cleared again; the other makers keep theirs. (The deadline's notice fails
-    // axe's link-in-text-block check: web/src/components/PasskeyNotice.tsx.)
-    ctx.sql(
-        "update users set passkey_due_at = null where id = $1",
-        &[&maker.id],
-    )
-    .await?;
     verify(ctx).await?;
     Ok(s)
 }

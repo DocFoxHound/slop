@@ -157,74 +157,45 @@ test.describe("sign-ins", () => {
     await expect(page.getByText("That account was already linked.")).toBeVisible();
   });
 
-  test("unlinking needs a recent sign-in or a passkey, and keeps the last sign-in", async ({ page }) => {
+  test("unlinking works at once, with no \"confirm it's you\", and keeps the last sign-in", async ({ page }) => {
     // Linked sign-ins need a real provider, so Sue's two are stood in for.
     let identities = [
       { provider: "github", provider_subject: "1001", login: "sue-gh", created_at: "2026-10-01T10:00:00Z", last_sign_in_at: "2026-10-22T10:00:00Z" },
       { provider: "gitlab", provider_subject: "2002", login: "sue-gl", created_at: "2026-10-02T10:00:00Z", last_sign_in_at: "2026-10-20T10:00:00Z" },
     ];
     await fake(page, "GET", "/v1/me/identities", () => ({ status: 200, body: identities }));
-    let refuse = true;
     const unlink = await fake(page, "DELETE", /^\/v1\/me\/identities\/gitlab\/2002$/, () => {
-      if (refuse) return { status: 403, body: apiError("step_up_required", "this needs a recent sign-in") };
       identities = identities.slice(0, 1);
       return { status: 204, body: undefined };
     });
-    await stubPasskeys(page);
-    await fake(page, "POST", "/v1/me/step-up/start", { status: 200, body: { challenge_id: "s1", options: passkeyOptions } });
-    await fake(page, "POST", "/v1/me/step-up/finish", () => {
-      refuse = false;
-      return { status: 204, body: undefined };
-    });
+    const stepUp = await fake(page, "POST", /^\/v1\/me\/step-up\//, { status: 500, body: apiError("internal", "not expected") });
     await signIn(page, "support");
     await page.goto("/account#sign-ins");
     const section = page.locator("#sign-ins");
     await expect(section.getByText("sue-gh")).toBeVisible();
     const gitlab = section.getByRole("listitem").filter({ hasText: "sue-gl" });
     await gitlab.getByRole("button", { name: "Unlink" }).click();
-    const alert = section.getByRole("alert");
-    await expect(alert).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-    await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute("href", "/signin?return_to=%2Faccount%2Fsecurity%23sign-ins");
-    await alert.getByRole("button", { name: "Confirm with a passkey" }).click();
-    await expect(section.getByRole("alert")).toHaveCount(0);
-    await gitlab.getByRole("button", { name: "Unlink" }).click();
     await expect(gitlab).toHaveCount(0);
+    await expect(section.getByRole("alert")).toHaveCount(0);
     // One left: it can't be unlinked.
     await expect(section.getByText("sue-gh")).toBeVisible();
     await expect(section.getByRole("button", { name: "Unlink" })).toHaveCount(0);
-    expect(unlink.calls).toHaveLength(2);
+    expect(unlink.calls).toHaveLength(1);
+    expect(stepUp.calls).toHaveLength(0);
   });
 
-  test("an account with passkeys confirms with one before linking", async ({ page }) => {
-    // What the server sends an account with passkeys to (auth/mod.rs link_start).
-    await stubPasskeys(page);
-    await fake(page, "POST", "/v1/me/step-up/start", { status: 200, body: { challenge_id: "s1", options: passkeyOptions } });
-    const finish = await fake(page, "POST", "/v1/me/step-up/finish", { status: 204, body: undefined });
+  test("signed in already, a sign-in page on its way to linking goes straight on to the provider", async ({ page }) => {
+    // Where a signed-out link sends you (auth/mod.rs link_start); signed in, it's a server
+    // address the website doesn't know, so the browser loads it rather than showing "Page not found".
     await signIn(page, "support");
-    await page.goto("/account?confirm_link=github#sign-ins");
-    const notice = page.getByRole("status").filter({ hasText: "To link GitHub, confirm it's you with one of your passkeys." });
-    await expect(notice).toBeVisible();
-    await notice.getByRole("button", { name: "Confirm with a passkey" }).click();
-    // Confirmed: on to linking, which goes to GitHub.
+    await page.goto(`/signin?return_to=${encodeURIComponent("/v1/auth/github/link?return_to=%2Faccount")}`);
     await page.waitForURL(`${server.fake}login/oauth/authorize?**`);
-    expect(finish.calls[0].body).toMatchObject({ challenge_id: "s1" });
-  });
-
-  test("a confirmation that fails says why", async ({ page }) => {
-    await stubPasskeys(page);
-    await fake(page, "POST", "/v1/me/step-up/start", {
-      status: 409,
-      body: apiError("conflict", "add a passkey first, or sign in again to confirm"),
-    });
-    await signIn(page, "support");
-    await page.goto("/account?confirm_link=github#sign-ins");
-    await page.getByRole("button", { name: "Confirm with a passkey" }).click();
-    await expect(page.getByRole("alert")).toHaveText("add a passkey first, or sign in again to confirm");
+    await expect(page.getByText("Page not found")).toHaveCount(0);
   });
 });
 
 test.describe("passkeys", () => {
-  test("adding one (named, or just 'Passkey') and removing one, which asks for a passkey first", async ({ page }) => {
+  test("adding one (named, or just 'Passkey') and removing one, with no \"confirm it's you\"", async ({ page }) => {
     // Passkeys can't work on 127.0.0.1 (crates/slop-api/src/passkeys.rs): the browser's prompt and
     // the server's answers are stood in for; the page is real.
     let keys: Array<{ id: string; name: string; created_at: string; last_used_at: string | null }> = [];
@@ -235,15 +206,8 @@ test.describe("passkeys", () => {
       keys = [...keys, { id: `k${keys.length + 1}`, name: body.name, created_at: "2026-10-23T10:00:00Z", last_used_at: null }];
       return { status: 201, body: keys[keys.length - 1] };
     });
-    let proved = false;
     const remove = await fake(page, "DELETE", /^\/v1\/me\/passkeys\/k1$/, () => {
-      if (!proved) return { status: 403, body: apiError("step_up_required", "this needs a recent sign-in") };
       keys = keys.filter((k) => k.id !== "k1");
-      return { status: 204, body: undefined };
-    });
-    await fake(page, "POST", "/v1/me/step-up/start", { status: 200, body: { challenge_id: "s1", options: passkeyOptions } });
-    await fake(page, "POST", "/v1/me/step-up/finish", () => {
-      proved = true;
       return { status: 204, body: undefined };
     });
     await stubPasskeys(page);
@@ -261,12 +225,10 @@ test.describe("passkeys", () => {
 
     const mac = section.getByRole("listitem").filter({ hasText: "MacBook" });
     await mac.getByRole("button", { name: "Remove" }).click();
-    await expect(section.getByRole("alert")).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-    await section.getByRole("button", { name: "Confirm with a passkey" }).click();
-    await mac.getByRole("button", { name: "Remove" }).click();
     await expect(mac).toHaveCount(0);
-    expect(remove.calls).toHaveLength(2);
-    expect(await page.evaluate(() => (window as unknown as { __passkeyPrompts: number }).__passkeyPrompts)).toBe(3);
+    await expect(section.getByRole("alert")).toHaveCount(0);
+    expect(remove.calls).toHaveLength(1);
+    expect(await page.evaluate(() => (window as unknown as { __passkeyPrompts: number }).__passkeyPrompts)).toBe(2);
   });
 
   test("closing the device's prompt says the passkey wasn't made", async ({ page }) => {
@@ -659,7 +621,7 @@ test.describe("sections", () => {
   });
 
   test("sections that need you say so in the list, in words as well as a mark", async ({ page }) => {
-    await tweak(page, "/v1/me", (me) => ({ ...me, new_decisions: 2, has_passkey: false, passkey_due_at: "2026-12-01T00:00:00Z" }));
+    await tweak(page, "/v1/me", (me) => ({ ...me, new_decisions: 2, has_passkey: false }));
     // Listing the decisions would mark them seen; this test only looks at the list.
     await fake(page, "GET", "/v1/me/decisions", { status: 200, body: [] });
     const terms = await call<{ version: string }>(null, "GET", "/v1/legal/terms");
@@ -673,12 +635,13 @@ test.describe("sections", () => {
     await openAccount(page);
     const nav = accountNav(page);
     await expect(nav.getByRole("link", { name: "Moderation (2 new)" })).toBeVisible();
-    await expect(nav.getByRole("link", { name: "Sign-in & security (add a passkey)" })).toBeVisible();
+    // Passkeys are optional: no mark asks for one.
+    await expect(nav.getByRole("link", { name: "Sign-in & security", exact: true })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Agreements (1 to accept)" })).toBeVisible();
     await expect(nav.getByRole("link", { name: "Money", exact: true })).toBeVisible();
-    // The passkey reminder is in its section too.
+    // Its section suggests one, gently.
     await nav.getByRole("link", { name: /Sign-in & security/ }).click();
-    await expect(page.getByRole("note").filter({ hasText: "need a passkey" })).toBeVisible();
+    await expect(page.getByRole("note").filter({ hasText: "Optional: a passkey lets you sign in quickly" })).toBeVisible();
   });
 
   test("the header shows who you are, with your public profile", async ({ page }) => {
