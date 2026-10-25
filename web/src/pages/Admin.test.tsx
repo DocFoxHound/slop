@@ -6,7 +6,7 @@ import { cleanup, fireEvent, render, screen, waitFor, within } from "@testing-li
 import { MemoryRouter } from "react-router";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 
-import { api, type AdminQueue, type QueuedReport } from "../api";
+import { api, type AdminApp, type AdminQueue, type QueuedReport } from "../api";
 import { Admin } from "./Admin";
 
 vi.mock("../session", () => ({
@@ -155,4 +155,58 @@ describe("the admin panel", () => {
     expect(await screen.findByText("Rejected “Miner 2.0.0”.")).toBeTruthy();
     expect(await screen.findByText("Nothing waiting here.")).toBeTruthy();
   });
+
+  it("lists apps a page at a time, and asks for only those needing attention, most urgent first", async () => {
+    vi.spyOn(api.admin, "queue").mockResolvedValue(empty);
+    const row = (n: number): AdminApp =>
+      ({
+        slug: `app-${n}`,
+        title: `App ${n}`,
+        stage: "released",
+        status: "listed",
+        repo_url: "https://github.com/x/y",
+        maker: "Mia",
+        releases: [],
+        pending_releases: 0,
+        flags: n === 0 ? ["reports"] : [],
+        visibility: "public",
+        icon_url: null,
+        thumbnail_url: null,
+        frozen_at: null,
+        frozen_reason: null,
+        stage_deadline: null,
+        last_commit_at: null,
+        updated_at: "2026-10-20T00:00:00Z",
+        newest_release: null,
+        serving_version: "1.0.0",
+        rescan_flags: 0,
+        downloads_lost: 0,
+        open_reports: n === 0 ? 3 : 0,
+        donations_paused: false,
+        players: 0,
+        last_played_at: null,
+        vote_count: 0,
+        not_slop_percent: null,
+      }) as AdminApp;
+    const apps = vi
+      .spyOn(api.admin, "apps")
+      .mockImplementation(async (q) => (q?.attention ? [row(0)] : q?.offset ? [row(50), row(51)] : Array.from({ length: 50 }, (_, i) => row(i))));
+    show("/admin?tab=apps");
+    const list = await screen.findByRole("list", { name: "Apps" });
+    expect(within(list).getAllByRole("listitem")).toHaveLength(50);
+    expect(within(list).getByText("3 open reports")).toBeTruthy();
+    expect(apps).toHaveBeenLastCalledWith({ status: undefined, attention: false, sort: "updated", q: undefined, limit: 50, offset: 0 });
+    // A full page: there may be more.
+    fireEvent.click(screen.getByRole("button", { name: "Show more" }));
+    await waitFor(() => expect(within(list).getAllByRole("listitem")).toHaveLength(52));
+    expect(apps).toHaveBeenCalledWith(expect.objectContaining({ offset: 50 }));
+    expect(screen.queryByRole("button", { name: "Show more" })).toBeNull();
+
+    // Needing attention starts again from one page, most urgent first.
+    fireEvent.change(screen.getByRole("combobox", { name: "Show" }), { target: { value: "attention" } });
+    await waitFor(() => expect(within(screen.getByRole("list", { name: "Apps" })).getAllByRole("listitem")).toHaveLength(1));
+    expect(apps).toHaveBeenLastCalledWith({ status: undefined, attention: true, sort: "urgent", q: undefined, limit: 50, offset: 0 });
+    expect((screen.getByRole("combobox", { name: "Sort" }) as HTMLSelectElement).value).toBe("urgent");
+    // (Fifty lines in jsdom take a few seconds on a busy machine.)
+  }, 30_000);
 });

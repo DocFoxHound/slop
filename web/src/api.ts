@@ -1658,10 +1658,63 @@ export interface AdminQueue {
   };
 }
 
+/** What can need staff about an app, most urgent first (crates/slop-api/src/admin_web.rs, FLAGS). */
+export type AdminAppFlag =
+  | "rescan_flagged"
+  | "download_lost"
+  | "frozen"
+  | "reports"
+  | "release_failed"
+  | "release_waiting"
+  | "past_deadline"
+  | "deadline_soon"
+  | "donations_paused"
+  | "no_commits"
+  | "no_players"
+  | "low_rating";
+
 export interface AdminApp extends AdminAppRef {
   releases: Array<{ id: string; version: string; reviewed_at: string | null }>;
   /** Releases still being checked or waiting for review. */
   pending_releases: number;
+  /** What needs staff, most urgent first; empty for a healthy app. */
+  flags: AdminAppFlag[];
+  visibility: string;
+  icon_url: string | null;
+  thumbnail_url: string | null;
+  frozen_at: string | null;
+  frozen_reason: string | null;
+  /** When its Coming soon or Beta time runs out (null once released). */
+  stage_deadline: string | null;
+  last_commit_at: string | null;
+  updated_at: string;
+  /** The newest release submitted, whatever became of it. */
+  newest_release: { version: string; status: string; status_reason: string | null } | null;
+  /** The version players get. */
+  serving_version: string | null;
+  /** Live release files a re-scan flagged, and ones whose download changed or went away. */
+  rescan_flags: number;
+  downloads_lost: number;
+  open_reports: number;
+  donations_paused: boolean;
+  /** Accounts that have launched it, and when one last played. */
+  players: number;
+  last_played_at: string | null;
+  vote_count: number;
+  /** Weighted % Not Slop; null below the store's minimum number of votes. */
+  not_slop_percent: number | null;
+}
+
+export interface AdminAppsQuery {
+  status?: AppStatus;
+  /** Part of the title, address or maker's name. */
+  q?: string;
+  /** Only apps with a flag. */
+  attention?: boolean;
+  sort?: "updated" | "urgent" | "title";
+  /** Up to 200 (the default). */
+  limit?: number;
+  offset?: number;
 }
 
 export interface ListingEdit {
@@ -2843,8 +2896,11 @@ export const api = {
     featured: () => request<AdminFeatured[]>("GET", "/v1/admin/featured"),
     setFeatured: (apps: Array<{ slug: string; blurb: string }>) =>
       request<AdminFeatured[]>("PUT", "/v1/admin/featured", { apps }),
-    apps: (status?: AppStatus, q?: string) =>
-      request<AdminApp[]>("GET", `/v1/admin/apps${query({ status, q: q || undefined })}`),
+    apps: (q: AdminAppsQuery = {}) =>
+      request<AdminApp[]>(
+        "GET",
+        `/v1/admin/apps${query({ ...q, q: q.q || undefined, attention: q.attention || undefined })}`,
+      ),
     /** Everything about one app: listing, releases, money, reports, decisions, history. */
     appRecord: (slug: string) =>
       request<AdminAppRecord>("GET", `/v1/admin/apps/${encodeURIComponent(slug)}/record`),
