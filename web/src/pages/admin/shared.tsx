@@ -4,19 +4,16 @@
 import { useState } from "react";
 
 import { ApiError } from "../../api";
-import { StepUpPrompt } from "../../components/PasskeyStepUp";
 
 /** Runs an admin action, showing its error (e.g. "approve a release first") if refused. */
 export function useAction(onDone: () => void) {
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
   const [notice, setNotice] = useState<string>();
-  const [stepUp, setStepUp] = useState(false);
   const run = async (key: string, action: () => Promise<unknown>) => {
     setBusy(key);
     setError(undefined);
     setNotice(undefined);
-    setStepUp(false);
     try {
       const result = await action();
       // Sensitive actions may wait for another staff member (staff.rs).
@@ -28,12 +25,11 @@ export function useAction(onDone: () => void) {
       onDone();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
-      setStepUp(err instanceof ApiError && err.code === "step_up_required");
     } finally {
       setBusy(undefined);
     }
   };
-  return { busy, error, notice, stepUp, run };
+  return { busy, error, notice, run };
 }
 
 export function ReasonButton({
@@ -182,8 +178,8 @@ export function DelistButton({
   );
 }
 
-/** The outcome of an action: refused, waiting for a second approval, or a sign-in needed. */
-export function ActionMessages({ error, notice, stepUp }: { error?: string; notice?: string; stepUp?: boolean }) {
+/** The outcome of an action: refused, or waiting for a second approval. */
+export function ActionMessages({ error, notice }: { error?: string; notice?: string }) {
   return (
     <>
       {notice && (
@@ -196,7 +192,6 @@ export function ActionMessages({ error, notice, stepUp }: { error?: string; noti
           {error}
         </p>
       )}
-      {stepUp && <StepUpPrompt signInAgain={`/signin?return_to=${encodeURIComponent(location.pathname + location.search)}`} />}
     </>
   );
 }

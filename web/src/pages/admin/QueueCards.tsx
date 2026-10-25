@@ -41,7 +41,7 @@ export const ABUSE_LABEL: Record<string, string> = {
 type Q = AdminQueue;
 
 export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -87,7 +87,7 @@ export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: (
       <SourceCheckList checks={r.source_checks} audience="reviewer" />
       <RepoScanList scan={r.repo_scan} advisories={r.advisories} audience="reviewer" />
       <Notes notes={r.notes} />
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <button
           className="btn slime small"
@@ -109,7 +109,7 @@ export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: (
 }
 
 export function ChangeCard({ c, onDone }: { c: Q["changes"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -156,7 +156,7 @@ export function ChangeCard({ c, onDone }: { c: Q["changes"][number]; onDone: () 
           review.
         </p>
       )}
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <button
           className="btn slime small"
@@ -178,7 +178,7 @@ export function ChangeCard({ c, onDone }: { c: Q["changes"][number]; onDone: () 
 }
 
 export function MediaCard({ m, onDone }: { m: Q["media"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -217,7 +217,7 @@ export function MediaCard({ m, onDone }: { m: Q["media"][number]; onDone: () => 
         </details>
       )}
       <Notes notes={m.notes} />
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <button
           className="btn slime small"
@@ -239,7 +239,7 @@ export function MediaCard({ m, onDone }: { m: Q["media"][number]; onDone: () => 
 }
 
 export function PortfolioCard({ p, onDone }: { p: Q["portfolios"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -266,7 +266,7 @@ export function PortfolioCard({ p, onDone }: { p: Q["portfolios"][number]; onDon
         </details>
       )}
       <Notes notes={p.notes} />
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <button
           className="btn slime small"
@@ -288,7 +288,7 @@ export function PortfolioCard({ p, onDone }: { p: Q["portfolios"][number]; onDon
 }
 
 export function ProblemCard({ p, onDone }: { p: Q["problems"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -319,7 +319,7 @@ export function ProblemCard({ p, onDone }: { p: Q["problems"][number]; onDone: (
       {p.mediator_suggestion && <p className="muted">Suggested: {p.mediator_suggestion}</p>}
       <JobRecord jobId={p.job_id} />
       <Notes notes={p.notes} />
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <ReasonButton
           label="Suggest an outcome"
@@ -340,7 +340,7 @@ export function ProblemCard({ p, onDone }: { p: Q["problems"][number]; onDone: (
 }
 
 export function DisputeCard({ d, onDone }: { d: Q["review_disputes"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -361,7 +361,7 @@ export function DisputeCard({ d, onDone }: { d: Q["review_disputes"][number]; on
       )}
       <JobRecord jobId={d.job_id} />
       <Notes notes={d.notes} />
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <ReasonButton
           label="Keep it"
@@ -396,7 +396,7 @@ export function DisputeCard({ d, onDone }: { d: Q["review_disputes"][number]; on
 }
 
 export function ReadyCard({ a, onDone }: { a: Q["ready_to_list"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -427,13 +427,13 @@ export function ReadyCard({ a, onDone }: { a: Q["ready_to_list"][number]; onDone
         <Link to={`/admin?tab=apps&app=${encodeURIComponent(a.slug)}`}>Open its record</Link>
       </p>
       <Notes notes={a.notes} />
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
     </li>
   );
 }
 
 export function RescanCard({ f, onDone }: { f: Q["rescans"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -452,7 +452,7 @@ export function RescanCard({ f, onDone }: { f: Q["rescans"][number]; onDone: () 
       {f.rescan_report?.findings && (
         <ScanFindings report={{ engines: {}, capabilities: [], ...f.rescan_report } as ScanReport} />
       )}
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <ReasonButton
           label="Withdraw release"
@@ -473,7 +473,7 @@ export function RescanCard({ f, onDone }: { f: Q["rescans"][number]; onDone: () 
 }
 
 export function AbuseCard({ a, onDone }: { a: Q["abuse"][number]; onDone: () => void }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -496,7 +496,7 @@ export function AbuseCard({ a, onDone }: { a: Q["abuse"][number]; onDone: () => 
           .map(([k, v]) => `${k.replace(/_/g, " ")}: ${String(v)}`)
           .join(" · ")}
       </p>
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <ReasonButton
           label="Dealt with"
@@ -525,7 +525,7 @@ export function StaffActionCard({
   approvalsRequired: number;
   onDone: () => void;
 }) {
-  const { busy, error, notice, stepUp, run } = useAction(onDone);
+  const { busy, error, notice, run } = useAction(onDone);
   return (
     <li className="panel panel-pad">
       <b>{a.summary}</b>
@@ -537,7 +537,7 @@ export function StaffActionCard({
         Sensitive actions need {approvalsRequired} different staff members, counting the one who asked. Approving makes it
         happen; requests lapse after three days.
       </p>
-      <ActionMessages error={error} notice={notice} stepUp={stepUp} />
+      <ActionMessages error={error} notice={notice} />
       <div className="row-actions">
         <button
           className="btn small slime"

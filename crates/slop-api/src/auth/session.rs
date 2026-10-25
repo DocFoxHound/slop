@@ -190,11 +190,6 @@ async fn lookup(state: &AppState, headers: &HeaderMap) -> ApiResult<Option<Curre
     }))
 }
 
-/// How recent a sign-in must be for the one step-up left: staff making an admin API token
-/// (admin_web.rs `confirm_recent`). Everything else trusts any signed-in session: the owner's
-/// decision of 2026-10-25 (SECURITY §4.3).
-pub const STEP_UP_WINDOW: Duration = Duration::minutes(10);
-
 /// What a suspended account may still do besides reading: appeal, accept terms, download its
 /// data, sign out (here or on other devices) and close the account.
 pub fn allowed_while_suspended(method: &axum::http::Method, path: &str) -> bool {

@@ -5,8 +5,6 @@
 //! - **Adding or removing one** (Account → Sign-in & security) works from any signed-in session.
 //! - **Signing in** with one needs no username: the browser offers the passkeys it has for Slop,
 //!   and the one chosen names its account. Closed accounts are refused, as with providers.
-//! - **Confirming with one** (`step_up`): the one step-up left, staff making an admin API token
-//!   (review.rs), also accepts a passkey used in the last ten minutes.
 //!
 //! Until 2026-10-25, sensitive actions (changing where donations go, linking sign-ins, closing the
 //! account…) asked for a recent sign-in or passkey, and publishers and creatives had to use a
@@ -45,8 +43,6 @@ pub fn routes() -> Router<AppState> {
         .route("/me/passkeys/{id}", delete(remove))
         .route("/me/passkeys/register/start", post(register_start))
         .route("/me/passkeys/register/finish", post(register_finish))
-        .route("/me/step-up/start", post(step_up_start))
-        .route("/me/step-up/finish", post(step_up_finish))
         .route("/auth/passkey/start", post(sign_in_start))
         .route("/auth/passkey/finish", post(sign_in_finish))
 }
@@ -357,61 +353,6 @@ async fn sign_in_finish(
         .and_then(|v| v.to_str().ok());
     let cookie = session::create(&state.db, &state.config, user_id, agent).await?;
     Ok((jar.add(cookie), Json(json!({ "signed_in": true }))))
-}
-
-async fn step_up_start(
-    State(state): State<AppState>,
-    user: CurrentUser,
-) -> ApiResult<Json<Started<RequestChallengeResponse>>> {
-    let keys: Vec<Passkey> = passkeys_of(&state, user.id)
-        .await?
-        .into_iter()
-        .map(|(_, k)| k)
-        .collect();
-    if keys.is_empty() {
-        return Err(ApiError::Conflict(
-            "add a passkey first, or sign in again to confirm".into(),
-        ));
-    }
-    let (options, auth) = webauthn(&state)?
-        .start_passkey_authentication(&keys)
-        .map_err(|e| ApiError::Internal(anyhow::anyhow!("{e}")))?;
-    let id = save_challenge(
-        &state,
-        "step_up",
-        Some(user.id),
-        Some(user.session_id),
-        serde_json::to_value(&auth).map_err(|e| ApiError::Internal(e.into()))?,
-    )
-    .await?;
-    Ok(Json(Started {
-        challenge_id: id,
-        options,
-    }))
-}
-
-async fn step_up_finish(
-    State(state): State<AppState>,
-    user: CurrentUser,
-    Json(b): Json<Finish>,
-) -> ApiResult<StatusCode> {
-    let ceremony = take_challenge(&state, b.challenge_id, "step_up", Some(&user)).await?;
-    let auth: PasskeyAuthentication =
-        serde_json::from_value(ceremony).map_err(|e| ApiError::Internal(e.into()))?;
-    let result = webauthn(&state)?
-        .finish_passkey_authentication(&b.credential, &auth)
-        .map_err(refused)?;
-    let keys = passkeys_of(&state, user.id).await?;
-    let (id, key) = keys
-        .into_iter()
-        .find(|(_, k)| k.cred_id() == result.cred_id())
-        .ok_or_else(|| ApiError::invalid("credential", "Slop doesn't know that passkey"))?;
-    used(&state, id, key, &result).await?;
-    sqlx::query("update sessions set stepped_up_at = now() where id = $1")
-        .bind(user.session_id)
-        .execute(&state.db)
-        .await?;
-    Ok(StatusCode::NO_CONTENT)
 }
 
 /// Expired ceremonies (cleanup.rs).

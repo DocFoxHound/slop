@@ -8,7 +8,6 @@ import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
 import { api, type AdminApp, type AppStage, type AppStatus, type AuditEntry, type StaffRole } from "../api";
-import { StepUpPrompt } from "../components/PasskeyStepUp";
 import { ErrorState, Loading } from "../components/ui";
 import { accountId, formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -118,7 +117,7 @@ function AdminPanel() {
 function StaffTab() {
   const staff = useLoad(() => api.admin.staff(), []);
   const history = useLoad(() => api.admin.actions(true), []);
-  const { busy, error, notice, stepUp, run } = useAction(() => {
+  const { busy, error, notice, run } = useAction(() => {
     staff.reload();
     history.reload();
   });
@@ -164,11 +163,7 @@ function StaffTab() {
       )}
       {error && (
         <p className="form-error" role="alert">
-          {stepUp ? (
-            <StepUpPrompt signInAgain="/signin?return_to=%2Fadmin%3Ftab%3Dstaff" />
-          ) : (
-            error
-          )}
+          {error}
         </p>
       )}
       <table className="kv-table">

@@ -36,10 +36,6 @@ pub enum ApiError {
     TermsRequired(&'static str),
     #[error("your account is suspended: see the decision on your account page")]
     Suspended,
-    /// Staff making an admin API token (review.rs) needs a sign-in from the last few minutes: the
-    /// one step-up left (SECURITY §4.3).
-    #[error("confirm it's you first: sign in again, or use a passkey")]
-    StepUpRequired,
     /// Too many unfinished checkouts: solve a proof-of-work challenge first (challenge.rs).
     #[error("one more step before trying again: your browser needs to do a quick check")]
     ChallengeRequired,
@@ -87,7 +83,6 @@ impl IntoResponse for ApiError {
             Self::Unavailable(_) => (StatusCode::SERVICE_UNAVAILABLE, "unavailable"),
             Self::TermsRequired(_) => (StatusCode::CONFLICT, "terms_required"),
             Self::Suspended => (StatusCode::FORBIDDEN, "suspended"),
-            Self::StepUpRequired => (StatusCode::FORBIDDEN, "step_up_required"),
             Self::ChallengeRequired => (StatusCode::CONFLICT, "challenge_required"),
             Self::TooFast { .. } | Self::NotYet { .. } => {
                 (StatusCode::TOO_MANY_REQUESTS, "rate_limited")

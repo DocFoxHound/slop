@@ -432,7 +432,6 @@ function InboxList({
   const links = useRef(new Map<string, HTMLAnchorElement>());
   const [busy, setBusy] = useState<string>();
   const [error, setError] = useState<string>();
-  const [stepUp, setStepUp] = useState(false);
   /** The line just decided: once it's gone, focus moves to the line now in its place. */
   const decided = useRef<{ key: string; index: number }>(undefined);
   const rows = sortRows(rowsFor(box, waiting.data), order);
@@ -449,7 +448,6 @@ function InboxList({
   const act = async (row: RowInfo, index: number, quick: Quick, reason: string): Promise<boolean> => {
     setBusy(row.key);
     setError(undefined);
-    setStepUp(false);
     try {
       const answer = await quick.run(reason);
       const pending = !!answer && typeof answer === "object" && "pending_action" in answer;
@@ -463,7 +461,6 @@ function InboxList({
       return true;
     } catch (e) {
       setError(e instanceof ApiError ? e.message : String(e));
-      setStepUp(e instanceof ApiError && e.code === "step_up_required");
       return false;
     } finally {
       setBusy(undefined);
@@ -488,7 +485,7 @@ function InboxList({
         </label>
       </div>
       <p className="muted small">{def.help}</p>
-      <ActionMessages error={error} stepUp={stepUp} />
+      <ActionMessages error={error} />
       {rows.length === 0 ? (
         <div className="empty-state">Nothing waiting here.</div>
       ) : (

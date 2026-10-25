@@ -12679,49 +12679,11 @@ async fn passkeys_are_added_from_any_session_and_still_confirm_staff_tokens(db: 
         .send(req(Method::POST, "/v1/me/passkeys/register/start").cookie(&cookie))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    // Confirming with it still works (staff making an admin API token ask for it).
-    let started = body_json(
-        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
-            .await,
-    )
-    .await;
-    let options = serde_json::from_value(started["options"].clone()).unwrap();
-    let assertion = authenticator
-        .do_authentication(origin.clone(), options)
-        .unwrap();
+    // Passkeys no longer have a step-up ceremony.
     let res = app
-        .send(
-            req(Method::POST, "/v1/me/step-up/finish")
-                .cookie(&cookie)
-                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
-        )
+        .send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
         .await;
-    assert_eq!(res.status(), StatusCode::NO_CONTENT);
-    let used: bool =
-        sqlx::query_scalar("select last_used_at is not null from passkeys where user_id = $1")
-            .bind(user_id)
-            .fetch_one(&app.db)
-            .await
-            .unwrap();
-    assert!(used);
-
-    // Someone else's session can't use Pia's challenge.
-    let (_, other) = app.user("Other", "US").await;
-    let started = body_json(
-        app.send(req(Method::POST, "/v1/me/step-up/start").cookie(&cookie))
-            .await,
-    )
-    .await;
-    let options = serde_json::from_value(started["options"].clone()).unwrap();
-    let assertion = authenticator.do_authentication(origin, options).unwrap();
-    let res = app
-        .send(
-            req(Method::POST, "/v1/me/step-up/finish")
-                .cookie(&other)
-                .json(json!({ "challenge_id": started["challenge_id"], "credential": assertion })),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
 
     // Signing in starts a usernameless ceremony.
     let started = body_json(app.send(req(Method::POST, "/v1/auth/passkey/start")).await).await;

@@ -5,6 +5,7 @@
 // admin-helpers.ts), and is out of the store again at the end.
 import { closePages, githubRepo, listedApp, MAKER, MAKER_NAME, newApp, newPage, newRelease, ok, seeDecisions, tag } from "./admin-helpers";
 import { expect, signIn, test } from "./fixtures";
+import { fake } from "./accounts-helpers";
 
 test.afterEach(closePages);
 
@@ -244,26 +245,18 @@ test("donation pauses: turned off with a ground, the maker's request kept, lifte
   await expect(recent.getByRole("cell", { name: /^donation/ }).first()).toBeVisible();
 });
 
-test("a sensitive action that needs a recent sign-in offers the way through", async ({ page }) => {
-  // The seeded sessions are recent, so the server's refusal is played to the page; nothing changes.
-  await page.route("**/v1/admin/releases/*/revoke", (route) =>
-    route.fulfill({
-      status: 403,
-      json: { error: { code: "step_up_required", message: "confirm it's you first: sign in again, or use a passkey" } },
-    }),
-  );
+test("a sensitive action asks for no recent sign-in and offers no step-up", async ({ page }) => {
+  // The page's own session is trusted (SECURITY 4.3): the action goes straight through, so it's
+  // played here with an answer and nothing changes on the server.
+  const withdrawn = await fake(page, "POST", /^\/v1\/admin\/releases\/[^/]+\/revoke$/, { status: 200, body: {} });
   await signIn(page, "admin");
   await page.goto("/admin?tab=apps&app=lantern-keep");
   const store = page.locator("section").filter({ has: page.getByRole("heading", { name: "In the store" }) });
   await store.getByRole("button", { name: "Withdraw 1.0.0" }).click();
-  await store.getByRole("textbox", { name: "Withdraw 1.0.0: reason" }).fill("Testing the sign-in prompt.");
+  await store.getByRole("textbox", { name: "Withdraw 1.0.0: reason" }).fill("Testing that no sign-in is asked.");
   await store.getByRole("button", { name: "Withdraw 1.0.0" }).click();
-  await expect(store.getByRole("alert")).toHaveText("confirm it's you first: sign in again, or use a passkey");
-  await expect(store.getByText(/For your safety, this needs a sign-in from the last few minutes\./)).toBeVisible();
-  await expect(store.getByRole("button", { name: "Confirm with a passkey" })).toBeVisible();
-  await expect(store.getByRole("link", { name: "sign in again" })).toHaveAttribute(
-    "href",
-    `/signin?return_to=${encodeURIComponent("/admin?tab=apps&app=lantern-keep")}`,
-  );
+  await expect.poll(() => withdrawn.calls.length).toBe(1);
+  await expect(store.getByRole("button", { name: "Confirm with a passkey" })).toHaveCount(0);
+  await expect(store.getByText(/needs a sign-in from the last few minutes/)).toHaveCount(0);
   await expect(page.getByText("LISTED", { exact: true })).toBeVisible();
 });
