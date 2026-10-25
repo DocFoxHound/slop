@@ -73,6 +73,8 @@ your money.
 Slop is in **private testing** at [slopai.games](https://slopai.games). The desktop app runs on
 Windows and Linux and updates itself; macOS and phones come later.
 
+How Slop's Windows app is built and signed: [Code signing policy](docs/CODE-SIGNING.md).
+
 Want to help build it? Start with [`docs/DEVELOPING.md`](docs/DEVELOPING.md),
 [`CONTRIBUTING.md`](CONTRIBUTING.md) and [`AGENTS.md`](AGENTS.md). Found a security problem?
 See [`CONTRIBUTING.md`](CONTRIBUTING.md#security-problems), and please don't open a public issue.

@@ -96,6 +96,7 @@ test("the store front is all apps; Slop's own links are at the bottom", async ({
     ["Check a file", "/verify"],
     ["Source code", "/source"],
     ["Contact", "/contact"],
+    ["Code signing policy", "https://github.com/DocFoxHound/slop/blob/main/docs/CODE-SIGNING.md"],
   ]) {
     await expect(footer.getByRole("link", { name })).toHaveAttribute("href", href);
   }

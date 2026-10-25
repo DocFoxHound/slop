@@ -81,6 +81,11 @@ export function Download() {
         <Link to="/">website</Link>.
       </p>
       <p className="muted small">
+        <a href="https://github.com/DocFoxHound/slop/blob/main/docs/CODE-SIGNING.md">Code signing policy</a>: free code signing provided by{" "}
+        <a href="https://about.signpath.io">SignPath.io</a>, certificate by <a href="https://signpath.org">SignPath Foundation</a>{" "}
+        (applied for; the Windows app is unsigned until then).
+      </p>
+      <p className="muted small">
         What's inside: the <a href="/sbom.json">software bill of materials</a> (CycloneDX) lists every library in this build of
         Slop, with its version.
       </p>
