@@ -146,7 +146,7 @@ test("each file's check shows while Slop works through them, and the page refres
   await expect(row).toContainText("1 of 4 done");
   await expect(row).toContainText("Checking file 2 of 4: Linux (.deb) — Scanning for malware");
   await expect(row).toContainText("About 5 minutes per file; started 12 minutes ago. About 13 minutes left.");
-  await expect(row.getByRole("link", { name: `Set up donations for ${title}` })).toHaveAttribute("href", `/publish/${slug}/manage#donations`);
+  await expect(row.getByRole("link", { name: `Set up donations for ${title}` })).toHaveAttribute("href", `/publish/${slug}#donations`);
   await expect(row).toContainText("Donations: off · Set up");
   // An app that takes donations has no pointer.
   await expect(page.locator("li.status-row").filter({ hasText: "Lantern Keep" }).getByText("Donations: off")).toHaveCount(0);

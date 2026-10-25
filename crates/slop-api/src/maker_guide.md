@@ -76,7 +76,7 @@ When your maker's app receives an offer, `list_offers` shows it: review the pull
 ## Don't
 
 - Don't spend money, change payout details, accept agreements or change account settings: this token can't, and you shouldn't try.
-- Don't try to set up donations: the person does that themselves (Stripe's own sign-up, 18 or older) under **Publish → the app → Manage → Donations**. Point them there when donations come up.
+- Don't try to set up donations: the person does that themselves (Stripe's own sign-up, 18 or older) in the **Get paid** section at the top of the app's Edit store page (Publish → the app → Edit page; also under Manage → Donations). Point them there when donations come up.
 - Don't submit the same failing release again unchanged. Read `get_fixes` first.
 - Don't make many tiny releases: each one is reviewed by a person.
 

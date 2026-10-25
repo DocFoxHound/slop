@@ -3,16 +3,30 @@
 // one beside it), the vote buttons, and the rating, votes and players over time
 // (crates/slop-api/src/votes.rs, pulse.rs; DESIGN §7, METRICS §2).
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { api, ApiError, type Ratings } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
+import { isDesktop } from "../platform";
 import { LineChart, UpDownBars } from "./Charts";
 
 function shortDay(day: string) {
   return day.slice(5);
+}
+
+/** "3 of these votes were given in Beta", when any were. */
+export function BetaNote({ ratings }: { ratings: Ratings }) {
+  const n = ratings.in_beta ?? 0;
+  if (n === 0) return null;
+  const total = ratings.not_slop + ratings.slop;
+  return (
+    <div className="muted small beta-note">
+      {n === total ? (total === 1 ? "This vote was" : `All ${total.toLocaleString()} votes were`) : `${n.toLocaleString()} of these votes were`}{" "}
+      given while it was in Beta.
+    </div>
+  );
 }
 
 export function RatingSummary({ ratings }: { ratings: Ratings }) {
@@ -25,6 +39,7 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
           {" "}
           · a rating shows from {ratings.min_votes} votes · <Link to="/ratings">how ratings work</Link>
         </span>
+        <BetaNote ratings={ratings} />
       </div>
     );
   }
@@ -38,6 +53,7 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
         <Link to="/ratings">weighted by playtime</Link> · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()}{" "}
         👍 / {ratings.slop.toLocaleString()} 👎)
       </div>
+      <BetaNote ratings={ratings} />
     </div>
   );
 }
@@ -115,26 +131,63 @@ export function jumpToRating() {
   panel.focus({ preventScroll: true });
 }
 
+/** What the viewer can do about rating an app, for the top of its page. */
+export type RateStep =
+  | { kind: "rate"; vote: "not_slop" | "slop" | null; beta: boolean }
+  | { kind: "sign_in" }
+  | { kind: "play" }
+  | { kind: "maker" }
+  | { kind: "coming_soon" }
+  | { kind: "other"; reason: string }
+  | { kind: "none" };
+
+export function rateStep(r: Ratings, isMine: boolean, signedIn: boolean): RateStep {
+  if (!r.open) return { kind: "coming_soon" };
+  if (isMine) return { kind: "maker" };
+  if (!signedIn) return { kind: "sign_in" };
+  const mine = r.mine;
+  if (!mine) return { kind: "none" };
+  if (mine.can_vote) return { kind: "rate", vote: mine.vote, beta: r.stage === "beta" };
+  if (mine.played === false || mine.reason?.startsWith("Launch it")) return { kind: "play" };
+  return mine.reason ? { kind: "other", reason: mine.reason } : { kind: "none" };
+}
+
 /**
  * The rating at the top of an app's page: "96% Not Slop · Overwhelmingly Not Slop · 2,914 votes",
- * and what the viewer can do about it: rate it (jumping to the panel), or why they can't yet.
+ * and what the viewer can do about it, plainly: a Rate it button (jumping to the panel), or why
+ * they can't yet with the step to take right there (sign in; play it from the Slop app, with
+ * `play`, the page's Play/Install control, in the desktop app; Interested while it's Coming soon).
  */
-export function RatingHeader({ slug, isMine, signedIn }: { slug: string; isMine: boolean; signedIn: boolean }) {
-  const r = useRatings(slug, signedIn).data;
-  if (!r) return null;
+export function RatingHeader({
+  slug,
+  title,
+  isMine,
+  signedIn,
+  play,
+  interested,
+}: {
+  slug: string;
+  title: string;
+  isMine: boolean;
+  signedIn: boolean;
+  /** The app's Play/Install control, offered in the desktop app to players who haven't played. */
+  play?: ReactNode;
+  /** The Interested button, offered while it's Coming soon. */
+  interested?: ReactNode;
+}) {
+  const loaded = useRatings(slug, signedIn);
+  const r = loaded.data;
+  const step = r ? rateStep(r, isMine, signedIn) : undefined;
+  // Back from playing it (the Slop app's window, or another tab): ask again whether they can rate.
+  const waiting = step?.kind === "play";
+  const reload = loaded.reload;
+  useEffect(() => {
+    if (!waiting) return;
+    window.addEventListener("focus", reload);
+    return () => window.removeEventListener("focus", reload);
+  }, [waiting, reload]);
+  if (!r || !step) return null;
   const total = r.not_slop + r.slop;
-  const mine = r.mine;
-  const why = !r.open
-    ? "Voting opens when it's released."
-    : isMine
-      ? "Makers can't rate their own app."
-      : !signedIn
-        ? null
-        : mine && !mine.can_vote
-          ? mine.reason?.startsWith("Launch it")
-            ? "Play it from the Slop app to rate it."
-            : mine.reason
-          : null;
   return (
     <div className="rating-head">
       <div className="rating-head-score">
@@ -161,20 +214,89 @@ export function RatingHeader({ slug, isMine, signedIn }: { slug: string; isMine:
           </>
         )}
       </div>
-      {r.open && !isMine && signedIn && mine?.can_vote ? (
-        <button type="button" className={`btn ${mine.vote ? "" : "slime"}`} onClick={jumpToRating}>
-          {mine.vote ? `Your rating: ${VOTE_LABEL[mine.vote]}` : "Rate it"}
-        </button>
-      ) : r.open && !isMine && !signedIn ? (
-        <p className="muted small">
-          <Link to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>Sign in</Link> and play it from the Slop app to
-          rate it.
-        </p>
-      ) : (
-        why && <p className="muted small">{why}</p>
-      )}
+      <RateCallout step={step} slug={slug} title={title} play={play} interested={interested} />
     </div>
   );
+}
+
+function RateCallout({
+  step,
+  slug,
+  title,
+  play,
+  interested,
+}: {
+  step: RateStep;
+  slug: string;
+  title: string;
+  play?: ReactNode;
+  interested?: ReactNode;
+}) {
+  switch (step.kind) {
+    case "none":
+      return null;
+    case "rate":
+      return (
+        <div className="rate-callout can-rate">
+          <button type="button" className={`btn ${step.vote ? "" : "slime"}`} onClick={jumpToRating}>
+            {step.vote ? `Your rating: ${VOTE_LABEL[step.vote]}` : "Rate it"}
+          </button>
+          {step.beta && <span className="muted small">It's in Beta: your rating is marked Rated in Beta.</span>}
+        </div>
+      );
+    case "sign_in":
+      return (
+        <div className="rate-callout" role="group" aria-label="Rate it">
+          <p>
+            <b>Played {title}? Sign in to rate it.</b> Ratings come from players who played it from the Slop app.
+          </p>
+          <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>
+            Sign in to rate
+          </Link>
+        </div>
+      );
+    case "play":
+      return (
+        <div className="rate-callout" role="group" aria-label="Rate it">
+          <p>
+            <b>Play it from the Slop app to rate it.</b> Only players who launched it through Slop can rate, which keeps
+            ratings honest. {isDesktop ? "Then come back here." : "Then rate it here or in your library."}
+          </p>
+          {isDesktop ? (
+            play
+          ) : (
+            <Link className="btn slime" to="/download">
+              ⬇ Get the Slop app
+            </Link>
+          )}
+        </div>
+      );
+    case "maker":
+      return (
+        <div className="rate-callout" role="group" aria-label="Rate it">
+          <p>
+            <b>Makers can't rate their own app.</b> Players who play it from the Slop app rate it here.
+          </p>
+        </div>
+      );
+    case "coming_soon":
+      return (
+        <div className="rate-callout" role="group" aria-label="Rate it">
+          <p>
+            <b>Ratings open when it's playable</b>, in Beta or once it's released. Mark it Interested to hear when.
+          </p>
+          {interested}
+        </div>
+      );
+    case "other":
+      return (
+        <div className="rate-callout" role="group" aria-label="Rate it">
+          <p>
+            <b>{step.reason}</b>
+          </p>
+        </div>
+      );
+  }
 }
 
 /** The rating in a few words, for the library's header: "96% Not Slop", or nothing yet. */
@@ -302,11 +424,14 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
       {r.since_new_work && <SinceNewWork s={r.since_new_work} min={r.min_votes} />}
 
       {!r.open ? (
-        <p className="muted small">Voting opens when the app is released.</p>
+        <p className="muted small">Ratings open when it's playable: in Beta or released.</p>
       ) : isMine ? (
         <p className="muted small">Makers can't vote on their own apps.</p>
       ) : !signedIn ? (
-        <p className="muted small">Sign in and play it from the Slop app to vote.</p>
+        <p className="muted small">
+          <Link to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>Sign in</Link> and play it from the Slop app to
+          vote.
+        </p>
       ) : mine?.can_vote ? (
         <div className="vote-row">
           <button
@@ -329,6 +454,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
           </button>
           <span className="muted small">
             Your vote counts {Math.round(mine.weight * 100)}% (more as you play). Press again to take it back.
+            {r.stage === "beta" && " It's in Beta, so your vote is marked Rated in Beta."}
           </span>
         </div>
       ) : (

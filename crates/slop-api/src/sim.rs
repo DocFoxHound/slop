@@ -603,10 +603,8 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
                 entry.3 = day;
                 *players_by_day.entry((a, day)).or_default() += 1;
 
-                // Vote (released apps only), or think again after an update.
-                if apps[a].stage != "released" {
-                    continue;
-                }
+                // Vote (Beta and released apps; `playable` has only those), or think again
+                // after an update.
                 let q = apps[a].quality_on(day);
                 let truth = like_chance(q, fits[u][a]);
                 let prev = current.get(&(u, a)).copied();
@@ -875,7 +873,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .collect();
     bulk(
         &mut tx,
-        "insert into vote_events (id, user_id, app_id, vote, prev_vote, release_version, playtime_seconds, days_launched, weight, created_at) ",
+        "insert into vote_events (id, user_id, app_id, vote, prev_vote, release_version, playtime_seconds, days_launched, weight, created_at, stage) ",
         &event_rows,
         |b, (id, u, a, e)| {
             b.push_bind(*id)
@@ -887,15 +885,17 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
                 .push_bind(e.playtime)
                 .push_bind(e.days)
                 .push_bind(e.weight)
-                .push_bind(e.at);
+                .push_bind(e.at)
+                .push_bind(apps[e.app].stage)
+                .push_unseparated("::app_stage");
         },
     )
     .await?;
     // The current vote is each account's last event (withdrawals removed).
     sqlx::query(
-        "insert into votes (user_id, app_id, vote, weight, updated_at)
-         select user_id, app_id, vote, weight, created_at from (
-             select distinct on (user_id, app_id) user_id, app_id, vote, weight, created_at
+        "insert into votes (user_id, app_id, vote, weight, updated_at, stage)
+         select user_id, app_id, vote, weight, created_at, stage from (
+             select distinct on (user_id, app_id) user_id, app_id, vote, weight, created_at, stage
              from vote_events order by user_id, app_id, created_at desc, id desc) last
          where vote <> 0",
     )

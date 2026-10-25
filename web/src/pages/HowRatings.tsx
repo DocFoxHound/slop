@@ -44,7 +44,10 @@ export function HowRatings() {
       <h2>Who can vote</h2>
       <ul>
         <li>Anyone signed in who has launched the app through Slop. You can't rate what you haven't tried.</li>
-        <li>Only released apps: Coming soon and Beta apps collect Interested marks instead.</li>
+        <li>
+          Apps you can play: Beta and released apps. Coming soon apps have nothing to play yet, so they collect Interested marks
+          instead. A vote given while the app was in Beta is marked <b>Rated in Beta</b>.
+        </li>
         <li>One vote per account. You can change or withdraw it whenever you like.</li>
       </ul>
 

@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The maker's donation settings and totals, on the Manage page (PAYMENTS §4–6). One Stripe
-// account per app: the maker's own. Breakdowns appear only from 10 donations up (METRICS §3).
+// The maker's donation settings and totals, on the Manage page and the store page editor
+// (PAYMENTS §4–6), and the short version on the app's own store page where donations are off.
+// One Stripe account per app: the maker's own. Breakdowns appear only from 10 donations up
+// (METRICS §3).
 
 import { useState, type FormEvent } from "react";
 
@@ -13,21 +15,48 @@ import { amount } from "./Donate";
 import { useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
 
-export function DonationsPanel({ slug }: { slug: string }) {
+/** Every donation setting for one app. `returnTo` is where Stripe's sign-up comes back to. */
+export function DonationsPanel({
+  slug,
+  title = "Donations",
+  returnTo,
+  note,
+}: {
+  slug: string;
+  title?: string;
+  returnTo?: string;
+  /** A line under the heading (the editor: when the Donate box will show). */
+  note?: string;
+}) {
   const settings = useLoad(() => api.donations.settings(slug), [slug]);
   if (settings.error) return <ErrorState error={settings.error} onRetry={settings.reload} />;
   if (!settings.data) return null;
   const s = settings.data;
   return (
-    <section className="panel panel-pad" id="donations">
-      <h2>Donations</h2>
+    <section className="panel panel-pad" id="donations" aria-label={title}>
+      <h2>{title}</h2>
+      {note && <p className="muted small">{note}</p>}
       <HoldNotice slug={slug} />
-      {s.payments === "off" ? (
+      {s.private ? (
+        <p className="muted">Private Slop takes no donations. They can be turned on once it's public.</p>
+      ) : s.payments === "off" ? (
         <p className="muted">Payments aren't switched on on this server yet.</p>
       ) : s.account_status !== "active" ? (
-        <EnableDonations status={s.account_status} onDone={settings.reload} slug={slug} />
+        <EnableDonations status={s.account_status} onDone={settings.reload} slug={slug} returnTo={returnTo} />
       ) : (
         <>
+          <p className="small donations-state">
+            {s.donations_on ? (
+              <>
+                <b>Donations on.</b> Your store page has a Donate box offering amounts around{" "}
+                {amount(s.donation_suggested_minor, s.donation_currency)}.
+              </>
+            ) : (
+              <>
+                <b>Stripe is ready; donations are off.</b> Tick "Show the Donate button" below and save to turn them on.
+              </>
+            )}
+          </p>
           <SettingsForm slug={slug} s={s} onSaved={settings.reload} />
           <Summary slug={slug} />
         </>
@@ -114,7 +143,73 @@ function AskToLift({ slug, hold, canAskAt, onDone }: { slug: string; hold: Donat
   );
 }
 
-function EnableDonations({ status, onDone, slug }: { status: string; onDone: () => void; slug: string }) {
+/**
+ * The maker's fix where donations are off, on their app's store page: finish Stripe's sign-up, or
+ * switch the Donate box on, or ask Slop to lift a pause. Nothing when payments are off on the
+ * server: that's not theirs to fix, and the box already says so.
+ */
+export function DonationsFix({ slug, onChanged }: { slug: string; onChanged: () => void }) {
+  const settings = useLoad(() => api.donations.settings(slug), [slug]);
+  if (settings.error) return <ErrorState error={settings.error} onRetry={settings.reload} />;
+  const s = settings.data;
+  if (!s || s.private || s.payments === "off") return null;
+  const done = () => {
+    settings.reload();
+    onChanged();
+  };
+  return (
+    <div className="donations-fix">
+      <HoldNotice slug={slug} />
+      {s.account_status !== "active" ? (
+        <EnableDonations status={s.account_status} onDone={done} slug={slug} returnTo={`/app/${slug}`} />
+      ) : (
+        !s.donations_on && <TurnOn slug={slug} s={s} onDone={done} />
+      )}
+    </div>
+  );
+}
+
+/** Stripe is ready but the Donate box is off: one button switches it on, keeping the rest. */
+function TurnOn({ slug, s, onDone }: { slug: string; s: DonationSettings; onDone: () => void }) {
+  const [error, setError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const go = async () => {
+    setBusy(true);
+    setError(undefined);
+    try {
+      await api.donations.saveSettings(slug, {
+        donations_on: true,
+        donation_suggested_minor: s.donation_suggested_minor,
+        donation_currency: s.donation_currency,
+        runs_servers: s.runs_servers,
+        servers_statement: s.runs_servers ? s.servers_statement : null,
+      });
+      onDone();
+    } catch (err) {
+      setError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+  return (
+    <div className="form">
+      <p className="small">
+        Your Stripe account is ready. Donors are offered amounts around {amount(s.donation_suggested_minor, s.donation_currency)};
+        Slop's fee is 5%.
+      </p>
+      {error && (
+        <p className="form-error" role="alert">
+          {error}
+        </p>
+      )}
+      <button type="button" className="btn slime" disabled={busy} onClick={() => void go()}>
+        {busy ? "Turning on…" : "Turn on donations"}
+      </button>
+    </div>
+  );
+}
+
+function EnableDonations({ status, onDone, slug, returnTo }: { status: string; onDone: () => void; slug: string; returnTo?: string }) {
   const { me } = useSession();
   const [ack, setAck] = useState(false);
   const [adult, setAdult] = useState(false);
@@ -125,7 +220,7 @@ function EnableDonations({ status, onDone, slug }: { status: string; onDone: () 
     setBusy(true);
     setError(undefined);
     try {
-      const res = await gate.guard(() => api.donations.onboard({ tax_notice_ack: ack, confirm_adult: adult, return_to: `/publish/${slug}/manage#donations` }));
+      const res = await gate.guard(() => api.donations.onboard({ tax_notice_ack: ack, confirm_adult: adult, return_to: returnTo ?? `/publish/${slug}/manage#donations` }));
       if (res.url) await openExternal(res.url);
       else onDone();
     } catch (err) {

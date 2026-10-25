@@ -2,7 +2,9 @@
 //! Ratings: 👍 Not Slop / 👎 Slop (DESIGN §7, METRICS §1.2, §2).
 //!
 //! - Only players who launched the app through Slop can vote (that's `user_app_usage`), and only
-//!   once it's released. One vote per account, changeable or withdrawable at any time.
+//!   once it's playable: in Beta or released (owner decision 2026-10-25; Coming soon has nothing
+//!   to play). One vote per account, changeable or withdrawable at any time.
+//! - Each vote records the app's stage when it was cast, so a rating given in Beta says so.
 //! - Every action is a `vote_events` row; `votes` holds the current vote, updated in the same
 //!   transaction.
 //! - Each vote is **weighted** by the voter's use at the time: playtime from Slop Pulse when the
@@ -136,6 +138,8 @@ pub struct MyVote {
     pub can_vote: bool,
     /// Why not, when they can't.
     pub reason: Option<&'static str>,
+    /// They launched it through Slop (what voting needs, besides the stage).
+    pub played: bool,
     /// How much their vote counts now.
     pub weight: f32,
     /// Their written review, if any (reviews.rs).
@@ -154,8 +158,12 @@ pub struct Ratings {
     /// Days in those 90 with unusual voting the abuse checks found (abuse.rs: review bombs,
     /// bursts from new accounts, swings), unless staff found nothing wrong. Shaded on the chart.
     pub unusual_days: Vec<String>,
-    /// Voting opens at full release.
+    /// Voting is open: the app is in Beta or released.
     pub open: bool,
+    /// The app's stage now: coming_soon, beta or released.
+    pub stage: &'static str,
+    /// Of the current votes, how many were cast while the app was in Beta.
+    pub in_beta: i64,
     pub min_votes: i64,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub mine: Option<MyVote>,
@@ -244,7 +252,8 @@ pub async fn daily(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<Day>> {
 /// One group of current votes in the maker's breakdown.
 #[derive(Serialize)]
 pub struct Group {
-    /// A version, or a platform (windows, linux); null when it wasn't recorded.
+    /// A version, a platform (windows, linux) or a stage (beta, released); null when it wasn't
+    /// recorded.
     pub key: Option<String>,
     #[serde(flatten)]
     pub tally: Tally,
@@ -266,6 +275,8 @@ pub struct Impact {
 pub struct Breakdown {
     pub by_version: Vec<Group>,
     pub by_platform: Vec<Group>,
+    /// By the app's stage when each was cast: beta or released.
+    pub by_stage: Vec<Group>,
     pub impact: Vec<Impact>,
 }
 
@@ -278,7 +289,7 @@ async fn grouped(
     let rows: Vec<(Option<String>, i64, i64, f64, f64)> =
         sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "with current as (
-             select distinct on (e.user_id) e.{column} as key, e.vote, e.weight
+             select distinct on (e.user_id) e.{column}::text as key, e.vote, e.weight
              from vote_events e where e.app_id = $1
              order by e.user_id, e.created_at desc, e.id desc
          )
@@ -304,6 +315,7 @@ pub async fn breakdown_for(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Brea
     Ok(Breakdown {
         by_version: grouped(db, app_id, "release_version").await?,
         by_platform: grouped(db, app_id, "platform").await?,
+        by_stage: grouped(db, app_id, "stage").await?,
         impact: sqlx::query_as(
             "select release_version as version,
                     count(*) filter (where vote = 1 and prev_vote = -1) as to_not_slop,
@@ -361,6 +373,10 @@ pub async fn cast(
     if prev.unwrap_or(0) == vote {
         return Ok(false);
     }
+    let stage: String = sqlx::query_scalar("select stage::text from apps where id = $1")
+        .bind(app_id)
+        .fetch_one(&mut *tx)
+        .await?;
     let weight = vote_weight(playtime, days);
     let at = at.unwrap_or_else(OffsetDateTime::now_utc);
     let version: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
@@ -371,8 +387,8 @@ pub async fn cast(
     .fetch_optional(&mut *tx)
     .await?;
     sqlx::query(
-        "insert into vote_events (id, user_id, app_id, vote, prev_vote, release_version, playtime_seconds, days_launched, weight, created_at, platform)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11)",
+        "insert into vote_events (id, user_id, app_id, vote, prev_vote, release_version, playtime_seconds, days_launched, weight, created_at, platform, stage)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::app_stage)",
     )
     .bind(Uuid::now_v7())
     .bind(user_id)
@@ -385,6 +401,7 @@ pub async fn cast(
     .bind(weight)
     .bind(at)
     .bind(&platform)
+    .bind(&stage)
     .execute(&mut *tx)
     .await?;
     if vote == 0 {
@@ -395,14 +412,15 @@ pub async fn cast(
             .await?;
     } else {
         sqlx::query(
-            "insert into votes (user_id, app_id, vote, weight, updated_at) values ($1, $2, $3, $4, $5)
-             on conflict (user_id, app_id) do update set vote = $3, weight = $4, updated_at = $5",
+            "insert into votes (user_id, app_id, vote, weight, updated_at, stage) values ($1, $2, $3, $4, $5, $6::app_stage)
+             on conflict (user_id, app_id) do update set vote = $3, weight = $4, updated_at = $5, stage = $6::app_stage",
         )
         .bind(user_id)
         .bind(app_id)
         .bind(vote)
         .bind(weight)
         .bind(at)
+        .bind(&stage)
         .execute(&mut *tx)
         .await?;
     }
@@ -438,7 +456,7 @@ async fn my_vote(
     .fetch_optional(&state.db)
     .await?;
     let reason = if !open {
-        Some("Voting opens when the app is released.")
+        Some(NOT_OPEN)
     } else if usage.is_none() {
         Some("Launch it from the Slop app first: only players can vote.")
     } else {
@@ -448,16 +466,35 @@ async fn my_vote(
         vote: current.and_then(vote_name),
         can_vote: reason.is_none(),
         reason,
+        played: usage.is_some(),
         weight: usage.map_or(0.1, |(p, d)| vote_weight(p, d)),
         review: crate::reviews::mine(&state.db, user.id, app_id).await?,
     })
 }
 
-async fn load(state: &AppState, user: Option<&CurrentUser>, app_id: Uuid) -> ApiResult<Ratings> {
-    let open: bool = sqlx::query_scalar("select stage = 'released' from apps where id = $1")
+/// Why nobody can vote yet on a Coming soon app.
+const NOT_OPEN: &str = "Ratings open when it's playable: in Beta or released.";
+
+/// The app's stage, and whether voting is open in it.
+async fn stage(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<(&'static str, bool)> {
+    let stage: String = sqlx::query_scalar("select stage::text from apps where id = $1")
         .bind(app_id)
-        .fetch_one(&state.db)
+        .fetch_one(db)
         .await?;
+    Ok(match stage.as_str() {
+        "released" => ("released", true),
+        "beta" => ("beta", true),
+        _ => ("coming_soon", false),
+    })
+}
+
+async fn load(state: &AppState, user: Option<&CurrentUser>, app_id: Uuid) -> ApiResult<Ratings> {
+    let (stage, open) = stage(&state.db, app_id).await?;
+    let in_beta: i64 =
+        sqlx::query_scalar("select count(*) from votes where app_id = $1 and stage = 'beta'")
+            .bind(app_id)
+            .fetch_one(&state.db)
+            .await?;
     let mine = match user {
         Some(u) => Some(my_vote(state, u, app_id, open).await?),
         None => None,
@@ -468,6 +505,8 @@ async fn load(state: &AppState, user: Option<&CurrentUser>, app_id: Uuid) -> Api
         daily: daily(&state.db, app_id).await?,
         unusual_days: unusual_days(&state.db, app_id).await?,
         open,
+        stage,
+        in_beta,
         min_votes: MIN_VOTES,
         mine,
         since_new_work: crate::people::since_new_work(&state.db, app_id).await?,
@@ -516,16 +555,8 @@ async fn vote(
     if catalog::is_private(&state.db, app_id).await? {
         return Err(ApiError::Conflict("Private Slop has no voting".into()));
     }
-    let mine = my_vote(&state, &user, app_id, true).await?;
-    let open: bool = sqlx::query_scalar("select stage = 'released' from apps where id = $1")
-        .bind(app_id)
-        .fetch_one(&state.db)
-        .await?;
-    if !open {
-        return Err(ApiError::Conflict(
-            "voting opens when the app is released".into(),
-        ));
-    }
+    let (_, open) = stage(&state.db, app_id).await?;
+    let mine = my_vote(&state, &user, app_id, open).await?;
     if let Some(reason) = mine.reason {
         return Err(ApiError::Conflict(reason.into()));
     }

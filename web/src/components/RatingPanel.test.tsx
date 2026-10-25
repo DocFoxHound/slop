@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { cleanup, fireEvent, render, screen } from "@testing-library/react";
-import { afterEach, describe, expect, it } from "vitest";
+import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
 
-import type { Ratings } from "../api";
+import { api, type Ratings } from "../api";
 import { LineChart, UpDownBars } from "./Charts";
-import { RatingSummary, SinceNewWork } from "./RatingPanel";
+import { RatingHeader, RatingSummary, rateStep, SinceNewWork } from "./RatingPanel";
 
 const base: Ratings = {
   not_slop: 3,
@@ -38,6 +38,99 @@ describe("RatingSummary", () => {
     expect(screen.getByText("91% Not Slop")).toBeTruthy();
     expect(screen.getByText("Very Not Slop")).toBeTruthy();
     expect(screen.getByText(/80% unweighted · 10 votes/)).toBeTruthy();
+  });
+});
+
+describe("Rated in Beta", () => {
+  afterEach(cleanup);
+
+  it("says how many of the votes were given in Beta", () => {
+    render(<RatingSummary ratings={{ ...base, in_beta: 2 }} />, { wrapper: MemoryRouter });
+    expect(screen.getByText(/2 of these votes were given while it was in Beta/)).toBeTruthy();
+    cleanup();
+    render(<RatingSummary ratings={{ ...base, in_beta: 4 }} />, { wrapper: MemoryRouter });
+    expect(screen.getByText(/All 4 votes were given while it was in Beta/)).toBeTruthy();
+    cleanup();
+    render(<RatingSummary ratings={{ ...base, in_beta: 0 }} />, { wrapper: MemoryRouter });
+    expect(screen.queryByText(/in Beta/)).toBeNull();
+  });
+});
+
+describe("rateStep", () => {
+  const mine = { vote: null, can_vote: false, reason: null, played: false, weight: 0.1 } as const;
+
+  it("is Rate it whenever the viewer can vote, in Beta too", () => {
+    expect(rateStep({ ...base, stage: "beta", mine: { ...mine, can_vote: true, played: true } }, false, true)).toEqual({
+      kind: "rate",
+      vote: null,
+      beta: true,
+    });
+    expect(rateStep({ ...base, stage: "released", mine: { ...mine, can_vote: true, played: true, vote: "slop" } }, false, true)).toEqual({
+      kind: "rate",
+      vote: "slop",
+      beta: false,
+    });
+  });
+
+  it("otherwise names the step to take", () => {
+    expect(rateStep({ ...base, open: false, stage: "coming_soon" }, false, false).kind).toBe("coming_soon");
+    expect(rateStep(base, true, true).kind).toBe("maker");
+    expect(rateStep(base, false, false).kind).toBe("sign_in");
+    expect(rateStep({ ...base, mine: { ...mine, reason: "Launch it from the Slop app first: only players can vote." } }, false, true).kind).toBe(
+      "play",
+    );
+    expect(rateStep({ ...base, mine: { ...mine, played: true, reason: "Something else." } }, false, true)).toEqual({
+      kind: "other",
+      reason: "Something else.",
+    });
+  });
+});
+
+describe("RatingHeader", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const show = async (r: Ratings, o: { isMine?: boolean; signedIn?: boolean } = {}) => {
+    vi.spyOn(api, "ratings").mockResolvedValue(r);
+    render(
+      <MemoryRouter>
+        <RatingHeader
+          slug="herds"
+          title="Angry Herds"
+          isMine={o.isMine ?? false}
+          signedIn={o.signedIn ?? true}
+          interested={<button type="button">☆ I'm interested</button>}
+        />
+      </MemoryRouter>,
+    );
+    await screen.findByText("No ratings yet");
+  };
+
+  it("offers Rate it as the main button to a player who played the Beta", async () => {
+    await show({ ...base, stage: "beta", mine: { vote: null, can_vote: true, reason: null, played: true, weight: 0.3 } });
+    expect(screen.getByRole("button", { name: "Rate it" }).className).toContain("slime");
+    expect(screen.getByText(/your rating is marked Rated in Beta/)).toBeTruthy();
+  });
+
+  it("gives signed-out visitors a Sign in button, and the website's players the Slop app", async () => {
+    await show({ ...base, stage: "beta" }, { signedIn: false });
+    expect(screen.getByRole("link", { name: "Sign in to rate" }).getAttribute("href")).toBe(`/signin?return_to=${encodeURIComponent("/app/herds")}`);
+    cleanup();
+    await show({ ...base, stage: "beta", mine: { vote: null, can_vote: false, reason: "Launch it from the Slop app first: only players can vote.", played: false, weight: 0.1 } });
+    expect(screen.getByText("Play it from the Slop app to rate it.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "⬇ Get the Slop app" }).getAttribute("href")).toBe("/download");
+  });
+
+  it("tells the maker, and offers Interested while it's Coming soon", async () => {
+    await show({ ...base, stage: "beta" }, { isMine: true });
+    expect(screen.getByText("Makers can't rate their own app.")).toBeTruthy();
+    expect(screen.queryByRole("button", { name: "Rate it" })).toBeNull();
+    cleanup();
+    await show({ ...base, open: false, stage: "coming_soon" }, { signedIn: false });
+    expect(screen.getByText("Ratings open when it's playable")).toBeTruthy();
+    expect(screen.getByRole("button", { name: "☆ I'm interested" })).toBeTruthy();
   });
 });
 

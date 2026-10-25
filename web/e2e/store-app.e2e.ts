@@ -79,9 +79,10 @@ test("only players who played it can vote; makers, visitors and upcoming apps ca
 
   const visitor = await browser.newPage();
   await visitor.goto(`/app/${rated}`);
-  await expect(ratings(visitor).getByText("Sign in and play it from the Slop app to vote.")).toBeVisible();
+  await expect(ratings(visitor).getByText(/and play it from the Slop app to vote\./)).toBeVisible();
+  await expect(ratings(visitor).getByRole("link", { name: "Sign in" })).toHaveAttribute("href", `/signin?return_to=${encodeURIComponent(`/app/${rated}`)}`);
   await visitor.goto(`/app/${soon}`);
-  await expect(ratings(visitor).getByText("Voting opens when the app is released.")).toBeVisible();
+  await expect(ratings(visitor).getByText("Ratings open when it's playable: in Beta or released.")).toBeVisible();
 });
 
 test("the rating is at the top of the page: Rate it jumps to the vote, or it says why you can't yet", async ({ page, browser }) => {
@@ -114,6 +115,7 @@ test("the rating is at the top of the page: Rate it jumps to the vote, or it say
   await signIn(teen, "teen");
   await teen.goto(`/app/${rated}`);
   await expect(head(teen).getByText("Play it from the Slop app to rate it.")).toBeVisible();
+  await expect(head(teen).getByRole("link", { name: "⬇ Get the Slop app" })).toHaveAttribute("href", "/download");
   await expect(head(teen).getByRole("button")).toHaveCount(0);
   const maker = await browser.newPage();
   await signIn(maker, "pendingCreative");
@@ -121,10 +123,16 @@ test("the rating is at the top of the page: Rate it jumps to the vote, or it say
   await expect(head(maker).getByText("Makers can't rate their own app.")).toBeVisible();
   const visitor = await browser.newPage();
   await visitor.goto(`/app/${rated}`);
-  await expect(head(visitor).getByText(/and play it from the Slop app to rate it\./)).toBeVisible();
-  await expect(head(visitor).getByRole("link", { name: "Sign in" })).toHaveAttribute("href", `/signin?return_to=${encodeURIComponent(`/app/${rated}`)}`);
+  await expect(head(visitor).getByText("Played Rated Rafts? Sign in to rate it.")).toBeVisible();
+  await expect(head(visitor).getByRole("link", { name: "Sign in to rate" })).toHaveAttribute(
+    "href",
+    `/signin?return_to=${encodeURIComponent(`/app/${rated}`)}`,
+  );
   await visitor.goto(`/app/${soon}`);
-  await expect(head(visitor).getByText("Voting opens when it's released.")).toBeVisible();
+  await expect(head(visitor).getByText("Ratings open when it's playable")).toBeVisible();
+  // Interested is right there (and only there, on a Coming soon page).
+  await expect(head(visitor).locator(".interested-count")).toBeVisible();
+  await expect(visitor.locator(".interested-count")).toHaveCount(1);
 });
 
 test("the rating chart switches between weighted and one account, one vote", async ({ page }) => {

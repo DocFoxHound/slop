@@ -123,7 +123,8 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 
 - **Ratings over time:** a monthly chart of % Not Slop shows whether updates and branches are improving the app.
 - **Since the new work:** apps that hired creatives through Slop also show % Not Slop from votes since the first release with that work (§15.4). Hiring never changes how votes count.
-- Voting opens at **full release**. Coming soon and beta pages show Interested counts instead.
+- Voting opens once an app is **playable: in Beta or released** (owner decision 2026-10-25: "Betas are playable and should be rateable"; before that, only at full release). Coming soon pages have nothing to play, so they show Interested counts instead. Every other rule is unchanged (only players who launched it through Slop, one vote per account, weighted by playtime, the abuse checks). **Built 2026-10-25 (migration 0088):** each vote records the app's stage when it was cast; reviews whose vote was cast in Beta say **Rated in Beta**, the rating panel says how many votes were, and the maker's breakdown groups them by stage. A vote changed after release counts as a released one.
+- **Rating is obvious at the top of the page (2026-10-25):** beside the rating, a primary **Rate it** whenever the viewer can vote; otherwise a clear panel with why and the step to take right there: signed out, **Sign in to rate**; not played yet, the Play/Install button in the Slop app or **Get the Slop app** on the website; the maker, "Makers can't rate their own app"; Coming soon, "Ratings open when it's playable" with the Interested button.
 
 ## 8. Publishing
 
@@ -247,6 +248,7 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 - **Donations unlock nothing,** and apps can't tell who donated. That's what keeps a donation from being a purchase.
 - **Server donation:** a monthly recurring donation, only for apps that declare they run servers. It never controls access to those servers. Cancel any time.
 - **Built 2026-10-20** (`PAYMENTS.md` §10): the Donate box on app pages, server donations, the maker's settings, totals and refunds on the Manage page, and donation history, cancelling and fee statements on the account page.
+- **Always visible (owner decision 2026-10-25):** every public Beta or released app's page shows the Donate box near the top of the sidebar, under Get it, to everyone (its details load signed out). Signed out, it has **Sign in to donate**. When donations are off it says why (off on this server, paused, not turned on, Stripe not ready), and the app's maker gets the fix right there: Stripe's sign-up, or **Turn on donations**. The maker's Edit store page has a **Get paid** section at the top with the same settings as Manage, and every step to set it up.
 - **Where the money goes:** **one** Stripe account per app, picked by the publisher. If several people made it, the publisher splits the money with them outside Slop. Community branches have their own Donate button.
 - **Slop's fee:** a flat **5%** of each donation, charged to the maker.
 - **No in-app purchases** (decided). Apps can't sell anything: no items, supporter packs, subscriptions, loot boxes or premium currencies. The monetization scan rejects them.

@@ -210,6 +210,83 @@ async fn the_donate_box_says_why_donations_are_off_and_follows_the_store_rules(d
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn anyone_signed_out_sees_a_beta_apps_donate_box_without_personal_data(db: PgPool) {
+    // The store page shows Donate on Beta and released apps to everyone (owner decision
+    // 2026-10-25), so the box's details load signed out too.
+    let app = test_app_with(db, simulated).await;
+    let (maker_id, maker) = app.user("Mia Maker", "US").await;
+    let (_, donor) = adult(&app, "Dee Donor", "GB").await;
+    listed_with(&app, maker_id, "arena", "beta", "").await;
+
+    let signed_out = || async {
+        let res = app.send(req(Method::GET, "/v1/apps/arena/donate")).await;
+        assert_eq!(res.status(), StatusCode::OK);
+        body_json(res).await
+    };
+    let info = signed_out().await;
+    assert_eq!(info["on"], false);
+    assert_eq!(info["off_reason"], "The maker hasn't turned on donations.");
+    assert_eq!(info["cant"], "Sign in to donate.");
+    // Only the app's public details: no viewer, no Stripe account, no donors.
+    let mut keys: Vec<&str> = info
+        .as_object()
+        .unwrap()
+        .keys()
+        .map(String::as_str)
+        .collect();
+    keys.sort_unstable();
+    assert_eq!(
+        keys,
+        [
+            "cant",
+            "currency",
+            "donor_covers_fees",
+            "maker",
+            "max_minor",
+            "min_minor",
+            "off_reason",
+            "on",
+            "presets",
+            "servers",
+            "shared",
+            "simulated"
+        ]
+    );
+    assert!(!info.to_string().contains("acct_"), "{info}");
+
+    // Once the maker takes donations, signed out it's on, with the same amounts a donor sees.
+    donations_on(&app, &maker, "arena", false).await;
+    let info = signed_out().await;
+    assert_eq!(
+        (info["on"].as_bool(), info["off_reason"].clone()),
+        (Some(true), Value::Null)
+    );
+    assert_eq!(info["cant"], "Sign in to donate.");
+    let theirs = get_json(&app, &donor, "/v1/apps/arena/donate").await;
+    assert!(theirs["cant"].is_null());
+    assert_eq!(
+        theirs["presets"][0]["donation"],
+        info["presets"][0]["donation"]
+    );
+    // The maker's own view says so.
+    assert_eq!(
+        get_json(&app, &maker, "/v1/apps/arena/donate").await["cant"],
+        "It's your own app."
+    );
+    // Private apps have no store page and no donations: 404, signed in or out.
+    sqlx::query("update apps set visibility = 'private' where slug = 'arena'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        app.send(req(Method::GET, "/v1/apps/arena/donate"))
+            .await
+            .status(),
+        StatusCode::NOT_FOUND
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn a_branch_shares_with_its_original_only_while_the_original_takes_donations(db: PgPool) {
     let app = test_app_with(db, simulated).await;
     let (_, _) = maker_taking_donations(&app, "arena", false).await;

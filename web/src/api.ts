@@ -40,6 +40,8 @@ export interface RatingGroup extends Tally {
 export interface RatingBreakdown {
   by_version: RatingGroup[];
   by_platform: RatingGroup[];
+  /** By the app's stage when each vote was cast (beta, released). */
+  by_stage?: RatingGroup[];
   impact: Array<{
     version: string;
     to_not_slop: number;
@@ -382,6 +384,8 @@ export interface AppReview {
   /** Their name, or "A player" when their profile is private. */
   author: string;
   vote: "not_slop" | "slop";
+  /** The vote was cast while the app was in Beta. */
+  in_beta?: boolean;
   body: string;
   created_at: string;
   updated_at: string;
@@ -909,12 +913,18 @@ export interface Ratings extends Tally {
   }>;
   /** Days with unusual voting the abuse checks found (YYYY-MM-DD), shaded on the chart. */
   unusual_days?: string[];
+  /** Voting is open: the app is in Beta or released (Coming soon has nothing to play). */
   open: boolean;
+  stage?: AppStage;
+  /** Of the current votes, how many were cast while the app was in Beta. */
+  in_beta?: number;
   min_votes: number;
   mine?: {
     vote: "not_slop" | "slop" | null;
     can_vote: boolean;
     reason: string | null;
+    /** They launched it through Slop, which voting needs. */
+    played?: boolean;
     weight: number;
     /** Their written review; hidden when a moderation decision hid it. */
     review?: { body: string; hidden: boolean };

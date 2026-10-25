@@ -97,7 +97,7 @@ optional.
 | Stage | What it means | Time limit |
 |---|---|---|
 | **Coming soon** | A store page with no build yet. Players can mark it Interested. | 12 months, then it must reach Beta |
-| **Beta** | Playable builds, still changing | 12 months, then it must be released |
+| **Beta** | Playable builds, still changing. Players can rate it (marked "Rated in Beta") and donate. | 12 months, then it must be released |
 | **Released** | Finished (and still updated) | none |
 
 A Coming soon or Beta project with **no commits for 90 days** is labelled a dead project. It stays
@@ -491,10 +491,15 @@ Players can donate to you. Donations are optional, and they never unlock anythin
 content, no perks, nothing in the app changes for someone who donated (and your app can't tell
 who did).
 
-- **Where to turn them on:** for each app, **Publish → your app → Manage → Donations**. The
-  first time, that starts **Stripe's own sign-up**: you create (or connect) your Stripe account on
-  Stripe's site, and donations go straight to it. Until you've set it up, Account → Money points
-  there too, and Publish shows **Donations: off · Set up** on each released or beta app.
+- **Where to turn them on:** for each app, the **Get paid** section at the top of its **Edit store
+  page** (Publish → your app → Edit page; the same settings are under Manage → Donations), or right
+  on your app's store page, where the Donate box shows you what's missing. The first time, that
+  starts **Stripe's own sign-up**: you create (or connect) your Stripe account on Stripe's site,
+  and donations go straight to it. Until you've set it up, Account → Money points there too, and
+  Publish shows **Donations: off · Set up** on each released or beta app.
+- **Who sees the Donate box:** everyone, on every Beta or released app's page. While donations
+  are off it says why ("The maker hasn't turned on donations", say), so players know it isn't
+  hidden.
 - **18 or older:** receiving donations is for adults; you confirm it when you sign up.
 - **Slop's fee is 5%** of each donation (VAT included where there is VAT). Donors pay the card
   processing on top, so you receive what they chose less 5%. Account → Money has your monthly fee
