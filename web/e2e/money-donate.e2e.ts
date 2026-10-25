@@ -32,13 +32,13 @@ async function payInNewTab(page: Page, button: string | RegExp): Promise<Page> {
   return stripe;
 }
 
-test("signed out, on your own app, coming soon or with donations off, there's no way to donate", async ({ browser }) => {
+test("signed out, on your own app, coming soon or with donations off, there's no way to donate, and it says why", async ({ browser }) => {
   const visitor = await browser.newPage();
   await visitor.goto(`/app/${ids.listedApp}`);
   const box = donateBox(visitor);
   await expect(box.getByRole("heading", { name: "♥ Donate" })).toBeVisible();
   await expect(box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio")).not.toHaveCount(0);
-  await expect(box.getByRole("link", { name: "Sign in to donate." })).toHaveAttribute(
+  await expect(box.getByRole("link", { name: "Sign in to donate" })).toHaveAttribute(
     "href",
     `/signin?return_to=/app/${ids.listedApp}`,
   );
@@ -53,10 +53,14 @@ test("signed out, on your own app, coming soon or with donations off, there's no
   await mia.goto(`/app/${ids.draftApp}`);
   await expect(mia.getByRole("heading", { name: "Starship Draft", level: 1 })).toBeVisible();
   await expect(donateBox(mia)).toHaveCount(0);
-  // The maker hasn't turned donations on.
+  // The maker hasn't turned donations on: the box stays, and says so.
   await visitor.goto("/app/castle-rock");
   await expect(visitor.getByRole("heading", { name: "Castle Rock", level: 1 })).toBeVisible();
   await expect(donateBox(visitor)).toHaveCount(0);
+  const off = visitor.getByRole("region", { name: "Donate to Castle Rock" });
+  await expect(off.getByText("Donations are off.")).toBeVisible();
+  await expect(off).toContainText(/The maker hasn't turned on donations\.|The maker's Stripe account isn't ready/);
+  await expect(off.getByRole("button")).toHaveCount(0);
 });
 
 test("presets and your own amount show what you pay, what the maker gets and the fees", async ({ page }) => {

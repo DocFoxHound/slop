@@ -71,6 +71,11 @@ export function Reviews({ slug }: { slug: string }) {
             <div className="review-who">
               {r.author_id ? <Link to={`/u/${r.author_id}`}>{r.author}</Link> : <span className="muted">{r.author}</span>}
               <span className={`vote-chip ${r.vote === "not_slop" ? "up" : "down"}`}>{r.vote === "not_slop" ? "👍 Not Slop" : "👎 Slop"}</span>
+              {r.in_beta && (
+                <span className="badge neutral" title="This player's vote was given while the app was in Beta">
+                  RATED IN BETA
+                </span>
+              )}
               <span className="faint small">
                 {formatDate(r.updated_at)}
                 {r.edited && " · edited"}

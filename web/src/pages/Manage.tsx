@@ -208,7 +208,7 @@ function RatingBreakdown({ slug }: { slug: string }) {
     <section className="panel panel-pad">
       <h2>Ratings</h2>
       <p className="muted small">
-        Each player's current vote, grouped by the version and platform they voted on. Percentages show from 5 votes.{" "}
+        Each player's current vote, grouped by the version, platform and stage (Beta or released) they voted on. Percentages show from 5 votes.{" "}
         <Link to="/ratings">How ratings work</Link>.
       </p>
       {b.error && <ErrorState error={b.error} onRetry={b.reload} />}
@@ -217,6 +217,9 @@ function RatingBreakdown({ slug }: { slug: string }) {
         <>
           <GroupTable caption="Version" groups={b.data.by_version} name={(k) => (k ? `v${k}` : "Before versions were recorded")} />
           <GroupTable caption="Platform" groups={b.data.by_platform} name={(k) => (k ? (PLATFORM_NAME[k] ?? k) : "Not recorded")} />
+          {(b.data.by_stage ?? []).some((g) => g.key === "beta") && (
+            <GroupTable caption="Stage" groups={b.data.by_stage ?? []} name={(k) => (k === "beta" ? "Rated in Beta" : "Rated after release")} />
+          )}
           {b.data.impact.some((i) => i.to_not_slop + i.to_slop > 0) && (
             <>
               <h3>Update impact</h3>

@@ -60,6 +60,21 @@ function AppView({ app }: { app: AppDetail }) {
   const age = ageLabel(app.min_age);
   const firstCategory = app.kind === "game" ? { slug: "games", name: "Games" } : null;
   const hasGallery = app.gallery.length > 0;
+  // The Play/Install control: in the Get it box, and offered again by the rating to players who
+  // haven't played yet (in the desktop app).
+  const getIt =
+    app.stage === "coming_soon" ? null : app.platforms.includes("any") && app.branch ? (
+      <ModControls slug={app.slug} game={{ slug: app.branch.parent_slug, title: app.branch.parent_title }} />
+    ) : app.branch && !app.is_mine ? (
+      <CommunityGate app={app}>
+        <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
+      </CommunityGate>
+    ) : (
+      <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
+    );
+  // Coming soon: Interested goes with "Ratings open when it's playable" at the top; in Beta it's
+  // in the Get it box.
+  const interested = !app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />;
 
   // Links inside the maker's Markdown leave Slop.
   const onDescriptionClick = (e: MouseEvent) => {
@@ -141,7 +156,16 @@ function AppView({ app }: { app: AppDetail }) {
               )}{" "}
               · {app.kind === "game" ? "Game" : "App"}
             </div>
-            {!app.private && <RatingHeader slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />}
+            {!app.private && (
+              <RatingHeader
+                slug={app.slug}
+                title={app.title}
+                isMine={app.is_mine}
+                signedIn={Boolean(me)}
+                play={getIt}
+                interested={app.stage === "coming_soon" ? interested : undefined}
+              />
+            )}
           </div>
           {upcoming && (
             <div className="panel panel-pad stage-panel">
@@ -255,21 +279,11 @@ function AppView({ app }: { app: AppDetail }) {
         <aside className="side-col">
           <div className="panel panel-pad install-box">
             <h3>{app.stage === "coming_soon" ? "Coming soon" : "Get it"}</h3>
-            {app.stage === "coming_soon" ? (
-              <p className="muted">No builds yet. This is a Coming soon page.</p>
-            ) : app.platforms.includes("any") && app.branch ? (
-              <ModControls slug={app.slug} game={{ slug: app.branch.parent_slug, title: app.branch.parent_title }} />
-            ) : app.branch && !app.is_mine ? (
-              <CommunityGate app={app}>
-                <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
-              </CommunityGate>
-            ) : (
-              <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
-            )}
+            {app.stage === "coming_soon" ? <p className="muted">No builds yet. This is a Coming soon page.</p> : getIt}
             {app.stage !== "coming_soon" && !app.platforms.includes("any") && <SandboxNote app={app} />}
             <DemoButton demo={app.demo} />
             {app.stage !== "coming_soon" && <LabelNotes slug={app.slug} />}
-            {!app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />}
+            {app.stage !== "coming_soon" && interested}
             {packages.length > 0 && (
               <p className="muted small packages">
                 Linux packages:{" "}
@@ -283,6 +297,7 @@ function AppView({ app }: { app: AppDetail }) {
               </p>
             )}
           </div>
+          {app.stage !== "coming_soon" && !app.private && <DonateBox slug={app.slug} title={app.title} isMine={app.is_mine} />}
           <div className="panel panel-pad trust">
             {provenance && (
               <div className="trust-row">
@@ -323,7 +338,6 @@ function AppView({ app }: { app: AppDetail }) {
             </div>
           </div>
           {!app.branch && !app.private && <CommunityBuilds app={app} />}
-          {app.stage !== "coming_soon" && !app.private && <DonateBox slug={app.slug} title={app.title} />}
           {!app.is_mine && (
             <p className="report-row">
               <ReportButton kind="app" subject={app.slug} label="this app" />

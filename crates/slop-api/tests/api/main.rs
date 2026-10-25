@@ -5028,7 +5028,6 @@ async fn only_players_vote_and_ratings_add_up(db: PgPool) {
     let app = test_app(db).await;
     let (maker, maker_cookie) = app.user("Maker", "US").await;
     listed_with(&app, maker, "voted", "released", "").await;
-    listed_with(&app, maker, "early", "beta", "").await;
     let (player, cookie) = app.user("Player", "US").await;
     let vote = |cookie: String, slug: &'static str, v: Value| {
         let r = req(Method::POST, format!("/v1/apps/{slug}/vote"))
@@ -5053,17 +5052,11 @@ async fn only_players_vote_and_ratings_add_up(db: PgPool) {
             .contains("Launch it")
     );
 
-    for slug in ["voted", "early"] {
-        let res = app
-            .send(req(Method::POST, format!("/v1/apps/{slug}/launch")).cookie(&cookie))
-            .await;
-        assert_eq!(res.status(), StatusCode::OK);
-    }
-    // Voting opens at release; makers can't vote on their own apps.
-    assert_eq!(
-        vote(cookie.clone(), "early", json!("slop")).await.status(),
-        StatusCode::CONFLICT
-    );
+    let res = app
+        .send(req(Method::POST, "/v1/apps/voted/launch").cookie(&cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    // Makers can't vote on their own apps.
     assert_eq!(
         vote(maker_cookie.clone(), "voted", json!("slop"))
             .await
@@ -5146,6 +5139,145 @@ async fn only_players_vote_and_ratings_add_up(db: PgPool) {
         ),
         (Some(5), Some(80))
     );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn beta_apps_can_be_rated_and_the_rating_says_so(db: PgPool) {
+    // Owner decision 2026-10-25: Betas are playable, so they're rateable; Coming soon isn't.
+    let app = test_app(db).await;
+    let (maker, maker_cookie) = app.user("Maker", "US").await;
+    listed_with(&app, maker, "early", "beta", "").await;
+    listed_with(&app, maker, "soon", "coming_soon", "").await;
+    let (player, cookie) = app.user("Player", "US").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let vote = |cookie: String, slug: &'static str, v: Value| {
+        let r = req(Method::POST, format!("/v1/apps/{slug}/vote"))
+            .cookie(&cookie)
+            .json(json!({ "vote": v }));
+        async { app.send(r).await }
+    };
+    let ratings = |cookie: Option<String>, slug: &'static str| {
+        let mut r = req(Method::GET, format!("/v1/apps/{slug}/ratings"));
+        if let Some(c) = &cookie {
+            r = r.cookie(c);
+        }
+        async { body_json(app.send(r).await).await }
+    };
+
+    // Open in Beta, but still only for players who launched it from the Slop app.
+    let r = ratings(Some(stranger.clone()), "early").await;
+    assert_eq!(
+        (r["open"].as_bool(), r["stage"].as_str()),
+        (Some(true), Some("beta"))
+    );
+    assert_eq!(r["mine"]["can_vote"], false);
+    assert_eq!(r["mine"]["played"], false);
+    assert!(r["mine"]["reason"].as_str().unwrap().contains("Launch it"));
+    assert_eq!(
+        vote(stranger.clone(), "early", json!("slop"))
+            .await
+            .status(),
+        StatusCode::CONFLICT
+    );
+    assert_eq!(
+        vote(maker_cookie.clone(), "early", json!("slop"))
+            .await
+            .status(),
+        StatusCode::CONFLICT,
+        "makers still can't rate their own app"
+    );
+
+    // Coming soon: nothing to play, so nothing to rate, even for someone with a launch on record.
+    sqlx::query(
+        "insert into user_app_usage (user_id, app_id, days_launched) select $1, id, 1 from apps where slug = 'soon'",
+    )
+    .bind(player)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let r = ratings(Some(cookie.clone()), "soon").await;
+    assert_eq!(
+        (r["open"].as_bool(), r["stage"].as_str()),
+        (Some(false), Some("coming_soon"))
+    );
+    assert_eq!(r["mine"]["can_vote"], false);
+    assert!(
+        r["mine"]["reason"].as_str().unwrap().contains("playable"),
+        "{r}"
+    );
+    let res = vote(cookie.clone(), "soon", json!("not_slop")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    let soon_votes: i64 = sqlx::query_scalar(
+        "select count(*) from vote_events e join apps a on a.id = e.app_id where a.slug = 'soon'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(soon_votes, 0);
+
+    // A player who launched the Beta votes and reviews; both remember it was in Beta.
+    let res = app
+        .send(req(Method::POST, "/v1/apps/early/launch").cookie(&cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let res = vote(cookie.clone(), "early", json!("not_slop")).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let r = body_json(res).await;
+    assert_eq!(
+        (r["not_slop"].as_i64(), r["in_beta"].as_i64()),
+        (Some(1), Some(1))
+    );
+    assert_eq!(r["mine"]["vote"], "not_slop");
+    let stages: Vec<(String, String)> = sqlx::query_as(
+        "select e.stage::text, v.stage::text from vote_events e join votes v using (user_id, app_id) where e.user_id = $1",
+    )
+    .bind(player)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(stages, [("beta".to_string(), "beta".to_string())]);
+    let res = app
+        .send(
+            req(Method::PUT, "/v1/apps/early/review")
+                .cookie(&cookie)
+                .json(json!({ "body": "Rough edges, but fun already." })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::NO_CONTENT);
+    let reviews = body_json(app.send(req(Method::GET, "/v1/apps/early/reviews")).await).await;
+    assert_eq!(reviews["reviews"][0]["in_beta"], true);
+    let breakdown = body_json(
+        app.send(req(Method::GET, "/v1/apps/early/ratings/breakdown").cookie(&maker_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(breakdown["by_stage"][0]["key"], "beta");
+    assert_eq!(breakdown["by_stage"][0]["not_slop"], 1);
+
+    // Released: a changed vote is a released one, and the review no longer says Beta.
+    sqlx::query("update apps set stage = 'released' where slug = 'early'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let r = body_json(vote(cookie.clone(), "early", json!("slop")).await).await;
+    assert_eq!(
+        (r["slop"].as_i64(), r["in_beta"].as_i64()),
+        (Some(1), Some(0))
+    );
+    let reviews = body_json(app.send(req(Method::GET, "/v1/apps/early/reviews")).await).await;
+    assert_eq!(reviews["reviews"][0]["in_beta"], false);
+    let events: Vec<String> = sqlx::query_scalar(
+        "select stage::text from vote_events where user_id = $1 order by created_at, id",
+    )
+    .bind(player)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(events, ["beta", "released"]);
+    // Signed out: the counts, and no `mine`.
+    let r = ratings(None, "early").await;
+    assert!(r.get("mine").is_none());
+    assert_eq!(r["open"], true);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

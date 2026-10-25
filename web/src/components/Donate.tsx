@@ -3,6 +3,9 @@
 // first and largest (PAY-10), what the maker receives, Slop's fee and the processing addition.
 // Donations give nothing back, and the app is the same for everyone.
 //
+// It shows on every public Beta or released app's page, never hidden: when donations are off it
+// says why, and the app's maker gets the fix right there (DonationsFix).
+//
 // On a community build or mod, a one-off donation is shared: the original's maker gets 30% as its
 // own donation, paid first, then the branch's author gets the rest. Two payments, because Slop
 // never splits one; after Stripe the donor comes back here (?shared=…&rest=…) for the second.
@@ -16,6 +19,8 @@ import { useLoad } from "../hooks";
 import { openExternal } from "../platform";
 import { solve } from "../pow";
 import { useSession } from "../session";
+import { DonationsFix } from "./DonationsManage";
+import { ErrorState } from "./ui";
 
 /** Always with cents: "$3.40". */
 export function amount(minor: number, currency: string): string {
@@ -30,7 +35,7 @@ export function shareFor(branch: number, percent: number): number {
 
 type StartBody = Parameters<typeof api.donations.start>[1];
 
-export function DonateBox({ slug, title }: { slug: string; title: string }) {
+export function DonateBox({ slug, title, isMine = false }: { slug: string; title: string; isMine?: boolean }) {
   const { me, refresh } = useSession();
   const [params, setParams] = useSearchParams();
   const info = useLoad(() => api.donations.info(slug), [slug, me?.id]);
@@ -101,6 +106,14 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
     }, 250);
     return () => window.clearTimeout(timer);
   }, [shared?.slug, share]); // eslint-disable-line react-hooks/exhaustive-deps
+  if (info.error) {
+    return (
+      <div className="panel panel-pad donate-box">
+        <h3>♥ Donate</h3>
+        <ErrorState error={info.error} onRetry={info.reload} />
+      </div>
+    );
+  }
   if (!d) return null;
   if (thanks) {
     return (
@@ -110,7 +123,21 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
       </div>
     );
   }
-  if (!d.on) return null;
+  if (!d.on) {
+    return (
+      <section className="panel panel-pad donate-box donate-off" aria-label={`Donate to ${title}`}>
+        <h3>♥ Donate</h3>
+        <p className="small">
+          <b>Donations are off.</b> {d.off_reason}
+        </p>
+        {isMine ? (
+          <DonationsFix slug={slug} onChanged={info.reload} />
+        ) : (
+          <p className="muted small">Donations go straight to {d.maker} and never unlock anything.</p>
+        )}
+      </section>
+    );
+  }
 
   const q = customQuote;
   const consentText = monthly ? (q?.consent ?? null) : null;
@@ -314,10 +341,12 @@ export function DonateBox({ slug, title }: { slug: string; title: string }) {
           {error}
         </p>
       )}
-      {d.cant ? (
-        <p className="small muted">
-          {d.cant === "Sign in to donate." ? <Link to={`/signin?return_to=/app/${slug}`}>Sign in to donate.</Link> : d.cant}
-        </p>
+      {d.cant === "Sign in to donate." ? (
+        <Link className="btn slime" to={`/signin?return_to=/app/${slug}`}>
+          Sign in to donate
+        </Link>
+      ) : d.cant ? (
+        <p className="small muted">{d.cant}</p>
       ) : (
         <button
           className="btn slime"

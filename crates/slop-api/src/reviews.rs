@@ -65,6 +65,8 @@ struct Review {
     author: String,
     /// not_slop or slop
     vote: String,
+    /// The vote was cast while the app was in Beta.
+    in_beta: bool,
     body: String,
     #[serde(with = "time::serde::rfc3339")]
     created_at: OffsetDateTime,
@@ -120,7 +122,7 @@ async fn list(
         .push(PUBLIC_SQL)
         .push(
             " then u.display_name else 'A player' end as author,
-               case when v.vote = 1 then 'not_slop' else 'slop' end as vote, r.body, r.created_at, r.updated_at,
+               case when v.vote = 1 then 'not_slop' else 'slop' end as vote, v.stage = 'beta' as in_beta, r.body, r.created_at, r.updated_at,
                r.updated_at > r.created_at + interval '1 minute' as edited, coalesce(r.user_id = ",
         )
         .push_bind(viewer)

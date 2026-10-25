@@ -25,6 +25,7 @@ import {
   type DonationSettings,
 } from "../api";
 import { AppIcon, appIconProps } from "../components/AppIcon";
+import { DonationsPanel } from "../components/DonationsManage";
 import { LicensePicker } from "../components/LicensePicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
@@ -68,7 +69,8 @@ export function Publish() {
   const checking = mine.data?.some((a) => a.latest?.status === "fetching") ?? false;
   const moving = mine.data?.some((a) => a.current.state === "active") ?? false;
   useInterval(mine.reload, checking ? 15_000 : moving ? 60_000 : null);
-  // Released and beta apps without donations get a pointer to where they're turned on.
+  // Released and beta apps without donations get a pointer to where they're turned on (the
+  // Get paid section of the app's Edit store page).
   const offerable = (mine.data ?? []).filter((a) => a.app.stage !== "coming_soon").map((a) => a.app.slug);
   const donations = useLoad(() => loadDonations(offerable), [offerable.join(",")]);
 
@@ -125,7 +127,7 @@ export function Publish() {
                 {donationsOff(donations.data?.[app.slug]) && (
                   <div className="small donations-off">
                     Donations: off ·{" "}
-                    <Link to={`/publish/${app.slug}/manage#donations`} aria-label={`Set up donations for ${app.title}`}>
+                    <Link to={`/publish/${app.slug}#donations`} aria-label={`Set up donations for ${app.title}`}>
                       Set up
                     </Link>
                   </div>
@@ -381,8 +383,22 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
       <div className="crumbs">
         <Link to="/publish">Your apps</Link> › {existing ? existing.title : "New app"}
       </div>
+      <h1 className="page-title">{existing ? "Edit store page" : "New app"}</h1>
+      {/* Getting paid is part of the page (owner decision 2026-10-25): its state and every step
+          to set it up, right here. */}
+      {existing && !existing.private && (
+        <DonationsPanel
+          slug={existing.slug}
+          title="Get paid: donations"
+          returnTo={`/publish/${existing.slug}#donations`}
+          note={
+            existing.stage === "coming_soon"
+              ? "The Donate box shows on your store page from Beta on; you can set it up now."
+              : undefined
+          }
+        />
+      )}
       <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
-        <h1>{existing ? "Edit store page" : "New app"}</h1>
 
         {field(
           "title",
@@ -655,6 +671,12 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             Pictures come next: your app's icon, thumbnail, screenshots and videos live in your repository, listed in{" "}
             <code>.slop/media.json</code>. Add them right after creating the draft, on its Edit store page; see{" "}
             <Link to="/publish/guide#pictures-and-videos">Pictures and videos</Link>.
+          </p>
+        )}
+        {!existing && form.visibility !== "private" && (
+          <p className="muted small new-app-donations">
+            Getting paid: players can donate to you once it's in Beta or released. The draft's Edit store page has a{" "}
+            <b>Get paid</b> section at the top to set it up with Stripe (18 or older; Slop's fee is 5%).
           </p>
         )}
       </form>
