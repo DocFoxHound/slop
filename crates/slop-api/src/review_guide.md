@@ -191,6 +191,21 @@ once its first portfolio is approved.
 - If the declared AI use is `none` but works look plainly machine-generated (for example
   generator watermarks), leave a `concern` note rather than rejecting: a person decides.
 - Titles and captions count as content too.
+- `detail.portfolio.design` is the creative's own page design, when they have one (null otherwise):
+  `html` and `css` are exactly what the page will show (Slop already removed anything not allowed:
+  no scripts, forms, buttons, other sites' files, fixed positioning), `warnings` lists what was
+  removed, and `pictures`/`tracks` are its own files: open each picture like a work. The design
+  shows between Slop's header (name, AI-use badge, rating, Hire, Report) and Slop's reviews. Turn
+  it down, saying what to change, if it:
+  - imitates Slop's own interface: a fake Hire, Pay or Sign in button, a fake rating, review,
+    "verified" badge, notice or header, or anything asking for a password or payment;
+  - links somewhere other than its text says, or to pages asking people to sign in or pay
+    outside Slop;
+  - has sexually explicit or otherwise not-allowed content, in text or pictures;
+  - is hard to read (text too small, or too little contrast with its background), flashes, or
+    hides or covers Slop's parts (`<slop-…>`) placed in it;
+  - doesn't match the declared AI use (for example, pictures plainly generated while it says none).
+  A plain or unusual look isn't a reason: taste is the creative's.
 - The creative gets a notification either way. When you turn one down, your reason is sent to
   them word for word, so say what to change ("the third work is someone else's art"), not only
   that it's wrong. Until a portfolio is approved, only the creative sees their page; once one is,

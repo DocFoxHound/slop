@@ -3,6 +3,7 @@
 //!
 //! - `mod.rs`: profiles (customisable pages, unlike app pages), the directory, verified reviews.
 //! - `portfolio.rs`: portfolios from a GitHub repository, reviewed like store pictures.
+//! - `design.rs`: the creative's own page design from the same repository, reviewed with it.
 //! - `jobs.rs`: request → offer → accept & pay → deliver → complete, with the Service Agreement.
 //! - `stripe.rs`: Stripe Connect. Every payment is a direct charge on the creative's own account;
 //!   Slop only takes its 5% fee and never holds the money (LEGAL-GUIDANCE §1 rule 1).
@@ -10,6 +11,7 @@
 //! Slop never sets prices, assigns work, or ranks creatives by default on performance (HUM-9,
 //! HUM-10): the directory's default order is a daily shuffle.
 
+pub mod design;
 pub mod jobs;
 pub mod mediation;
 pub mod portfolio;
@@ -967,6 +969,9 @@ struct Page {
     sections: Vec<String>,
     links: Vec<LinkView>,
     banner_url: Option<String>,
+    /// The creative's own page design (design.rs), from the approved portfolio; none shows the
+    /// standard layout.
+    design: Option<design::PageDesign>,
     works: Vec<WorkView>,
     services: Vec<ServiceView>,
     reviews: Vec<ReviewView>,
@@ -1015,6 +1020,8 @@ async fn page(
         links: Vec<Link>,
         #[sqlx(json(nullable))]
         banner: Option<media::Picture>,
+        #[sqlx(json(nullable))]
+        design: Option<design::Design>,
         portfolio_set_id: Option<Uuid>,
         hidden_reason: Option<String>,
         suspended: bool,
@@ -1024,7 +1031,7 @@ async fn page(
     push_card_select(
         &mut qb,
         ", c.user_id, c.about_md, c.ai_note, c.trader, c.turnaround, c.sections, c.links,
-           ps.banner, c.portfolio_set_id, c.hidden_reason,
+           ps.banner, ps.design, c.portfolio_set_id, c.hidden_reason,
            (select su.suspended_at is not null from users su where su.id = c.user_id) as suspended,
            (select su.closed_at is not null from users su where su.id = c.user_id) as closed",
     );
@@ -1081,6 +1088,7 @@ async fn page(
             })
             .collect(),
         banner_url: row.banner.map(|b| b.url),
+        design: row.design.map(design::PageDesign::from),
         works: works.into_iter().map(work_view).collect(),
         services,
         reviews,
