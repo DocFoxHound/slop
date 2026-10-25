@@ -10,8 +10,10 @@ It's written so that a person or an AI assistant can follow it from start to fin
 
 > **Using an AI assistant?** Give it this line: *"Read https://slopai.games/portfolio.md and help
 > me build my Slop portfolio."* (Use the address of the Slop site you're on; this page is
-> `/portfolio.md` on every Slop site.) Agents: the [checklist](#checklist-for-agents) near the
-> end lists every step in order.
+> `/portfolio.md` on every Slop site.) Agents: **this page is everything you need.** Nothing on
+> the person's Slop screens is meant for you: no token, no code, no other line to paste, so don't
+> ask for one. The [checklist](#checklist-for-agents) near the end lists every step in order, and
+> [what to ask the person](#what-to-ask-the-person).
 
 ## What a portfolio is
 
@@ -236,10 +238,27 @@ Every problem names where it is and what to do. Some examples:
 | `link the GitHub account that owns this repository (…)` | Press **Link GitHub** next to the message, then check again |
 | `this is the portfolio that was turned down: …` | Change what the reviewer asked for first |
 
+## What to ask the person
+
+Only what the repository needs:
+
+- **The GitHub account** that will own the repository (it must be the one linked to their Slop
+  account), and whether to make a new repository or use one they have.
+- **What they do** and the work they want to be hired for, to pick a template and skills.
+- **Their works**: the pictures and tracks (files they give you or that are already in a
+  repository) and the YouTube links to their videos, best first, with titles and captions if
+  they have them. An avatar and a banner if they want them.
+- **If you build a page design** (below): the look they want, in their own words.
+
+Not for you to collect: their name on Slop, rates and services, AI-use label, location and
+whether they're taking work are set by the person in the editor (`/people/me`), not in the
+repository. Offer to suggest wording for them if they'd like, but don't wait for them.
+
 ## Checklist for agents
 
 To help someone build their portfolio, in order. Steps marked **(person)** need the person
-themself: Slop's agent tokens can't check or send a portfolio.
+themself: Slop's agent tokens can't check or send a portfolio, and there's no token or code to
+ask them for.
 
 1. Ask what they do, what kind of work they want to be hired for, and which works they're proudest
    of. Suggest a template: gallery (pictures), showreel (videos), tracklist (audio) or studio (a
