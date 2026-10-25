@@ -3490,8 +3490,9 @@ async fn the_fetcher_wakes_for_new_releases_and_retakes_abandoned_ones(db: PgPoo
         .unwrap();
     assert!(!releases::fetch_next(&app.state).await.unwrap());
     assert_eq!(release_state(&app, &first).await, "fetching");
-    // That fetcher died: after 30 minutes the release is taken again.
-    sqlx::query("update releases set fetch_started_at = now() - interval '31 minutes'")
+    // That fetcher died: 40 minutes without moving on to a file's next step (each step renews
+    // the lease, releases.rs), and the release is taken again.
+    sqlx::query("update releases set fetch_started_at = now() - interval '41 minutes'")
         .execute(&app.db)
         .await
         .unwrap();

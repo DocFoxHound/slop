@@ -131,4 +131,39 @@ test("someone who receives nothing has no receiving or fee sections", async ({ p
   await expect(page.getByRole("heading", { name: "Your donations" })).toBeVisible();
   await expect(page.locator("section#receiving")).toHaveCount(0);
   await expect(page.locator("section#fee-statements")).toHaveCount(0);
+  // No apps: nothing to set donations up for.
+  await expect(page.locator("section#donations-setup")).toHaveCount(0);
+});
+
+test("a maker with apps but no Stripe account is shown where to turn donations on", async ({ page }) => {
+  await signIn(page, "maker");
+  // Mia's real Stripe account is connected: no pointer.
+  await page.goto("/account/money");
+  await expect(page.getByRole("heading", { name: "Receiving donations" })).toBeVisible();
+  await expect(page.locator("section#donations-setup")).toHaveCount(0);
+
+  // As before she connected one, with two of her apps (Lantern Keep already takes donations).
+  await page.route("**/v1/me/donation-account", (route) =>
+    route.request().method() === "GET" ? route.fulfill(json(200, { status: "none", payments: "stripe", change: null })) : route.fallback(),
+  );
+  await page.route("**/v1/me/apps", async (route) => {
+    const res = await route.fetch();
+    const apps = (await res.json()) as Array<{ slug: string }>;
+    return route.fulfill({ response: res, json: apps.filter((a) => a.slug === "mias-first" || a.slug === "lantern-keep") });
+  });
+  await page.reload();
+  const hint = page.getByRole("region", { name: "Want donations?" });
+  await expect(hint).toContainText("Turn them on per app: Publish → your app → Manage → Donations.");
+  await expect(hint).toContainText("Stripe's own sign-up (you need to be 18 or older)");
+  await expect(hint).toContainText("Slop's fee is 5%, and donations never unlock anything.");
+  await expect(hint.getByRole("listitem")).toHaveCount(1);
+  await expect(page.locator("section#receiving")).toHaveCount(0);
+  const link = hint.getByRole("link", { name: "Set up donations for Mia's First Game" });
+  await expect(link).toHaveAttribute("href", "/publish/mias-first/manage#donations");
+  // The link lands on the app's Donations panel.
+  await link.click();
+  await expect(page).toHaveURL(/\/publish\/mias-first\/manage#donations$/);
+  const panel = page.locator("section#donations");
+  await expect(panel.getByRole("heading", { name: "Donations" })).toBeVisible();
+  await expect(panel).toBeInViewport();
 });

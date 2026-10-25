@@ -27,8 +27,8 @@ optional.
 ## Why publish on Slop
 
 - **Free to list.** No fees to publish or to download. Slop never sells anything and takes no cut
-  of sales, because there are none. *(coming: optional donations, paid straight to you, with a
-  flat 5% Slop fee.)*
+  of sales, because there are none. Players can donate to you if you turn
+  [donations](#donations) on: paid straight to you, with a flat 5% Slop fee.
 - **Players who are looking for AI-made software.** Store pages, categories, tags and search,
   with Coming soon, Beta and Released stages so players can follow a project from the start.
 - **Installs and updates handled for you.** The Slop desktop app (Windows, Ubuntu/Debian,
@@ -396,12 +396,19 @@ Builds made by Slop Build are labelled **Built by Slop Build from source**.
 
 ### 4. What happens next
 
-Your app's **Releases** page shows a **Publishing progress** checklist:
+Your app's **Releases** page shows a **Publishing progress** checklist, and refreshes itself while
+anything is under way, so there's no need to reload it:
 
 1. **Store page:** saved.
 2. **Release:** received.
 3. **Files checked:** Slop downloads each file once, records its size and SHA-256, and keeps
-   nothing else. If a file can't be downloaded, the release fails with the reason.
+   nothing else. If a file can't be downloaded, the release fails with the reason. Files are
+   checked one at a time (and releases one at a time, oldest first), so the checklist shows each
+   file: done (passed, a note, or on hold), being checked ("Checking file 2 of 4: Linux (.deb) —
+   Scanning for malware"), or waiting, with how long files take on Slop and about how long is
+   left. Scanning takes a few minutes per file, longer for big programs (up to 30 minutes), so a
+   release with four builds can take 20 minutes or more. Your AI agent sees the same in
+   `list_releases` (`progress.summary`).
 4. **Maker signature:** the attestation is checked: it must name the file's hash and come from
    your repository at the release's commit.
 5. **Scan:** Slop scans every file with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
@@ -422,8 +429,10 @@ Your app's **Releases** page shows a **Publishing progress** checklist:
    an update with a new one waits for a person. After that, Slop checks those packages against
    [OSV](https://osv.dev) every day and tells you when a new security advisory affects your live
    release.
-7. **Review:** a person at Slop reviews your app's first release. Approval signs it; a rejection
-   comes with a reason.
+7. **Review by a person:** a person at Slop reviews your app's first release, usually within a
+   day or two. Approval signs it; a rejection comes with a reason, and **To fix** on the Releases
+   page (or `get_fixes` for your AI agent) says what to change. Either way you get a notification
+   (under 🔔, and by email).
 8. **In the store:** Slop staff put the app in the store.
 
 **Updates.** With **Approve updates automatically** on (the default), every later release that
@@ -462,6 +471,24 @@ Changes that would have players download something different are checked before 
 Switching to another approved release follows the same rule as updates: it goes through straight
 away when automatic approval applies (the release already passed every check), otherwise a person
 looks. Everything else, like the store page, platforms and settings, changes straight away.
+
+## Donations
+
+Players can donate to you. Donations are optional, and they never unlock anything: no extra
+content, no perks, nothing in the app changes for someone who donated (and your app can't tell
+who did).
+
+- **Where to turn them on:** for each app, **Publish → your app → Manage → Donations**. The
+  first time, that starts **Stripe's own sign-up**: you create (or connect) your Stripe account on
+  Stripe's site, and donations go straight to it. Until you've set it up, Account → Money points
+  there too, and Publish shows **Donations: off · Set up** on each released or beta app.
+- **18 or older:** receiving donations is for adults; you confirm it when you sign up.
+- **Slop's fee is 5%** of each donation (VAT included where there is VAT). Donors pay the card
+  processing on top, so you receive what they chose less 5%. Account → Money has your monthly fee
+  statements.
+- Donations may be taxable income for you; Slop doesn't give tax advice.
+- **Your AI agent can't do this for you:** signing up with Stripe and changing where money goes
+  are for you alone.
 
 ## Online play and mods
 

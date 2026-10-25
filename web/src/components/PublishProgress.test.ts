@@ -1,8 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
+import { isValidElement, type ReactNode } from "react";
 import type { AppDetail, Release } from "../api";
-import { currentStep, progressSteps } from "./PublishProgress";
+import { about, ago, currentStep, fileLabel, progressSteps, refreshEvery } from "./PublishProgress";
+
+/** The text in a step's detail, which may hold links. */
+function textOf(node: ReactNode): string {
+  if (node === null || node === undefined || typeof node === "boolean") return "";
+  if (typeof node === "string" || typeof node === "number") return String(node);
+  if (Array.isArray(node)) return node.map(textOf).join("");
+  if (isValidElement<{ children?: ReactNode }>(node)) {
+    // Our own small components: render them to find their text.
+    if (typeof node.type === "function") return textOf((node.type as (p: unknown) => ReactNode)(node.props));
+    return textOf(node.props.children);
+  }
+  return "";
+}
 
 const app = (over: Partial<AppDetail> = {}) =>
   ({ slug: "game", stage: "beta", status: "draft", ...over }) as AppDetail;
@@ -74,7 +88,7 @@ describe("progressSteps", () => {
       "Maker signature": "skipped",
       Scan: "skipped",
       "Source check": "done",
-      Review: "active",
+      "Review by a person": "active",
       "In the store": "waiting",
     });
   });
@@ -102,7 +116,7 @@ describe("progressSteps", () => {
       state: "problem",
     });
     expect(
-      String(waiting.find((s) => s.title === "Source check")!.detail),
+      textOf(waiting.find((s) => s.title === "Source check")!.detail),
     ).toContain("2 notes");
     const approved = progressSteps(
       app(),
@@ -132,7 +146,7 @@ describe("progressSteps", () => {
       (s) => s.title === "Source check",
     )!;
     expect(step.state).toBe("problem");
-    expect(String(step.detail)).toContain("2 notes");
+    expect(textOf(step.detail)).toContain("2 notes");
   });
 
   it("flags a missing signature when signatures are required", () => {
@@ -156,17 +170,17 @@ describe("progressSteps", () => {
       ],
       testServer,
     );
-    expect(failed.find((s) => s.title === "Files checked")).toMatchObject({
-      state: "problem",
-      detail: "download failed: HTTP 404",
-    });
+    const files = failed.find((s) => s.title === "Files checked")!;
+    expect(files.state).toBe("problem");
+    expect(textOf(files.detail)).toContain("Slop couldn't check the files: download failed: HTTP 404.");
+    expect(textOf(files.detail)).toContain("See what to fix");
     const rejected = progressSteps(
       app(),
       [release({ status: "rejected", status_reason: "loot boxes" })],
       testServer,
     );
     expect(
-      String(rejected.find((s) => s.title === "Review")!.detail),
+      textOf(rejected.find((s) => s.title === "Review by a person")!.detail),
     ).toContain("loot boxes");
   });
 
@@ -180,7 +194,7 @@ describe("progressSteps", () => {
       testServer,
     );
     expect(steps.find((s) => s.title === "Release")!.detail).toBe("Version 1.0.0 received.");
-    expect(String(steps.find((s) => s.title === "Review")!.detail)).toContain("loot boxes");
+    expect(textOf(steps.find((s) => s.title === "Review by a person")!.detail)).toContain("loot boxes");
     const only = progressSteps(app(), [release({ status: "withdrawn" })], testServer);
     expect(only.find((s) => s.title === "Release")!.state).toBe("waiting");
   });
@@ -191,7 +205,7 @@ describe("progressSteps", () => {
         progressSteps(app(), [release({ status: "approved" })], testServer),
       ),
     ).toMatchObject({
-      Review: "done",
+      "Review by a person": "done",
       "In the store": "active",
     });
     expect(
@@ -240,15 +254,17 @@ describe("progressSteps", () => {
       ],
       testServer,
     );
-    expect(String(waiting.find((s) => s.title === "Review")?.detail)).toContain(
-      "first release",
-    );
+    const review = waiting.find((s) => s.title === "Review by a person")!;
+    expect(textOf(review.more)).toContain("Why a person: an app's first release is always reviewed by a person.");
+    expect(textOf(review.detail)).toBe("Waiting for review by a person at Slop. It usually takes a day or two.");
+    expect(textOf(review.more)).toContain("you get a notification");
+    expect(review.stateLabel).toBe("Waiting for a person");
     const auto = progressSteps(
       app({ status: "listed" }),
       [release({ status: "approved", auto_approved: true })],
       testServer,
     );
-    expect(String(auto.find((s) => s.title === "Review")?.detail)).toContain(
+    expect(textOf(auto.find((s) => s.title === "Review by a person")?.detail)).toContain(
       "automatically",
     );
   });
@@ -259,7 +275,7 @@ describe("progressSteps", () => {
     );
     expect(
       currentStep(progressSteps(app(), [release()], testServer)).title,
-    ).toBe("Review");
+    ).toBe("Review by a person");
     const failed = progressSteps(
       app(),
       [release({ status: "failed", status_reason: "HTTP 404" })],
@@ -278,5 +294,108 @@ describe("progressSteps", () => {
       title: "In the store",
       state: "done",
     });
+  });
+  it("shows each file while Slop checks them, with an honest estimate", () => {
+    const now = Date.parse("2026-10-25T12:00:00Z");
+    const min = (n: number) => new Date(now - n * 60_000).toISOString();
+    const checking = release({
+      status: "fetching",
+      source: "slop_build",
+      repo_scan: null,
+      files: [
+        file({ platform: "linux", file_name: "g.tar.gz", check: "checked", check_started_at: min(12), checked_at: min(7), scan_result: "passed", provenance_problem: null }),
+        file({ platform: "linux-deb", file_name: "g.deb", check: "checking", check_stage: "scanning", check_started_at: min(2), sha256: null, scan_result: null }),
+        file({ platform: "linux-rpm", file_name: "g.rpm", check: "waiting", sha256: null, scan_result: null }),
+        file({ platform: "windows", file_name: "g.zip", check: "waiting", sha256: null, scan_result: null }),
+      ],
+      progress: {
+        stage: "checking_files",
+        files_total: 4,
+        files_checked: 1,
+        started_at: min(12),
+        seconds_per_file: 300,
+        remaining_seconds: 780,
+        summary: "",
+      },
+    });
+    const steps = progressSteps(app(), [checking], { scanning: true, maker_signatures_required: false }, now);
+    const files = steps.find((s) => s.title === "Files checked")!;
+    expect(files.state).toBe("active");
+    expect(files.stateLabel).toBe("1 of 4 done");
+    expect(files.detail).toBe("Checking file 2 of 4: Linux (.deb) — Scanning for malware");
+    expect(files.more).toBe("About 5 minutes per file; started 12 minutes ago. About 13 minutes left.");
+    expect(files.items!.map((i) => [i.label, i.state, i.status])).toEqual([
+      ["Linux (.tar.gz)", "done", "Passed"],
+      ["Linux (.deb)", "active", "Scanning for malware"],
+      ["Linux (.rpm)", "waiting", "Waiting"],
+      ["Windows (.zip)", "waiting", "Waiting"],
+    ]);
+    expect(files.items![0].detail).toBe("Took 5 minutes");
+    expect(files.items![1].detail).toBe("Started 2 minutes ago");
+    expect(steps.find((s) => s.title === "Release")!.detail).toBe("Version 1.0.0 received from Slop Build.");
+    expect(states(steps)).toMatchObject({ Scan: "waiting", "Source check": "waiting", "Review by a person": "waiting" });
+    expect(currentStep(steps).title).toBe("Files checked");
+
+    // A file taking longer than usual says so instead of counting below zero.
+    const slow = progressSteps(app(), [checking], { scanning: true, maker_signatures_required: false }, now + 6 * 60_000);
+    expect(slow.find((s) => s.title === "Files checked")!.more).toContain("This file is taking longer than usual");
+  });
+
+  it("says a release is waiting its turn, without counting who is ahead", () => {
+    const queued = release({
+      status: "fetching",
+      files: [file({ check: "waiting", sha256: null, scan_result: null })],
+      progress: { stage: "queued", files_total: 1, files_checked: 0, started_at: null, seconds_per_file: 300, remaining_seconds: null, summary: "" },
+    });
+    const files = progressSteps(app(), [queued], testServer).find((s) => s.title === "Files checked")!;
+    expect(files.stateLabel).toBe("Waiting its turn");
+    expect(files.detail).toContain("Slop checks one release at a time.");
+    expect(files.detail).not.toContain("ahead");
+    expect(files.more).toBe("Each file takes about 5 minutes here.");
+  });
+
+  it("shows the other checks on each file, and a file on hold in plain words", () => {
+    const steps = progressSteps(
+      app(),
+      [
+        release({
+          files: [
+            file({ check: "checked", scan_result: "on_hold", scan_detail: "YARA: Packed_UPX.", provenance: {} as never, defender: { sha256: "", engine: "1", signatures: "1", signatures_updated: null, detections: [], signed_by: null } }),
+            file({ platform: "linux", file_name: "g.tar.gz", check: "checked", scan_result: "note", scan_detail: "It can log keystrokes.", maker_key: { fingerprint: "SHA256:x", key_name: "laptop" } }),
+          ],
+        }),
+      ],
+      { scanning: true, maker_signatures_required: true },
+    );
+    const items = steps.find((s) => s.title === "Files checked")!.items!;
+    expect(items[0]).toMatchObject({ label: "Windows (.zip)", state: "problem", status: "On hold" });
+    expect(items[0].detail).toBe("YARA: Packed_UPX. · signed by your build · Microsoft Defender found nothing");
+    expect(items[1]).toMatchObject({ status: "Passed, with a note" });
+    expect(items[1].detail).toContain('signed with your key "laptop"');
+    const scan = steps.find((s) => s.title === "Scan")!;
+    expect(scan).toMatchObject({ state: "problem", stateLabel: "On hold", detail: "Windows (.zip) is on hold: YARA: Packed_UPX." });
+    expect(textOf(scan.more)).toContain("a person at Slop looks");
+    expect(states(steps)["Maker signature"]).toBe("done");
+    expect(textOf(steps.find((s) => s.title === "Review by a person")!.detail)).toContain("looks at the file on hold first");
+  });
+
+  it("refreshes often while files are checked, now and then during review, and stops when done", () => {
+    expect(refreshEvery([release({ status: "fetching" })])).toBe(10_000);
+    expect(refreshEvery([release({ status: "awaiting_review" })])).toBe(60_000);
+    expect(refreshEvery([release({ status: "approved" })])).toBeNull();
+    expect(refreshEvery([release({ status: "withdrawn" }), release({ status: "rejected" })])).toBeNull();
+    expect(refreshEvery([])).toBeNull();
+    expect(refreshEvery(undefined)).toBeNull();
+  });
+
+  it("words times and files plainly", () => {
+    expect(fileLabel({ platform: "linux-rpm", file_name: "Game.RPM" })).toBe("Linux (.rpm)");
+    expect(fileLabel({ platform: "any", file_name: "mod.zip" })).toBe("Mod (.zip)");
+    expect(about(30)).toBe("under a minute");
+    expect(about(299)).toBe("about 5 minutes");
+    expect(about(3900)).toBe("about 1 hour 5 minutes");
+    const now = Date.parse("2026-10-25T12:00:00Z");
+    expect(ago(new Date(now - 20_000).toISOString(), now)).toBe("just now");
+    expect(ago(new Date(now - 12 * 60_000).toISOString(), now)).toBe("12 minutes ago");
   });
 });

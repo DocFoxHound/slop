@@ -1309,3 +1309,24 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .people-mine p { margin: 0; }
 .people-mine-who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .account-panel .people-mine { margin: 0; }
+/* --- Publishing progress, file by file, and donation pointers (PublishProgress.tsx, Publish.tsx,
+   AccountSections.tsx). Sub-items carry their own state, so their icons and labels don't take the
+   colour of the step they sit in. --- */
+.step-more { margin-top: 2px; }
+.step-files { list-style: none; margin: 8px 0 2px; padding: 8px 10px; display: flex; flex-direction: column; gap: 6px; border: 1px solid var(--line); border-radius: 10px; background: var(--panel-2); }
+.step-files .step-file { display: grid; grid-template-columns: 22px 1fr; gap: 8px; align-items: start; font-size: 13px; }
+.step-files .step-file .step-icon { width: 20px; height: 20px; font-size: 11px; background: var(--panel-3); color: var(--muted); }
+.step-files .step-file.done .step-icon { background: var(--slime-soft); color: var(--slime); }
+.step-files .step-file.active .step-icon { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
+.step-files .step-file.problem .step-icon { background: rgba(248, 113, 113, 0.16); color: var(--bad); }
+.step-files .step-file .step-state { color: var(--muted); }
+.step-files .step-file.done .step-state { color: var(--slime); }
+.step-files .step-file.active .step-state { color: var(--warn); }
+.step-files .step-file.problem .step-state { color: var(--bad); }
+.step-details { margin-top: 4px; }
+.step-details > summary { cursor: pointer; color: var(--muted); }
+.donations-off { margin-top: 4px; color: var(--muted); }
+/* Links inside a line of text are underlined, not told apart by colour alone (WCAG 1.4.1). */
+.donations-off a, .step a, .donation-setup-list a { text-decoration: underline; }
+.donation-setup-list { display: flex; flex-direction: column; gap: 6px; margin: 10px 0 0; }
+/* --- end publishing progress --- */

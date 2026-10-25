@@ -44,3 +44,26 @@ export function useDocumentTitle(title: string | undefined) {
     document.title = title ? `${title} · Slop` : "Slop";
   }, [title]);
 }
+
+/**
+ * Calls `tick` every `ms` milliseconds while `ms` is set (null stops it), skipping ticks while the
+ * page is hidden. For pages that follow something under way, like a release being checked.
+ */
+export function useInterval(tick: () => void, ms: number | null) {
+  useEffect(() => {
+    if (ms === null) return;
+    const timer = window.setInterval(() => {
+      if (typeof document !== "undefined" && document.hidden) return;
+      tick();
+    }, ms);
+    return () => window.clearInterval(timer);
+  }, [tick, ms]);
+}
+
+/** The time now, updated every `ms` milliseconds while `ms` is set, for "started 12 minutes ago". */
+export function useNow(ms: number | null): number {
+  const [now, setNow] = useState(() => Date.now());
+  const tick = useCallback(() => setNow(Date.now()), []);
+  useInterval(tick, ms);
+  return now;
+}
