@@ -1370,7 +1370,8 @@ export interface JobCard {
 export interface PeopleQuery {
   skill?: string;
   taking_work?: boolean;
-  ai?: "none" | "assisted";
+  /** Creatives who use AI exactly this much. */
+  ai?: AiUse;
   studios?: boolean;
   q?: string;
   sort?: "shuffle" | "rating" | "clients";

@@ -176,12 +176,17 @@ pub fn audio_format(bytes: &[u8]) -> Option<&'static str> {
     }
 }
 
-fn clean_title(title: Option<&str>) -> Result<Option<String>, Problem> {
-    let Some(t) = title.map(str::trim).filter(|t| !t.is_empty()) else {
+/// One line of up to `max` characters, or nothing. `field` names it in the problem.
+fn one_line(field: &str, value: Option<&str>, max: usize) -> Result<Option<String>, Problem> {
+    let Some(t) = value.map(str::trim).filter(|t| !t.is_empty()) else {
         return Ok(None);
     };
-    if t.chars().count() > MAX_TITLE || t.chars().any(char::is_control) {
-        problem!("titles are one line of up to {MAX_TITLE} characters: \"{t}\"");
+    let n = t.chars().count();
+    if n > max {
+        problem!("\"{field}\" can be up to {max} characters; this one has {n}");
+    }
+    if t.chars().any(char::is_control) {
+        problem!("\"{field}\" has to be one line, without line breaks or tabs");
     }
     Ok(Some(t.to_string()))
 }
@@ -191,7 +196,7 @@ fn clean_skill(skill: Option<&str>) -> Result<Option<String>, Problem> {
         None => Ok(None),
         Some(s) if SKILLS.iter().any(|(slug, _)| *slug == s) => Ok(Some(s.to_string())),
         Some(s) => problem!(
-            "\"{s}\" isn't one of the skills: {}",
+            "\"{s}\" isn't one of the skills; use one of {}",
             SKILLS
                 .iter()
                 .map(|(slug, _)| *slug)
@@ -200,6 +205,17 @@ fn clean_skill(skill: Option<&str>) -> Result<Option<String>, Problem> {
         ),
     }
 }
+
+/// Puts what a problem is about in front of it: `work 3 "image": …`.
+fn about<T>(what: &str, checked: Result<T, Problem>) -> Result<T, Problem> {
+    checked.map_err(|Problem(p)| Problem(format!("{what}: {p}")))
+}
+
+/// Shown with "isn't a YouTube video link", so the fix is plain.
+const YOUTUBE_FORMS: &str = "use a video's own link, like https://youtu.be/VIDEO_ID or https://www.youtube.com/watch?v=VIDEO_ID (Shorts, /embed/ and /live/ links work too)";
+
+/// At most this many problems are listed at once; the rest are counted.
+const MAX_PROBLEMS: usize = 12;
 
 async fn read_audio(state: &AppState, base: &url::Url, path: &str) -> Result<AudioFile, Problem> {
     let path = media::clean_file_path(
@@ -211,11 +227,18 @@ async fn read_audio(state: &AppState, base: &url::Url, path: &str) -> Result<Aud
     let bytes = match media::download(state, url.clone(), MAX_AUDIO_BYTES).await {
         Ok(Some(b)) => b,
         Ok(None) => problem!(".slop/{path} isn't in the repository at that commit"),
-        Err(e) if e.to_string() == "too big" => problem!("{path} is over 15 MB"),
+        Err(e) if e.to_string() == "too big" => {
+            problem!(
+                "{path} is over {} MB, the most for a track",
+                MAX_AUDIO_BYTES / (1024 * 1024)
+            )
+        }
         Err(e) => problem!("couldn't download {path}: {e:#}"),
     };
     let Some(format) = audio_format(&bytes) else {
-        problem!("{path} isn't an MP3, Ogg, WAV, FLAC or M4A file");
+        problem!(
+            "{path} isn't an MP3, Ogg, WAV, FLAC or M4A file (Slop reads its first bytes, not its name)"
+        );
     };
     Ok(AudioFile {
         path,
@@ -274,10 +297,15 @@ async fn read_and_store(
             Ok(None) => return Ok(Outcome::NoManifest),
             Err(e) => problem!("couldn't download {MANIFEST_PATH}: {e:#}"),
         };
-    let manifest: Manifest = serde_json::from_slice(&manifest)
-        .map_err(|e| Problem(format!("{MANIFEST_PATH} isn't valid: {e}")))?;
+    let manifest: Manifest = serde_json::from_slice(&manifest).map_err(|e| {
+        Problem(format!(
+            "{MANIFEST_PATH} isn't valid: {e}. It's one JSON object with \"avatar\", \"banner\" and \"works\" (a list); each work has one of \"image\", \"youtube\" or \"audio\", and optionally \"poster\", \"title\", \"caption\" and \"skill\""
+        ))
+    })?;
     if manifest.works.is_empty() {
-        problem!("{MANIFEST_PATH} needs at least one work");
+        problem!(
+            "{MANIFEST_PATH} needs at least one work: add a \"works\" list, e.g. \"works\": [{{ \"image\": \"works/first.png\" }}]"
+        );
     }
     if manifest.works.len() > MAX_WORKS {
         problem!(
@@ -286,63 +314,124 @@ async fn read_and_store(
         );
     }
 
+    // Every problem is listed, each naming where it is, so one check finds them all.
+    let mut problems: Vec<String> = Vec::new();
+    let mut note = |r: Result<(), Problem>| {
+        if let Err(Problem(p)) = r {
+            problems.push(p);
+        }
+    };
     let mut reader = Reader::new(state, base.clone());
-    let avatar = match &manifest.avatar {
-        Some(p) => Some(reader.picture(p, AVATAR_MIN).await?),
-        None => None,
-    };
-    let banner = match &manifest.banner {
-        Some(p) => Some(reader.picture(p, BANNER_MIN).await?),
-        None => None,
-    };
+    let mut avatar = None;
+    if let Some(p) = &manifest.avatar {
+        note(about("\"avatar\"", reader.picture(p, AVATAR_MIN).await).map(|p| avatar = Some(p)));
+    }
+    let mut banner = None;
+    if let Some(p) = &manifest.banner {
+        note(about("\"banner\"", reader.picture(p, BANNER_MIN).await).map(|p| banner = Some(p)));
+    }
     let mut works = Vec::with_capacity(manifest.works.len());
+    // Each work's key and number, to say which one repeats which.
+    let mut first_listed: std::collections::HashMap<String, usize> =
+        std::collections::HashMap::new();
     for (i, w) in manifest.works.iter().enumerate() {
         let n = i + 1;
-        let title = clean_title(w.title.as_deref())?;
-        let caption = media::clean_caption(w.caption.as_deref())?;
-        let skill = clean_skill(w.skill.as_deref())?;
-        let poster = match &w.poster {
-            Some(p) => Some(reader.picture(p, WORK_MIN).await?),
-            None => None,
-        };
-        works.push(match (&w.image, &w.youtube, &w.audio) {
-            (Some(path), None, None) => {
-                if poster.is_some() {
-                    problem!("work {n}: \"poster\" is only for videos and audio");
-                }
-                Work::Image {
-                    picture: reader.picture(path, WORK_MIN).await?,
+        let at = |field: &str| format!("work {n} \"{field}\"");
+        let checked = async {
+            let title = about(
+                &format!("work {n}"),
+                one_line("title", w.title.as_deref(), MAX_TITLE),
+            )?;
+            let caption = about(
+                &format!("work {n}"),
+                one_line("caption", w.caption.as_deref(), media::MAX_CAPTION),
+            )?;
+            let skill = about(&at("skill"), clean_skill(w.skill.as_deref()))?;
+            let given: Vec<&str> = [
+                ("image", w.image.is_some()),
+                ("youtube", w.youtube.is_some()),
+                ("audio", w.audio.is_some()),
+            ]
+            .into_iter()
+            .filter_map(|(k, set)| set.then_some(k))
+            .collect();
+            if given.len() != 1 {
+                problem!(
+                    "work {n} needs exactly one of \"image\", \"youtube\" or \"audio\"; it has {}",
+                    if given.is_empty() {
+                        "none of them".to_string()
+                    } else {
+                        given
+                            .iter()
+                            .map(|k| format!("\"{k}\""))
+                            .collect::<Vec<_>>()
+                            .join(" and ")
+                    }
+                );
+            }
+            if w.image.is_some() && w.poster.is_some() {
+                problem!(
+                    "work {n}: \"poster\" is only for \"youtube\" and \"audio\" works; a picture is its own preview, so remove it"
+                );
+            }
+            let poster = match &w.poster {
+                Some(p) => Some(about(&at("poster"), reader.picture(p, WORK_MIN).await)?),
+                None => None,
+            };
+            Ok::<_, Problem>(match (&w.image, &w.youtube, &w.audio) {
+                (Some(path), _, _) => Work::Image {
+                    picture: about(&at("image"), reader.picture(path, WORK_MIN).await)?,
                     title,
                     caption,
                     skill,
+                },
+                (_, Some(link), _) => {
+                    let Some(youtube_id) = media::youtube_id(link) else {
+                        problem!(
+                            "{}: \"{link}\" isn't a YouTube video link; {YOUTUBE_FORMS}",
+                            at("youtube")
+                        );
+                    };
+                    Work::Video {
+                        youtube_id,
+                        poster,
+                        title,
+                        caption,
+                        skill,
+                    }
                 }
-            }
-            (None, Some(link), None) => {
-                let Some(youtube_id) = media::youtube_id(link) else {
-                    problem!("work {n}: \"{link}\" isn't a YouTube video link");
-                };
-                Work::Video {
-                    youtube_id,
+                (_, _, Some(path)) => Work::Audio {
+                    audio: about(&at("audio"), read_audio(state, &base, path).await)?,
                     poster,
                     title,
                     caption,
                     skill,
+                },
+                (None, None, None) => unreachable!("exactly one was checked above"),
+            })
+        };
+        match checked.await {
+            Ok(work) => {
+                let key = work.key();
+                if let Some(first) = first_listed.get(&key) {
+                    problems.push(format!(
+                        "work {n} is the same as work {first} ({key}); list each work once"
+                    ));
+                } else {
+                    first_listed.insert(key, n);
                 }
+                works.push(work);
             }
-            (None, None, Some(path)) => Work::Audio {
-                audio: read_audio(state, &base, path).await?,
-                poster,
-                title,
-                caption,
-                skill,
-            },
-            _ => problem!("work {n} needs exactly one of \"image\", \"youtube\" or \"audio\""),
-        });
+            Err(Problem(p)) => problems.push(p),
+        }
     }
-    let mut keys: Vec<String> = works.iter().map(Work::key).collect();
-    keys.sort();
-    if let Some(dup) = keys.windows(2).find(|w| w[0] == w[1]) {
-        problem!("{MANIFEST_PATH} lists {} twice", dup[0]);
+    if !problems.is_empty() {
+        let more = problems.len().saturating_sub(MAX_PROBLEMS);
+        problems.truncate(MAX_PROBLEMS);
+        if more > 0 {
+            problems.push(format!("…and {more} more"));
+        }
+        return Err(Problem(problems.join("\n")));
     }
 
     let fingerprint = {
@@ -728,7 +817,14 @@ pub async fn check(
         // organization they own), like an app's (security review, 2026-10-22).
         let owned = crate::repo_owner::assess(&state, user.id, repo).await?;
         if !owned.ok {
-            return Err(ApiError::invalid("repo_url", owned.message));
+            // "github_account" when linking a GitHub account fixes it: the editor offers that
+            // button right there.
+            let field = if owned.link == Some("github") {
+                "github_account"
+            } else {
+                "repo_url"
+            };
+            return Err(ApiError::invalid(field, owned.message));
         }
         sqlx::query(
             "update creatives set portfolio_repo = $2, updated_at = now() where user_id = $1",
@@ -746,7 +842,7 @@ pub async fn check(
     let Some(repo) = repo else {
         return Err(ApiError::invalid(
             "repo_url",
-            "add the repository your portfolio is in",
+            "add the address of the public GitHub repository your portfolio is in, e.g. https://github.com/you/portfolio",
         ));
     };
     let result = match refresh(&state, me, &repo).await {
@@ -792,6 +888,34 @@ pub async fn set_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    /// web/public/portfolio.md (the guide for people and their AI assistants) states the limits
+    /// this file enforces; it has to change when they do.
+    #[test]
+    fn the_portfolio_guide_states_every_limit() {
+        let guide = include_str!("../../../../web/public/portfolio.md");
+        let mb = |b: u64| format!("{} MB", b / (1024 * 1024));
+        let size = |(w, h): (u32, u32)| format!("{w}×{h}");
+        let mut want = vec![
+            MANIFEST_PATH.to_string(),
+            format!("{} KB", MAX_MANIFEST_BYTES / 1024),
+            format!("1 to {MAX_WORKS}"),
+            mb(MAX_AUDIO_BYTES),
+            mb(media::MAX_IMAGE_BYTES),
+            format!("**{MAX_TITLE}**"),
+            format!("**{}**", media::MAX_CAPTION),
+            size(WORK_MIN),
+            size(AVATAR_MIN),
+            size(BANNER_MIN),
+            "8192".to_string(),
+            "## Your page's design (coming soon)".to_string(),
+            "Check my portfolio now".to_string(),
+        ];
+        want.extend(SKILLS.iter().map(|(slug, _)| format!("`{slug}`")));
+        for w in want {
+            assert!(guide.contains(&w), "portfolio.md doesn't say {w}");
+        }
+    }
 
     #[test]
     fn audio_is_recognised_from_its_signature() {

@@ -27,17 +27,21 @@ export function accentStyle(accent: Accent): CSSProperties {
   return { "--accent": a.color, "--accent-ink": a.ink } as CSSProperties;
 }
 
-export const AI_USE: Record<AiUse, { label: string; hint: string }> = {
-  none: { label: "No AI", hint: "Everything is made by hand." },
-  assisted: { label: "AI-assisted", hint: "Uses AI for references or drafts, finished by hand." },
-  heavy: { label: "Mostly AI-generated", hint: "Output is largely generated, then edited." },
+/**
+ * How a creative uses AI. Every way of working is welcome on People, so each has its own neutral
+ * colour and mark (blue, teal, green): none of them is styled as a warning (owner, 2026-10-25).
+ */
+export const AI_USE: Record<AiUse, { label: string; short: string; hint: string; icon: string }> = {
+  none: { label: "No AI", short: "No AI", hint: "Everything is made by hand.", icon: "✋" },
+  assisted: { label: "AI-assisted", short: "AI-assisted", hint: "Uses AI for references or drafts, finished by hand.", icon: "🤝" },
+  heavy: { label: "Mostly AI-generated", short: "Mostly AI", hint: "Output is largely generated, then edited.", icon: "✨" },
 };
 
 export function AiBadge({ ai }: { ai: AiUse }) {
-  const cls = ai === "none" ? "official" : ai === "assisted" ? "warn" : "bad";
+  const a = AI_USE[ai];
   return (
-    <span className={`badge ${cls}`} title={AI_USE[ai].hint}>
-      {ai === "none" ? "✋" : "🤖"} {AI_USE[ai].label.toUpperCase()}
+    <span className={`badge ai-${ai}`} title={a.hint}>
+      <span aria-hidden="true">{a.icon}</span> {a.label.toUpperCase()}
     </span>
   );
 }

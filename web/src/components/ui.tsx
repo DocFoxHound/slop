@@ -117,13 +117,13 @@ export function Shelf({ apps, empty }: { apps: Array<AppSummary & { reason?: str
 }
 
 /** A link that leaves Slop. In the desktop app it opens the system browser. */
-export function ExternalLink({ href, children }: { href: string; children: ReactNode }) {
+export function ExternalLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
   const onClick = (e: MouseEvent) => {
     e.preventDefault();
     void openExternal(href);
   };
   return (
-    <a href={href} onClick={onClick} rel="noopener noreferrer" target="_blank">
+    <a href={href} onClick={onClick} rel="noopener noreferrer" target="_blank" className={className}>
       {children}
     </a>
   );

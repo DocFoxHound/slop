@@ -282,14 +282,14 @@ Details are in `PAYMENTS.md`, and the legal reasoning is in `LEGAL.md` §3–4.
 
 ### 15.1 Profiles (different from app pages)
 A creative's page is built to sell a service, so it isn't an app page with a different header:
-- **Header:** name, "Individual" or "Studio · N people", headline, location, skills, "Taking work" or "Fully booked", typical turnaround, and the **AI-use disclosure** (required: No AI / AI-assisted / Mostly AI-generated, with an optional note). Whether they're a **business (trader)** is shown too (`LEGAL-GUIDANCE.md` HUM-1).
+- **Header:** name, "Individual" or "Studio · N people", headline, location, skills, "Taking work" or "Fully booked", typical turnaround, and the **AI-use disclosure** (required: No AI / AI-assisted / Mostly AI-generated, with an optional note; each has its own neutral colour, blue, teal and green, because no way of working is shunned, decided 2026-10-25). Whether they're a **business (trader)** is shown too (`LEGAL-GUIDANCE.md` HUM-1).
 - **Rating:** % Not Slop from **verified clients only** (a completed job through Slop), shown from 3 reviews, with the count.
-- **Portfolio:** pictures, videos (YouTube) and **audio tracks** for composers. Like app pictures, Slop doesn't host them: they live in a public GitHub repository, listed in `.slop/portfolio.json`, read at one commit, checked, and **reviewed before they show** (§15.8). A first profile goes live when its first portfolio is approved.
+- **Portfolio:** pictures, videos (YouTube) and **audio tracks** for composers. Like app pictures, Slop doesn't host them: they live in a public GitHub repository, listed in `.slop/portfolio.json`, read at one commit, checked, and **reviewed before they show** (§15.8). A first profile goes live when its first portfolio is approved. It's explained as the creative's shop window, with a guide for people and their AI assistants (`/portfolio.md`) and ready-made templates (`examples/portfolio-templates/`); "Check my portfolio now" lists every problem at once, each naming the work and field.
 - **Services:** up to 8 packages (name, what's included, starting price, typical days, skill). "Hire" on a package starts a request with it filled in.
 - **Verified reviews:** each one says ✓ Verified client, the project and what was made, and the client's 👍/👎 with text. The creative can reply once, publicly.
 - **Worked on:** the apps that credit them (§15.4).
 - **Customisation:** an accent colour (from a palette that keeps contrast readable), a banner and avatar from their portfolio, the **order of the sections** (portfolio, services, reviews, worked on, about), the portfolio order, an About section (Markdown, through the safe renderer), and up to 5 links (website, ArtStation, Bandcamp…), shown with their domain.
-- **Directory (`/people`):** filters for skill, taking work now, AI use, studios only. Default order is a **daily shuffle**, so nobody is buried. "Best rated" and "Most clients" are sorts the viewer picks (HUM-10).
+- **Directory (`/people`):** filters for skill, taking work now, AI use (Any, or exactly one of No AI, AI-assisted, Mostly AI), studios only. Default order is a **daily shuffle**, so nobody is buried. "Best rated" and "Most clients" are sorts the viewer picks (HUM-10).
 
 ### 15.2 Hiring, start to finish
 Every job belongs to **one of the maker's projects**, at any stage (coming soon, beta or released; public or private). That's what lets the work be credited.

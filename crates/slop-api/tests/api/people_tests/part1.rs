@@ -387,7 +387,10 @@ async fn the_directory_filters_searches_and_leaves_out_hidden_suspended_and_clos
     };
     assert_eq!(handles(&dir("").await), ["forge", "genny", "vera"]);
     assert_eq!(handles(&dir("?ai=none").await), ["vera"]);
-    assert_eq!(handles(&dir("?ai=assisted").await), ["forge", "vera"]);
+    // Each AI-use level matches exactly: the filter doesn't rank one way of working over another.
+    assert_eq!(handles(&dir("?ai=assisted").await), ["forge"]);
+    assert_eq!(handles(&dir("?ai=heavy").await), ["genny"]);
+    assert_eq!(handles(&dir("?ai=other").await), ["forge", "genny", "vera"]);
     assert_eq!(handles(&dir("?studios=true").await), ["forge"]);
     assert_eq!(handles(&dir("?taking_work=true").await), ["genny", "vera"]);
     // Text search over the name, headline and handle; % and _ are dropped from the search.
@@ -1212,6 +1215,8 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
             .contains("link the GitHub account"),
         "{body}"
     );
+    // Linking a GitHub account fixes it, so the editor offers that button right there.
+    assert_eq!(field(&body), "github_account", "{body}");
     link_github(&app, vera, "43").await;
     let (status, body) = check(&cookie, octo.clone()).await;
     assert_eq!(
@@ -1247,26 +1252,56 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
 
     // Each kind of problem is explained, and nothing is queued.
     let problems = [
+        // Each names the work and the field, what's wrong and the limit, so a person or an AI
+        // can fix it without guessing.
         (
             json!([{ "image": "tiny.png", "title": "Tiny" }]),
-            "tiny.png is 16×16; it needs to be at least 32×32",
+            "work 1 \"image\": tiny.png is 16×16; it needs to be at least 32×32",
         ),
         (
             json!([{ "image": "knight.png", "title": "x".repeat(81) }]),
-            "titles are one line of up to 80 characters",
+            "work 1: \"title\" can be up to 80 characters; this one has 81",
+        ),
+        (
+            json!([{ "image": "knight.png", "caption": "two\nlines" }]),
+            "work 1: \"caption\" has to be one line",
         ),
         (
             json!([{ "image": "knight.png", "skill": "juggling" }]),
-            "\"juggling\" isn't one of the skills",
+            "work 1 \"skill\": \"juggling\" isn't one of the skills; use one of 2d-art, pixel-art",
         ),
         (
             json!([{ "image": "knight.png", "youtube": "https://youtu.be/dQw4w9WgXcQ" }]),
-            "needs exactly one of",
+            "work 1 needs exactly one of \"image\", \"youtube\" or \"audio\"; it has \"image\" and \"youtube\"",
+        ),
+        (
+            json!([{ "title": "Nothing" }]),
+            "work 1 needs exactly one of \"image\", \"youtube\" or \"audio\"; it has none of them",
+        ),
+        (
+            json!([{ "image": "knight.png", "poster": "knight.png" }]),
+            "work 1: \"poster\" is only for \"youtube\" and \"audio\" works",
+        ),
+        (
+            json!([{ "youtube": "https://vimeo.com/123" }]),
+            "work 1 \"youtube\": \"https://vimeo.com/123\" isn't a YouTube video link; use a video's own link, like https://youtu.be/",
+        ),
+        (
+            json!([{ "image": "missing.png" }]),
+            "work 1 \"image\": .slop/missing.png isn't in the repository at that commit",
+        ),
+        (
+            json!([{ "image": "../knight.png" }]),
+            "work 1 \"image\": \"../knight.png\" isn't a usable path",
+        ),
+        (
+            json!([{ "image": "knight.svg" }]),
+            "work 1 \"image\": \"knight.svg\" isn't a picture: use .png, .jpg, .webp or .gif",
         ),
         (json!([]), "needs at least one work"),
         (
             json!([{ "image": "knight.png" }, { "image": "knight.png" }]),
-            "lists image:knight.png twice",
+            "work 2 is the same as work 1 (image:knight.png); list each work once",
         ),
     ];
     for (works, want) in problems {
@@ -1276,6 +1311,30 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
         assert_eq!(body["result"], "problem", "{body}");
         assert!(body["problem"].as_str().unwrap().contains(want), "{body}");
     }
+    // Every problem at once, a line each, so one check finds them all.
+    manifest(
+        &files,
+        json!([{ "image": "tiny.png" }, { "image": "knight.png" }, { "youtube": "nope", "skill": "juggling" }]),
+    );
+    let (_, body) = check(&cookie, json!({})).await;
+    let lines: Vec<&str> = body["problem"].as_str().unwrap().lines().collect();
+    assert_eq!(lines.len(), 2, "{body}");
+    assert!(lines[0].starts_with("work 1 \"image\": "), "{body}");
+    assert!(lines[1].starts_with("work 3 \"skill\": "), "{body}");
+    // Not JSON Slop knows: says where, and what the file looks like.
+    put_file(
+        &files,
+        "portfolio.json",
+        br#"{ "works": [{ "img": "knight.png" }] }"#.to_vec(),
+    );
+    let (_, body) = check(&cookie, json!({})).await;
+    let problem = body["problem"].as_str().unwrap();
+    assert!(problem.contains("unknown field `img`"), "{body}");
+    assert!(problem.contains("line 1 column"), "{body}");
+    assert!(
+        problem.contains("each work has one of \"image\", \"youtube\" or \"audio\""),
+        "{body}"
+    );
     put_file(&files, "small-avatar.png", png(64, 64));
     put_file(
         &files,
@@ -1289,7 +1348,7 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
         body["problem"]
             .as_str()
             .unwrap()
-            .contains("at least 128×128"),
+            .contains("\"avatar\": small-avatar.png is 64×64; it needs to be at least 128×128"),
         "{body}"
     );
     assert_eq!(count(&app, "select count(*) from portfolio_sets").await, 0);
@@ -1310,6 +1369,75 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
     assert_eq!(overview["pending"]["works"][0]["title"], "Knight");
     assert_eq!(overview["live"], Value::Null);
     assert!(overview["checked_at"].is_string());
+}
+
+/// The starter portfolios in `examples/portfolio-templates/` (pointed to from portfolio.md and
+/// the editor) pass every check "Check my portfolio now" makes, read the way Slop reads them.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_portfolio_templates_pass_the_portfolio_check(db: PgPool) {
+    let (app, files, vera, cookie) = portfolio_app(db).await;
+    link_github(&app, vera, "42").await;
+    let root =
+        std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("../../examples/portfolio-templates");
+    let mut templates = Vec::new();
+    for entry in std::fs::read_dir(&root).unwrap() {
+        let dir = entry.unwrap().path();
+        if dir.is_dir() {
+            templates.push(dir);
+        }
+    }
+    templates.sort();
+    let names: Vec<String> = templates
+        .iter()
+        .map(|d| d.file_name().unwrap().to_string_lossy().into_owned())
+        .collect();
+    assert_eq!(names, ["gallery", "showreel", "studio", "tracklist"]);
+    for dir in templates {
+        files.lock().unwrap().clear();
+        let slop = dir.join(".slop");
+        let mut stack = vec![slop.clone()];
+        while let Some(d) = stack.pop() {
+            for entry in std::fs::read_dir(&d).unwrap() {
+                let path = entry.unwrap().path();
+                if path.is_dir() {
+                    stack.push(path);
+                } else {
+                    let rel = path
+                        .strip_prefix(&slop)
+                        .unwrap()
+                        .to_string_lossy()
+                        .into_owned();
+                    put_file(&files, &rel, std::fs::read(&path).unwrap());
+                }
+            }
+        }
+        let (status, body) = call(
+            &app,
+            post(
+                "/v1/me/creative/portfolio/check",
+                &cookie,
+                json!({ "repo_url": "https://github.com/octo/game" }),
+            ),
+        )
+        .await;
+        assert_eq!(status, StatusCode::OK, "{}: {body}", dir.display());
+        assert_eq!(body["result"], "pending", "{}: {body}", dir.display());
+        assert!(
+            body["pending"]["avatar"].is_object(),
+            "{}: {body}",
+            dir.display()
+        );
+        assert!(
+            body["pending"]["banner"].is_object(),
+            "{}: {body}",
+            dir.display()
+        );
+        assert!(
+            dir.join("README.md").is_file(),
+            "{} has a README",
+            dir.display()
+        );
+    }
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

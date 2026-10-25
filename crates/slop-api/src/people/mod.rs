@@ -834,7 +834,7 @@ struct DirectoryQuery {
     skill: Option<String>,
     #[serde(default)]
     taking_work: bool,
-    /// none: No AI only; assisted: No AI or AI-assisted.
+    /// none, assisted or heavy: creatives who use AI exactly that much.
     ai: Option<String>,
     #[serde(default)]
     studios: bool,
@@ -871,14 +871,12 @@ async fn directory(
     if q.taking_work {
         qb.push(" and c.taking_work");
     }
-    match q.ai.as_deref() {
-        Some("none") => {
-            qb.push(" and c.ai_use = 'none'");
-        }
-        Some("assisted") => {
-            qb.push(" and c.ai_use in ('none', 'assisted')");
-        }
-        _ => {}
+    // Each level on its own: the filter finds a way of working, it doesn't rank them.
+    if let Some(ai) =
+        q.ai.as_deref()
+            .filter(|a| ["none", "assisted", "heavy"].contains(a))
+    {
+        qb.push(" and c.ai_use = ").push_bind(ai.to_string());
     }
     if q.studios {
         qb.push(" and c.kind = 'studio'");

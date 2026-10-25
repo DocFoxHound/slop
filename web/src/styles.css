@@ -18,8 +18,25 @@
   --warn: #fbbf24;
   --bad: #f87171;
   --info: #60a5fa;
+  /* AI use on People: neutral colours, none of them a warning (WCAG AA on every panel). */
+  --ai-none: #7cb8fb;
+  --ai-none-soft: rgba(124, 184, 251, 0.16);
+  --ai-assisted: #2dd4bf;
+  --ai-assisted-soft: rgba(45, 212, 191, 0.16);
+  --ai-heavy: #4ade80;
+  --ai-heavy-soft: rgba(74, 222, 128, 0.16);
   --radius: 10px;
   color-scheme: dark;
+}
+
+/* Slop is dark only so far; a light theme would set data-theme="light" and get these (AA on white). */
+:root[data-theme="light"] {
+  --ai-none: #1e40af;
+  --ai-none-soft: #dbeafe;
+  --ai-assisted: #115e59;
+  --ai-assisted-soft: #ccfbf1;
+  --ai-heavy: #166534;
+  --ai-heavy-soft: #dcfce7;
 }
 
 * { box-sizing: border-box; }
@@ -45,6 +62,7 @@ code { font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; background:
 .slime { color: var(--slime); }
 .bad { color: var(--bad); }
 .small { font-size: 12px; }
+.pre-line { white-space: pre-line; }
 
 .skip { position: absolute; left: -9999px; top: 8px; z-index: 10; background: var(--slime); color: var(--slime-ink); padding: 8px 12px; border-radius: 8px; }
 .skip:focus { left: 8px; }
@@ -124,6 +142,9 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .badge.official { background: var(--slime-soft); color: var(--slime); }
 .badge.bad { background: rgba(248, 113, 113, 0.14); color: var(--bad); }
 .badge.neutral { background: var(--panel-3); color: var(--muted); }
+.badge.ai-none { background: var(--ai-none-soft); color: var(--ai-none); }
+.badge.ai-assisted { background: var(--ai-assisted-soft); color: var(--ai-assisted); }
+.badge.ai-heavy { background: var(--ai-heavy-soft); color: var(--ai-heavy); }
 .badge.soon { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
 .badge.beta { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
 .notice { background: rgba(96, 165, 250, 0.08); border: 1px solid rgba(96, 165, 250, 0.3); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
@@ -596,6 +617,13 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .step-track li.done::before { content: "✓ "; }
 .people-edit section, .people-edit > form { margin-bottom: 16px; }
 .people-edit h2 { margin: 6px 0 4px; }
+.portfolio-setup { margin: 10px 0 14px; }
+.portfolio-setup > summary { cursor: pointer; margin-bottom: 6px; }
+.portfolio-setup ol { margin: 6px 0 10px; padding-left: 22px; display: flex; flex-direction: column; gap: 6px; }
+.portfolio-setup ol .btn { margin-left: 4px; }
+.portfolio-problems { margin: 4px 0 0; padding-left: 20px; font-weight: 400; }
+.shop-window ol { margin: 8px 0 0; padding-left: 22px; }
+.people-offer p { max-width: 760px; }
 
 .people-hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; }
 .people-hero h1 { font-size: 34px; margin: 6px 0; }

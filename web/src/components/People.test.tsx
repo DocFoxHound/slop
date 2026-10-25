@@ -4,7 +4,7 @@ import { MemoryRouter } from "react-router";
 import { afterEach, describe, expect, it } from "vitest";
 
 import type { CreativeCard, Work } from "../api";
-import { PersonCard, RatingLine, WorkTile } from "./People";
+import { AI_USE, AiBadge, PersonCard, RatingLine, WorkTile } from "./People";
 
 const card: CreativeCard = {
   handle: "vera",
@@ -48,6 +48,24 @@ describe("PersonCard", () => {
       </MemoryRouter>,
     );
     expect(screen.getByText("Not taking paid work yet")).toBeTruthy();
+  });
+});
+
+describe("AiBadge", () => {
+  afterEach(cleanup);
+
+  it("gives every way of working its own neutral colour, never a warning", () => {
+    for (const ai of Object.keys(AI_USE) as Array<keyof typeof AI_USE>) {
+      const { container } = render(<AiBadge ai={ai} />);
+      const badge = container.querySelector(".badge")!;
+      expect(badge.className).toBe(`badge ai-${ai}`);
+      expect(badge.className).not.toMatch(/\b(warn|bad|official)\b/);
+      // Words, not colour alone (A11Y-1); the mark is decoration.
+      expect(badge.textContent).toContain(AI_USE[ai].label.toUpperCase());
+      expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe(AI_USE[ai].icon);
+      expect(badge.getAttribute("title")).toBe(AI_USE[ai].hint);
+      cleanup();
+    }
   });
 });
 

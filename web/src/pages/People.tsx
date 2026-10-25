@@ -6,7 +6,7 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { api, ApiError, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
+import { api, ApiError, type AiUse, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
 import { Avatar } from "../components/Avatar";
 import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, WorkTile, accentStyle } from "../components/People";
 import { MyPeoplePageCard, PageStatusDetails, useMyPeoplePage, type PeopleSaved } from "../components/PeopleStatus";
@@ -96,8 +96,11 @@ export function People() {
           AI use{" "}
           <select value={q.ai ?? ""} onChange={(e) => set("ai", e.target.value || null)}>
             <option value="">Any</option>
-            <option value="none">No AI only</option>
-            <option value="assisted">No AI or AI-assisted</option>
+            {(Object.keys(AI_USE) as AiUse[]).map((k) => (
+              <option key={k} value={k}>
+                {AI_USE[k].short}
+              </option>
+            ))}
           </select>
         </label>
         <label className="check">
@@ -136,6 +139,21 @@ export function People() {
           Your contract is with the creative, not Slop. Slop takes a 5% fee from what the creative receives; nothing is added to your price.
         </p>
       </div>
+
+      {!mine.data && (
+        <div className="panel panel-pad people-how people-offer">
+          <b>Offering your services?</b>
+          <p className="muted">
+            A People page is your shop window: it shows makers who might hire you who you are, your style, your best work and your rates.
+            Your best work comes from a portfolio, a public GitHub repository of your own with your pictures and tracks in it (videos are
+            YouTube links). There are ready-made templates to start from, and a line you can hand an AI assistant to build it with you. A
+            person at Slop looks at it, then your page goes public.
+          </p>
+          <Link className="btn" to="/people/me">
+            Make your People page
+          </Link>
+        </div>
+      )}
     </div>
   );
 }
