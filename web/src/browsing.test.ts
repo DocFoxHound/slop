@@ -1,0 +1,86 @@
+// SPDX-License-Identifier: AGPL-3.0-or-later
+import { describe, expect, it } from "vitest";
+
+import { browsingKey, displayAddress, furthest, isTyping, siteOrigin } from "./browsing";
+
+describe("furthest", () => {
+  it("drops what was ahead on a new page, keeps it going back and forth", () => {
+    expect(furthest(0, 1, "PUSH")).toBe(1);
+    expect(furthest(3, 1, "POP")).toBe(3);
+    expect(furthest(3, 2, "PUSH")).toBe(2);
+    expect(furthest(3, 3, "REPLACE")).toBe(3);
+    // A reload further along than was known (another tab's session storage, say).
+    expect(furthest(0, 4, "POP")).toBe(4);
+  });
+});
+
+describe("siteOrigin", () => {
+  it("is the page's own origin on the website", () => {
+    expect(siteOrigin({ origin: "https://slopai.games", protocol: "https:", hostname: "slopai.games" }, "")).toBe("https://slopai.games");
+    expect(siteOrigin({ origin: "http://localhost:5173", protocol: "http:", hostname: "localhost" }, "https://x.example/")).toBe("http://localhost:5173");
+  });
+  it("is the site the packaged desktop app was built for", () => {
+    expect(siteOrigin({ origin: "tauri://localhost", protocol: "tauri:", hostname: "localhost" }, "https://test.slop.example/")).toBe("https://test.slop.example");
+    expect(siteOrigin({ origin: "http://tauri.localhost", protocol: "http:", hostname: "tauri.localhost" }, "")).toBe("https://slopai.games");
+    expect(siteOrigin({ origin: "http://tauri.localhost", protocol: "http:", hostname: "tauri.localhost" }, "not a url")).toBe("https://slopai.games");
+  });
+});
+
+describe("displayAddress", () => {
+  it("reads like an address bar", () => {
+    expect(displayAddress("https://slopai.games", "/app/lantern-keep")).toBe("slopai.games/app/lantern-keep");
+    expect(displayAddress("http://localhost:5173", "/search?q=caf%C3%A9")).toBe("localhost:5173/search?q=café");
+    expect(displayAddress("https://slopai.games", "/bad%E0%A4%A")).toBe("slopai.games/bad%E0%A4%A");
+  });
+});
+
+describe("browsingKey", () => {
+  const key = (k: string, mods: Partial<Record<"altKey" | "ctrlKey" | "metaKey" | "shiftKey", boolean>> = {}) => ({
+    key: k,
+    altKey: false,
+    ctrlKey: false,
+    metaKey: false,
+    shiftKey: false,
+    ...mods,
+  });
+  it("knows the browser's shortcuts on Windows and Linux", () => {
+    expect(browsingKey(key("ArrowLeft", { altKey: true }), false, false)).toBe("back");
+    expect(browsingKey(key("ArrowRight", { altKey: true }), false, false)).toBe("forward");
+    expect(browsingKey(key("F5"), false, false)).toBe("reload");
+    expect(browsingKey(key("r", { ctrlKey: true }), false, false)).toBe("reload");
+    expect(browsingKey(key("R", { ctrlKey: true, shiftKey: true }), false, false)).toBe("hard-reload");
+    expect(browsingKey(key("F5", { ctrlKey: true }), false, false)).toBe("hard-reload");
+    expect(browsingKey(key("ArrowLeft"), false, false)).toBeNull();
+    expect(browsingKey(key("ArrowLeft", { altKey: true, shiftKey: true }), false, false)).toBeNull();
+    expect(browsingKey(key("r"), false, false)).toBeNull();
+    expect(browsingKey(key("[", { metaKey: true }), false, false)).toBeNull();
+  });
+  it("and on a Mac", () => {
+    expect(browsingKey(key("[", { metaKey: true }), true, false)).toBe("back");
+    expect(browsingKey(key("]", { metaKey: true }), true, false)).toBe("forward");
+    expect(browsingKey(key("r", { metaKey: true }), true, false)).toBe("reload");
+    expect(browsingKey(key("r", { ctrlKey: true }), true, false)).toBeNull();
+    expect(browsingKey(key("ArrowLeft", { altKey: true }), true, false)).toBeNull();
+  });
+  it("leaves the arrows to text fields, but reloads from them", () => {
+    expect(browsingKey(key("ArrowLeft", { altKey: true }), false, true)).toBeNull();
+    expect(browsingKey(key("[", { metaKey: true }), true, true)).toBeNull();
+    expect(browsingKey(key("F5"), false, true)).toBe("reload");
+  });
+});
+
+describe("isTyping", () => {
+  it("is text fields and editable areas", () => {
+    const make = (html: string) => {
+      const div = document.createElement("div");
+      div.innerHTML = html;
+      return div.firstElementChild;
+    };
+    expect(isTyping(make("<input>"))).toBe(true);
+    expect(isTyping(make('<input type="search">'))).toBe(true);
+    expect(isTyping(make('<input type="checkbox">'))).toBe(false);
+    expect(isTyping(make("<textarea></textarea>"))).toBe(true);
+    expect(isTyping(make("<button>Go</button>"))).toBe(false);
+    expect(isTyping(null)).toBe(false);
+  });
+});

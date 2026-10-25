@@ -28,6 +28,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 ## 3. Platforms
 
 - **Desktop:** Windows, macOS, Linux. One **Tauri** app, shared with the phone app and the website UI (decided).
+- **Page bar** (2026-10-25): a slim bar under the top bar with Back, Forward, Reload this page and the page's address (with Copy link), since the desktop app has no browser around it; there Alt+Left/Right (Cmd+[ and ] on a Mac), F5 and Ctrl+R work as in a browser, and Reload loads the page's data again without restarting the app. The website shows it only on wide screens; phones never.
 - **Phone:** iOS and Android. It's the same app, with a phone layout and bottom tabs.
 - Publishers can ship builds for any of the five platforms.
 - **Send to phone:** on a computer, a user can send a phone app to a linked phone, which installs it next time it's online.
@@ -152,6 +153,7 @@ Slop is a Steam-style store for **apps and games made with AI**, from small util
 
 ### Notifications (built 2026-10-20)
 - A 🔔 in the top bar with an unread count, and a notifications page. Kinds: **People jobs** (every step by the other side, and new messages, merged while unread), **Interested** apps moving on, and **moderation** (decisions, appeal answers, report outcomes).
+- The page is an inbox (2026-10-25): the kinds down the side with their unread counts, rows grouped by day (Today, Yesterday, This week, Earlier), Unread only, Mark all as read for the kind shown, and each one can be marked unread again or dismissed (deleted). Older ones load 30 at a time.
 - Each kind can also be **emailed**, on by default and switched off per kind on the account page. Product emails only, never marketing (TERMS-3). Signed-out reporters get their report's outcome by email.
 - Emails go out only when the server has SMTP set (`deploy/README.md`).
 

@@ -12,11 +12,13 @@
 
 use std::time::Duration as StdDuration;
 
+use std::collections::BTreeMap;
+
 use axum::{
     Json, Router,
-    extract::State,
+    extract::{Path, Query, State},
     http::StatusCode,
-    routing::{get, post},
+    routing::{delete, get, post},
 };
 use serde::{Deserialize, Serialize};
 use serde_json::{Map, Value};
@@ -77,6 +79,8 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/me/notifications", get(list))
         .route("/me/notifications/read", post(mark_read))
+        .route("/me/notifications/unread", post(mark_unread))
+        .route("/me/notifications/{id}", delete(dismiss))
         .route("/me/email-prefs", get(prefs).put(set_prefs))
 }
 
@@ -223,8 +227,13 @@ struct Item {
 
 #[derive(Serialize)]
 struct Inbox {
+    /// Unread, of every kind the caller can see.
     unread: i64,
+    /// Unread per kind (only kinds with some).
+    counts: BTreeMap<String, i64>,
     items: Vec<Item>,
+    /// Whether there are older ones than these (ask again with `before` = the last one's id).
+    more: bool,
     /// For a maker's AI agent: its own token's expiry, so it can tell its person in time.
     #[serde(skip_serializing_if = "Option::is_none")]
     your_token: Option<YourToken>,
@@ -251,6 +260,18 @@ fn hidden_for(user: &CurrentUser) -> Vec<&'static str> {
     }
 }
 
+/// A kind of notification named in a request: one of `CATEGORIES`.
+fn known_category(category: Option<&str>) -> ApiResult<Option<&str>> {
+    match category {
+        None | Some("") => Ok(None),
+        Some(c) if CATEGORIES.iter().any(|(k, _)| *k == c) => Ok(Some(c)),
+        Some(c) => Err(ApiError::invalid(
+            "category",
+            format!("\"{c}\" isn't a kind of notification"),
+        )),
+    }
+}
+
 /// Unread notifications the caller can see (an agent's count leaves out what it can't).
 pub async fn unread(db: &PgPool, user: &CurrentUser) -> sqlx::Result<i64> {
     sqlx::query_scalar(
@@ -262,14 +283,55 @@ pub async fn unread(db: &PgPool, user: &CurrentUser) -> sqlx::Result<i64> {
     .await
 }
 
-async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Inbox>> {
-    let items = sqlx::query_as(
+const PAGE: i64 = 60;
+
+#[derive(Deserialize)]
+struct ListQuery {
+    /// Only this kind.
+    category: Option<String>,
+    /// Only unread ones.
+    #[serde(default)]
+    unread: bool,
+    /// Older than this notification (the last one of the previous page).
+    before: Option<Uuid>,
+    /// How many, 1 to 100 (60 when left out).
+    limit: Option<i64>,
+}
+
+async fn list(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Query(q): Query<ListQuery>,
+) -> ApiResult<Json<Inbox>> {
+    let category = known_category(q.category.as_deref())?;
+    let limit = q.limit.unwrap_or(PAGE).clamp(1, 100);
+    let hidden = hidden_for(&user);
+    // Newest first; a page continues from the row it names, which must be the caller's.
+    let mut items: Vec<Item> = sqlx::query_as(
         "select id, category, title, body, link, count, created_at, read_at is not null as read
-         from notifications where user_id = $1 and not (category = any($2))
-         order by created_at desc limit 60",
+         from notifications n where n.user_id = $1 and not (n.category = any($2))
+           and ($3::text is null or n.category = $3)
+           and (not $4 or n.read_at is null)
+           and ($5::uuid is null or (n.created_at, n.id) <
+                (select p.created_at, p.id from notifications p where p.id = $5 and p.user_id = $1))
+         order by n.created_at desc, n.id desc limit $6",
     )
     .bind(user.id)
-    .bind(hidden_for(&user))
+    .bind(&hidden)
+    .bind(category)
+    .bind(q.unread)
+    .bind(q.before)
+    .bind(limit + 1)
+    .fetch_all(&state.db)
+    .await?;
+    let more = items.len() as i64 > limit;
+    items.truncate(limit as usize);
+    let counts: Vec<(String, i64)> = sqlx::query_as(
+        "select category, count(*) from notifications
+         where user_id = $1 and read_at is null and not (category = any($2)) group by category",
+    )
+    .bind(user.id)
+    .bind(&hidden)
     .fetch_all(&state.db)
     .await?;
     let your_token = match &user.agent {
@@ -284,8 +346,10 @@ async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Jso
         None => None,
     };
     Ok(Json(Inbox {
-        unread: unread(&state.db, &user).await?,
+        unread: counts.iter().map(|(_, n)| n).sum(),
+        counts: counts.into_iter().collect(),
         items,
+        more,
         your_token,
     }))
 }
@@ -296,6 +360,9 @@ struct ReadBody {
     /// These, or every unread one when empty.
     #[serde(default)]
     ids: Vec<Uuid>,
+    /// With no ids: every unread one of this kind.
+    #[serde(default)]
+    category: Option<String>,
 }
 
 async fn mark_read(
@@ -303,14 +370,78 @@ async fn mark_read(
     user: CurrentUser,
     Json(body): Json<ReadBody>,
 ) -> ApiResult<StatusCode> {
+    let category = known_category(body.category.as_deref())?;
     sqlx::query(
         "update notifications set read_at = now()
-         where user_id = $1 and read_at is null and (cardinality($2::uuid[]) = 0 or id = any($2))",
+         where user_id = $1 and read_at is null and not (category = any($3))
+           and (cardinality($2::uuid[]) > 0 and id = any($2)
+                or cardinality($2::uuid[]) = 0 and ($4::text is null or category = $4))",
     )
     .bind(user.id)
     .bind(&body.ids)
+    .bind(hidden_for(&user))
+    .bind(category)
     .execute(&state.db)
     .await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct UnreadBody {
+    ids: Vec<Uuid>,
+}
+
+/// Marks notifications unread again, to come back to. One that would now be merged with a newer
+/// unread one of the same thread stays on its own (only one unread per collapse key), and it
+/// isn't pushed to phones again.
+async fn mark_unread(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Json(body): Json<UnreadBody>,
+) -> ApiResult<StatusCode> {
+    if body.ids.is_empty() || body.ids.len() > 100 {
+        return Err(ApiError::invalid("ids", "1 to 100 notifications"));
+    }
+    let hidden = hidden_for(&user);
+    let mut tx = state.db.begin().await?;
+    for id in &body.ids {
+        sqlx::query(
+            "update notifications n set read_at = null, pushed_at = coalesce(n.pushed_at, now()),
+                    collapse_key = case when exists (
+                        select 1 from notifications o where o.user_id = n.user_id
+                          and o.collapse_key = n.collapse_key and o.read_at is null and o.id <> n.id)
+                      then null else n.collapse_key end
+             where n.id = $2 and n.user_id = $1 and n.read_at is not null and not (n.category = any($3))",
+        )
+        .bind(user.id)
+        .bind(id)
+        .bind(&hidden)
+        .execute(&mut *tx)
+        .await?;
+    }
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
+}
+
+/// Removes one of the caller's notifications from the bell (what it was about stays where it is).
+async fn dismiss(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(id): Path<Uuid>,
+) -> ApiResult<StatusCode> {
+    let gone = sqlx::query(
+        "delete from notifications where id = $1 and user_id = $2 and not (category = any($3))",
+    )
+    .bind(id)
+    .bind(user.id)
+    .bind(hidden_for(&user))
+    .execute(&state.db)
+    .await?
+    .rows_affected();
+    if gone == 0 {
+        return Err(ApiError::NotFound);
+    }
     Ok(StatusCode::NO_CONTENT)
 }
 

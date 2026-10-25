@@ -48,6 +48,9 @@ export default defineConfig({
     proxy: { "/v1": { target: api, changeOrigin: false } },
   },
   envPrefix: ["VITE_", "TAURI_ENV_"],
+  // The site a desktop app build is for (its SLOP_API_URL), for the page bar's address
+  // (components/BrowserBar.tsx); the website uses its own address instead.
+  define: { __SLOP_SITE_URL__: JSON.stringify(process.env.SLOP_API_URL ?? "") },
   build: {
     target: "es2022",
     sourcemap: true,
