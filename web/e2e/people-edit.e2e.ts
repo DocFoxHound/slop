@@ -112,10 +112,18 @@ test("a new creative makes their page: details, services, look, links; then gets
   await terms.getByRole("checkbox", { name: /I've read and accept/ }).check();
   await terms.getByRole("button", { name: "Accept and continue" }).click();
 
+  // Created: Sec lands on the page itself, told it's saved and that it's a draft until a
+  // portfolio is approved (people-status.e2e.ts follows every state).
+  await expect(page).toHaveURL("/people/sec-sounds");
+  await expect(page.getByRole("status").filter({ hasText: "Your People page is created." })).toContainText(
+    "Only you can see it for now: add your portfolio next",
+  );
+  await expect(page.getByText("Draft: only you can see your page")).toBeVisible();
+  await page.getByRole("link", { name: "Add your portfolio" }).click();
+  await expect(page).toHaveURL("/people/me#portfolio");
   await expect(page.getByRole("heading", { name: "Your People page", level: 1 })).toBeVisible();
-  await expect(page.getByText("Saved.")).toBeVisible();
   await expect(page.locator(".step-track li.done")).toHaveText(["Describe yourself"]);
-  await expect(page.getByRole("heading", { name: "Portfolio" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Portfolio" })).toBeInViewport();
   const saved = await call("security", "GET", "/v1/me/creative");
   expect(saved).toMatchObject({
     handle: "sec-sounds",
@@ -129,10 +137,17 @@ test("a new creative makes their page: details, services, look, links; then gets
   expect(saved.services[0]).toMatchObject({ name: "Footstep pack", price_minor: 3500, currency: "eur", days: 5, skill: "sound" });
   expect(saved.links).toHaveLength(1);
 
-  // Edits save in place.
+  // Edits save too, and show the page with them.
   await page.getByRole("textbox", { name: "Headline" }).fill("Footsteps, doors, creaky floors and rain");
   await page.getByRole("button", { name: "Save", exact: true }).click();
-  await expect(page.getByText("Saved.")).toBeVisible();
+  await expect(page).toHaveURL("/people/sec-sounds");
+  await expect(page.getByRole("status").filter({ hasText: "Your People page is saved." })).toBeVisible();
+  // Said once: not again after a reload.
+  await page.reload();
+  await expect(page.getByRole("heading", { name: "Sec Sound Studio", level: 1 })).toBeVisible();
+  await expect(page.getByText("Your People page is saved.")).toHaveCount(0);
+  await page.goto("/people/me");
+  await expect(page.getByRole("link", { name: "View my page" })).toHaveAttribute("href", "/people/sec-sounds");
 
   // The page, only for Sec until a portfolio is approved.
   await page.getByRole("link", { name: "View my page" }).click();
@@ -160,7 +175,7 @@ test("the portfolio panel: waiting vs live, checking a repository, reordering, a
   const vera = await browser.newPage();
   await signIn(vera, "creative");
   await vera.goto("/people/me");
-  await expect(vera.getByText("Your page is live:")).toBeVisible();
+  await expect(vera.getByText("Live: everyone can see your page")).toBeVisible();
   await expect(vera.getByRole("link", { name: `/people/${ids.creativeHandle}` })).toBeVisible();
   await expect(vera.getByText(/New portfolio waiting for review/)).toHaveCount(0);
   await expect(vera.locator(".step-track li.done")).toHaveCount(3);
@@ -171,7 +186,8 @@ test("the portfolio panel: waiting vs live, checking a repository, reordering, a
   await remy.goto("/people/me");
   const panel = remy.locator("section").filter({ has: remy.getByRole("heading", { name: "Portfolio" }) });
   await expect(panel.getByText("New portfolio waiting for review (3 works).")).toBeVisible();
-  await expect(remy.getByText("Your page is live:")).toHaveCount(0);
+  await expect(remy.getByText("Waiting for Slop's review")).toBeVisible();
+  await expect(remy.getByText("Live: everyone can see your page")).toHaveCount(0);
   await panel.getByText("Example .slop/portfolio.json").click();
   await expect(panel.locator("pre.code-block")).toContainText('"works"');
 

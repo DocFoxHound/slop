@@ -186,6 +186,10 @@ once its first portfolio is approved.
 - If the declared AI use is `none` but works look plainly machine-generated (for example
   generator watermarks), leave a `concern` note rather than rejecting: a person decides.
 - Titles and captions count as content too.
+- The creative gets a notification either way. When you turn one down, your reason is sent to
+  them word for word, so say what to change ("the third work is someone else's art"), not only
+  that it's wrong. Until a portfolio is approved, only the creative sees their page; once one is,
+  a turned-down newer one leaves the approved one showing.
 
 ### `listing`: putting an app in the store
 
