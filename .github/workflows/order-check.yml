@@ -1,0 +1,107 @@
+# The browser tests in other orders, once a week on dev (deploy/README.md, "How changes ship").
+# The tests share one server and database, one file after another, so a test can pass only
+# because of what an earlier file left behind, or fail because of it, and that only shows when the
+# order changes. This runs the pipeline's checks (deploy/build/build.sh, as in pipeline.yml) with
+# the files reversed and shuffled (SLOP_E2E_ORDER, web/playwright.config.ts), with no retries.
+# A failure here is a test to fix; it never blocks a release. Run it by hand from the Actions tab
+# too ("Run workflow"), with any order.
+name: Order check
+
+on:
+  schedule:
+    - cron: "0 4 * * 1" # Mondays, 04:00 UTC
+  workflow_dispatch:
+    inputs:
+      order:
+        description: '"reverse", or "shuffle:<seed>" (the same seed gives the same order)'
+        default: reverse
+
+permissions:
+  contents: read
+
+jobs:
+  browser-tests:
+    runs-on: ubuntu-latest
+    timeout-minutes: 120
+    strategy:
+      fail-fast: false
+      matrix:
+        # By hand: the order asked for. Weekly: reversed, and shuffled with the run's own number
+        # as the seed (shown in the run, so a failing order can be run again).
+        order: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.order) || format('["reverse","shuffle:{0}"]', github.run_number)) }}
+    name: browser tests (${{ matrix.order }})
+    services:
+      postgres:
+        # The same Postgres as pipeline.yml's.
+        image: docker.io/library/postgres:17@sha256:3cec7eb015ba8adb28139fa5c83b8489cdf0e666e53dfdf20f598ae0cc8739e3
+        env:
+          POSTGRES_USER: slop
+          POSTGRES_PASSWORD: slop
+          POSTGRES_DB: slop
+        ports:
+          - 5432:5432
+        options: >-
+          --health-cmd "pg_isready -U slop -q"
+          --health-interval 5s --health-timeout 5s --health-retries 30
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          ref: ${{ github.event_name == 'schedule' && 'dev' || github.ref }}
+          persist-credentials: false
+
+      - name: Make room
+        run: sudo rm -rf /usr/share/dotnet /usr/local/lib/android /opt/ghc /usr/local/.ghcup /opt/hostedtoolcache/CodeQL
+
+      - uses: actions/cache/restore@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
+        with:
+          path: |
+            ~/slop-cache/cargo/registry
+            ~/slop-cache/cargo/git
+            ~/slop-cache/npm
+            target
+          key: checks-${{ hashFiles('deploy/build/Containerfile', 'Cargo.lock', 'web/package-lock.json') }}
+          restore-keys: checks-
+
+      - name: Build the build image
+        run: docker build -q -t slop-build -f deploy/build/Containerfile deploy/build
+
+      - name: Browser tests in this order
+        env:
+          ORDER: ${{ matrix.order }}
+        run: |
+          echo "Order: $ORDER (run it again: Actions -> Order check -> Run workflow, order \"$ORDER\")"
+          mkdir -p ~/slop-cache/cargo ~/slop-cache/npm "$RUNNER_TEMP/out"
+          docker run --rm --network=host --user "$(id -u):$(id -g)" \
+            --cap-drop=all --security-opt=no-new-privileges \
+            -e HOME=/tmp/home -e CARGO_HOME=/cache/cargo -e npm_config_cache=/cache/npm \
+            -e CARGO_INCREMENTAL=0 -e CI=true -e SLOP_E2E_ORDER="$ORDER" \
+            -e SLOP_TEST_DATABASE_URL=postgres://slop:slop@127.0.0.1:5432/slop \
+            -v "$GITHUB_WORKSPACE:/src" -v "$HOME/slop-cache:/cache" -v "$RUNNER_TEMP/out:/out" \
+            -w /src slop-build bash deploy/build/build.sh >"$RUNNER_TEMP/out/container.log" 2>&1 || true
+          out="$RUNNER_TEMP/out"
+          if [ -e "$out/ok" ] && [ ! -e "$out/failed" ]; then
+            echo "Every test passed in this order."
+            exit 0
+          fi
+          step=$(head -c 40 "$out/failed" 2>/dev/null | tr -cd 'a-z ' || true)
+          step=${step:-container}
+          if [ "$step" = "browser tests" ]; then
+            grep -E "✘|Error:|failed" "$out/e2e.log" | head -n 40
+            grep -E "✘" "$out/e2e.log" | head -n 6 | sed 's/^/::error::/'
+            grep -E "Error:|^ *> *[0-9]+ \|" "$out/e2e.log" | head -n 4 | sed 's/^ */::error::/'
+          else
+            # Not the order: something else failed first (pipeline.yml shows the same on dev).
+            tail -n 30 "$out/container.log"
+          fi
+          echo "::error::failed at: $step (order $ORDER)"
+          exit 1
+
+      - uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
+        if: failure()
+        with:
+          name: order-check-logs-${{ strategy.job-index }}
+          path: |
+            ${{ runner.temp }}/out/*.log
+            web/e2e/.results
+          retention-days: 14
+          if-no-files-found: ignore
