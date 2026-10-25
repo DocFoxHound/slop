@@ -757,15 +757,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .bell { position: relative; display: inline-flex; align-items: center; justify-content: center; width: 36px; height: 36px; border-radius: 8px; color: var(--text); font-size: 17px; }
 .bell:hover, .bell.on { background: var(--panel-2); }
 .bell-count { position: absolute; top: 1px; right: 0; min-width: 17px; height: 17px; padding: 0 4px; border-radius: 9px; background: #dc2626; color: #fff; font-size: 10px; font-weight: 700; line-height: 17px; text-align: center; }
-.notifications { list-style: none; margin: 0 0 14px; padding: 0; }
-.notifications li { border-bottom: 1px solid var(--line); }
-.notifications li:last-child { border-bottom: 0; }
-.notification { display: flex; gap: 12px; width: 100%; padding: 12px 16px; background: none; border: 0; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
-.notification:hover { background: var(--panel-2); }
-.notifications li.unread .notification { border-left: 3px solid var(--slime); padding-left: 13px; }
-.notifications li:not(.unread) b { font-weight: 500; color: var(--text-2); }
-.n-icon { flex: none; width: 22px; text-align: center; }
-.n-text { display: flex; flex-direction: column; gap: 2px; }
+/* The notifications page itself: "Notifications inbox and page bar" at the end. */
 
 /* ---- Donations ------------------------------------------------------------ */
 .donate-box { margin-top: 14px; }
@@ -1357,3 +1349,100 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .media-review .media-review-icon img { aspect-ratio: 1; object-fit: contain; }
 .media-review .media-review-icon .icon-sizes { display: flex; align-items: flex-end; gap: 8px; margin-top: 6px; }
 .media-review .media-review-icon .icon-sizes img { width: auto; aspect-ratio: 1; border-radius: 20%; background: none; }
+/* ==== Notifications inbox and page bar (2026-10-25) ========================================
+   pages/Notifications.tsx: the kinds down the side (a row of chips on phones), rows grouped by
+   day with the title, a preview, the time and an unread dot, and per-row actions.
+   components/BrowserBar.tsx: Back, Forward, Reload and the address under the top bar. It's for
+   the desktop app above all (no browser around it), so it shows there from 601px; on the website
+   only on wide screens, and quieter; never on phones. */
+.inbox-page { max-width: 1080px; }
+.inbox { display: grid; grid-template-columns: 220px minmax(0, 1fr); gap: 24px; align-items: start; margin-top: 8px; }
+.inbox-nav { position: sticky; top: 16px; }
+.inbox-nav ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.inbox-kind { position: relative; display: flex; align-items: center; gap: 10px; padding: 7px 12px 7px 9px; border-radius: 8px; border-left: 3px solid transparent; color: var(--text-2); font-weight: 600; text-decoration: none !important; }
+.inbox-kind:hover { background: var(--panel-2); color: var(--text); }
+.inbox-kind[aria-current="page"] { background: var(--panel-2); color: var(--text); border-left-color: var(--slime); }
+.kind-icon { flex: none; width: 16px; height: 16px; fill: none; stroke: currentColor; stroke-width: 1.4; stroke-linecap: round; stroke-linejoin: round; }
+.inbox-kind .kind-icon { color: var(--muted); }
+.inbox-kind:hover .kind-icon, .inbox-kind[aria-current="page"] .kind-icon { color: var(--slime); }
+.inbox-kind-name { flex: 1; min-width: 0; }
+.inbox-count { flex: none; min-width: 20px; padding: 0 7px; border-radius: 999px; background: var(--slime); color: var(--slime-ink); font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }
+.inbox-main { min-width: 0; }
+.inbox-head { display: flex; align-items: center; gap: 8px 16px; flex-wrap: wrap; min-height: 32px; margin-bottom: 12px; }
+.inbox-head h2 { font-size: 18px; margin-right: auto; }
+.inbox-head h2:focus:not(:focus-visible) { outline: none; }
+.inbox-toggle { display: inline-flex; align-items: center; gap: 8px; font-size: 13px; color: var(--text-2); cursor: pointer; }
+.inbox-toggle input { appearance: none; -webkit-appearance: none; position: relative; flex: none; width: 30px; height: 18px; margin: 0; border-radius: 999px; border: 1px solid var(--muted); background: var(--panel-3); cursor: pointer; transition: background 0.12s; }
+.inbox-toggle input::after { content: ""; position: absolute; top: 2px; left: 2px; width: 12px; height: 12px; border-radius: 50%; background: var(--text-2); transition: transform 0.12s; }
+.inbox-toggle input:checked { background: var(--slime); border-color: var(--slime); }
+.inbox-toggle input:checked::after { transform: translateX(12px); background: var(--slime-ink); }
+.inbox-day + .inbox-day { margin-top: 18px; }
+.inbox-day h3 { margin: 0 0 6px 4px; font-size: 11px; font-weight: 700; letter-spacing: 0.08em; text-transform: uppercase; color: var(--faint); }
+.notifications { list-style: none; margin: 0; padding: 0; overflow: hidden; }
+.notifications li { position: relative; display: flex; align-items: center; border-bottom: 1px solid var(--line); }
+.notifications li:last-child { border-bottom: 0; }
+.notifications li:hover, .notifications li:focus-within { background: var(--panel-2); }
+.notification { flex: 1; min-width: 0; display: flex; align-items: flex-start; gap: 12px; padding: 10px 10px 10px 13px; background: none; border: 0; border-left: 3px solid transparent; color: var(--text); text-align: left; cursor: pointer; font: inherit; }
+.notification:focus-visible { outline-offset: -2px; }
+.notifications li.unread .notification { border-left-color: var(--slime); }
+.n-icon { flex: none; display: grid; place-items: center; width: 32px; height: 32px; margin-top: 1px; border-radius: 50%; background: var(--panel-3); color: var(--muted); }
+.unread .n-icon { background: var(--slime-soft); color: var(--slime); }
+.n-text { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.n-title { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); font-weight: 500; }
+.unread .n-title { color: var(--text); font-weight: 700; }
+.n-times { color: var(--muted); font-weight: 500; }
+.n-body { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--muted); font-size: 13px; }
+.n-text { padding-top: 1px; }
+.n-meta { flex: none; display: flex; align-items: center; gap: 8px; line-height: 20px; padding-top: 1px; font-size: 12px; color: var(--faint); white-space: nowrap; }
+.unread .n-meta time { color: var(--text-2); }
+.n-dot { width: 8px; height: 8px; border-radius: 50%; background: var(--slime); }
+.n-actions { flex: none; display: flex; gap: 2px; padding-right: 8px; opacity: 0; }
+.notifications li:hover .n-actions, .notifications li:focus-within .n-actions { opacity: 1; }
+.n-action { display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.n-action:hover { background: var(--panel-3); color: var(--text); }
+.n-action svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.7; stroke-linecap: round; stroke-linejoin: round; }
+.inbox-empty .kind-icon { width: 28px; height: 28px; margin-bottom: 8px; stroke-width: 1.2; }
+.inbox-empty p { margin: 0 0 6px; }
+.inbox-empty p:last-child { margin: 0; }
+.inbox-more { display: flex; margin: 16px auto 0; }
+.inbox-settings { margin: 18px 0 0; }
+@media (hover: none) { .n-actions { opacity: 1; } }
+@media (max-width: 760px) {
+  .inbox { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .inbox-nav { position: static; overflow-x: auto; scrollbar-width: none; overscroll-behavior-x: contain; }
+  .inbox-nav::-webkit-scrollbar { display: none; }
+  .inbox-nav ul { display: flex; gap: 6px; }
+  .inbox-kind { white-space: nowrap; gap: 6px; padding: 5px 12px; border: 1px solid var(--line); border-radius: 999px; font-size: 13px; }
+  .inbox-kind[aria-current="page"] { border-color: var(--slime); background: var(--slime-soft); color: var(--slime); }
+  .notification { gap: 10px; padding-right: 6px; }
+  .n-title, .n-body { white-space: normal; display: -webkit-box; -webkit-line-clamp: 2; -webkit-box-orient: vertical; }
+  .n-actions { padding-right: 4px; }
+}
+
+.browserbar { display: none; flex: none; align-items: center; gap: 2px; height: 30px; padding: 0 12px; background: var(--bg); border-bottom: 1px solid var(--line); font-size: 12px; color: var(--muted); }
+.browserbar.in-app { background: #10141a; }
+.browserbar .grow { flex: 1; align-self: stretch; }
+.bb-btn { flex: none; display: grid; place-items: center; width: 26px; height: 24px; padding: 0; border: 0; border-radius: 6px; background: transparent; color: var(--muted); cursor: pointer; }
+.bb-btn:hover:not(:disabled) { background: var(--panel-2); color: var(--text); }
+.bb-btn:disabled { opacity: 0.35; cursor: default; }
+.bb-btn:focus-visible { outline-offset: -1px; }
+.bb-btn svg { width: 14px; height: 14px; fill: none; stroke: currentColor; stroke-width: 1.6; stroke-linecap: round; stroke-linejoin: round; }
+.bb-btn.spinning svg { animation: bb-spin 0.6s ease-out; }
+@keyframes bb-spin { to { transform: rotate(360deg); } }
+.bb-address { display: flex; align-items: center; gap: 2px; min-width: 0; max-width: min(640px, 60%); height: 22px; margin-left: 8px; padding: 0 1px 0 10px; border: 1px solid transparent; border-radius: 6px; background: var(--panel); }
+.bb-address:hover, .bb-address:focus-within { border-color: var(--line); }
+.bb-text { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text-2); cursor: text; user-select: all; -webkit-user-select: all; }
+.bb-copy { width: 22px; height: 20px; }
+.bb-copy svg { width: 12px; height: 12px; }
+@media (min-width: 601px) { .browserbar.in-app { display: flex; } }
+@media (min-width: 1100px) { .browserbar { display: flex; } }
+/* ==== end of notifications inbox and page bar ============================================ */
+/* ---- Downloads by the chat bar (components/Layout.tsx, desktop app only) --------------------
+   The downloads bar sits at the bottom right just left of Friends & Chat (.chat-dock: 240px wide,
+   24px from the edge), and its panel opens upwards above the bar, growing leftwards so it never
+   covers the chat bar. */
+.downloads-dock { position: fixed; right: calc(24px + 240px + 12px); bottom: 0; z-index: 40; width: 220px; border: 1px solid var(--line); border-bottom: 0; border-radius: 10px 10px 0 0; }
+.downloads-dock .downloads { border-top: 0; }
+.downloads-dock .downloads-bar { border-radius: 10px 10px 0 0; padding: 9px 14px; }
+.downloads-dock .downloads-panel { left: auto; right: -1px; bottom: calc(100% + 1px); width: min(360px, calc(100vw - 24px - 240px - 12px - 24px)); max-height: min(60vh, 480px); }
+/* ---- end of the downloads dock ---- */

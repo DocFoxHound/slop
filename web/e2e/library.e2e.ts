@@ -228,6 +228,30 @@ async function desktopLibrary(page: Page, extra: FakeLibrary = {}) {
 const emit = (page: Page, event: string, payload: unknown) =>
   page.evaluate(([e, p]) => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit(e as string, p), [event, payload]);
 
+test("in the Slop app: downloads sit by Friends & Chat, and their panel doesn't cover the chat bar", async ({ page }) => {
+  await page.setViewportSize({ width: 1440, height: 900 });
+  await desktopLibrary(page);
+  await page.goto("/store");
+  const dock = page.locator(".downloads-dock");
+  const bar = dock.getByRole("button", { name: /^Downloads/ });
+  const chat = page.getByRole("button", { name: /^Friends & Chat/ });
+  await expect(bar).toBeVisible();
+  await expect(chat).toBeVisible();
+  const box = async (l: typeof bar) => (await l.boundingBox())!;
+  // Side by side along the bottom edge, downloads to the left.
+  const [b, c] = [await box(bar), await box(chat)];
+  expect(b.x + b.width).toBeLessThanOrEqual(c.x);
+  expect(Math.abs(b.y + b.height - (c.y + c.height))).toBeLessThan(2);
+  await bar.click();
+  const panel = dock.getByRole("group", { name: "Downloads" });
+  await expect(panel).toBeVisible();
+  const p = await box(panel);
+  // Above the bar, inside the window, and not over the chat bar.
+  expect(p.y + p.height).toBeLessThanOrEqual(b.y + 1);
+  expect(p.x).toBeGreaterThanOrEqual(0);
+  expect(p.x + p.width).toBeLessThanOrEqual(c.x);
+});
+
 test("in the Slop app: what each app is doing, the big button, and downloads", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await desktopLibrary(page);
