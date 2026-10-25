@@ -11,9 +11,10 @@ use axum::{
     extract::Request,
     http::{HeaderValue, header},
     middleware::{self, Next},
-    response::Response,
+    response::{IntoResponse, Response},
     routing::Router,
 };
+use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
 /// Pages may load only Slop's own scripts, styles, images and API. Inline styles are allowed
@@ -58,16 +59,84 @@ async fn page_headers(req: Request, next: Next) -> Response {
     res
 }
 
-/// Files from `dir`, with `index.html` for any other path (the UI routes in the browser).
-/// `/publish/guide` gets `guide.html`, the same page with the guide already in it, so tools
-/// that don't run JavaScript can read it.
+/// Files a page route never ends in: a missing one is a plain 404, not the website, so a tool
+/// (or an AI agent) reading `/portfolio.md` from a server without it learns that it isn't there,
+/// instead of getting an empty page that only fills in with JavaScript.
+const DOCUMENTS: &[&str] = &["md", "txt", "json", "xml", "csv", "yaml", "yml", "pdf"];
+
+fn is_document(path: &str) -> bool {
+    let name = path.rsplit('/').next().unwrap_or("");
+    name.rsplit_once('.').is_some_and(|(stem, ext)| {
+        !stem.is_empty() && DOCUMENTS.contains(&ext.to_ascii_lowercase().as_str())
+    })
+}
+
+/// Files from `dir`, with `index.html` for any other path (the UI routes in the browser), except
+/// documents (`DOCUMENTS`), which are a 404 when missing. `/publish/guide` gets `guide.html`, the
+/// same page with the guide already in it, so tools that don't run JavaScript can read it.
 pub fn service<S: Clone + Send + Sync + 'static>(dir: &Path) -> Router<S> {
     let index = dir.join("index.html");
-    let files = ServeDir::new(dir).fallback(ServeFile::new(&index));
+    let pages = ServeDir::new(dir).fallback(ServeFile::new(&index));
+    let documents = ServeDir::new(dir);
     let guide = dir.join("guide.html");
     let guide = if guide.exists() { guide } else { index };
     Router::new()
         .route_service("/publish/guide", ServeFile::new(guide))
-        .fallback_service(files)
+        .fallback(move |req: Request| async move {
+            if is_document(req.uri().path()) {
+                documents.oneshot(req).await.into_response()
+            } else {
+                pages.oneshot(req).await.into_response()
+            }
+        })
         .layer(middleware::from_fn(page_headers))
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn documents_are_told_apart_from_page_routes() {
+        for path in ["/portfolio.md", "/llms.txt", "/x/data.JSON", "/sitemap.xml"] {
+            assert!(is_document(path), "{path}");
+        }
+        for path in [
+            "/",
+            "/people/me",
+            "/app/castle-rock",
+            "/library",
+            "/u/0193",
+            "/.md",
+            "/publish/guide",
+        ] {
+            assert!(!is_document(path), "{path}");
+        }
+    }
+
+    #[tokio::test]
+    async fn a_missing_document_is_a_404_and_a_page_route_is_the_website() {
+        let dir = std::env::temp_dir().join(format!("slop-web-test-{}", std::process::id()));
+        std::fs::create_dir_all(&dir).unwrap();
+        std::fs::write(dir.join("index.html"), "<!doctype html><title>Slop</title>").unwrap();
+        std::fs::write(dir.join("publishing.md"), "# How to publish").unwrap();
+        let app: Router = service(&dir);
+        let get = |path: &str| {
+            let app = app.clone();
+            let req = Request::builder()
+                .uri(path)
+                .body(axum::body::Body::empty())
+                .unwrap();
+            async move { app.oneshot(req).await.unwrap() }
+        };
+        assert_eq!(get("/publishing.md").await.status(), 200);
+        assert_eq!(get("/portfolio.md").await.status(), 404);
+        let page = get("/people/me").await;
+        assert_eq!(page.status(), 200);
+        let body = axum::body::to_bytes(page.into_body(), 1 << 16)
+            .await
+            .unwrap();
+        assert!(String::from_utf8_lossy(&body).contains("<title>Slop</title>"));
+        std::fs::remove_dir_all(&dir).ok();
+    }
 }
