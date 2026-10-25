@@ -18,7 +18,8 @@ import {
   type Service,
   type Skill,
 } from "../api";
-import { ACCENTS, AI_USE, accentStyle } from "../components/People";
+import { ACCENTS, AI_USE, ServicesList, accentStyle } from "../components/People";
+import { DesignPreview, portfolioWork } from "../components/PeopleDesign";
 import { PasskeyNotice } from "../components/PasskeyNotice";
 import { PageStatusDetails, type PeopleSaved } from "../components/PeopleStatus";
 import { useTermsGate } from "../components/Terms";
@@ -119,7 +120,7 @@ export function PeopleEdit() {
       )}
       {!current && <ShopWindow />}
       {current && <GetPaid profile={current} onChange={(status) => setProfile({ ...current, stripe_status: status })} />}
-      {current && <PortfolioPanel />}
+      {current && <PortfolioPanel profile={current} skills={skills.data} />}
       <ProfileForm initial={current} skills={skills.data} adultConfirmed={Boolean(me?.adult_confirmed)} onSaved={setProfile} />
     </div>
   );
@@ -273,7 +274,7 @@ function Problems({ text }: { text: string }) {
   );
 }
 
-function PortfolioPanel() {
+function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill[] }) {
   const loaded = useLoad(() => api.people.portfolio(), []);
   // Which GitHub account the repository has to belong to, or a button to link one.
   const identities = useLoad(() => api.identities().catch(() => null), []);
@@ -411,7 +412,11 @@ function PortfolioPanel() {
           {typeof error !== "string" && error.field === "github_account" && linkGithub}
         </div>
       )}
-      {ov.pending && <div className="notice">New portfolio waiting for review ({ov.pending.works.length} works).</div>}
+      {ov.pending && (
+        <div className="notice">
+          New portfolio waiting for review ({ov.pending.works.length} works{ov.pending.design ? " and your page's design" : ""}).
+        </div>
+      )}
       {ov.rejected && <div className="notice">Your last portfolio was turned down: {ov.rejected.status_reason}</div>}
       {shown && (
         <ol className="media-order">
@@ -434,6 +439,31 @@ function PortfolioPanel() {
             </li>
           ))}
         </ol>
+      )}
+      <h3 id="design">Your page's design</h3>
+      <p className="muted small">
+        Optional: design your page yourself with <code>.slop/page/index.html</code> (up to 64 KB) and <code>.slop/page/style.css</code> (up to
+        32 KB) in the same repository. Slop checks them with your portfolio, removes anything pages can't have (scripts, forms, other sites'
+        files…) and shows the result between Slop's header and your reviews. Put your works and services where you like with{" "}
+        <code>{"<slop-works></slop-works>"}</code>, <code>{'<slop-work ref="1"></slop-work>'}</code> and{" "}
+        <code>{"<slop-services></slop-services>"}</code>. The rules are in the <a href="/portfolio.md">portfolio guide</a>.
+      </p>
+      {shown?.design ? (
+        <>
+          <p className="small">{ov.pending ? "Your new design, as it will show once it's approved:" : "Your design, as your page shows it:"}</p>
+          <DesignPreview
+            design={shown.design}
+            works={shown.works.map(portfolioWork)}
+            services={() =>
+              profile.services.length > 0 ? (
+                <ServicesList services={profile.services.map((s) => ({ ...s, skill_name: skills.find((k) => k.slug === s.skill)?.name ?? s.skill }))} />
+              ) : null
+            }
+            label={`Preview of ${profile.name}'s page`}
+          />
+        </>
+      ) : (
+        shown && <p className="muted small">No design yet: your page uses Slop's standard layout.</p>
       )}
     </section>
   );

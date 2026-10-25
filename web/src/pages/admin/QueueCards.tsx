@@ -22,6 +22,7 @@ import {
 } from "../../api";
 import { FileChecks, RepoScanList, ScanFindings, SourceCheckList } from "../../components/Checks";
 import { ItemThumb } from "../../components/MediaEditor";
+import { DesignPreview, portfolioWork } from "../../components/PeopleDesign";
 import { ExternalLink } from "../../components/ui";
 import { formatDate, STAGE_LABEL } from "../../format";
 import { useLoad } from "../../hooks";
@@ -259,10 +260,12 @@ export function PortfolioCard({ p, onDone }: { p: Q["portfolios"][number]; onDon
         </span>
       </div>
       <PortfolioReview set={p.set} />
+      {p.set.design && <DesignReview set={p.set} name={p.name} />}
       {p.live && (
         <details>
           <summary className="muted small">What the People page shows now</summary>
           <PortfolioReview set={p.live} />
+          {p.live.design && <DesignReview set={p.live} name={p.name} />}
         </details>
       )}
       <Notes notes={p.notes} />
@@ -702,6 +705,34 @@ function JobRecord({ jobId }: { jobId: string }) {
       </button>
       {error && <span className="bad"> {error}</span>}
     </p>
+  );
+}
+
+/**
+ * A portfolio's page design, drawn as the People page will draw it, with what Slop removed and the
+ * exact HTML and CSS (people/design.rs).
+ */
+function DesignReview({ set, name }: { set: PortfolioSet; name: string }) {
+  const design = set.design!;
+  return (
+    <section className="design-review" aria-label="Page design">
+      <h3 className="small">Page design</h3>
+      <p className="muted small">
+        Shown between Slop's header and the reviews. Turn it down if it imitates Slop (fake buttons, badges, ratings or sign-in), is hard
+        to read, or doesn't match the declared AI use.
+      </p>
+      <DesignPreview
+        design={design}
+        works={set.works.map(portfolioWork)}
+        services={() => <div className="design-placeholder muted small">Slop's list of the creative's services, with Hire buttons</div>}
+        label={`Preview of ${name}'s page design`}
+      />
+      <details>
+        <summary className="muted small">The HTML and CSS, as Slop will show them</summary>
+        <pre className="code-block">{design.html}</pre>
+        <pre className="code-block">{design.css || "(no style.css)"}</pre>
+      </details>
+    </section>
   );
 }
 

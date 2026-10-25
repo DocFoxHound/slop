@@ -1021,6 +1021,8 @@ export interface CreativePage extends CreativeCard {
   sections: Section[];
   links: Array<{ label: string; url: string; domain: string }>;
   banner_url: string | null;
+  /** The creative's own page design, from the approved portfolio; null shows the standard layout. */
+  design: PageDesign | null;
   works: Work[];
   services: Array<Service & { skill_name: string }>;
   reviews: CreativeReview[];
@@ -1119,6 +1121,31 @@ export function workKey(w: PortfolioWork): string {
       : `audio:${w.audio.path}`;
 }
 
+/**
+ * One node of a creative's page design (people/design.rs): text, or an element Slop allows, or one
+ * of Slop's own parts (`slop-works`, `slop-work`, `slop-video`, `slop-track`, `slop-services`).
+ */
+export type DesignNode = string | { tag: string; attrs?: Record<string, string>; children?: DesignNode[] };
+
+/** A creative's own page design, as their People page draws it (components/PeopleDesign.tsx). */
+export interface PageDesign {
+  tree: DesignNode[];
+  /** The checked style sheet, for the design's shadow root only. */
+  css: string;
+  /** The design places Slop's services itself; otherwise they show below it. */
+  has_services: boolean;
+}
+
+/** A checked design, with its portfolio set: what the creative and reviewers see. */
+export interface PortfolioDesign extends PageDesign {
+  /** The same page as HTML, for reading. */
+  html: string;
+  pictures: RepoPicture[];
+  tracks: Array<{ path: string; url: string; format: string }>;
+  /** What Slop removed, and why. */
+  warnings: string[];
+}
+
 export interface PortfolioSet {
   id: string;
   repo_url: string;
@@ -1126,6 +1153,8 @@ export interface PortfolioSet {
   avatar: RepoPicture | null;
   banner: RepoPicture | null;
   works: PortfolioWork[];
+  /** The page design read with these works (`.slop/page/`), if any. */
+  design: PortfolioDesign | null;
   status: "pending" | "approved" | "rejected" | "superseded";
   status_reason: string | null;
   created_at: string;

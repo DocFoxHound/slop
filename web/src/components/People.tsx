@@ -5,7 +5,7 @@
 import { useState, type CSSProperties } from "react";
 import { Link } from "react-router";
 
-import type { Accent, AiUse, CreativeCard, CreativeRating, Work } from "../api";
+import type { Accent, AiUse, CreativeCard, CreativePage, CreativeRating, Work } from "../api";
 import { money } from "../format";
 import { isDesktop, openExternal } from "../platform";
 import { Avatar } from "./Avatar";
@@ -165,6 +165,34 @@ export function Lightbox({ w, onClose }: { w: Work; onClose: () => void }) {
       <button type="button" className="btn" onClick={onClose} autoFocus>
         Close
       </button>
+    </div>
+  );
+}
+
+/** A creative's services; `onHire` adds a Hire button to each (left out on their own page). */
+export function ServicesList({ services, onHire }: { services: CreativePage["services"]; onHire?: (s: CreativePage["services"][number]) => void }) {
+  return (
+    <div className="services">
+      {services.map((s) => (
+        <div className="panel panel-pad service" key={s.id}>
+          <div className="service-head">
+            <b>{s.name}</b>
+            <span className="service-price">from {money(s.price_minor, s.currency)}</span>
+          </div>
+          {s.description && <p className="muted small">{s.description}</p>}
+          <div className="service-foot">
+            <span className="chip">{s.skill_name}</span>
+            <span className="muted small">
+              about {s.days} day{s.days === 1 ? "" : "s"}
+            </span>
+            {onHire && (
+              <button type="button" className="btn small accent" onClick={() => onHire(s)}>
+                Hire for this
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
     </div>
   );
 }
