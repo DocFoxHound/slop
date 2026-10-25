@@ -35,8 +35,9 @@ use crate::{
 
 /// How long a signed revocation list is valid. Clients refresh at least this often.
 pub const REVOCATION_LIST_LIFETIME: Duration = Duration::hours(6);
-/// A fetch that started this long ago is presumed dead and retried.
-const FETCH_LEASE: Duration = Duration::minutes(30);
+/// A fetch that hasn't moved on for this long is presumed dead and retried. Each step of each
+/// file renews it (`file_stage`), so it only has to outlast one file's longest scan (scan.rs).
+const FETCH_LEASE: Duration = Duration::minutes(40);
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -418,6 +419,16 @@ struct ReleaseFileInfo {
     defender: Option<serde_json::Value>,
     /// A reviewer cleared a finding as a false positive, and why.
     cleared_reason: Option<String>,
+    /// What Slop is doing with this file right now: downloading, signature or scanning
+    /// (release_progress.rs). Null when it isn't being checked.
+    check_stage: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    check_started_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    checked_at: Option<OffsetDateTime>,
+    /// waiting, checking, checked, or not_checked (the release stopped before this file).
+    #[sqlx(skip)]
+    check: &'static str,
 }
 
 #[derive(Serialize)]
@@ -448,6 +459,8 @@ pub(crate) struct ReleaseInfo {
     repo_scan: Option<serde_json::Value>,
     /// Advisories for its packages (dep_watch.rs), newest first.
     advisories: Vec<Advisory>,
+    /// Where it is in Slop's checks, file by file, with a summary for the maker.
+    progress: crate::release_progress::ReleaseProgress,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -883,14 +896,22 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
     .bind(id)
     .fetch_one(&state.db)
     .await?;
-    let files = sqlx::query_as(
+    let mut files: Vec<ReleaseFileInfo> = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, provenance, provenance_problem,
                 scan_result, scan_detail, scan_report, defender, cleared_reason,
-                maker_signature - 'signature' - 'public_key' as maker_key
+                maker_signature - 'signature' - 'public_key' as maker_key,
+                check_stage, check_started_at, checked_at
          from release_files where release_id = $1 order by platform",
     )
     .bind(id)
     .fetch_all(&state.db)
+    .await?;
+    let progress = release_progress(
+        state,
+        id,
+        (&row.status, row.status_reason.as_deref(), row.auto_approved),
+        &mut files,
+    )
     .await?;
     let (source_checks, repo_scan): (Option<serde_json::Value>, Option<serde_json::Value>) =
         sqlx::query_as("select source_checks, repo_scan from releases where id = $1")
@@ -924,7 +945,54 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         }),
         runtimes: row.runtimes,
         files,
+        progress,
     })
+}
+
+/// Each file's check state, and the release's progress (release_progress.rs). The estimate and
+/// the queue are looked up only while its files are being checked.
+async fn release_progress(
+    state: &AppState,
+    id: Uuid,
+    (status, status_reason, auto_approved): (&str, Option<&str>, bool),
+    files: &mut [ReleaseFileInfo],
+) -> ApiResult<crate::release_progress::ReleaseProgress> {
+    use crate::release_progress as rp;
+    let (seconds_per_file, queue_ahead) = if status == "fetching" {
+        (
+            rp::seconds_per_file(&state.db, state.config.releases.scanner.is_on()).await?,
+            rp::queue_ahead(&state.db, id).await?,
+        )
+    } else {
+        (None, 0)
+    };
+    let states: Vec<rp::FileState> = files
+        .iter()
+        .map(|f| rp::FileState {
+            platform: &f.platform,
+            file_name: &f.file_name,
+            stage: f.check_stage.as_deref(),
+            started_at: f.check_started_at,
+            checked_at: f.checked_at,
+            hashed: f.sha256.is_some(),
+            scan_result: f.scan_result.as_deref(),
+            scan_detail: f.scan_detail.as_deref(),
+        })
+        .collect();
+    let checks: Vec<&'static str> = states.iter().map(|f| f.check(status)).collect();
+    let progress = rp::build(&rp::Inputs {
+        status,
+        status_reason,
+        auto_approved,
+        files: &states,
+        now: OffsetDateTime::now_utc(),
+        seconds_per_file,
+        queue_ahead,
+    });
+    for (f, check) in files.iter_mut().zip(checks) {
+        f.check = check;
+    }
+    Ok(progress)
 }
 
 /// Makers see every release with its status; everyone else sees approved releases.
@@ -1376,6 +1444,14 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
     let Some((id, app_id, commit, repo_url)) = claimed else {
         return Ok(false);
     };
+    // A fetch that died part-way starts over: every file is checked again.
+    sqlx::query(
+        "update release_files set check_stage = null, check_started_at = null, checked_at = null
+         where release_id = $1",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
 
     match fetch_release(state, id, &commit, &repo_url).await {
         Ok(commit_verified) => {
@@ -1437,6 +1513,7 @@ async fn fetch_release(
     .await?;
     let scanner = state.config.releases.scanner;
     for (platform, url, file_name, parts) in files {
+        file_stage(state, id, &platform, "downloading").await?;
         let part_urls: Vec<String> = parts
             .as_ref()
             .and_then(|p| p.as_array())
@@ -1486,6 +1563,7 @@ async fn fetch_release(
             }
         };
         let (size, sha256) = (file.size, file.sha256.clone());
+        file_stage(state, id, &platform, "signature").await?;
         // In parts: each part carries its own attestation (Slop Build attests every file it
         // uploads); the joined file has none of its own.
         let mut parts_out = None;
@@ -1544,6 +1622,9 @@ async fn fetch_release(
                 }
             }
         }
+        if scanner.is_on() {
+            file_stage(state, id, &platform, "scanning").await?;
+        }
         let verdict = match &local {
             Some(path) => {
                 let v = scanner
@@ -1570,7 +1651,7 @@ async fn fetch_release(
             "update release_files
              set size_bytes = $3, sha256 = $4, attestation = $5, provenance = $6, provenance_problem = $7,
                  scan_result = $8, scan_detail = $9, scan_report = $10, maker_signature = $11,
-                 parts = coalesce($12, parts)
+                 parts = coalesce($12, parts), check_stage = null, checked_at = now()
              where release_id = $1 and platform = $2",
         )
         .bind(id)
@@ -1600,6 +1681,32 @@ async fn fetch_release(
         .await?;
     }
     Ok(commit_verified)
+}
+
+/// Records what Slop is doing with one file now, for its maker's progress view
+/// (release_progress.rs). Starting a file also renews the release's lease, so a release with
+/// several slow scans isn't taken for a dead fetch and started again.
+async fn file_stage(state: &AppState, id: Uuid, platform: &str, stage: &str) -> sqlx::Result<()> {
+    debug_assert!(crate::release_progress::STAGES.contains(&stage));
+    sqlx::query(
+        "update release_files
+         set check_stage = $3,
+             check_started_at = case when $3 = 'downloading' then now() else check_started_at end,
+             checked_at = null
+         where release_id = $1 and platform = $2",
+    )
+    .bind(id)
+    .bind(platform)
+    .bind(stage)
+    .execute(&state.db)
+    .await?;
+    sqlx::query(
+        "update releases set fetch_started_at = now() where id = $1 and status = 'fetching'",
+    )
+    .bind(id)
+    .execute(&state.db)
+    .await?;
+    Ok(())
 }
 
 pub(crate) async fn github_get(state: &AppState, url: Url) -> reqwest::RequestBuilder {

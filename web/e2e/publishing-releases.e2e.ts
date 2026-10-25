@@ -154,7 +154,7 @@ test("a file Slop can't download fails, with the reason", async ({ page }) => {
   await expect(release.getByText("Slop couldn't check the files. See the reason below.")).toBeVisible();
 });
 
-test("while files are being fetched, the page checks again every few seconds", async ({ page }) => {
+test("while files are being fetched, the page checks again every 10 seconds", async ({ page }) => {
   await page.clock.install();
   await signIn(page, "maker");
   let loads = 0;
@@ -169,7 +169,7 @@ test("while files are being fetched, the page checks again every few seconds", a
   await page.goto(page_);
   await expect(page.getByText("CHECKING FILES", { exact: true })).toBeVisible();
   const before = loads;
-  await page.clock.fastForward(4_500);
+  await page.clock.fastForward(10_500);
   await expect.poll(() => loads).toBeGreaterThan(before);
 });
 

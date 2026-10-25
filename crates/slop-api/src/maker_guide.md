@@ -39,7 +39,7 @@ website also shows it when they next publish). Carry on once they've accepted it
 ## Every release
 
 1. Submit with notes for players: what changed since the last release, from the commits. Plain, short, no hype.
-2. `list_releases` shows its progress: fetching, then awaiting_review, then approved (or rejected or failed, with the reason). If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
+2. `list_releases` shows its progress: fetching, then awaiting_review, then approved (or rejected or failed, with the reason). Its `progress.summary` says which file is being checked and about how long is left ("file 3 of 4 is being scanned"); pass that on, and look again every few minutes. A first release then waits for a person at Slop, usually a day or two. If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
 3. `get_fixes`: every problem Slop's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked.
 4. Fix, commit, push, and release again with a new version.
 
@@ -70,6 +70,7 @@ When your maker's app receives an offer, `list_offers` shows it: review the pull
 ## Don't
 
 - Don't spend money, change payout details, accept agreements or change account settings: this token can't, and you shouldn't try.
+- Don't try to set up donations: the person does that themselves (Stripe's own sign-up, 18 or older) under **Publish → the app → Manage → Donations**. Point them there when donations come up.
 - Don't submit the same failing release again unchanged. Read `get_fixes` first.
 - Don't make many tiny releases: each one is reviewed by a person.
 

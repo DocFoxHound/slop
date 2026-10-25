@@ -1619,6 +1619,8 @@ struct Settings {
     /// The maker's Stripe account: none, pending, active or restricted.
     account_status: String,
     active_server_donations: i64,
+    /// A private app (private.rs) takes no donations until it goes public.
+    private: bool,
     /// Whether this server takes payments: stripe, simulated or off.
     #[sqlx(skip)]
     payments: &'static str,
@@ -1628,7 +1630,8 @@ async fn load_settings(state: &AppState, app_id: Uuid) -> ApiResult<Settings> {
     let mut s: Settings = sqlx::query_as(
         "select a.donations_on, a.donation_suggested_minor, a.donation_currency, a.runs_servers, a.servers_statement,
                 a.servers_shut_down_at, coalesce(d.stripe_status, 'none') as account_status,
-                (select count(*) from server_donations s where s.app_id = a.id and s.status = 'active') as active_server_donations
+                (select count(*) from server_donations s where s.app_id = a.id and s.status = 'active') as active_server_donations,
+                a.visibility = 'private' as private
          from apps a left join donation_accounts d on d.user_id = a.maker_id where a.id = $1",
     )
     .bind(app_id)

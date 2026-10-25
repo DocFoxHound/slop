@@ -54,6 +54,7 @@ pub mod private;
 pub mod pulse;
 pub mod push;
 pub mod ratelimit;
+pub mod release_progress;
 pub mod releases;
 pub mod repo_identity;
 pub mod repo_owner;

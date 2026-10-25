@@ -55,7 +55,8 @@ test("the dashboard says where each app is, and checks again while one is moving
   );
   const before = loads;
   expect(before).toBeGreaterThan(0);
-  await page.clock.fastForward(21_000);
+  // A review is awaited: every minute.
+  await page.clock.fastForward(61_000);
   await expect.poll(() => loads).toBeGreaterThan(before);
 });
 

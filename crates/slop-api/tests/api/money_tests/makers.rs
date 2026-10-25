@@ -193,6 +193,16 @@ async fn saving_donation_settings_checks_every_field(db: PgPool) {
     assert_eq!(status, StatusCode::OK);
     assert!(s["servers_shut_down_at"].is_null(), "{s}");
     assert!(get_json(&app, &dee, "/v1/apps/arena/donate").await["servers"].is_object());
+
+    // The settings say whether the app is private (no donations until it goes public), so the
+    // Publish page offers to set donations up only where they can be.
+    assert_eq!(s["private"], false);
+    sqlx::query("update apps set visibility = 'private' where slug = 'arena'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let s = get_json(&app, &maker, "/v1/apps/arena/donations/settings").await;
+    assert_eq!(s["private"], true);
 }
 
 /// b39: a monthly donation still at Stripe Checkout becomes active when it's paid, so switching
