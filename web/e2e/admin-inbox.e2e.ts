@@ -14,7 +14,7 @@ test.afterEach(closePages);
 
 const MAKER: Who = "security";
 
-/** The inbox's categories as the API counts them (pages/admin/inbox.ts). */
+/** The inbox's categories as the API counts them (pages/admin/queue.ts). */
 async function counts(): Promise<Record<string, number>> {
   const q = await ok("admin", "GET", "/v1/admin/queue");
   const actions = await ok("admin", "GET", "/v1/admin/actions");

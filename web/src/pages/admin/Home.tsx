@@ -8,7 +8,7 @@ import { Link, useNavigate } from "react-router";
 import { api } from "../../api";
 import { ErrorState, Loading } from "../../components/ui";
 import { useLoad } from "../../hooks";
-import { BOXES, inboxUrl } from "./inbox";
+import { BOXES, inboxUrl } from "./queue";
 import type { Waiting } from "./Inbox";
 
 export function AdminHome({ waiting }: { waiting: Waiting }) {

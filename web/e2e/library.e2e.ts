@@ -25,7 +25,7 @@ test.beforeAll(async () => {
 
 test.afterAll(async () => {
   await tryCall("player", "POST", `/v1/apps/${larks}/vote`, { vote: null });
-  for (const slug of [larks, "neon-drift"]) await tryCall("player", "DELETE", `/v1/me/library/${slug}`);
+  for (const slug of [larks, "castle-rock", "neon-drift"]) await tryCall("player", "DELETE", `/v1/me/library/${slug}`);
   await tryCall("player", "DELETE", `/v1/me/interested/${later}`);
   await delist(larks, later);
 });

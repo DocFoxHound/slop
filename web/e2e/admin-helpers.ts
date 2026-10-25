@@ -73,7 +73,7 @@ export async function withToken(token: string, method: string, path: string, bod
   return { status: res.status, json };
 }
 
-/** A category of the review queue, the inbox (web/src/pages/admin/inbox.ts): "releases", "people"… */
+/** A category of the review queue, the inbox (web/src/pages/admin/queue.ts): "releases", "people"… */
 export const inbox = (box: string) => `/admin?tab=queue&box=${box}`;
 
 /** The line for an item in the inbox's list. */
