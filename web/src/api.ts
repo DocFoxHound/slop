@@ -672,11 +672,8 @@ export interface Me {
   unread_notifications: number;
   /** Votes and reviews shown on the public profile (default on; off in the UK under-18 view). */
   profile_public: boolean;
-  /** Passkeys for publishers and creatives: whether they have one, from when publishing and
-   * payouts need one, and a grace staff gave. */
+  /** Whether they have a passkey (optional: a quicker sign-in, never required). */
   has_passkey: boolean;
-  passkey_due_at: string | null;
-  passkey_grace_until: string | null;
   /** This browser sent a Global Privacy Control signal. */
   gpc: boolean;
   /** Their profile picture from a linked sign-in, served by Slop; null: the letter. */
@@ -1999,7 +1996,6 @@ export interface AgentToken {
   /** App addresses; empty: all your apps. */
   apps: string[];
   people: boolean;
-  passkey_proved: boolean;
   created_at: string;
   expires_at: string;
   last_used_at: string;
@@ -2785,8 +2781,6 @@ export const api = {
       request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/decide`, body),
     liftSuspension: (id: string, reason: string) =>
       request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/lift-suspension`, { reason }),
-    passkeyGrace: (id: string, reason: string) =>
-      request<unknown>("POST", `/v1/admin/users/${encodeURIComponent(id)}/passkey-grace`, { reason }),
     /** Threads AI agents wrote to the admins that you can see, newest activity first. */
     aiMessages: (category?: AiMessageCategory, status: "open" | "closed" = "open") =>
       request<AiThreadSummary[]>("GET", `/v1/admin/ai-messages${query({ category, status })}`),

@@ -389,7 +389,6 @@ async fn save_profile(
 ) -> ApiResult<Json<MyProfile>> {
     require_adult(&state, &user, p.confirm_adult).await?;
     crate::legal::require(&state.db, user.id, "people").await?;
-    crate::passkeys::require(&state, &user).await?;
     let handle = p.handle.trim().to_ascii_lowercase();
     let handle_ok = (3..=40).contains(&handle.len())
         && handle.split('-').all(|part| {

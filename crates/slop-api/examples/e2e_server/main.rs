@@ -2,7 +2,8 @@
 //! A throwaway Slop for the browser tests (web/e2e). Never for real use.
 //!
 //! Makes a new database (`slop_e2e_<random>_sim`) on the test Postgres, migrates it, starts a
-//! fake GitHub (release files, repository and account pictures) and a fake Stripe (fake_stripe.rs), runs the
+//! fake GitHub (release files, repository and account pictures, and a stand-in Google sign-in)
+//! and a fake Stripe (fake_stripe.rs), runs the
 //! API with the release fetcher on a free port, serving the built website (`web/dist`), and
 //! seeds it (seed.rs: accounts for every kind of person, apps, money, People, teams, chat and
 //! admin queues). Prints one line of JSON (`url`, `fake`, `stripe`, `cookie_name`, `cookies`,
@@ -18,7 +19,14 @@ mod seed;
 use std::{io::Write as _, net::SocketAddr, path::PathBuf};
 
 use anyhow::Context;
-use axum::{Router, body::Bytes, extract::Path, routing::get};
+use axum::{
+    Router,
+    body::Bytes,
+    extract::{Path, Query},
+    http::HeaderMap,
+    response::Redirect,
+    routing::{get, post},
+};
 use slop_api::{
     AppState, MIGRATOR,
     auth::session,
@@ -98,6 +106,43 @@ async fn fake_github() -> anyhow::Result<String> {
                 )
             }),
         )
+        // A stand-in Google sign-in (auth/oauth.rs), for linking and "Refresh picture": it says
+        // yes at once and always names Pia Picture's Google account (seed.rs), whose picture is
+        // one of the account pictures above.
+        .route(
+            "/google/authorize",
+            get(
+                |Query(q): Query<std::collections::HashMap<String, String>>| async move {
+                    let mut back = url::Url::parse(q.get("redirect_uri").map_or("", |s| s))
+                        .map_err(|_| axum::http::StatusCode::BAD_REQUEST)?;
+                    back.query_pairs_mut()
+                        .append_pair("code", "e2e-google")
+                        .append_pair("state", q.get("state").map_or("", |s| s));
+                    Ok::<_, axum::http::StatusCode>(Redirect::to(back.as_str()))
+                },
+            ),
+        )
+        .route(
+            "/google/token",
+            post(|| async { axum::Json(serde_json::json!({ "access_token": "e2e-google" })) }),
+        )
+        .route(
+            "/google/api/userinfo",
+            get(|headers: HeaderMap| async move {
+                let host = headers
+                    .get("host")
+                    .and_then(|h| h.to_str().ok())
+                    .unwrap_or("127.0.0.1")
+                    .to_string();
+                axum::Json(serde_json::json!({
+                    "sub": seed::PIA_GOOGLE,
+                    "name": "Pia Picture",
+                    "email": "pia@example.test",
+                    "email_verified": true,
+                    "picture": format!("http://{host}/avatars/u/5252"),
+                }))
+            }),
+        )
         // The newest commit, for store pictures (media.rs).
         .route(
             "/repos/{owner}/{repo}/commits/HEAD",
@@ -175,7 +220,13 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             oauth_base: fake.parse()?,
             api_base: fake.parse()?,
         }),
-        google: None,
+        google: Some(slop_api::config::OAuthConfig {
+            client_id: "e2e".into(),
+            client_secret: "e2e".into(),
+            authorize_url: format!("{fake}google/authorize").parse()?,
+            token_url: format!("{fake}google/token").parse()?,
+            api_base: format!("{fake}google/api/").parse()?,
+        }),
         gitlab: None,
         bitbucket: None,
         microsoft: None,
@@ -287,7 +338,8 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
     .context("seeding")?;
 
     // The whole suite takes longer than the step-up window (auth/session.rs), so the seeded
-    // sessions keep counting as recent sign-ins. Tests of an old sign-in answer for the server.
+    // sessions keep counting as recent sign-ins for the one step-up left: staff making an admin
+    // API token (review.rs). It can go when that does.
     tokio::spawn({
         let db = db.clone();
         async move {

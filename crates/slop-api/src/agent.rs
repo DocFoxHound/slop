@@ -56,7 +56,6 @@ pub fn routes() -> Router<AppState> {
         .route("/admin/users/{id}", get(user_details))
         .route("/admin/users/{id}/decide", post(decide_user))
         .route("/admin/users/{id}/lift-suspension", post(lift_suspension))
-        .route("/admin/users/{id}/passkey-grace", post(passkey_grace))
 }
 
 /// The admin MCP endpoint: its own body limit (lib.rs), since a tool call may carry a whole
@@ -514,83 +513,6 @@ async fn lift_suspension(
     .await
 }
 
-/// Lets someone who lost their passkeys publish without one for a week (passkeys.rs), after
-/// staff checked it's really them. Sensitive: someone who stole a sign-in could ask for it too,
-/// so it waits for enough staff (staff.rs), like a suspension.
-async fn passkey_grace(
-    State(state): State<AppState>,
-    admin: AdminUser,
-    Path(id): Path<Uuid>,
-    Json(b): Json<Lift>,
-) -> ApiResult<crate::staff::Outcome> {
-    admin.need(Perm::Sensitive)?;
-    let reason = b.reason.trim();
-    if !(10..=1000).contains(&reason.chars().count()) {
-        return Err(ApiError::invalid(
-            "reason",
-            "say how you checked it's them, in 10 to 1000 characters",
-        ));
-    }
-    // Someone else checks it's really them.
-    if id == admin.user_id {
-        return Err(ApiError::invalid("id", "not on your own account"));
-    }
-    let name: Option<String> =
-        sqlx::query_scalar("select display_name from users where id = $1 and closed_at is null")
-            .bind(id)
-            .fetch_optional(&state.db)
-            .await?;
-    let name = name.ok_or(ApiError::NotFound)?;
-    crate::staff::request(
-        &state,
-        &admin,
-        "account.passkey_grace",
-        &format!("Let {name} publish without a passkey for a week: {reason}"),
-        json!({ "user_id": id, "reason": reason }),
-    )
-    .await
-}
-
-/// A passkey grace, once approved (staff.rs).
-pub(crate) async fn passkey_grace_stored(
-    state: &AppState,
-    p: &Value,
-    actor: &str,
-) -> ApiResult<Value> {
-    let id: Uuid =
-        serde_json::from_value(p["user_id"].clone()).map_err(|e| ApiError::Internal(e.into()))?;
-    let reason = p["reason"].as_str().unwrap_or_default();
-    let mut tx = state.db.begin().await?;
-    let until = crate::passkeys::grace(&mut tx, id).await?;
-    crate::notify::send(
-        &mut tx,
-        crate::notify::Notice {
-            user_id: id,
-            category: "apps",
-            title: "Add a new passkey this week".into(),
-            body: format!(
-                "Slop lets you publish and manage payouts without a passkey until {}. Add a new one under \
-                 Account → Sign-ins before then. If you didn't ask for this, tell Slop at once.",
-                until.date()
-            ),
-            link: "/account#sign-ins".into(),
-            collapse_key: None,
-        },
-    )
-    .await?;
-    admin::audit(
-        &mut tx,
-        actor,
-        "account.passkey_grace",
-        &id.to_string(),
-        json!({ "reason": reason, "until": until.to_string() }),
-    )
-    .await
-    .map_err(ApiError::Internal)?;
-    tx.commit().await?;
-    Ok(json!({ "until": until.to_string() }))
-}
-
 /// Lifting a suspension, once approved (staff.rs).
 pub(crate) async fn lift_stored(state: &AppState, p: &Value, actor: &str) -> ApiResult<Value> {
     let id: Uuid =
@@ -843,14 +765,6 @@ const TOOLS: &[Tool] = &[
         method: Method::POST,
         path: "/v1/admin/users/{id}/lift-suspension",
         properties: || json!({ "id": s("The account ID"), "reason": s("Why") }),
-        required: &["id", "reason"],
-    },
-    Tool {
-        name: "passkey_grace",
-        description: "Let someone who lost their passkeys publish and manage payouts without one for a week, after checking it's really them (say how in the reason, 10+ characters). Waits for staff approval like other sensitive actions. Needs a moderate token.",
-        method: Method::POST,
-        path: "/v1/admin/users/{id}/passkey-grace",
-        properties: || json!({ "id": s("The account ID"), "reason": s("How you checked it's them") }),
         required: &["id", "reason"],
     },
     Tool {

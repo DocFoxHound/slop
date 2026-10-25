@@ -498,8 +498,8 @@ async fn staff(app: &TestApp, name: &str, role: &str) -> (Uuid, String) {
     (id, cookie)
 }
 
-/// A user who has a passkey and must use it now (their grace period is over), signed in
-/// without it.
+/// A user who has a passkey they never used in this session, past the deadline publishers had
+/// before passkeys became optional (2026-10-25): nothing asks them for it now.
 async fn passkey_holder(app: &TestApp, id: Uuid) {
     sqlx::query(
         "insert into passkeys (id, user_id, credential_id, credential, name) values ($1, $2, $3, '{}', 'Laptop')",
@@ -519,16 +519,8 @@ async fn passkey_holder(app: &TestApp, id: Uuid) {
     .unwrap();
 }
 
-/// As if they had just confirmed with their passkey.
-async fn passkey_confirmed(app: &TestApp, id: Uuid) {
-    sqlx::query("update sessions set passkey_at = now() where user_id = $1")
-        .bind(id)
-        .execute(&app.db)
-        .await
-        .unwrap();
-}
-
-/// Makes the user's sign-in an hour old (too old for steps that need a fresh one).
+/// Makes the user's sign-in an hour old (once too old for steps that needed a fresh one; nothing
+/// does since 2026-10-25).
 async fn old_sign_in(app: &TestApp, id: Uuid) {
     sqlx::query(
         "update sessions set created_at = now() - interval '1 hour', stepped_up_at = null where user_id = $1",

@@ -74,8 +74,11 @@ test("a sign-in that shares its picture only at sign-in offers Refresh, and a re
   await page.goto("/account#picture");
   const section = page.locator("#picture");
   await expect(section.getByRole("radio", { name: /Your Discord picture/ })).toBeDisabled();
-  await expect(section.getByText("Slop gets this picture when you sign in with Discord: press Refresh picture.")).toBeVisible();
-  await expect(section.getByRole("link", { name: "Refresh picture" })).toHaveAttribute(
+  await expect(
+    section.getByText("Slop gets this picture when you sign in with Discord: press Refresh picture to fetch it now (a quick trip to Discord and back)."),
+  ).toBeVisible();
+  const discord = section.locator(".picture-choice").filter({ hasText: "Your Discord picture" });
+  await expect(discord.getByRole("link", { name: "Refresh picture" })).toHaveAttribute(
     "href",
     "/v1/auth/discord/link?return_to=%2Faccount%3Fpicture%3Drefresh%23picture",
   );
@@ -95,6 +98,30 @@ test("a sign-in that shares its picture only at sign-in offers Refresh, and a re
   await section.getByRole("radio", { name: /Your GitHub picture/ }).check();
   await expect(section.getByRole("alert")).toHaveText("couldn't get your picture from GitHub: try again later");
   await expect(section.getByRole("radio", { name: /The letter/ })).toBeChecked();
+});
+
+test("Refresh picture for a sign-in with no picture yet goes to it and straight back, and the picture is there", async ({ page }) => {
+  // Pia's Google sign-in has no picture yet; the test server's stand-in Google says yes at once
+  // (crates/slop-api/examples/e2e_server/main.rs). No "confirm it's you" on the way.
+  await signIn(page, "pictured");
+  await page.goto("/account#picture");
+  const section = page.locator("#picture");
+  const google = section.getByRole("radio", { name: /Your Google picture/ });
+  await expect(google).toBeDisabled();
+  await expect(
+    section.getByText("Slop gets this picture when you sign in with Google: press Refresh picture to fetch it now (a quick trip to Google and back)."),
+  ).toBeVisible();
+  const choice = section.locator(".picture-choice").filter({ hasText: "Your Google picture" });
+  await choice.getByRole("link", { name: "Refresh picture" }).click();
+  // Through the link flow and back to the account page, signed in as before.
+  await expect(page).toHaveURL(new RegExp(`^${server.url}/account\\?picture=refresh&linked=already#picture$`));
+  await expect(section.getByRole("status")).toHaveText("Signed in again: Slop has your newest picture from there.");
+  await expect(page.getByText("Page not found")).toHaveCount(0);
+  await expect(google).toBeEnabled();
+  await expect(section.getByText("Updated each time you sign in with Google.")).toBeVisible();
+  await google.check();
+  await expect(google).toBeChecked();
+  await loaded(section.locator(".picture-current img"));
 });
 
 test("staff remove a picture from the account's record, saying why", async ({ browser }) => {

@@ -111,9 +111,8 @@ takes the page out of the store until you reach the next stage; existing install
 On the Slop website, choose **Sign in → Continue with GitHub**, then pick a display name and your
 country. Slop never sees your password.
 
-**Add a passkey** under Account → Sign-ins. 30 days after you first publish, publishing and
-changing where donations go need one, used in the last 12 hours, so someone who gets into your
-GitHub account can't publish as you.
+Optionally, **add a passkey** under Account → Sign-in & security: a quicker way to sign in that
+nobody can phish. Nothing on Slop requires one.
 
 ### 2. Create the store page
 

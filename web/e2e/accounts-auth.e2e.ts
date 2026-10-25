@@ -7,10 +7,14 @@ test.describe("the sign-in page", () => {
   test("offers the sign-ins this server has, and keeps where you were going", async ({ page }) => {
     await page.goto("/signin?return_to=%2Flibrary%3Ftab%3Dinstalled");
     await expect(page.getByRole("heading", { name: "Sign in to Slop" })).toBeVisible();
-    // The test server has GitHub and nothing else (crates/slop-api/examples/e2e_server/main.rs).
+    // The test server has GitHub and a stand-in Google, nothing else (crates/slop-api/examples/e2e_server/main.rs).
     const github = page.getByRole("link", { name: "Continue with GitHub" });
     await expect(github).toHaveAttribute("href", "/v1/auth/github/start?return_to=%2Flibrary%3Ftab%3Dinstalled");
-    await expect(page.getByRole("link", { name: /Continue with (Google|GitLab|Bitbucket|Microsoft|Discord)/ })).toHaveCount(0);
+    await expect(page.getByRole("link", { name: "Continue with Google" })).toHaveAttribute(
+      "href",
+      "/v1/auth/google/start?return_to=%2Flibrary%3Ftab%3Dinstalled",
+    );
+    await expect(page.getByRole("link", { name: /Continue with (GitLab|Bitbucket|Microsoft|Discord)/ })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Sign in with a passkey" })).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
   });
@@ -38,7 +42,7 @@ test.describe("the sign-in page", () => {
       await expect(page.getByRole("alert")).toHaveText(text);
     }
     await page.goto("/signin?reason=link&return_to=%2Faccount");
-    await expect(page.getByText("To link another sign-in, first sign in again with one you already use.")).toBeVisible();
+    await expect(page.getByText("To link another sign-in, first sign in with one you already use.")).toBeVisible();
   });
 
   test("says so when no sign-in is set up", async ({ page }) => {
@@ -266,36 +270,16 @@ test.describe("approving the desktop app", () => {
     await expect(page.getByText("Go back to the Slop app and choose Sign in again.")).toBeVisible();
   });
 
-  test("an old sign-in must be confirmed before it can approve a new device", async ({ page }) => {
+  test("approving a new device never asks to confirm it's you", async ({ page }) => {
+    // No recent sign-in needed (auth/desktop.rs; the API tests approve from a days-old session).
     const req = await desktopSignInRequest("Sue's other PC", 43_456);
-    await stubPasskeys(page);
-    // The seeded session is fresh; an old one is refused like this (auth/session.rs).
-    const approve = await fake(
-      page,
-      "POST",
-      `/v1/auth/desktop/requests/${req.id}/approve`,
-      { status: 403, body: apiError("step_up_required", "this needs a recent sign-in") },
-      { times: 1 },
-    );
-    await fake(page, "POST", "/v1/me/step-up/start", { status: 200, body: { challenge_id: "s1", options: passkeyOptions } });
-    const finish = await fake(page, "POST", "/v1/me/step-up/finish", { status: 204, body: undefined });
+    const stepUp = await fake(page, "POST", /^\/v1\/me\/step-up\//, { status: 500, body: apiError("internal", "not expected") });
+    await page.route("http://127.0.0.1:43456/**", (route) => route.fulfill({ status: 200, body: "ok" }));
     await signIn(page, "support");
     await page.goto(`/desktop-signin/${req.id}`);
     await page.getByRole("button", { name: "Allow", exact: true }).click();
-    const alert = page.getByRole("alert");
-    await expect(alert).toContainText("For your safety, this needs a sign-in from the last few minutes.");
-    await expect(alert.getByRole("link", { name: "sign in again" })).toHaveAttribute(
-      "href",
-      `/signin?return_to=${encodeURIComponent(`/desktop-signin/${req.id}`)}`,
-    );
-    await alert.getByRole("button", { name: "Confirm with a passkey" }).click();
-    await expect(page.getByRole("alert")).toHaveCount(0);
-    expect(finish.calls).toHaveLength(1);
-    expect(approve.calls).toHaveLength(1);
-    // Confirmed: Allow works now (the server answers this time).
-    await page.route("http://127.0.0.1:43456/**", (route) => route.fulfill({ status: 200, body: "ok" }));
-    await page.getByRole("button", { name: "Allow", exact: true }).click();
     await expect(page).toHaveURL(/^http:\/\/127\.0\.0\.1:43456\/callback\?/);
+    expect(stepUp.calls).toHaveLength(0);
   });
 });
 
@@ -355,11 +339,11 @@ test.describe("combining accounts", () => {
 
   test("a refused combination shows the server's reason", async ({ page }) => {
     await fake(page, "GET", "/v1/auth/combine", { status: 200, body: preview });
-    await fake(page, "POST", "/v1/auth/combine", { status: 403, body: apiError("step_up_required", "this needs a recent sign-in") });
+    await fake(page, "POST", "/v1/auth/combine", { status: 409, body: apiError("conflict", "that sign-in was linked again meanwhile: start over") });
     await signIn(page, "support");
     await page.goto("/account/combine");
     await page.getByRole("button", { name: "Combine them" }).click();
-    await expect(page.getByRole("alert")).toHaveText("this needs a recent sign-in");
+    await expect(page.getByRole("alert")).toHaveText("that sign-in was linked again meanwhile: start over");
     await expect(page).toHaveURL(/\/account\/combine$/);
   });
 

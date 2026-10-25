@@ -68,7 +68,6 @@ export function Account() {
   const badges: Partial<Record<AccountSectionId, Badge>> = {};
   if (me.suspended) badges.moderation = { text: "!", label: "your account is suspended", tone: "bad" };
   else if (me.new_decisions > 0) badges.moderation = { text: String(me.new_decisions), label: `${me.new_decisions} new` };
-  if (!me.has_passkey && me.passkey_due_at) badges.security = { text: "!", label: "add a passkey", tone: "warn" };
   const toAccept = (notices.data ?? []).filter((n) => n.action === "accept").length;
   if (toAccept > 0) badges.agreements = { text: String(toAccept), label: `${toAccept} to accept` };
   const expiring = tokenBadge(agentTokens.data ?? []);

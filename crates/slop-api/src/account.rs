@@ -397,8 +397,8 @@ async fn close(
     jar: CookieJar,
     Json(body): Json<CloseBody>,
 ) -> ApiResult<(StatusCode, CookieJar)> {
-    // Closing is for good: it takes a fresh sign-in or passkey, not a session someone stole.
-    crate::auth::session::require_recent_sign_in(&state.db, &user).await?;
+    // Any signed-in session may close the account, no "confirm it's you" first (the owner's
+    // decision of 2026-10-25, SECURITY §4.3); typing the confirmation is the safeguard.
     if body.confirm.trim().to_lowercase() != CONFIRMATION {
         return Err(ApiError::invalid(
             "confirm",

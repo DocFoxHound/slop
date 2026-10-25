@@ -15,7 +15,6 @@ function token(name: string, madeDaysAgo: number, expiresInDays: number, id = na
     scope: "publish",
     apps: [],
     people: false,
-    passkey_proved: false,
     created_at: at(-madeDaysAgo),
     expires_at: at(expiresInDays),
     last_used_at: at(-1),

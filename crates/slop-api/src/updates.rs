@@ -411,7 +411,6 @@ async fn submit_from_github(
 ) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
     crate::limits::check(&state, user.id, crate::limits::Action::Release)?;
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
-    crate::passkeys::require(&state, &user).await?;
     let repo_path = github_path(&repo_url)?;
     if req.tag.is_empty() || req.tag.len() > 100 || req.tag.chars().any(char::is_control) {
         return Err(ApiError::invalid("tag", "pick a release"));
@@ -571,8 +570,6 @@ async fn put_settings(
     Json(change): Json<SettingsChange>,
 ) -> ApiResult<Json<Settings>> {
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
-    // Watching submits releases, and automatic updates send them out: as sensitive as publishing.
-    crate::passkeys::require(&state, &user).await?;
     sqlx::query(
         "update apps set watch_releases = coalesce($2, watch_releases),
                          auto_update = coalesce($3, auto_update)

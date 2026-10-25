@@ -36,13 +36,10 @@ pub enum ApiError {
     TermsRequired(&'static str),
     #[error("your account is suspended: see the decision on your account page")]
     Suspended,
-    /// A sensitive action (SECURITY §4.3) needs a sign-in from the last few minutes.
+    /// Staff making an admin API token (review.rs) needs a sign-in from the last few minutes: the
+    /// one step-up left (SECURITY §4.3).
     #[error("confirm it's you first: sign in again, or use a passkey")]
     StepUpRequired,
-    /// Publishing and payout changes need a passkey (passkeys.rs `require`): confirm with one
-    /// (true: the account has one), or add one first (false).
-    #[error("{}", if *.0 { "confirm with your passkey first" } else { "add a passkey to your account first (Account → Sign-ins): publishers and creatives need one" })]
-    PasskeyRequired(bool),
     /// Too many unfinished checkouts: solve a proof-of-work challenge first (challenge.rs).
     #[error("one more step before trying again: your browser needs to do a quick check")]
     ChallengeRequired,
@@ -91,7 +88,6 @@ impl IntoResponse for ApiError {
             Self::TermsRequired(_) => (StatusCode::CONFLICT, "terms_required"),
             Self::Suspended => (StatusCode::FORBIDDEN, "suspended"),
             Self::StepUpRequired => (StatusCode::FORBIDDEN, "step_up_required"),
-            Self::PasskeyRequired(_) => (StatusCode::FORBIDDEN, "passkey_required"),
             Self::ChallengeRequired => (StatusCode::CONFLICT, "challenge_required"),
             Self::TooFast { .. } | Self::NotYet { .. } => {
                 (StatusCode::TOO_MANY_REQUESTS, "rate_limited")
@@ -109,10 +105,6 @@ impl IntoResponse for ApiError {
         let mut body = json!({ "error": { "code": code, "message": message } });
         if let Self::Invalid { field, .. } = &self {
             body["error"]["field"] = json!(field);
-        }
-        // Whether to confirm with a passkey ("confirm") or add one ("add").
-        if let Self::PasskeyRequired(has) = &self {
-            body["error"]["field"] = json!(if *has { "confirm" } else { "add" });
         }
         // The document to accept, so the UI can show it and try again.
         if let Self::TermsRequired(kind) = &self {

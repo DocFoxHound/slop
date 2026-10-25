@@ -366,7 +366,9 @@ async fn execute(state: &AppState, kind: &str, payload: &Value, actor: &str) -> 
         "report.act" => crate::moderation::act_on_report_stored(state, payload, actor).await,
         "account.suspend" => crate::agent::suspend_stored(state, payload, actor).await,
         "account.lift" => crate::agent::lift_stored(state, payload, actor).await,
-        "account.passkey_grace" => crate::agent::passkey_grace_stored(state, payload, actor).await,
+        // Passkeys aren't required since 2026-10-25, so a grace left waiting from before means
+        // nothing any more.
+        "account.passkey_grace" => Ok(Value::Null),
         "donations.off" => crate::donation_holds::off_stored(state, payload, actor).await,
         "legal.publish" => crate::legal::publish_stored(state, payload, actor).await,
         "staff.role" => {
@@ -598,12 +600,10 @@ async fn approve(
     .await?;
     let (kind, payload, status, needed) = row.ok_or(ApiError::NotFound)?;
     admin.need(perm_for(&kind))?;
-    // A person approves, signed in themselves (recently, or confirmed with a passkey): never an
-    // agent's token.
+    // A person approves, signed in themselves: never an agent's token.
     if admin.token.is_some() {
         return Err(ApiError::Forbidden);
     }
-    admin.confirm_recent(&state.db).await?;
     if status != "pending" {
         return Err(ApiError::Conflict(format!("that request is {status}")));
     }
@@ -744,7 +744,7 @@ async fn change_role(
     Path(user_id): Path<Uuid>,
     Json(b): Json<ChangeRole>,
 ) -> ApiResult<Outcome> {
-    let by_agent = may_change_staff(&state, &admin).await?;
+    let by_agent = may_change_staff(&admin)?;
     // Only an owner gives or takes the owner role.
     if b.role == Role::Owner && !admin.roles.contains(&Role::Owner) {
         return Err(ApiError::Forbidden);
@@ -769,18 +769,16 @@ async fn change_role(
 }
 
 /// Whether this admin may change staff, and whether it's an agent asking (true), whose request
-/// then waits for a person. A person must have signed in or confirmed with a passkey lately.
-async fn may_change_staff(state: &AppState, admin: &AdminUser) -> ApiResult<bool> {
+/// then waits for a person. A person signed in themselves may (no "confirm it's you" first: the
+/// owner's decision of 2026-10-25, SECURITY §4.3).
+fn may_change_staff(admin: &AdminUser) -> ApiResult<bool> {
     if !admin.roles.iter().any(|r| r.allows(Perm::Security)) {
         return Err(ApiError::Forbidden);
     }
     match &admin.token {
         Some(t) if t.can_moderate => Ok(true),
         Some(_) => Err(ApiError::Forbidden),
-        None => {
-            admin.confirm_recent(&state.db).await?;
-            Ok(false)
-        }
+        None => Ok(false),
     }
 }
 
@@ -798,7 +796,7 @@ async fn remove(
     Path(user_id): Path<Uuid>,
     Json(b): Json<RemoveBody>,
 ) -> ApiResult<Outcome> {
-    let by_agent = may_change_staff(&state, &admin).await?;
+    let by_agent = may_change_staff(&admin)?;
     let reason = b.reason.trim();
     if reason.chars().count() < 10 || reason.chars().count() > 2000 {
         return Err(ApiError::invalid(

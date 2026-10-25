@@ -394,8 +394,7 @@ function Waiting({ status, onDone }: { status: ChatStatus; onDone: () => void })
           <div className="notice">
             <p>
               Starting over makes this your only device for chat: your other devices are removed, and the people you chat
-              with see that your security code changed. You can restore your history with your recovery code. It needs a
-              recent sign-in.
+              with see that your security code changed. You can restore your history with your recovery code.
             </p>
             <div className="row-actions">
               <button className="btn small danger" onClick={() => void startOver()}>

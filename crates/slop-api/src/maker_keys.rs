@@ -4,9 +4,10 @@
 //! register an Ed25519 SSH public key, sign each file with
 //! `ssh-keygen -Y sign -f <key> -n slop-release <file>`, and attach the `.sig` beside it.
 //!
-//! Adding a key needs a recent sign-in or passkey (step-up), and the key only works 72 hours
-//! after it's added; the maker is told straight away, so a key added by someone with a stolen
-//! session can be removed before it signs anything. Removing one works at once.
+//! Any signed-in session may add a key (no "confirm it's you" first: the owner's decision of
+//! 2026-10-25, SECURITY §4.3), and the key only works 72 hours after it's added; the maker is
+//! told straight away, so a key added by someone with a stolen session can be removed before it
+//! signs anything. Removing one works at once.
 
 use axum::{
     Json, Router,
@@ -20,7 +21,7 @@ use uuid::Uuid;
 
 use crate::{
     AppState,
-    auth::session::{self, CurrentUser},
+    auth::session::CurrentUser,
     error::{ApiError, ApiResult},
 };
 
@@ -74,7 +75,6 @@ async fn add(
     user: CurrentUser,
     Json(b): Json<NewKey>,
 ) -> ApiResult<(StatusCode, Json<KeyInfo>)> {
-    session::require_recent_sign_in(&state.db, &user).await?;
     let name = b.name.trim();
     if name.is_empty() || name.chars().count() > 60 {
         return Err(ApiError::invalid(

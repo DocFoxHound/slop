@@ -151,15 +151,13 @@ struct Approved {
 }
 
 /// The signed-in user approves the device. Cookie-authenticated, so the CSRF layer applies.
-/// It needs a sign-in (or passkey confirmation) from the last few minutes: the new desktop
-/// session starts out "freshly signed in", so an old or stolen session must not be able to mint
-/// one for itself (security review, 2026-10-22).
+/// Any signed-in session may approve, no "confirm it's you" first (the owner's decision of
+/// 2026-10-25, SECURITY §4.3).
 async fn approve(
     State(state): State<AppState>,
     user: CurrentUser,
     Path(id): Path<Uuid>,
 ) -> ApiResult<Json<Approved>> {
-    crate::auth::session::require_recent_sign_in(&state.db, &user).await?;
     let code = new_token();
     let row: Option<(i32, String)> = sqlx::query_as(
         "update desktop_auth_requests set approved_by = $2, code_hash = $3

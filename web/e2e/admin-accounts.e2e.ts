@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Accounts in the admin panel: finding one, its record, warning, suspending, reinstating,
-// passkey grace, fixing a profile or a team, and making someone staff from their record.
+// fixing a profile or a team, and making someone staff from their record.
 // What changes here is Sam's (who never signs in), Olly's (put back as he was) or made here.
 import { call, closePages, newPage, newTeam, ok, tag } from "./admin-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
@@ -53,7 +53,7 @@ test("finding accounts by name or People handle, and an account's record", async
   await expect(page.getByRole("button", { name: "Suspend" })).toHaveCount(0);
 });
 
-test("warning, suspending and reinstating an account, and passkey grace", async ({ page }) => {
+test("warning, suspending and reinstating an account", async ({ page }) => {
   await signIn(page, "admin");
   await page.goto(`/admin?tab=users&user=${ids.sam}`);
   await expect(page.getByRole("heading", { name: "Sam Seed", level: 2 })).toBeVisible();
@@ -85,18 +85,8 @@ test("warning, suspending and reinstating an account, and passkey grace", async 
   await page.getByRole("button", { name: "Reinstate" }).click();
   await expect(page.getByText("SUSPENDED", { exact: true })).toHaveCount(0);
   await expect(decisions.getByText(/suspend_account \(harassment\) about Sam Seed .* · reversed/)).toBeVisible();
-
-  // Passkey grace: how staff checked it's them.
-  await page.getByRole("button", { name: "Passkey grace" }).click();
-  const grace = page.getByRole("textbox", { name: "Passkey grace: reason" });
-  await grace.fill("Asked");
-  await page.getByRole("button", { name: "Passkey grace" }).click();
-  await expect(page.getByRole("alert")).toHaveText("say how you checked it's them, in 10 to 1000 characters");
-  await grace.fill("Video call; matched the ID on their payout account.");
-  await page.getByRole("button", { name: "Passkey grace" }).click();
-  await expect(page.getByRole("alert")).toHaveCount(0);
-  const audit = await ok("admin", "GET", "/v1/admin/audit?q=account.passkey_grace");
-  expect(audit.some((e: { subject: string }) => e.subject === ids.sam)).toBe(true);
+  // Passkeys aren't required (since 2026-10-25), so there's no passkey grace to give.
+  await expect(page.getByRole("button", { name: "Passkey grace" })).toHaveCount(0);
 });
 
 test("staff can't act on their own account, and a suspension may wait for a second person", async ({ page }) => {
