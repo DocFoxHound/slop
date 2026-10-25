@@ -110,7 +110,7 @@ test("staff can't act on their own account, and a suspension may wait for a seco
   await suspend.getByRole("textbox", { name: /The facts/ }).fill("Spam in every review.");
   await suspend.getByRole("button", { name: "Suspend" }).click();
   await expect(
-    page.getByRole("status").filter({ hasText: "Recorded. It happens once another staff member approves it under Waiting for approval." }),
+    page.getByRole("status").filter({ hasText: "Recorded. It happens once another staff member approves it under Review queue → Second approvals." }),
   ).toBeVisible();
   await expect(page.getByText("SUSPENDED", { exact: true })).toHaveCount(0);
 });

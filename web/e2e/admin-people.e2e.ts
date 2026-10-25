@@ -3,7 +3,7 @@
 // outcome suggested, closed unresolved) and a disputed review (removed with a statement of
 // reasons). Cleo hires Vera for each, as the seed does; the seeded problem and dispute stay
 // open for the other tests (what staff would send about them is checked without sending it).
-import { acceptedJob, call, closePages, completedJob, newPage, ok, seeDecisions, tag } from "./admin-helpers";
+import { acceptedJob, call, closePages, completedJob, newPage, ok, openItem, seeDecisions, tag } from "./admin-helpers";
 import { expect, signIn, test } from "./fixtures";
 
 test.afterEach(closePages);
@@ -16,7 +16,7 @@ test("a People problem: the record read, an outcome suggested, then closed unres
 
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "problems", title);
   const problem = admin.getByRole("listitem").filter({ has: admin.getByText(title, { exact: true }) });
   await expect(problem.getByText(/Vera Okafor and Cleo Client · opened by the client ·/)).toBeVisible();
   await expect(problem.getByText(`Nothing has arrived and the due date passed (${t}).`)).toBeVisible();
@@ -61,7 +61,7 @@ test("a review dispute: the review removed, with a statement of reasons for its 
 
   const admin = await newPage(browser);
   await signIn(admin, "admin");
-  await admin.goto("/admin?tab=queue");
+  await openItem(admin, "disputes", review);
   const dispute = admin.getByRole("listitem").filter({ hasText: review });
   await expect(dispute.getByText(/Cleo Client on Vera Okafor: 👎 Slop/)).toBeVisible();
   await expect(dispute.getByText(`The client wants free work for removing it (${t}).`)).toBeVisible();
@@ -94,7 +94,7 @@ test("a review dispute kept, or kept with a note: what staff send", async ({ pag
     await route.fulfill({ status: 204 });
   });
   await signIn(page, "admin");
-  await page.goto("/admin?tab=queue");
+  await openItem(page, "disputes", "Make me a second sign for free or this review stays.");
   const dispute = page.getByRole("listitem").filter({ hasText: "Make me a second sign for free or this review stays." });
   await expect(dispute.getByText(/Creative's dispute/)).toBeVisible();
   await dispute.getByRole("button", { name: "Keep it" }).click();

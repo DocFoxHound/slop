@@ -25,6 +25,8 @@
 //                   server donation to Lantern Keep; opened the "A Linux build" bounty; in Night
 //                   Owls and Open Crew.
 //   pendingCreative Remy Pending: People page remy-sounds, portfolio waiting for review.
+//   inboxCreative   Ivy Inbox: People page ivy-inbox, first portfolio waiting for review; the
+//                   review inbox's test (admin-inbox.e2e.ts) approves it, so it's live after.
 //   moderator, reviewer, support, finance, security
 //                   Mo Moderator, Rae Reviewer, Sue Support, Fin Finance, Sec Security: staff with
 //                   that one role (crates/slop-api/src/staff.rs).
@@ -47,7 +49,8 @@
 //     "starship-draft", frozenApp "frozen-fjord", delistedApp "delisted-dash", maker2App
 //     "pocket-golf", releaseInReview (on releaseInReviewApp, "pocket-golf"), clientApp
 //     "cleos-tavern".
-//   People: creativeHandle "vera-pixels", pendingCreativeHandle "remy-sounds". Jobs, all Cleo
+//   People: creativeHandle "vera-pixels", pendingCreativeHandle "remy-sounds", inboxCreativeHandle
+//     "ivy-inbox". Jobs, all Cleo
 //     hiring Vera: deliveredJob (talked over in its conversation; delivered, Cleo to pay),
 //     workingJob (paid up front through Stripe, in progress), requestedJob (just asked),
 //     problemJob (in progress; Cleo opened a problem), completedJob (paid and done; Cleo's review
@@ -59,9 +62,9 @@
 //   Admin queues: 3 open reports (report is one's reference), 2 appeals (suspensionDecision,
 //     delistDecision), staffAction (an AI agent asked to make Sam support staff: it waits for a
 //     person), a server alert, a possible-abuse signal, and the release, pictures, repository
-//     move, portfolio, People problem and review dispute above. No donation pauses and no
-//     shelves (admin.e2e.ts expects none), and no AI messages beyond Mia's two
-//     (ai-messages.e2e.ts counts them).
+//     move, portfolios (Remy's and Ivy's), People problem and review dispute above. No donation
+//     pauses and no shelves (admin.e2e.ts expects none), and no AI messages
+//     beyond Mia's two (ai-messages.e2e.ts counts them).
 //   Unread notifications: most accounts have some.
 //
 // Payments are Stripe, faked (e2e_server/fake_stripe.rs): checkout links lead to its "Fake
@@ -81,6 +84,7 @@ export type Who =
   | "creative"
   | "client"
   | "pendingCreative"
+  | "inboxCreative"
   | "moderator"
   | "reviewer"
   | "support"
@@ -112,6 +116,7 @@ export type Id =
   | "claimedBounty"
   | "creativeHandle"
   | "pendingCreativeHandle"
+  | "inboxCreativeHandle"
   | "clientApp"
   | "deliveredJob"
   | "workingJob"

@@ -286,5 +286,8 @@ Every decision about a person is recorded, explained to them with the rule and t
 be appealed. Write the facts so a stranger would understand them, without guessing at intent.
 
 **MCP:** the same API is at `POST /v1/admin/mcp` as Model Context Protocol tools (JSON-RPC over
-HTTP, with the same `Authorization` header). For Claude Code:
-`claude mcp add --transport http slop-admin {origin}/v1/admin/mcp --header "Authorization: Bearer slopadm_…"`.
+HTTP, with the same `Authorization` header). The admin keeps the token in an environment variable,
+`SLOP_ADMIN_TOKEN`, saved in their own terminal, and connects with a reference to it, e.g. for
+Claude Code: `claude mcp add --transport http --scope user slop-admin {origin}/v1/admin/mcp --header 'Authorization: Bearer ${SLOP_ADMIN_TOKEN}'`.
+Never print the token, never ask for it in the chat, and if you see it in a conversation, tell the
+admin to revoke it and make a new one.

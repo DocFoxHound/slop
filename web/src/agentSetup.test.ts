@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import { OSES, TOOLS, checkCommand, codexConfig, connectCommand, guessOs, saveCommand } from "./agentSetup";
+import { OSES, SETUPS, TOOLS, checkCommand, codexConfig, connectCommand, guessOs, saveCommand } from "./agentSetup";
 
 const SECRET = "slopmk_abc123DEF-456_xyz";
 const URL = "https://slopai.games/v1/maker/mcp";
@@ -38,6 +38,32 @@ describe("setting up an AI tool without pasting the token anywhere", () => {
     );
     expect(connectCommand("other", URL)).toBeUndefined();
     expect(codexConfig(URL)).toBe('[mcp_servers.slop]\nurl = "https://slopai.games/v1/maker/mcp"\nbearer_token_env_var = "SLOP_TOKEN"');
+  });
+
+  it("a staff token goes in SLOP_ADMIN_TOKEN and connects to the admin tools", () => {
+    const staff = SETUPS.staff;
+    const secret = "slopadm_abc123DEF-456_xyz";
+    const admin = "https://slopai.games/v1/admin/mcp";
+    expect(saveCommand("windows", secret, staff)).toBe(`setx SLOP_ADMIN_TOKEN "${secret}"`);
+    expect(saveCommand("linux", secret, staff)).toBe(`echo 'export SLOP_ADMIN_TOKEN="${secret}"' >> ~/.bashrc`);
+    expect(checkCommand("macos", staff)).toBe(
+      '[ -n "$SLOP_ADMIN_TOKEN" ] && echo "SLOP_ADMIN_TOKEN is saved" || echo "SLOP_ADMIN_TOKEN is missing"',
+    );
+    expect(connectCommand("claude", admin, staff)).toBe(
+      "claude mcp add --transport http --scope user slop-admin https://slopai.games/v1/admin/mcp --header 'Authorization: Bearer ${SLOP_ADMIN_TOKEN}'",
+    );
+    expect(connectCommand("codex", admin, staff)).toBe(
+      "codex mcp add slop-admin --url https://slopai.games/v1/admin/mcp --bearer-token-env-var SLOP_ADMIN_TOKEN",
+    );
+    expect(codexConfig(admin, staff)).toBe(
+      '[mcp_servers.slop-admin]\nurl = "https://slopai.games/v1/admin/mcp"\nbearer_token_env_var = "SLOP_ADMIN_TOKEN"',
+    );
+    // Only the save step has the token.
+    for (const { id: os } of OSES) {
+      expect(checkCommand(os, staff)).not.toContain("slopadm_");
+      for (const { id: tool } of TOOLS) expect(connectCommand(tool, admin, staff) ?? "").not.toContain("slopadm_");
+    }
+    expect(staff.firstPrompt).toMatch(/^Read review_guide, then /);
   });
 
   it("guesses the computer from the browser", () => {

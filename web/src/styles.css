@@ -1242,3 +1242,50 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
   .downloads-panel { left: 0; }
 }
 /* ==== end Library ============================================================================= */
+/* ---- Admin → Review queue as an inbox (pages/admin/Inbox.tsx) -------------------------------
+   Categories on the left with counts, one line per item, the full item when opened. On a phone
+   the categories become a menu and each line wraps. Kept in one block. */
+.admin-tab-count { display: inline-block; min-width: 20px; padding: 0 6px; border-radius: 999px; background: var(--slime-soft); color: var(--slime); font-size: 11px; font-weight: 800; line-height: 18px; text-align: center; }
+.inbox { display: grid; grid-template-columns: 236px minmax(0, 1fr); gap: 24px; align-items: start; margin-top: 12px; }
+.inbox-nav { position: sticky; top: 12px; display: grid; gap: 14px; }
+.inbox-hide { justify-self: start; }
+.inbox-group-label { margin: 0 0 4px 12px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.inbox-group ul { list-style: none; margin: 0; padding: 0; display: grid; gap: 2px; }
+.inbox-box { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 7px 10px 7px 12px; border-radius: 8px; border-left: 3px solid transparent; color: var(--text-2); font-weight: 600; text-decoration: none !important; }
+.inbox-box:hover { background: var(--panel-2); color: var(--text); }
+.inbox-box.on { background: var(--panel-2); color: var(--text); border-left-color: var(--slime); }
+.inbox-box.empty { color: var(--muted); font-weight: 500; }
+.inbox-count { min-width: 24px; padding: 0 7px; border-radius: 999px; background: var(--panel-3); color: var(--text); font-size: 12px; font-weight: 700; line-height: 20px; text-align: center; }
+.inbox-box:not(.empty) .inbox-count { background: var(--slime-soft); color: var(--slime); }
+.inbox-select { display: none; }
+.inbox-announce:empty { display: none; }
+.inbox-list-head { display: flex; align-items: baseline; justify-content: space-between; gap: 12px; flex-wrap: wrap; }
+.inbox-list-head .section-title { margin-top: 0; }
+.inbox-rows { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); overflow: hidden; }
+.inbox-row + .inbox-row { border-top: 1px solid var(--line); }
+.inbox-row:hover, .inbox-row.asking { background: var(--panel-2); }
+.inbox-line { display: grid; grid-template-columns: minmax(0, 2.4fr) minmax(0, 3fr) auto 4.6em auto; align-items: center; gap: 12px; padding: 8px 12px; min-height: 44px; }
+.inbox-open { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.inbox-open:hover b { color: var(--slime); }
+.inbox-blurb { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.inbox-pill { justify-self: start; white-space: nowrap; }
+.inbox-age { text-align: right; white-space: nowrap; }
+.inbox-actions { display: flex; gap: 6px; justify-content: flex-end; }
+.inbox-confirm { display: grid; gap: 8px; padding: 4px 12px 12px; }
+.inbox-confirm p { margin: 0; }
+.inbox-confirm label { display: grid; gap: 4px; font-size: 13px; }
+.inbox-confirm input { background: var(--panel); border: 1px solid var(--line); border-radius: 8px; padding: 7px 10px; color: var(--text); }
+.inbox-detail > p:first-child { margin-top: 0; }
+@media (max-width: 760px) {
+  .inbox { grid-template-columns: minmax(0, 1fr); gap: 12px; }
+  .inbox-nav { display: none; }
+  .inbox-select { display: grid; gap: 4px; font-size: 13px; font-weight: 600; }
+  .inbox-select select { padding: 8px 10px; font-size: 15px; }
+  .inbox-line { grid-template-columns: minmax(0, 1fr) auto; grid-template-areas: "open age" "blurb blurb" "pill actions"; gap: 6px 10px; }
+  .inbox-open { grid-area: open; white-space: normal; }
+  .inbox-blurb { grid-area: blurb; }
+  .inbox-pill { grid-area: pill; }
+  .inbox-age { grid-area: age; }
+  .inbox-actions { grid-area: actions; }
+}
+/* ---- end of the review inbox ---- */

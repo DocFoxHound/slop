@@ -3,42 +3,71 @@
 // counts, alerts and server checks, the audit log, AI reviewer tokens, staff roles and the
 // actions waiting for a second approval.
 //
-// Making tokens, changing staff and approving actions need a sign-in from the last ten minutes
-// (SECURITY §4.3), and the seeded sessions are as old as the test server: these run first.
-import { adminToken, call, closePages, newPage, ok, tag, withToken } from "./admin-helpers";
+// Changing staff and approving actions need a sign-in from the last ten minutes (SECURITY §4.3),
+// and the seeded sessions are as old as the test server: these run first. Making an AI reviewer
+// token doesn't (decided 2026-10-25).
+import { adminToken, call, closePages, inbox, inboxRow, newPage, ok, tag, withToken } from "./admin-helpers";
 import type { Locator } from "@playwright/test";
 
 import { expect, ids, server, signIn, test } from "./fixtures";
 
 test.afterEach(closePages);
 
-test("AI reviewer tokens: made with a scope and an expiry, shown once, listed, and revoked", async ({ page }) => {
+test("AI reviewer tokens: made with a scope and an expiry, set up without the token in any command, listed, and revoked", async ({
+  page,
+}) => {
   await signIn(page, "admin");
+  // The seeded session is old: making a token doesn't ask to sign in again.
   await page.goto("/admin?tab=ai");
   const name = `Picture checks ${tag()}`;
   await page.getByRole("textbox", { name: "Name" }).fill(name);
+  // The same lifetimes as makers' tokens; moderate ones up to 3 months.
+  const expires = page.getByRole("combobox", { name: "Expires after" });
+  await expect(expires.locator("option")).toHaveText(["1 day", "7 days", "30 days", "3 months", "6 months", "12 months"]);
+  await page.getByRole("combobox", { name: "Can" }).selectOption({ label: "Also suspend accounts and withdraw releases (moderate)" });
+  await expect(expires.locator("option")).toHaveText(["1 day", "7 days", "30 days", "3 months"]);
   await page.getByRole("combobox", { name: "Can" }).selectOption({ label: "Also approve and reject (review)" });
-  await page.getByRole("combobox", { name: "Expires after" }).selectOption({ label: "30 days" });
+  await expires.selectOption({ label: "30 days" });
   await page.getByRole("button", { name: "Make token" }).click();
 
-  // The secret, once, with the prompt and the MCP command that carry it.
-  await expect(page.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
-  const secret = (await page.locator("pre.code-block").first().innerText()).trim();
+  // The setup makers get: a warning, the token once, then steps that only refer to it.
+  const setup = page.getByRole("region", { name: `Set up “${name}” on your computer` });
+  await expect(setup.getByText("Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.")).toBeVisible();
+  await expect(setup.getByText(/It's a password for your Slop staff account/)).toBeVisible();
+  await expect(setup.getByText(/Copy it now: Slop won't show this token again\./)).toBeVisible();
+  const secret = (await setup.locator("pre.copy-row-secret").innerText()).trim();
   expect(secret).toMatch(/^slopadm_/);
-  await expect(page.getByText(`${server.url}/v1/admin/review/guide`)).toBeVisible();
-  await expect(page.getByText(`Authorization: Bearer ${secret}`).first()).toBeVisible();
+  // Only the token itself and the step that saves it have it.
+  const withSecret = setup.locator("pre").filter({ hasText: secret });
+  await expect(withSecret).toHaveCount(2);
+  await expect(withSecret.nth(1)).toHaveText(/SLOP_ADMIN_TOKEN/);
+  await expect(page.getByText(/claude mcp add .*slopadm_/)).toHaveCount(0);
+  await expect(setup.getByText("Save the token on your computer")).toBeVisible();
+  const tools = setup.getByRole("tablist", { name: "Your AI tool" });
+  await tools.getByRole("tab", { name: "Claude Code" }).click();
   await expect(
-    page.getByText(`claude mcp add --transport http slop-admin ${server.url}/v1/admin/mcp --header "Authorization: Bearer ${secret}"`),
+    setup.getByText(
+      `claude mcp add --transport http --scope user slop-admin ${server.url}/v1/admin/mcp --header 'Authorization: Bearer \${SLOP_ADMIN_TOKEN}'`,
+    ),
   ).toBeVisible();
+  await tools.getByRole("tab", { name: "Codex (OpenAI)" }).click();
+  await expect(
+    setup.getByText(`codex mcp add slop-admin --url ${server.url}/v1/admin/mcp --bearer-token-env-var SLOP_ADMIN_TOKEN`),
+  ).toBeVisible();
+  for (const tool of ["Grok Build (xAI)", "Other AI tools"]) {
+    await tools.getByRole("tab", { name: tool }).click();
+    await expect(setup.locator("pre").filter({ hasText: secret })).toHaveCount(2);
+  }
+  await expect(setup.getByText(/^Read review_guide, then /)).toBeVisible();
   await expect(page.getByRole("textbox", { name: "Name" })).toHaveValue("");
-  await page.getByRole("button", { name: "Done" }).click();
-  await expect(page.getByText("Copy it now: Slop won't show this token again.")).toHaveCount(0);
+  await setup.getByRole("button", { name: "Done" }).click();
+  await expect(setup).toHaveCount(0);
 
-  // It works, it's listed with its scope and whose it is, and revoking ends it.
+  // It works, it's listed with its scope, whose it is and when it expires, and revoking ends it.
   expect((await withToken(secret, "GET", "/v1/admin/status")).status).toBe(200);
   const row = page.getByRole("listitem").filter({ hasText: name });
   await expect(row.getByText("REVIEW", { exact: true })).toBeVisible();
-  await expect(row.getByText(/for Ada Admin · made .* · expires/)).toBeVisible();
+  await expect(row.getByText(/for Ada Admin · made .* · never used · expires in 30 days/)).toBeVisible();
   await row.getByRole("button", { name: "Revoke" }).click();
   await expect(row.getByText("REVOKED", { exact: true })).toBeVisible();
   await expect(row.getByRole("button", { name: "Revoke" })).toHaveCount(0);
@@ -71,18 +100,24 @@ test("AI reviewer tokens: expired ones say so, a refusal is shown, and only secu
   await expect(old.getByText(/never used/)).toBeVisible();
   await expect(old.getByRole("button", { name: "Revoke" })).toHaveCount(0);
 
-  // Making one needs a recent sign-in: the refusal shows, and no secret does.
+  // An expired token of your own offers a replacement with its settings.
+  await old.getByRole("button", { name: "Make a replacement for Old picture checker" }).click();
+  await expect(admin.getByText(/Making a replacement for “Old picture checker”, with the same settings/)).toBeVisible();
+  await expect(admin.getByRole("textbox", { name: "Name" })).toHaveValue("Old picture checker");
+  await expect(admin.getByRole("combobox", { name: "Expires after" })).toHaveValue("7");
+
+  // A refusal shows, and no secret does.
   await admin.route("**/v1/admin/tokens", (route) =>
     route.request().method() === "POST"
       ? route.fulfill({
-          status: 403,
-          json: { error: { code: "step_up_required", message: "confirm it's you first: sign in again, or use a passkey" } },
+          status: 422,
+          json: { error: { code: "invalid", message: "name: give it a name of up to 60 characters" } },
         })
       : route.fallback(),
   );
   await admin.getByRole("textbox", { name: "Name" }).fill("Late night checker");
   await admin.getByRole("button", { name: "Make token" }).click();
-  await expect(admin.getByRole("alert")).toHaveText("confirm it's you first: sign in again, or use a passkey");
+  await expect(admin.getByRole("alert")).toHaveText("name: give it a name of up to 60 characters");
   await expect(admin.getByText("Copy it now")).toHaveCount(0);
 
   // A reviewer can't see or make them.
@@ -115,19 +150,24 @@ test("an AI agent's staff change waits for a person, who approves one and turns 
 
   await signIn(page, "admin");
   await page.goto("/admin");
-  await expect(page.getByRole("link", { name: /^\d+ Waiting for a second approval$/ })).toBeVisible();
-  await page.getByRole("link", { name: /Waiting for a second approval$/ }).click();
-  const waiting = page.locator("section").filter({ has: page.getByRole("heading", { name: /^Waiting for approval/ }) });
-  await expect(waiting.getByText("Sensitive actions need 1 different staff members")).toBeVisible();
+  await expect(page.getByRole("link", { name: /^\d+ Second approvals$/ })).toBeVisible();
+  await page.getByRole("link", { name: /Second approvals$/ }).click();
+  const waiting = page.getByRole("list", { name: "Second approvals" });
   const support = waiting.getByRole("listitem").filter({ hasText: "Give the support role to Olly Overdue" });
   const finance = waiting.getByRole("listitem").filter({ hasText: "Give the finance role to Olly Overdue" });
-  await expect(support.getByText(/Asked by AI reviewer "Staffing agent .*" for Ada Admin .* · 0 of 1 approvals/)).toBeVisible();
+  await expect(support.getByText(/Asked by AI reviewer "Staffing agent .*" for Ada Admin/)).toBeVisible();
+  await expect(support.getByText("0 OF 1 APPROVALS")).toBeVisible();
   // The seeded request (Sam) stays where it is.
   await expect(waiting.getByRole("listitem").filter({ hasText: "Sam Seed" })).toHaveCount(1);
+  // Opened, it says how many approvals a sensitive action needs.
+  await support.getByRole("link").click();
+  await expect(page.getByText("Sensitive actions need 1 different staff members")).toBeVisible();
+  await page.goBack();
 
-  await finance.getByRole("button", { name: "Turn down" }).click();
+  await finance.getByRole("button", { name: /^Deny / }).click();
+  await finance.getByRole("button", { name: "Yes, deny" }).click();
   await expect(finance).toHaveCount(0);
-  await support.getByRole("button", { name: "Approve" }).click();
+  await support.getByRole("button", { name: /^Approve / }).click();
   await expect(support).toHaveCount(0);
 
   // Olly is support staff now, and the history says what happened.
@@ -158,18 +198,20 @@ test("waiting for approval: a refusal and a recorded request are both shown", as
   await page.goto("/admin?tab=staff");
   await page.getByRole("checkbox", { name: "Sue Support: reviewer" }).click();
   await expect(
-    page.getByRole("status").filter({ hasText: "Recorded. It happens once another staff member approves it under Waiting for approval." }),
+    page.getByRole("status").filter({ hasText: "Recorded. It happens once another staff member approves it under Review queue → Second approvals." }),
   ).toBeVisible();
 
   // Whoever asked can't be the second approval.
   await page.route("**/v1/admin/actions/*/approve", (route) =>
     route.fulfill({ status: 409, json: { error: { code: "conflict", message: "you already approved this: it needs someone else" } } }),
   );
-  await page.goto("/admin?tab=queue");
-  const waiting = page.locator("section").filter({ has: page.getByRole("heading", { name: /^Waiting for approval/ }) });
-  await waiting.getByRole("listitem").filter({ hasText: "Sam Seed" }).getByRole("button", { name: "Approve" }).click();
-  await expect(waiting.getByRole("alert")).toHaveText("you already approved this: it needs someone else");
-  await expect(waiting.getByRole("listitem").filter({ hasText: "Sam Seed" })).toHaveCount(1);
+  await page.goto(inbox("approvals"));
+  const sam = inboxRow(page, "Sam Seed");
+  await sam.getByRole("button", { name: /^Approve / }).click();
+  await expect(page.getByRole("alert")).toHaveText("you already approved this: it needs someone else");
+  await expect(sam).toHaveCount(1);
+  // Focus stays on the button that was refused.
+  await expect(sam.getByRole("button", { name: /^Approve / })).toBeFocused();
 });
 
 test("the Staff tab: owners give and take roles, add and remove staff; others can't", async ({ browser }) => {
@@ -244,7 +286,7 @@ test("every tab opens for an owner", async ({ page }) => {
   await signIn(page, "admin");
   await page.goto("/admin");
   const tabs: Array<[string, Locator]> = [
-    ["Review queue", page.getByRole("heading", { name: /^Reports \(/ })],
+    ["Review queue", page.getByRole("navigation", { name: "Review categories" })],
     ["Apps", page.getByRole("link", { name: "Lantern Keep", exact: true })],
     ["Accounts", page.getByRole("textbox", { name: /Find an account/ })],
     ["Front page", page.getByText("Featured on the front page")],
@@ -258,8 +300,10 @@ test("every tab opens for an owner", async ({ page }) => {
     ["Home", page.getByRole("heading", { name: "Needs you" })],
   ];
   for (const [tab, shows] of tabs) {
-    await page.getByRole("tab", { name: tab, exact: true }).click();
-    await expect(page.getByRole("tab", { name: tab, exact: true })).toHaveAttribute("aria-selected", "true");
+    // The queue's tab also says how much is waiting.
+    const name = tab === "Review queue" ? /^Review queue \d+ waiting$/ : tab;
+    await page.getByRole("tab", { name, exact: true }).click();
+    await expect(page.getByRole("tab", { name, exact: true })).toHaveAttribute("aria-selected", "true");
     await expect(shows).toBeVisible();
     await expect(page.getByRole("alert")).toHaveCount(0);
   }
@@ -278,7 +322,10 @@ test("staff with one role see what their role allows, and refusals for the rest"
   await expect(reviewer.getByText("The payments record is for staff with the finance role.")).toBeVisible();
   // Their own work is there.
   await reviewer.goto("/admin?tab=queue");
-  await expect(reviewer.getByRole("heading", { name: /^Releases to review/ })).toBeVisible();
+  const categories = reviewer.getByRole("navigation", { name: "Review categories" });
+  await expect(categories.getByRole("link", { name: /^New releases \d+ waiting$/ })).toBeVisible();
+  // Legal requests are for staff who take sensitive actions: not a category for them.
+  await expect(categories.getByRole("link", { name: /^Legal requests/ })).toHaveCount(0);
 
   const finance = await newPage(browser);
   await signIn(finance, "finance");
@@ -298,36 +345,38 @@ test("Home counts what's waiting, links to it, and finds apps and accounts", asy
   const queue = await ok("admin", "GET", "/v1/admin/queue");
   const actions = await ok("admin", "GET", "/v1/admin/actions");
   const ops = await ok("admin", "GET", "/v1/admin/ops");
+  const ai = await ok("admin", "GET", "/v1/admin/ai-messages?status=open");
   await page.goto("/admin");
   const counts: Array<[number, string]> = [
     [ops.length, "Server alerts"],
-    [actions.actions.length, "Waiting for a second approval"],
+    [actions.actions.length, "Second approvals"],
     [queue.reports.length, "Reports"],
     [queue.appeals.length, "Appeals"],
-    [queue.rescans.length, "Live releases a re-scan flagged"],
-    [queue.releases.length, "Releases to review"],
-    [queue.changes.length, "Changes to review"],
-    [queue.media.length, "Pictures to review"],
-    [queue.portfolios.length, "People portfolios to review"],
+    [queue.rescans.length, "Re-scan flags"],
+    [queue.releases.length, "New releases"],
+    [queue.changes.length, "Release holds & moves"],
+    [queue.media.length, "Store pictures"],
+    [queue.portfolios.length, "People pages"],
     [queue.problems.length, "People problems"],
     [queue.review_disputes.length, "Review disputes"],
-    [queue.abuse.length, "Possible abuse"],
-    [queue.ready_to_list.length, "Ready for the store"],
+    [queue.abuse.length, "Abuse alerts"],
+    [queue.ready_to_list.length, "Apps to list"],
+    [ai.length, "AI messages"],
   ];
   for (const [n, label] of counts) {
     expect(n, label).toBeGreaterThan(0);
     await expect(page.getByRole("link", { name: `${n} ${label}`, exact: true })).toBeVisible();
   }
   // Nothing paused, so nothing about pauses.
-  await expect(page.getByRole("link", { name: /Makers asking for donations back/ })).toHaveCount(0);
+  await expect(page.getByRole("link", { name: /Donation pause requests/ })).toHaveCount(0);
 
-  // Each goes to its part of the queue.
+  // Each goes to its category in the queue.
   await page.getByRole("link", { name: /^\d+ Appeals$/ }).click();
-  await expect(page).toHaveURL(/tab=queue#appeals$/);
-  await expect(page.getByRole("heading", { name: /^Appeals \(/ })).toBeInViewport();
+  await expect(page).toHaveURL(/tab=queue&box=appeals$/);
+  await expect(page.getByRole("heading", { name: `Appeals (${queue.appeals.length})` })).toBeVisible();
   await page.goBack();
   await page.getByRole("link", { name: /^\d+ Reports$/ }).click();
-  await expect(page.getByRole("heading", { name: /^Reports \(/ })).toBeInViewport();
+  await expect(page.getByRole("heading", { name: /^Reports \(/ })).toBeVisible();
 
   // Find: an account.
   await page.getByRole("tab", { name: "Home" }).click();
