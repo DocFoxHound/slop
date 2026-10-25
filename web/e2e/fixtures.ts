@@ -27,11 +27,14 @@
 //   pendingCreative Remy Pending: People page remy-sounds, portfolio waiting for review.
 //   inboxCreative   Ivy Inbox: People page ivy-inbox, first portfolio waiting for review; the
 //                   review inbox's test (admin-inbox.e2e.ts) approves it, so it's live after.
+//   designer        Dee Designer: People page dee-design, no portfolio yet; her linked GitHub
+//                   account ("dee-gh") owns e2e/dee-design, a portfolio with its own page design
+//                   (e2e_server/main.rs), which people-design.e2e.ts checks and approves.
 //   moderator, reviewer, support, finance, security
 //                   Mo Moderator, Rae Reviewer, Sue Support, Fin Finance, Sec Security: staff with
 //                   that one role (crates/slop-api/src/staff.rs).
 //   suspended       Sid Suspended: suspended by staff for harassment; appealed.
-//   pictured        Pia Picture: the only account with a linked sign-in (GitHub "pia-gh", whose
+//   pictured        Pia Picture: the only account with a linked sign-in besides Dee (GitHub "pia-gh", whose
 //                   picture the fake GitHub serves), for the profile picture tests.
 //   newcomer        Nia Newcomer: accepted only the Terms of Service (no Publisher Agreement or
 //                   People Terms yet), no apps.
@@ -85,6 +88,7 @@ export type Who =
   | "client"
   | "pendingCreative"
   | "inboxCreative"
+  | "designer"
   | "moderator"
   | "reviewer"
   | "support"
@@ -117,6 +121,7 @@ export type Id =
   | "creativeHandle"
   | "pendingCreativeHandle"
   | "inboxCreativeHandle"
+  | "designerHandle"
   | "clientApp"
   | "deliveredJob"
   | "workingJob"

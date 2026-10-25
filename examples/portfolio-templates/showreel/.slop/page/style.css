@@ -1,0 +1,80 @@
+/* Showreel: a cinema-dark page with one big featured video, then the rest in a row. */
+.page {
+  background: radial-gradient(circle at 50% 0%, #2a2f45 0%, #0b0d14 70%);
+  color: #eef0f7;
+  padding: 40px 32px 48px;
+  font-family: "Inter", sans-serif;
+}
+
+.title {
+  text-align: center;
+  margin-bottom: 24px;
+}
+
+.eyebrow {
+  margin: 0;
+  font-size: 13px;
+  letter-spacing: 0.25em;
+  text-transform: uppercase;
+  color: #ffb454;
+}
+
+.title h2 {
+  margin: 4px 0 0;
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 72px;
+  font-weight: 400;
+  letter-spacing: 0.04em;
+  line-height: 1;
+  animation: rise 0.8s ease-out both;
+}
+
+.featured {
+  max-width: 960px;
+  margin: 0 auto;
+  box-shadow: 0 24px 60px rgb(0 0 0 / 55%);
+  border-radius: 12px;
+}
+
+.more h3 {
+  font-family: "Bebas Neue", sans-serif;
+  font-size: 32px;
+  font-weight: 400;
+  letter-spacing: 0.06em;
+  margin: 40px 0 12px;
+  color: #ffb454;
+}
+
+.row {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+  gap: 16px;
+}
+
+.outro {
+  margin: 32px auto 0;
+  max-width: 560px;
+  text-align: center;
+  color: #c7cbe0;
+}
+
+@keyframes rise {
+  from {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 24px 16px 32px;
+  }
+
+  .title h2 {
+    font-size: 48px;
+  }
+}

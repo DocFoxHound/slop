@@ -1,0 +1,88 @@
+/* Studio: a clean, bright layout with team cards and the services placed by the page itself. */
+.page {
+  background: #f4f6fb;
+  color: #1c2233;
+  padding: 40px 32px;
+  font-family: "Inter", sans-serif;
+}
+
+.hero {
+  background: linear-gradient(120deg, #3b5bdb 0%, #7048e8 100%);
+  color: #ffffff;
+  border-radius: 16px;
+  padding: 32px;
+}
+
+.hero h2 {
+  margin: 0 0 8px;
+  font-size: 34px;
+  line-height: 1.15;
+  font-weight: 800;
+}
+
+.hero p {
+  margin: 0;
+  font-size: 17px;
+  color: #eef0ff;
+}
+
+.page h3 {
+  margin: 36px 0 14px;
+  font-size: 13px;
+  letter-spacing: 0.16em;
+  text-transform: uppercase;
+  color: #3b5bdb;
+}
+
+.people {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(200px, 1fr));
+  gap: 16px;
+}
+
+.person {
+  background: #ffffff;
+  border: 1px solid #dde2ee;
+  border-radius: 12px;
+  padding: 18px;
+  transition: transform 0.2s ease, box-shadow 0.2s ease;
+}
+
+.person:hover {
+  transform: translateY(-2px);
+  box-shadow: 0 8px 20px rgb(28 34 51 / 12%);
+}
+
+.person h4 {
+  margin: 0;
+  font-family: "Pixelify Sans", sans-serif;
+  font-size: 22px;
+}
+
+.role {
+  margin: 2px 0 8px;
+  color: #5a6378;
+  font-size: 14px;
+}
+
+.person p {
+  margin-bottom: 0;
+}
+
+.hire p {
+  max-width: 600px;
+}
+
+@media (max-width: 640px) {
+  .page {
+    padding: 24px 16px;
+  }
+
+  .hero {
+    padding: 24px 20px;
+  }
+
+  .hero h2 {
+    font-size: 26px;
+  }
+}
