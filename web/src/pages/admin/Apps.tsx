@@ -5,7 +5,7 @@
 // Each line's actions are in its "⋯" menu: the record, the store page, the stage, putting it in
 // or taking it out of the store, and withdrawing a release. Taking out and withdrawing ask
 // "Are you sure?" on the line, with the reason the maker or players will read. What the facts
-// mean is in apps.ts; the API is crates/slop-api/src/admin_web.rs (apps).
+// mean is in appFacts.ts; the API is crates/slop-api/src/admin_web.rs (apps).
 
 import { useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
@@ -28,7 +28,7 @@ import {
   STAGE_LABEL,
   type Show,
   type Sort,
-} from "./apps";
+} from "./appFacts";
 import { ActionMessages, DelistButton, ReasonButton, useAction } from "./shared";
 
 export function AppsTab() {

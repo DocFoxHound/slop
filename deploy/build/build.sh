@@ -27,6 +27,15 @@ if [ -d target ] && [ ! -e target/.built-in-container ]; then
 fi
 mkdir -p target && touch target/.built-in-container
 
+# Two files whose names differ only in capitals are one file on Windows, and its build fails.
+if command -v git >/dev/null && git -c safe.directory='*' rev-parse --git-dir >/dev/null 2>&1; then
+  same=$(git -c safe.directory='*' ls-files | sort -f | uniq -di)
+  if [ -n "$same" ]; then
+    echo "names that differ only in capitals (one file on Windows): $same" >"$out/lint.log"
+    fail lint
+  fi
+fi
+
 # Only the release build is stamped with the commit (the tests check a plain build has none).
 commit="${SLOP_COMMIT:-}"
 unset SLOP_COMMIT
