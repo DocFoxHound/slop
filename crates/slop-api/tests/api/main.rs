@@ -5516,7 +5516,8 @@ async fn creatives_go_live_with_a_reviewed_portfolio(db: PgPool) {
             .await,
     )
     .await;
-    assert_eq!(own["status"], "waiting");
+    // A draft: no portfolio sent yet.
+    assert_eq!(own["status"], "draft");
 
     // The portfolio comes from the repository: pictures, a video and a track.
     let head = "b".repeat(40);
@@ -5557,6 +5558,20 @@ async fn creatives_go_live_with_a_reviewed_portfolio(db: PgPool) {
     assert!(
         body["problem"].as_str().unwrap().contains("isn't an MP3"),
         "{body}"
+    );
+    // Still a draft, saying what went wrong.
+    let own = body_json(
+        app.send(req(Method::GET, "/v1/people/loopsmith").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(own["mine"]["state"], "draft");
+    assert!(
+        own["mine"]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("isn't an MP3"),
+        "{own}"
     );
 
     put_raw(

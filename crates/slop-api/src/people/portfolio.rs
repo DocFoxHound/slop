@@ -442,14 +442,18 @@ fn strip_urls(v: &mut serde_json::Value) {
 
 pub async fn approve_set(db: &sqlx::PgPool, id: Uuid, reviewer: &str) -> anyhow::Result<()> {
     let mut tx = db.begin().await?;
-    let row: Option<(Uuid, String, String, bool)> = sqlx::query_as(
-        "select ps.creative_id, ps.status, c.handle, c.portfolio_set_id is not null from portfolio_sets ps
+    /// (creative, status, handle, first approved portfolio, page hidden, can be paid)
+    type Row = (Uuid, String, String, bool, bool, bool);
+    let row: Option<Row> = sqlx::query_as(
+        "select ps.creative_id, ps.status, c.handle, c.portfolio_set_id is null,
+                c.hidden_reason is not null, c.stripe_status = 'active'
+         from portfolio_sets ps
          join creatives c on c.user_id = ps.creative_id where ps.id = $1 for update of ps",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (creative_id, status, handle, was_live) =
+    let (creative_id, status, handle, first, hidden, paid) =
         row.ok_or_else(|| anyhow::anyhow!("no such portfolio"))?;
     anyhow::ensure!(
         status == "pending",
@@ -477,23 +481,36 @@ pub async fn approve_set(db: &sqlx::PgPool, id: Uuid, reviewer: &str) -> anyhow:
         json!({ "set": id }),
     )
     .await?;
-    // The creative hears about every decision on their page, like a maker about a release.
+    let (title, body) = if first && !hidden {
+        (
+            "Your People page is live".to_string(),
+            format!(
+                "Slop approved your portfolio: makers can find your page on People now.{}",
+                if paid {
+                    ""
+                } else {
+                    " To be hired, set up payments under Get paid on your page's editor."
+                }
+            ),
+        )
+    } else {
+        (
+            "Your new portfolio was approved".to_string(),
+            if hidden {
+                "Your People page is still hidden: see the decision under Account → Moderation."
+                    .to_string()
+            } else {
+                "It's on your People page now.".to_string()
+            },
+        )
+    };
     crate::notify::send(
         &mut tx,
         crate::notify::Notice {
             user_id: creative_id,
             category: "moderation",
-            title: if was_live {
-                "Your new portfolio is on your People page".into()
-            } else {
-                "Your People page is live".into()
-            },
-            body: if was_live {
-                "A reviewer approved it: your People page shows it now.".into()
-            } else {
-                "A reviewer approved your portfolio, so anyone can find your People page now."
-                    .into()
-            },
+            title,
+            body,
             link: format!("/people/{handle}"),
             collapse_key: None,
         },
@@ -512,14 +529,18 @@ pub async fn reject_set(
     let reason = reason.trim();
     anyhow::ensure!(!reason.is_empty(), "say why, for the creative");
     let mut tx = db.begin().await?;
-    let row: Option<(Uuid, String, String)> = sqlx::query_as(
-        "select ps.creative_id, ps.status, c.handle from portfolio_sets ps
+    /// (creative, status, handle, an approved portfolio shows)
+    type Row = (Uuid, String, String, bool);
+    let row: Option<Row> = sqlx::query_as(
+        "select ps.creative_id, ps.status, c.handle, c.portfolio_set_id is not null
+         from portfolio_sets ps
          join creatives c on c.user_id = ps.creative_id where ps.id = $1 for update of ps",
     )
     .bind(id)
     .fetch_optional(&mut *tx)
     .await?;
-    let (creative_id, status, handle) = row.ok_or_else(|| anyhow::anyhow!("no such portfolio"))?;
+    let (creative_id, status, handle, live) =
+        row.ok_or_else(|| anyhow::anyhow!("no such portfolio"))?;
     anyhow::ensure!(
         status == "pending",
         "this portfolio isn't waiting for review ({status})"
@@ -547,9 +568,15 @@ pub async fn reject_set(
             user_id: creative_id,
             category: "moderation",
             title: "Your portfolio wasn't approved".into(),
-            // The reviewer's reason, as a maker reads a rejected release's.
-            body: reason.to_string(),
-            link: "/people/me".into(),
+            body: format!(
+                "{reason}\n\nFix it in your repository, then use \"Check my portfolio now\" on your People page's editor: the new one is reviewed again. {}",
+                if live {
+                    "Your page keeps showing the portfolio approved before."
+                } else {
+                    "Only you can see your page until a portfolio is approved."
+                }
+            ),
+            link: "/people/me#portfolio".into(),
             collapse_key: None,
         },
     )
