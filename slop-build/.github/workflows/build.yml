@@ -810,6 +810,9 @@ jobs:
           exec_ = b.get("exec")
           if not isinstance(exec_, str) or not exec_ or not line.match(exec_) or exec_.startswith("/") or ".." in exec_.split("/"):
               raise SystemExit("::error::the build's program path isn't usable")
+          # $GITHUB_ENV only reaches later steps, so check the program here rather than in bash.
+          if not os.path.isfile(os.path.join("slop-dist/app", exec_)):
+              raise SystemExit(f"::error::the build has no {exec_}")
           for k in ("deb_depends", "rpm_requires"):
               if not re.match(r"^[A-Za-z0-9 ,.()<>=_+~:-]*$", b.get(k) or ""):
                   raise SystemExit(f"::error::unexpected {k}")
@@ -828,7 +831,6 @@ jobs:
                       fh.write(f"{k}={v}\n")
           PY
           rm -f slop-dist/app.tar slop-dist/build.json
-          [ -f "slop-dist/app/$SLOP_EXEC" ] || { echo "::error::the build has no $SLOP_EXEC"; exit 1; }
 
       # Optional: sign the Windows program with the maker's SignPath Foundation certificate (free
       # for open-source projects). SignPath checks the build came from this repository on GitHub's
