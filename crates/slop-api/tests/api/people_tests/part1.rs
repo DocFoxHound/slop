@@ -23,7 +23,7 @@ fn roomy(c: &mut Config) {
 }
 
 /// The status and JSON body of a request.
-async fn call(app: &TestApp, r: Req) -> (StatusCode, Value) {
+pub(super) async fn call(app: &TestApp, r: Req) -> (StatusCode, Value) {
     let res = app.send(r).await;
     let status = res.status();
     (status, body_json(res).await)
@@ -45,11 +45,11 @@ async fn call_text(app: &TestApp, r: Req) -> (StatusCode, Option<String>, String
     )
 }
 
-fn post(path: impl Into<String>, cookie: &str, body: Value) -> Req {
+pub(super) fn post(path: impl Into<String>, cookie: &str, body: Value) -> Req {
     req(Method::POST, path).cookie(cookie).json(body)
 }
 
-fn fetch(path: impl Into<String>, cookie: &str) -> Req {
+pub(super) fn fetch(path: impl Into<String>, cookie: &str) -> Req {
     req(Method::GET, path).cookie(cookie)
 }
 
@@ -58,7 +58,7 @@ fn field(body: &Value) -> &str {
     body["error"]["field"].as_str().unwrap_or("")
 }
 
-async fn count(app: &TestApp, sql: &str) -> i64 {
+pub(super) async fn count(app: &TestApp, sql: &str) -> i64 {
     sqlx::query_scalar(sqlx::AssertSqlSafe(sql.to_string()))
         .fetch_one(&app.db)
         .await
@@ -73,7 +73,7 @@ async fn exec(app: &TestApp, sql: &str) {
 }
 
 /// Notification titles a user has, newest first.
-async fn notices(app: &TestApp, user: Uuid) -> Vec<String> {
+pub(super) async fn notices(app: &TestApp, user: Uuid) -> Vec<String> {
     sqlx::query_scalar(
         "select title from notifications where user_id = $1 order by created_at desc",
     )
@@ -84,7 +84,7 @@ async fn notices(app: &TestApp, user: Uuid) -> Vec<String> {
 }
 
 /// A staff member with one role (staff.rs), not an owner.
-async fn staff(app: &TestApp, name: &str, role: &str) -> (Uuid, String) {
+pub(super) async fn staff(app: &TestApp, name: &str, role: &str) -> (Uuid, String) {
     let (id, cookie) = app.user(name, "US").await;
     sqlx::query("update users set is_admin = true where id = $1")
         .bind(id)
@@ -1079,11 +1079,12 @@ async fn creatives_reply_once_to_each_review(db: PgPool) {
 // ---------------------------------------------------------------------------------------------
 // Portfolios and their review (people-006 … people-011)
 
-type Files = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>>;
+pub(super) type Files =
+    std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Vec<u8>>>>;
 
 /// GitHub's raw files for these tests, kept apart from the shared RAW_FILES so tests running at
 /// the same time can't change each other's portfolio.
-async fn raw_files() -> (String, Files) {
+pub(super) async fn raw_files() -> (String, Files) {
     let files: Files = Default::default();
     let served = files.clone();
     let app = Router::new().route(
@@ -1107,7 +1108,7 @@ async fn raw_files() -> (String, Files) {
 }
 
 /// A file in octo/game's `.slop/` at its newest commit (the fake GitHub's "b…b").
-fn put_file(files: &Files, path: &str, bytes: Vec<u8>) {
+pub(super) fn put_file(files: &Files, path: &str, bytes: Vec<u8>) {
     files
         .lock()
         .unwrap()
@@ -1125,7 +1126,7 @@ fn manifest(files: &Files, works: Value) {
 }
 
 /// A creative (not live yet) on a server whose raw files are `files`.
-async fn portfolio_app(db: PgPool) -> (TestApp, Files, Uuid, String) {
+pub(super) async fn portfolio_app(db: PgPool) -> (TestApp, Files, Uuid, String) {
     let (raw, files) = raw_files().await;
     let app = test_app_with(db, |c| {
         c.media.github_raw_base = raw.parse().unwrap();
@@ -1146,7 +1147,7 @@ async fn portfolio_app(db: PgPool) -> (TestApp, Files, Uuid, String) {
     (app, files, id, cookie)
 }
 
-async fn link_github(app: &TestApp, user: Uuid, account: &str) {
+pub(super) async fn link_github(app: &TestApp, user: Uuid, account: &str) {
     sqlx::query(
         "insert into identities (provider, provider_subject, user_id) values ('github', $1, $2)",
     )

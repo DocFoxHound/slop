@@ -19,6 +19,9 @@
 //! Slop reads it at one commit, checks every file once (pictures from their header, audio from
 //! its signature, sizes), and links to the files at that commit. Every new set waits for review
 //! (admin_web.rs, review.rs); a profile goes live with its first approved portfolio.
+//!
+//! The same commit's `.slop/page/` (the creative's own page design, design.rs) is read with it
+//! and is part of the set: reviewed with the works, and shown only once approved.
 
 use axum::{Json, extract::State};
 use serde::{Deserialize, Serialize};
@@ -27,7 +30,11 @@ use sha2::{Digest, Sha256};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
-use super::{SKILLS, my_creative};
+use super::{
+    SKILLS,
+    design::{self, Design},
+    my_creative,
+};
 use crate::{
     AppState, admin,
     auth::session::CurrentUser,
@@ -115,6 +122,9 @@ pub struct PortfolioSet {
     pub banner: Option<Picture>,
     #[sqlx(json)]
     pub works: Vec<Work>,
+    /// The creative's own page design, if the repository has one at that commit.
+    #[sqlx(json(nullable))]
+    pub design: Option<Design>,
     pub status: String,
     pub status_reason: Option<String>,
     #[serde(with = "time::serde::rfc3339")]
@@ -123,7 +133,7 @@ pub struct PortfolioSet {
     pub reviewed_at: Option<OffsetDateTime>,
 }
 
-pub const SET_COLUMNS: &str = "id, repo_url, commit_sha, avatar, banner, works, status, status_reason, created_at, reviewed_at";
+pub const SET_COLUMNS: &str = "id, repo_url, commit_sha, avatar, banner, works, design, status, status_reason, created_at, reviewed_at";
 
 pub async fn load_set(db: &sqlx::PgPool, id: Uuid) -> sqlx::Result<PortfolioSet> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
@@ -217,7 +227,11 @@ const YOUTUBE_FORMS: &str = "use a video's own link, like https://youtu.be/VIDEO
 /// At most this many problems are listed at once; the rest are counted.
 const MAX_PROBLEMS: usize = 12;
 
-async fn read_audio(state: &AppState, base: &url::Url, path: &str) -> Result<AudioFile, Problem> {
+pub(super) async fn read_audio(
+    state: &AppState,
+    base: &url::Url,
+    path: &str,
+) -> Result<AudioFile, Problem> {
     let path = media::clean_file_path(
         path,
         &[".mp3", ".ogg", ".oga", ".opus", ".wav", ".flac", ".m4a"],
@@ -433,6 +447,7 @@ async fn read_and_store(
         }
         return Err(Problem(problems.join("\n")));
     }
+    let design = design::read(state, &base, &mut reader, &works).await?;
 
     let fingerprint = {
         let mut sorted: Vec<serde_json::Value> = works
@@ -446,7 +461,11 @@ async fn read_and_store(
             .collect();
         sorted.sort_by_key(|v| v.to_string());
         let pic = |p: &Option<Picture>| p.as_ref().map(|p| json!([p.path, p.sha256]));
-        let value = json!([pic(&avatar), pic(&banner), sorted]);
+        // Sets from before page designs keep their fingerprint.
+        let value = match &design {
+            None => json!([pic(&avatar), pic(&banner), sorted]),
+            Some((_, design)) => json!([pic(&avatar), pic(&banner), sorted, design]),
+        };
         hex::encode(Sha256::digest(value.to_string().as_bytes()))
     };
 
@@ -498,8 +517,8 @@ async fn read_and_store(
     }
     let id = Uuid::now_v7();
     sqlx::query(
-        "insert into portfolio_sets (id, creative_id, repo_url, commit_sha, avatar, banner, works, fingerprint, source)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, 'creative')",
+        "insert into portfolio_sets (id, creative_id, repo_url, commit_sha, avatar, banner, works, design, fingerprint, source)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, 'creative')",
     )
     .bind(id)
     .bind(creative_id)
@@ -508,6 +527,7 @@ async fn read_and_store(
     .bind(avatar.map(sqlx::types::Json))
     .bind(banner.map(sqlx::types::Json))
     .bind(sqlx::types::Json(&works))
+    .bind(design.map(|(d, _)| sqlx::types::Json(d)))
     .bind(&fingerprint)
     .execute(&mut *tx)
     .await?;
