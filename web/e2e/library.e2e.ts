@@ -250,6 +250,11 @@ test("in the Slop app: downloads sit by Friends & Chat, and their panel doesn't 
   expect(p.y + p.height).toBeLessThanOrEqual(b.y + 1);
   expect(p.x).toBeGreaterThanOrEqual(0);
   expect(p.x + p.width).toBeLessThanOrEqual(c.x);
+
+  // On the Library page only the list's own Downloads shows, not a second one by the chat bar.
+  await page.goto("/library");
+  await expect(page.getByRole("navigation", { name: "Your apps" }).getByRole("button", { name: /^Downloads/ })).toBeVisible();
+  await expect(dock).toHaveCount(0);
 });
 
 test("in the Slop app: what each app is doing, the big button, and downloads", async ({ page }) => {
