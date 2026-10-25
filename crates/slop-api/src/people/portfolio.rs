@@ -928,7 +928,7 @@ mod tests {
             size(AVATAR_MIN),
             size(BANNER_MIN),
             "8192".to_string(),
-            "## Your page's design (coming soon)".to_string(),
+            "## Your page's design".to_string(),
             "Check my portfolio now".to_string(),
         ];
         want.extend(SKILLS.iter().map(|(slug, _)| format!("`{slug}`")));

@@ -446,7 +446,7 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
         32 KB) in the same repository. Slop checks them with your portfolio, removes anything pages can't have (scripts, forms, other sites'
         files…) and shows the result between Slop's header and your reviews. Put your works and services where you like with{" "}
         <code>{"<slop-works></slop-works>"}</code>, <code>{'<slop-work ref="1"></slop-work>'}</code> and{" "}
-        <code>{"<slop-services></slop-services>"}</code>. The rules are in the <a href="/portfolio.md">portfolio guide</a>.
+        <code>{"<slop-services></slop-services>"}</code>. Every rule is in the guide, under <a href="/portfolio.md">Your page's design</a>.
       </p>
       {shown?.design ? (
         <>
