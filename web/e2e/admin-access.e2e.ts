@@ -401,16 +401,24 @@ test("Home counts what's waiting, links to it, and finds apps and accounts", asy
   await page.getByRole("link", { name: /^\d+ Reports$/ }).click();
   await expect(page.getByRole("heading", { name: /^Reports \(/ })).toBeVisible();
 
-  // Find: an account.
+  // Find: an account. Home's own box, once Home shows: the Accounts tab has a "Find an account"
+  // box, still there for a moment after clicking Home on a slow machine.
+  const homeFind = page
+    .getByRole("search")
+    .filter({ has: page.getByRole("button", { name: "Accounts", exact: true }) })
+    .getByRole("textbox", { name: "Find", exact: true });
   await page.getByRole("tab", { name: "Home" }).click();
-  await page.getByRole("textbox", { name: /Find/ }).fill("Bo Builder");
-  await page.getByRole("button", { name: "Accounts" }).click();
+  await expect(page.getByRole("heading", { name: "Needs you" })).toBeVisible();
+  await homeFind.fill("Bo Builder");
+  await page.getByRole("button", { name: "Accounts", exact: true }).click();
   await expect(page).toHaveURL(/tab=users&q=Bo(\+|%20)Builder/);
   await expect(page.getByRole("link", { name: "Bo Builder" })).toBeVisible();
   // And an app, with Enter.
   await page.getByRole("tab", { name: "Home" }).click();
-  await page.getByRole("textbox", { name: /Find/ }).fill("pocket");
-  await page.getByRole("textbox", { name: /Find/ }).press("Enter");
+  await expect(page.getByRole("heading", { name: "Needs you" })).toBeVisible();
+  await homeFind.fill("pocket");
+  await homeFind.press("Enter");
+  await expect(page).toHaveURL(/tab=apps&q=pocket/);
   await expect(page.getByRole("link", { name: "Pocket Golf" })).toBeVisible();
   await expect(page.getByRole("link", { name: "Lantern Keep" })).toHaveCount(0);
 });
@@ -455,11 +463,11 @@ test("the audit log: search, and older entries a page at a time", async ({ page 
   expect(await rows.count()).toBeGreaterThan(100);
 
   // Search by what was done.
-  await page.getByRole("textbox", { name: /Find/ }).fill("staff_action");
+  await page.getByRole("textbox", { name: "Find", exact: true }).fill("staff_action");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(rows.first()).toContainText("staff_action");
   for (const text of await rows.locator("td:nth-child(3)").allInnerTexts()) expect(text).toContain("staff_action");
-  await page.getByRole("textbox", { name: /Find/ }).fill("nothing-has-this-name");
+  await page.getByRole("textbox", { name: "Find", exact: true }).fill("nothing-has-this-name");
   await page.getByRole("button", { name: "Search" }).click();
   await expect(page.getByText("Nothing recorded that matches.")).toBeVisible();
 });

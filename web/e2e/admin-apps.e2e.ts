@@ -24,7 +24,7 @@ test("the Apps tab: one line per app with what needs attention, filters, and the
 
   await signIn(page, "admin");
   await page.goto("/admin?tab=apps");
-  await page.getByRole("textbox", { name: /Find/ }).fill(t);
+  await page.getByRole("textbox", { name: "Find", exact: true }).fill(t);
   await page.getByRole("button", { name: "Search" }).click();
   const list = page.getByRole("list", { name: "Apps" });
   const row = (title: string) => list.getByRole("listitem").filter({ has: page.getByRole("link", { name: title }) });

@@ -8,7 +8,7 @@ test("staff pause an app's donations, the maker asks for them back, and staff li
   await expect(admin.getByRole("heading", { name: "Needs you" })).toBeVisible();
 
   // Find the app from Home and open its record.
-  await admin.getByRole("textbox", { name: /Find/ }).fill("Mia");
+  await admin.getByRole("textbox", { name: "Find", exact: true }).fill("Mia");
   await admin.getByRole("button", { name: "Apps", exact: true }).click();
   await admin.getByRole("link", { name: "Mia's First Game" }).click();
   await expect(admin.getByRole("heading", { name: "Mia's First Game", level: 2 })).toBeVisible();
