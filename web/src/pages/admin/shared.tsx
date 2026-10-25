@@ -37,15 +37,25 @@ export function ReasonButton({
   placeholder,
   danger,
   disabled,
+  startOpen,
+  onCancel,
   onSubmit,
 }: {
   label: string;
   placeholder: string;
   danger?: boolean;
   disabled?: boolean;
+  /** Open on the reason already (chosen from a menu). */
+  startOpen?: boolean;
+  /** Cancel was pressed (or Escape in the reason). */
+  onCancel?: () => void;
   onSubmit: (reason: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen ?? false);
+  const cancel = () => {
+    setOpen(false);
+    onCancel?.();
+  };
   const [reason, setReason] = useState("");
   if (!open) {
     return (
@@ -72,6 +82,7 @@ export function ReasonButton({
         value={reason}
         placeholder={placeholder}
         onChange={(e) => setReason(e.target.value)}
+        onKeyDown={(e) => e.key === "Escape" && onCancel && cancel()}
       />
       <button
         className={`btn small ${danger ? "danger" : ""}`}
@@ -79,11 +90,7 @@ export function ReasonButton({
       >
         {label}
       </button>
-      <button
-        type="button"
-        className="btn small ghost"
-        onClick={() => setOpen(false)}
-      >
+      <button type="button" className="btn small ghost" onClick={cancel}>
         Cancel
       </button>
     </form>
@@ -94,16 +101,18 @@ export function ReasonButton({
 export function RuleSelect({
   rules,
   value,
+  autoFocus,
   onChange,
 }: {
   rules: Array<[string, string]>;
   value: string;
+  autoFocus?: boolean;
   onChange: (v: string) => void;
 }) {
   return (
     <label>
       The rule it breaks
-      <select value={value} required onChange={(e) => onChange(e.target.value)}>
+      <select value={value} required autoFocus={autoFocus} onChange={(e) => onChange(e.target.value)}>
         <option value="" disabled>
           Choose a Content Policy rule
         </option>
@@ -121,13 +130,18 @@ export function RuleSelect({
 export function DelistButton({
   rules,
   disabled,
+  startOpen,
+  onCancel,
   onSubmit,
 }: {
   rules: Array<[string, string]>;
   disabled: boolean;
+  /** Open on the form already (chosen from a menu). */
+  startOpen?: boolean;
+  onCancel?: () => void;
   onSubmit: (rule: string, reason: string) => void;
 }) {
-  const [open, setOpen] = useState(false);
+  const [open, setOpen] = useState(startOpen ?? false);
   const [rule, setRule] = useState("");
   const [reason, setReason] = useState("");
   if (!open) {
@@ -149,7 +163,7 @@ export function DelistButton({
         onSubmit(rule, reason.trim());
       }}
     >
-      <RuleSelect rules={rules} value={rule} onChange={setRule} />
+      <RuleSelect rules={rules} value={rule} autoFocus={startOpen} onChange={setRule} />
       <label>
         The facts, as the maker will read them
         <textarea
@@ -169,7 +183,10 @@ export function DelistButton({
         <button
           type="button"
           className="btn small ghost"
-          onClick={() => setOpen(false)}
+          onClick={() => {
+            setOpen(false);
+            onCancel?.();
+          }}
         >
           Cancel
         </button>

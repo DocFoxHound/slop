@@ -1281,6 +1281,58 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
   .inbox-actions { grid-area: actions; }
 }
 /* ---- end of the review inbox ---- */
+/* ---- Admin → Apps: one line per app, like the review inbox, with a "⋯" menu (2026-10-25) ---- */
+.apps-rows { list-style: none; margin: 8px 0 0; padding: 0; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+.apps-row + .apps-row { border-top: 1px solid var(--line); }
+.apps-row:first-child { border-radius: var(--radius) var(--radius) 0 0; }
+.apps-row:last-child { border-radius: 0 0 var(--radius) var(--radius); }
+.apps-row:hover, .apps-row.asking { background: var(--panel-2); }
+.apps-line { display: grid; grid-template-columns: 32px minmax(0, 2.2fr) minmax(0, 1fr) auto minmax(0, 3fr) 5.5em auto; align-items: center; gap: 12px; padding: 6px 12px; min-height: 48px; }
+.apps-open { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; color: var(--text); }
+.apps-open a { color: var(--text); }
+.apps-open a:hover b { color: var(--slime); }
+.apps-maker { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.apps-stage { display: inline-flex; align-items: center; gap: 6px; white-space: nowrap; }
+.apps-facts { min-width: 0; display: flex; gap: 4px 14px; overflow: hidden; white-space: nowrap; }
+.apps-fact { min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.apps-fact + .apps-fact { flex-shrink: 4; }
+.apps-facts > .muted { flex: none; }
+.apps-fact.quiet { color: var(--muted); }
+.apps-fact.bad { color: var(--bad); font-weight: 600; }
+.apps-fact.warn { color: var(--warn); font-weight: 600; }
+.apps-fact-dot { margin-right: 5px; font-size: 9px; vertical-align: 1px; }
+.apps-when { text-align: right; white-space: nowrap; }
+.apps-messages, .apps-confirm { padding: 0 12px 10px 56px; }
+.apps-messages p { margin: 0; }
+.apps-confirm { display: grid; gap: 8px; }
+.apps-confirm > p { margin: 0; }
+.apps-more { display: block; margin: 12px auto 0; }
+/* The menu button, for any list's "⋯" (components/MenuButton.tsx). */
+.menu-button { position: relative; }
+.menu-button-btn { display: inline-flex; align-items: center; justify-content: center; min-width: 34px; min-height: 30px; padding-inline: 8px; line-height: 1; }
+.menu-button-btn.on { background: var(--panel-3); }
+.menu-button-menu { position: absolute; right: 0; top: calc(100% + 4px); z-index: 30; min-width: 230px; max-width: min(320px, calc(100vw - 32px)); padding: 6px; display: grid; gap: 1px; box-shadow: 0 10px 30px rgba(0, 0, 0, 0.35); }
+.menu-button-group { display: grid; gap: 1px; }
+.menu-button-sep { height: 1px; margin: 5px 4px; background: var(--line); }
+.menu-button-label { padding: 2px 10px; color: var(--muted); font-size: 11px; font-weight: 700; letter-spacing: 0.06em; text-transform: uppercase; }
+.menu-button-item { display: flex; align-items: center; gap: 8px; width: 100%; padding: 7px 10px; border: 0; border-radius: 6px; background: none; color: var(--text); font: inherit; font-size: 13px; text-align: left; text-decoration: none !important; cursor: pointer; }
+.menu-button-item:hover, .menu-button-item:focus-visible { background: var(--panel-3); outline: none; }
+.menu-button-item:focus-visible { box-shadow: inset 0 0 0 2px var(--slime); }
+.menu-button-item.danger { color: var(--bad); }
+.menu-button-item[aria-disabled="true"] { color: var(--muted); cursor: default; }
+.menu-button-check { width: 12px; font-size: 9px; color: var(--slime); }
+.menu-button-note { margin: 0 10px 4px; color: var(--muted); font-size: 12px; white-space: normal; }
+@media (max-width: 760px) {
+  .apps-line { grid-template-columns: 32px minmax(0, 1fr) auto; grid-template-areas: "icon open menu" "icon maker when" ". stage stage" ". facts facts"; gap: 4px 10px; padding: 8px 12px; }
+  .apps-line > :first-child { grid-area: icon; align-self: start; }
+  .apps-open { grid-area: open; white-space: normal; }
+  .apps-maker { grid-area: maker; }
+  .apps-stage { grid-area: stage; }
+  .apps-facts { grid-area: facts; flex-wrap: wrap; white-space: normal; }
+  .apps-when { grid-area: when; }
+  .apps-line > .menu-button { grid-area: menu; }
+  .apps-messages, .apps-confirm { padding-left: 12px; }
+}
 /* ---- People: the page's status, and the editor's colour and skill pickers (2026-10-25) ----
    The pickers' radio and checkbox inputs are hidden over their swatch or chip. They used to be
    absolutely positioned with no positioned parent, so they were placed against the document:

@@ -7,7 +7,7 @@
 import { useEffect, useRef, useState } from "react";
 import { Link, useSearchParams } from "react-router";
 
-import { api, type AdminApp, type AppStage, type AppStatus, type AuditEntry, type StaffRole } from "../api";
+import { api, type AuditEntry, type StaffRole } from "../api";
 import { ErrorState, Loading } from "../components/ui";
 import { accountId, formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -16,12 +16,13 @@ import { NotFound } from "./Listing";
 import { LegalRequestsTab } from "../components/LegalRequests";
 import { AiMessagesTab } from "./admin/AiMessages";
 import { AppRecord, AuditRows } from "./admin/AppRecord";
+import { AppsTab } from "./admin/Apps";
 import { AdminHome } from "./admin/Home";
 import { QueueTab, useWaiting } from "./admin/Inbox";
 import { LegalDocsTab } from "./admin/LegalDocs";
 import { StoreTab } from "./admin/StoreTab";
 import { MoneyTab } from "./admin/Money";
-import { DelistButton, ReasonButton, useAction } from "./admin/shared";
+import { ReasonButton, useAction } from "./admin/shared";
 import { TokensTab } from "./admin/Tokens";
 import { UsersTab } from "./admin/Users";
 
@@ -300,141 +301,6 @@ function StaffTab() {
   );
 }
 
-
-const STATUSES: Array<AppStatus | ""> = ["", "draft", "listed", "delisted"];
-
-function AppsTab() {
-  const [params, setParams] = useSearchParams();
-  const q = params.get("q") ?? "";
-  const [text, setText] = useState(q);
-  const [status, setStatus] = useState<AppStatus | "">("");
-  const apps = useLoad(() => api.admin.apps(status || undefined, q), [status, q]);
-  // The Content Policy rules, for the statement of reasons when taking an app out.
-  const rules = useLoad(() => api.admin.queue().then((q) => q.rules), []);
-  const { busy, error, notice, run } = useAction(apps.reload);
-
-  return (
-    <>
-      <form
-        className="filters"
-        role="search"
-        onSubmit={(e) => {
-          e.preventDefault();
-          setParams({ tab: "apps", q: text.trim() }, { replace: true });
-        }}
-      >
-        <label>
-          Find{" "}
-          <input value={text} placeholder="Title, address or maker" onChange={(e) => setText(e.target.value)} />
-        </label>
-        <button className="btn small">Search</button>
-        <label>
-          Show{" "}
-          <select
-            value={status}
-            onChange={(e) => setStatus(e.target.value as AppStatus | "")}
-          >
-            {STATUSES.map((s) => (
-              <option key={s} value={s}>
-                {s ? s[0].toUpperCase() + s.slice(1) : "All apps"}
-              </option>
-            ))}
-          </select>
-        </label>
-      </form>
-      {notice && (
-        <p className="notice" role="status">
-          {notice}
-        </p>
-      )}
-      {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
-      )}
-      {apps.error && <ErrorState error={apps.error} onRetry={apps.reload} />}
-      {!apps.data && !apps.error && <Loading />}
-      {apps.data?.length === 0 && <div className="empty-state">No apps.</div>}
-      <ul className="release-list">
-        {apps.data?.map((a: AdminApp) => (
-          <li key={a.slug} className="panel panel-pad">
-            <div className="title-row spread">
-              <div className="title-row">
-                <Link to={`/admin?tab=apps&app=${encodeURIComponent(a.slug)}`}>
-                  <b>{a.title}</b>
-                </Link>
-                <span className="muted">by {a.maker}</span>
-                <Link className="small" to={`/app/${a.slug}`}>
-                  store page
-                </Link>
-                <span
-                  className={`badge ${a.status === "listed" ? "official" : a.status === "delisted" ? "bad" : "neutral"}`}
-                >
-                  {a.status.toUpperCase()}
-                </span>
-              </div>
-              <label className="small">
-                Stage{" "}
-                <select
-                  value={a.stage}
-                  disabled={busy !== undefined}
-                  onChange={(e) =>
-                    void run(a.slug, () =>
-                      api.admin.stage(a.slug, e.target.value as AppStage),
-                    )
-                  }
-                >
-                  <option value="coming_soon">Coming soon</option>
-                  <option value="beta">Beta</option>
-                  <option value="released">Released</option>
-                </select>
-              </label>
-            </div>
-            <div className="row-actions">
-              {a.status === "listed" ? (
-                <DelistButton
-                  rules={rules.data ?? []}
-                  disabled={busy !== undefined}
-                  onSubmit={(rule, reason) =>
-                    void run(a.slug, () =>
-                      api.admin.delist(a.slug, rule, reason),
-                    )
-                  }
-                />
-              ) : a.stage !== "coming_soon" && a.releases.length === 0 ? (
-                <span className="muted small">
-                  {a.pending_releases > 0
-                    ? "Can't list yet: approve its release under Review queue → New releases first."
-                    : "Can't list yet: the maker hasn't submitted a release. Set the stage to Coming soon to list the page without one."}
-                </span>
-              ) : (
-                <button
-                  className="btn small"
-                  disabled={busy !== undefined}
-                  onClick={() => void run(a.slug, () => api.admin.list(a.slug))}
-                >
-                  Put in the store
-                </button>
-              )}
-              {a.releases.map((r) => (
-                <ReasonButton
-                  key={r.id}
-                  label={`Withdraw ${r.version}`}
-                  placeholder="Reason, shown to players (stops it launching)"
-                  danger
-                  disabled={busy !== undefined}
-                  onSubmit={(reason) =>
-                    void run(r.id, () => api.admin.revoke(r.id, reason))
-                  }
-                />
-              ))}
-            </div>
-          </li>
-        ))}
-      </ul>
-    </>
-  );
-}
 
 function AuditTab() {
   const [text, setText] = useState("");

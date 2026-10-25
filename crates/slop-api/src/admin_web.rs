@@ -18,6 +18,7 @@ use axum::{
     routing::{get, post},
 };
 use serde::{Deserialize, Serialize};
+use sqlx::{Postgres, QueryBuilder};
 use time::OffsetDateTime;
 use uuid::Uuid;
 
@@ -353,12 +354,93 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
     }))
 }
 
-#[derive(Serialize, sqlx::FromRow)]
+#[derive(Serialize, Deserialize, sqlx::FromRow)]
 struct ApprovedRelease {
     id: Uuid,
     version: String,
     #[serde(with = "time::serde::rfc3339::option")]
     reviewed_at: Option<OffsetDateTime>,
+}
+
+/// The newest release the maker submitted, whatever became of it.
+#[derive(Serialize)]
+struct NewestRelease {
+    version: String,
+    status: String,
+    /// Why it failed, was rejected or was withdrawn.
+    status_reason: Option<String>,
+}
+
+/// What can need staff about an app, most urgent first: a code and its condition on the facts
+/// row `x` (static SQL). An app shows its codes as `flags`; the Apps tab says each in words
+/// (web/src/pages/admin/apps.ts) and sorts by the first.
+const FLAGS: &[(&str, &str)] = &[
+    // A re-scan of a live release found something new (rescan.rs).
+    ("rescan_flagged", "x.rescan_flags > 0"),
+    // The file players get changed on the maker's page, or can't be fetched.
+    ("download_lost", "x.downloads_lost > 0"),
+    // Slop lost access to its repository, or staff froze it (admin_tools.rs).
+    ("frozen", "x.frozen_at is not null"),
+    ("reports", "x.open_reports > 0"),
+    // The newest release couldn't be fetched or scanned.
+    ("release_failed", "x.newest_status = 'failed'"),
+    ("release_waiting", "x.pending_releases > 0"),
+    // Listed, but its Coming soon or Beta time ran out, so the store hides it (catalog.rs).
+    (
+        "past_deadline",
+        "x.status = 'listed' and x.stage_deadline < now()",
+    ),
+    (
+        "deadline_soon",
+        "x.status = 'listed' and x.stage_deadline >= now() and x.stage_deadline < now() + interval '14 days'",
+    ),
+    ("donations_paused", "x.donations_paused"),
+    // The store's own "dead project": not released, and no commit for a long time.
+    (
+        "no_commits",
+        "x.stage <> 'released' and x.last_commit_at < now() - x.dead_after",
+    ),
+    // In the store a long time, playable, and nobody has played it lately.
+    (
+        "no_players",
+        "x.status = 'listed' and x.stage <> 'coming_soon' and x.created_at < now() - x.dead_after
+         and coalesce(x.last_played_at, '-infinity') < now() - x.dead_after",
+    ),
+    // Enough votes to count, and most of them say Slop.
+    ("low_rating", "x.not_slop_percent < 40"),
+];
+
+#[derive(sqlx::FromRow)]
+struct AppFacts {
+    slug: String,
+    title: String,
+    stage: AppStage,
+    status: AppStatus,
+    repo_url: String,
+    maker: String,
+    visibility: String,
+    icon_url: Option<String>,
+    thumbnail_url: Option<String>,
+    frozen_at: Option<OffsetDateTime>,
+    frozen_reason: Option<String>,
+    stage_deadline: Option<OffsetDateTime>,
+    last_commit_at: Option<OffsetDateTime>,
+    updated_at: OffsetDateTime,
+    newest_version: Option<String>,
+    newest_status: Option<String>,
+    newest_reason: Option<String>,
+    serving_version: Option<String>,
+    pending_releases: i64,
+    rescan_flags: i64,
+    downloads_lost: i64,
+    open_reports: i64,
+    donations_paused: bool,
+    players: i64,
+    last_played_at: Option<OffsetDateTime>,
+    vote_count: i64,
+    not_slop_percent: Option<i32>,
+    releases: sqlx::types::Json<Vec<ApprovedRelease>>,
+    flags: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -370,6 +452,91 @@ struct ModeratedApp {
     /// Releases still being checked or waiting for review: what listing a Beta or Released app
     /// is waiting on when it has no approved release yet.
     pending_releases: i64,
+    /// What needs staff, most urgent first (`FLAGS`); empty for a healthy app.
+    flags: Vec<String>,
+    visibility: String,
+    icon_url: Option<String>,
+    thumbnail_url: Option<String>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    frozen_at: Option<OffsetDateTime>,
+    frozen_reason: Option<String>,
+    /// When its Coming soon or Beta time runs out (null once released).
+    #[serde(with = "time::serde::rfc3339::option")]
+    stage_deadline: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    last_commit_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339")]
+    updated_at: OffsetDateTime,
+    newest_release: Option<NewestRelease>,
+    /// The version players get (releases::SERVING), if any.
+    serving_version: Option<String>,
+    /// Live release files a re-scan flagged, and ones whose download changed or went away.
+    rescan_flags: i64,
+    downloads_lost: i64,
+    open_reports: i64,
+    donations_paused: bool,
+    /// Accounts that have launched it, and when one last played.
+    players: i64,
+    #[serde(with = "time::serde::rfc3339::option")]
+    last_played_at: Option<OffsetDateTime>,
+    vote_count: i64,
+    /// Weighted % Not Slop, as the store shows it; null below votes::MIN_VOTES.
+    not_slop_percent: Option<i32>,
+}
+
+impl From<AppFacts> for ModeratedApp {
+    fn from(f: AppFacts) -> Self {
+        let newest_release = match (f.newest_version, f.newest_status) {
+            (Some(version), Some(status)) => Some(NewestRelease {
+                version,
+                status,
+                status_reason: f.newest_reason,
+            }),
+            _ => None,
+        };
+        ModeratedApp {
+            app: AppRef {
+                slug: f.slug,
+                title: f.title,
+                stage: f.stage,
+                status: f.status,
+                repo_url: f.repo_url,
+                maker: f.maker,
+            },
+            releases: f.releases.0,
+            pending_releases: f.pending_releases,
+            flags: f.flags,
+            visibility: f.visibility,
+            icon_url: f.icon_url,
+            thumbnail_url: f.thumbnail_url,
+            frozen_at: f.frozen_at,
+            frozen_reason: f.frozen_reason,
+            stage_deadline: f.stage_deadline,
+            last_commit_at: f.last_commit_at,
+            updated_at: f.updated_at,
+            newest_release,
+            serving_version: f.serving_version,
+            rescan_flags: f.rescan_flags,
+            downloads_lost: f.downloads_lost,
+            open_reports: f.open_reports,
+            donations_paused: f.donations_paused,
+            players: f.players,
+            last_played_at: f.last_played_at,
+            vote_count: f.vote_count,
+            not_slop_percent: f.not_slop_percent,
+        }
+    }
+}
+
+#[derive(Deserialize, Clone, Copy, Default, PartialEq)]
+#[serde(rename_all = "snake_case")]
+enum AppsSort {
+    /// Most recently changed first.
+    #[default]
+    Updated,
+    /// Most urgent flag first (`FLAGS`), then most recently changed.
+    Urgent,
+    Title,
 }
 
 #[derive(Deserialize)]
@@ -377,6 +544,14 @@ struct AppsQuery {
     status: Option<AppStatus>,
     /// Part of the title, address or maker's name.
     q: Option<String>,
+    /// Only apps with at least one flag.
+    #[serde(default)]
+    attention: bool,
+    #[serde(default)]
+    sort: AppsSort,
+    /// A page: up to 200 apps (the default), after skipping `offset`.
+    limit: Option<i64>,
+    offset: Option<i64>,
 }
 
 /// `text` as an ILIKE pattern that matches it anywhere, literally.
@@ -389,68 +564,132 @@ pub(crate) fn contains_pattern(text: &str) -> String {
     )
 }
 
-/// Every app (optionally by status), for listing, delisting, stages and withdrawals.
+/// Every app (optionally by status, or only those needing staff), with what an admin would want
+/// to know at a glance: for listing, delisting, stages and withdrawals. One query: the facts are
+/// index lookups per app, and when the page doesn't depend on them only the page's apps get them.
 async fn apps(
     State(state): State<AppState>,
     _admin: AdminUser,
     Query(q): Query<AppsQuery>,
 ) -> ApiResult<Json<Vec<ModeratedApp>>> {
-    let rows: Vec<(Uuid, AppRef)> = sqlx::query_as::<
-        _,
-        (Uuid, String, String, AppStage, AppStatus, String, String),
-    >(sqlx::AssertSqlSafe(format!(
-        "select a.id, {APP_COLUMNS} from apps a join users u on u.id = a.maker_id
-             where ($1::app_status is null or a.status = $1)
-               and ($2::text is null or a.title ilike $2 or a.slug ilike $2 or u.display_name ilike $2)
-             order by a.updated_at desc limit 200"
-    )))
-    .bind(q.status)
-    .bind(
+    let limit = q.limit.unwrap_or(200).clamp(1, 200);
+    let offset = q.offset.unwrap_or(0).max(0);
+    let rules = state.config.catalog;
+    let pattern =
         q.q.as_deref()
             .map(str::trim)
             .filter(|t| !t.is_empty())
-            .map(contains_pattern),
-    )
-    .fetch_all(&state.db)
-    .await?
-    .into_iter()
-    .map(|(id, slug, title, stage, status, repo_url, maker)| {
-        (
-            id,
-            AppRef {
-                slug,
-                title,
-                stage,
-                status,
-                repo_url,
-                maker,
-            },
+            .map(contains_pattern);
+    // (the order of the whole list, the same order on `apps a` alone)
+    let (order, base_order) = match q.sort {
+        AppsSort::Updated => ("updated_at desc, slug", "a.updated_at desc, a.slug"),
+        AppsSort::Title => ("lower(title), slug", "lower(a.title), a.slug"),
+        AppsSort::Urgent => ("urgency nulls last, updated_at desc, slug", ""),
+    };
+    let mut qb: QueryBuilder<Postgres> = QueryBuilder::new(
+        "with base as (
+             select a.id, a.slug, a.title, a.stage, a.status, a.repo_url, u.display_name as maker,
+                    a.visibility, a.frozen_at, a.frozen_reason, a.last_commit_at, a.created_at,
+                    a.updated_at, a.media_set_id, a.pinned_release_id,
+                    case a.stage
+                        when 'coming_soon' then a.stage_entered_at + make_interval(days => ",
+    );
+    qb.push_bind(rules.coming_soon_days)
+        .push(") when 'beta' then a.stage_entered_at + make_interval(days => ")
+        .push_bind(rules.beta_days)
+        .push(
+            ") end as stage_deadline
+             from apps a join users u on u.id = a.maker_id
+             where (",
         )
-    })
-    .collect();
-    let mut out = Vec::with_capacity(rows.len());
-    for (id, app) in rows {
-        let releases = sqlx::query_as(
-            "select id, version, reviewed_at from releases
-             where app_id = $1 and status = 'approved' order by reviewed_at desc limit 10",
-        )
-        .bind(id)
-        .fetch_all(&state.db)
-        .await?;
-        let pending_releases = sqlx::query_scalar(
-            "select count(*) from releases
-             where app_id = $1 and status in ('fetching', 'awaiting_review')",
-        )
-        .bind(id)
-        .fetch_one(&state.db)
-        .await?;
-        out.push(ModeratedApp {
-            app,
-            releases,
-            pending_releases,
-        });
+        .push_bind(q.status)
+        .push("::app_status is null or a.status = ")
+        .push_bind(q.status)
+        .push(") and (")
+        .push_bind(pattern.clone())
+        .push("::text is null or a.title ilike ")
+        .push_bind(pattern.clone())
+        .push(" or a.slug ilike ")
+        .push_bind(pattern.clone())
+        .push(" or u.display_name ilike ")
+        .push_bind(pattern)
+        .push(")");
+    // Sorting by date or title needs no facts: just the page's apps go on.
+    if !q.attention && q.sort != AppsSort::Urgent {
+        qb.push(format!(" order by {base_order} limit "))
+            .push_bind(offset + limit);
     }
-    Ok(Json(out))
+    qb.push(
+        "), x as (
+             select b.*, make_interval(days => ",
+    )
+    .push_bind(rules.dead_after_days)
+    .push(
+        ") as dead_after,
+                ms.icon->>'url' as icon_url, ms.thumbnail->>'url' as thumbnail_url,
+                nr.version as newest_version, nr.status::text as newest_status, nr.status_reason as newest_reason,
+                sv.version as serving_version,
+                (select count(*) from releases r
+                 where r.app_id = b.id and r.status in ('fetching', 'awaiting_review')) as pending_releases,
+                fl.rescan_flags, fl.downloads_lost,
+                (select count(*) from reports p
+                 where p.subject_kind = 'app' and p.subject_id = b.id and p.status = 'open') as open_reports,
+                exists (select 1 from donation_holds h where h.app_id = b.id and h.lifted_at is null) as donations_paused,
+                pl.players, pl.last_played_at, vt.vote_count, vt.not_slop_percent,
+                coalesce((select json_agg(json_build_object('id', r.id, 'version', r.version, 'reviewed_at', r.reviewed_at)
+                                          order by r.reviewed_at desc)
+                          from (select id, version, reviewed_at from releases r
+                                where r.app_id = b.id and r.status = 'approved'
+                                order by reviewed_at desc limit 10) r), '[]') as releases
+             from base b
+             left join media_sets ms on ms.id = b.media_set_id
+             left join lateral (select version, status, status_reason from releases r
+                                where r.app_id = b.id order by created_at desc limit 1) nr on true
+             left join lateral (select r.id, r.version from releases r
+                                where r.app_id = b.id and r.status = 'approved' and r.signed_manifest is not null
+                                order by coalesce(r.id = b.pinned_release_id, false) desc, r.reviewed_at desc
+                                limit 1) sv on true
+             left join lateral (select count(*) filter (where f.rescan_flagged_at is not null) as rescan_flags,
+                                       count(*) filter (where f.release_id = sv.id
+                                                          and f.rescan_result in ('changed', 'unreachable')) as downloads_lost
+                                from release_files f join releases r on r.id = f.release_id
+                                where r.app_id = b.id and r.status = 'approved') fl on true
+             left join lateral (select count(*) as players, max(g.last_played_at) as last_played_at
+                                from user_app_usage g where g.app_id = b.id) pl on true
+             left join lateral (select count(*) as vote_count,
+                                       case when count(*) >= ",
+    )
+    .push_bind(crate::votes::MIN_VOTES)
+    .push(
+        " and sum(v.weight) > 0
+                                            then round(100 * coalesce(sum(v.weight) filter (where v.vote = 1), 0)
+                                                       / sum(v.weight))::int4 end as not_slop_percent
+                                from votes v where v.app_id = b.id) vt on true
+         ), y as (
+             select x.*, array_remove(array[",
+    );
+    for (i, (code, condition)) in FLAGS.iter().enumerate() {
+        if i > 0 {
+            qb.push(", ");
+        }
+        qb.push(format!("case when {condition} then '{code}' end"));
+    }
+    let codes: Vec<String> = FLAGS.iter().map(|(code, _)| format!("'{code}'")).collect();
+    qb.push(format!(
+        "]::text[], null) as flags from x
+         )
+         select *, array_position(array[{}]::text[], flags[1]) as urgency from y where (not ",
+        codes.join(", ")
+    ))
+    .push_bind(q.attention)
+    .push(format!(
+        " or cardinality(flags) > 0) order by {order} limit "
+    ))
+    .push_bind(limit)
+    .push(" offset ")
+    .push_bind(offset);
+    let rows: Vec<AppFacts> = qb.build_query_as().fetch_all(&state.db).await?;
+    Ok(Json(rows.into_iter().map(ModeratedApp::from).collect()))
 }
 
 #[derive(Serialize, sqlx::FromRow)]

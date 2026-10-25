@@ -6917,3 +6917,259 @@ async fn a_reinstated_app_with_pictures_waiting_waits_for_a_reviewer(db: PgPool)
             .unwrap();
     assert_eq!((status.as_str(), waiting), ("listed", false));
 }
+
+/// Admin → Apps: every app with what needs staff (flags, most urgent first) and the facts behind
+/// them; only those that need attention on request, sorted by urgency, a page at a time.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_apps_list_says_what_needs_staff(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Mia Maker", "US").await;
+    let (admin_id, admin) = make_admin(&app, "Ada Admin").await;
+    let sql = |q: String| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query(sqlx::AssertSqlSafe(q))
+                .execute(&db)
+                .await
+                .unwrap();
+        }
+    };
+    // A release of an app: (slug, version, status, how long ago it was submitted, status reason).
+    let release = |slug: &str, version: &str, status: &str, ago: &str, reason: &str| {
+        format!(
+            "insert into releases (id, app_id, version, commit_sha, status, status_reason, submitted_by,
+                                   created_at, reviewed_at, signed_manifest)
+             select gen_random_uuid(), id, '{version}', repeat('a', 40), '{status}', nullif('{reason}', ''),
+                    maker_id, now() - interval '{ago}', now() - interval '{ago}',
+                    case when '{status}' = 'approved' then '{{}}'::jsonb end
+             from apps where slug = '{slug}'"
+        )
+    };
+
+    // Healthy: released, played yesterday, well rated.
+    listed_with(&app, maker, "healthy", "released", "").await;
+    sql(release("healthy", "1.0.0", "approved", "10 days", "")).await;
+    sql(format!(
+        "insert into user_app_usage (user_id, app_id, last_played_at)
+         select '{admin_id}', id, now() - interval '1 day' from apps where slug = 'healthy'"
+    ))
+    .await;
+    for _ in 0..5 {
+        sql("insert into votes (user_id, app_id, vote, weight)
+             select gen_random_uuid(), id, 1, 1 from apps where slug = 'healthy'"
+            .into())
+        .await;
+    }
+    // A re-scan flagged its live release, whose download is also gone.
+    listed_with(&app, maker, "rescanned", "released", "").await;
+    sql(release("rescanned", "2.0.0", "approved", "3 days", "")).await;
+    sql("insert into release_files (release_id, platform, kind, url, file_name, rescan_result, rescan_flagged_at)
+         select r.id, 'windows', 'archive', 'https://example.com/g.zip', 'g.zip', 'unreachable', now()
+         from releases r join apps a on a.id = r.app_id where a.slug = 'rescanned'"
+        .into())
+    .await;
+    // Frozen; reported; donations paused.
+    listed_with(
+        &app,
+        maker,
+        "frozen",
+        "released",
+        "frozen_at = now(), frozen_reason = 'Slop lost access to its repository'",
+    )
+    .await;
+    listed_with(&app, maker, "reported", "released", "").await;
+    sql(
+        "insert into reports (id, reference, subject_kind, subject_id, subject_label, reason, details, priority, due_at)
+         select gen_random_uuid(), 'R-1', 'app', id, 'App: reported', 'broken', 'x', 2, now() + interval '7 days'
+         from apps where slug = 'reported'"
+            .into(),
+    )
+    .await;
+    listed_with(&app, maker, "paused", "released", "").await;
+    sql("insert into donation_holds (id, app_id, kind, reason, placed_by)
+         select gen_random_uuid(), id, 'review', 'Checking the page', 'Ada Admin' from apps where slug = 'paused'"
+        .into())
+    .await;
+    // A draft whose newest release failed its checks, and one waiting for review.
+    listed_with(&app, maker, "failed", "beta", "status = 'draft'").await;
+    sql(release("failed", "0.1.0", "rejected", "5 days", "")).await;
+    sql(release(
+        "failed",
+        "0.2.0",
+        "failed",
+        "1 day",
+        "The scanner timed out",
+    ))
+    .await;
+    listed_with(&app, maker, "waiting", "beta", "status = 'draft'").await;
+    sql(release(
+        "waiting",
+        "0.9.0",
+        "awaiting_review",
+        "2 hours",
+        "",
+    ))
+    .await;
+    // Coming soon with days left; a beta whose time ran out; a beta nobody has committed to in
+    // half a year; a released game nobody has played in months, rated Slop.
+    listed_with(
+        &app,
+        maker,
+        "soon",
+        "coming_soon",
+        "stage_entered_at = now() - interval '355 days'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "expired",
+        "beta",
+        "stage_entered_at = now() - interval '400 days'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "abandoned",
+        "beta",
+        "last_commit_at = now() - interval '200 days'",
+    )
+    .await;
+    listed_with(
+        &app,
+        maker,
+        "forgotten",
+        "released",
+        "created_at = now() - interval '300 days', updated_at = now() - interval '300 days'",
+    )
+    .await;
+    for _ in 0..5 {
+        sql("insert into votes (user_id, app_id, vote, weight)
+             select gen_random_uuid(), id, -1, 1 from apps where slug = 'forgotten'"
+            .into())
+        .await;
+    }
+
+    let get = |q: &'static str| {
+        let admin = admin.clone();
+        let app = &app;
+        async move {
+            body_json(
+                app.send(req(Method::GET, format!("/v1/admin/apps{q}")).cookie(&admin))
+                    .await,
+            )
+            .await
+        }
+    };
+    let all = get("").await;
+    let by = |slug: &str| {
+        all.as_array()
+            .unwrap()
+            .iter()
+            .find(|a| a["slug"] == slug)
+            .unwrap_or_else(|| panic!("{slug} listed"))
+            .clone()
+    };
+    let flags = |slug: &str| {
+        by(slug)["flags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|f| f.as_str().unwrap().to_string())
+            .collect::<Vec<_>>()
+    };
+    assert_eq!(all.as_array().unwrap().len(), 11);
+    assert!(flags("healthy").is_empty(), "{:?}", flags("healthy"));
+    assert_eq!(flags("rescanned"), ["rescan_flagged", "download_lost"]);
+    assert_eq!(flags("frozen"), ["frozen"]);
+    assert_eq!(flags("reported"), ["reports"]);
+    assert_eq!(flags("paused"), ["donations_paused"]);
+    assert_eq!(flags("failed"), ["release_failed"]);
+    assert_eq!(flags("waiting"), ["release_waiting"]);
+    assert_eq!(flags("soon"), ["deadline_soon"]);
+    assert_eq!(flags("expired"), ["past_deadline"]);
+    assert_eq!(flags("abandoned"), ["no_commits"]);
+    assert_eq!(flags("forgotten"), ["no_players", "low_rating"]);
+
+    // The facts behind them.
+    let healthy = by("healthy");
+    assert_eq!(healthy["players"], 1);
+    assert!(healthy["last_played_at"].is_string());
+    assert_eq!(healthy["vote_count"], 5);
+    assert_eq!(healthy["not_slop_percent"], 100);
+    assert_eq!(healthy["serving_version"], "1.0.0");
+    assert_eq!(healthy["releases"][0]["version"], "1.0.0");
+    assert_eq!(healthy["newest_release"]["status"], "approved");
+    assert_eq!(healthy["visibility"], "public");
+    assert!(healthy["stage_deadline"].is_null());
+    assert_eq!(by("forgotten")["not_slop_percent"], 0);
+    assert_eq!(by("forgotten")["players"], 0);
+    assert_eq!(by("rescanned")["rescan_flags"], 1);
+    assert_eq!(by("rescanned")["downloads_lost"], 1);
+    assert_eq!(
+        by("frozen")["frozen_reason"],
+        "Slop lost access to its repository"
+    );
+    assert_eq!(by("reported")["open_reports"], 1);
+    assert_eq!(by("paused")["donations_paused"], true);
+    let failed = by("failed");
+    assert_eq!(failed["newest_release"]["version"], "0.2.0");
+    assert_eq!(
+        failed["newest_release"]["status_reason"],
+        "The scanner timed out"
+    );
+    assert!(failed["releases"].as_array().unwrap().is_empty());
+    assert!(failed["serving_version"].is_null());
+    assert_eq!(by("waiting")["pending_releases"], 1);
+    assert!(by("soon")["stage_deadline"].is_string());
+    // Most recently changed first by default: the forgotten one is last.
+    assert_eq!(all[10]["slug"], "forgotten");
+
+    // Only those needing attention, most urgent first.
+    let urgent = get("?attention=true&sort=urgent").await;
+    let order: Vec<&str> = urgent
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        order,
+        [
+            "rescanned",
+            "frozen",
+            "reported",
+            "failed",
+            "waiting",
+            "expired",
+            "soon",
+            "paused",
+            "abandoned",
+            "forgotten"
+        ]
+    );
+    // With a status and a search; by title; a page at a time.
+    let drafts = get("?attention=true&status=draft").await;
+    assert_eq!(drafts.as_array().unwrap().len(), 2);
+    assert_eq!(
+        get("?q=forgot&attention=true").await[0]["slug"],
+        "forgotten"
+    );
+    assert_eq!(get("?q=healthy&attention=true").await, json!([]));
+    let titles = get("?sort=title&limit=3").await;
+    let titles: Vec<&str> = titles
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|a| a["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(titles, ["abandoned", "expired", "failed"]);
+    let next = get("?sort=title&limit=3&offset=3").await;
+    assert_eq!(next[0]["slug"], "forgotten");
+    assert_eq!(
+        get("?sort=urgent&attention=true&limit=2&offset=1").await[0]["slug"],
+        "frozen"
+    );
+    assert_eq!(get("?offset=11").await, json!([]));
+}

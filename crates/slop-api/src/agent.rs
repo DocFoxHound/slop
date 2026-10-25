@@ -786,10 +786,10 @@ const TOOLS: &[Tool] = &[
     // Apps
     Tool {
         name: "find_apps",
-        description: "Find apps by part of the title, address or maker's name, optionally only one status.",
+        description: "Find apps by part of the title, address or maker's name, optionally only one status or only those that need staff. Each app comes with flags, most urgent first (rescan_flagged, download_lost, frozen, reports, release_failed, release_waiting, past_deadline, deadline_soon, donations_paused, no_commits, no_players, low_rating), and the facts behind them. Up to 200 at a time; page with offset.",
         method: Method::GET,
         path: "/v1/admin/apps",
-        properties: || json!({ "q": s("Optional: part of the title, address or maker's name"), "status": s("Optional: draft, listed or delisted") }),
+        properties: || json!({ "q": s("Optional: part of the title, address or maker's name"), "status": s("Optional: draft, listed or delisted"), "attention": { "type": "boolean", "description": "Optional: true for only apps with a flag" }, "sort": s("Optional: updated (the default), urgent or title"), "limit": { "type": "integer", "description": "Optional: up to 200 (the default)" }, "offset": { "type": "integer", "description": "Optional: how many to skip" } }),
         required: &[],
     },
     Tool {

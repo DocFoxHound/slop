@@ -287,7 +287,7 @@ test("every tab opens for an owner", async ({ page }) => {
   await page.goto("/admin");
   const tabs: Array<[string, Locator]> = [
     ["Review queue", page.getByRole("navigation", { name: "Review categories" })],
-    ["Apps", page.getByRole("link", { name: "Lantern Keep", exact: true })],
+    ["Apps", page.getByRole("list", { name: "Apps" }).getByRole("button", { name: /^Actions for / }).first()],
     ["Accounts", page.getByRole("textbox", { name: /Find an account/ })],
     ["Front page", page.getByText("Featured on the front page")],
     ["Money", page.getByRole("heading", { name: /^Donation pauses/ })],
