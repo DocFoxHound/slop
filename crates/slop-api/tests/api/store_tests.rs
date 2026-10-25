@@ -3656,7 +3656,7 @@ async fn the_library_keeps_apps_that_left_the_store(db: PgPool) {
         maker_id,
         "past-deadline",
         "coming_soon",
-        "stage_entered_at = now() - interval '40 days'",
+        "stage_entered_at = now() - interval '400 days'",
     )
     .await;
     let (pat_id, pat) = app.user("Pat", "US").await;

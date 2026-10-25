@@ -223,7 +223,7 @@ export function Upcoming() {
       </div>
       <h1 className="page-title">Coming soon &amp; beta</h1>
       <p className="muted">
-        Coming soon pages have 30 days to reach beta, and betas have a year to fully release. Projects with no code
+        Coming soon pages have a year to reach beta, and betas have a year to fully release. Projects with no code
         changes for 90 days are marked dead.
       </p>
       <div className="seg" role="tablist">

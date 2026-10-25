@@ -1348,7 +1348,7 @@ async fn stage_deadlines_and_dead_projects(db: PgPool) {
         maker_id,
         "fresh-soon",
         "coming_soon",
-        "stage_entered_at = now() - interval '29 days'",
+        "stage_entered_at = now() - interval '364 days'",
     )
     .await;
     listed_with(
@@ -1356,7 +1356,7 @@ async fn stage_deadlines_and_dead_projects(db: PgPool) {
         maker_id,
         "late-soon",
         "coming_soon",
-        "stage_entered_at = now() - interval '31 days'",
+        "stage_entered_at = now() - interval '366 days'",
     )
     .await;
     listed_with(
@@ -1516,7 +1516,7 @@ async fn providers_and_stage_deadlines(db: PgPool) {
     .await;
     listed_with(&app, maker_id, "done-app", "released", "").await;
     let expected: OffsetDateTime = sqlx::query_scalar(
-        "select stage_entered_at + interval '30 days' from apps where slug = 'soon-app'",
+        "select stage_entered_at + interval '365 days' from apps where slug = 'soon-app'",
     )
     .fetch_one(&app.db)
     .await
