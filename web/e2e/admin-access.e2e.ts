@@ -342,31 +342,44 @@ test("staff with one role see what their role allows, and refusals for the rest"
 
 test("Home counts what's waiting, links to it, and finds apps and accounts", async ({ page }) => {
   await signIn(page, "admin");
-  const queue = await ok("admin", "GET", "/v1/admin/queue");
-  const actions = await ok("admin", "GET", "/v1/admin/actions");
-  const ops = await ok("admin", "GET", "/v1/admin/ops");
-  const ai = await ok("admin", "GET", "/v1/admin/ai-messages?status=open");
+  // What the API counts, read again on each try: earlier files' background work (scans, alerts)
+  // can still add to the queue while this one starts, on a slow machine.
+  const waiting = async () => {
+    const queue = await ok("admin", "GET", "/v1/admin/queue");
+    const actions = await ok("admin", "GET", "/v1/admin/actions");
+    const ops = await ok("admin", "GET", "/v1/admin/ops");
+    const ai = await ok("admin", "GET", "/v1/admin/ai-messages?status=open");
+    const counts: Array<[number, string]> = [
+      [ops.length, "Server alerts"],
+      [actions.actions.length, "Second approvals"],
+      [queue.reports.length, "Reports"],
+      [queue.appeals.length, "Appeals"],
+      [queue.rescans.length, "Re-scan flags"],
+      [queue.releases.length, "New releases"],
+      [queue.changes.length, "Release holds & moves"],
+      [queue.media.length, "Store pictures"],
+      [queue.portfolios.length, "People pages"],
+      [queue.problems.length, "People problems"],
+      [queue.review_disputes.length, "Review disputes"],
+      [queue.abuse.length, "Abuse alerts"],
+      [queue.ready_to_list.length, "Apps to list"],
+      [ai.length, "AI messages"],
+    ];
+    return { queue, counts };
+  };
+  let queue = (await waiting()).queue;
   await page.goto("/admin");
-  const counts: Array<[number, string]> = [
-    [ops.length, "Server alerts"],
-    [actions.actions.length, "Second approvals"],
-    [queue.reports.length, "Reports"],
-    [queue.appeals.length, "Appeals"],
-    [queue.rescans.length, "Re-scan flags"],
-    [queue.releases.length, "New releases"],
-    [queue.changes.length, "Release holds & moves"],
-    [queue.media.length, "Store pictures"],
-    [queue.portfolios.length, "People pages"],
-    [queue.problems.length, "People problems"],
-    [queue.review_disputes.length, "Review disputes"],
-    [queue.abuse.length, "Abuse alerts"],
-    [queue.ready_to_list.length, "Apps to list"],
-    [ai.length, "AI messages"],
-  ];
-  for (const [n, label] of counts) {
-    expect(n, label).toBeGreaterThan(0);
-    await expect(page.getByRole("link", { name: `${n} ${label}`, exact: true })).toBeVisible();
-  }
+  let first = true;
+  await expect(async () => {
+    if (!first) await page.reload();
+    first = false;
+    const now = await waiting();
+    queue = now.queue;
+    for (const [n, label] of now.counts) {
+      expect(n, label).toBeGreaterThan(0);
+      await expect(page.getByRole("link", { name: `${n} ${label}`, exact: true })).toBeVisible({ timeout: 2_000 });
+    }
+  }).toPass({ timeout: 20_000 });
   // Nothing paused, so nothing about pauses.
   await expect(page.getByRole("link", { name: /Donation pause requests/ })).toHaveCount(0);
 

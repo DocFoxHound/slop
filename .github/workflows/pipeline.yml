@@ -101,7 +101,9 @@ jobs:
             "browser tests")
               grep -E "✘|Error:|failed" "$out/e2e.log" | head -n 30
               # The failing tests' names as annotations, readable on the run page without the logs.
-              grep -E "✘" "$out/e2e.log" | head -n 8 | sed 's/^/::error::/' ;;
+              grep -E "✘" "$out/e2e.log" | head -n 5 | sed 's/^/::error::/'
+              # And what went wrong: the error and the test line it stopped at.
+              grep -E "Error:|^ *> *[0-9]+ \|" "$out/e2e.log" | head -n 4 | sed 's/^ */::error::/' ;;
             *) tail -n 30 "$out/container.log" ;;
           esac || true
           echo "::error::failed at: $step"
