@@ -5,7 +5,7 @@ import { Link, useParams } from "react-router";
 import { api, type AppDetail, type AppPlatform, type Credit } from "../api";
 import { engines } from "../components/Checks";
 import { Gallery } from "../components/Gallery";
-import { RatingPanel } from "../components/RatingPanel";
+import { RatingHeader, RatingPanel } from "../components/RatingPanel";
 import { ReportButton } from "../components/Report";
 import { AppLabel, LabelNotes } from "../components/AppLabel";
 import { AppBounties } from "./Bounties";
@@ -139,6 +139,7 @@ function AppView({ app }: { app: AppDetail }) {
               )}{" "}
               · {app.kind === "game" ? "Game" : "App"}
             </div>
+            {!app.private && <RatingHeader slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />}
           </div>
           {upcoming && (
             <div className="panel panel-pad stage-panel">
@@ -243,9 +244,9 @@ function AppView({ app }: { app: AppDetail }) {
           ) : (
             <p className="muted">The maker hasn't written a description yet.</p>
           )}
-          <AppLabel slug={app.slug} />
           {!app.private && <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />}
           {!app.private && <Reviews slug={app.slug} />}
+          <AppLabel slug={app.slug} />
           {me && app.stage !== "coming_soon" && <BugReports slug={app.slug} />}
           {!app.private && !app.platforms.includes("any") && <AppBounties slug={app.slug} title={app.title} />}
         </div>
