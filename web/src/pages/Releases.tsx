@@ -23,11 +23,11 @@ import {
   type ReleaseRating,
   type UpdateSettings,
 } from "../api";
-import { PublishProgress } from "../components/PublishProgress";
+import { PublishProgress, refreshEvery } from "../components/PublishProgress";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { CONTENT_LABEL, formatDate } from "../format";
-import { useDocumentTitle, useLoad } from "../hooks";
+import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { useSession } from "../session";
 import { AgeSelect, ContentLabelPicker } from "./Publish";
@@ -39,7 +39,7 @@ const STATUS: Record<
   fetching: {
     label: "CHECKING FILES",
     badge: "neutral",
-    help: "Slop is downloading each file once to record its size and hash.",
+    help: "Slop is downloading, hashing and scanning each file, one at a time: Publishing progress above shows which.",
   },
   awaiting_review: {
     label: "IN REVIEW",
@@ -144,13 +144,9 @@ export function Releases() {
   const server = useLoad(() => api.server(), []);
   // New releases start from what the last approved one needed.
   const lastRuntimes = releases.data?.find((r) => r.status === "approved")?.runtimes ?? [];
-  // While files are being checked, refresh every few seconds so progress moves on its own.
-  const checking = releases.data?.some((r) => r.status === "fetching");
-  useEffect(() => {
-    if (!checking) return;
-    const timer = setInterval(() => releases.reload(), 4000);
-    return () => clearInterval(timer);
-  }, [checking, releases.reload]);
+  // While files are being checked (or a person reviews it), look again now and then so progress
+  // moves on its own; stop once nothing is under way.
+  useInterval(releases.reload, refreshEvery(releases.data));
   useDocumentTitle(app.data ? `${app.data.title} releases` : "Releases");
   const [settingsNonce, setSettingsNonce] = useState(0);
 
@@ -1216,7 +1212,7 @@ function FixesPanel({ slug, nonce }: { slug: string; nonce: string }) {
     (f.guide_section ? `\n(Slop's publishing guide, section "${f.guide_section}", has the details.)` : "");
   const all = list.map(prompt).join("\n\n") + `\n\n${fixes.data?.next ?? ""}`;
   return (
-    <section className="panel panel-pad" aria-labelledby="fixes-title">
+    <section className="panel panel-pad" id="fixes" aria-labelledby="fixes-title">
       <h2 id="fixes-title">To fix in {fixes.data?.release?.version}</h2>
       <p className="muted small">
         Copy these to your AI coding agent, or connect it to Slop (Account → AI agents) and ask it to run get_fixes.

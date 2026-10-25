@@ -681,6 +681,7 @@ export function AccountMoney() {
         </section>
       )}
       {receiving && <ReceivingDonations account={account} />}
+      {account.data?.status === "none" && account.data.payments !== "off" && <DonationsSetupHint />}
       {statements.data && statements.data.statements.length > 0 && (
         <FeeStatements statements={statements.data.statements} vat={statements.data.vat} onVat={statements.reload} />
       )}
@@ -691,6 +692,51 @@ export function AccountMoney() {
         </p>
       )}
     </>
+  );
+}
+
+/**
+ * Makers with apps but no Stripe account yet: where donations are turned on (per app, on its
+ * Manage page, which starts Stripe's own sign-up). Private apps take no donations, so they're left
+ * out.
+ */
+function DonationsSetupHint() {
+  const apps = useLoad(async () => {
+    const mine = await api.myApps();
+    const settings = await Promise.all(mine.map((a) => api.donations.settings(a.slug).catch(() => null)));
+    return mine.filter((_, i) => settings[i] && !settings[i]!.private && !settings[i]!.donations_on);
+  }, []);
+  const list = apps.data ?? [];
+  if (list.length === 0) return null;
+  const shown = list.slice(0, 10);
+  return (
+    <section id="donations-setup" className="account-panel" aria-labelledby="donations-setup-title">
+      <h3 className="account-panel-title" id="donations-setup-title">
+        Want donations?
+      </h3>
+      <div className="panel panel-pad">
+        <p>
+          Turn them on per app: <b>Publish → your app → Manage → Donations</b>. That starts Stripe's own sign-up (you need to
+          be 18 or older), and donations then go straight to your Stripe account. Slop's fee is 5%, and donations never unlock
+          anything.
+        </p>
+        <ul className="plain donation-setup-list">
+          {shown.map((a) => (
+            <li key={a.slug}>
+              <b>{a.title}</b>{" "}
+              <Link to={`/publish/${a.slug}/manage#donations`} aria-label={`Set up donations for ${a.title}`}>
+                Set up donations
+              </Link>
+            </li>
+          ))}
+        </ul>
+        {list.length > shown.length && (
+          <p className="small">
+            <Link to="/publish">All your apps</Link>
+          </p>
+        )}
+      </div>
+    </section>
   );
 }
 
