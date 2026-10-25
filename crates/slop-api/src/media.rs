@@ -6,6 +6,7 @@
 //! ```json
 //! {
 //!   "thumbnail": "thumbnail.png",
+//!   "icon": "icon.png",
 //!   "gallery": [
 //!     { "image": "screenshots/title.png", "caption": "The title screen" },
 //!     { "youtube": "https://youtu.be/…", "poster": "screenshots/trailer.png" }
@@ -17,6 +18,10 @@
 //! "check", or a release's commit when one is fetched), downloads each picture once to check it
 //! (format, size, dimensions, SHA-256), and keeps links to the files **at that commit**. Git
 //! content at a commit can't change, so the pictures people see are the ones that were reviewed.
+//!
+//! The icon is a square picture (256 to 1024 pixels a side, best 512) for players' libraries, store
+//! tiles and the app's page. It's optional but recommended: without one the website crops the
+//! thumbnail, then shows the app's first letter, and the maker's tools say it's missing.
 //!
 //! Every new set of pictures waits for review, by a person or an AI reviewer (review.rs); the
 //! store keeps showing the last approved set meanwhile. A set with the same pictures and
@@ -49,6 +54,7 @@ use crate::{
     AppState, admin,
     auth::session::CurrentUser,
     error::{ApiError, ApiResult},
+    fixes::Fix,
     updates::owned,
 };
 
@@ -65,6 +71,16 @@ const MAX_CAPTION: usize = 200;
 const THUMB_MIN: (u32, u32) = (460, 215);
 const SHOT_MIN: (u32, u32) = (320, 180);
 const MAX_SIDE: u32 = 8192;
+/// The icon is square: at least this many pixels a side…
+pub const ICON_MIN: u32 = 256;
+/// …and at most this many. Libraries show it at 32–64 pixels, the app's page at up to 128.
+pub const ICON_MAX: u32 = 1024;
+/// What the guides suggest.
+pub const ICON_BEST: u32 = 512;
+/// The largest icon Slop accepts: plenty for 1024×1024.
+pub const MAX_ICON_BYTES: u64 = 4 * 1024 * 1024;
+/// Icons are still pictures: no GIFs.
+const ICON_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp"];
 
 pub fn routes() -> Router<AppState> {
     Router::new()
@@ -135,6 +151,9 @@ pub struct MediaSet {
     pub commit_sha: String,
     #[sqlx(json(nullable))]
     pub thumbnail: Option<Picture>,
+    /// The square icon, if media.json names one.
+    #[sqlx(json(nullable))]
+    pub icon: Option<Picture>,
     #[sqlx(json)]
     pub gallery: Vec<Item>,
     pub status: String,
@@ -144,24 +163,34 @@ pub struct MediaSet {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     pub reviewed_at: Option<OffsetDateTime>,
-    /// Other makers' apps whose icon looks like this thumbnail, for the reviewer.
+    /// Other makers' apps whose thumbnail or icon looks like this set's, for the reviewer.
     #[sqlx(json)]
     pub lookalikes: Vec<Lookalike>,
 }
 
-/// Another maker's app with an icon like a new thumbnail.
+/// Another maker's app with a thumbnail or icon like a new one.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Lookalike {
     pub slug: String,
     pub title: String,
     /// Differing bits out of 64: 0 is the same picture.
     pub distance: u32,
+    /// Which picture: `thumbnail` (compared with other thumbnails) or `icon` (with other icons).
+    /// Sets from before icons have only thumbnails.
+    #[serde(default = "Lookalike::thumbnail")]
+    pub kind: String,
+}
+
+impl Lookalike {
+    fn thumbnail() -> String {
+        "thumbnail".into()
+    }
 }
 
 /// Hashes this close (out of 64 bits) count as looking alike.
 const LOOKALIKE_DISTANCE: u32 = 10;
 
-pub const SET_COLUMNS: &str = "id, commit_sha, thumbnail, gallery, status, status_reason, source, created_at, reviewed_at, lookalikes";
+pub const SET_COLUMNS: &str = "id, commit_sha, thumbnail, icon, gallery, status, status_reason, source, created_at, reviewed_at, lookalikes";
 
 pub async fn load_set(db: &sqlx::PgPool, id: Uuid) -> sqlx::Result<MediaSet> {
     sqlx::query_as(sqlx::AssertSqlSafe(format!(
@@ -240,6 +269,7 @@ pub async fn gallery(state: &AppState, app_id: Uuid) -> sqlx::Result<Vec<Gallery
 #[serde(deny_unknown_fields)]
 struct Manifest {
     thumbnail: Option<String>,
+    icon: Option<String>,
     #[serde(default)]
     gallery: Vec<ManifestItem>,
 }
@@ -419,16 +449,41 @@ impl<'a> Reader<'a> {
         min: (u32, u32),
     ) -> Result<Picture, Problem> {
         let path = clean_path(path)?;
+        self.fetch(path, min, MAX_IMAGE_BYTES).await
+    }
+
+    /// The app's icon: a square PNG, JPEG or WebP, 256 to 1024 pixels a side, up to 4 MB.
+    /// Problems with it start with "icon: ", so the maker's page shows them on the icon.
+    pub(crate) async fn icon(&mut self, path: &str) -> Result<Picture, Problem> {
+        let checked = async {
+            let path = clean_file_path(path, ICON_EXTS, "a PNG, JPEG or WebP picture")?;
+            let picture = self
+                .fetch(path, (ICON_MIN, ICON_MIN), MAX_ICON_BYTES)
+                .await?;
+            check_icon(&picture)?;
+            Ok(picture)
+        };
+        checked
+            .await
+            .map_err(|Problem(p)| Problem(format!("icon: {p}")))
+    }
+
+    async fn fetch(
+        &mut self,
+        path: String,
+        min: (u32, u32),
+        max_bytes: u64,
+    ) -> Result<Picture, Problem> {
         if let Some(p) = self.seen.get(&path) {
             inspect_dims(p, min)?;
             return Ok(p.clone());
         }
         let url = self.base.join(&path)?;
-        let bytes = match download(self.state, url.clone(), MAX_IMAGE_BYTES).await {
+        let bytes = match download(self.state, url.clone(), max_bytes).await {
             Ok(Some(b)) => b,
             Ok(None) => problem!("{MANIFEST_DIR}/{path} isn't in the repository at that commit"),
             Err(e) if e.to_string() == "too big" => {
-                problem!("{path} is over 8 MB")
+                problem!("{path} is over {} MB", max_bytes / (1024 * 1024))
             }
             Err(e) => problem!("couldn't download {path}: {e:#}"),
         };
@@ -447,6 +502,28 @@ impl<'a> Reader<'a> {
         self.seen.insert(path, picture.clone());
         Ok(picture)
     }
+}
+
+/// An icon is square, at most `ICON_MAX` a side, and not a GIF (the minimum is checked on reading).
+fn check_icon(p: &Picture) -> Result<(), Problem> {
+    let Picture {
+        path,
+        width: w,
+        height: h,
+        ..
+    } = p;
+    if p.format == "gif" {
+        problem!("{path} is a GIF; the icon has to be a PNG, JPEG or WebP picture");
+    }
+    if w != h {
+        problem!("{path} is {w}×{h}; the icon has to be square, e.g. {ICON_BEST}×{ICON_BEST}");
+    }
+    if *w > ICON_MAX {
+        problem!(
+            "{path} is {w}×{h}; the icon can be up to {ICON_MAX}×{ICON_MAX} (best {ICON_BEST}×{ICON_BEST})"
+        );
+    }
+    Ok(())
 }
 
 fn inspect_dims(p: &Picture, min: (u32, u32)) -> Result<(), Problem> {
@@ -550,6 +627,11 @@ async fn read_and_store(
         base,
         seen: HashMap::new(),
     };
+    // The icon first, so it's downloaded under its own size limit even if it's listed twice.
+    let icon = match &manifest.icon {
+        Some(path) => Some(reader.icon(path).await?),
+        None => None,
+    };
     let thumbnail = match &manifest.thumbnail {
         Some(path) => Some(reader.picture(path, THUMB_MIN).await?),
         None => None,
@@ -595,7 +677,7 @@ async fn read_and_store(
         );
     }
 
-    let fingerprint = fingerprint(thumbnail.as_ref(), &gallery);
+    let fingerprint = fingerprint(thumbnail.as_ref(), icon.as_ref(), &gallery);
     let mut tx = state.db.begin().await?;
     sqlx::query("select 1 from apps where id = $1 for update")
         .bind(app_id)
@@ -646,15 +728,17 @@ async fn read_and_store(
         problem!("these are the pictures that were turned down: {reason}");
     }
     let id = Uuid::now_v7();
-    let like = lookalikes(&mut tx, app_id, thumbnail.as_ref()).await?;
+    let mut like = lookalikes(&mut tx, app_id, Compared::Thumbnail, thumbnail.as_ref()).await?;
+    like.extend(lookalikes(&mut tx, app_id, Compared::Icon, icon.as_ref()).await?);
     sqlx::query(
-        "insert into media_sets (id, app_id, commit_sha, thumbnail, gallery, fingerprint, source, lookalikes)
-         values ($1, $2, $3, $4, $5, $6, $7, $8)",
+        "insert into media_sets (id, app_id, commit_sha, thumbnail, icon, gallery, fingerprint, source, lookalikes)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9)",
     )
     .bind(id)
     .bind(app_id)
     .bind(&commit)
     .bind(thumbnail.map(sqlx::types::Json))
+    .bind(icon.map(sqlx::types::Json))
     .bind(sqlx::types::Json(&gallery))
     .bind(&fingerprint)
     .bind(source)
@@ -698,24 +782,44 @@ pub async fn dhash_off_thread(bytes: Vec<u8>) -> Option<u64> {
         .flatten()
 }
 
-/// Other makers' apps whose live icon looks like `thumbnail`, closest first.
+/// Which picture `lookalikes` compares: a thumbnail with other thumbnails, an icon with icons.
+#[derive(Clone, Copy)]
+enum Compared {
+    Thumbnail,
+    Icon,
+}
+
+impl Compared {
+    /// The `media_sets` column, and the `kind` a look-alike gets.
+    fn column(self) -> &'static str {
+        match self {
+            Compared::Thumbnail => "thumbnail",
+            Compared::Icon => "icon",
+        }
+    }
+}
+
+/// Other makers' apps whose live thumbnail (or icon) looks like this one, closest first.
 async fn lookalikes(
     conn: &mut sqlx::PgConnection,
     app_id: Uuid,
-    thumbnail: Option<&Picture>,
+    compared: Compared,
+    picture: Option<&Picture>,
 ) -> sqlx::Result<Vec<Lookalike>> {
-    let Some(mine) = thumbnail
+    let Some(mine) = picture
         .and_then(|t| t.dhash.as_deref())
         .and_then(|h| u64::from_str_radix(h, 16).ok())
     else {
         return Ok(vec![]);
     };
-    let others: Vec<(String, String, String)> = sqlx::query_as(
-        "select a.slug, a.title, ms.thumbnail->>'dhash'
+    // The column name is one of two fixed words, never input.
+    let column = compared.column();
+    let others: Vec<(String, String, String)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select a.slug, a.title, ms.{column}->>'dhash'
          from apps a join media_sets ms on ms.id = a.media_set_id
          where a.maker_id <> (select maker_id from apps where id = $1)
-           and ms.thumbnail ? 'dhash'",
-    )
+           and ms.{column} ? 'dhash'"
+    )))
     .bind(app_id)
     .fetch_all(&mut *conn)
     .await?;
@@ -727,6 +831,7 @@ async fn lookalikes(
                 slug,
                 title,
                 distance,
+                kind: column.to_string(),
             })
         })
         .collect();
@@ -767,7 +872,7 @@ pub async fn hash_old_thumbnails(state: &AppState, limit: i64) -> anyhow::Result
 }
 
 /// What the pictures are, regardless of which commit they were read at or their order.
-fn fingerprint(thumbnail: Option<&Picture>, gallery: &[Item]) -> String {
+fn fingerprint(thumbnail: Option<&Picture>, icon: Option<&Picture>, gallery: &[Item]) -> String {
     let pic = |p: &Picture| json!([p.path, p.sha256]);
     let mut sorted: Vec<&Item> = gallery.iter().collect();
     sorted.sort_by_key(|i| i.key());
@@ -782,7 +887,11 @@ fn fingerprint(thumbnail: Option<&Picture>, gallery: &[Item]) -> String {
             } => json!(["video", youtube_id, poster.as_ref().map(pic), caption]),
         })
         .collect();
-    let value = json!([thumbnail.map(pic), items]);
+    // A set without an icon keeps the fingerprint it had before icons, so it isn't reviewed again.
+    let value = match icon {
+        Some(icon) => json!([thumbnail.map(pic), items, pic(icon)]),
+        None => json!([thumbnail.map(pic), items]),
+    };
     hex::encode(Sha256::digest(value.to_string().as_bytes()))
 }
 
@@ -896,6 +1005,55 @@ pub async fn has_pending(conn: &mut sqlx::PgConnection, app_id: Uuid) -> sqlx::R
 // ---------------------------------------------------------------------------------------------
 // The maker's view
 
+/// The line that names the icon in `.slop/media.json`.
+pub const ICON_LINE: &str = "\"icon\": \"icon.png\"";
+
+/// "No icon yet", as a recommendation for the maker and their agent (never a blocker).
+pub fn missing_icon() -> Fix {
+    Fix {
+        kind: "icon:missing".into(),
+        severity: "recommended",
+        problem:
+            "The app has no icon yet. Slop shows it in players' libraries, on store tiles and \
+                  on the app's page; until there is one, it crops the thumbnail or shows the \
+                  app's first letter."
+                .into(),
+        instruction: format!(
+            "Add a square icon: a PNG (or JPEG or WebP), {ICON_BEST}×{ICON_BEST} is best (at least \
+             {ICON_MIN}×{ICON_MIN}, at most {ICON_MAX}×{ICON_MAX}, up to 4 MB). Make it from the \
+             app's own art: its logo, a character, or a square crop of a screenshot or the \
+             thumbnail. Never a picture that suggests another game, brand or maker, and nothing \
+             the app doesn't have. Save it as .slop/icon.png and add {ICON_LINE} to \
+             .slop/media.json (if there's no media.json yet, create it containing \
+             {{ {ICON_LINE} }}). Commit and push, then run check_pictures (or the owner presses \
+             Check my repository now under Edit store page). A person reviews it with the other \
+             pictures before it shows."
+        ),
+        guide_section: Some(GUIDE_SECTION),
+    }
+}
+
+/// The publishing guide's section on pictures, by its heading.
+pub const GUIDE_SECTION: &str = "Pictures and videos";
+
+/// Recommendations about an app's pictures for the maker's tools: "no icon yet" unless the shown
+/// set or the one waiting for review has an icon.
+pub async fn recommendations(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<Fix>> {
+    let has_icon: bool = sqlx::query_scalar(
+        "select exists (select 1 from media_sets ms join apps a on a.id = ms.app_id
+                        where ms.app_id = $1 and ms.icon is not null
+                          and (ms.status = 'pending' or ms.id = a.media_set_id))",
+    )
+    .bind(app_id)
+    .fetch_one(db)
+    .await?;
+    Ok(if has_icon {
+        vec![]
+    } else {
+        vec![missing_icon()]
+    })
+}
+
 #[derive(Serialize)]
 struct Overview {
     /// The pictures the store shows.
@@ -908,6 +1066,10 @@ struct Overview {
     checked_at: Option<OffsetDateTime>,
     /// What was wrong the last time Slop read the repository.
     problem: Option<String>,
+    /// The same, when it was the icon that was wrong (without the "icon: " it starts with).
+    icon_problem: Option<String>,
+    /// What's worth adding that never blocks anything: today, an icon when there's none.
+    recommendations: Vec<Fix>,
     /// Only GitHub repositories so far.
     supported: bool,
     manifest_path: &'static str,
@@ -954,12 +1116,23 @@ async fn load_overview(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiRes
     let rejected = newest("rejected")
         .await?
         .filter(|r| pending.is_none() && live.as_ref().is_none_or(|l| l.created_at < r.created_at));
+    let has_icon = |s: &Option<MediaSet>| s.as_ref().is_some_and(|s| s.icon.is_some());
+    let recommendations = if has_icon(&live) || has_icon(&pending) {
+        vec![]
+    } else {
+        vec![missing_icon()]
+    };
     Ok(Overview {
         live,
         pending,
         rejected,
         checked_at,
+        icon_problem: problem
+            .as_deref()
+            .and_then(|p| p.strip_prefix("icon: "))
+            .map(str::to_string),
         problem,
+        recommendations,
         supported: slop_provenance::github_repo_path(repo_url).is_some(),
         manifest_path: MANIFEST_PATH,
         order,
@@ -1030,6 +1203,7 @@ async fn set_order(
 #[cfg(test)]
 mod tests {
     use super::*;
+    use serde_json::Value;
 
     /// An icon: a coloured disc on a gradient, as PNG.
     fn icon(size: u32, shift: u8, disc_at: f32) -> Vec<u8> {
@@ -1124,7 +1298,10 @@ mod tests {
         );
         // The order doesn't change what's reviewed.
         let reversed: Vec<_> = items.iter().rev().cloned().collect();
-        assert_eq!(fingerprint(None, &items), fingerprint(None, &reversed));
+        assert_eq!(
+            fingerprint(None, None, &items),
+            fingerprint(None, None, &reversed)
+        );
     }
 
     #[test]
@@ -1142,6 +1319,65 @@ mod tests {
         ] {
             assert!(clean_path(bad).is_err(), "{bad}");
         }
+    }
+
+    #[test]
+    fn icons_are_square_and_not_too_big() {
+        let pic = |w, h, format: &str| Picture {
+            path: "icon.png".into(),
+            url: "https://example.com/icon.png".into(),
+            sha256: "x".into(),
+            width: w,
+            height: h,
+            format: format.into(),
+            dhash: None,
+        };
+        assert!(check_icon(&pic(512, 512, "png")).is_ok());
+        assert!(check_icon(&pic(256, 256, "webp")).is_ok());
+        assert!(check_icon(&pic(1024, 1024, "jpeg")).is_ok());
+        let refused = |p: Picture| check_icon(&p).unwrap_err().0;
+        assert!(refused(pic(512, 300, "png")).contains("has to be square"));
+        assert!(refused(pic(2048, 2048, "png")).contains("up to 1024×1024"));
+        assert!(refused(pic(512, 512, "gif")).contains("is a GIF"));
+        // The smallest size is checked when it's read, from the header.
+        let mut out = Vec::new();
+        image::RgbImage::new(200, 200)
+            .write_to(&mut Cursor::new(&mut out), ImageFormat::Png)
+            .unwrap();
+        assert!(
+            inspect("icon.png", &out, (ICON_MIN, ICON_MIN))
+                .unwrap_err()
+                .0
+                .contains("at least 256×256")
+        );
+        assert!(clean_file_path("icon.gif", ICON_EXTS, "a PNG, JPEG or WebP picture").is_err());
+        assert!(clean_file_path("icon.svg", ICON_EXTS, "a PNG, JPEG or WebP picture").is_err());
+    }
+
+    #[test]
+    fn a_set_without_an_icon_keeps_its_fingerprint() {
+        let thumb = Picture {
+            path: "t.png".into(),
+            url: "u".into(),
+            sha256: "abc".into(),
+            width: 920,
+            height: 430,
+            format: "png".into(),
+            dhash: None,
+        };
+        // As sets were fingerprinted before icons: unchanged, so they aren't reviewed again.
+        let before = hex::encode(Sha256::digest(
+            json!([json!(["t.png", "abc"]), Vec::<Value>::new()])
+                .to_string()
+                .as_bytes(),
+        ));
+        assert_eq!(fingerprint(Some(&thumb), None, &[]), before);
+        let icon = Picture {
+            path: "icon.png".into(),
+            sha256: "def".into(),
+            ..thumb.clone()
+        };
+        assert_ne!(fingerprint(Some(&thumb), Some(&icon), &[]), before);
     }
 
     #[test]

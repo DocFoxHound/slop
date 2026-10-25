@@ -30,7 +30,13 @@ reviews it. Read only the guide sections you need (`publishing_guide`).
 1. Read the repository. Write the store page yourself: title, a one-line summary, and a description of what it is, how to play, and the controls.
 2. `list_categories` for tags. Pick an age (0, 7, 12, 16, 18) and content labels honestly.
 3. `create_store_page`. It's a draft until a release is approved.
-4. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`.
+4. Pictures: add a `.slop/` folder with `media.json` naming an **icon** (square, 512×512 PNG is
+   best; 256 to 1024 pixels a side), a thumbnail (920×430) and screenshots, push, then
+   `check_pictures`. Make the icon from the app's own art (its logo, a character, a square crop of
+   a screenshot); never one that shows something the app doesn't have or suggests another game.
+   No icon yet is fine (never a blocker): `get_fixes` lists it under `recommendations`. Guide
+   section "Pictures and videos".
+5. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`.
 
 If a tool answers `terms_required` (field `publisher`: the Publisher Agreement changed since your
 maker accepted it), tell them it's waiting for them on Slop under **Account → AI agents** (the

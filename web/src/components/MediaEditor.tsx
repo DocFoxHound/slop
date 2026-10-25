@@ -9,9 +9,11 @@ import { Link } from "react-router";
 import { api, ApiError, mediaKey, type AppDetail, type MediaItem, type MediaOverview, type MediaSet } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
+import { IconSlot } from "./IconSlot";
 import { ErrorState, ExternalLink, Loading } from "./ui";
 
 const EXAMPLE = `{
+  "icon": "icon.png",
   "thumbnail": "thumbnail.png",
   "gallery": [
     { "image": "screenshots/title.png", "caption": "The title screen" },
@@ -55,15 +57,17 @@ export function MediaEditor({ app }: { app: AppDetail }) {
   return (
     <section className="panel panel-pad form media-editor">
       <h2>Pictures &amp; videos</h2>
+      <IconSlot app={app} overview={m} />
       <p className="muted small">
-        Your thumbnail (the store tile), screenshots and videos come from your repository, not from uploads. Put the
-        pictures in a <code>.slop</code> folder and list them in <code>{m.manifest_path}</code>:
+        Your icon, thumbnail (the store tile), screenshots and videos come from your repository, not from uploads. Put
+        the pictures in a <code>.slop</code> folder and list them in <code>{m.manifest_path}</code>:
       </p>
       <pre className="code-block">{EXAMPLE}</pre>
       <p className="muted small">
-        Paths are inside <code>.slop/</code>. PNG, JPEG, WebP or GIF, up to 8 MB each; the thumbnail is best at 920×430
-        (at least 460×215), screenshots at least 320×180. Up to 20 screenshots and videos. Videos are YouTube links; the{" "}
-        <code>poster</code> is optional. See <Link to="/publish/guide">How to publish</Link>.
+        Paths are inside <code>.slop/</code>. PNG, JPEG, WebP or GIF, up to 8 MB each; the icon is square (see above),
+        the thumbnail is best at 920×430 (at least 460×215), screenshots at least 320×180. Up to 20 screenshots and
+        videos. Videos are YouTube links; the <code>poster</code> is optional. See{" "}
+        <Link to="/publish/guide#pictures-and-videos">How to publish</Link>.
       </p>
       <p className="muted small">
         Every new set of pictures is reviewed before it shows (and before the app first goes in the store). Slop also
