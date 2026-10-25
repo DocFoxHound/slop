@@ -2534,6 +2534,12 @@ export const api = {
       `/v1/apps/${encodeURIComponent(slug)}/media/order`,
       { keys },
     ),
+  /** Whether a store address is free, with a free one like it when it isn't (catalog.rs). */
+  addressAvailable: (slug: string) =>
+    request<{ slug: string; available: boolean; suggestion: string | null }>(
+      "GET",
+      `/v1/apps/${encodeURIComponent(slug)}/available`,
+    ),
   /** The licence GitHub finds in a repository, for the Publish form. */
   detectLicense: (repoUrl: string) =>
     request<{ spdx: string | null; name: string | null; note: string | null }>(

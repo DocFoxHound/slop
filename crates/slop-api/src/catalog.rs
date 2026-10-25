@@ -30,6 +30,7 @@ pub fn routes() -> Router<AppState> {
         .route("/apps", get(list_apps).post(create_app))
         .route("/apps/{slug}", get(get_app).patch(update_app))
         .route("/apps/{slug}/similar", get(similar_apps))
+        .route("/apps/{slug}/available", get(address_available))
         .route(
             "/apps/{slug}/sandbox-report",
             put(report_sandbox).delete(unreport_sandbox),
@@ -1233,6 +1234,54 @@ pub(crate) fn validate_online_hosts(hosts: &[String]) -> ApiResult<Vec<String>> 
 
 const MAX_TAGS: usize = 10;
 
+#[derive(Serialize)]
+struct AddressCheck {
+    slug: String,
+    available: bool,
+    /// A free address like this one, when it's taken.
+    suggestion: Option<String>,
+}
+
+/// Whether a store address is free, and a free one like it when it isn't: the new-app form asks
+/// as the maker types. Signed in, like creating an app.
+async fn address_available(
+    State(state): State<AppState>,
+    _user: CurrentUser,
+    Path(slug): Path<String>,
+) -> ApiResult<Json<AddressCheck>> {
+    validate_slug(&slug)?;
+    let suggestion = free_address(&state.db, &slug).await?;
+    Ok(Json(AddressCheck {
+        available: suggestion.is_none(),
+        slug,
+        suggestion,
+    }))
+}
+
+/// `None` when `slug` itself is free; otherwise the first free `<slug>-2`, `-3`… (a trailing
+/// number is replaced, so `game-2` suggests `game-3`, not `game-2-2`), kept within 60 characters.
+async fn free_address(db: &sqlx::PgPool, slug: &str) -> sqlx::Result<Option<String>> {
+    let base = match slug.rsplit_once('-') {
+        Some((head, tail)) if !head.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) => head,
+        _ => slug,
+    };
+    let taken: Vec<String> =
+        sqlx::query_scalar("select slug from apps where slug = $1 or slug like $2")
+            .bind(slug)
+            .bind(format!("{base}-%"))
+            .fetch_all(db)
+            .await?;
+    if !taken.iter().any(|t| t == slug) {
+        return Ok(None);
+    }
+    Ok((2..1000).find_map(|n| {
+        let tail = format!("-{n}");
+        let head = &base[..base.len().min(60 - tail.len())];
+        let candidate = format!("{}{tail}", head.trim_end_matches('-'));
+        (!taken.contains(&candidate)).then_some(candidate)
+    }))
+}
+
 pub(crate) fn validate_slug(slug: &str) -> ApiResult<()> {
     let ok = (3..=60).contains(&slug.len())
         && slug.split('-').all(|part| {
@@ -1427,7 +1476,7 @@ async fn create_app(
 
     let app_id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
-    sqlx::query(
+    let inserted = sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
                            platforms, visibility, content_labels, online, online_hosts, sandbox_ready, mods_folder,
                            accessibility, bug_reports)
@@ -1454,14 +1503,20 @@ async fn create_app(
     .bind(crate::label::validate_accessibility(&req.accessibility)?)
     .bind(req.bug_reports)
     .execute(&mut *tx)
-    .await
-    .map_err(|err| {
-        if is_unique_violation(&err) {
-            ApiError::invalid("slug", "that address is taken")
-        } else {
-            err.into()
+    .await;
+    match inserted {
+        Ok(_) => {}
+        Err(err) if is_unique_violation(&err) => {
+            drop(tx);
+            // Taken: say which one is free, for the form and for makers' agents alike.
+            let message = match free_address(&state.db, &req.slug).await? {
+                Some(free) => format!("that address is taken; {free} is free"),
+                None => "that address is taken".to_string(),
+            };
+            return Err(ApiError::invalid("slug", message));
         }
-    })?;
+        Err(err) => return Err(err.into()),
+    }
     set_tags(&mut tx, app_id, &tag_ids).await?;
     if let (Some(t), Some(key)) = (&req.repo_token, state.config.releases.repo_token_key) {
         crate::repo_tokens::store(&mut tx, &key, app_id, &repo_url, t, user.id).await?;

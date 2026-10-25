@@ -116,12 +116,19 @@ test("the new app form: the address follows the name, errors show where they bel
   await tags.getByRole("button", { name: "Cozy" }).click();
   await expect(tags.getByRole("button", { name: "Retro" })).toBeEnabled();
 
-  // An address that's taken.
+  // An address that's taken: the form says so as it's typed and offers a free one; sending it
+  // anyway names the free one too (makers' agents get the same answer).
+  const addressLabel = page.locator("label").filter({ hasText: "Store address" });
   await address.fill("lantern-keep");
+  await expect(addressLabel.getByRole("status")).toContainText("Taken.");
+  const use = addressLabel.getByRole("button", { name: /^Use lantern-keep-\d+$/ });
+  await expect(use).toBeVisible();
   await create.click();
-  await expect(page.locator("label").filter({ hasText: "Store address" }).getByRole("alert")).toHaveText(
-    "that address is taken",
-  );
+  await expect(addressLabel.getByRole("alert")).toHaveText(/^that address is taken; lantern-keep-\d+ is free$/);
+  const free = (await use.textContent())!.replace("Use ", "");
+  await use.click();
+  await expect(address).toHaveValue(free);
+  await expect(addressLabel.getByRole("status")).toHaveText(`✓ slop/app/${free} is free.`);
 
   // A repository that's already on Slop: the form says so before sending, and the API refuses.
   await address.fill(uniq("ferry"));
