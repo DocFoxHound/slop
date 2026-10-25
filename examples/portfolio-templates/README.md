@@ -15,6 +15,11 @@ Each folder is a whole portfolio repository: its `.slop/` folder passes every ch
 with placeholder pictures (and, in tracklist, two one-second test tones) for you to replace.
 Each folder's README says what to change.
 
+Each one also has a page design in `.slop/page/` (`index.html` and `style.css`), with its own look:
+Gallery a big wall of pictures, Showreel one featured video, Tracklist a numbered track list, and
+Studio the team and its services. Keep it, change it, or delete the `page/` folder for Slop's
+standard layout; the rules are under "Your page's design" in the guide.
+
 The full guide, with every rule: [portfolio.md](https://slopai.games/portfolio.md) (also on any
 Slop site at `/portfolio.md`). Using an AI assistant? Tell it: *"Read
 https://slopai.games/portfolio.md and help me build my Slop portfolio."*

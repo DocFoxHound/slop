@@ -316,7 +316,8 @@ test("the portfolio guide is served for people and AI assistants", async ({ requ
   const text = await res.text();
   expect(text).toContain("# Your Slop portfolio");
   expect(text).toContain(".slop/portfolio.json");
-  expect(text).toContain("## Your page's design (coming soon)");
+  expect(text).toContain("## Your page's design");
+  expect(text).toContain("<slop-works></slop-works>");
 });
 
 test("a turned-down portfolio shows why; Stripe pending, Check again, and payments off", async ({ page }) => {

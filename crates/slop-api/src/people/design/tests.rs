@@ -609,3 +609,31 @@ fn the_allow_lists_are_whole_words() {
     }
     assert!(listed(FUNCTIONS, "repeating-conic-gradient") && listed(UNITS, "dppx"));
 }
+
+/// web/public/portfolio.md states the rules this file enforces; it has to change when they do.
+#[test]
+fn the_portfolio_guide_states_the_design_rules() {
+    let guide = include_str!("../../../../../web/public/portfolio.md");
+    let mut want = vec![
+        HTML_PATH.to_string(),
+        CSS_PATH.to_string(),
+        format!("{} KB", MAX_HTML_BYTES / 1024),
+        format!("{} KB", MAX_CSS_BYTES / 1024),
+        format!("up to {MAX_CLASSES} classes"),
+        format!("{MAX_DEPTH} deep"),
+        "2,000 elements".to_string(),
+        format!("±{MAX_Z}"),
+        "rel=\"nofollow noopener noreferrer ugc\"".to_string(),
+    ];
+    want.extend(FONTS.iter().map(|f| format!("`{f}`")));
+    want.extend(SLOP_TAGS.iter().map(|t| format!("<{t}")));
+    want.extend(
+        TAGS.iter()
+            .map(|t| format!("`{t}`"))
+            .filter(|t| t != "`h2`" && t != "`h3`" && t != "`h4`" && t != "`h5`"),
+    );
+    for w in want {
+        assert!(guide.contains(&w), "portfolio.md doesn't say {w}");
+    }
+    assert_eq!(MAX_ELEMENTS, 2_000);
+}

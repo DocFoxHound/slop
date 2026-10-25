@@ -255,14 +255,8 @@ fn the_example_templates_pass_without_warnings() {
             format: "png".into(),
             dhash: None,
         };
-        // A template's portfolio.json comes with its works; until it's there, any work number
-        // up to the most a portfolio can have is taken as a work.
-        let manifest: Value = match std::fs::read(dir.join("portfolio.json")) {
-            Ok(bytes) => serde_json::from_slice(&bytes).unwrap(),
-            Err(_) => {
-                json!({ "works": (1..=30).map(|n| json!({ "image": format!("works/{n}.png") })).collect::<Vec<_>>() })
-            }
-        };
+        let manifest: Value =
+            serde_json::from_slice(&std::fs::read(dir.join("portfolio.json")).unwrap()).unwrap();
         let works: Vec<Work> = manifest["works"]
             .as_array()
             .unwrap()
