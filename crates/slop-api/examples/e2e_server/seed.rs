@@ -266,6 +266,24 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
         "A percentage while files are scanned would help.",
     )
     .await?;
+    // Two more, for ai-messages.e2e.ts to read, answer, close and delete: the two above stay open
+    // for the admin panel's other tests (its Home counts them, its tabs show them).
+    agent_message(
+        ctx,
+        maker.id,
+        "report",
+        "Saving a draft fails",
+        "Saving the Starship Draft page failed twice.\nLog: https://example.com/log <b>not bold</b>",
+    )
+    .await?;
+    agent_message(
+        ctx,
+        maker.id,
+        "suggestion",
+        "Let players pick a theme",
+        "A dark theme for the store page would help.",
+    )
+    .await?;
     for (name, who) in [
         ("maker", &maker),
         ("player", &player),
@@ -334,6 +352,12 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     .await?;
     s.cookies.insert("newcomer", newcomer.cookie.clone());
     s.ids.insert("newcomer", json!(newcomer.id));
+
+    // Bea Bystander: an account no test changes, for the empty states (no donations, no reports
+    // sent): whichever order the files run in, nothing has happened to her.
+    let bystander = ctx.user("Bea Bystander", "US").await?;
+    s.cookies.insert("bystander", bystander.cookie.clone());
+    s.ids.insert("bystander", json!(bystander.id));
 
     let p = people(ctx, &admin).await.context("People")?;
     s.cookies.insert("creative", p.creative.cookie.clone());
@@ -1999,7 +2023,7 @@ async fn verify(ctx: &Ctx) -> anyhow::Result<()> {
             "select count(*)::text from review_disputes where status = 'pending'",
             "1",
         ),
-        ("select count(*)::text from admin_threads", "2"),
+        ("select count(*)::text from admin_threads", "4"),
         ("select count(*)::text from donation_holds", "0"),
         ("select count(*)::text from store_shelves", "0"),
     ];

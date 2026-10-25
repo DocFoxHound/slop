@@ -5,7 +5,7 @@
 import { readFileSync } from "node:fs";
 import type { Browser, Page } from "@playwright/test";
 import { expect, ids, signIn, test, type Who } from "./fixtures";
-import { call, hireVera, inDays, payOnFakeStripe } from "./people-helpers";
+import { call, hireVera, inDays, jobStatus, payOnFakeStripe } from "./people-helpers";
 
 async function as(browser: Browser, who: Who, path: string): Promise<Page> {
   const page = await browser.newPage();
@@ -26,7 +26,7 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
   test.slow();
   const job = await hireVera("A tavern map, 20×15 tiles, top-down, with a bar and four tables.");
   const vera = await as(browser, "creative", `/jobs/${job}`);
-  await expect(vera.getByRole("status")).toContainText("They're waiting for your offer.");
+  await expect(jobStatus(vera)).toContainText("They're waiting for your offer.");
   await expect(vera.getByText(/This client: paid in full on \d+ of \d+ finished job/)).toBeVisible();
 
   // Vera's offer: the price must be a number.
@@ -44,7 +44,7 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
   await offer.getByRole("radio", { name: /Licence for this project/ }).check();
   await offer.getByLabel("Due").fill(inDays(21));
   await offer.getByRole("button", { name: "Send offer" }).click();
-  await expect(vera.getByRole("status")).toContainText("Offer sent. Waiting for the client.");
+  await expect(jobStatus(vera)).toContainText("Offer sent. Waiting for the client.");
 
   // A new offer replaces the first: the form keeps what was sent.
   await expect(offer.getByRole("heading", { name: "Send a new offer" })).toBeVisible();
@@ -55,7 +55,7 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
 
   // Cleo reads the offer in plain words and accepts it: Accept waits for the exact-terms box.
   const cleo = await as(browser, "client", `/jobs/${job}`);
-  await expect(cleo.getByRole("status")).toContainText("Vera Okafor sent an offer. Read it carefully");
+  await expect(jobStatus(cleo)).toContainText("Vera Okafor sent an offer. Read it carefully");
   const summary = cleo.locator(".offer-summary");
   await expect(summary).toContainText("$180");
   await expect(summary.getByText(/Read every word/)).toBeVisible();
@@ -65,30 +65,30 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
   await expect(accept).toBeDisabled();
   await summary.getByRole("checkbox", { name: /exactly/ }).check();
   await accept.click();
-  await expect(cleo.getByRole("status")).toContainText("Pay $90 to start the work.");
+  await expect(jobStatus(cleo)).toContainText("Pay $90 to start the work.");
 
   // Pay the first half on (fake) Stripe; back on the job, the page asks Stripe how it went.
   const checked = cleo.waitForRequest((r) => r.url().endsWith(`/v1/jobs/${job}/payment/check`) && r.method() === "POST");
   await cleo.getByRole("button", { name: "Pay $90" }).click();
   await payOnFakeStripe(cleo, job);
   await checked;
-  await expect(cleo.getByRole("status")).toContainText("Vera Okafor is working on it.");
+  await expect(jobStatus(cleo)).toContainText("Vera Okafor is working on it.");
   await expect(cleo.locator(".pay-table tr").filter({ hasText: "First half" })).toContainText("Paid");
   await expect(cleo.locator(".pay-table tr").filter({ hasText: "Second half" })).toContainText("On delivery");
 
   // Vera sends the direction for sign-off; Cleo signs off.
   await vera.reload();
-  await expect(vera.getByRole("status")).toContainText("Send the direction for sign-off first.");
+  await expect(jobStatus(vera)).toContainText("Send the direction for sign-off first.");
   const signOff = vera.locator("form").filter({ has: vera.getByRole("heading", { name: "Send the direction for sign-off" }) });
   await signOff.getByRole("textbox", { name: /Links to the files/ }).fill("https://drive.example/tavern-sketch.png");
   await signOff.getByRole("textbox", { name: /Note/ }).fill("Rough layout: bar on the left.");
   await signOff.getByRole("button", { name: "Send for sign-off" }).click();
-  await expect(vera.getByRole("status")).toContainText("Waiting for the client to sign off on the direction.");
+  await expect(jobStatus(vera)).toContainText("Waiting for the client to sign off on the direction.");
 
   await cleo.reload();
   await expect(cleo.locator(".timeline")).toContainText("https://drive.example/tavern-sketch.png");
   await cleo.getByRole("button", { name: "Sign off on this direction" }).click();
-  await expect(cleo.getByRole("status")).toContainText("Vera Okafor is working on it.");
+  await expect(jobStatus(cleo)).toContainText("Vera Okafor is working on it.");
 
   // Vera delivers: half is still owed on delivery, so she sends a preview.
   await vera.reload();
@@ -96,27 +96,27 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
   await expect(deliver.getByText(/Money is still owed on delivery, so send a preview/)).toBeVisible();
   await deliver.getByRole("textbox", { name: /Links to the files/ }).fill("https://drive.example/tavern-preview.png");
   await deliver.getByRole("button", { name: "Mark delivered" }).click();
-  await expect(vera.getByRole("status")).toContainText("Delivered. Waiting for the client to accept.");
+  await expect(jobStatus(vera)).toContainText("Delivered. Waiting for the client to accept.");
 
   // Cleo pays the rest, which accepts the delivery.
   await cleo.reload();
-  await expect(cleo.getByRole("status")).toContainText("pay the remaining $90");
+  await expect(jobStatus(cleo)).toContainText("pay the remaining $90");
   await expect(cleo.getByText(/If you don't answer by .*, the delivery counts as accepted\./)).toBeVisible();
   await cleo.getByRole("button", { name: "Accept the delivery — pay $90" }).click();
   await payOnFakeStripe(cleo, job);
-  await expect(cleo.getByRole("status")).toContainText("Paid in full. Waiting for Vera Okafor to send the final files.");
+  await expect(jobStatus(cleo)).toContainText("Paid in full. Waiting for Vera Okafor to send the final files.");
 
   // Vera sends the final files: done.
   await vera.reload();
   const finals = vera.locator("form").filter({ has: vera.getByRole("heading", { name: "Send the final files" }) });
   await finals.getByRole("textbox", { name: /Links to the files/ }).fill("https://drive.example/tavern-final.zip");
   await finals.getByRole("button", { name: "Send final files" }).click();
-  await expect(vera.getByRole("status")).toContainText("Completed.");
+  await expect(jobStatus(vera)).toContainText("Completed.");
   await expect(vera.getByText(/You receive about \$171 of the original price/)).toBeVisible();
 
   // Cleo's review: a vote is needed; it can be changed later.
   await cleo.reload();
-  await expect(cleo.getByRole("status")).toContainText("Completed.");
+  await expect(jobStatus(cleo)).toContainText("Completed.");
   await expect(cleo.getByText("Credited on Cleo's Tavern's page.")).toBeVisible();
   const review = cleo.locator("form").filter({ has: cleo.getByRole("heading", { name: "Was Vera Okafor's work slop?" }) });
   await expect(review.getByRole("button", { name: "Post review" })).toBeDisabled();

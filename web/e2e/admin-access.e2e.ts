@@ -1,11 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The admin panel's door and its tabs: who gets in, what each role may see, the Home page's
 // counts, alerts and server checks, the audit log, AI reviewer tokens, staff roles and the
-// actions waiting for a second approval.
-//
-// Changing staff and approving actions need a sign-in from the last ten minutes (SECURITY §4.3),
-// and the seeded sessions are as old as the test server: these run first. Making an AI reviewer
-// token doesn't (decided 2026-10-25).
+// actions waiting for a second approval. Nothing here asks to sign in again (decided 2026-10-25),
+// and other files change staff too (admin-accounts.e2e.ts): tests find their own entries.
 import { adminToken, call, closePages, inbox, inboxRow, newPage, ok, tag, withToken } from "./admin-helpers";
 import type { Locator } from "@playwright/test";
 
@@ -146,7 +143,10 @@ test("an AI agent's staff change waits for a person, who approves one and turns 
   const { token } = await adminToken(`Staffing agent ${tag()}`, "moderate");
   const asked = await withToken(token, "POST", `/v1/admin/staff/${olly}/roles`, { role: "support", grant: true });
   expect(asked.status).toBe(202);
-  expect((await withToken(token, "POST", `/v1/admin/staff/${olly}/roles`, { role: "finance", grant: true })).status).toBe(202);
+  const askedFinance = await withToken(token, "POST", `/v1/admin/staff/${olly}/roles`, { role: "finance", grant: true });
+  expect(askedFinance.status).toBe(202);
+  const supportAction = (asked.json as { pending_action: string }).pending_action;
+  const financeAction = (askedFinance.json as { pending_action: string }).pending_action;
 
   await signIn(page, "admin");
   await page.goto("/admin");
@@ -174,9 +174,19 @@ test("an AI agent's staff change waits for a person, who approves one and turns 
   await page.getByRole("tab", { name: "Staff" }).click();
   await expect(page.getByRole("checkbox", { name: "Olly Overdue: support" })).toBeChecked();
   await expect(page.getByRole("checkbox", { name: "Olly Overdue: finance" })).not.toBeChecked();
-  const history = page.getByRole("listitem").filter({ hasText: "Olly Overdue" });
-  await expect(history.filter({ hasText: "Give the support role to Olly Overdue" }).getByText("DONE", { exact: true })).toBeVisible();
-  await expect(history.filter({ hasText: "Give the finance role to Olly Overdue" }).getByText("CANCELLED", { exact: true })).toBeVisible();
+  // This test's two requests, found by ID where the page lists them (it shows the API's list in
+  // order): other tests give Olly roles too, so the same words can be there more than once.
+  const all: Array<{ id: string }> = (await ok("admin", "GET", "/v1/admin/actions?status=all")).actions;
+  const history = page.getByRole("list", { name: "Sensitive actions" }).getByRole("listitem");
+  const listed = (id: string) => {
+    const at = all.findIndex((a) => a.id === id);
+    expect(at, `action ${id} in the history`).toBeGreaterThanOrEqual(0);
+    return history.nth(at);
+  };
+  await expect(listed(supportAction)).toContainText("Give the support role to Olly Overdue");
+  await expect(listed(supportAction).getByText("DONE", { exact: true })).toBeVisible();
+  await expect(listed(financeAction)).toContainText("Give the finance role to Olly Overdue");
+  await expect(listed(financeAction).getByText("CANCELLED", { exact: true })).toBeVisible();
 
   // Back as he was.
   await ok("admin", "POST", `/v1/admin/staff/${olly}/remove`, { reason: "Only for the admin browser tests." });

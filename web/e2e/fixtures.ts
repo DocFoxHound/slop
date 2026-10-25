@@ -5,7 +5,9 @@
 // Accounts (sign in with `signIn(page, "<key>")`; all US unless said, agreements accepted):
 //   maker           Mia Maker: Mia's First Game (mias-first, listed), Lantern Keep (lantern-keep:
 //                   the busy store page), Starship Draft (starship-draft, a draft). Her AI agent
-//                   wrote the admins two messages ("Release upload times out", "Show scan progress").
+//                   wrote the admins four messages: "Release upload times out" and "Show scan
+//                   progress" stay open; ai-messages.e2e.ts closes "Saving a draft fails" and
+//                   deletes "Let players pick a theme".
 //   player          Pat Player: played, rated and reviewed Lantern Keep, donated to it, opened and
 //                   pledged to the "Controller support" bounty, reported a bug, friends with Bo and
 //                   Tia, owns the Night Owls team, chats with Bo. Cleo's friend request waits.
@@ -41,6 +43,8 @@
 //                   picture the fake GitHub serves), for the profile picture tests.
 //   newcomer        Nia Newcomer: accepted only the Terms of Service (no Publisher Agreement or
 //                   People Terms yet), no apps.
+//   bystander       Bea Bystander: nothing done, and no test may change that: for the empty
+//                   states ("No donations yet", no reports sent) in any order of the files.
 // Without a sign-in: Sam Seed (castle-rock; neon-drift, which plays online), and players Kai
 // Kestrel, Lu Lark and Noor Nightjar (votes, a review and bug reports on Lantern Keep, bounty
 // pledges, reports).
@@ -70,7 +74,7 @@
 //     person), a server alert, a possible-abuse signal, and the release, pictures, repository
 //     move, portfolios (Remy's, Ivy's and Pip's newer one), People problem and review dispute
 //     above. No donation pauses and no shelves (admin.e2e.ts expects none), and no AI messages
-//     beyond Mia's two (ai-messages.e2e.ts counts them).
+//     beyond Mia's four.
 //   Unread notifications: most accounts have some.
 //
 // Payments are Stripe, faked (e2e_server/fake_stripe.rs): checkout links lead to its "Fake
@@ -100,7 +104,8 @@ export type Who =
   | "security"
   | "suspended"
   | "pictured"
-  | "newcomer";
+  | "newcomer"
+  | "bystander";
 
 export type Id =
   | Who

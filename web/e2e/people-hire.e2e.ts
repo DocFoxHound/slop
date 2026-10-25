@@ -3,7 +3,7 @@
 // Tavern; each test ends the jobs it starts, since Cleo may have only three open requests with
 // Vera at once (the seed's requestedJob is one).
 import { expect, ids, signIn, test } from "./fixtures";
-import { call, hireVera } from "./people-helpers";
+import { call, hireVera, jobStatus } from "./people-helpers";
 
 test("the hire form opened while the session loads becomes the form once it has (b62)", async ({ page }) => {
   const errors: string[] = [];
@@ -62,7 +62,7 @@ test("asking about it first sends an inquiry and opens the job, which the maker 
   await ask.click();
 
   await expect(page).toHaveURL(/\/jobs\/[0-9a-f-]{36}$/);
-  await expect(page.getByRole("status")).toContainText("You asked Vera Okafor to look at your request.");
+  await expect(jobStatus(page)).toContainText("You asked Vera Okafor to look at your request.");
   await expect(page.getByText("An inquiry: they asked for a review first")).toBeVisible();
   await expect(page.getByText("A tavern cat, idle and sleeping")).toBeVisible();
   await expect(page.locator(".timeline")).toContainText("Package: Sprite sheet (from $120, about 7 days)");
@@ -72,7 +72,7 @@ test("asking about it first sends an inquiry and opens the job, which the maker 
   await page.locator(".job-secondary").getByRole("button", { name: "Decline" }).click();
   await page.getByRole("textbox", { name: "Decline" }).fill("Found a cat sprite already, thanks!");
   await page.locator(".job-secondary").getByRole("button", { name: "Decline" }).click();
-  await expect(page.getByRole("status")).toContainText("Declined.");
+  await expect(jobStatus(page)).toContainText("Declined.");
   await expect(page.locator(".timeline")).toContainText("Found a cat sprite already, thanks!");
   await expect(page.locator(".job-secondary").getByRole("button", { name: "Decline" })).toHaveCount(0);
 });
@@ -92,7 +92,7 @@ test("a request as a business with a date, and the refusal when too many request
   await form.getByRole("button", { name: "Send request" }).click();
   await expect(page).toHaveURL(/\/jobs\/[0-9a-f-]{36}$/);
   const job = page.url().split("/").pop()!;
-  await expect(page.getByRole("status")).toContainText("Waiting for Vera Okafor to send an offer.");
+  await expect(jobStatus(page)).toContainText("Waiting for Vera Okafor to send an offer.");
   await expect(page.getByText("Hoped for by 2030-01-31")).toBeVisible();
   expect((await call("client", "GET", `/v1/jobs/${job}`)).client_is_business).toBe(true);
 
