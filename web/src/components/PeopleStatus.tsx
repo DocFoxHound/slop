@@ -75,12 +75,19 @@ export function PageStatusDetails({
       title = "Draft: only you can see your page";
       lines.push(
         <>
-          Next, add your portfolio: put your work in a public GitHub repository and let Slop read it
-          {inEditor ? " (Portfolio, below)" : ""}. A person at Slop reviews every new portfolio, and your page goes public on People once
-          it's approved. You'll get a notification either way.
+          Next, add your portfolio: your shop window, showing makers who might hire you your style and your best work. It lives in a
+          public GitHub repository of your own. {inEditor ? "The Portfolio section below" : "Your page's editor"} shows how to set one up, with
+          ready-made templates and a line to hand an AI assistant. A person at Slop reviews every new portfolio, and your page goes public
+          on People once it's approved. You'll get a notification either way.
         </>,
       );
-      if (status.problem) lines.push(<>The last time Slop read your portfolio, something was wrong: {status.problem}</>);
+      if (status.problem)
+        lines.push(
+          <>
+            The last time Slop read your portfolio, something was wrong:{" "}
+            <span className="pre-line">{status.problem}</span>
+          </>,
+        );
       action = portfolio;
       break;
     case "waiting":

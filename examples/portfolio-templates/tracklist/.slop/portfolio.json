@@ -1,0 +1,26 @@
+{
+  "avatar": "avatar.png",
+  "banner": "banner.png",
+  "works": [
+    {
+      "audio": "tracks/placeholder.wav",
+      "poster": "covers/theme.png",
+      "title": "Main theme",
+      "caption": "Orchestral loop for a fantasy RPG's title screen. Loops seamlessly at 1:42.",
+      "skill": "music"
+    },
+    {
+      "audio": "tracks/placeholder-2.wav",
+      "poster": "covers/battle.png",
+      "title": "Battle theme",
+      "caption": "Chiptune, made for an arcade shooter.",
+      "skill": "music"
+    },
+    {
+      "youtube": "https://youtu.be/REPLACE_ME4",
+      "title": "Sound design breakdown",
+      "caption": "How I made the footsteps, doors and spells for a dungeon crawler.",
+      "skill": "sound"
+    }
+  ]
+}

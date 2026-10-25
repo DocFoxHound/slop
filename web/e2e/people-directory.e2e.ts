@@ -51,6 +51,57 @@ test("the directory filters by skill, availability, AI use and kind, and says wh
   await expect(page.getByRole("heading", { name: "Vera Okafor", level: 1 })).toBeVisible();
 });
 
+test("the AI-use filter is neutral: each way of working on its own, in the address", async ({ page }) => {
+  await page.goto("/people");
+  const vera = page.getByRole("link", { name: /Vera Okafor/ });
+  await expect(vera).toBeVisible();
+  const ai = page.getByRole("combobox", { name: "AI use" });
+  await expect(ai.locator("option")).toHaveText(["Any", "No AI", "AI-assisted", "Mostly AI"]);
+  // Vera makes everything by hand: she's under No AI only, not under the others.
+  await ai.selectOption("assisted");
+  await expect(page).toHaveURL(/[?&]ai=assisted/);
+  await expect(vera).toHaveCount(0);
+  await ai.selectOption("heavy");
+  await expect(page).toHaveURL(/[?&]ai=heavy/);
+  await expect(vera).toHaveCount(0);
+  await ai.selectOption("none");
+  await expect(page).toHaveURL(/[?&]ai=none/);
+  await expect(vera).toBeVisible();
+  await page.reload();
+  await expect(ai).toHaveValue("none");
+  await ai.selectOption("");
+  await expect(page).not.toHaveURL(/ai=/);
+});
+
+test("AI-use badges: their own neutral colours, readable, with words and not colour alone", async ({ page }) => {
+  // Vera's card three times over, one for each way of working.
+  await page.route((url) => url.pathname === "/v1/people", async (route) => {
+    const res = await route.fetch();
+    const body = await res.json();
+    const vera = body.people.find((c: { handle: string }) => c.handle === ids.creativeHandle);
+    const people = (["none", "assisted", "heavy"] as const).map((ai_use, i) => ({ ...vera, handle: `${vera.handle}-${i}`, name: `Vera ${ai_use}`, ai_use }));
+    await route.fulfill({ response: res, json: { ...body, people } });
+  });
+  await page.goto("/people");
+  const badges = page.locator(".person-card .badge");
+  await expect(badges).toHaveText([/NO AI/, /AI-ASSISTED/, /MOSTLY AI-GENERATED/]);
+  const looks = await badges.evaluateAll((els) => els.map((e) => [e.className, getComputedStyle(e).color]));
+  expect(looks.map(([cls]) => cls)).toEqual(["badge ai-none", "badge ai-assisted", "badge ai-heavy"]);
+  // Blue, teal and green: three different colours, none of them the warning or error ones.
+  expect(looks.map(([, color]) => color)).toEqual(["rgb(124, 184, 251)", "rgb(45, 212, 191)", "rgb(74, 222, 128)"]);
+  const results = await new AxeBuilder({ page }).include(".person-card .badge").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
+  expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+  expect(results.passes.map((v) => v.id)).toContain("color-contrast");
+});
+
+test("someone without a page is told what a People page is for, with the way to make one", async ({ page }) => {
+  await page.goto("/people");
+  const offer = page.locator(".people-offer");
+  await expect(offer).toContainText("A People page is your shop window");
+  await expect(offer).toContainText("portfolio");
+  await expect(offer.getByRole("link", { name: "Make your People page" })).toHaveAttribute("href", "/people/me");
+});
+
 test("a creative's page shows services, portfolio, reviews and AI use; signed out, hiring asks to sign in", async ({ page }) => {
   await page.goto(`/people/${ids.creativeHandle}`);
   await expect(page.getByRole("heading", { name: "Vera Okafor", level: 1 })).toBeVisible();

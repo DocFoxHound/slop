@@ -1,0 +1,30 @@
+{
+  "avatar": "avatar.png",
+  "banner": "banner.png",
+  "works": [
+    {
+      "image": "works/painting.png",
+      "title": "Harbour at dusk",
+      "caption": "Key art for a cosy fishing game. Painted in Krita, about 12 hours.",
+      "skill": "2d-art"
+    },
+    {
+      "image": "works/character.png",
+      "title": "Wandering knight",
+      "caption": "Character design: turnaround and colour study.",
+      "skill": "2d-art"
+    },
+    {
+      "image": "works/sprite.png",
+      "title": "Knight sprite, 64×64",
+      "caption": "Pixel art keeps its crisp edges: Slop scales small pictures up without blurring.",
+      "skill": "pixel-art"
+    },
+    {
+      "image": "works/environment.png",
+      "title": "Forest level background",
+      "caption": "Parallax layers for a side-scroller.",
+      "skill": "2d-art"
+    }
+  ]
+}

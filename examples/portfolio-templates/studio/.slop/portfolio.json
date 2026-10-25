@@ -1,0 +1,31 @@
+{
+  "avatar": "avatar.png",
+  "banner": "banner.png",
+  "works": [
+    {
+      "image": "works/key-art.png",
+      "title": "Key art for a space trader",
+      "caption": "Our art lead's cover for a client's store page.",
+      "skill": "2d-art"
+    },
+    {
+      "image": "works/ui-mockup.png",
+      "title": "Inventory and crafting UI",
+      "caption": "Designed and built in Godot for a survival game, controller and mouse.",
+      "skill": "ui-ux"
+    },
+    {
+      "image": "works/tileset.png",
+      "title": "Dungeon tileset",
+      "caption": "256 tiles, 16×16, with animated torches and water.",
+      "skill": "pixel-art"
+    },
+    {
+      "youtube": "https://youtu.be/REPLACE_ME5",
+      "poster": "works/trailer.png",
+      "title": "Trailer we made for a client",
+      "caption": "Capture, edit, music and sound by our team.",
+      "skill": "animation"
+    }
+  ]
+}

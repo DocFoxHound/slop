@@ -9,6 +9,11 @@ test("signed out, and not yet 18-confirmed, the editor says what's needed", asyn
   const visitor = await browser.newPage();
   await visitor.goto("/people/me");
   await expect(visitor.getByText("Sign in to offer your services on People.")).toBeVisible();
+  // Not a dead end: signing in is right there, and comes back here.
+  await expect(visitor.getByRole("main").getByRole("link", { name: "Sign in", exact: true })).toHaveAttribute(
+    "href",
+    `/signin?return_to=${encodeURIComponent("/people/me")}`,
+  );
 
   const olly = await browser.newPage();
   await signIn(olly, "overdue");
@@ -26,6 +31,10 @@ test("a new creative makes their page: details, services, look, links; then gets
   await signIn(page, "security");
   await page.goto("/people/me");
   await expect(page.getByRole("heading", { name: "Offer your services", level: 1 })).toBeVisible();
+  // What the page is for, and the three steps to a live one.
+  const intro = page.getByRole("region", { name: "How People pages work" });
+  await expect(intro).toContainText("Your People page is your shop window");
+  await expect(intro.getByRole("listitem")).toHaveText([/^Describe yourself/, /^Add your portfolio/, /^Get paid/]);
   // Adults only, and Sec already said so: no 18+ box.
   await expect(page.getByRole("checkbox", { name: "I'm 18 or older" })).toHaveCount(0);
 
@@ -188,6 +197,10 @@ test("the portfolio panel: waiting vs live, checking a repository, reordering, a
   await expect(panel.getByText("New portfolio waiting for review (3 works).")).toBeVisible();
   await expect(remy.getByText("Waiting for Slop's review")).toBeVisible();
   await expect(remy.getByText("Live: everyone can see your page")).toHaveCount(0);
+  // How to set one up shows open until a repository is set, then folds away.
+  const setup = panel.locator("details.portfolio-setup");
+  if ((await setup.getAttribute("open")) === null) await panel.getByText("How to set one up").click();
+  await expect(setup).toHaveAttribute("open", "");
   await panel.getByText("Example .slop/portfolio.json").click();
   await expect(panel.locator("pre.code-block")).toContainText('"works"');
 
@@ -231,6 +244,79 @@ test("the portfolio panel: waiting vs live, checking a repository, reordering, a
   fail = false;
   await failed.getByRole("button", { name: "Try again" }).click();
   await expect(panel.getByText("New portfolio waiting for review (3 works).")).toBeVisible();
+});
+
+test("the portfolio panel explains the portfolio, how to make one, and hands an AI the guide", async ({ page }) => {
+  await signIn(page, "pendingCreative");
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"]);
+  // As if Remy had no repository yet (the setup steps then show open) and no GitHub account linked.
+  await page.route("**/v1/me/creative/portfolio", async (route) => {
+    const res = await route.fetch();
+    await route.fulfill({ response: res, json: { ...(await res.json()), repo_url: null } });
+  });
+  await page.route("**/v1/me/identities", (route) => route.fulfill({ json: [] }));
+  await page.goto("/people/me");
+  const panel = page.getByRole("region", { name: "Portfolio" });
+  await expect(panel).toContainText("Your portfolio is your shop window");
+  const steps = panel.locator(".portfolio-setup ol > li");
+  await expect(steps).toHaveCount(5);
+  // Every step can be done from here: link GitHub, make the repository, start from a template.
+  await expect(steps.nth(0).getByRole("link", { name: "Link GitHub" })).toHaveAttribute(
+    "href",
+    `/v1/auth/github/link?return_to=${encodeURIComponent("/people/me#portfolio")}`,
+  );
+  await expect(steps.nth(0).getByRole("link", { name: "New repository on GitHub" })).toHaveAttribute("href", "https://github.com/new");
+  await expect(steps.nth(1).getByRole("link", { name: "ready-made template" })).toHaveAttribute(
+    "href",
+    "https://github.com/DocFoxHound/slop/tree/main/examples/portfolio-templates",
+  );
+  await expect(panel.getByRole("link", { name: "portfolio guide" })).toHaveAttribute("href", "/portfolio.md");
+  // The line for an AI assistant names this site's own guide.
+  await panel.getByRole("button", { name: "Copy the line for your AI assistant" }).click();
+  await expect(panel.getByRole("button", { name: "Copy the line for your AI assistant" })).toHaveText("Copied");
+  const origin = new URL(page.url()).origin;
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
+    `Read ${origin}/portfolio.md and help me build my Slop portfolio.`,
+  );
+
+  // A repository that needs a linked GitHub account offers the button right by the message.
+  await page.route("**/v1/me/creative/portfolio/check", (route) =>
+    route.fulfill({
+      status: 422,
+      json: { error: { code: "invalid", field: "github_account", message: "link the GitHub account that owns this repository (remy) to your Slop account, under Account → Sign-ins" } },
+    }),
+  );
+  await panel.getByRole("textbox", { name: "Repository" }).fill("https://github.com/remy/portfolio");
+  await panel.getByRole("button", { name: "Check my portfolio now" }).click();
+  const alert = panel.getByRole("alert");
+  await expect(alert).toContainText("link the GitHub account that owns this repository");
+  await expect(alert.getByRole("link", { name: "Link GitHub" })).toBeVisible();
+
+  // Problems come one per line, each naming the work and field.
+  await page.unroute("**/v1/me/creative/portfolio/check");
+  await page.route("**/v1/me/creative/portfolio/check", async (route) => {
+    const res = await page.request.get("/v1/me/creative/portfolio");
+    const overview = await res.json();
+    await route.fulfill({
+      json: {
+        ...overview,
+        result: "problem",
+        problem: 'work 1 "image": tiny.png is 16×16; it needs to be at least 32×32\nwork 3 "skill": "art" isn\'t one of the skills',
+      },
+    });
+  });
+  await panel.getByRole("button", { name: "Check my portfolio now" }).click();
+  await expect(alert).toContainText("Slop found 2 things to fix in your portfolio:");
+  await expect(alert.getByRole("listitem")).toHaveText([/^work 1 "image": tiny\.png is 16×16/, /^work 3 "skill"/]);
+});
+
+test("the portfolio guide is served for people and AI assistants", async ({ request }) => {
+  const res = await request.get("/portfolio.md");
+  expect(res.ok()).toBe(true);
+  const text = await res.text();
+  expect(text).toContain("# Your Slop portfolio");
+  expect(text).toContain(".slop/portfolio.json");
+  expect(text).toContain("## Your page's design (coming soon)");
 });
 
 test("a turned-down portfolio shows why; Stripe pending, Check again, and payments off", async ({ page }) => {

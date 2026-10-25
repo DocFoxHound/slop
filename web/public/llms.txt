@@ -11,3 +11,9 @@
   play and mods (copy them into your project's agent instructions), and a step-by-step
   checklist for agents. This one Markdown file is the whole guide; the page at /publish/guide
   shows the same text.
+
+## People
+
+- [Your Slop portfolio](/portfolio.md): how creatives (artists, animators, composers, sound
+  designers, writers…) build the portfolio their People page needs: the `.slop/portfolio.json`
+  format, every limit Slop checks, ready-made templates, and a checklist for agents.

@@ -25,8 +25,12 @@ import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
 import { formatDate, money, toMinor } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { siteOrigin } from "../browsing";
 import { isDesktop, openExternal } from "../platform";
 import { useSession } from "../session";
+
+/** The site the desktop app was built for (vite.config.ts, from SLOP_API_URL). */
+declare const __SLOP_SITE_URL__: string;
 
 const SECTION_NAMES: Record<Section, string> = {
   portfolio: "Portfolio",
@@ -76,7 +80,12 @@ export function PeopleEdit() {
   if (me === null) {
     return (
       <div className="page narrow">
-        <div className="empty-state">Sign in to offer your services on People.</div>
+        <div className="empty-state">
+          <p>Sign in to offer your services on People.</p>
+          <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent("/people/me")}`}>
+            Sign in
+          </Link>
+        </div>
       </div>
     );
   }
@@ -108,10 +117,34 @@ export function PeopleEdit() {
           </p>
         </section>
       )}
+      {!current && <ShopWindow />}
       {current && <GetPaid profile={current} onChange={(status) => setProfile({ ...current, stripe_status: status })} />}
       {current && <PortfolioPanel />}
       <ProfileForm initial={current} skills={skills.data} adultConfirmed={Boolean(me?.adult_confirmed)} onSaved={setProfile} />
     </div>
+  );
+}
+
+/** For someone starting out: what a People page is for, and the three steps to a live one. */
+function ShopWindow() {
+  return (
+    <section className="panel panel-pad shop-window" aria-label="How People pages work">
+      <p>
+        Your People page is your shop window: it shows makers who might hire you who you are, your style, your best work and your rates.
+      </p>
+      <ol className="muted">
+        <li>
+          <b>Describe yourself</b> and what you charge, below.
+        </li>
+        <li>
+          <b>Add your portfolio</b>: your best work, from a public GitHub repository of your own (there are ready-made templates, and a
+          line to hand an AI assistant). A person at Slop looks at it, then your page goes public.
+        </li>
+        <li>
+          <b>Get paid</b>: connect Stripe, so makers can hire you.
+        </li>
+      </ol>
+    </section>
   );
 }
 
@@ -193,16 +226,61 @@ const EXAMPLE = `{
   "works": [
     { "image": "art/knight.png", "title": "Knight sprite sheet", "skill": "pixel-art" },
     { "audio": "music/theme.ogg", "poster": "music/cover.png", "title": "Main theme", "skill": "music" },
-    { "youtube": "https://youtu.be/…", "title": "Showreel" }
+    { "youtube": "https://youtu.be/VIDEO_ID", "title": "Showreel", "skill": "animation" }
   ]
 }`;
 
+/** Ready-to-copy portfolio repositories (examples/portfolio-templates in Slop's own repository). */
+export const PORTFOLIO_TEMPLATES = "https://github.com/DocFoxHound/slop/tree/main/examples/portfolio-templates";
+
+/** The line to hand an AI assistant: the guide, on this site (public/portfolio.md). */
+export function portfolioPrompt(origin: string): string {
+  return `Read ${origin}/portfolio.md and help me build my Slop portfolio.`;
+}
+
+/** A line to copy, with its own Copy button. */
+function CopyLine({ text, label }: { text: string; label: string }) {
+  const [copied, setCopied] = useState(false);
+  const copy = () => {
+    void navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 2000);
+    });
+  };
+  return (
+    <div className="ai-prompt">
+      <code>{text}</code>
+      <button type="button" className="btn small" onClick={copy} aria-label={label}>
+        {copied ? "Copied" : "Copy"}
+      </button>
+    </div>
+  );
+}
+
+/** A problem from reading the portfolio: one line each (portfolio.rs lists them all). */
+function Problems({ text }: { text: string }) {
+  const lines = text.split("\n").filter(Boolean);
+  if (lines.length === 1) return <p className="form-error" role="alert">{lines[0]}</p>;
+  return (
+    <div className="form-error" role="alert">
+      <p>Slop found {lines.length} things to fix in your portfolio:</p>
+      <ul className="portfolio-problems">
+        {lines.map((l, i) => (
+          <li key={i}>{l}</li>
+        ))}
+      </ul>
+    </div>
+  );
+}
+
 function PortfolioPanel() {
   const loaded = useLoad(() => api.people.portfolio(), []);
+  // Which GitHub account the repository has to belong to, or a button to link one.
+  const identities = useLoad(() => api.identities().catch(() => null), []);
   const [o, setO] = useState<PortfolioOverview>();
   const [repo, setRepo] = useState("");
   const [busy, setBusy] = useState(false);
-  const [error, setError] = useState<string>();
+  const [error, setError] = useState<ApiError | string>();
   const ov = o ?? loaded.data;
   useEffect(() => {
     if (loaded.data?.repo_url) setRepo(loaded.data.repo_url);
@@ -215,7 +293,7 @@ function PortfolioPanel() {
     try {
       setO(await api.people.checkPortfolio(repo.trim() || undefined));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
+      setError(err instanceof ApiError ? err : String(err));
     } finally {
       setBusy(false);
     }
@@ -232,21 +310,80 @@ function PortfolioPanel() {
     try {
       setO(await api.people.setPortfolioOrder(keys));
     } catch (err) {
-      setError(err instanceof ApiError ? err.message : String(err));
+      setError(err instanceof ApiError ? err : String(err));
     }
   };
+  const github = identities.data?.filter((i) => i.provider === "github") ?? [];
+  const linkGithub = (
+    <a className="btn small" href={api.linkUrl("github", "/people/me#portfolio")}>
+      Link GitHub
+    </a>
+  );
+  const origin = siteOrigin(window.location, typeof __SLOP_SITE_URL__ === "string" ? __SLOP_SITE_URL__ : "");
   return (
-    <section className="panel panel-pad" id="portfolio">
-      <h2>Portfolio</h2>
-      <p className="muted">
-        Slop doesn't host your files. Put them in a <b>public GitHub repository</b> (any one, e.g. <code>you/portfolio</code>) under a{" "}
-        <code>.slop/</code> folder, listed in <code>{ov.manifest_path}</code>. Pictures: PNG, JPEG, WebP or GIF up to 8 MB. Tracks: MP3, Ogg,
-        WAV, FLAC or M4A up to 15 MB. Videos: YouTube links. Up to 30 works. Every new portfolio is checked by a person before it shows.
+    <section className="panel panel-pad" id="portfolio" aria-labelledby="portfolio-title">
+      <h2 id="portfolio-title">Portfolio</h2>
+      <p>
+        Your portfolio is your shop window: your style and your best work, shown on your page next to your rates (your services) for
+        makers who might hire you. Slop doesn't host the files: they stay in a public GitHub repository of your own, and Slop shows them
+        from there. A person at Slop looks at every new portfolio before it shows.
       </p>
-      <details>
-        <summary>Example {ov.manifest_path}</summary>
-        <pre className="code-block">{EXAMPLE}</pre>
-        <p className="hint">Paths are inside .slop/. Skills: 2d-art, pixel-art, 3d, animation, ui-ux, music, sound, writing, voice, localization, playtesting.</p>
+      <details className="portfolio-setup" open={!ov.repo_url}>
+        <summary>
+          <b>How to set one up</b>
+        </summary>
+        <ol>
+          <li>
+            Make a new <b>public</b> repository on GitHub for it, e.g. <code>portfolio</code>.{" "}
+            {github.length > 0 ? (
+              <>
+                It has to belong to your linked GitHub account
+                {github[0].login ? (
+                  <>
+                    {" "}
+                    (<b>{github[0].login}</b>)
+                  </>
+                ) : null}
+                .{" "}
+              </>
+            ) : identities.data ? (
+              <>It has to belong to a GitHub account linked to your Slop account: {linkGithub} </>
+            ) : null}
+            <ExternalLink className="btn small" href="https://github.com/new">
+              New repository on GitHub
+            </ExternalLink>
+          </li>
+          <li>
+            Add a file called <code>{ov.manifest_path}</code> that lists your works. Start from a{" "}
+            <ExternalLink href={PORTFOLIO_TEMPLATES}>ready-made template</ExternalLink> (gallery, showreel, tracklist or studio) or the
+            example below.
+          </li>
+          <li>
+            Put your pictures and tracks in the <code>.slop/</code> folder, and link your videos from YouTube.
+          </li>
+          <li>Doll it up: a banner and avatar, titles and captions, and your best work first.</li>
+          <li>
+            Paste the repository's address below and choose <b>Check my portfolio now</b>. If anything needs fixing, Slop says exactly
+            what and where.
+          </li>
+        </ol>
+        <p className="small">
+          <b>Using an AI assistant?</b> It can build the whole repository with you. Paste this in:
+        </p>
+        <CopyLine text={portfolioPrompt(origin)} label="Copy the line for your AI assistant" />
+        <p className="muted small">
+          Pictures: PNG, JPEG, WebP or GIF, up to 8 MB; works at least 32×32, avatar at least 128×128, banner at least 1200×300. Tracks:
+          MP3, Ogg, WAV, FLAC or M4A, up to 15 MB. Videos: YouTube links. 1 to 30 works. The full list of rules is in the{" "}
+          <a href="/portfolio.md">portfolio guide</a>.
+        </p>
+        <details>
+          <summary>Example {ov.manifest_path}</summary>
+          <pre className="code-block">{EXAMPLE}</pre>
+          <p className="hint">
+            Paths are inside .slop/. Skills: 2d-art, pixel-art, 3d, animation, ui-ux, music, sound, writing, voice, localization,
+            playtesting.
+          </p>
+        </details>
       </details>
       <form className="form" onSubmit={check}>
         <label>
@@ -261,16 +398,18 @@ function PortfolioPanel() {
         </div>
       </form>
       {ov.result === "unchanged" && <p className="muted">Nothing new since the last check.</p>}
-      {ov.result === "none" && <p>No {ov.manifest_path} found in that repository's default branch.</p>}
-      {ov.problem && (
-        <p className="form-error" role="alert">
-          {ov.problem}
+      {ov.result === "none" && (
+        <p>
+          There's no <code>{ov.manifest_path}</code> on that repository's default branch yet. Add it (a{" "}
+          <ExternalLink href={PORTFOLIO_TEMPLATES}>template</ExternalLink> is the quickest start), then check again.
         </p>
       )}
+      {ov.problem && <Problems text={ov.problem} />}
       {error && (
-        <p className="form-error" role="alert">
-          {error}
-        </p>
+        <div className="form-error" role="alert">
+          <p>{typeof error === "string" ? error : error.message}</p>
+          {typeof error !== "string" && error.field === "github_account" && linkGithub}
+        </div>
       )}
       {ov.pending && <div className="notice">New portfolio waiting for review ({ov.pending.works.length} works).</div>}
       {ov.rejected && <div className="notice">Your last portfolio was turned down: {ov.rejected.status_reason}</div>}

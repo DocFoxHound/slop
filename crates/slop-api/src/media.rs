@@ -66,7 +66,7 @@ const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
 pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 /// Screenshots and videos in one app's gallery.
 pub const MAX_GALLERY: usize = 20;
-const MAX_CAPTION: usize = 200;
+pub(crate) const MAX_CAPTION: usize = 200;
 /// The store tile is shown at 460×215 (Steam's capsule shape); best at twice that.
 const THUMB_MIN: (u32, u32) = (460, 215);
 const SHOT_MIN: (u32, u32) = (320, 180);

@@ -1,0 +1,33 @@
+{
+  "avatar": "avatar.png",
+  "banner": "banner.png",
+  "works": [
+    {
+      "youtube": "https://youtu.be/REPLACE_ME1",
+      "poster": "posters/showreel.png",
+      "title": "2026 showreel",
+      "caption": "Ninety seconds of my favourite shots: character, effects and UI motion.",
+      "skill": "animation"
+    },
+    {
+      "youtube": "https://www.youtube.com/watch?v=REPLACE_ME2",
+      "poster": "posters/walk-cycle.png",
+      "title": "Walk and run cycles",
+      "caption": "Four characters, 12 frames each, made for a platformer.",
+      "skill": "animation"
+    },
+    {
+      "youtube": "https://www.youtube.com/shorts/REPLACE_ME3",
+      "poster": "posters/trailer.png",
+      "title": "Launch trailer",
+      "caption": "Edited and animated a 30-second trailer for an indie game.",
+      "skill": "animation"
+    },
+    {
+      "image": "works/storyboard.png",
+      "title": "Storyboard",
+      "caption": "Boards for the trailer above: pictures sit next to your videos.",
+      "skill": "2d-art"
+    }
+  ]
+}
