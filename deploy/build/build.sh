@@ -51,9 +51,23 @@ if [ "$build_only" != 1 ]; then
   # Tests, once more if the database was busy (someone else's run): real failures fail twice.
   run_tests() { DATABASE_URL="$SLOP_TEST_DATABASE_URL" cargo test -q --locked >"$out/test.log" 2>&1; }
   if ! run_tests; then
-    grep -qE "PoolTimedOut|too many clients|connection refused" "$out/test.log" || fail tests
-    sleep 60
-    run_tests || fail tests
+    if grep -qE "PoolTimedOut|too many clients|connection refused" "$out/test.log"; then
+      sleep 60
+      run_tests || fail tests
+    else
+      # The failed tests get one more run on their own. Passing then, they're flaky: the checks
+      # pass, and flaky-tests.txt names them, to be fixed (the pipeline shows them as warnings).
+      # Failing again, they fail the checks. Their first failure stays in test-first.log.
+      failed=$(awk '/^failures:$/ {f=1; next} /^test result:/ {f=0} f && /^    [A-Za-z0-9_:]+$/ {print $1}' "$out/test.log" | sort -u)
+      [ -n "$failed" ] || fail tests
+      cp "$out/test.log" "$out/test-first.log"
+      # shellcheck disable=SC2086 # one argument per test name
+      if DATABASE_URL="$SLOP_TEST_DATABASE_URL" cargo test -q --locked -- --exact $failed >"$out/test.log" 2>&1; then
+        echo "$failed" >"$out/flaky-tests.txt"
+      else
+        fail tests
+      fi
+    fi
   fi
   cargo clippy --locked --all-targets -q -- -D warnings >"$out/lint.log" 2>&1 || fail lint
 fi

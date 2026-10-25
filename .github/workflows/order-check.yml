@@ -1,15 +1,16 @@
-# The browser tests in other orders, once a week on dev (deploy/README.md, "How changes ship").
+# The browser tests in other orders, every night on dev (deploy/README.md, "How changes ship").
 # The tests share one server and database, one file after another, so a test can pass only
 # because of what an earlier file left behind, or fail because of it, and that only shows when the
 # order changes. This runs the pipeline's checks (deploy/build/build.sh, as in pipeline.yml) with
 # the files reversed and shuffled (SLOP_E2E_ORDER, web/playwright.config.ts), with no retries.
+# Rust tests that only pass on their second try (deploy/build/build.sh) are named here too.
 # A failure here is a test to fix; it never blocks a release. Run it by hand from the Actions tab
 # too ("Run workflow"), with any order.
 name: Order check
 
 on:
   schedule:
-    - cron: "0 4 * * 1" # Mondays, 04:00 UTC
+    - cron: "0 4 * * *" # every night, 04:00 UTC
   workflow_dispatch:
     inputs:
       order:
@@ -26,7 +27,7 @@ jobs:
     strategy:
       fail-fast: false
       matrix:
-        # By hand: the order asked for. Weekly: reversed, and shuffled with the run's own number
+        # By hand: the order asked for. Nightly: reversed, and shuffled with the run's own number
         # as the seed (shown in the run, so a failing order can be run again).
         order: ${{ fromJSON(github.event_name == 'workflow_dispatch' && format('["{0}"]', inputs.order) || format('["reverse","shuffle:{0}"]', github.run_number)) }}
     name: browser tests (${{ matrix.order }})
@@ -80,6 +81,11 @@ jobs:
             -w /src slop-build bash deploy/build/build.sh >"$RUNNER_TEMP/out/container.log" 2>&1 || true
           out="$RUNNER_TEMP/out"
           if [ -e "$out/ok" ] && [ ! -e "$out/failed" ]; then
+            if [ -s "$out/flaky-tests.txt" ]; then
+              sed 's/^/::warning::flaky Rust test (passed on retry): /' "$out/flaky-tests.txt"
+              { echo "### Flaky Rust tests (passed on retry)"; echo '```'
+                grep -E -A12 "^---- .* stdout ----" "$out/test-first.log" | head -n 150; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+            fi
             echo "Every test passed in this order."
             exit 0
           fi

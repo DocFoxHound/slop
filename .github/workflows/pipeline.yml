@@ -124,6 +124,13 @@ jobs:
             # Browser tests that passed only on their retry: named, to be fixed, not hidden.
             awk '/^ +[0-9]+ flaky$/ {f=1; next} /^ +[0-9]+ (passed|failed|skipped|did not run|interrupted)/ {f=0} f && /›/' \
               "$out/e2e.log" 2>/dev/null | head -n 8 | sed 's/^ */::warning::flaky (passed on retry): /' || true
+            # Rust tests that failed once and passed on their own run (build.sh): named, with the
+            # first failure in the run's summary.
+            if [ -s "$out/flaky-tests.txt" ]; then
+              sed 's/^/::warning::flaky Rust test (passed on retry): /' "$out/flaky-tests.txt"
+              { echo "### Flaky Rust tests (passed on retry)"; echo '```'
+                grep -E -A12 "^---- .* stdout ----" "$out/test-first.log" | head -n 150; echo '```'; } >>"$GITHUB_STEP_SUMMARY"
+            fi
             # Their failed first tries, with the page as it was, in the run's summary.
             for f in web/e2e/.results/*/error-context.md; do
               [ -e "$f" ] || continue
@@ -136,7 +143,14 @@ jobs:
           step=${step:-container}
           # The same summary as deploy/update.sh; every log is in the job's artifacts.
           case "$step" in
-            tests) grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$out/test.log" | tail -n 30 ;;
+            tests)
+              grep -E "panicked at|FAILED|^failures:|^    [a-z_]+$" "$out/test.log" | tail -n 30
+              # The failing tests by name, with their panics, on the run page and in its summary.
+              awk '/^failures:$/ {f=1; next} /^test result:/ {f=0} f && /^    [A-Za-z0-9_:]+$/ {print $1}' "$out/test.log" |
+                sort -u | head -n 6 | sed 's/^/::error::failed Rust test: /'
+              grep -E "panicked at" -A3 "$out/test.log" | head -n 8 | sed 's/^/::error::/'
+              { echo "### Failed Rust tests"; echo '```'
+                grep -E -A15 "^---- .* stdout ----" "$out/test.log" | head -n 200; echo '```'; } >>"$GITHUB_STEP_SUMMARY" ;;
             lint) tail -n 30 "$out/lint.log" ;;
             "browser tests")
               grep -E "✘|Error:|failed" "$out/e2e.log" | head -n 30
