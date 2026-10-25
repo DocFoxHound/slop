@@ -40,6 +40,13 @@ fi
 commit="${SLOP_COMMIT:-}"
 unset SLOP_COMMIT
 build_only="${SLOP_BUILD_ONLY:-}"
+# Only the website and its browser tests (deploy/ci-local.sh --e2e-only, to chase a failure).
+if [ "${SLOP_E2E_ONLY:-}" = 1 ]; then
+  (cd web && npm ci --silent --no-audit --no-fund && npm run build --silent) >"$out/web.log" 2>&1 || fail "web build"
+  (cd web && npx playwright test) >"$out/e2e.log" 2>&1 || fail "browser tests"
+  touch "$out/ok"
+  exit 0
+fi
 if [ "$build_only" != 1 ]; then
   # Tests, once more if the database was busy (someone else's run): real failures fail twice.
   run_tests() { DATABASE_URL="$SLOP_TEST_DATABASE_URL" cargo test -q --locked >"$out/test.log" 2>&1; }
