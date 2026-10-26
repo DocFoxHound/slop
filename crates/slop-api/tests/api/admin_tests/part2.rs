@@ -3891,6 +3891,11 @@ async fn notification_emails_are_sent_retried_and_given_up(db: PgPool) {
         outbox(&app, "refused@old.example").await.0 == 5
     })
     .await;
+    // Ray's and Gwen's were queued together (one created_at), so Ray's can come after Gwen's.
+    eventually(5, "Ray's was tried", || async {
+        outbox(&app, "refused@example.com").await.0 == 1
+    })
+    .await;
     job.abort();
 
     assert_eq!(
