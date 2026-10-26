@@ -154,6 +154,10 @@ test("the Donate box is always there on a Beta page: why donations are off, and 
   await donate(ready).getByRole("button", { name: "Turn on donations" }).click();
   await expect.poll(() => saved?.donations_on).toBe(true);
   expect(saved?.donation_suggested_minor).toBe(700);
+  // Saving reloads the settings: let that answer (and any other still on its way) finish before
+  // the windows close, or its handler reads a response that's already gone and fails the test.
+  await ready.unrouteAll({ behavior: "wait" });
+  await maker.unrouteAll({ behavior: "wait" });
 });
 
 test("the Edit store page has a Get paid section at the top, with every step to set it up", async ({ page }) => {
