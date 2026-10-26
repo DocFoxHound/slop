@@ -20,7 +20,7 @@ import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
 import { StoreNav } from "../components/StoreNav";
 import { ModControls } from "../components/ModControls";
-import { DonateBox } from "../components/Donate";
+import { DonateButton } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
 import { workflowName } from "./Releases";
 import { isDesktop, openExternal } from "../platform";
@@ -60,18 +60,25 @@ function AppView({ app }: { app: AppDetail }) {
   const age = ageLabel(app.min_age);
   const firstCategory = app.kind === "game" ? { slug: "games", name: "Games" } : null;
   const hasGallery = app.gallery.length > 0;
-  // The Play/Install control: in the Get it box, and offered again by the rating to players who
-  // haven't played yet (in the desktop app).
-  const getIt =
+  // Donate, next to Play/Install in the Get it box (not for Coming soon or Private Slop).
+  const donate =
+    app.stage !== "coming_soon" && !app.private ? <DonateButton slug={app.slug} title={app.title} isMine={app.is_mine} /> : null;
+  // The Play/Install control: in the Get it box with Donate, and offered again (without it) by the
+  // rating to players who haven't played yet (in the desktop app).
+  const getItWith = (donate: ReactNode) =>
     app.stage === "coming_soon" ? null : app.platforms.includes("any") && app.branch ? (
-      <ModControls slug={app.slug} game={{ slug: app.branch.parent_slug, title: app.branch.parent_title }} />
+      <>
+        <ModControls slug={app.slug} game={{ slug: app.branch.parent_slug, title: app.branch.parent_title }} />
+        {donate && <div className="get-row">{donate}</div>}
+      </>
     ) : app.branch && !app.is_mine ? (
-      <CommunityGate app={app}>
-        <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
+      <CommunityGate app={app} donate={donate}>
+        <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} donate={donate} />
       </CommunityGate>
     ) : (
-      <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} />
+      <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} sandbox={sandboxHint} donate={donate} />
     );
+  const getIt = getItWith(donate);
   // Coming soon: Interested goes with "Ratings open when it's playable" at the top; in Beta it's
   // in the Get it box.
   const interested = !app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />;
@@ -162,7 +169,7 @@ function AppView({ app }: { app: AppDetail }) {
                 title={app.title}
                 isMine={app.is_mine}
                 signedIn={Boolean(me)}
-                play={getIt}
+                play={getItWith(null)}
                 interested={app.stage === "coming_soon" ? interested : undefined}
               />
             )}
@@ -297,7 +304,6 @@ function AppView({ app }: { app: AppDetail }) {
               </p>
             )}
           </div>
-          {app.stage !== "coming_soon" && !app.private && <DonateBox slug={app.slug} title={app.title} isMine={app.is_mine} />}
           <div className="panel panel-pad trust">
             {provenance && (
               <div className="trust-row">
@@ -403,28 +409,32 @@ const BRANCH_LABEL: Record<string, string> = {
 };
 const PLATFORM_NAME: Record<string, string> = { windows: "Windows", linux: "Linux", "linux-deb": ".deb", "linux-rpm": ".rpm" };
 
-/** A community build's caveats (DESIGN §9), ticked before it can be installed. */
-function CommunityGate({ app, children }: { app: AppDetail; children: ReactNode }) {
+/** A community build's caveats (DESIGN §9), ticked before it can be installed. Donating doesn't
+ * wait for the tick. */
+function CommunityGate({ app, donate, children }: { app: AppDetail; donate?: ReactNode; children: ReactNode }) {
   const [ok, setOk] = useState(false);
   if (!app.branch) return <>{children}</>;
   if (ok) return <>{children}</>;
   return (
-    <div className="community-gate">
-      <ul className="small">
-        <li>
-          Made by {app.maker.display_name}, not {app.branch.parent_maker}.
-        </li>
-        <li>Checked the same way as every app on Slop.</li>
-        <li>May lag behind {app.branch.parent_title}'s official updates.</li>
-        <li>
-          Read <ExternalLink href={app.repo_url}>its README</ExternalLink> first.
-        </li>
-      </ul>
-      <label className="check">
-        <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} />
-        <span>I understand this is a community build.</span>
-      </label>
-    </div>
+    <>
+      <div className="community-gate">
+        <ul className="small">
+          <li>
+            Made by {app.maker.display_name}, not {app.branch.parent_maker}.
+          </li>
+          <li>Checked the same way as every app on Slop.</li>
+          <li>May lag behind {app.branch.parent_title}'s official updates.</li>
+          <li>
+            Read <ExternalLink href={app.repo_url}>its README</ExternalLink> first.
+          </li>
+        </ul>
+        <label className="check">
+          <input type="checkbox" checked={ok} onChange={(e) => setOk(e.target.checked)} />
+          <span>I understand this is a community build.</span>
+        </label>
+      </div>
+      {donate && <div className="get-row">{donate}</div>}
+    </>
   );
 }
 

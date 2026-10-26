@@ -140,6 +140,19 @@ export interface DonateInfo {
   simulated: boolean;
   /** A community build or mod: one-off donations give the original's maker a share first. */
   shared: { slug: string; title: string; maker: string; percent: number } | null;
+  /** Signed in: the viewer's own donations to this app, for their Donate button. */
+  mine?: {
+    /** Their latest paid donation (one-off, or a month of a server donation), unless refunded. */
+    last: { total_minor: number; currency: string; paid_at: string } | null;
+    /** Their monthly server donation while it runs. */
+    monthly: {
+      id: string;
+      total_minor: number;
+      currency: string;
+      started_at: string | null;
+      next_charge_at: string | null;
+    } | null;
+  };
 }
 
 export interface MyDonation {

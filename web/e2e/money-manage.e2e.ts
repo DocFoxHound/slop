@@ -4,6 +4,7 @@
 // seeded creative) makes her own game for it; Remy donates to it.
 import type { Page, Route } from "@playwright/test";
 
+import { donateButton, openDonateForm, SLIME } from "./donate-helpers";
 import { expect, signIn, test } from "./fixtures";
 import { api, call, donate, listedApp } from "./money-helpers";
 
@@ -131,16 +132,19 @@ test("the settings save, refuse bad values, and the servers can be shut down", a
   const visitor = await browser.newPage();
   await visitor.goto(`/app/${SLUG}`);
   const box = visitor.getByRole("form", { name: "Donate to Coin Garden" });
+  await openDonateForm(visitor);
   await expect(box.getByRole("radio").first()).toContainText("€");
   await box.getByRole("tab", { name: "Server donation · monthly" }).click();
   await expect(box.getByText("“Runs the garden's shared leaderboard.”")).toBeVisible();
 
-  // Turned off, the button goes from the store page.
+  // Turned off, the store page's button goes quiet and says so.
   await on.uncheck();
   await save.click();
   await expect(p.getByText("Saved.")).toBeVisible();
   await visitor.reload();
   await expect(visitor.getByRole("heading", { name: "Coin Garden", level: 1 })).toBeVisible();
+  await expect(visitor.locator(".install-box").getByText("Donations off")).toBeVisible();
+  await expect(donateButton(visitor)).not.toHaveCSS("background-color", SLIME);
   await expect(box).toHaveCount(0);
   await on.check();
   await save.click();

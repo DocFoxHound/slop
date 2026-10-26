@@ -1,20 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Donate box on an app's page (DESIGN §12, PAYMENTS §5–6). The donor sees what they pay
+// The Donate button, next to Play, Install or Download on an app's store page and in the library
+// (DESIGN §12, PAYMENTS §5–6). It opens the donate form right there: the donor sees what they pay
 // first and largest (PAY-10), what the maker receives, Slop's fee and the processing addition.
 // Donations give nothing back, and the app is the same for everyone.
 //
-// It shows on every public Beta or released app's page, never hidden: when donations are off it
-// says why, and the app's maker gets the fix right there (DonationsFix).
+// Green like Play while the viewer can donate; grey once they have ("Donated"), or with their
+// monthly server donation and Cancel beside it (PAY-15: two clicks, at once). It shows on every
+// public Beta or released app, never hidden: when donations are off it's quiet and says why, and
+// the app's maker gets the fix in its panel (DonationsFix).
 //
 // On a community build or mod, a one-off donation is shared: the original's maker gets 30% as its
 // own donation, paid first, then the branch's author gets the rest. Two payments, because Slop
 // never splits one; after Stripe the donor comes back here (?shared=…&rest=…) for the second.
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
 import { Link, useSearchParams } from "react-router";
 
-import { api, ApiError, type DonationQuote } from "../api";
-import { toMinor } from "../format";
+import { api, ApiError, type DonateInfo, type DonationQuote } from "../api";
+import { formatDate, toMinor } from "../format";
 import { useLoad } from "../hooks";
 import { openExternal } from "../platform";
 import { solve } from "../pow";
@@ -35,10 +38,273 @@ export function shareFor(branch: number, percent: number): number {
 
 type StartBody = Parameters<typeof api.donations.start>[1];
 
-export function DonateBox({ slug, title, isMine = false }: { slug: string; title: string; isMine?: boolean }) {
+export function DonateButton({ slug, title, isMine = false }: { slug: string; title: string; isMine?: boolean }) {
+  const { me } = useSession();
+  const [params] = useSearchParams();
+  const info = useLoad(() => api.donations.info(slug), [slug, me?.id]);
+  // Back from Stripe (?donated=… or ?shared=…): the form opens to say thanks, or for step 2.
+  const back = Boolean(params.get("donated") || params.get("shared"));
+  const [open, setOpen] = useState(back);
+  // The form, rather than what the viewer already gave.
+  const [form, setForm] = useState(back);
+  const [confirming, setConfirming] = useState(false);
+  const [cancelled, setCancelled] = useState(false);
+  const [cancelError, setCancelError] = useState<string>();
+  const [busy, setBusy] = useState(false);
+  const panelId = useId();
+  const tipId = useId();
+  const button = useRef<HTMLButtonElement>(null);
+  const cancelButton = useRef<HTMLButtonElement>(null);
+  const panel = useRef<HTMLDivElement>(null);
+  const confirmBox = useRef<HTMLDivElement>(null);
+  const done = useRef<HTMLParagraphElement>(null);
+  const focusNext = useRef<"panel" | "confirm" | "done" | null>(null);
+  useEffect(() => {
+    const target = { panel, confirm: confirmBox, done }[focusNext.current ?? "panel"];
+    if (focusNext.current) target.current?.focus();
+    focusNext.current = null;
+  }, [open, form, confirming, cancelled]);
+
+  const d = info.data;
+  // Not a public app (a local build, say): nothing to donate to.
+  if (info.error?.status === 404) return null;
+  if (!d && !info.error) return null;
+  const mine = d?.mine;
+  const monthly = mine?.monthly ?? null;
+  const last = mine?.last ?? null;
+  const quiet = Boolean(info.error) || !d?.on || isMine;
+  const note = info.error ? null : !d?.on ? "Donations off" : isMine ? "Donations on" : null;
+  const tip = info.error
+    ? null
+    : !d?.on
+      ? `Donations are off. ${d?.off_reason ?? ""}`.trim()
+      : isMine
+        ? "It's your own app: players donate here."
+        : null;
+
+  const close = () => {
+    setOpen(false);
+    setForm(false);
+    button.current?.focus();
+  };
+  const toggle = () => {
+    if (open) return close();
+    setConfirming(false);
+    setCancelled(false);
+    // Someone who has given sees what first, with Donate again; everyone else gets the form.
+    setForm(!monthly && !last);
+    focusNext.current = "panel";
+    setOpen(true);
+  };
+  const onPanelKey = (e: KeyboardEvent) => {
+    if (e.key === "Escape") {
+      e.preventDefault();
+      close();
+    }
+  };
+  const keep = () => {
+    setConfirming(false);
+    setTimeout(() => cancelButton.current?.focus());
+  };
+  const cancelMonthly = async () => {
+    if (!monthly) return;
+    setBusy(true);
+    setCancelError(undefined);
+    try {
+      await api.donations.cancel(monthly.id);
+      setConfirming(false);
+      setCancelled(true);
+      focusNext.current = "done";
+      info.reload();
+    } catch (err) {
+      setCancelError(err instanceof ApiError ? err.message : String(err));
+    } finally {
+      setBusy(false);
+    }
+  };
+
+  const label = monthly ? (
+    <>
+      <span aria-hidden="true">♥</span> {amount(monthly.total_minor, monthly.currency)}/month
+    </>
+  ) : last && !quiet ? (
+    <>
+      <span aria-hidden="true">♥</span> Donated
+    </>
+  ) : (
+    <>
+      <span aria-hidden="true">♥</span> Donate
+    </>
+  );
+  const tone = monthly ? "donate-btn given" : quiet ? "donate-btn quiet" : last ? "donate-btn given" : "donate-btn slime";
+
+  return (
+    <>
+      <span className="donate-wrap">
+        <button
+          type="button"
+          ref={button}
+          className={`btn ${tone}`}
+          aria-expanded={open}
+          aria-controls={open ? panelId : undefined}
+          aria-describedby={tip ? tipId : undefined}
+          aria-label={monthly ? `${amount(monthly.total_minor, monthly.currency)}/month server donation` : undefined}
+          onClick={toggle}
+        >
+          {label}
+        </button>
+        {tip && (
+          <span className="donate-tip" role="tooltip" id={tipId}>
+            {tip}
+          </span>
+        )}
+        {note && <span className="small muted donate-note">{note}</span>}
+        {monthly && !confirming && (
+          <button
+            type="button"
+            ref={cancelButton}
+            className="btn donate-cancel"
+            aria-label="Cancel server donation"
+            onClick={() => {
+              setOpen(false);
+              setCancelError(undefined);
+              focusNext.current = "confirm";
+              setConfirming(true);
+            }}
+          >
+            Cancel
+          </button>
+        )}
+      </span>
+      {confirming && monthly && d && (
+        <div
+          className="notice donate-confirm"
+          role="group"
+          aria-label="Cancel your server donation"
+          ref={confirmBox}
+          tabIndex={-1}
+          onKeyDown={(e) => {
+            if (e.key === "Escape" && !busy) {
+              e.preventDefault();
+              keep();
+            }
+          }}
+        >
+          <p>
+            Cancel your server donation of <b>{amount(monthly.total_minor, monthly.currency)} a month</b> to {title}? It
+            ends now: no more payments are taken
+            {monthly.next_charge_at ? `, including the one due ${formatDate(monthly.next_charge_at)}` : ""}. What you've
+            already given stays with {d.maker}.
+          </p>
+          {cancelError && (
+            <p className="form-error" role="alert">
+              {cancelError}
+            </p>
+          )}
+          <div className="actions">
+            <button type="button" className="btn small danger" disabled={busy} onClick={() => void cancelMonthly()}>
+              {busy ? "Cancelling…" : "Yes, cancel it"}
+            </button>
+            <button type="button" className="btn small ghost" disabled={busy} onClick={keep}>
+              Keep it
+            </button>
+          </div>
+        </div>
+      )}
+      {cancelled && !confirming && (
+        <p className="small donate-done" role="status" ref={done} tabIndex={-1}>
+          Your server donation to {title} is cancelled. No more payments will be taken.
+        </p>
+      )}
+      {open && (
+        <div
+          className="panel panel-pad donate-panel"
+          id={panelId}
+          role="dialog"
+          aria-label={`Donate to ${title}`}
+          ref={panel}
+          tabIndex={-1}
+          onKeyDown={onPanelKey}
+        >
+          <button type="button" className="btn small ghost donate-close" aria-label="Close" onClick={close}>
+            <span aria-hidden="true">×</span>
+          </button>
+          {info.error ? (
+            <>
+              <h3>♥ Donate</h3>
+              <ErrorState error={info.error} onRetry={info.reload} />
+            </>
+          ) : !d ? null : !d.on ? (
+            <section className="donate-box donate-off" aria-label={`Donations to ${title} are off`}>
+              <h3>♥ Donate</h3>
+              <p className="small">
+                <b>Donations are off.</b> {d.off_reason}
+              </p>
+              {isMine ? (
+                <DonationsFix slug={slug} onChanged={info.reload} />
+              ) : (
+                <p className="muted small">Donations go straight to {d.maker} and never unlock anything.</p>
+              )}
+            </section>
+          ) : form ? (
+            <DonateForm slug={slug} title={title} d={d} monthlyAllowed={!monthly} onDone={info.reload} />
+          ) : (
+            <div className="donate-box donate-given">
+              <h3>{monthly ? "♥ Your server donation" : "♥ You donated"}</h3>
+              {monthly && (
+                <p>
+                  You give <b>{amount(monthly.total_minor, monthly.currency)} a month</b> for {title}'s servers
+                  {monthly.started_at ? `, since ${formatDate(monthly.started_at)}` : ""}.
+                  {monthly.next_charge_at && ` The next payment is on ${formatDate(monthly.next_charge_at)}.`} Cancel it any
+                  time with Cancel next to this button.
+                </p>
+              )}
+              {last && (
+                <p>
+                  You donated <b>{amount(last.total_minor, last.currency)}</b> on {formatDate(last.paid_at)}. It went
+                  straight to {d.maker}.
+                </p>
+              )}
+              <p className="muted small">
+                Donating again is up to you: {title} is the same for everyone. Receipts are on your{" "}
+                <Link to="/account/money#donations">account page</Link>.
+              </p>
+              <button
+                type="button"
+                className="btn small"
+                onClick={() => {
+                  focusNext.current = "panel";
+                  setForm(true);
+                }}
+              >
+                Donate again
+              </button>
+            </div>
+          )}
+        </div>
+      )}
+    </>
+  );
+}
+
+/** The donate form itself: amounts, monthly for server donations, consent, then Stripe. */
+function DonateForm({
+  slug,
+  title,
+  d,
+  monthlyAllowed,
+  onDone,
+}: {
+  slug: string;
+  title: string;
+  d: DonateInfo;
+  /** False while the viewer already gives monthly (one each). */
+  monthlyAllowed: boolean;
+  /** A donation went through: the button reloads what the viewer gave. */
+  onDone: () => void;
+}) {
   const { me, refresh } = useSession();
   const [params, setParams] = useSearchParams();
-  const info = useLoad(() => api.donations.info(slug), [slug, me?.id]);
   const [monthly, setMonthly] = useState(false);
   const [chosen, setChosen] = useState<number>();
   const [custom, setCustom] = useState("");
@@ -78,9 +344,10 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
       .catch(() => undefined)
       .then(() => {
         setThanks(true);
+        onDone();
         setParams({}, { replace: true });
       });
-  }, [donated, setParams]);
+  }, [donated, setParams, onDone]);
 
   // The quote (and, for server donations, the exact terms) for whatever amount is chosen.
   const selected = custom ? toMinor(custom) : (chosen ?? null);
@@ -95,8 +362,7 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
   // New terms need a new tick.
   useEffect(() => setConsent(false), [selected, monthly]);
 
-  const d = info.data;
-  const shared = d?.shared && !monthly ? d.shared : null;
+  const shared = d.shared && !monthly ? d.shared : null;
   const share = shared && selected !== null ? shareFor(selected, shared.percent) : null;
   useEffect(() => {
     setShareQuote(undefined);
@@ -106,36 +372,12 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
     }, 250);
     return () => window.clearTimeout(timer);
   }, [shared?.slug, share]); // eslint-disable-line react-hooks/exhaustive-deps
-  if (info.error) {
-    return (
-      <div className="panel panel-pad donate-box">
-        <h3>♥ Donate</h3>
-        <ErrorState error={info.error} onRetry={info.reload} />
-      </div>
-    );
-  }
-  if (!d) return null;
   if (thanks) {
     return (
-      <div className="panel panel-pad donate-box">
+      <div className="donate-box">
         <h3>♥ Thank you</h3>
         <p>Your donation goes straight to {d.maker}. Your receipt is on your <Link to="/account/money#donations">account page</Link>.</p>
       </div>
-    );
-  }
-  if (!d.on) {
-    return (
-      <section className="panel panel-pad donate-box donate-off" aria-label={`Donate to ${title}`}>
-        <h3>♥ Donate</h3>
-        <p className="small">
-          <b>Donations are off.</b> {d.off_reason}
-        </p>
-        {isMine ? (
-          <DonationsFix slug={slug} onChanged={info.reload} />
-        ) : (
-          <p className="muted small">Donations go straight to {d.maker} and never unlock anything.</p>
-        )}
-      </section>
     );
   }
 
@@ -172,6 +414,7 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
       await openExternal(res.url);
     } else {
       setThanks(true);
+      onDone();
       void refresh();
     }
   };
@@ -223,6 +466,7 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
         await openExternal(res.url);
       } else {
         setThanks(true);
+        onDone();
         void refresh();
       }
     });
@@ -230,7 +474,7 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
 
   if (sharePaid) {
     return (
-      <div className="panel panel-pad donate-box">
+      <div className="donate-box">
         <h3>♥ Step 2 of 2</h3>
         <p>
           Thank you: your share for {d.shared?.title ?? "the original"} is paid. Now your donation of{" "}
@@ -249,12 +493,12 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
   }
 
   return (
-    <form className="panel panel-pad donate-box form" onSubmit={(e) => void submit(e)} aria-label={`Donate to ${title}`}>
+    <form className="donate-box form" onSubmit={(e) => void submit(e)} aria-label={`Donate to ${title}`}>
       <h3>♥ Donate</h3>
       <p className="muted small">
         Goes straight to {d.maker} through Stripe. Donations give nothing back: {title} is the same for everyone.
       </p>
-      {d.servers && (
+      {d.servers && monthlyAllowed && (
         <div className="seg small-seg" role="tablist" aria-label="How often">
           <button type="button" role="tab" aria-selected={!monthly} className={!monthly ? "on" : ""} onClick={() => setMonthly(false)}>
             Once
@@ -373,7 +617,7 @@ export function DonateBox({ slug, title, isMine = false }: { slug: string; title
         {d.simulated
           ? "This server simulates payments: no money moves."
           : `Payment runs on ${d.maker}'s own Stripe account, so they see what Stripe shows them for your receipt. Donations are final; the maker can refund mistakes.`}
-        {monthly && " Cancel any time from your account page."}
+        {monthly && " Cancel any time, right next to the Donate button or on your account page."}
       </p>
     </form>
   );

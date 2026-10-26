@@ -1,10 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Donate box on an app's page (web/src/components/Donate.tsx): quotes, who can't donate,
-// one-off and monthly server donations through (fake) Stripe Checkout, which opens in a new tab,
-// the shared two-payment donation to a community build, and the proof-of-work check. Each donor
-// is a staff account that donates nowhere else, so their per-hour limits and checks are theirs.
+// The Donate button next to Add to library / Play on an app's page (web/src/components/Donate.tsx)
+// and the form it opens: green for someone who can donate, grey once they have, a monthly server
+// donation with Cancel right there; quotes, who can't donate, one-off and monthly server donations
+// through (fake) Stripe Checkout, which opens in a new tab, the shared two-payment donation to a
+// community build, and the proof-of-work check. Each donor is a staff account that donates
+// nowhere else, so their per-hour limits and checks are theirs.
 import type { Page } from "@playwright/test";
 
+import { fake } from "./accounts-helpers";
+import { donateButton, donatePanel, expectSameRow, noSeriousAxeViolations, openDonateForm, SLIME } from "./donate-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
 import { api, call, moneyApps } from "./money-helpers";
 
@@ -17,7 +21,7 @@ interface Quote {
   donor_covers_fees: boolean;
 }
 
-/** As the Donate box writes amounts: always with cents. */
+/** As the donate form writes amounts: always with cents. */
 const amount = (minor: number, _currency: "usd") => `$${(minor / 100).toFixed(2)}`;
 
 const donateBox = (page: Page) => page.getByRole("form", { name: /^Donate to/ });
@@ -35,7 +39,10 @@ async function payInNewTab(page: Page, button: string | RegExp): Promise<Page> {
 test("signed out, on your own app, coming soon or with donations off, there's no way to donate, and it says why", async ({ browser }) => {
   const visitor = await browser.newPage();
   await visitor.goto(`/app/${ids.listedApp}`);
-  const box = donateBox(visitor);
+  // Green like Play, in the Get it box; it opens the amounts, with Sign in to donate.
+  await expect(donateButton(visitor)).toHaveAccessibleName("Donate");
+  await expect(donateButton(visitor)).toHaveCSS("background-color", SLIME);
+  const box = await openDonateForm(visitor);
   await expect(box.getByRole("heading", { name: "♥ Donate" })).toBeVisible();
   await expect(box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio")).not.toHaveCount(0);
   await expect(box.getByRole("link", { name: "Sign in to donate" })).toHaveAttribute(
@@ -44,29 +51,113 @@ test("signed out, on your own app, coming soon or with donations off, there's no
   );
   await expect(box.getByRole("button", { name: /^Donate|Choose an amount/ })).toHaveCount(0);
 
+  // The maker's own: quiet, not green, and the form says why.
   const mia = await browser.newPage();
   await signIn(mia, "maker");
   await mia.goto(`/app/${ids.listedApp}`);
+  await expect(donateButton(mia)).not.toHaveCSS("background-color", SLIME);
+  await expect(mia.locator(".install-box").getByText("Donations on")).toBeVisible();
+  await openDonateForm(mia);
   await expect(donateBox(mia).getByText("It's your own app.")).toBeVisible();
   await expect(donateBox(mia).getByRole("button", { name: /^Donate|Choose an amount/ })).toHaveCount(0);
-  // Coming soon: no box at all.
+  // Coming soon: no Donate at all.
   await mia.goto(`/app/${ids.draftApp}`);
   await expect(mia.getByRole("heading", { name: "Starship Draft", level: 1 })).toBeVisible();
-  await expect(donateBox(mia)).toHaveCount(0);
-  // The maker hasn't turned donations on: the box stays, and says so.
+  await expect(donateButton(mia)).toHaveCount(0);
+  // The maker hasn't turned donations on: the button stays, quiet, and says why beside it, on
+  // hover or focus, and in its panel.
   await visitor.goto("/app/castle-rock");
   await expect(visitor.getByRole("heading", { name: "Castle Rock", level: 1 })).toBeVisible();
-  await expect(donateBox(visitor)).toHaveCount(0);
-  const off = visitor.getByRole("region", { name: "Donate to Castle Rock" });
+  const quiet = donateButton(visitor);
+  await expect(quiet).toHaveAccessibleName("Donate");
+  await expect(quiet).not.toHaveCSS("background-color", SLIME);
+  await expect(visitor.locator(".install-box").getByText("Donations off")).toBeVisible();
+  await expect(quiet).toHaveAccessibleDescription(/^Donations are off\. (The maker hasn't turned on donations\.|The maker's Stripe account isn't ready)/);
+  await quiet.focus();
+  await expect(visitor.getByRole("tooltip")).toBeVisible();
+  await quiet.click();
+  const off = donatePanel(visitor);
   await expect(off.getByText("Donations are off.")).toBeVisible();
   await expect(off).toContainText(/The maker hasn't turned on donations\.|The maker's Stripe account isn't ready/);
-  await expect(off.getByRole("button")).toHaveCount(0);
+  await expect(donateBox(visitor)).toHaveCount(0);
+  await expect(off.getByRole("button")).toHaveAccessibleName("Close");
+});
+
+test("next to Add to library: green for someone who can donate, grey once they have, and a monthly one with Cancel", async ({ browser }) => {
+  // Rae never donates to Lantern Keep: green, normal size, beside the library button.
+  const rae = await (await browser.newContext()).newPage();
+  await signIn(rae, "reviewer");
+  await rae.goto(`/app/${ids.listedApp}`);
+  const green = donateButton(rae);
+  await expect(green).toHaveAccessibleName("Donate");
+  await expect(green).toHaveCSS("background-color", SLIME);
+  await expect(green).not.toHaveClass(/\bbig\b/);
+  await expectSameRow(green, rae.locator(".install-box").getByRole("button", { name: /library/ }));
+  await green.click();
+  await expect(green).toHaveAttribute("aria-expanded", "true");
+  await expect(donatePanel(rae)).toBeFocused();
+  await expect(donateBox(rae)).toBeVisible();
+  await noSeriousAxeViolations(rae);
+  await rae.keyboard.press("Escape");
+  await expect(donatePanel(rae)).toHaveCount(0);
+  await expect(green).toBeFocused();
+
+  // Pat has donated: grey "Donated", which says what and when, with Donate again.
+  const pat = await browser.newPage();
+  await signIn(pat, "player");
+  await pat.goto(`/app/${ids.listedApp}`);
+  const given = donateButton(pat);
+  await expect(given).toHaveAccessibleName("Donated");
+  await expect(given).not.toHaveCSS("background-color", SLIME);
+  await given.click();
+  await expect(donatePanel(pat).getByText(/^You donated \$[\d.]+ on /)).toBeVisible();
+  await expect(donatePanel(pat).getByRole("button", { name: "Donate again" })).toBeVisible();
+
+  // Cleo gives monthly: the amount, grey, and Cancel right beside it, which asks first. (Her real
+  // server donation stays: the cancel is answered here.)
+  const cleo = await (await browser.newContext()).newPage();
+  await signIn(cleo, "client");
+  let cancelled = false;
+  await cleo.route(
+    (u) => u.pathname === `/v1/apps/${ids.listedApp}/donate`,
+    async (route) => {
+      if (route.request().method() !== "GET") return route.fallback();
+      const res = await route.fetch();
+      const body = await res.json();
+      return route.fulfill({ response: res, json: cancelled ? { ...body, mine: { ...body.mine, monthly: null } } : body });
+    },
+  );
+  const cancel = await fake(cleo, "POST", `/v1/me/server-donations/${ids.serverDonation}/cancel`, () => {
+    cancelled = true;
+    return { status: 204 };
+  });
+  await cleo.goto(`/app/${ids.listedApp}`);
+  const monthly = cleo.locator(".install-box").getByRole("button", { name: /^\$[\d.]+\/month server donation$/ });
+  await expect(monthly).toBeVisible();
+  await expect(monthly).not.toHaveCSS("background-color", SLIME);
+  const stop = cleo.locator(".install-box").getByRole("button", { name: "Cancel server donation" });
+  await expectSameRow(monthly, stop);
+  await stop.click();
+  const sure = cleo.getByRole("group", { name: "Cancel your server donation" });
+  await expect(sure).toContainText(/^Cancel your server donation of \$[\d.]+ a month to Lantern Keep\? It ends now: no more payments are taken/);
+  await expect(sure).toBeFocused();
+  await noSeriousAxeViolations(cleo);
+  await sure.getByRole("button", { name: "Keep it" }).click();
+  await expect(sure).toHaveCount(0);
+  await expect(stop).toBeFocused();
+  expect(cancel.calls).toHaveLength(0);
+  await stop.click();
+  await sure.getByRole("button", { name: "Yes, cancel it" }).click();
+  await expect(cleo.getByRole("status").filter({ hasText: "Your server donation to Lantern Keep is cancelled." })).toBeVisible();
+  expect(cancel.calls).toHaveLength(1);
+  await expect(stop).toHaveCount(0);
+  await expect(monthly).toHaveCount(0);
 });
 
 test("presets and your own amount show what you pay, what the maker gets and the fees", async ({ page }) => {
   await signIn(page, "player");
   await page.goto(`/app/${ids.listedApp}`);
-  const box = donateBox(page);
+  const box = await openDonateForm(page);
   const presets = box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio");
   await expect(box.getByRole("button", { name: "Choose an amount" })).toBeDisabled();
 
@@ -109,6 +200,7 @@ test("presets and your own amount show what you pay, what the maker gets and the
   await expect(box.getByRole("tablist", { name: "How often" })).toBeVisible();
   const { original } = await moneyApps();
   await page.goto(`/app/${original}`);
+  await openDonateForm(page);
   await expect(donateBox(page).getByRole("heading", { name: "♥ Donate" })).toBeVisible();
   await expect(donateBox(page).getByRole("tablist", { name: "How often" })).toHaveCount(0);
 });
@@ -118,7 +210,7 @@ test("someone who hasn't said they're 18 has to tick it first", async ({ page })
   // stays unconfirmed for the other tests).
   await signIn(page, "overdue");
   await page.goto(`/app/${ids.listedApp}`);
-  const box = donateBox(page);
+  const box = await openDonateForm(page);
   await box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio").first().click();
   const donate = box.getByRole("button", { name: /^Donate \$/ });
   await expect(donate).toBeDisabled();
@@ -128,6 +220,7 @@ test("someone who hasn't said they're 18 has to tick it first", async ({ page })
   const teen = await page.context().browser()!.newPage();
   await signIn(teen, "teen");
   await teen.goto(`/app/${ids.listedApp}`);
+  await openDonateForm(teen);
   await donateBox(teen).getByRole("radiogroup", { name: "Amount" }).getByRole("radio").first().click();
   await expect(donateBox(teen).getByRole("checkbox", { name: "I'm 18 or older." })).not.toBeChecked();
   await expect(donateBox(teen).getByRole("button", { name: /^Donate \$/ })).toBeDisabled();
@@ -141,7 +234,7 @@ test("a one-off donation goes through Stripe in a new tab, says thanks, and is o
   const { original } = await moneyApps();
   await signIn(page, "support");
   await page.goto(`/app/${original}`);
-  const box = donateBox(page);
+  const box = await openDonateForm(page);
   await box.getByRole("textbox", { name: /Or your own amount/ }).fill("4");
   await box.getByRole("checkbox", { name: /Tell Mia Maker my name/ }).check();
   await box.getByRole("textbox", { name: /A message for them/ }).fill("For the shiny coins.");
@@ -151,6 +244,9 @@ test("a one-off donation goes through Stripe in a new tab, says thanks, and is o
   await expect(stripe.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
   await expect(stripe.getByText("Your donation goes straight to Mia Maker.")).toBeVisible();
   await expect(stripe).toHaveURL(new RegExp(`/app/${original}$`));
+  // The button beside Add to library goes grey.
+  await expect(donateButton(stripe)).toHaveAccessibleName("Donated");
+  await expect(donateButton(stripe)).not.toHaveCSS("background-color", SLIME);
 
   await stripe.goto("/account#donations");
   const row = stripe.getByRole("row").filter({ has: stripe.getByRole("link", { name: "Tip Jar Tycoon" }) });
@@ -177,53 +273,80 @@ test("back from Stripe, the thanks show even when checking the payment fails", a
   await expect(page).toHaveURL(/\/account\/money#donations$/);
 });
 
-test("a monthly server donation states its terms, needs a fresh tick for each amount, and is cancelled in two clicks", async ({ page }) => {
-  await signIn(page, "moderator");
-  await page.goto(`/app/${ids.listedApp}`);
-  const box = donateBox(page);
-  await expect(box.getByRole("tab", { name: "Once" })).toHaveAttribute("aria-selected", "true");
-  await expect(box.getByRole("checkbox", { name: /Tell Mia Maker my name/ })).toBeVisible();
-  await box.getByRole("tab", { name: "Server donation · monthly" }).click();
-  await expect(box.getByText("“Pays for two game servers and the leaderboard.”")).toBeVisible();
-  // Names aren't shared on monthly donations.
-  await expect(box.getByRole("checkbox", { name: /Tell Mia Maker my name/ })).toHaveCount(0);
-  const presets = box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio");
-  await presets.first().click();
-  await expect(box.getByText(/^You pay .* every month/)).toBeVisible();
-  const consent = box.locator("label.consent").getByRole("checkbox");
-  await expect(box.locator("label.consent")).toContainText("Lantern Keep");
-  const donate = box.getByRole("button", { name: /^Donate \$[\d.]+ a month$/ });
-  await expect(donate).toBeDisabled();
-  await consent.check();
-  await expect(donate).toBeEnabled();
-  // Other terms, another tick.
-  await presets.nth(1).click();
-  await expect(consent).not.toBeChecked();
-  await expect(donate).toBeDisabled();
-  await consent.check();
-  const stripe = await payInNewTab(page, /^Donate \$[\d.]+ a month$/);
-  await expect(stripe.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+/** Ends Mo's monthly server donation to Lantern Keep, if a run before left one going. */
+async function endMonthly() {
+  const mine = await api<{ server_donations: Array<{ id: string; app_slug: string; status: string }> }>("moderator", "GET", "/v1/me/donations");
+  for (const s of mine.server_donations) {
+    if (s.app_slug === ids.listedApp && s.status !== "cancelled") {
+      await call("moderator", "POST", `/v1/me/server-donations/${s.id}/cancel`);
+    }
+  }
+}
 
-  await stripe.goto("/account#donations");
-  const item = stripe.getByRole("listitem").filter({ hasText: "Server donation to Lantern Keep" });
-  await expect(item.getByText(/^Next payment /)).toBeVisible();
-  await item.getByText("What you agreed to").click();
-  await expect(item.getByText(/Lantern Keep/).last()).toBeVisible();
-  // Two clicks; "Keep it" backs out.
-  await item.getByRole("button", { name: "Cancel" }).click();
-  await item.getByRole("button", { name: "Keep it" }).click();
-  await expect(item.getByRole("button", { name: "Yes, cancel it" })).toHaveCount(0);
-  await item.getByRole("button", { name: "Cancel" }).click();
-  await item.getByRole("button", { name: "Yes, cancel it" }).click();
-  await expect(item.getByText(/^Cancelled /)).toBeVisible();
-  await expect(item.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+test("a monthly server donation states its terms, needs a fresh tick for each amount, and is cancelled next to the button in two clicks", async ({ page }) => {
+  await endMonthly();
+  try {
+    await signIn(page, "moderator");
+    await page.goto(`/app/${ids.listedApp}`);
+    const box = await openDonateForm(page);
+    await expect(box.getByRole("tab", { name: "Once" })).toHaveAttribute("aria-selected", "true");
+    await expect(box.getByRole("checkbox", { name: /Tell Mia Maker my name/ })).toBeVisible();
+    await box.getByRole("tab", { name: "Server donation · monthly" }).click();
+    await expect(box.getByText("“Pays for two game servers and the leaderboard.”")).toBeVisible();
+    // Names aren't shared on monthly donations.
+    await expect(box.getByRole("checkbox", { name: /Tell Mia Maker my name/ })).toHaveCount(0);
+    const presets = box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio");
+    await presets.first().click();
+    await expect(box.getByText(/^You pay .* every month/)).toBeVisible();
+    const consent = box.locator("label.consent").getByRole("checkbox");
+    await expect(box.locator("label.consent")).toContainText("Lantern Keep");
+    await expect(box.locator("label.consent")).toContainText("I can cancel at any time in two clicks from my library or account page");
+    const donate = box.getByRole("button", { name: /^Donate \$[\d.]+ a month$/ });
+    await expect(donate).toBeDisabled();
+    await consent.check();
+    await expect(donate).toBeEnabled();
+    // Other terms, another tick.
+    await presets.nth(1).click();
+    await expect(consent).not.toBeChecked();
+    await expect(donate).toBeDisabled();
+    await consent.check();
+    const stripe = await payInNewTab(page, /^Donate \$[\d.]+ a month$/);
+    await expect(stripe.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+
+    // Beside Add to library: the amount a month, grey, and Cancel. Two clicks; Keep it backs out.
+    const monthly = stripe.locator(".install-box").getByRole("button", { name: /^\$[\d.]+\/month server donation$/ });
+    await expect(monthly).toBeVisible();
+    await expect(monthly).not.toHaveCSS("background-color", SLIME);
+    const stop = stripe.locator(".install-box").getByRole("button", { name: "Cancel server donation" });
+    await stop.click();
+    const sure = stripe.getByRole("group", { name: "Cancel your server donation" });
+    await expect(sure).toContainText(/It ends now: no more payments are taken, including the one due /);
+    await sure.getByRole("button", { name: "Keep it" }).click();
+    await expect(sure.getByRole("button", { name: "Yes, cancel it" })).toHaveCount(0);
+    await stop.click();
+    await sure.getByRole("button", { name: "Yes, cancel it" }).click();
+    await expect(stripe.getByRole("status").filter({ hasText: "Your server donation to Lantern Keep is cancelled." })).toBeVisible();
+    await expect(stop).toHaveCount(0);
+    // The month paid counts as given.
+    await expect(donateButton(stripe)).toHaveAccessibleName("Donated");
+
+    // The account page has it, with what was agreed to, cancelled.
+    await stripe.goto("/account#donations");
+    const item = stripe.getByRole("listitem").filter({ hasText: "Server donation to Lantern Keep" }).first();
+    await item.getByText("What you agreed to").click();
+    await expect(item.getByText(/Lantern Keep/).last()).toBeVisible();
+    await expect(item.getByText(/^Cancelled /)).toBeVisible();
+    await expect(item.getByRole("button", { name: "Cancel" })).toHaveCount(0);
+  } finally {
+    await endMonthly();
+  }
 });
 
 test("a donation to a community build is two payments: the original's share first, then the build's", async ({ page }) => {
   const { original, build } = await moneyApps();
   await signIn(page, "reviewer");
   await page.goto(`/app/${build}`);
-  const box = donateBox(page);
+  const box = await openDonateForm(page);
   const custom = box.getByRole("textbox", { name: /Or your own amount for Bo Builder/ });
   // Too small: the original's 30% would be under the $1 minimum.
   await custom.fill("1");
@@ -267,11 +390,14 @@ test("where payments are simulated, both payments of a shared donation happen at
     return route.fulfill({ status: 200, contentType: "application/json", body: JSON.stringify({ url: null, id, done: true }) });
   });
   await page.goto(`/app/${build}`);
-  const box = donateBox(page);
+  const box = await openDonateForm(page);
   await expect(box.getByText("This server simulates payments: no money moves.")).toBeVisible();
   await box.getByRole("textbox", { name: /Or your own amount/ }).fill("5");
+  // Once it's done, the button reloads what Rae gave (through the stand-ins above).
+  const reloaded = page.waitForResponse((r) => new URL(r.url()).pathname === `/v1/apps/${build}/donate` && r.request().method() === "GET");
   await box.getByRole("button", { name: /in two payments$/ }).click();
   await expect(page.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+  await reloaded;
   expect(started.map((s) => new URL(s.url).pathname)).toEqual([`/v1/apps/${original}/donate`, `/v1/apps/${build}/donate`]);
   expect(started[0].body).toMatchObject({ amount_minor: 215, share_for: build, rest_minor: 500, monthly: false });
   expect(started[1].body).toMatchObject({ amount_minor: 500, share_donation: "00000000-0000-4000-8000-000000000001" });
@@ -284,7 +410,7 @@ test("after a few unfinished checkouts the browser does a quick check first", as
   }
   await signIn(page, "security");
   await page.goto(`/app/${ids.listedApp}`);
-  const box = donateBox(page);
+  const box = await openDonateForm(page);
   await box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio").first().click();
 
   // When the check can't start, the error shows and the button comes back.

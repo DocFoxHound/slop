@@ -5,7 +5,7 @@ import { MemoryRouter } from "react-router";
 
 import { api, type Ratings } from "../api";
 import { LineChart, UpDownBars } from "./Charts";
-import { RatingHeader, RatingSummary, rateStep, SinceNewWork } from "./RatingPanel";
+import { RatePrompt, RatingHeader, RatingSummary, rateStep, SinceNewWork } from "./RatingPanel";
 
 const base: Ratings = {
   not_slop: 3,
@@ -131,6 +131,52 @@ describe("RatingHeader", () => {
     await show({ ...base, open: false, stage: "coming_soon" }, { signedIn: false });
     expect(screen.getByText("Ratings open when it's playable")).toBeTruthy();
     expect(screen.getByRole("button", { name: "☆ I'm interested" })).toBeTruthy();
+  });
+});
+
+describe("RatePrompt (the library)", () => {
+  afterEach(() => {
+    cleanup();
+    vi.restoreAllMocks();
+  });
+
+  const show = (r: Ratings, o: { isMine?: boolean; signedIn?: boolean } = {}) => {
+    vi.spyOn(api, "ratings").mockResolvedValue(r);
+    return render(
+      <MemoryRouter>
+        <RatePrompt slug="herds" title="Angry Herds" signedIn={o.signedIn ?? true} isMine={o.isMine ?? false} />
+      </MemoryRouter>,
+    );
+  };
+  const played = { vote: null, can_vote: true, reason: null, played: true, weight: 0.3 } as const;
+
+  it("asks a player who played it, then shows their rating in grey with Change", async () => {
+    show({ ...base, mine: played });
+    expect(await screen.findByRole("heading", { name: "You've played Angry Herds: is it Slop or Not Slop?" })).toBeTruthy();
+    cleanup();
+    show({ ...base, mine: { ...played, vote: "not_slop" } });
+    expect((await screen.findByText("👍 Not Slop")).closest(".rate-prompt-done")?.textContent).toContain("Your rating: 👍 Not Slop");
+    fireEvent.click(screen.getByRole("button", { name: "Change" }));
+    expect(screen.getByRole("heading", { name: "Change your rating of Angry Herds" })).toBeTruthy();
+  });
+
+  it("before they can, says why with the step: sign in, or play it from the Slop app", async () => {
+    show({ ...base }, { signedIn: false });
+    expect((await screen.findByRole("link", { name: "Sign in to rate" })).className).toContain("slime");
+    cleanup();
+    show({ ...base, mine: { vote: null, can_vote: false, reason: "Launch it from the Slop app first: only players can vote.", played: false, weight: 0.1 } });
+    expect(await screen.findByText("Play it from the Slop app to rate it.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "⬇ Get the Slop app" }).className).toContain("slime");
+  });
+
+  it("stays out of the way for the maker and before it's playable", async () => {
+    const { container } = show({ ...base }, { isMine: true });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(container.textContent).toBe("");
+    cleanup();
+    const closed = show({ ...base, open: false });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(closed.container.textContent).toBe("");
   });
 });
 

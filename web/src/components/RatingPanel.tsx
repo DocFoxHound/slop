@@ -260,7 +260,12 @@ function RateCallout({
         <div className="rate-callout" role="group" aria-label="Rate it">
           <p>
             <b>Play it from the Slop app to rate it.</b> Only players who launched it through Slop can rate, which keeps
-            ratings honest. {isDesktop ? "Then come back here." : "Then rate it here or in your library."}
+            ratings honest.{" "}
+            {isDesktop
+              ? play
+                ? "Then come back here."
+                : "Press Play above, then rate it here."
+              : "Then rate it here or in your library."}
           </p>
           {isDesktop ? (
             play
@@ -312,16 +317,45 @@ export function RatingBadge({ slug, signedIn }: { slug: string; signedIn: boolea
 
 /**
  * Steam's "would you recommend this?" for the library: once the player has played an app and
- * hasn't voted, ask; once they have, show their vote with Change, and their review.
+ * hasn't voted, ask; once they have, show their vote with Change, and their review. Before they
+ * can, why not with the step to take (sign in; play it from the Slop app), as at the top of the
+ * store page.
  */
-export function RatePrompt({ slug, title }: { slug: string; title: string }) {
-  const loaded = useRatings(slug, true);
+export function RatePrompt({
+  slug,
+  title,
+  signedIn = true,
+  isMine = false,
+}: {
+  slug: string;
+  title: string;
+  signedIn?: boolean;
+  isMine?: boolean;
+}) {
+  const loaded = useRatings(slug, signedIn);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [changing, setChanging] = useState(false);
   const r = loaded.data;
   const mine = r?.mine;
-  if (!r || !r.open || !mine?.can_vote) return null;
+  // Back from playing it: ask again whether they can rate.
+  const waiting = Boolean(r?.open && signedIn && !isMine && mine && !mine.can_vote);
+  const reload = loaded.reload;
+  useEffect(() => {
+    if (!waiting) return;
+    window.addEventListener("focus", reload);
+    return () => window.removeEventListener("focus", reload);
+  }, [waiting, reload]);
+  if (!r || !r.open) return null;
+  const step = rateStep(r, isMine, signedIn);
+  if (step.kind === "sign_in" || step.kind === "play" || step.kind === "other") {
+    return (
+      <div className="rate-prompt-callout">
+        <RateCallout step={step} slug={slug} title={title} />
+      </div>
+    );
+  }
+  if (!mine?.can_vote) return null;
   const vote = async (v: "not_slop" | "slop") => {
     setBusy(true);
     setError(undefined);
