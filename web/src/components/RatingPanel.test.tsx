@@ -75,6 +75,7 @@ describe("rateStep", () => {
   it("otherwise names the step to take", () => {
     expect(rateStep({ ...base, open: false, stage: "coming_soon" }, false, false).kind).toBe("coming_soon");
     expect(rateStep(base, true, true).kind).toBe("maker");
+    expect(rateStep({ ...base, mine: { ...mine, can_vote: false, played: true, maker: true } }, false, true).kind).toBe("maker");
     expect(rateStep(base, false, false).kind).toBe("sign_in");
     expect(rateStep({ ...base, mine: { ...mine, reason: "Launch it from the Slop app first: only players can vote." } }, false, true).kind).toBe(
       "play",
@@ -173,6 +174,11 @@ describe("RatePrompt (the library)", () => {
     const { container } = show({ ...base }, { isMine: true });
     await new Promise((r) => setTimeout(r, 0));
     expect(container.textContent).toBe("");
+    cleanup();
+    // The ratings say they made it (the library, before the app's details load): no vote buttons.
+    const unknown = show({ ...base, mine: { ...played, can_vote: false, maker: true, reason: "Makers can't rate their own app." } });
+    await new Promise((r) => setTimeout(r, 0));
+    expect(unknown.container.textContent).toBe("");
     cleanup();
     const closed = show({ ...base, open: false });
     await new Promise((r) => setTimeout(r, 0));

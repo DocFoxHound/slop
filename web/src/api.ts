@@ -940,6 +940,8 @@ export interface Ratings extends Tally {
     vote: "not_slop" | "slop" | null;
     can_vote: boolean;
     reason: string | null;
+    /** They made it: no vote buttons for them anywhere. */
+    maker?: boolean;
     /** They launched it through Slop, which voting needs. */
     played?: boolean;
     weight: number;
