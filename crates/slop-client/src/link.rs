@@ -363,14 +363,23 @@ fn read_plain(path: &Path, checked: &fs::Metadata) -> Option<Vec<u8>> {
 mod tests {
     use super::*;
 
+    /// Up to 10 s: a busy CI machine can be slow to schedule the link's thread.
     fn wait_for(mut done: impl FnMut() -> bool) {
-        for _ in 0..200 {
+        for _ in 0..1000 {
             if done() {
                 return;
             }
             std::thread::sleep(Duration::from_millis(10));
         }
         panic!("timed out");
+    }
+
+    /// A request as games are told to write one: `.tmp`, then renamed. Written straight to
+    /// `.json`, the link could read it before its contents land, and answer "not a request".
+    fn put(run: &Path, name: &str, body: &[u8]) {
+        let tmp = run.join("requests").join(format!("{name}.tmp"));
+        fs::write(&tmp, body).unwrap();
+        fs::rename(&tmp, run.join("requests").join(format!("{name}.json"))).unwrap();
     }
 
     #[test]
@@ -385,21 +394,17 @@ mod tests {
         let run = link.open("castle").unwrap();
 
         // Bad requests get a "failed" answer and never reach the player.
-        fs::write(
-            run.join("requests/bad.json"),
-            br#"{"mods": [{"slug": "../x"}]}"#,
-        )
-        .unwrap();
+        put(&run, "bad", br#"{"mods": [{"slug": "../x"}]}"#);
         wait_for(|| read_answer(&run, "bad").is_some());
         assert_eq!(read_answer(&run, "bad").unwrap()["status"], "failed");
         fs::write(run.join("requests/half.tmp"), b"{").unwrap();
 
         // A good one waits for the player; a second waits its turn.
-        fs::write(
-            run.join("requests/r1.json"),
+        put(
+            &run,
+            "r1",
             br#"{"mods": [{"slug": "dragons", "version": "1.2.0"}, {"slug": "dragons"}], "for": "Rock\u0007 server"}"#,
-        )
-        .unwrap();
+        );
         wait_for(|| !seen.lock().unwrap().is_empty());
         assert_eq!(read_answer(&run, "r1").unwrap()["status"], "waiting");
         let asked = seen.lock().unwrap()[0].clone();
