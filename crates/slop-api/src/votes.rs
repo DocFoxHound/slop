@@ -138,6 +138,8 @@ pub struct MyVote {
     pub can_vote: bool,
     /// Why not, when they can't.
     pub reason: Option<&'static str>,
+    /// They made it: no vote buttons for them anywhere (makers can't vote on their own apps).
+    pub maker: bool,
     /// They launched it through Slop (what voting needs, besides the stage).
     pub played: bool,
     /// How much their vote counts now.
@@ -441,6 +443,7 @@ async fn my_vote(
     user: &CurrentUser,
     app_id: Uuid,
     open: bool,
+    maker: bool,
 ) -> ApiResult<MyVote> {
     let current: Option<i16> =
         sqlx::query_scalar("select vote from votes where user_id = $1 and app_id = $2")
@@ -455,7 +458,9 @@ async fn my_vote(
     .bind(app_id)
     .fetch_optional(&state.db)
     .await?;
-    let reason = if !open {
+    let reason = if maker {
+        Some(MAKER)
+    } else if !open {
         Some(NOT_OPEN)
     } else if usage.is_none() {
         Some("Launch it from the Slop app first: only players can vote.")
@@ -466,6 +471,7 @@ async fn my_vote(
         vote: current.and_then(vote_name),
         can_vote: reason.is_none(),
         reason,
+        maker,
         played: usage.is_some(),
         weight: usage.map_or(0.1, |(p, d)| vote_weight(p, d)),
         review: crate::reviews::mine(&state.db, user.id, app_id).await?,
@@ -474,6 +480,9 @@ async fn my_vote(
 
 /// Why nobody can vote yet on a Coming soon app.
 const NOT_OPEN: &str = "Ratings open when it's playable: in Beta or released.";
+
+/// Why the maker gets no vote buttons on their own app.
+const MAKER: &str = "Makers can't rate their own app.";
 
 /// The app's stage, and whether voting is open in it.
 async fn stage(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<(&'static str, bool)> {
@@ -488,7 +497,12 @@ async fn stage(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<(&'static str, b
     })
 }
 
-async fn load(state: &AppState, user: Option<&CurrentUser>, app_id: Uuid) -> ApiResult<Ratings> {
+async fn load(
+    state: &AppState,
+    user: Option<&CurrentUser>,
+    app_id: Uuid,
+    is_mine: bool,
+) -> ApiResult<Ratings> {
     let (stage, open) = stage(&state.db, app_id).await?;
     let in_beta: i64 =
         sqlx::query_scalar("select count(*) from votes where app_id = $1 and stage = 'beta'")
@@ -496,7 +510,7 @@ async fn load(state: &AppState, user: Option<&CurrentUser>, app_id: Uuid) -> Api
             .fetch_one(&state.db)
             .await?;
     let mine = match user {
-        Some(u) => Some(my_vote(state, u, app_id, open).await?),
+        Some(u) => Some(my_vote(state, u, app_id, open, is_mine).await?),
         None => None,
     };
     Ok(Ratings {
@@ -520,8 +534,8 @@ async fn ratings(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Ratings>> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
-    let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
-    Ok(Json(load(&state, user.as_ref(), app_id).await?))
+    let (app_id, is_mine) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
+    Ok(Json(load(&state, user.as_ref(), app_id, is_mine).await?))
 }
 
 #[derive(Deserialize)]
@@ -556,12 +570,12 @@ async fn vote(
         return Err(ApiError::Conflict("Private Slop has no voting".into()));
     }
     let (_, open) = stage(&state.db, app_id).await?;
-    let mine = my_vote(&state, &user, app_id, open).await?;
+    let mine = my_vote(&state, &user, app_id, open, false).await?;
     if let Some(reason) = mine.reason {
         return Err(ApiError::Conflict(reason.into()));
     }
     cast(&state.db, user.id, app_id, value, None).await?;
-    Ok(Json(load(&state, Some(&user), app_id).await?))
+    Ok(Json(load(&state, Some(&user), app_id, false).await?))
 }
 
 #[cfg(test)]

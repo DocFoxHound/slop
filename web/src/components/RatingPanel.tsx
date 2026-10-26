@@ -143,7 +143,7 @@ export type RateStep =
 
 export function rateStep(r: Ratings, isMine: boolean, signedIn: boolean): RateStep {
   if (!r.open) return { kind: "coming_soon" };
-  if (isMine) return { kind: "maker" };
+  if (isMine || r.mine?.maker) return { kind: "maker" };
   if (!signedIn) return { kind: "sign_in" };
   const mine = r.mine;
   if (!mine) return { kind: "none" };
@@ -339,7 +339,7 @@ export function RatePrompt({
   const r = loaded.data;
   const mine = r?.mine;
   // Back from playing it: ask again whether they can rate.
-  const waiting = Boolean(r?.open && signedIn && !isMine && mine && !mine.can_vote);
+  const waiting = Boolean(r?.open && signedIn && !isMine && mine && !mine.maker && !mine.can_vote);
   const reload = loaded.reload;
   useEffect(() => {
     if (!waiting) return;
@@ -447,6 +447,8 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
     }
   };
   const mine = r.mine;
+  // The ratings say so too, so the maker never sees vote buttons while the app's details load.
+  const maker = isMine || Boolean(mine?.maker);
   const months = r.monthly.map((m) => m.month);
   const days = r.daily.map((d) => shortDay(d.day));
   const peaks = players.data?.daily_peaks ?? [];
@@ -459,7 +461,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
 
       {!r.open ? (
         <p className="muted small">Ratings open when it's playable: in Beta or released.</p>
-      ) : isMine ? (
+      ) : maker ? (
         <p className="muted small">Makers can't vote on their own apps.</p>
       ) : !signedIn ? (
         <p className="muted small">
@@ -494,7 +496,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
       ) : (
         <p className="muted small">{mine?.reason}</p>
       )}
-      {r.open && signedIn && !isMine && mine?.vote && (
+      {r.open && signedIn && !maker && mine?.vote && (
         <MyReview
           slug={slug}
           review={mine.review}

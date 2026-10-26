@@ -5263,6 +5263,28 @@ async fn only_players_vote_and_ratings_add_up(db: PgPool) {
             .status(),
         StatusCode::CONFLICT
     );
+    // Even after playing it, the maker's ratings offer no vote (so no vote buttons, anywhere).
+    let res = app
+        .send(req(Method::POST, "/v1/apps/voted/launch").cookie(&maker_cookie))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/voted/ratings").cookie(&maker_cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(ratings["mine"]["can_vote"], false);
+    assert_eq!(ratings["mine"]["maker"], true);
+    assert_eq!(
+        ratings["mine"]["reason"],
+        "Makers can't rate their own app."
+    );
+    let ratings = body_json(
+        app.send(req(Method::GET, "/v1/apps/voted/ratings").cookie(&cookie))
+            .await,
+    )
+    .await;
+    assert_eq!(ratings["mine"]["maker"], false);
     assert_eq!(
         vote(cookie.clone(), "voted", json!("meh")).await.status(),
         StatusCode::UNPROCESSABLE_ENTITY
