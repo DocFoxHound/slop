@@ -144,6 +144,25 @@ pub async fn load_set(db: &sqlx::PgPool, id: Uuid) -> sqlx::Result<PortfolioSet>
     .await
 }
 
+/// The creative's portfolio that's newer than the approved one: the one waiting for review, or
+/// else the newest turned down since the approved one (none approved: the newest turned down).
+/// Their own page previews it (mod.rs `page`); nobody else ever sees it before it's approved.
+pub async fn newer_set(db: &sqlx::PgPool, creative_id: Uuid) -> sqlx::Result<Option<PortfolioSet>> {
+    sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select {SET_COLUMNS} from portfolio_sets
+         where creative_id = $1
+           and (status = 'pending'
+                or (status = 'rejected'
+                    and created_at > coalesce((select l.created_at from creatives c
+                                                 join portfolio_sets l on l.id = c.portfolio_set_id
+                                               where c.user_id = $1), '-infinity')))
+         order by status = 'pending' desc, created_at desc limit 1"
+    )))
+    .bind(creative_id)
+    .fetch_optional(db)
+    .await
+}
+
 // ---------------------------------------------------------------------------------------------
 // Reading .slop/portfolio.json
 

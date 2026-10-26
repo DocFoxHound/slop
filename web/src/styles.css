@@ -1424,6 +1424,37 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .people-saved:focus { outline: none; }
 .people-mine { margin: 0 0 16px; display: grid; gap: 6px; }
 .people-mine h2 { margin: 0; font-size: 17px; }
+/* The editor's note on a portfolio waiting for review, with the way to its preview. */
+.portfolio-waiting { display: grid; gap: 8px; justify-items: start; }
+.portfolio-waiting p { margin: 0; }
+/* The creative's own page while it previews their portfolio waiting for review, and their live
+   page (?view=live; People.tsx, PeopleStatus.tsx). The preview can't be missed or mistaken for
+   the live page: a bright bar that stays on top while scrolling, and the page itself outlined and
+   labelled. Dark text on amber, light on dark (AA and more). */
+.own-view-bar { position: sticky; top: 0; z-index: 20; display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 10px 20px; padding: 12px 16px; margin-bottom: 16px; border-radius: var(--radius); box-shadow: 0 6px 20px rgba(0, 0, 0, 0.45); font-size: 14px; }
+.own-view-bar p { margin: 0; }
+.own-view-bar q { font-style: italic; }
+.own-view-text { display: grid; gap: 4px; flex: 1 1 420px; min-width: 0; }
+.own-view-title { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; font-size: 16px; }
+.own-view-tag { padding: 2px 10px; border-radius: 6px; font-weight: 900; font-size: 13px; letter-spacing: 0.12em; text-transform: uppercase; }
+.own-view-actions { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.own-view-none { font-weight: 700; }
+.own-view-bar.preview { background: var(--warn); color: #1c1400; }
+.own-view-bar.preview .own-view-tag { background: #1c1400; color: var(--warn); }
+.own-view-bar.preview .btn { background: #1c1400; border-color: #1c1400; color: #fff7e0; }
+.own-view-bar.preview .btn:hover { background: #3a2a00; }
+.own-view-bar.preview :focus-visible { outline-color: #1c1400; }
+.own-view-bar.live { background: var(--panel-2); border: 2px solid var(--slime); color: var(--text); }
+.own-view-bar.live .own-view-tag { background: var(--slime); color: var(--slime-ink); }
+.own-preview-frame { outline: 3px dashed var(--warn); outline-offset: 6px; border-radius: var(--radius); margin: 22px 0 16px; }
+.own-preview-ribbon { width: fit-content; margin: 0 0 10px; padding: 3px 12px; border-radius: 6px; background: var(--warn); color: #1c1400; font-weight: 900; font-size: 12px; letter-spacing: 0.12em; text-transform: uppercase; }
+.own-preview-ribbon.end { margin: 16px 0 0; }
+/* On a phone the whole bar would cover too much of the screen: it scrolls away, and the
+   preview's one-line label stays on top instead. */
+@media (max-width: 600px) {
+  .own-view-bar { position: static; }
+  .own-preview-ribbon:first-child { position: sticky; top: 0; z-index: 20; box-shadow: 0 4px 12px rgba(0, 0, 0, 0.45); }
+}
 .people-mine p { margin: 0; }
 .people-mine-who { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
 .account-panel .people-mine { margin: 0; }

@@ -74,9 +74,11 @@ Your rates aren't in the portfolio: you set them as **services** on your page's 
 7. **Approved:** your page goes public on People. Then set up payments under **Get paid** on the
    same editor so makers can hire you.
 
-Later changes work the same way: push, then **Check my portfolio now**. Your page keeps showing
-the approved portfolio until the new one is approved. You can put works in a different order in
-the editor at any time; that isn't reviewed.
+Later changes work the same way: push, then **Check my portfolio now**. Everyone else keeps seeing
+the approved portfolio until the new one is approved. You see the new one on your own page right
+away, marked **Preview** (only you can see it), with a **View your live page** link to the page as
+everyone else sees it. You can put works in a different order in the editor at any time; that isn't
+reviewed.
 
 ## `.slop/portfolio.json`
 

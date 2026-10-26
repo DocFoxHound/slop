@@ -169,13 +169,13 @@ const STATES = {
   live_update: {
     status: { state: "live", reason: null, update_waiting: true, waiting_since: "2026-10-20T10:00:00Z", problem: null, suspended: false },
     title: "Live: everyone can see your page",
-    says: ["Your new portfolio is waiting for Slop's review; your page shows the approved one until then."],
+    says: ["Your new portfolio is waiting for Slop's review; everyone else sees the approved one until then."],
     badge: "LIVE",
   },
   live_turned_down: {
     status: { state: "live", reason: "The video isn't yours.", update_waiting: false, waiting_since: null, problem: null, suspended: false },
     title: "Live: everyone can see your page",
-    says: ["Your newest portfolio wasn't approved: The video isn't yours. Your page keeps showing the one approved before."],
+    says: ["Your newest portfolio wasn't approved: The video isn't yours. Everyone else keeps seeing the one approved before."],
     badge: "LIVE",
   },
   hidden: {

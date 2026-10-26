@@ -6,7 +6,7 @@
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 
-import { api, ApiError, type MyProfile, type PageState, type PageStatus } from "../api";
+import { api, ApiError, type CreativePage, type MyProfile, type PageState, type PageStatus, type PreviewSet } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { useSession } from "../session";
@@ -118,12 +118,12 @@ export function PageStatusDetails({
       title = "Live: everyone can see your page";
       if (status.update_waiting)
         lines.push(
-          <>Your new portfolio is waiting for Slop's review; your page shows the approved one until then. You'll get a notification.</>,
+          <>Your new portfolio is waiting for Slop's review; everyone else sees the approved one until then. You'll get a notification.</>,
         );
       else if (status.reason)
         lines.push(
           <>
-            Your newest portfolio wasn't approved: <q>{status.reason}</q> Your page keeps showing the one approved before.
+            Your newest portfolio wasn't approved: <q>{status.reason}</q> Everyone else keeps seeing the one approved before.
           </>,
         );
       if (notHireable)
@@ -153,6 +153,112 @@ export function PageStatusDetails({
       ))}
       {action && <div className="row-actions">{action}</div>}
     </div>
+  );
+}
+
+/**
+ * Which of their own page's versions the creative is looking at: `preview` (their portfolio that
+ * isn't approved yet, `?view` not set) or `live` (`?view=live`, exactly what everyone else sees).
+ * Null for everyone else, and when there's nothing newer than the live page.
+ */
+export type OwnView = "preview" | "live" | null;
+
+/**
+ * The page to draw. With a portfolio newer than the approved one, the creative sees its works,
+ * avatar, banner and design by default; the server sends it to nobody else (people/mod.rs
+ * `PreviewSet`), so everyone else always gets the live page.
+ */
+export function ownPageView(p: CreativePage, wantsLive: boolean): { page: CreativePage; view: OwnView } {
+  const set = p.is_me ? p.preview_set : null;
+  if (!set) return { page: p, view: null };
+  if (wantsLive) return { page: p, view: "live" };
+  return {
+    page: { ...p, works: set.works, avatar_url: set.avatar_url, banner_url: set.banner_url, design: set.design },
+    view: "preview",
+  };
+}
+
+/**
+ * The bar on top of the creative's own page while it previews their newer portfolio: it's a
+ * preview, only they see it, where the portfolio stands, and the way to their live page (or why
+ * there isn't one yet). Sticky, so it's on every screenful.
+ */
+export function PreviewBar({ handle, status, set }: { handle: string; status: PageStatus; set: PreviewSet }) {
+  const live = status.state === "live";
+  const others =
+    status.state === "hidden"
+      ? "Your page is hidden, so nobody else can see it."
+      : live
+        ? "everyone else sees your live page."
+        : "your page isn't public yet, so nobody else can see it.";
+  const lead =
+    status.state === "hidden"
+      ? others
+      : set.status === "pending"
+        ? `Your changes are waiting for Slop's review; ${others}`
+        : `Slop turned these changes down; ${others}`;
+  return (
+    <section className="own-view-bar preview" aria-label="Preview: only you can see this">
+      <div className="own-view-text">
+        <p className="own-view-title">
+          <span className="own-view-tag">Preview</span> <b>Only you can see this.</b>
+        </p>
+        <p>{lead}</p>
+        {set.status === "pending" ? (
+          <p>Waiting for review since {formatDate(set.created_at)}. You'll get a notification when it's approved or turned down.</p>
+        ) : (
+          <p>
+            Turned down{set.reviewed_at ? ` on ${formatDate(set.reviewed_at)}` : ""}. The reviewer said: <q>{set.status_reason}</q> Fix it in
+            your portfolio's repository, then choose <b>Check my portfolio now</b> in your page's editor; the new portfolio goes back for review.
+          </p>
+        )}
+      </div>
+      <div className="own-view-actions">
+        {live ? (
+          <Link className="btn" to={`/people/${handle}?view=live`}>
+            View your live page
+          </Link>
+        ) : (
+          <p className="own-view-none">
+            {status.state === "hidden" ? "Your page is hidden: there's no live page to see." : "Your page isn't live yet: there's no live page to see."}
+          </p>
+        )}
+        {set.status === "rejected" && (
+          <Link className="btn" to="/people/me#portfolio">
+            Fix your portfolio
+          </Link>
+        )}
+      </div>
+    </section>
+  );
+}
+
+/** The bar on top of the creative's live page (`?view=live`), with the way back to the preview. */
+export function LiveBar({ handle, status, set }: { handle: string; status: PageStatus; set: PreviewSet }) {
+  const title =
+    status.state === "live"
+      ? "This is your live page, as everyone sees it."
+      : status.state === "hidden"
+        ? "This is your approved page. It's hidden, so nobody else sees it."
+        : "Your page isn't live yet: nobody else can see it. This is it without your newer portfolio.";
+  return (
+    <section className="own-view-bar live" aria-label="Your live page">
+      <div className="own-view-text">
+        <p className="own-view-title">
+          <span className="own-view-tag">Live</span> <b>{title}</b>
+        </p>
+        <p>
+          {set.status === "pending"
+            ? "Your newer portfolio is waiting for Slop's review; only you can see it, in the preview."
+            : "Your newer portfolio was turned down; only you can see it, in the preview."}
+        </p>
+      </div>
+      <div className="own-view-actions">
+        <Link className="btn" to={`/people/${handle}`}>
+          Back to your preview
+        </Link>
+      </div>
+    </section>
   );
 }
 

@@ -30,6 +30,9 @@
 //   designer        Dee Designer: People page dee-design, no portfolio yet; her linked GitHub
 //                   account ("dee-gh") owns e2e/dee-design, a portfolio with its own page design
 //                   (e2e_server/main.rs), which people-design.e2e.ts checks and approves.
+//   previewer       Pip Preview: People page pip-preview, live (portfolio approved: Knight, Tavern,
+//                   Dragon), with a newer portfolio waiting for review (Moth and Lighthouse, a new
+//                   banner and a page design, "Pip's new look"), which only she sees, as a preview.
 //   moderator, reviewer, support, finance, security
 //                   Mo Moderator, Rae Reviewer, Sue Support, Fin Finance, Sec Security: staff with
 //                   that one role (crates/slop-api/src/staff.rs).
@@ -53,7 +56,7 @@
 //     "pocket-golf", releaseInReview (on releaseInReviewApp, "pocket-golf"), clientApp
 //     "cleos-tavern".
 //   People: creativeHandle "vera-pixels", pendingCreativeHandle "remy-sounds", inboxCreativeHandle
-//     "ivy-inbox". Jobs, all Cleo
+//     "ivy-inbox", previewerHandle "pip-preview". Jobs, all Cleo
 //     hiring Vera: deliveredJob (talked over in its conversation; delivered, Cleo to pay),
 //     workingJob (paid up front through Stripe, in progress), requestedJob (just asked),
 //     problemJob (in progress; Cleo opened a problem), completedJob (paid and done; Cleo's review
@@ -65,8 +68,8 @@
 //   Admin queues: 3 open reports (report is one's reference), 2 appeals (suspensionDecision,
 //     delistDecision), staffAction (an AI agent asked to make Sam support staff: it waits for a
 //     person), a server alert, a possible-abuse signal, and the release, pictures, repository
-//     move, portfolios (Remy's and Ivy's), People problem and review dispute above. No donation
-//     pauses and no shelves (admin.e2e.ts expects none), and no AI messages
+//     move, portfolios (Remy's, Ivy's and Pip's newer one), People problem and review dispute
+//     above. No donation pauses and no shelves (admin.e2e.ts expects none), and no AI messages
 //     beyond Mia's two (ai-messages.e2e.ts counts them).
 //   Unread notifications: most accounts have some.
 //
@@ -89,6 +92,7 @@ export type Who =
   | "pendingCreative"
   | "inboxCreative"
   | "designer"
+  | "previewer"
   | "moderator"
   | "reviewer"
   | "support"
@@ -122,6 +126,7 @@ export type Id =
   | "pendingCreativeHandle"
   | "inboxCreativeHandle"
   | "designerHandle"
+  | "previewerHandle"
   | "clientApp"
   | "deliveredJob"
   | "workingJob"
