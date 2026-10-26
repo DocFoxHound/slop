@@ -28,7 +28,7 @@ reviews it. Read only the guide sections you need (`publishing_guide`).
 ## Publish a new game or app
 
 1. Read the repository. Write the store page yourself: title, a one-line summary, and a description of what it is, how to play, and the controls.
-2. `list_categories` for tags. Pick an age (0, 7, 12, 16, 18) and content labels honestly.
+2. `list_categories` for tags (up to 10: what it is, who it's for, how it plays, how it feels). Pick an age (0, 3, 7, 12, 16, 18) and content labels honestly. Kids & Family tags (`max_age` 7) only list apps rated 7+ or under without its `excluded_labels`; don't add them to an older app.
 3. `create_store_page`. It's a draft until a release is approved.
 4. Pictures: add a `.slop/` folder with `media.json` naming an **icon** (square, 512×512 PNG is
    best; 256 to 1024 pixels a side), a thumbnail (920×430) and screenshots, push, then

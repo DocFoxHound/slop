@@ -27,6 +27,7 @@ import {
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { DonationsPanel } from "../components/DonationsManage";
 import { LicensePicker } from "../components/LicensePicker";
+import { TagPicker } from "../components/TagPicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
@@ -326,8 +327,6 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
     ...(isMod ? [] : ["mods_folder"]),
     ...(needsToken ? ["repo_token"] : []),
   ]);
-  const toggleTag = (tag: string) =>
-    set("tags", form.tags.includes(tag) ? form.tags.filter((t) => t !== tag) : [...form.tags, tag]);
 
   const submit = async (e: FormEvent) => {
     e.preventDefault();
@@ -620,38 +619,15 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
 
         <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
 
-        <fieldset className="tag-picker">
-          <legend>
-            Tags <span className="muted">({form.tags.length}/10)</span>
-          </legend>
-          {categories.map((c) => (
-            <div key={c.slug}>
-              <h4>{c.name}</h4>
-              <div className="chips">
-                {c.tags.map((t) => {
-                  const on = form.tags.includes(t.slug);
-                  return (
-                    <button
-                      type="button"
-                      key={t.slug}
-                      className={`chip ${on ? "on" : ""}`}
-                      aria-pressed={on}
-                      disabled={!on && form.tags.length >= 10}
-                      onClick={() => toggleTag(t.slug)}
-                    >
-                      {t.name}
-                    </button>
-                  );
-                })}
-              </div>
-            </div>
-          ))}
-          {error?.field === "tags" && (
-            <span className="field-error" role="alert">
-              {error.message}
-            </span>
-          )}
-        </fieldset>
+        <TagPicker
+          categories={categories}
+          value={form.tags}
+          onChange={(t) => set("tags", t)}
+          kind={form.kind}
+          minAge={form.min_age}
+          labels={form.content_labels ?? []}
+          error={error?.field === "tags" ? error.message : undefined}
+        />
 
         {error && !(error.field && inline.has(error.field)) && (
           <p className="form-error" role="alert">

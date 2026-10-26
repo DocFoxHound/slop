@@ -108,7 +108,7 @@ impl Rng {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Personas: kinds of taste, over the real tags (migration 0002)
+// Personas: kinds of taste, over the real tags (migrations 0002 and 0089)
 
 pub struct Persona {
     pub name: &'static str,
@@ -156,8 +156,10 @@ pub const PERSONAS: &[Persona] = &[
         name: "action fan",
         kind: AppKind::Game,
         tags: &[
+            "action",
             "platformer",
             "racing",
+            "arcade",
             "chaotic",
             "controller-support",
             "multiplayer",
@@ -174,6 +176,11 @@ pub const PERSONAS: &[Persona] = &[
             "relaxing",
             "funny",
         ],
+    },
+    Persona {
+        name: "family player",
+        kind: AppKind::Game,
+        tags: &["kids", "family", "all-ages", "party", "cute", "wholesome"],
     },
     Persona {
         name: "developer",
@@ -213,12 +220,21 @@ pub const PERSONAS: &[Persona] = &[
     Persona {
         name: "learner",
         kind: AppKind::App,
-        tags: &["language", "math", "typing", "kids", "offline"],
+        tags: &[
+            "language",
+            "math",
+            "typing",
+            "coding",
+            "educational",
+            "offline",
+        ],
     },
 ];
 
-const GAME_PERSONAS: std::ops::Range<usize> = 0..5;
-const TOOL_PERSONAS: std::ops::Range<usize> = 5..9;
+const GAME_PERSONAS: std::ops::Range<usize> = 0..6;
+const TOOL_PERSONAS: std::ops::Range<usize> = 6..10;
+/// The family player's apps are rated for Kids & Family (7+ or under, migration 0089).
+const FAMILY_PERSONA: usize = 5;
 
 const ADJECTIVES: &[&str] = &[
     "Angry", "Tiny", "Neon", "Cozy", "Quantum", "Rusty", "Silent", "Pixel", "Lucky", "Hollow",
@@ -451,7 +467,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         let a = rng.f();
         let min_age = if a < 0.7 {
             0
-        } else if a < 0.8 {
+        } else if a < 0.8 || theme == FAMILY_PERSONA {
             7
         } else if a < 0.88 {
             12
@@ -1806,7 +1822,7 @@ pub async fn report(
 
     let gamers: Vec<Uuid> = sqlx::query_scalar(
         "select s.user_id from sim_users s join users u on u.id = s.user_id
-         where s.personas not like '%,%' and s.personas similar to '(roguelike fan|cozy gamer|strategist|action fan|puzzler)%'
+         where s.personas not like '%,%' and s.personas similar to '(roguelike fan|cozy gamer|strategist|action fan|puzzler|family player)%'
            and u.country_code = 'US' limit 40",
     )
     .fetch_all(db)

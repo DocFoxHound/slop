@@ -5,6 +5,7 @@ import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
 
 import { ACCESSIBILITY, api, ApiError, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
+import { CONTENT_LABEL } from "../format";
 import { detectOs, OS_LABEL } from "../platform";
 import { StoreFrame } from "../components/StoreNav";
 import { ErrorState, Loading, Shelf } from "../components/ui";
@@ -277,6 +278,20 @@ function TagCloud({ category }: { category: Category }) {
   );
 }
 
+/** What a category with an age limit (Kids & Family) leaves out, so a missing app isn't a mystery. */
+function AgeLimit({ category }: { category: Category }) {
+  if (category.max_age == null) return null;
+  const labels = (category.excluded_labels ?? []).map((l) => CONTENT_LABEL[l].toLowerCase());
+  const without = labels.length > 1 ? `${labels.slice(0, -1).join(", ")} or ${labels[labels.length - 1]}` : labels[0];
+  return (
+    <p className="muted small age-limit">
+      Only apps rated {category.max_age === 0 ? "for everyone" : `${category.max_age}+ or under`}
+      {without ? `, without ${without}` : ""}. Makers rate and label their own apps; you can report one that's wrong
+      from its page.
+    </p>
+  );
+}
+
 export function CategoryPage() {
   const { slug = "" } = useParams();
   const categories = useLoad(() => api.categories(), []);
@@ -290,6 +305,7 @@ export function CategoryPage() {
       </div>
       <h1 className="page-title">{category?.name ?? " "}</h1>
       <div className="muted">{category?.description}</div>
+      {category && <AgeLimit category={category} />}
       {category && <TagCloud category={category} />}
       <AppGrid base={{ category: slug }} />
     </StoreFrame>
@@ -310,6 +326,7 @@ export function TagPage() {
         {category && <Link to={`/browse/${category.slug}`}>{category.name}</Link>} › {tag?.name}
       </div>
       <h1 className="page-title"># {tag?.name ?? slug}</h1>
+      {category && <AgeLimit category={category} />}
       <AppGrid base={{ tag: slug }} />
     </StoreFrame>
   );

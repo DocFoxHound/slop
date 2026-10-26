@@ -2,13 +2,14 @@
 
 // Tags are grouped so the store can browse broad -> specific.
 const TAG_GROUPS = [
-  { name: "Games", icon: "🎮", desc: "Things you play", tags: ["Roguelike", "Puzzle", "Platformer", "Idle", "Simulation", "Visual Novel", "Strategy", "Racing", "Card Game", "Tycoon"] },
-  { name: "Tools", icon: "🛠️", desc: "Things that get work done", tags: ["Productivity", "Developer Tools", "File Management", "Note-taking", "Automation", "Finance"] },
-  { name: "Creative", icon: "🎨", desc: "Make art, music and words", tags: ["Music", "Pixel Art", "3D", "Writing", "Generative Art", "Video"] },
-  { name: "Utilities", icon: "⚙️", desc: "Keep your machine happy", tags: ["System Monitor", "Launcher", "Backup", "Privacy"] },
-  { name: "Learning", icon: "📚", desc: "Get smarter, slowly", tags: ["Language", "Math", "Typing", "Kids"] },
-  { name: "Play style", icon: "🕹️", desc: "How you play", tags: ["Single-player", "Co-op", "Multiplayer", "Controller Support", "Touch Controls", "Offline", "Short Sessions"] },
-  { name: "Vibe", icon: "✨", desc: "How it feels", tags: ["Cozy", "Retro", "Dark", "Minimalist", "Chaotic", "Relaxing", "Funny"] },
+  { name: "Games", icon: "🎮", desc: "Things you play", tags: ["Action", "Adventure", "Arcade", "Board Game", "Bullet Hell", "Card Game", "City Builder", "Deckbuilder", "Endless Runner", "Exploration", "Farming", "Fighting", "Horror", "Idle", "Metroidvania", "Open World", "Party", "Physics", "Platformer", "Point & Click", "Puzzle", "Racing", "Rhythm", "Roguelike", "RPG", "Sandbox", "Shooter", "Simulation", "Sports", "Stealth", "Strategy", "Survival", "Tower Defense", "Trivia", "Tycoon", "Visual Novel", "Word Game"] },
+  { name: "Kids & Family", icon: "🧸", desc: "Simple, gentle fun for younger players and the whole family", tags: ["Kids", "Family", "All Ages", "Educational"] },
+  { name: "Tools", icon: "🛠️", desc: "Things that get work done", tags: ["Productivity", "Developer Tools", "File Management", "Note-taking", "Automation", "Finance", "Communication", "Office", "Calendar", "Health & Fitness", "AI Assistant"] },
+  { name: "Creative", icon: "🎨", desc: "Make art, music and words", tags: ["Music", "Pixel Art", "3D", "Writing", "Generative Art", "Video", "Drawing", "Photo Editing", "Animation", "Audio Editing", "Design", "Game Making"] },
+  { name: "Utilities", icon: "⚙️", desc: "Keep your machine happy", tags: ["System Monitor", "Launcher", "Backup", "Privacy", "Security", "Networking", "Accessibility Tools", "Customization", "Hardware", "Media Player", "Screenshots"] },
+  { name: "Learning", icon: "📚", desc: "Get smarter, slowly", tags: ["Language", "Math", "Typing", "Science", "Coding", "History", "Geography", "Reading"] },
+  { name: "Play style", icon: "🕹️", desc: "How you play", tags: ["Single-player", "Co-op", "Multiplayer", "Controller Support", "Touch Controls", "Offline", "Short Sessions", "Split-screen", "PvP", "Turn-based", "Real-time", "Keyboard Only"] },
+  { name: "Vibe", icon: "✨", desc: "How it feels", tags: ["Cozy", "Retro", "Dark", "Minimalist", "Chaotic", "Relaxing", "Funny", "Wholesome", "Spooky", "Cute", "Weird", "Atmospheric", "Intense"] },
 ];
 
 const PLATFORMS = {

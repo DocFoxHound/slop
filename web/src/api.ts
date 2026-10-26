@@ -16,6 +16,10 @@ export interface Category {
   slug: string;
   name: string;
   description: string;
+  /** Kids & Family: under this category and its tags the store lists only apps rated at most
+   * this, without any of `excluded_labels` (catalog.rs `push_category_limits`). */
+  max_age?: number;
+  excluded_labels?: ContentLabel[];
   tags: TagRef[];
 }
 

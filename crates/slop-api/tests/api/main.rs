@@ -1027,14 +1027,214 @@ async fn categories_include_their_tags(db: PgPool) {
     let app = test_app(db).await;
     let body = body_json(app.send(req(Method::GET, "/v1/categories")).await).await;
     let categories = body.as_array().unwrap();
-    assert_eq!(categories.len(), 7);
-    assert_eq!(categories[0]["slug"], "games");
-    assert!(
-        categories[0]["tags"]
+    let slugs: Vec<&str> = categories
+        .iter()
+        .map(|c| c["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(
+        slugs,
+        [
+            "games",
+            "family",
+            "tools",
+            "creative",
+            "utilities",
+            "learning",
+            "play-style",
+            "vibe"
+        ]
+    );
+    let tags_of = |slug: &str| -> Vec<String> {
+        categories.iter().find(|c| c["slug"] == slug).unwrap()["tags"]
             .as_array()
             .unwrap()
             .iter()
-            .any(|t| t["slug"] == "roguelike")
+            .map(|t| t["slug"].as_str().unwrap().to_string())
+            .collect()
+    };
+    for (category, tag) in [
+        ("games", "roguelike"),
+        ("games", "rpg"),
+        ("games", "tower-defense"),
+        ("games", "party"),
+        ("tools", "ai-assistant"),
+        ("creative", "game-making"),
+        ("utilities", "security"),
+        ("learning", "coding"),
+        ("play-style", "turn-based"),
+        ("vibe", "wholesome"),
+    ] {
+        assert!(
+            tags_of(category).iter().any(|t| t == tag),
+            "{category} {tag}"
+        );
+    }
+    // Every tag is in one category only.
+    let mut all: Vec<String> = slugs.iter().flat_map(|c| tags_of(c)).collect();
+    let count = all.len();
+    all.sort();
+    all.dedup();
+    assert_eq!(all.len(), count);
+    // Only Kids & Family holds apps to an age (catalog.rs `push_category_limits`).
+    assert!(
+        categories
+            .iter()
+            .filter(|c| c["slug"] != "family")
+            .all(|c| c.get("max_age").is_none() && c.get("excluded_labels").is_none())
+    );
+}
+
+/// Kids & Family (migration 0089): right after Games, rated 7+ or under, without the themes that
+/// aren't for children; Kids moved there from Learning as the same tag, so apps keep it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn kids_and_family_is_a_category_and_kids_moved_into_it(db: PgPool) {
+    let app = test_app(db).await;
+    let body = body_json(app.send(req(Method::GET, "/v1/categories")).await).await;
+    let family = &body[1];
+    assert_eq!(family["slug"], "family");
+    assert_eq!(family["name"], "Kids & Family");
+    assert_eq!(family["max_age"], 7);
+    assert_eq!(
+        family["excluded_labels"],
+        json!(["suggestive", "horror", "strong_language", "gambling_themes"])
+    );
+    let tags: Vec<&str> = family["tags"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|t| t["slug"].as_str().unwrap())
+        .collect();
+    assert_eq!(tags, ["all-ages", "educational", "family", "kids"]);
+    let learning = body
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|c| c["slug"] == "learning")
+        .unwrap();
+    assert!(
+        learning["tags"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .all(|t| t["slug"] != "kids")
+    );
+    // The same row 0002 made (IDs 1–44), not a new one.
+    let id: i16 = sqlx::query_scalar("select id from tags where slug = 'kids'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert!(id <= 44, "{id}");
+}
+
+/// Kids & Family's page and its tags' pages list only apps rated 7+ or under without suggestive
+/// themes, horror, strong language or gambling themes, for everyone; the same apps still show
+/// under their other tags. Tagging an older app is saved, and the maker is told why it's missing.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn kids_and_family_lists_only_apps_rated_for_it(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Maker", "US").await;
+    let (_, adult) = app.user("Adult", "US").await;
+    for (slug, min_age, labels, tags) in [
+        ("kid-ok", 7, vec![], vec!["kids", "puzzle"]),
+        ("kid-old", 12, vec![], vec!["kids", "family", "puzzle"]),
+        ("kid-horror", 3, vec!["horror"], vec!["all-ages"]),
+        ("kid-scuffle", 7, vec!["violence"], vec!["family", "rpg"]),
+        ("kid-none", 0, vec![], vec!["puzzle"]),
+    ] {
+        let mut body = new_app(slug);
+        body["min_age"] = json!(min_age);
+        body["content_labels"] = json!(labels);
+        body["tags"] = json!(tags);
+        let res = app
+            .send(req(Method::POST, "/v1/apps").cookie(&maker).json(body))
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED, "{slug}");
+    }
+    sqlx::query("update apps set status = 'listed' where maker_id = $1")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    let get =
+        |q: &str| req(Method::GET, format!("/v1/apps?sort=title&{q}")).header("x-country", "US");
+    assert_eq!(
+        list_slugs(&app, get("category=family")).await,
+        ["kid-ok", "kid-scuffle"]
+    );
+    assert_eq!(list_slugs(&app, get("tag=kids")).await, ["kid-ok"]);
+    assert_eq!(list_slugs(&app, get("tag=family")).await, ["kid-scuffle"]);
+    assert!(list_slugs(&app, get("tag=all-ages")).await.is_empty());
+    // A signed-in adult sees the same.
+    assert_eq!(
+        list_slugs(&app, get("category=family").cookie(&adult)).await,
+        ["kid-ok", "kid-scuffle"]
+    );
+    // Other categories and tags don't care about Kids & Family's limits.
+    assert_eq!(
+        list_slugs(&app, get("tag=puzzle")).await,
+        ["kid-none", "kid-ok", "kid-old"]
+    );
+    assert_eq!(
+        list_slugs(&app, get("category=games")).await,
+        ["kid-none", "kid-ok", "kid-old", "kid-scuffle"]
+    );
+    assert_eq!(list_slugs(&app, get("tag=rpg")).await, ["kid-scuffle"]);
+    // Search with a category keeps the limit too.
+    assert_eq!(
+        list_slugs(&app, get("q=dungeon&category=family")).await,
+        ["kid-ok", "kid-scuffle"]
+    );
+
+    // The maker (and their agent) hear why: a recommendation, never a blocker.
+    let fixes = |slug: &str| req(Method::GET, format!("/v1/apps/{slug}/fixes")).cookie(&maker);
+    let recs = |body: &Value| -> Vec<Value> {
+        body["recommendations"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .filter(|f| f["kind"].as_str().unwrap().starts_with("tags:"))
+            .cloned()
+            .collect()
+    };
+    let old = body_json(app.send(fixes("kid-old")).await).await;
+    let old = recs(&old);
+    assert_eq!(old.len(), 1, "{old:?}");
+    assert_eq!(old[0]["kind"], "tags:family");
+    assert_eq!(old[0]["severity"], "recommended");
+    let problem = old[0]["problem"].as_str().unwrap();
+    assert!(
+        problem.starts_with("Tagged Family, Kids (Kids & Family), but it's rated 12+"),
+        "{problem}"
+    );
+    assert!(
+        problem.contains("rated 7+ or under, without suggestive themes, horror, strong language or gambling themes, so it won't show there."),
+        "{problem}"
+    );
+    let horror = body_json(app.send(fixes("kid-horror")).await).await;
+    assert!(
+        recs(&horror)[0]["problem"]
+            .as_str()
+            .unwrap()
+            .contains("it's labelled horror"),
+        "{horror}"
+    );
+    for slug in ["kid-ok", "kid-scuffle", "kid-none"] {
+        let body = body_json(app.send(fixes(slug)).await).await;
+        assert!(recs(&body).is_empty(), "{slug}: {body}");
+    }
+    // Raising the rating later is saved too, and takes it out of Kids & Family.
+    let res = app
+        .send(
+            req(Method::PATCH, "/v1/apps/kid-ok")
+                .cookie(&maker)
+                .json(json!({ "min_age": 12 })),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(
+        list_slugs(&app, get("category=family")).await,
+        ["kid-scuffle"]
     );
 }
 

@@ -235,6 +235,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .tag-cloud a { padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); color: var(--text); font-size: 13px; text-decoration: none; }
 .tag-cloud a:hover { border-color: var(--slime); }
+.age-limit { margin: 6px 0 0; }
 
 /* ---- app page -------------------------------------------------------- */
 .app-head { display: grid; grid-template-columns: minmax(0, 1.25fr) minmax(320px, 1fr); gap: 22px; margin-bottom: 26px; }
@@ -291,6 +292,11 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .tag-picker { border: 1px solid var(--line); border-radius: 8px; padding: 12px 14px; display: flex; flex-direction: column; gap: 10px; margin: 0; }
 .tag-picker legend { font-weight: 600; font-size: 13px; padding: 0 6px; }
 .tag-picker h4 { font-size: 11px; letter-spacing: 0.1em; color: var(--faint); text-transform: uppercase; margin-bottom: 6px; }
+.tag-picker .tag-search { max-width: 320px; }
+.tag-group > summary { cursor: pointer; font-size: 12px; margin-bottom: 6px; }
+.tag-group-name { font-size: 11px; font-weight: 700; letter-spacing: 0.1em; color: var(--text-2); text-transform: uppercase; }
+.tag-group:not([open]) > summary { margin-bottom: 0; }
+.tag-warning { margin: 0; color: var(--warn); }
 .actions { display: flex; justify-content: flex-end; gap: 10px; }
 .auth-card { display: flex; flex-direction: column; gap: 14px; }
 .auth-card .provider { align-self: stretch; }

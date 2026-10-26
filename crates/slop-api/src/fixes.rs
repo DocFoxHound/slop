@@ -74,7 +74,8 @@ async fn fixes(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Fixes>> {
     let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
-    let recommendations = crate::media::recommendations(&state.db, app_id).await?;
+    let mut recommendations = crate::media::recommendations(&state.db, app_id).await?;
+    recommendations.extend(crate::catalog::tag_recommendations(&state.db, app_id).await?);
     let row: Option<Row> = sqlx::query_as(
         "select id, version, status::text, status_reason, repo_scan, source_checks
          from releases where app_id = $1 order by created_at desc limit 1",

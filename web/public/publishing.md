@@ -130,9 +130,17 @@ Go to **Publish → New app** and fill in:
 | Licence | Detected from the repository; pick one or choose Other for any SPDX ID |
 | Runs on | Windows and/or Linux; for Linux, also `.deb` and/or `.rpm` (see the table above) |
 | Age rating | Everyone, 3+, 7+, 12+, 16+ or 18+ |
-| Tags | Up to 10 |
+| Tags | Up to 10 (see below) |
 
 It's saved as a draft that only you can see.
+
+**Tags** come from Slop's categories: Games, Kids & Family, Tools, Creative, Utilities, Learning,
+Play style and Vibe. `GET /v1/categories` (`list_categories` for AI agents) lists each one with
+its tags. Pick the few that describe the app best: what it is (Puzzle, RPG, Tower Defense, Note-taking…),
+who it's for, how it plays (Co-op, Turn-based, Keyboard Only…) and how it feels (Cozy, Spooky…).
+**Kids & Family** (Kids, Family, All Ages, Educational) lists only apps rated **7+ or under**,
+without suggestive themes, horror, strong language or gambling themes. Saving an older app with
+those tags still works, but it won't show there; the editor and `get_fixes` say so.
 
 ### Pictures and videos
 
