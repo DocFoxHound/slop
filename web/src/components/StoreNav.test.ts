@@ -6,13 +6,14 @@ import { storeSection } from "./StoreNav";
 
 const cat = (slug: string, tags: string[]): Category =>
   ({ slug, name: slug, description: "", tags: tags.map((t) => ({ slug: t, name: t })) }) as unknown as Category;
-const categories = [cat("games", ["puzzle", "racing"]), cat("utilities", ["files"]), cat("tools", ["editor"])];
+const categories = [cat("games", ["puzzle", "racing"]), cat("family", ["kids"]), cat("utilities", ["files"]), cat("tools", ["editor"])];
 
 describe("storeSection", () => {
   it("marks the bar's own sections", () => {
     expect(storeSection("/browse", "", categories)).toBe("browse");
     expect(storeSection("/recommended", "", categories)).toBe("recommended");
     expect(storeSection("/browse/games", "", categories)).toBe("games");
+    expect(storeSection("/browse/family", "", categories)).toBe("family");
     expect(storeSection("/browse/utilities", "", categories)).toBe("utilities");
   });
 
@@ -28,6 +29,7 @@ describe("storeSection", () => {
   it("gives a tag its category's section, once the categories are known", () => {
     expect(storeSection("/tag/puzzle", "", categories)).toBe("games");
     expect(storeSection("/tag/files", "", categories)).toBe("utilities");
+    expect(storeSection("/tag/kids", "", categories)).toBe("family");
     expect(storeSection("/tag/editor", "", categories)).toBe("more");
     expect(storeSection("/tag/puzzle", "", undefined)).toBeNull();
     expect(storeSection("/tag/unknown", "", categories)).toBeNull();

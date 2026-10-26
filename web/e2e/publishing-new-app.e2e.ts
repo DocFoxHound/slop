@@ -303,7 +303,8 @@ test("Mia creates a store page", async ({ page }) => {
   await expect(licenceHint).toHaveText(/Must be an OSI-approved open-source licence/);
   await page.getByRole("combobox", { name: "Licence" }).selectOption("Apache-2.0");
   await page.getByLabel("Age rating").selectOption("7");
-  await page.getByRole("button", { name: "Horror", exact: true }).click();
+  // Horror is a content label here (it's also a Games tag).
+  await page.getByRole("group", { name: "Content labels" }).getByRole("button", { name: "Horror", exact: true }).click();
   await page.getByRole("checkbox", { name: /Works in sandbox mode/ }).check();
   await page.getByRole("checkbox", { name: /Take bug reports/ }).uncheck();
   await page.getByRole("checkbox", { name: /Windows/ }).check();

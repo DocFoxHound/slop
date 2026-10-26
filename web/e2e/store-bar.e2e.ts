@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The store bar along the top of store pages (web/src/components/StoreNav.tsx): Browse,
-// Recommended, Games, Utilities and More, the store search, and Slop's own links at the bottom.
+// Recommended, Games, Kids & Family, Utilities and More, the store search, and Slop's own links at the bottom.
 // Read-only.
 import type { Page } from "@playwright/test";
 
@@ -16,6 +16,7 @@ test("each section goes to its page and is marked while you're there", async ({ 
     ["Browse", "/browse", "All categories"],
     ["Recommended", "/recommended", "Recommended"],
     ["Games", "/browse/games", "Games"],
+    ["Kids & Family", "/browse/family", "Kids & Family"],
     ["Utilities", "/browse/utilities", "Utilities"],
   ]) {
     await bar(page).getByRole("link", { name, exact: true }).click();
@@ -53,8 +54,8 @@ test("More opens the rest of the store, closes with Escape, and is marked for it
   ]) {
     await expect(menu.getByRole("link", { name })).toHaveAttribute("href", href);
   }
-  // Games and Utilities are on the bar itself.
-  await expect(menu.getByRole("link", { name: "Games", exact: true })).toHaveCount(0);
+  // Games, Kids & Family and Utilities are on the bar itself.
+  for (const name of ["Games", "Kids & Family", "Utilities"]) await expect(menu.getByRole("link", { name, exact: true })).toHaveCount(0);
   await page.keyboard.press("Escape");
   await expect(menu).toBeHidden();
   await expect(more).toBeFocused();

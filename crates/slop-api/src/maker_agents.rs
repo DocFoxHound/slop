@@ -760,7 +760,7 @@ fn store_page_fields() -> Value {
         "license_spdx": s("The repository's licence as an SPDX ID, e.g. MIT, GPL-3.0-or-later"),
         "min_age": { "type": "integer", "description": "Minimum age: 0, 7, 12, 16 or 18" },
         "content_labels": { "type": "array", "items": { "type": "string" }, "description": "Any of romance, suggestive, violence, horror, strong_language, gambling_themes" },
-        "tags": { "type": "array", "items": { "type": "string" }, "description": "Tag slugs from list_categories" },
+        "tags": { "type": "array", "items": { "type": "string" }, "description": "Up to 10 tag slugs from list_categories. A category with max_age (Kids & Family) lists only apps rated at most that and without its excluded_labels: don't tag an older app with it" },
         "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux: every release must include exactly these" },
         "online": { "type": "array", "items": { "type": "string" }, "description": "How it goes online, if it does (see the guide section \"Online play and mods\")" },
         "online_hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it connects to" },
@@ -971,7 +971,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_categories",
-        description: "Slop's categories and their tags, for a store page's tags.",
+        description: "Slop's categories and their tags, for a store page's tags. A category's max_age and excluded_labels, when present, say which apps it lists.",
         method: Method::GET,
         path: "/v1/categories",
         properties: || json!({}),

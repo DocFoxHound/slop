@@ -79,13 +79,19 @@ struct Category {
     slug: String,
     name: String,
     description: String,
+    /// Kids & Family: under this category and its tags the store lists only apps rated at most
+    /// this, with none of `excluded_labels` (`push_category_limits`). Absent: no limit.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    max_age: Option<i16>,
+    #[serde(skip_serializing_if = "Vec::is_empty")]
+    excluded_labels: Vec<String>,
     #[sqlx(json)]
     tags: Vec<TagRef>,
 }
 
 async fn list_categories(State(state): State<AppState>) -> ApiResult<Json<Vec<Category>>> {
     let categories = sqlx::query_as(
-        "select c.slug, c.name, c.description,
+        "select c.slug, c.name, c.description, c.max_age, c.excluded_labels,
                 coalesce((select json_agg(json_build_object('slug', t.slug, 'name', t.name) order by t.name)
                           from tags t where t.category_id = c.id), '[]') as tags
          from categories c order by c.position",
@@ -126,6 +132,19 @@ pub(crate) fn push_store_visible_as(
         ))
         .push_bind(rules.beta_days)
         .push(")))");
+}
+
+/// Keeps out apps the category being browsed (picked by `which`, static SQL ending in a bind,
+/// over `categories c`) doesn't take: Kids & Family lists only apps rated 7+ or under without
+/// themes that aren't for children (migration 0089). A maker can still tag a 12+ app Kids; the
+/// editor warns them, and it just doesn't show here. `a` is `apps`.
+fn push_category_limits(qb: &mut QueryBuilder<Postgres>, which: &'static str, value: &str) {
+    qb.push(" and not exists (select 1 from categories c ")
+        .push(which)
+        .push_bind(value.to_string())
+        .push(
+            " and (a.min_age > coalesce(c.max_age, 18) or a.content_labels && c.excluded_labels))",
+        );
 }
 
 /// Columns shared by every app summary query. `a` is `apps`.
@@ -323,6 +342,11 @@ async fn list_apps(
         qb.push(" and exists (select 1 from app_tags at join tags t on t.id = at.tag_id where at.app_id = a.id and t.slug = ")
             .push_bind(tag)
             .push(")");
+        push_category_limits(
+            &mut qb,
+            "join tags t on t.category_id = c.id where t.slug = ",
+            tag,
+        );
     }
     if let Some(category) = &query.category {
         qb.push(
@@ -331,6 +355,7 @@ async fn list_apps(
         )
         .push_bind(category)
         .push(")");
+        push_category_limits(&mut qb, "where c.slug = ", category);
     }
     if let Some(stage) = query.stage {
         qb.push(" and a.stage = ").push_bind(stage);
@@ -1429,6 +1454,85 @@ async fn resolve_tags(db: &sqlx::PgPool, tags: &[String]) -> ApiResult<Vec<i16>>
         return Err(ApiError::invalid("tags", format!("unknown tag: {missing}")));
     }
     Ok(found.into_iter().map(|(id, _)| id).collect())
+}
+
+/// A category that won't list an app tagged with some of its tags (`tag_recommendations`).
+#[derive(sqlx::FromRow)]
+struct Unlisted {
+    slug: String,
+    name: String,
+    tags: Vec<String>,
+    max_age: Option<i16>,
+    min_age: i16,
+    excluded_labels: Vec<String>,
+    clashing: Vec<String>,
+}
+
+/// Content labels as players read them, joined with `last` ("horror, strong language or …").
+fn label_words(labels: &[String], last: &str) -> String {
+    let words: Vec<String> = labels
+        .iter()
+        .map(|l| match l.as_str() {
+            "suggestive" => "suggestive themes".to_string(),
+            other => other.replace('_', " "),
+        })
+        .collect();
+    match words.split_last() {
+        Some((end, rest)) if !rest.is_empty() => format!("{} {last} {end}", rest.join(", ")),
+        _ => words.join(""),
+    }
+}
+
+/// For the maker and their agent (fixes.rs): tags of a category that won't list the app, e.g.
+/// Kids on a 12+ app. Saving is never refused for it (the website's editor warns as it's typed).
+pub(crate) async fn tag_recommendations(
+    db: &sqlx::PgPool,
+    app_id: Uuid,
+) -> sqlx::Result<Vec<crate::fixes::Fix>> {
+    let rows: Vec<Unlisted> = sqlx::query_as(
+        "select c.slug, c.name, array_agg(t.name order by t.name) as tags, c.max_age, a.min_age, c.excluded_labels,
+                array(select l from unnest(a.content_labels) l where l = any(c.excluded_labels) order by l) as clashing
+         from app_tags at join tags t on t.id = at.tag_id join categories c on c.id = t.category_id
+              join apps a on a.id = at.app_id
+         where at.app_id = $1
+           and (a.min_age > coalesce(c.max_age, 18) or a.content_labels && c.excluded_labels)
+         group by c.id, a.min_age, a.content_labels order by c.position",
+    )
+    .bind(app_id)
+    .fetch_all(db)
+    .await?;
+    Ok(rows
+        .into_iter()
+        .map(|u| {
+            let max = u.max_age.unwrap_or(18);
+            let why = if u.min_age > max {
+                format!("it's rated {}+", u.min_age)
+            } else {
+                format!("it's labelled {}", label_words(&u.clashing, "and"))
+            };
+            let without = if u.excluded_labels.is_empty() {
+                String::new()
+            } else {
+                format!(", without {}", label_words(&u.excluded_labels, "or"))
+            };
+            let tags = u.tags.join(", ");
+            crate::fixes::Fix {
+                kind: format!("tags:{}", u.slug),
+                severity: "recommended",
+                problem: format!(
+                    "Tagged {tags} ({name}), but {why}: {name} lists only apps rated {max}+ or \
+                     under{without}, so it won't show there.",
+                    name = u.name,
+                ),
+                instruction: format!(
+                    "If it really is for younger players, check the age rating and content labels \
+                     against what the app shows and correct them only if they're wrong \
+                     (update_store_page). Otherwise remove the tags {tags} so they don't mislead."
+                ),
+                guide_section: None,
+            }
+        })
+        .collect())
 }
 
 async fn set_tags(tx: &mut sqlx::PgConnection, app_id: Uuid, tag_ids: &[i16]) -> ApiResult<()> {

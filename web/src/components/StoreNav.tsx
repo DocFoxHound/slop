@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The store's own navigation, along the top of store pages (like Steam's store bar): Browse,
-// Recommended, Games, Utilities and More, with the store search. The front page under it is all
+// Recommended, Games, Kids & Family, Utilities and More, with the store search. The front page under it is all
 // apps; categories and the rest live here, in More, and on the list pages' sidebar.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -10,9 +10,9 @@ import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
 
 /** Categories with their own place on the bar; the rest are under More. */
-const ON_BAR = ["games", "utilities"];
+const ON_BAR = ["games", "family", "utilities"];
 
-type Section = "browse" | "recommended" | "games" | "utilities" | "more" | null;
+type Section = "browse" | "recommended" | "games" | "family" | "utilities" | "more" | null;
 
 /** Which part of the bar the page is in. */
 export function storeSection(pathname: string, search: string, categories: Category[] | undefined): Section {
@@ -48,6 +48,7 @@ export function StoreNav() {
         {item("browse", "/browse", "Browse")}
         {item("recommended", "/recommended", "Recommended")}
         {item("games", "/browse/games", "Games")}
+        {item("family", "/browse/family", "Kids & Family")}
         {item("utilities", "/browse/utilities", "Utilities")}
       </div>
       <MoreMenu on={section === "more"} categories={categories.data?.filter((c) => !ON_BAR.includes(c.slug))} />
