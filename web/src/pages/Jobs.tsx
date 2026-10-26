@@ -196,6 +196,16 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
           <div className="muted small">If you don't answer by {formatDate(j.auto_complete_at)}, the delivery counts as accepted.</div>
         )}
         {j.completed_automatically && <div className="muted small">Accepted automatically 7 days after delivery.</div>}
+        {isClient && can("review") && (
+          <div className="row-actions">
+            <button type="button" className={`btn ${j.review ? "" : "slime"}`} onClick={jumpToReview}>
+              {j.review ? `Your rating: ${j.review.vote === "not_slop" ? "👍 Not Slop" : "👎 Slop"}` : `Rate ${j.creative.name}`}
+            </button>
+          </div>
+        )}
+        {isClient && !can("review") && !j.review && !["completed", "declined", "cancelled", "withdrawn"].includes(j.status) && (
+          <div className="muted small">You rate {j.creative.name}'s work once the job is complete.</div>
+        )}
         {j.credited && (
           <div className="small">
             ✋ Credited on <Link to={`/app/${j.project.slug}`}>{j.project.title}</Link>'s page.
@@ -1129,6 +1139,14 @@ function ProblemPanel({ j, busy, step }: { j: Job; busy: boolean; step: Step }) 
   );
 }
 
+/** Moves to the review form (id "review") and puts focus there. */
+function jumpToReview() {
+  const form = document.getElementById("review");
+  if (!form) return;
+  form.scrollIntoView({ block: "start", behavior: "smooth" });
+  form.focus({ preventScroll: true });
+}
+
 function ReviewForm({
   j,
   busy,
@@ -1148,6 +1166,8 @@ function ReviewForm({
   return (
     <form
       className="panel panel-pad form"
+      id="review"
+      tabIndex={-1}
       onSubmit={(e) => {
         e.preventDefault();
         if (vote) onSend({ vote, body });

@@ -1,13 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A Beta app's store page (owner decision 2026-10-25: Betas are playable, so they're rateable,
 // and they take donations): Rate it at the top for a player who played it, otherwise why not with
-// the step to take right there; "Rated in Beta" on the votes; the Donate box always there, saying
-// why donations are off, with the maker's fix in it. Also the maker's Get paid section on the Edit
-// store page. Remy's Beta game is this file's own; it leaves the store again at the end.
+// the step to take right there; "Rated in Beta" on the votes; the Donate button always there next
+// to Get it, saying why donations are off, with the maker's fix in its panel. Also the maker's Get
+// paid section on the Edit store page. Remy's Beta game is this file's own; it leaves the store
+// again at the end.
 import AxeBuilder from "@axe-core/playwright";
 import type { Page, Route } from "@playwright/test";
 
 import { asDesktop } from "./desktop-helpers";
+import { donateButton, donatePanel } from "./donate-helpers";
 import { expect, signIn, test } from "./fixtures";
 import { call, delist, listedApp, path, played, tryCall } from "./store-helpers";
 
@@ -27,7 +29,12 @@ test.afterAll(async () => {
 
 const head = (page: Page) => page.locator(".rating-head");
 const ratings = (page: Page) => page.getByRole("region", { name: "Ratings" });
-const donate = (page: Page) => page.getByRole("region", { name: `Donate to ${title}` });
+const donate = (page: Page) => donatePanel(page);
+/** Opens the Donate button's panel, beside Get it's controls. */
+async function openDonate(page: Page) {
+  await donateButton(page.locator(".install-box")).click();
+  await expect(donate(page)).toBeVisible();
+}
 
 async function noSeriousAxeViolations(page: Page) {
   const results = await new AxeBuilder({ page }).withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
@@ -104,16 +111,22 @@ test("why others can't rate it yet, with the step to take right there", async ({
   await expect(head(maker).getByRole("button", { name: "Rate it" })).toHaveCount(0);
 });
 
-test("the Donate box is always there on a Beta page: why donations are off, and the maker's fix", async ({ browser }) => {
-  // Everyone sees why; the box sits right under Get it.
+test("Donate is always there on a Beta page, next to Get it: why donations are off, and the maker's fix", async ({ browser }) => {
+  // Everyone sees why: quiet, with "Donations off" beside it and the reason on hover and focus.
   const visitor = await browser.newPage();
   await visitor.goto(`/app/${beta}`);
+  const button = donateButton(visitor.locator(".install-box"));
+  await expect(button).toHaveAccessibleName("Donate");
+  await expect(button).toHaveAccessibleDescription("Donations are off. The maker hasn't turned on donations.");
+  await expect(visitor.locator(".install-box").getByText("Donations off")).toBeVisible();
+  await openDonate(visitor);
   const box = donate(visitor);
   await expect(box.getByRole("heading", { name: "♥ Donate" })).toBeVisible();
   await expect(box.getByText("Donations are off.")).toBeVisible();
   await expect(box).toContainText("The maker hasn't turned on donations.");
-  await expect(box.getByRole("button")).toHaveCount(0);
-  await expect(visitor.locator(".side-col > .install-box + .donate-box")).toHaveCount(1);
+  await expect(box.getByRole("button")).toHaveAccessibleName("Close");
+  // One place: no separate Donate box under Get it any more.
+  await expect(visitor.locator(".side-col > .donate-box")).toHaveCount(0);
 
   // The maker without a Stripe account: Stripe's sign-up, right there, coming back here.
   const maker = await (await browser.newContext()).newPage();
@@ -126,6 +139,7 @@ test("the Donate box is always there on a Beta page: why donations are off, and 
     return route.fulfill({ json: { url: null, status: "pending" } });
   });
   await maker.goto(`/app/${beta}`);
+  await openDonate(maker);
   const fix = donate(maker);
   await expect(fix.getByText("Donations are off.")).toBeVisible();
   const enable = fix.getByRole("button", { name: "Enable donations with Stripe" });
@@ -150,6 +164,7 @@ test("the Donate box is always there on a Beta page: why donations are off, and 
     return settingsAs({ account_status: "active", donations_on: false, donation_suggested_minor: 700 })(route);
   });
   await ready.goto(`/app/${beta}`);
+  await openDonate(ready);
   await expect(donate(ready).getByText(/Your Stripe account is ready\. Donors are offered amounts around \$7\.00/)).toBeVisible();
   await donate(ready).getByRole("button", { name: "Turn on donations" }).click();
   await expect.poll(() => saved?.donations_on).toBe(true);
@@ -205,7 +220,7 @@ test("the Edit store page has a Get paid section at the top, with every step to 
   await page.unroute(settings);
   await page.route(settings, settingsAs({ payments: "stripe", account_status: "active", donations_on: true, donation_suggested_minor: 500, donation_currency: "usd" }));
   await page.reload();
-  await expect(section.getByText(/Donations on\. Your store page has a Donate box offering amounts around \$5\.00/)).toBeVisible();
+  await expect(section.getByText(/Donations on\. Your store page has a Donate button \(next to Play\) offering amounts around \$5\.00/)).toBeVisible();
   await expect(section.getByRole("checkbox", { name: "Show the Donate button on the store page" })).toBeChecked();
   await noSeriousAxeViolations(page);
 });

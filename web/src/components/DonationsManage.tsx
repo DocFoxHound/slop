@@ -25,7 +25,7 @@ export function DonationsPanel({
   slug: string;
   title?: string;
   returnTo?: string;
-  /** A line under the heading (the editor: when the Donate box will show). */
+  /** A line under the heading (the editor: when the Donate button will show). */
   note?: string;
 }) {
   const settings = useLoad(() => api.donations.settings(slug), [slug]);
@@ -48,7 +48,7 @@ export function DonationsPanel({
           <p className="small donations-state">
             {s.donations_on ? (
               <>
-                <b>Donations on.</b> Your store page has a Donate box offering amounts around{" "}
+                <b>Donations on.</b> Your store page has a Donate button (next to Play) offering amounts around{" "}
                 {amount(s.donation_suggested_minor, s.donation_currency)}.
               </>
             ) : (
@@ -145,7 +145,7 @@ function AskToLift({ slug, hold, canAskAt, onDone }: { slug: string; hold: Donat
 
 /**
  * The maker's fix where donations are off, on their app's store page: finish Stripe's sign-up, or
- * switch the Donate box on, or ask Slop to lift a pause. Nothing when payments are off on the
+ * switch the Donate button on, or ask Slop to lift a pause. Nothing when payments are off on the
  * server: that's not theirs to fix, and the box already says so.
  */
 export function DonationsFix({ slug, onChanged }: { slug: string; onChanged: () => void }) {
@@ -169,7 +169,7 @@ export function DonationsFix({ slug, onChanged }: { slug: string; onChanged: () 
   );
 }
 
-/** Stripe is ready but the Donate box is off: one button switches it on, keeping the rest. */
+/** Stripe is ready but the Donate button is off: one button switches it on, keeping the rest. */
 function TurnOn({ slug, s, onDone }: { slug: string; s: DonationSettings; onDone: () => void }) {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);

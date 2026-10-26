@@ -11,11 +11,13 @@
 //!   processing comes out of what the maker receives (PAY-12).
 //! - **Nothing in return.** Donors are never shown publicly; their name and a message reach the
 //!   maker only if they choose (PAY-6). Nothing that apps can call says who donated (PAY-5, see
-//!   the test at the bottom), and no page looks different to a donor.
+//!   the test at the bottom), and no page looks different to a donor, except that their own
+//!   Donate button says they donated (and cancels their server donation right there).
 //! - **Server donations** repeat monthly (Stripe Billing on the maker's account) for apps that
 //!   declare servers. The donor confirms the exact terms, which are saved (PAY-14); cancelling
-//!   is two clicks and immediate, with a confirmation email (PAY-15); reminders go before the
-//!   first renewal and yearly (PAY-16); shutting the servers down cancels them all (PAY-17).
+//!   is two clicks (next to Play, or on the account page) and immediate, with a confirmation
+//!   email (PAY-15); reminders go before the first renewal and yearly (PAY-16); shutting the
+//!   servers down cancels them all (PAY-17).
 //!
 //! - **Shared with the original.** A one-off donation to a community build or mod is shared with
 //!   the original app's maker: 30% goes to them as its own direct donation, paid first, then the
@@ -336,6 +338,60 @@ struct Info {
     simulated: bool,
     /// For a community build or mod: the original's share of one-off donations.
     shared: Option<SharedInfo>,
+    /// The signed-in viewer's own donations to this app, for their Donate button; left out
+    /// signed out. Nobody else's, and nothing about the app changes (PAY-5).
+    #[serde(skip_serializing_if = "Option::is_none")]
+    mine: Option<MyGiving>,
+}
+
+#[derive(Serialize)]
+struct MyGiving {
+    /// Their latest paid donation (one-off, or a month of a server donation), unless refunded.
+    last: Option<LastGift>,
+    /// Their monthly server donation while it runs: cancelled from the button.
+    monthly: Option<MyMonthly>,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct LastGift {
+    total_minor: i32,
+    currency: String,
+    #[serde(with = "time::serde::rfc3339")]
+    paid_at: OffsetDateTime,
+}
+
+#[derive(Serialize, sqlx::FromRow)]
+struct MyMonthly {
+    id: Uuid,
+    total_minor: i32,
+    currency: String,
+    #[serde(with = "time::serde::rfc3339::option")]
+    started_at: Option<OffsetDateTime>,
+    #[serde(with = "time::serde::rfc3339::option")]
+    next_charge_at: Option<OffsetDateTime>,
+}
+
+/// What the viewer has given this app.
+async fn my_giving(db: &PgPool, user: Uuid, app: Uuid) -> sqlx::Result<MyGiving> {
+    Ok(MyGiving {
+        last: sqlx::query_as(
+            "select total_minor, currency, paid_at from donations
+             where donor_id = $1 and app_id = $2 and status in ('paid', 'partially_refunded') and paid_at is not null
+             order by paid_at desc limit 1",
+        )
+        .bind(user)
+        .bind(app)
+        .fetch_optional(db)
+        .await?,
+        monthly: sqlx::query_as(
+            "select id, total_minor, currency, started_at, next_charge_at from server_donations
+             where donor_id = $1 and app_id = $2 and status = 'active'",
+        )
+        .bind(user)
+        .bind(app)
+        .fetch_optional(db)
+        .await?,
+    })
 }
 
 #[derive(Serialize)]
@@ -389,8 +445,13 @@ async fn info(
             maker: p.maker_name,
             percent: ORIGINAL_SHARE,
         });
+    let mine = match &user {
+        Some(u) => Some(my_giving(&state.db, u.id, t.app_id).await?),
+        None => None,
+    };
     Ok(Json(Info {
         shared,
+        mine,
         on: off_reason.is_none(),
         off_reason,
         presets: presets(t.suggested)

@@ -393,7 +393,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           returnTo={`/publish/${existing.slug}#donations`}
           note={
             existing.stage === "coming_soon"
-              ? "The Donate box shows on your store page from Beta on; you can set it up now."
+              ? "The Donate button shows on your store page from Beta on; you can set it up now."
               : undefined
           }
         />

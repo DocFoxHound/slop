@@ -2,12 +2,15 @@
 // The library laid out like Steam's (pages/Library.tsx): the sidebar's groups, counts, search,
 // filter and arrow keys; the selected app in the address; the big button on the website and in
 // the Slop app (installed apps, updates, downloads and running apps come from the pretend app in
-// desktop-helpers.ts); tabs; friends' ratings; the "is it Slop?" prompt after playing; a phone's
-// two screens; and accessibility. The apps added to Pat's library here are taken out again.
+// desktop-helpers.ts); Donate beside the big button; tabs; friends' ratings; the "is it Slop?"
+// prompt after playing (and why not, before); a phone's two screens; and accessibility. The apps
+// added to Pat's library here are taken out again.
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
+import { fake } from "./accounts-helpers";
 import { asDesktop, type FakeLibrary } from "./desktop-helpers";
+import { donateButton, donateForm, donatePanel, expectSameRow, SLIME } from "./donate-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
 import { call, delist, listedApp, played, tryCall } from "./store-helpers";
 
@@ -185,10 +188,92 @@ test("after playing, the library asks: Slop or Not Slop? It keeps the vote, whic
   await expect(prompt.getByText("Your rating: 👎 Slop")).toBeVisible();
   expect((await call<{ mine: { vote: string } }>("player", "GET", `/v1/apps/${larks}/ratings`)).mine.vote).toBe("slop");
 
-  // Not played: no prompt.
+  // Not played: no question yet, but why not and the step to take, right there.
   await page.goto("/library/neon-drift");
   await expect(app(page, "Neon Drift").getByRole("heading", { level: 2 })).toBeVisible();
   await expect(page.getByRole("region", { name: /^Rate / })).toHaveCount(0);
+  const why = app(page, "Neon Drift").locator(".rate-prompt-callout").getByRole("group", { name: "Rate it" });
+  await expect(why.getByText("Play it from the Slop app to rate it.")).toBeVisible();
+  await expect(why.getByRole("link", { name: "⬇ Get the Slop app" })).toHaveCSS("background-color", SLIME);
+});
+
+test("on the website: Donate beside the big button: green, quiet when off, grey once given, monthly with Cancel", async ({ page }) => {
+  const had = (await call<Array<{ slug: string }>>("player", "GET", "/v1/me/library")).some((e) => e.slug === ids.listedApp);
+  if (!had) await call("player", "PUT", `/v1/me/library/${ids.listedApp}`);
+  try {
+    await signIn(page, "player");
+    // Castle Rock doesn't take donations: quiet, and it says so.
+    await page.goto("/library/castle-rock");
+    const castle = app(page, "Castle Rock");
+    const off = donateButton(castle);
+    await expect(off).toHaveAccessibleName("Donate");
+    await expect(off).not.toHaveCSS("background-color", SLIME);
+    await expect(castle.locator(".lib-bar").getByText("Donations off")).toBeVisible();
+    await expectSameRow(castle.getByRole("link", { name: "⬇ Get the Slop app to play" }), off);
+
+    // Lantern Keep: Pat has donated, so it's grey, says what and when, and offers Donate again.
+    await page.goto(`/library/${ids.listedApp}`);
+    const lantern = app(page, "Lantern Keep");
+    const given = donateButton(lantern);
+    await expect(given).toHaveAccessibleName("Donated");
+    await expect(given).not.toHaveCSS("background-color", SLIME);
+    await expectSameRow(lantern.getByRole("link", { name: "⬇ Get the Slop app to play" }), given);
+    await given.click();
+    await expect(donatePanel(lantern).getByText(/^You donated \$[\d.]+ on /)).toBeVisible();
+    await donatePanel(lantern).getByRole("button", { name: "Donate again" }).click();
+    await expect(donateForm(lantern).getByRole("radiogroup", { name: "Amount" })).toBeVisible();
+    await axe(page);
+    await donatePanel(lantern).getByRole("button", { name: "Close" }).click();
+    await expect(donatePanel(lantern)).toHaveCount(0);
+    await expect(given).toBeFocused();
+
+    // Loot Larks as if it took donations: green like the big button. Then as if Pat gave monthly:
+    // the amount, grey, with Cancel right there (answered here, so nothing changes).
+    let mine: unknown = { last: null, monthly: null };
+    await page.route(
+      (u) => u.pathname === `/v1/apps/${larks}/donate`,
+      async (route) => {
+        if (route.request().method() !== "GET") return route.fallback();
+        const res = await route.fetch();
+        return route.fulfill({ response: res, json: { ...(await res.json()), on: true, off_reason: null, cant: null, mine } });
+      },
+    );
+    const cancel = await fake(page, "POST", "/v1/me/server-donations/sd-larks/cancel", () => {
+      mine = { last: null, monthly: null };
+      return { status: 204 };
+    });
+    await page.goto(`/library/${larks}`);
+    const loot = app(page, "Loot Larks");
+    const green = donateButton(loot);
+    await expect(green).toHaveAccessibleName("Donate");
+    await expect(green).toHaveCSS("background-color", SLIME);
+    await expect(green).not.toHaveClass(/\bbig\b/);
+    await expectSameRow(loot.getByRole("link", { name: "⬇ Get the Slop app to play" }), green);
+    await green.click();
+    await expect(donatePanel(loot)).toBeFocused();
+    await expect(donateForm(loot)).toBeVisible();
+
+    mine = {
+      last: null,
+      monthly: { id: "sd-larks", total_minor: 546, currency: "usd", started_at: "2026-10-01T00:00:00Z", next_charge_at: "2026-10-31T00:00:00Z" },
+    };
+    await page.reload();
+    const monthly = loot.getByRole("button", { name: "$5.46/month server donation" });
+    await expect(monthly).not.toHaveCSS("background-color", SLIME);
+    const stop = loot.getByRole("button", { name: "Cancel server donation" });
+    await expectSameRow(monthly, stop);
+    await stop.click();
+    const sure = loot.getByRole("group", { name: "Cancel your server donation" });
+    await expect(sure).toContainText("Cancel your server donation of $5.46 a month to Loot Larks? It ends now: no more payments are taken");
+    await axe(page);
+    await sure.getByRole("button", { name: "Yes, cancel it" }).click();
+    await expect(loot.getByRole("status").filter({ hasText: "Your server donation to Loot Larks is cancelled." })).toBeVisible();
+    expect(cancel.calls).toHaveLength(1);
+    await expect(stop).toHaveCount(0);
+    await expect(donateButton(loot)).toHaveAccessibleName("Donate");
+  } finally {
+    if (!had) await tryCall("player", "DELETE", `/v1/me/library/${ids.listedApp}`);
+  }
 });
 
 const installed: FakeLibrary["installed"] = [
@@ -282,6 +367,9 @@ test("in the Slop app: what each app is doing, the big button, and downloads", a
   await expect(lantern.getByText("Update queued", { exact: true })).toBeVisible();
   await expect(lantern.getByText("0% complete · version 1.0.0 → 1.1.0")).toBeVisible();
   await expect(lantern.getByRole("button", { name: "▶ Play 1.0.0" })).toBeVisible();
+  // Donate beside them: Pat has donated, so it's grey.
+  await expect(donateButton(lantern)).toHaveAccessibleName("Donated");
+  await expectSameRow(lantern.getByRole("button", { name: "▶ Play 1.0.0" }), donateButton(lantern));
   await expect(lantern.getByRole("combobox", { name: "Which version of Lantern Keep Play starts" })).toContainText(
     "Lantern Keep for Linux (community, by Bo Builder)",
   );

@@ -738,6 +738,7 @@ img.pixelated { image-rendering: pixelated; object-fit: contain !important; }
 .job-head { display: flex; justify-content: space-between; align-items: flex-start; gap: 14px; margin-bottom: 14px; }
 .job-page > .panel, .job-page > form, .job-page > .btn { margin-bottom: 14px; }
 .next-step { border-color: var(--slime); display: flex; flex-direction: column; gap: 6px; }
+.next-step a { text-decoration: underline; text-underline-offset: 2px; }
 .offer-summary { display: flex; flex-direction: column; gap: 10px; }
 .summary-list { margin: 0; padding-left: 20px; display: flex; flex-direction: column; gap: 4px; }
 .agreement summary { cursor: pointer; font-weight: 600; }
@@ -820,9 +821,20 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 /* The notifications page itself: "Notifications inbox and page bar" at the end. */
 
 /* ---- Donations ------------------------------------------------------------ */
-.donate-box { margin-top: 14px; }
+/* The Donate button sits in the row with Play / Install / Download; its panel and the Cancel
+   confirmation wrap onto their own line at the end of that row (DESIGN §12). */
+.get-row { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.donate-wrap { position: relative; display: inline-flex; flex-wrap: wrap; align-items: center; gap: 8px; }
+.btn.donate-btn.quiet { background: transparent; border-style: dashed; color: var(--text-2); font-weight: 500; }
+.donate-tip { display: none; position: absolute; top: calc(100% + 6px); left: 0; z-index: 20; width: max-content; max-width: min(280px, 80vw); padding: 6px 10px; border: 1px solid var(--line); border-radius: 6px; background: var(--panel-3); color: var(--text); font-size: 12px; font-weight: 400; white-space: normal; box-shadow: 0 6px 18px rgba(0, 0, 0, 0.35); }
+.donate-wrap:hover .donate-tip, .donate-wrap:focus-within .donate-tip { display: block; }
+.donate-panel { position: relative; flex: 1 1 100%; order: 10; margin: 0; text-align: left; }
+.donate-panel h3 { padding-right: 34px; }
+.donate-close { position: absolute; top: 8px; right: 8px; font-size: 16px; line-height: 1; }
+.donate-confirm, .donate-done { flex: 1 1 100%; order: 9; margin: 0; }
+.donate-confirm p { margin: 0 0 8px; }
 .donate-box h3 { margin: 0 0 4px; }
-.install-box + .donate-box { margin-top: 0; }
+.donate-given p { margin: 0 0 8px; }
 .donate-off .donations-fix { margin-top: 10px; }
 .donate-off .donations-fix .form p { margin-bottom: 8px; }
 /* The editor's Get paid section, above the store page form. */
@@ -1239,6 +1251,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .rate-prompt h3 { font-size: 16px; }
 .rate-prompt p { margin: 0; }
 .rate-prompt-done { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
+.rate-prompt-callout { margin: 0 0 12px; }
 .lib-tabbar { display: flex; flex-wrap: wrap; align-items: center; gap: 6px 16px; border-bottom: 1px solid var(--line); margin-bottom: 18px; }
 .lib-tabs { display: flex; flex-wrap: wrap; gap: 2px; }
 .lib-tabs button { padding: 10px 14px; border: 0; border-bottom: 3px solid transparent; margin-bottom: -1px; background: none; color: var(--muted); font-weight: 600; font-size: 13px; cursor: pointer; }

@@ -54,6 +54,7 @@ export function InstallControls({
   inLibrary,
   sandbox,
   bar,
+  donate,
 }: {
   slug: string;
   title: string;
@@ -62,11 +63,13 @@ export function InstallControls({
   sandbox?: SandboxHint;
   /** The library's Steam-like action bar: one big button, a status, and icon buttons. */
   bar?: BarInfo;
+  /** The Donate button (DonateButton), in the row with Play, Install or Download. */
+  donate?: ReactNode;
 }) {
   return isDesktop ? (
-    <DesktopControls slug={slug} title={title} sandbox={sandbox} bar={bar} />
+    <DesktopControls slug={slug} title={title} sandbox={sandbox} bar={bar} donate={donate} />
   ) : (
-    <WebControls slug={slug} inLibrary={inLibrary} bar={bar} />
+    <WebControls slug={slug} inLibrary={inLibrary} bar={bar} donate={donate} />
   );
 }
 
@@ -144,7 +147,7 @@ export function Popover({
   );
 }
 
-function WebControls({ slug, inLibrary, bar }: { slug: string; inLibrary?: boolean; bar?: BarInfo }) {
+function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary?: boolean; bar?: BarInfo; donate?: ReactNode }) {
   const { me } = useSession();
   const location = useLocation();
   const [added, setAdded] = useState(inLibrary ?? false);
@@ -169,6 +172,7 @@ function WebControls({ slug, inLibrary, bar }: { slug: string; inLibrary?: boole
           <Link className="btn big slime lib-primary" to="/download">
             ⬇ Get the Slop app to play
           </Link>
+          {donate}
           <div className="lib-bar-status">
             <span className="lib-bar-label">{added ? "In your library" : "Not in your library"}</span>
             <span className="muted small">Install it with the Slop desktop app. It checks every file against Slop's signature first.</span>
@@ -197,15 +201,18 @@ function WebControls({ slug, inLibrary, bar }: { slug: string; inLibrary?: boole
 
   return (
     <div className="install-controls">
-      {me ? (
-        <button className={`btn ${added ? "" : "slime"}`} onClick={() => void toggle()} aria-pressed={added}>
-          {added ? "✓ In your library" : "+ Add to library"}
-        </button>
-      ) : (
-        <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(location.pathname)}`}>
-          Sign in to add to your library
-        </Link>
-      )}
+      <div className="get-row">
+        {me ? (
+          <button className={`btn ${added ? "" : "slime"}`} onClick={() => void toggle()} aria-pressed={added}>
+            {added ? "✓ In your library" : "+ Add to library"}
+          </button>
+        ) : (
+          <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(location.pathname)}`}>
+            Sign in to add to your library
+          </Link>
+        )}
+        {donate}
+      </div>
       <p className="muted small">Install it with the Slop desktop app. It checks every file against Slop's signature first.</p>
       {error && (
         <p className="form-error" role="alert">
@@ -221,11 +228,13 @@ function DesktopControls({
   title,
   sandbox: given,
   bar,
+  donate,
 }: {
   slug: string;
   title: string;
   sandbox?: SandboxHint;
   bar?: BarInfo;
+  donate?: ReactNode;
 }) {
   const build = useLoad(() => api.hasBuild(slug), [slug]);
   const sandboxStatus = useSandboxStatus();
@@ -576,6 +585,7 @@ function DesktopControls({
         <div className="lib-bar">
           {primary}
           {secondary}
+          {donate}
           <div className="lib-bar-status">
             <span className="lib-bar-label">{label}</span>
             <span className="muted small">{detail}</span>
@@ -662,20 +672,23 @@ function DesktopControls({
     <div className="install-controls">
       {installed ? (
         <>
-          {installed.kind === "installer" ? (
-            confirmInstaller ? (
-              installerConfirm
-            ) : (
-              <button className="btn big slime" onClick={() => setConfirmInstaller(true)}>
-                Run installer…
-              </button>
-            )
+          {installed.kind === "installer" && confirmInstaller ? (
+            installerConfirm
           ) : (
-            <div className="play-split">
-              <button className="btn big slime" disabled={busy !== null} onClick={() => void play()}>
-                {busy === "launch" ? "Starting…" : "▶ Play"}
-              </button>
-              {playPick}
+            <div className="get-row">
+              {installed.kind === "installer" ? (
+                <button className="btn big slime" onClick={() => setConfirmInstaller(true)}>
+                  Run installer…
+                </button>
+              ) : (
+                <div className="play-split">
+                  <button className="btn big slime" disabled={busy !== null} onClick={() => void play()}>
+                    {busy === "launch" ? "Starting…" : "▶ Play"}
+                  </button>
+                  {playPick}
+                </div>
+              )}
+              {donate}
             </div>
           )}
           {needsNotice}
@@ -702,9 +715,12 @@ function DesktopControls({
         </>
       ) : build.data ? (
         <>
-          <button className="btn big slime" disabled={busy !== null} onClick={() => void run("install", () => desktop.install(slug))}>
-            {installing ? (progress ? `Installing… ${pct}%` : "Starting download…") : "Install"}
-          </button>
+          <div className="get-row">
+            <button className="btn big slime" disabled={busy !== null} onClick={() => void run("install", () => desktop.install(slug))}>
+              {installing ? (progress ? `Installing… ${pct}%` : "Starting download…") : "Install"}
+            </button>
+            {donate}
+          </div>
           {installing && progress && (
             <>
               <progress max={progress.total} value={progress.got} aria-label="Download progress" />
@@ -718,7 +734,10 @@ function DesktopControls({
           )}
         </>
       ) : (
-        <p className="muted">No approved build yet.</p>
+        <>
+          <p className="muted">No approved build yet.</p>
+          {donate && <div className="get-row">{donate}</div>}
+        </>
       )}
       {errorNote}
     </div>

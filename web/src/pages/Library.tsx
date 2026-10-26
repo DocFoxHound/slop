@@ -13,6 +13,7 @@ import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Avatar } from "../components/Avatar";
 import { checkUpdates, LIBRARY_CHANGED } from "../components/AppUpdates";
 import { BugReports } from "../components/BugReports";
+import { DonateButton } from "../components/Donate";
 import { downloading, DownloadsStatus, useDownloads } from "../components/Downloads";
 import { GEAR_ICON, INFO_ICON, InstallControls, Popover } from "../components/InstallControls";
 import { GameMods } from "../components/ModControls";
@@ -364,6 +365,10 @@ function Details({
   const latest = releases.data?.find((r) => r.status === "approved");
   const waiting = entry.interested && !entry.installed && !entry.inLibrary && entry.app?.stage !== "released";
   const info = <AppInfo entry={entry} detail={d} latest={latest} />;
+  // Donate next to Play, as on the store page (not for Coming soon or Private Slop).
+  const donate = !isPrivate && !upcoming && (
+    <DonateButton key={entry.slug} slug={entry.slug} title={entry.title} isMine={Boolean(d?.is_mine)} />
+  );
 
   return (
     <section className="lib-main" aria-labelledby="lib-title">
@@ -413,7 +418,7 @@ function Details({
           <p className="notice small">Released: add it to your library to install it.</p>
         )}
         {waiting ? (
-          <InterestedBar entry={entry} info={info} onRemoved={onInterestRemoved} />
+          <InterestedBar entry={entry} info={info} donate={donate} onRemoved={onInterestRemoved} />
         ) : (
           <InstallControls
             key={entry.slug}
@@ -438,10 +443,13 @@ function Details({
               extra: info,
               onShowSaves: () => setTab("saves"),
             }}
+            donate={donate}
           />
         )}
 
-        {signedIn && !isPrivate && !upcoming && <RatePrompt slug={entry.slug} title={entry.title} />}
+        {!isPrivate && !upcoming && (
+          <RatePrompt slug={entry.slug} title={entry.title} signedIn={signedIn} isMine={Boolean(d?.is_mine)} />
+        )}
 
         <div className="lib-tabbar">
           <div className="lib-tabs" role="tablist" aria-label={`${entry.title} in your library`} onKeyDown={onTabKey}>
@@ -509,7 +517,17 @@ function Details({
 }
 
 /** An upcoming app you're waiting for: nothing to install yet. */
-function InterestedBar({ entry, info, onRemoved }: { entry: Entry; info: ReactNode; onRemoved: () => void }) {
+function InterestedBar({
+  entry,
+  info,
+  donate,
+  onRemoved,
+}: {
+  entry: Entry;
+  info: ReactNode;
+  donate?: ReactNode;
+  onRemoved: () => void;
+}) {
   const [error, setError] = useState<string>();
   const [busy, setBusy] = useState(false);
   return (
@@ -518,6 +536,7 @@ function InterestedBar({ entry, info, onRemoved }: { entry: Entry; info: ReactNo
         <button type="button" className="btn big lib-primary" disabled>
           {entry.app?.stage === "beta" ? "In beta" : "Coming soon"}
         </button>
+        {donate}
         <div className="lib-bar-status">
           <span className="lib-bar-label">Interested</span>
           <span className="muted small">We tell you when it reaches beta or is released.</span>

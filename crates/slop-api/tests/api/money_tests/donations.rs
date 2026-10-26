@@ -287,6 +287,84 @@ async fn anyone_signed_out_sees_a_beta_apps_donate_box_without_personal_data(db:
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_donate_box_tells_each_viewer_their_own_donations_for_the_button(db: PgPool) {
+    // Next to Play, the Donate button turns grey once the viewer has donated, and a monthly server
+    // donation shows with Cancel. Only the viewer's own, never anyone else's.
+    let app = test_app_with(db, simulated).await;
+    let (_, maker) = maker_taking_donations(&app, "arena", true).await;
+    let (_, dee) = adult(&app, "Dee Donor", "US").await;
+    let (_, eve) = adult(&app, "Eve Donor", "US").await;
+    let mine = |cookie: String| {
+        let app = &app;
+        async move { get_json(app, &cookie, "/v1/apps/arena/donate").await["mine"].clone() }
+    };
+    assert_eq!(
+        mine(dee.clone()).await,
+        json!({ "last": null, "monthly": null })
+    );
+    let signed_out = body_json(app.send(req(Method::GET, "/v1/apps/arena/donate")).await).await;
+    assert!(signed_out.get("mine").is_none(), "{signed_out}");
+
+    // A one-off donation: what Dee paid and when.
+    assert_eq!(
+        donate(&app, &dee, "arena", json!({ "amount_minor": 300 }))
+            .await
+            .0,
+        StatusCode::OK
+    );
+    let after = mine(dee.clone()).await;
+    assert_eq!(after["last"]["total_minor"], 340);
+    assert_eq!(after["last"]["currency"], "usd");
+    assert!(after["last"]["paid_at"].is_string(), "{after}");
+    assert!(after["monthly"].is_null());
+    assert_eq!(
+        mine(eve.clone()).await,
+        json!({ "last": null, "monthly": null })
+    );
+    assert_eq!(
+        mine(maker.clone()).await,
+        json!({ "last": null, "monthly": null })
+    );
+
+    // A monthly server donation, with what cancelling it needs.
+    let (_, started) = donate(
+        &app,
+        &dee,
+        "arena",
+        json!({ "amount_minor": 500, "monthly": true, "consent": true }),
+    )
+    .await;
+    let id = started["id"].as_str().unwrap();
+    let after = mine(dee.clone()).await;
+    assert_eq!(after["monthly"]["id"], id);
+    assert_eq!(after["monthly"]["total_minor"], 546);
+    assert!(after["monthly"]["next_charge_at"].is_string(), "{after}");
+    assert!(mine(eve.clone()).await["monthly"].is_null());
+    // Eve can't cancel it; Dee can, at once, and the button goes back to the last donation.
+    let cancel = |cookie: &str| {
+        req(Method::POST, format!("/v1/me/server-donations/{id}/cancel")).cookie(cookie)
+    };
+    assert_eq!(app.send(cancel(&eve)).await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(
+        app.send(cancel(&dee)).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let after = mine(dee.clone()).await;
+    assert!(after["monthly"].is_null(), "{after}");
+    assert!(after["last"].is_object(), "{after}");
+
+    // Refunded donations don't count as given.
+    sqlx::query("update donations set status = 'refunded'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(
+        mine(dee.clone()).await,
+        json!({ "last": null, "monthly": null })
+    );
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn a_branch_shares_with_its_original_only_while_the_original_takes_donations(db: PgPool) {
     let app = test_app_with(db, simulated).await;
     let (_, _) = maker_taking_donations(&app, "arena", false).await;
