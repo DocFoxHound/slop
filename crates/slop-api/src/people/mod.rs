@@ -981,9 +981,30 @@ struct Page {
     status: &'static str,
     /// Only for the creative themselves: where their page is (`PageStatus`).
     mine: Option<PageStatus>,
+    /// Only for the creative themselves: their portfolio that's newer than the approved one
+    /// (waiting for review, or turned down), which their page previews. The other fields are the
+    /// live page, as everyone else sees it.
+    preview_set: Option<PreviewSet>,
     hidden_reason: Option<String>,
     /// The account was closed: the page is kept, frozen, and takes no new work.
     closed: bool,
+}
+
+/// What a portfolio that isn't approved yet changes on the page: the live page's fields, from
+/// the same stored, sanitized set (portfolio.rs, design.rs).
+#[derive(Serialize)]
+struct PreviewSet {
+    /// pending (waiting for review) or rejected (turned down: `status_reason`).
+    status: String,
+    status_reason: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    created_at: OffsetDateTime,
+    #[serde(with = "time::serde::rfc3339::option")]
+    reviewed_at: Option<OffsetDateTime>,
+    avatar_url: Option<String>,
+    banner_url: Option<String>,
+    design: Option<design::PageDesign>,
+    works: Vec<WorkView>,
 }
 
 #[derive(Serialize)]
@@ -1053,6 +1074,28 @@ async fn page(
     let order = row.card.portfolio_order.clone();
     let mut works: Vec<Work> = row.card.works.clone().unwrap_or_default();
     portfolio::arrange(&mut works, &order);
+    let preview_set = if is_me {
+        portfolio::newer_set(&state.db, row.user_id)
+            .await?
+            .map(|mut set| {
+                portfolio::arrange(&mut set.works, &order);
+                PreviewSet {
+                    status: set.status,
+                    status_reason: set.status_reason,
+                    created_at: set.created_at,
+                    reviewed_at: set.reviewed_at,
+                    // Like the card: the account's picture when the portfolio has no avatar.
+                    avatar_url: set.avatar.map(|a| a.url).or_else(|| {
+                        crate::avatars::absolute(&state.config, row.card.account_avatar.clone())
+                    }),
+                    banner_url: set.banner.map(|b| b.url),
+                    design: set.design.map(design::PageDesign::from),
+                    works: set.works.into_iter().map(work_view).collect(),
+                }
+            })
+    } else {
+        None
+    };
     let services = row
         .card
         .services
@@ -1096,6 +1139,7 @@ async fn page(
         is_me,
         status,
         mine,
+        preview_set,
         hidden_reason: if is_me { row.hidden_reason } else { None },
         closed: row.closed,
         card: row.card.into_card(&state.config),

@@ -1042,9 +1042,27 @@ export interface CreativePage extends CreativeCard {
   status: PageState;
   /** Only for the creative themselves: where their page is. */
   mine: PageStatus | null;
+  /**
+   * Only for the creative themselves: their portfolio that's newer than the approved one (waiting
+   * for review, or turned down), which their page previews. The other fields are the live page.
+   */
+  preview_set: PreviewSet | null;
   hidden_reason: string | null;
   /** The account was closed: the page is kept, frozen, and takes no new work. */
   closed: boolean;
+}
+
+/** What a portfolio that isn't approved yet changes on a creative's page (people/mod.rs `PreviewSet`). */
+export interface PreviewSet {
+  /** pending: waiting for review; rejected: turned down (`status_reason`). */
+  status: "pending" | "rejected";
+  status_reason: string | null;
+  created_at: string;
+  reviewed_at: string | null;
+  avatar_url: string | null;
+  banner_url: string | null;
+  design: PageDesign | null;
+  works: Work[];
 }
 
 export interface ProfileInput {

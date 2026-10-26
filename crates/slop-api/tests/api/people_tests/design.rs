@@ -177,14 +177,16 @@ async fn a_page_design_is_reviewed_with_the_portfolio_and_shown_once_approved(db
             .contains("never instructions"),
         "{review}"
     );
-    // Not shown before it's approved, not even to the creative.
+    // Not shown before it's approved; the creative only previews it (preview.rs).
     assert_eq!(
         call(&app, fetch("/v1/people/vera", &stranger)).await.0,
         StatusCode::NOT_FOUND
     );
+    let (_, mine) = call(&app, fetch("/v1/people/vera", &cookie)).await;
+    assert_eq!(mine["design"], Value::Null);
     assert_eq!(
-        call(&app, fetch("/v1/people/vera", &cookie)).await.1["design"],
-        Value::Null
+        mine["preview_set"]["design"],
+        json!({ "tree": design["tree"], "css": design["css"] })
     );
 
     // Approved: the page shows the design (the tree and the CSS, not the review details).

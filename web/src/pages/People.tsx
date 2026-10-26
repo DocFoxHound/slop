@@ -10,7 +10,15 @@ import { api, ApiError, type AiUse, type CreativePage, type PageStatus, type Peo
 import { Avatar } from "../components/Avatar";
 import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, ServicesList, WorkTile, accentStyle } from "../components/People";
 import { DesignArea, slopParts } from "../components/PeopleDesign";
-import { MyPeoplePageCard, PageStatusDetails, useMyPeoplePage, type PeopleSaved } from "../components/PeopleStatus";
+import {
+  LiveBar,
+  MyPeoplePageCard,
+  PageStatusDetails,
+  PreviewBar,
+  ownPageView,
+  useMyPeoplePage,
+  type PeopleSaved,
+} from "../components/PeopleStatus";
 import { ReportButton } from "../components/Report";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading, SectionHeader, Shelf } from "../components/ui";
@@ -217,10 +225,14 @@ function savedMessage(saved: PeopleSaved, status: PageStatus): string {
   }
 }
 
-function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
+function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void }) {
   const { me } = useSession();
   const location = useLocation();
   const navigate = useNavigate();
+  // The creative's own page previews their portfolio waiting for review (or turned down);
+  // ?view=live shows exactly what everyone else sees.
+  const [params] = useSearchParams();
+  const { page: p, view } = ownPageView(loaded, params.get("view") === "live");
   // Arrived here from the editor's Save: say so once (not again on reload or Back).
   const [saved] = useState(() => (location.state as { peopleSaved?: PeopleSaved } | null)?.peopleSaved);
   const savedRef = useRef<HTMLDivElement>(null);
@@ -297,6 +309,8 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
       <div className="crumbs">
         <Link to="/people">People</Link> › {p.name}
       </div>
+      {view === "preview" && p.mine && p.preview_set && <PreviewBar handle={p.handle} status={p.mine} set={p.preview_set} />}
+      {view === "live" && p.mine && p.preview_set && <LiveBar handle={p.handle} status={p.mine} set={p.preview_set} />}
       {saved && p.mine && (
         <div className="notice people-saved" role="status" tabIndex={-1} ref={savedRef}>
           <span aria-hidden="true">✓ </span>
@@ -318,94 +332,111 @@ function PersonView({ p, reload }: { p: CreativePage; reload: () => void }) {
           takes no new work.
         </div>
       )}
-      <div className="person-banner" aria-hidden="true">
-        {p.banner_url && <img src={p.banner_url} alt="" />}
-      </div>
-      <div className="person-head panel">
-        <Avatar name={p.name} url={p.avatar_url} className="p-avatar big" />
-        <div className="person-head-main">
-          <div className="title-row">
-            <h1>{p.name}</h1>
-            <span className="badge neutral">{p.kind === "studio" ? `STUDIO · ${p.team_size ?? 2} PEOPLE` : "INDIVIDUAL"}</span>
-            <AiBadge ai={p.ai_use} />
-          </div>
-          {p.headline && <p className="lede">{p.headline}</p>}
-          <div className="muted small">
-            {p.location && `${p.location} · `}
-            <span className={`avail ${p.can_hire ? "on" : ""}`} aria-hidden="true" />
-            {p.can_hire ? "Taking work" : p.taking_work ? "Not taking paid work yet" : "Fully booked"}
-            {p.turnaround && ` · usually ${p.turnaround}`}
-          </div>
-          <div className="chips">
-            {p.skills.map((s) => (
-              <Link className="chip" key={s.slug} to={`/people?skill=${s.slug}`}>
-                {s.name}
-              </Link>
-            ))}
-          </div>
-          {p.links.length > 0 && (
-            <div className="person-links">
-              {p.links.map((l) => (
-                <ExternalLink key={l.url} href={l.url}>
-                  {l.label} <span className="faint">({l.domain})</span>
-                </ExternalLink>
-              ))}
-            </div>
-          )}
+      <PreviewFrame on={view === "preview"}>
+        <div className="person-banner" aria-hidden="true">
+          {p.banner_url && <img src={p.banner_url} alt="" />}
         </div>
-        <div className="person-head-side">
-          <RatingLine rating={p.rating} clients={p.clients} />
-          {!p.is_me &&
-            (p.can_hire ? (
-              <button type="button" className="btn big accent" onClick={() => setHiring({})}>
-                Hire {p.kind === "studio" ? "them" : p.name.split(" ")[0]}
-              </button>
-            ) : (
-              <button type="button" className="btn big" disabled>
-                {p.closed ? "Account closed" : p.taking_work ? "Not taking paid work yet" : "Fully booked"}
-              </button>
-            ))}
-          <span className="muted small">
-            {p.trader ? "Offers services as a business" : "Offers services as a private individual"}
-          </span>
-          {!p.is_me && <ReportButton kind="profile" subject={p.handle} label="this profile" />}
-        </div>
-      </div>
-
-      {hiring && (
-        <HireForm
-          p={p}
-          initial={hiring}
-          signedIn={Boolean(me)}
-          adultConfirmed={Boolean(me?.adult_confirmed)}
-          onClose={() => setHiring(undefined)}
-        />
-      )}
-
-      {p.design && (
-        <DesignArea design={p.design} label={`${p.name}'s page`} parts={slopParts({ works: p.works, onOpen: setOpen })} />
-      )}
-
-      <div className="two-col person-body">
-        <div className="person-sections">{shown.map((s) => sections[s])}</div>
-        <aside className="side-col">
-          <div className="panel panel-pad">
-            <b>AI use</b>
-            <div className="ai-box">
+        <div className="person-head panel">
+          <Avatar name={p.name} url={p.avatar_url} className="p-avatar big" />
+          <div className="person-head-main">
+            <div className="title-row">
+              <h1>{p.name}</h1>
+              <span className="badge neutral">{p.kind === "studio" ? `STUDIO · ${p.team_size ?? 2} PEOPLE` : "INDIVIDUAL"}</span>
               <AiBadge ai={p.ai_use} />
             </div>
-            <div className="muted small">{p.ai_note || AI_USE[p.ai_use].hint}</div>
-            <div className="faint small">Required on every profile. Each offer says it again for that job.</div>
+            {p.headline && <p className="lede">{p.headline}</p>}
+            <div className="muted small">
+              {p.location && `${p.location} · `}
+              <span className={`avail ${p.can_hire ? "on" : ""}`} aria-hidden="true" />
+              {p.can_hire ? "Taking work" : p.taking_work ? "Not taking paid work yet" : "Fully booked"}
+              {p.turnaround && ` · usually ${p.turnaround}`}
+            </div>
+            <div className="chips">
+              {p.skills.map((s) => (
+                <Link className="chip" key={s.slug} to={`/people?skill=${s.slug}`}>
+                  {s.name}
+                </Link>
+              ))}
+            </div>
+            {p.links.length > 0 && (
+              <div className="person-links">
+                {p.links.map((l) => (
+                  <ExternalLink key={l.url} href={l.url}>
+                    {l.label} <span className="faint">({l.domain})</span>
+                  </ExternalLink>
+                ))}
+              </div>
+            )}
           </div>
-          <div className="panel panel-pad small muted">
-            <b className="text">Hiring through Slop</b>
-            <p>You pay {p.name} directly through Stripe. Slop never holds the money.</p>
-            <p>When the job is done, your app's page credits them and gets the ✋ Made with people badge.</p>
-            <p>Your contract is with {p.name}, not Slop. Slop doesn't settle disputes.</p>
+          <div className="person-head-side">
+            <RatingLine rating={p.rating} clients={p.clients} />
+            {!p.is_me &&
+              (p.can_hire ? (
+                <button type="button" className="btn big accent" onClick={() => setHiring({})}>
+                  Hire {p.kind === "studio" ? "them" : p.name.split(" ")[0]}
+                </button>
+              ) : (
+                <button type="button" className="btn big" disabled>
+                  {p.closed ? "Account closed" : p.taking_work ? "Not taking paid work yet" : "Fully booked"}
+                </button>
+              ))}
+            <span className="muted small">
+              {p.trader ? "Offers services as a business" : "Offers services as a private individual"}
+            </span>
+            {!p.is_me && <ReportButton kind="profile" subject={p.handle} label="this profile" />}
           </div>
-        </aside>
-      </div>
+        </div>
+
+        {hiring && (
+          <HireForm
+            p={p}
+            initial={hiring}
+            signedIn={Boolean(me)}
+            adultConfirmed={Boolean(me?.adult_confirmed)}
+            onClose={() => setHiring(undefined)}
+          />
+        )}
+
+        {p.design && (
+          <DesignArea design={p.design} label={`${p.name}'s page`} parts={slopParts({ works: p.works, onOpen: setOpen })} />
+        )}
+
+        <div className="two-col person-body">
+          <div className="person-sections">{shown.map((s) => sections[s])}</div>
+          <aside className="side-col">
+            <div className="panel panel-pad">
+              <b>AI use</b>
+              <div className="ai-box">
+                <AiBadge ai={p.ai_use} />
+              </div>
+              <div className="muted small">{p.ai_note || AI_USE[p.ai_use].hint}</div>
+              <div className="faint small">Required on every profile. Each offer says it again for that job.</div>
+            </div>
+            <div className="panel panel-pad small muted">
+              <b className="text">Hiring through Slop</b>
+              <p>You pay {p.name} directly through Stripe. Slop never holds the money.</p>
+              <p>When the job is done, your app's page credits them and gets the ✋ Made with people badge.</p>
+              <p>Your contract is with {p.name}, not Slop. Slop doesn't settle disputes.</p>
+            </div>
+          </aside>
+        </div>
+      </PreviewFrame>
       {open && <Lightbox w={open} onClose={() => setOpen(undefined)} />}
+    </div>
+  );
+}
+
+/**
+ * The previewed page, outlined and labelled at its top and bottom, so no part of it (or a
+ * screenshot of it) passes for the live page. Off, just the page.
+ */
+function PreviewFrame({ on, children }: { on: boolean; children: ReactNode }) {
+  if (!on) return <>{children}</>;
+  return (
+    <div className="own-preview-frame">
+      <p className="own-preview-ribbon">Preview · not your live page</p>
+      {children}
+      <p className="own-preview-ribbon end">Preview · not your live page</p>
     </div>
   );
 }

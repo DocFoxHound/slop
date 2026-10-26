@@ -354,6 +354,9 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.cookies.insert("designer", p.designer.cookie.clone());
     s.ids.insert("designer", json!(p.designer.id));
     s.ids.insert("designerHandle", json!("dee-design"));
+    s.cookies.insert("previewer", p.previewer.cookie.clone());
+    s.ids.insert("previewer", json!(p.previewer.id));
+    s.ids.insert("previewerHandle", json!("pip-preview"));
     s.ids.insert("deliveredJob", json!(p.delivered_job));
     s.ids.insert("workingJob", json!(p.working_job));
     s.ids.insert("requestedJob", json!(p.requested_job));
@@ -535,6 +538,62 @@ async fn portfolio(ctx: &Ctx, creative: Uuid, handle: &str, color: &str) -> anyh
     Ok(set)
 }
 
+/// A newer portfolio than the approved one, waiting for review: other works, a new banner and a
+/// page design (cleaned by design.rs, as a check would).
+async fn newer_portfolio(ctx: &Ctx, creative: Uuid, handle: &str) -> anyhow::Result<Uuid> {
+    let works: Vec<Value> = ["Moth", "Lighthouse"]
+        .iter()
+        .map(|t| {
+            let mut w = svg_picture(
+                &format!("works/{}.svg", t.to_lowercase()),
+                640,
+                480,
+                "#b4532a",
+                t,
+            );
+            w["kind"] = json!("image");
+            w["title"] = json!(t);
+            w["skill"] = json!("pixel-art");
+            w
+        })
+        .collect();
+    let typed: Vec<slop_api::people::portfolio::Work> =
+        serde_json::from_value(Value::Array(works.clone()))?;
+    let draft = slop_api::people::design::sanitize(
+        "<h2>Pip's new look</h2><p>Moths, lighthouses and other things drawn to light.</p><slop-works></slop-works>",
+        Some("h2 { color: #ffd166; font-family: Caveat, cursive; }"),
+        &typed,
+    )
+    .map_err(|e| anyhow::anyhow!("the seeded page design: {}", e.0))?;
+    let mut html = String::new();
+    slop_api::people::design::to_html(&draft.tree, &mut html);
+    let design = slop_api::people::design::Design {
+        tree: draft.tree,
+        html,
+        css: draft.css,
+        pictures: Vec::new(),
+        tracks: Vec::new(),
+        warnings: draft.warnings,
+    };
+    let set = Uuid::now_v7();
+    sqlx::query(
+        "insert into portfolio_sets (id, creative_id, repo_url, commit_sha, avatar, banner, works, design, fingerprint, status, source)
+         values ($1, $2, $3, repeat('d', 40), $4, $5, $6, $7, $8, 'pending', 'creative')",
+    )
+    .bind(set)
+    .bind(creative)
+    .bind(format!("https://github.com/e2e/{handle}-portfolio"))
+    .bind(sqlx::types::Json(svg_picture("avatar.svg", 256, 256, "#b4532a", "NEW")))
+    .bind(sqlx::types::Json(svg_picture("banner.svg", 1600, 400, "#b4532a", "New banner")))
+    .bind(sqlx::types::Json(works))
+    .bind(sqlx::types::Json(design))
+    .bind(format!("e2e-{handle}-newer"))
+    .execute(&ctx.db)
+    .await
+    .context("newer portfolio")?;
+    Ok(set)
+}
+
 /// A creative's People profile (PUT /v1/me/creative), taking work.
 async fn creative_profile(ctx: &Ctx, who: &Who, handle: &str, name: &str) -> anyhow::Result<()> {
     ctx.put(
@@ -572,6 +631,8 @@ pub struct People {
     pub inbox_creative: Who,
     /// A creative with no portfolio yet, whose repository has a page design (main.rs).
     pub designer: Who,
+    /// A live creative whose newer portfolio (with a page design) waits for review.
+    pub previewer: Who,
     /// Delivered, with a conversation: the client is asked to pay.
     pub delivered_job: Uuid,
     /// Paid up front through (fake) Stripe Checkout, and being worked on.
@@ -638,6 +699,18 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
         &[&designer.id, &DEE_GITHUB.to_string()],
     )
     .await?;
+    // And one who's live, with a newer portfolio (other works, a banner, a page design) waiting
+    // for review: only she sees it, as a preview on her page (people-preview.e2e.ts, read-only).
+    let previewer = ctx.user("Pip Preview", "US").await?;
+    creative_profile(ctx, &previewer, "pip-preview", "Pip Preview").await?;
+    let set = portfolio(ctx, previewer.id, "pip-preview", "#2f6f4f").await?;
+    ctx.post(
+        admin,
+        &format!("/v1/admin/portfolio/{set}/approve"),
+        json!({}),
+    )
+    .await?;
+    newer_portfolio(ctx, previewer.id, "pip-preview").await?;
 
     // The client and their app.
     let client = ctx.adult("Cleo Client", "US").await?;
@@ -848,6 +921,7 @@ async fn people(ctx: &Ctx, admin: &Who) -> anyhow::Result<People> {
         pending_creative,
         inbox_creative,
         designer,
+        previewer,
         delivered_job,
         working_job,
         requested_job,
@@ -1907,7 +1981,7 @@ async fn verify(ctx: &Ctx) -> anyhow::Result<()> {
         ),
         (
             "select string_agg(status::text, ',' order by status::text) from portfolio_sets",
-            "approved,pending,pending",
+            "approved,approved,pending,pending,pending",
         ),
         (
             "select count(*)::text from media_sets where status = 'pending'",

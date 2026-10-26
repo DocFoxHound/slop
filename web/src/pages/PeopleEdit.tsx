@@ -412,12 +412,26 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
           {typeof error !== "string" && error.field === "github_account" && linkGithub}
         </div>
       )}
+      {/* Their page previews the portfolio that isn't approved yet, for them only. */}
       {ov.pending && (
-        <div className="notice">
-          New portfolio waiting for review ({ov.pending.works.length} works{ov.pending.design ? " and your page's design" : ""}).
+        <div className="notice portfolio-waiting">
+          <p>
+            New portfolio waiting for review ({ov.pending.works.length} works{ov.pending.design ? " and your page's design" : ""}). Your page
+            shows it to you as a preview; everyone else sees {ov.live ? "your live page" : "nothing until it's approved"}.
+          </p>
+          <Link className="btn small slime" to={`/people/${profile.handle}`}>
+            See the preview on your page
+          </Link>
         </div>
       )}
-      {ov.rejected && <div className="notice">Your last portfolio was turned down: {ov.rejected.status_reason}</div>}
+      {ov.rejected && (
+        <div className="notice portfolio-waiting">
+          <p>Your last portfolio was turned down: {ov.rejected.status_reason}</p>
+          <Link className="btn small" to={`/people/${profile.handle}`}>
+            See it on your page
+          </Link>
+        </div>
+      )}
       {shown && (
         <ol className="media-order">
           {shown.works.map((w, i) => (
