@@ -2223,6 +2223,36 @@ export interface AgentToken {
   last_used_at: string;
   /** Past its expiry: it no longer works (listed for a week after). */
   expired: boolean;
+  /**
+   * Approved in the browser by an AI tool (crates/slop-api/src/agent_oauth.rs): the name it gave
+   * itself, and the website the approval went to (null: a program on this computer). Null for a
+   * token made on the website.
+   */
+  connected: { client: string; redirect_host: string | null } | null;
+}
+
+/** An AI tool waiting for approval (crates/slop-api/src/agent_oauth.rs `request_info`). */
+export interface AiConnectRequest {
+  /** The name the tool gives itself. */
+  client_name: string;
+  /** registered: it registered itself (its name is only its word); document: named by an address on client_host. */
+  client_kind: "registered" | "document";
+  client_host: string | null;
+  /** loopback: a program on this computer; web: the website redirect_host. */
+  redirect_kind: "loopback" | "web";
+  redirect_host: string | null;
+  /** A website SLAPorSLOP doesn't know. */
+  unfamiliar: boolean;
+  requested_scopes: string[];
+  expires_at: string;
+}
+
+export interface AiConnectChoices {
+  name: string;
+  scope: AgentToken["scope"];
+  apps: string[];
+  people: boolean;
+  days: number;
 }
 
 /** A community build's fix offered to the original (crates/slop-api/src/offers.rs). */
@@ -3854,6 +3884,12 @@ export const api = {
       body,
     ),
   revokeAgentToken: (id: string) => request<void>("DELETE", `/v1/me/maker-tokens/${encodeURIComponent(id)}`),
+  aiConnect: {
+    request: (id: string) => request<AiConnectRequest>("GET", `/v1/oauth/requests/${encodeURIComponent(id)}`),
+    approve: (id: string, choices: AiConnectChoices) =>
+      request<{ redirect_url: string }>("POST", `/v1/oauth/requests/${encodeURIComponent(id)}/approve`, choices),
+    deny: (id: string) => request<{ redirect_url: string }>("POST", `/v1/oauth/requests/${encodeURIComponent(id)}/deny`),
+  },
   /** Fixes for the problems in an app's newest release. */
   fixes: (slug: string) =>
     request<{

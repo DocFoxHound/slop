@@ -25,7 +25,7 @@ test("a read-only token for one app, for a day", async ({ page }) => {
 
   await expect(section.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
   await expect(section.getByText("Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.")).toBeVisible();
-  await expect(section.getByText(/claude mcp add .*slopmk_/)).toHaveCount(0);
+  await expect(section.getByRole("region", { name: /^Set up/ }).getByText(/claude mcp add .*slopmk_/)).toHaveCount(0);
   await section.getByRole("button", { name: "Done" }).click();
 
   const row = section.getByRole("listitem").filter({ hasText: name });
