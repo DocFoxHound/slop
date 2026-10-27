@@ -42,6 +42,8 @@ Your rates aren't in the portfolio: you set them as **services** on your page's 
    The editor's Portfolio section shows which GitHub account is linked, or a **Link GitHub**
    button if none is. (A repository owned by a GitHub organization works if you're one of the
    organization's owners and SLAPorSLOP's GitHub App is installed on it.)
+   No GitHub account yet? AI assistants: [Starting from nothing](/start.md#starting-from-nothing-no-github-yet)
+   walks the person through it.
 
 ## Step by step
 
