@@ -211,7 +211,7 @@ async fn pausing_for_review_stops_collection_at_stripe_and_closes_open_checkouts
     assert!(
         notices(&app, maker_id)
             .await
-            .contains(&"Donations to arena are paused while Slop reviews it".to_string())
+            .contains(&"Donations to arena are paused while SLAPorSLOP reviews it".to_string())
     );
     // The original's share of donations to its community builds stops too.
     assert!(get_json(&app, &dee, "/v1/apps/arena-mod/donate").await["shared"].is_null());

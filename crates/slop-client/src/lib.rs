@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The Slop client's core: talking to the API, signing in through the system browser, and
+//! The SLAPorSLOP client's core: talking to the API, signing in through the system browser, and
 //! installing, verifying and launching apps (docs/ARCHITECTURE.md §3, §6.3; docs/SECURITY.md §5).
 //!
 //! It has no UI and no Tauri dependency, so it can be tested on its own; `slop-desktop` exposes
@@ -24,7 +24,7 @@ pub use slop_manifest;
 
 #[derive(Debug, thiserror::Error)]
 pub enum Error {
-    #[error("can't reach Slop: {0}")]
+    #[error("can't reach SLAPorSLOP: {0}")]
     Network(String),
     #[error("{message}")]
     Api {
@@ -38,7 +38,7 @@ pub enum Error {
     Verify(String),
     #[error("{0}")]
     Install(String),
-    #[error("this version was withdrawn by Slop: {0}")]
+    #[error("this version was withdrawn by SLAPorSLOP: {0}")]
     Revoked(String),
     #[error("{0}")]
     Io(#[from] std::io::Error),

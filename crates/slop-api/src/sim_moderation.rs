@@ -180,7 +180,7 @@ pub async fn write(
         if !act {
             sqlx::query(
                 "update reports set status = 'dismissed', decided_by = $2, decided_at = $3,
-                        outcome = 'We looked at this and it doesn''t break Slop''s rules, so it stays up.'
+                        outcome = 'We looked at this and it doesn''t break SLAPorSLOP''s rules, so it stays up.'
                  where id = any($1)",
             )
             .bind(&ids)

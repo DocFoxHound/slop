@@ -113,7 +113,7 @@ pub const REASONS: &[Reason] = &[
     },
     Reason {
         code: "outside_code",
-        label: "Runs code or mods from outside Slop",
+        label: "Runs code or mods from outside SLAPorSLOP",
         kinds: &["app"],
         priority: 1,
         rule: Some("outside_code"),
@@ -239,7 +239,7 @@ pub const REASONS: &[Reason] = &[
 pub const RULES: &[(&str, &str)] = &[
     ("malware", "Malware and data theft"),
     ("source_mismatch", "Builds must match their source"),
-    ("outside_code", "Code from outside Slop"),
+    ("outside_code", "Code from outside SLAPorSLOP"),
     ("scam", "Scams and fraud"),
     ("illegal", "Illegal content"),
     ("child_abuse", "Child sexual abuse material"),
@@ -400,7 +400,7 @@ struct ReportBody {
     email: Option<String>,
     copyright: Option<CopyrightNotice>,
     /// A chat message (kind chat_message): the reporter's decrypted copy and its franking key,
-    /// checked against what Slop stored when it was sent (chat.rs).
+    /// checked against what SLAPorSLOP stored when it was sent (chat.rs).
     chat: Option<crate::chat::ChatEvidence>,
 }
 
@@ -557,7 +557,7 @@ async fn find_subject(
             })
         }
         "chat_message" => {
-            // Only someone in the chat can report it, with their own decrypted copy: Slop can't
+            // Only someone in the chat can report it, with their own decrypted copy: SLAPorSLOP can't
             // read chats, but franking proves the sender sent exactly this.
             let user = user.ok_or(ApiError::Unauthorized)?;
             let evidence = chat.ok_or_else(|| {
@@ -1706,7 +1706,7 @@ struct Answered {
     reporter_email: Option<String>,
 }
 
-/// Tells each reporter what was decided (DSA Art. 16(5)): in Slop, or by email when they
+/// Tells each reporter what was decided (DSA Art. 16(5)): in SLAPorSLOP, or by email when they
 /// reported signed out.
 async fn tell_reporters(
     tx: &mut sqlx::PgConnection,
@@ -1736,7 +1736,7 @@ async fn tell_reporters(
                 email,
                 &title,
                 &format!(
-                    "You reported {} to Slop.\n\nWhat we decided: {outcome}",
+                    "You reported {} to SLAPorSLOP.\n\nWhat we decided: {outcome}",
                     a.subject_label
                 ),
             )

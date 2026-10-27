@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Releases: makers submit them, Slop fetches and hashes their files, a reviewer approves them
-//! and Slop signs the manifest (docs/ARCHITECTURE.md §6.3, docs/SECURITY.md §5).
+//! Releases: makers submit them, SLAPorSLOP fetches and hashes their files, a reviewer approves them
+//! and SLAPorSLOP signs the manifest (docs/ARCHITECTURE.md §6.3, docs/SECURITY.md §5).
 //!
-//! Builds stay on the maker's release page. Slop downloads each file once to hash it, keeps
+//! Builds stay on the maker's release page. SLAPorSLOP downloads each file once to hash it, keeps
 //! nothing but the hash and size, and the client later downloads from the same URL and checks
-//! the hash against Slop's signed manifest.
+//! the hash against SLAPorSLOP's signed manifest.
 
 use std::time::Duration as StdDuration;
 
@@ -419,7 +419,7 @@ struct ReleaseFileInfo {
     defender: Option<serde_json::Value>,
     /// A reviewer cleared a finding as a false positive, and why.
     cleared_reason: Option<String>,
-    /// What Slop is doing with this file right now: downloading, signature or scanning
+    /// What SLAPorSLOP is doing with this file right now: downloading, signature or scanning
     /// (release_progress.rs). Null when it isn't being checked.
     check_stage: Option<String>,
     #[serde(with = "time::serde::rfc3339::option")]
@@ -444,7 +444,7 @@ pub(crate) struct ReleaseInfo {
     created_at: OffsetDateTime,
     /// maker, slop_build or github_release.
     source: String,
-    /// True when Slop approved it automatically as an update (updates.rs).
+    /// True when SLAPorSLOP approved it automatically as an update (updates.rs).
     auto_approved: bool,
     /// Its rating (AGE-7).
     rating: Option<Rating>,
@@ -455,11 +455,11 @@ pub(crate) struct ReleaseInfo {
     files: Vec<ReleaseFileInfo>,
     /// Slop Build's source checks: possible secrets and vulnerable dependencies.
     source_checks: Option<serde_json::Value>,
-    /// Slop's own source check (source_scan.rs): licence, monetization notes, package count.
+    /// SLAPorSLOP's own source check (source_scan.rs): licence, monetization notes, package count.
     repo_scan: Option<serde_json::Value>,
     /// Advisories for its packages (dep_watch.rs), newest first.
     advisories: Vec<Advisory>,
-    /// Where it is in Slop's checks, file by file, with a summary for the maker.
+    /// Where it is in SLAPorSLOP's checks, file by file, with a summary for the maker.
     progress: crate::release_progress::ReleaseProgress,
 }
 
@@ -699,12 +699,12 @@ pub(crate) async fn create_release(
         return Err(ApiError::Conflict(
             if crate::frozen::by_staff(&state.db, app_id).await? {
                 format!(
-                    "Slop staff froze this app, so it can't take new releases: {reason}. Fix what \
-                     it says and Slop lifts the freeze once it's checked"
+                    "SLAPorSLOP staff froze this app, so it can't take new releases: {reason}. Fix what \
+                     it says and SLAPorSLOP lifts the freeze once it's checked"
                 )
             } else {
                 format!(
-                    "this app is frozen, so it can't take new releases: {reason}. Restore Slop's \
+                    "this app is frozen, so it can't take new releases: {reason}. Restore SLAPorSLOP's \
                      access to the repository, then press Check now on the app's Manage page"
                 )
             },
@@ -783,7 +783,7 @@ pub(crate) async fn create_release(
     load_release(state, id).await
 }
 
-/// What happened to a release, for its maker. `Withdrawn` is Slop's kill switch;
+/// What happened to a release, for its maker. `Withdrawn` is SLAPorSLOP's kill switch;
 /// `WithdrawnByMaker` is the maker taking one back before review (`withdraw_release`).
 pub enum ReleaseEvent<'a> {
     Received { source: &'a str },
@@ -820,10 +820,10 @@ pub async fn tell_maker(
         ReleaseEvent::Received { source } => (
             format!("{title} {version} was submitted"),
             format!(
-                "{}. Slop is checking it now. If you didn't publish this, withdraw it on the app's Manage page and secure your accounts and repository.",
+                "{}. SLAPorSLOP is checking it now. If you didn't publish this, withdraw it on the app's Manage page and secure your accounts and repository.",
                 match source {
                     "slop_build" => "Slop Build sent it from your repository",
-                    "github_release" => "Slop picked it up from a GitHub release",
+                    "github_release" => "SLAPorSLOP picked it up from a GitHub release",
                     _ => "It was submitted from your account",
                 }
             ),
@@ -1076,7 +1076,7 @@ fn github_release_file(url: &str) -> Option<(String, String, String)> {
 
 /// Where to download a release file from. For a GitHub release with a `GITHUB_TOKEN` configured,
 /// a short-lived signed link from GitHub's API, which also works for private repositories;
-/// otherwise the file's own URL. Slop never relays the file itself.
+/// otherwise the file's own URL. SLAPorSLOP never relays the file itself.
 pub async fn download_link(state: &AppState, url: &str) -> anyhow::Result<String> {
     let cfg = &state.config.releases;
     let (true, Some((repo, tag, name))) = (
@@ -1243,8 +1243,8 @@ async fn revocations(State(state): State<AppState>) -> ApiResult<Json<Signed>> {
 /// How long a file verification is valid.
 pub const VERIFICATION_LIFETIME: Duration = Duration::hours(24);
 
-/// "Does Slop know this file?" (docs/standard/file-verification.md), signed, for anyone: other
-/// stores showing "verified by Slop", or players checking a download. Only public apps are
+/// "Does SLAPorSLOP know this file?" (docs/standard/file-verification.md), signed, for anyone: other
+/// stores showing "verified by SLAPorSLOP", or players checking a download. Only public apps are
 /// named, as a viewer with no account would see them; revoked releases of public apps are named
 /// even once the app has left the store, since that's the answer that matters most. Private
 /// apps are never disclosed, so an unknown file and a private one look the same.
@@ -1385,7 +1385,7 @@ struct PublicKey {
     public_key: String,
 }
 
-/// Slop's current public signing key. Clients pin keys at build time; this is for transparency.
+/// SLAPorSLOP's current public signing key. Clients pin keys at build time; this is for transparency.
 async fn keys(State(state): State<AppState>) -> Json<Vec<PublicKey>> {
     Json(
         state
@@ -1675,7 +1675,7 @@ async fn fetch_release(
     Ok(commit_verified)
 }
 
-/// Records what Slop is doing with one file now, for its maker's progress view
+/// Records what SLAPorSLOP is doing with one file now, for its maker's progress view
 /// (release_progress.rs). Starting a file also renews the release's lease, so a release with
 /// several slow scans isn't taken for a dead fetch and started again.
 async fn file_stage(state: &AppState, id: Uuid, platform: &str, stage: &str) -> sqlx::Result<()> {
@@ -1705,7 +1705,7 @@ pub(crate) async fn github_get(state: &AppState, url: Url) -> reqwest::RequestBu
     github_request(state, &state.fetch_http, url, "application/vnd.github+json").await
 }
 
-/// A GitHub API GET on a chosen client, with the repository's GitHub App token or Slop's
+/// A GitHub API GET on a chosen client, with the repository's GitHub App token or SLAPorSLOP's
 /// shared token (github_app::auth_for).
 async fn github_request(
     state: &AppState,

@@ -328,7 +328,7 @@ async fn making_an_admin_token_checks_the_person_the_name_the_scope_and_the_days
             OffsetDateTime::parse(made["expires_at"].as_str().unwrap(), &Rfc3339).unwrap();
         assert_eq!((expires - created).whole_days(), days, "{body}");
         assert_eq!(made["admin"], "Ada Owner");
-        // Slop keeps only the hash.
+        // SLAPorSLOP keeps only the hash.
         let secret = made["token"].as_str().unwrap();
         assert!(secret.starts_with("slopadm_"));
         let stored: Vec<u8> =
@@ -3669,7 +3669,7 @@ async fn agents_fix_apps_and_profiles_through_mcp_tools(db: PgPool) {
     assert!(
         notice_titles(&app, maker_id)
             .await
-            .contains(&"Slop froze arena".to_string())
+            .contains(&"SLAPorSLOP froze arena".to_string())
     );
     assert!(
         tool_refused(&app, &review, "freeze_app", freeze)
@@ -3735,7 +3735,7 @@ async fn agents_fix_apps_and_profiles_through_mcp_tools(db: PgPool) {
             .contains("only an approved release")
     );
 
-    // An automatic freeze (Slop lost the repository): "unfreezing" checks again, and it stays.
+    // An automatic freeze (SLAPorSLOP lost the repository): "unfreezing" checks again, and it stays.
     sqlx::query("update apps set repo_url = $1, repo_checked_at = null, status = 'listed' where slug = 'game'")
         .bind(format!("{}octo/gone", app.fake_base))
         .execute(&app.db)
@@ -3808,7 +3808,7 @@ async fn agents_fix_apps_and_profiles_through_mcp_tools(db: PgPool) {
     assert!(
         notice_titles(&app, maker_id)
             .await
-            .contains(&"Slop changed your profile".to_string())
+            .contains(&"SLAPorSLOP changed your profile".to_string())
     );
     let team = json!({ "slug": "mias-crew", "name": "Mia's Crew", "reason": "Not affiliated with Valve." });
     assert!(
@@ -3831,7 +3831,7 @@ async fn agents_fix_apps_and_profiles_through_mcp_tools(db: PgPool) {
     assert!(
         notice_titles(&app, maker_id)
             .await
-            .contains(&"Slop changed your team's page".to_string())
+            .contains(&"SLAPorSLOP changed your team's page".to_string())
     );
 }
 

@@ -8,7 +8,7 @@ use sqlx::{PgPool, postgres::PgPoolOptions};
 use tracing_subscriber::EnvFilter;
 use uuid::Uuid;
 
-/// The Slop API server, plus the staff commands for reviewing releases.
+/// The SLAPorSLOP API server, plus the staff commands for reviewing releases.
 #[derive(Parser)]
 #[command(version)]
 struct Cli {
@@ -557,7 +557,7 @@ async fn serve() -> anyhow::Result<()> {
     let listener = tokio::net::TcpListener::bind(bind)
         .await
         .with_context(|| format!("binding {bind}"))?;
-    tracing::info!(%bind, "Slop API listening");
+    tracing::info!(%bind, "SLAPorSLOP API listening");
     // Send each response as soon as it's written: without this, small responses streamed in
     // pieces (the website's files) wait ~40 ms for the client's delayed acknowledgement.
     let listener = axum::serve::ListenerExt::tap_io(listener, |tcp| {

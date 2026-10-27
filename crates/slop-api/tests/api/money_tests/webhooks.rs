@@ -89,7 +89,7 @@ async fn the_webhook_handles_each_event_once_and_lets_stripe_retry_failures(db: 
     // Signed but not an event.
     assert_eq!(hook_raw(&app, "not json").await, StatusCode::BAD_REQUEST);
     assert_eq!(hook_raw(&app, "{}").await, StatusCode::BAD_REQUEST);
-    // Kinds Slop doesn't use are recorded and acknowledged.
+    // Kinds SLAPorSLOP doesn't use are recorded and acknowledged.
     let status = hook(
         &app,
         event(
@@ -256,7 +256,7 @@ async fn donation_checkout_webhooks_trust_only_the_session_slop_made(db: PgPool)
 }
 
 /// New: Stripe says when a Checkout page expires unpaid; the donation then stops showing as
-/// waiting (before, only the donor coming back to Slop marked it).
+/// waiting (before, only the donor coming back to SLAPorSLOP marked it).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn an_expired_checkout_marks_its_donation_expired(db: PgPool) {
     let fake = FakeStripe::start().await;
@@ -546,7 +546,7 @@ async fn refund_webhooks_record_partial_and_full_refunds_once(db: PgPool) {
         .await,
         0
     );
-    // A charge Slop doesn't know: nothing.
+    // A charge SLAPorSLOP doesn't know: nothing.
     let other = event(
         "evt_r3",
         "charge.refunded",
@@ -778,7 +778,7 @@ async fn account_webhooks_update_every_place_the_account_is_used(db: PgPool) {
     };
     for (n, status) in ["restricted", "pending", "active"].into_iter().enumerate() {
         fake.set_account(&acct, status);
-        // The event says nothing Slop uses but the account's ID.
+        // The event says nothing SLAPorSLOP uses but the account's ID.
         let res = hook(
             &app,
             event(
@@ -1080,7 +1080,7 @@ async fn job_checkouts_are_made_again_when_expired_and_never_paid_twice(db: PgPo
 }
 
 /// b29: Stripe sends every event on a connected account, including the maker's own sales that
-/// have nothing to do with Slop. Those are acknowledged, not failed (Stripe would retry them for
+/// have nothing to do with SLAPorSLOP. Those are acknowledged, not failed (Stripe would retry them for
 /// days and then switch the endpoint off).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn a_makers_own_stripe_sales_are_acknowledged_and_ignored(db: PgPool) {
@@ -1112,7 +1112,7 @@ async fn a_makers_own_stripe_sales_are_acknowledged_and_ignored(db: PgPool) {
         1
     );
     assert_eq!(count(&app, "select count(*) from payments").await, 0);
-    // One naming a job payment Slop never made: the same.
+    // One naming a job payment SLAPorSLOP never made: the same.
     fake.add_session(
         "cs_odd",
         json!({ "id": "cs_odd", "status": "complete", "payment_status": "paid", "amount_total": 2500,

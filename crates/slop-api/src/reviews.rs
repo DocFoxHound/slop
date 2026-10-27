@@ -181,7 +181,7 @@ async fn write(
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     if catalog::is_private(&state.db, app_id).await? {
-        return Err(ApiError::Conflict("Private Slop has no reviews".into()));
+        return Err(ApiError::Conflict("Private apps have no reviews".into()));
     }
     let body = b.body.trim();
     if body.is_empty() || body.chars().count() > 4000 {

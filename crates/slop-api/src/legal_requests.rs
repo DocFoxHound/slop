@@ -5,8 +5,8 @@
 //! Staff with sensitive rights log each request as it arrives: who sent it, what kind of order,
 //! what it asks, the deadline (EU production orders: 10 days, emergencies 8 hours, terrorist
 //! content removal orders 1 hour). Admins are alerted as a deadline nears (ops.rs). When it's
-//! answered, the log keeps what Slop gave, or why not, and whether the person was told; they are,
-//! unless a law or the order forbids it. Slop can only give what it has: account details, the
+//! answered, the log keeps what SLAPorSLOP gave, or why not, and whether the person was told; they are,
+//! unless a law or the order forbids it. SLAPorSLOP can only give what it has: account details, the
 //! metadata it keeps, reported messages. Chat is end-to-end encrypted (SECURITY §8.5).
 //!
 //! The transparency report (`/v1/transparency/{year}`, public) counts requests by country, kind
@@ -364,7 +364,7 @@ async fn removal_order(
         _ => return Err(ApiError::invalid("subject_kind", "app, app_review, profile or team")),
     };
     let (subject_id, owner, label, snapshot) =
-        found.ok_or_else(|| ApiError::invalid("subject", "nothing on Slop by that name"))?;
+        found.ok_or_else(|| ApiError::invalid("subject", "nothing on SLAPorSLOP by that name"))?;
     let action = match b.subject_kind.as_str() {
         "app" => "delist_app",
         "app_review" => "hide_review",

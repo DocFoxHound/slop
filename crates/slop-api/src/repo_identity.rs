@@ -4,7 +4,7 @@
 //! An app is linked to a repository by its URL, but a URL is a name: if the maker renames their
 //! account or deletes the repository, someone else can register the same `owner/repo` and push
 //! releases from it ("repojacking"). GitHub's numeric repository and owner IDs never move to a new
-//! repository, so Slop records them when the app is linked (or the repository is moved, or by the
+//! repository, so SLAPorSLOP records them when the app is linked (or the repository is moved, or by the
 //! background fill below for apps linked before) and from then on accepts releases only when:
 //! - Slop Build's token names the same repository ID (slop_build.rs), and
 //! - every file's build attestation names it (releases.rs `find_attestation`, through

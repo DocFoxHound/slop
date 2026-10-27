@@ -1,7 +1,7 @@
 [package]
 name = "slop-verify"
 version = "0.1.0"
-description = "Checks Slop's signed documents (the Slop open standard, docs/standard/) without trusting a Slop server"
+description = "Checks SLAPorSLOP's signed documents (the SLAPorSLOP open standard, docs/standard/) without trusting a SLAPorSLOP server"
 edition.workspace = true
 publish.workspace = true
 license.workspace = true

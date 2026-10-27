@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The Slop API: one modular application (docs/ARCHITECTURE.md §4).
+//! The SLAPorSLOP API: one modular application (docs/ARCHITECTURE.md §4).
 
 pub mod abuse;
 pub mod account;
@@ -126,7 +126,7 @@ pub struct AppState {
             std::collections::HashMap<String, (std::time::Instant, serde_json::Value)>,
         >,
     >,
-    /// Slop's GitHub App installation tokens.
+    /// SLAPorSLOP's GitHub App installation tokens.
     pub github_app_tokens: Arc<github_app::TokenCache>,
     /// Wakes chat long-polls (chat.rs).
     pub chat_hub: chat::Hub,
@@ -166,7 +166,7 @@ impl AppState {
             .https_only(!config.releases.allow_http_downloads);
         // Makers choose these addresses: every connection, redirects included, goes only to
         // public addresses, checked when they're resolved, so a name that later points inside
-        // (DNS rebinding) or a redirect to one can't reach Slop's own network (security review,
+        // (DNS rebinding) or a redirect to one can't reach SLAPorSLOP's own network (security review,
         // 2026-10-22). Tests serve files from this machine, so not there.
         if !config.releases.allow_http_downloads {
             fetch_http = fetch_http.dns_resolver(Arc::new(PublicOnly)).redirect(
@@ -282,7 +282,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(repo_tokens::routes())
         .merge(chat::routes())
         .merge(interested::routes())
-        // Everything except the routes merged below (uploads, webhooks, legal documents, Slop
+        // Everything except the routes merged below (uploads, webhooks, legal documents, SLAPorSLOP
         // Build submissions): small bodies, quick answers.
         .layer(RequestBodyLimitLayer::new(64 * 1024))
         .layer(TimeoutLayer::with_status_code(
@@ -435,7 +435,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
             "default-src 'none'; frame-ancestors 'none'",
         ))
         .layer(header_layer(header::CACHE_CONTROL, "no-store"))
-        // Nothing on Slop needs the camera, microphone, location, USB or payment APIs.
+        // Nothing on SLAPorSLOP needs the camera, microphone, location, USB or payment APIs.
         .layer(header_layer(
             HeaderName::from_static("permissions-policy"),
             "camera=(), microphone=(), geolocation=(), payment=(), usb=(), serial=(), bluetooth=(), interest-cohort=()",
@@ -461,7 +461,7 @@ fn header_layer(name: HeaderName, value: &'static str) -> SetResponseHeaderLayer
 /// The commit this server was built from (`SLOP_COMMIT` at build time, deploy/update.sh).
 const COMMIT: Option<&str> = option_env!("SLOP_COMMIT");
 
-/// Where to get this Slop's source code, at the version that's running (the AGPL's section 13).
+/// Where to get this SLAPorSLOP's source code, at the version that's running (the AGPL's section 13).
 async fn source(axum::extract::State(state): axum::extract::State<AppState>) -> Json<Value> {
     let url = state.config.source_url.as_deref();
     let commit = COMMIT.filter(|c| c.len() == 40 && c.bytes().all(|b| b.is_ascii_hexdigit()));
@@ -475,7 +475,7 @@ async fn source(axum::extract::State(state): axum::extract::State<AppState>) -> 
     }))
 }
 
-/// Slop's published contact address (`SLOP_CONTACT_EMAIL`) for the contact page; null when unset.
+/// SLAPorSLOP's published contact address (`SLOP_CONTACT_EMAIL`) for the contact page; null when unset.
 async fn contact(axum::extract::State(state): axum::extract::State<AppState>) -> Json<Value> {
     Json(json!({ "email": state.config.contact_email }))
 }

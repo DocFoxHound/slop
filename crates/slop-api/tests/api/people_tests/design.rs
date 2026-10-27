@@ -135,10 +135,10 @@ async fn a_page_design_is_reviewed_with_the_portfolio_and_shown_once_approved(db
     assert_eq!(
         warnings,
         [
-            ".slop/page/index.html line 1: <h1> became <h2>: the page's one <h1> is your name, in Slop's header",
+            ".slop/page/index.html line 1: <h1> became <h2>: the page's one <h1> is your name, in SLAPorSLOP's header",
             ".slop/page/index.html line 2: <script> was removed with what's inside: pages can't run scripts",
             ".slop/page/index.html line 3: <img onerror> was removed: pages can't run scripts",
-            ".slop/page/style.css line 2: \"position: fixed\" was removed: position can be static, relative or absolute: fixed and sticky could cover Slop's page",
+            ".slop/page/style.css line 2: \"position: fixed\" was removed: position can be static, relative or absolute: fixed and sticky could cover SLAPorSLOP's page",
         ]
     );
     assert_eq!(

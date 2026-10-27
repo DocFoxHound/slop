@@ -2,7 +2,7 @@
 //! Slop Pulse (DESIGN §11, METRICS §2): live player counts and playtime, from games that ping.
 //!
 //! Optional for makers. A game reads `SLOP_PULSE_TOKEN` and `SLOP_PULSE_URL` from its
-//! environment (set by the Slop desktop app at launch) and posts the token to `…/start`, then to
+//! environment (set by the SLAPorSLOP desktop app at launch) and posts the token to `…/start`, then to
 //! `…/heartbeat` about once a minute, and to `…/end` when it quits. The token is the only thing
 //! sent (PRIV-8). Each account counts once per game however many copies it runs.
 
@@ -140,7 +140,7 @@ struct TokenBody {
 fn unknown() -> ApiError {
     ApiError::invalid(
         "token",
-        "unknown or expired Pulse token; relaunch the game from Slop",
+        "unknown or expired Pulse token; relaunch the game from SLAPorSLOP",
     )
 }
 

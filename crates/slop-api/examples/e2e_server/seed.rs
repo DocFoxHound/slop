@@ -325,7 +325,7 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.ids.insert("maker2", json!(maker2.id));
 
     // Pia Picture: a linked GitHub sign-in, whose picture the fake GitHub serves, and a linked
-    // Google one with no picture yet (Slop gets it at the next sign-in: "Refresh picture" goes to
+    // Google one with no picture yet (SLAPorSLOP gets it at the next sign-in: "Refresh picture" goes to
     // the stand-in Google, main.rs), for the profile picture tests (accounts-picture.e2e.ts).
     // Nobody else has a linked sign-in but Dee Designer (her GitHub, for her People portfolio).
     let pictured = ctx.user("Pia Picture", "US").await?;
@@ -460,7 +460,7 @@ async fn listed(
             &slug,
             &title,
             &format!("{title}: a game for the browser tests."),
-            &format!("# {title}\n\nMade for Slop's browser tests."),
+            &format!("# {title}\n\nMade for SLAPorSLOP's browser tests."),
             &maker,
             &format!("https://github.com/e2e/{slug}"),
         ],
@@ -1039,7 +1039,7 @@ async fn new_app(
             "slug": slug,
             "title": title,
             "summary": summary,
-            "description_md": format!("# {title}\n\n{summary}\n\nMade for Slop's browser tests."),
+            "description_md": format!("# {title}\n\n{summary}\n\nMade for SLAPorSLOP's browser tests."),
             "kind": "game",
             "stage": stage,
             "repo_url": format!("https://github.com/e2e/{slug}"),
@@ -1111,7 +1111,7 @@ async fn donations_on(ctx: &Ctx, maker: &Who, slug: &str, servers: bool) -> anyh
     Ok(())
 }
 
-/// Pays a Checkout link Slop gave (the fake Stripe's page), as the payer would.
+/// Pays a Checkout link SLAPorSLOP gave (the fake Stripe's page), as the payer would.
 async fn pay(ctx: &Ctx, answer: &Value) -> anyhow::Result<()> {
     let url = answer["url"].as_str().context("no checkout link")?;
     let session = url.rsplit('/').next().context("session id")?;
@@ -1119,7 +1119,7 @@ async fn pay(ctx: &Ctx, answer: &Value) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// A player who has played `slug` through Slop (needed to vote, review and report bugs).
+/// A player who has played `slug` through SLAPorSLOP (needed to vote, review and report bugs).
 async fn launch(ctx: &Ctx, who: &Who, slug: &str) -> anyhow::Result<()> {
     ctx.call(
         Some(who),
@@ -1538,7 +1538,7 @@ async fn builder_account(ctx: &Ctx, who: &Who) -> anyhow::Result<()> {
 // ---------------------------------------------------------------------------------------------
 // People and social
 
-/// A user's Slop desktop app with chat, signed in through the desktop sign-in flow, as the API
+/// A user's SLAPorSLOP desktop app with chat, signed in through the desktop sign-in flow, as the API
 /// tests make them (tests/api/main.rs `chat_app`). Its keys live only in memory and a temporary
 /// folder: nobody can read the seeded messages later, as with any device that's gone.
 async fn chat_app(
@@ -1557,7 +1557,7 @@ async fn chat_app(
                 "code_challenge": slop_api::tokens::pkce_challenge(&verifier),
                 "redirect_port": 49152,
                 "state": "state-state-state-1",
-                "device_name": "Slop for Linux",
+                "device_name": "SLAPorSLOP for Linux",
             })),
         )
         .await?;
@@ -1741,7 +1741,7 @@ async fn social(
     ids.insert("directChat", json!(direct));
     ids.insert("teamChat", json!(team));
 
-    // A few more unread notifications, as Slop's own jobs would send them (no route makes
+    // A few more unread notifications, as SLAPorSLOP's own jobs would send them (no route makes
     // these).
     let notices: [(&Who, &str, &str, &str, &str); 7] = [
         (
@@ -1928,7 +1928,7 @@ async fn admin_queues(
     );
     ids.insert("staffAction", asked["pending_action"].clone());
 
-    // What Slop's own checks would have found (no route makes these).
+    // What SLAPorSLOP's own checks would have found (no route makes these).
     ctx.sql(
         "insert into ops_alerts (key, title, detail, link) values ('disk-e2e', 'The disk is 91% full', 'Old release files could be cleaned up.', '/admin')",
         &[],

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Known-bad links (SECURITY §11): once a day Slop downloads public lists of malware and
+//! Known-bad links (SECURITY §11): once a day SLAPorSLOP downloads public lists of malware and
 //! phishing addresses (URLhaus by default, `SLOP_BAD_LINK_FEEDS`), and the hourly abuse checks
 //! (abuse.rs) look for them in store pages and creative profiles. A match is an abuse signal for
 //! a person to look at; nothing is removed automatically.
@@ -48,7 +48,7 @@ const SHARED_HOSTS: &[&str] = &[
     "archive.org",
 ];
 
-/// An address as the lists and Slop compare them: lower-case scheme and site, no fragment, no
+/// An address as the lists and SLAPorSLOP compare them: lower-case scheme and site, no fragment, no
 /// trailing slash, `www.` dropped. Returns (address, site).
 pub fn normalize(raw: &str) -> Option<(String, String)> {
     let mut url = Url::parse(raw.trim()).ok()?;

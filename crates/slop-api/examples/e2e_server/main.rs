@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! A throwaway Slop for the browser tests (web/e2e). Never for real use.
+//! A throwaway SLAPorSLOP for the browser tests (web/e2e). Never for real use.
 //!
 //! Makes a new database (`slop_e2e_<random>_sim`) on the test Postgres, migrates it, starts a
 //! fake GitHub (release files, repository and account pictures, and a stand-in Google sign-in)
@@ -100,7 +100,7 @@ fn icon_png(size: u32, seed: &str) -> Vec<u8> {
 /// with `badicon` names one that isn't square.
 ///
 /// `dee-design` is a People portfolio with its own page design (people/design.rs), for
-/// people-design.e2e.ts: three works, and `.slop/page/` with things Slop removes (a script, a
+/// people-design.e2e.ts: three works, and `.slop/page/` with things SLAPorSLOP removes (a script, a
 /// `<slop-services>`, fixed positioning) and a width query.
 async fn raw_file(Path(path): Path<String>) -> axum::response::Response {
     use axum::response::IntoResponse;

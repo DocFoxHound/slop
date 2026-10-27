@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Ratings: 👍 Not Slop / 👎 Slop (DESIGN §7, METRICS §1.2, §2).
+//! Ratings: 👍 Slaps / 👎 Slop (DESIGN §7, METRICS §1.2, §2).
 //!
-//! - Only players who launched the app through Slop can vote (that's `user_app_usage`), and only
+//! - Only players who launched the app through SLAPorSLOP can vote (that's `user_app_usage`), and only
 //!   once it's playable: in Beta or released (owner decision 2026-10-25; Coming soon has nothing
 //!   to play). One vote per account, changeable or withdrawable at any time.
 //! - Each vote records the app's stage when it was cast, so a rating given in Beta says so.
 //! - Every action is a `vote_events` row; `votes` holds the current vote, updated in the same
 //!   transaction.
 //! - Each vote is **weighted** by the voter's use at the time: playtime from Slop Pulse when the
-//!   app reports it, otherwise the days they launched it. Store pages show the weighted % Not Slop
+//!   app reports it, otherwise the days they launched it. Store pages show the weighted % Slaps
 //!   with the unweighted one beside it, and both over time.
 
 use axum::{
@@ -59,12 +59,12 @@ pub fn vote_weight(playtime_seconds: i64, days_launched: i32) -> f32 {
     w.clamp(0.1, 1.0) as f32
 }
 
-/// The words for a % Not Slop (DESIGN §7).
+/// The words for a % Slaps (DESIGN §7).
 pub fn label(percent: i32) -> &'static str {
     match percent {
-        95.. => "Overwhelmingly Not Slop",
-        80..=94 => "Very Not Slop",
-        70..=79 => "Mostly Not Slop",
+        95.. => "Overwhelmingly Slaps",
+        80..=94 => "Really Slaps",
+        70..=79 => "Mostly Slaps",
         40..=69 => "Mixed",
         20..=39 => "Mostly Slop",
         _ => "Overwhelmingly Slop",
@@ -83,7 +83,7 @@ pub struct Tally {
     pub slop: i64,
     pub not_slop_weight: f64,
     pub slop_weight: f64,
-    /// Unweighted % Not Slop; null below MIN_VOTES.
+    /// Unweighted % Slaps; null below MIN_VOTES.
     pub percent: Option<i32>,
     /// Weighted by playtime (the one shown first); null below MIN_VOTES.
     pub percent_weighted: Option<i32>,
@@ -140,7 +140,7 @@ pub struct MyVote {
     pub reason: Option<&'static str>,
     /// They made it: no vote buttons for them anywhere (makers can't vote on their own apps).
     pub maker: bool,
-    /// They launched it through Slop (what voting needs, besides the stage).
+    /// They launched it through SLAPorSLOP (what voting needs, besides the stage).
     pub played: bool,
     /// How much their vote counts now.
     pub weight: f32,
@@ -463,7 +463,7 @@ async fn my_vote(
     } else if !open {
         Some(NOT_OPEN)
     } else if usage.is_none() {
-        Some("Launch it from the Slop app first: only players can vote.")
+        Some("Launch it from the SLAPorSLOP app first: only players can vote.")
     } else {
         None
     };
@@ -567,7 +567,7 @@ async fn vote(
         ));
     }
     if catalog::is_private(&state.db, app_id).await? {
-        return Err(ApiError::Conflict("Private Slop has no voting".into()));
+        return Err(ApiError::Conflict("Private apps have no voting".into()));
     }
     let (_, open) = stage(&state.db, app_id).await?;
     let mine = my_vote(&state, &user, app_id, open, false).await?;
@@ -600,9 +600,9 @@ mod tests {
 
     #[test]
     fn labels_and_minimum() {
-        assert_eq!(label(100), "Overwhelmingly Not Slop");
-        assert_eq!(label(94), "Very Not Slop");
-        assert_eq!(label(70), "Mostly Not Slop");
+        assert_eq!(label(100), "Overwhelmingly Slaps");
+        assert_eq!(label(94), "Really Slaps");
+        assert_eq!(label(70), "Mostly Slaps");
         assert_eq!(label(40), "Mixed");
         assert_eq!(label(39), "Mostly Slop");
         assert_eq!(label(0), "Overwhelmingly Slop");

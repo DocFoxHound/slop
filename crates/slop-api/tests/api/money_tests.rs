@@ -19,7 +19,7 @@ use std::{
     sync::{Arc, Mutex},
 };
 
-/// One call Slop made to the fake Stripe.
+/// One call SLAPorSLOP made to the fake Stripe.
 #[derive(Clone, Debug)]
 struct Call {
     method: String,
@@ -261,7 +261,7 @@ fn stripe_answer(
                 "application_fee": form.get("payment_intent_data[application_fee_amount]").map(|f| f.parse::<i64>().unwrap()),
                 "metadata": metadata,
                 "account": account,
-                // What Slop sent, for tests to check.
+                // What SLAPorSLOP sent, for tests to check.
                 "form": form,
             });
             s.sessions.insert(id, session.clone());
@@ -409,7 +409,7 @@ fn with_email(c: &mut Config) {
     });
 }
 
-/// A signed Stripe event, posted to the webhook. Returns the status Slop answered.
+/// A signed Stripe event, posted to the webhook. Returns the status SLAPorSLOP answered.
 async fn hook(app: &TestApp, event: Value) -> StatusCode {
     let (body, sig) = stripe_signed(&event, WEBHOOK_SECRET);
     app.router
@@ -429,7 +429,7 @@ async fn hook(app: &TestApp, event: Value) -> StatusCode {
         .status()
 }
 
-/// A Stripe event of this type about `object`, on a connected account (or Slop's own).
+/// A Stripe event of this type about `object`, on a connected account (or SLAPorSLOP's own).
 fn event(id: &str, kind: &str, account: Option<&str>, object: Value) -> Value {
     json!({ "id": id, "type": kind, "account": account, "data": { "object": object } })
 }

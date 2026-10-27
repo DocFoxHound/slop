@@ -11,7 +11,7 @@
 //! - **Conversations are recorded** and opened by the creative. The client may ask for one at
 //!   any time; the creative decides whether and when (LEGAL-GUIDANCE HUM-17).
 //! - The steps, notes, documents and conversations are the contract record (HUM-16), downloadable
-//!   by both sides. Slop never decides disputes; mediation (mediation.rs) only suggests.
+//!   by both sides. SLAPorSLOP never decides disputes; mediation (mediation.rs) only suggests.
 
 use axum::{
     Json, Router,
@@ -37,7 +37,7 @@ use crate::{
 
 /// The Service Agreement template (versioned: change the version with the text).
 pub const TEMPLATE: &str = include_str!("service_agreement.md");
-pub const TEMPLATE_VERSION: &str = "2026-10-23";
+pub const TEMPLATE_VERSION: &str = "2026-10-27";
 /// The client has this long after delivery to accept it or ask for a change (DESIGN §15.2).
 pub const COMPLETION_WINDOW: Duration = Duration::days(7);
 const MAX_OPEN_REQUESTS: i64 = 3;
@@ -48,12 +48,12 @@ pub const EXACT_WORDING: &str = "The creative will deliver exactly what the agre
      Anything I don't write down isn't part of the work, and any change after accepting is new work with its own price and date.";
 /// Shown above every job conversation and acknowledged before writing (DESIGN §15.5).
 pub const RECORDING_NOTICE: &str = "This conversation is recorded, so you both have proof of what was said. Download your copy: \
-     Slop keeps the text only while the conversation is open and for 30 days after it closes. After that Slop keeps only a \
-     fingerprint of each message, which proves a downloaded copy hasn't been changed. Slop staff see the conversation only if \
+     SLAPorSLOP keeps the text only while the conversation is open and for 30 days after it closes. After that SLAPorSLOP keeps only a \
+     fingerprint of each message, which proves a downloaded copy hasn't been changed. SLAPorSLOP staff see the conversation only if \
      one of you submits your copy for a problem or a review dispute.";
 /// The longest conversation copy kept as evidence (job_evidence.transcript).
 const MAX_EVIDENCE_CHARS: usize = 400_000;
-/// How long Slop keeps a closed conversation's text for the two sides to download.
+/// How long SLAPorSLOP keeps a closed conversation's text for the two sides to download.
 pub const CONVERSATION_KEPT: Duration = Duration::days(30);
 
 /// Submitting a conversation copy can be larger than other requests (lib.rs gives it 2 MB).
@@ -315,7 +315,7 @@ pub fn agreement(o: &Offer, p: &Parties) -> String {
     };
     let credit = if o.credit {
         format!(
-            "The client agrees that Slop shows \"{} by {}\" on the project's page.",
+            "The client agrees that SLAPorSLOP shows \"{} by {}\" on the project's page.",
             super::credit_role(p.skill),
             p.creative_name
         )
@@ -557,7 +557,7 @@ struct PaymentView {
 #[derive(Serialize, sqlx::FromRow)]
 struct EventView {
     kind: String,
-    /// Null: Slop did it.
+    /// Null: SLAPorSLOP did it.
     actor: Option<String>,
     note: Option<String>,
     links: Vec<String>,
@@ -570,7 +570,7 @@ struct MessageView {
     id: Uuid,
     author: String,
     mine: bool,
-    /// Null once Slop has deleted it (30 days after the conversation closed).
+    /// Null once SLAPorSLOP has deleted it (30 days after the conversation closed).
     body: Option<String>,
     sha256: String,
     #[serde(with = "time::serde::rfc3339")]
@@ -620,7 +620,7 @@ struct Conversation {
     #[serde(with = "time::serde::rfc3339::option")]
     requested_at: Option<OffsetDateTime>,
     request_note: Option<String>,
-    /// When Slop deletes the text (a closed conversation), so both sides know to download it.
+    /// When SLAPorSLOP deletes the text (a closed conversation), so both sides know to download it.
     #[serde(with = "time::serde::rfc3339::option")]
     text_deleted_after: Option<OffsetDateTime>,
     /// The viewer acknowledged that it's recorded.
@@ -685,7 +685,7 @@ pub struct JobView {
     payments: Vec<PaymentView>,
     paid_minor: i64,
     refunded_minor: i64,
-    /// For the creative: about what they'll receive after Slop's fee (Stripe's card fee is extra).
+    /// For the creative: about what they'll receive after SLAPorSLOP's fee (Stripe's card fee is extra).
     creative_receives_minor: Option<i64>,
     withdrawal: Option<Withdrawal>,
     /// Before acceptance: the consumer cancellation period that will apply, in days.
@@ -1141,7 +1141,7 @@ fn step_text(kind: &str) -> Option<(&'static str, &'static str)> {
     })
 }
 
-/// Tells the side(s) that didn't take a step about it. Slop's own steps (payments arriving,
+/// Tells the side(s) that didn't take a step about it. SLAPorSLOP's own steps (payments arriving,
 /// automatic completion) go to both.
 async fn notify_step(
     conn: &mut sqlx::PgConnection,
@@ -1802,7 +1802,7 @@ async fn pay(
                 amount_minor: amount.into(),
                 currency,
                 description: format!(
-                    "{} by @{} — {label} (People job via Slop)",
+                    "{} by @{} — {label} (People job via SLAPorSLOP)",
                     title, j.creative_handle
                 ),
                 account,
@@ -2799,7 +2799,7 @@ async fn post_message(
 }
 
 /// A message's fingerprint: SHA-256 of the previous fingerprint, the message ID, its author and
-/// its text. It proves a copy is unchanged without Slop keeping the text.
+/// its text. It proves a copy is unchanged without SLAPorSLOP keeping the text.
 pub fn message_fingerprint(prev: Option<&str>, id: Uuid, author: Uuid, body: &str) -> String {
     let mut h = Sha256::new();
     h.update(prev.unwrap_or("").as_bytes());
@@ -2845,7 +2845,8 @@ async fn conversation_copy(
     .await?;
     if rows.iter().any(|r| r.4.is_none()) {
         return Err(ApiError::Conflict(
-            "Slop has already deleted this conversation's text; use the copy you downloaded".into(),
+            "SLAPorSLOP has already deleted this conversation's text; use the copy you downloaded"
+                .into(),
         ));
     }
     let copy = ConversationCopy {
@@ -2876,8 +2877,8 @@ async fn conversation_copy(
     ))
 }
 
-/// Checks a copy against Slop's fingerprints: (matching messages, messages that don't match or
-/// aren't Slop's). Order and gaps matter: each fingerprint includes the one before.
+/// Checks a copy against SLAPorSLOP's fingerprints: (matching messages, messages that don't match or
+/// aren't SLAPorSLOP's). Order and gaps matter: each fingerprint includes the one before.
 pub async fn verify_copy(
     db: &sqlx::PgPool,
     job: Uuid,
@@ -2970,7 +2971,7 @@ async fn submit_evidence(
         Some(user.id),
         "conversation_submitted",
         Some(&format!(
-            "{good} messages match Slop's fingerprints, {bad} don't"
+            "{good} messages match SLAPorSLOP's fingerprints, {bad} don't"
         )),
         &[],
         None,
@@ -3061,7 +3062,7 @@ pub(crate) async fn record_text(db: &sqlx::PgPool, j: &JobRow) -> ApiResult<Stri
     for (at, who, kind, note, links) in events {
         out.push_str(&format!(
             "- {at} · {} · {kind}{}{}\n",
-            who.unwrap_or_else(|| "Slop".into()),
+            who.unwrap_or_else(|| "SLAPorSLOP".into()),
             note.map(|n| format!(": {n}")).unwrap_or_default(),
             if links.is_empty() {
                 String::new()
@@ -3083,7 +3084,7 @@ pub(crate) async fn record_text(db: &sqlx::PgPool, j: &JobRow) -> ApiResult<Stri
             match body {
                 Some(b) => out.push_str(&format!("**{who}** · {at}\n\n{b}\n\n")),
                 None => out.push_str(&format!(
-                    "**{who}** · {at} · deleted from Slop; fingerprint `{sha}`\n\n"
+                    "**{who}** · {at} · deleted from SLAPorSLOP; fingerprint `{sha}`\n\n"
                 )),
             }
         }
@@ -3522,7 +3523,7 @@ mod tests {
         assert!(text.contains("$60.01 when you accept, $60 when you accept the delivered preview"));
         assert!(text.contains("within 14 days"));
         assert!(text.contains("job conversations"));
-        assert!(text.contains("Slop isn't a party"));
+        assert!(text.contains("SLAPorSLOP isn't a party"));
         assert!(text.contains("\"Art by Vera\""));
         let mut o = offer();
         o.rights = "licence".into();

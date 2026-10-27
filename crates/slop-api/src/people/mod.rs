@@ -6,9 +6,9 @@
 //! - `design.rs`: the creative's own page design from the same repository, reviewed with it.
 //! - `jobs.rs`: request → offer → accept & pay → deliver → complete, with the Service Agreement.
 //! - `stripe.rs`: Stripe Connect. Every payment is a direct charge on the creative's own account;
-//!   Slop only takes its 5% fee and never holds the money (LEGAL-GUIDANCE §1 rule 1).
+//!   SLAPorSLOP only takes its 5% fee and never holds the money (LEGAL-GUIDANCE §1 rule 1).
 //!
-//! Slop never sets prices, assigns work, or ranks creatives by default on performance (HUM-9,
+//! SLAPorSLOP never sets prices, assigns work, or ranks creatives by default on performance (HUM-9,
 //! HUM-10): the directory's default order is a daily shuffle.
 
 pub mod design;
@@ -174,7 +174,7 @@ pub fn skill(slug: &str) -> Skill {
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(deny_unknown_fields)]
 pub struct Service {
-    /// Assigned by Slop when empty.
+    /// Assigned by SLAPorSLOP when empty.
     #[serde(default)]
     pub id: String,
     pub name: String,
@@ -400,7 +400,7 @@ pub struct PageStatus {
     /// When the portfolio waiting for review was read.
     #[serde(with = "time::serde::rfc3339::option")]
     pub waiting_since: Option<OffsetDateTime>,
-    /// What went wrong the last time Slop read the portfolio, if anything.
+    /// What went wrong the last time SLAPorSLOP read the portfolio, if anything.
     pub problem: Option<String>,
     /// hidden: because the account is suspended.
     pub suspended: bool,

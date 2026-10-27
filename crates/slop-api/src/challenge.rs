@@ -2,7 +2,7 @@
 //! Proof-of-work checks (PAYMENTS §9: card testing).
 //!
 //! After a few unfinished checkouts, starting another donation needs the browser to find a
-//! number that, hashed with a random prefix from Slop, gives a SHA-256 starting with enough zero
+//! number that, hashed with a random prefix from SLAPorSLOP, gives a SHA-256 starting with enough zero
 //! bits. That takes a person's browser a second or two, but makes trying hundreds of stolen
 //! cards slow and costly. Unlike a CAPTCHA service, nothing about the person goes to a third
 //! party. Each challenge is for one account, works once, and expires after 10 minutes.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Slop's legal documents, their versions, and who accepted which (LEGAL §11, LEGAL-GUIDANCE §14
+//! SLAPorSLOP's legal documents, their versions, and who accepted which (LEGAL §11, LEGAL-GUIDANCE §14
 //! and §15).
 //!
 //! The documents live in `crates/slop-api/legal/*.md`, each with a version and a summary of what

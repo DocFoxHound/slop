@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Save sync (plan phase 15): an app's save folder follows the player between their computers,
-//! end-to-end encrypted, so Slop's server stores only ciphertext (slop-api `save_sync.rs`).
+//! end-to-end encrypted, so SLAPorSLOP's server stores only ciphertext (slop-api `save_sync.rs`).
 //!
 //! - **The key** comes from the player's chat backup key (chat/mod.rs `save_sync_key`), which
 //!   their approved devices share and their recovery code restores. Without it, nothing syncs.
@@ -31,7 +31,7 @@ use crate::{
     api::{ApiClient, RawBody},
 };
 
-/// Largest save Slop syncs (packed and encrypted).
+/// Largest save SLAPorSLOP syncs (packed and encrypted).
 pub const MAX_BYTES: usize = 20 * 1024 * 1024;
 const MAGIC: &[u8] = b"SLOPSV1";
 
@@ -198,7 +198,7 @@ pub fn open(key: &[u8; 32], slug: &str, sealed: &[u8]) -> Result<Vec<u8>> {
     let rest = sealed
         .strip_prefix(MAGIC)
         .filter(|r| r.len() > 24)
-        .ok_or_else(|| Error::Verify("that isn't a Slop save".into()))?;
+        .ok_or_else(|| Error::Verify("that isn't a SLAPorSLOP save".into()))?;
     let (nonce, body) = rest.split_at(24);
     let nonce: [u8; 24] = nonce.try_into().expect("24 bytes");
     XChaCha20Poly1305::new(key.into())
@@ -257,7 +257,7 @@ pub async fn pull(
     }
     if res.status != 200 {
         return Err(Error::Install(format!(
-            "Slop answered {} for the synced save",
+            "SLAPorSLOP answered {} for the synced save",
             res.status
         )));
     }
@@ -354,7 +354,7 @@ pub async fn push(
             other_device: String::new(),
         }),
         s => Err(Error::Install(format!(
-            "Slop answered {s} when sending the save"
+            "SLAPorSLOP answered {s} when sending the save"
         ))),
     }
 }

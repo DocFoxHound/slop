@@ -50,7 +50,7 @@ async fn serve_fake(router: Router) -> String {
     format!("http://{addr}/")
 }
 
-/// Private Slop on octo/<slug>, made through the API, with an approved release when `approved`.
+/// A private app on octo/<slug>, made through the API, with an approved release when `approved`.
 async fn private_app(app: &TestApp, owner: Uuid, cookie: &str, slug: &str, approved: bool) {
     let mut body = new_app(slug);
     body["visibility"] = json!("private");
@@ -92,9 +92,9 @@ async fn team(app: &TestApp, slug: &str, kind: &str, join_policy: &str, members:
 }
 
 // ---------------------------------------------------------------------------------------------
-// Private Slop sharing (private.rs, frozen.rs)
+// Private app sharing (private.rs, frozen.rs)
 
-/// The share list shows people and teams by name, to the owner only, and only for Private Slop.
+/// The share list shows people and teams by name, to the owner only, and only for private apps.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn the_owner_sees_who_private_slop_is_shared_with_by_name(db: PgPool) {
     let app = test_app(db).await;
@@ -192,7 +192,7 @@ async fn the_owner_sees_who_private_slop_is_shared_with_by_name(db: PgPool) {
     );
 }
 
-/// Sharing refuses yourself, accounts that can't use Slop, links that aren't profiles, official
+/// Sharing refuses yourself, accounts that can't use SLAPorSLOP, links that aren't profiles, official
 /// teams, open teams and teams the owner isn't in; a repeat share doesn't tell them twice.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn sharing_private_slop_refuses_what_it_cannot_share_with(db: PgPool) {
@@ -223,12 +223,15 @@ async fn sharing_private_slop_refuses_what_it_cannot_share_with(db: PgPool) {
         (json!({ "user": owner_id.to_string() }), "already yours"),
         (
             json!({ "user": Uuid::now_v7().to_string() }),
-            "no Slop account",
+            "no SLAPorSLOP account",
         ),
-        (json!({ "user": closed_id.to_string() }), "no Slop account"),
+        (
+            json!({ "user": closed_id.to_string() }),
+            "no SLAPorSLOP account",
+        ),
         (
             json!({ "user": suspended_id.to_string() }),
-            "no Slop account",
+            "no SLAPorSLOP account",
         ),
         (
             json!({ "user": "https://example.com/not-a-profile" }),
@@ -415,7 +418,7 @@ async fn only_the_owner_stops_sharing_with_people_and_teams(db: PgPool) {
     assert!(shared["shared"].as_array().unwrap().is_empty());
 }
 
-/// "My Private Slop": the user's own private apps (even without a release), and apps shared
+/// "My private apps": the user's own private apps (even without a release), and apps shared
 /// with them that have an approved release and aren't frozen past the grace period.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn my_private_slop_lists_mine_and_what_is_ready_for_me(db: PgPool) {
@@ -1203,7 +1206,7 @@ async fn download_links_are_for_approved_releases_the_viewer_can_see(db: PgPool)
         .await
         .unwrap();
 
-    // Private Slop: only the owner and who it's shared with.
+    // Private apps: only the owner and who it's shared with.
     sqlx::query("update apps set visibility = 'private'")
         .execute(&app.db)
         .await
@@ -1341,7 +1344,7 @@ async fn the_revocation_list_is_signed_in_order_and_expires_in_six_hours(db: PgP
     assert_eq!(body_json(res).await["error"]["code"], "unavailable");
 }
 
-/// Slop's public key, for transparency, and what the server checks, so the UI claims only that.
+/// SLAPorSLOP's public key, for transparency, and what the server checks, so the UI claims only that.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn the_server_publishes_its_key_and_what_it_checks(db: PgPool) {
     let app = test_app(db.clone()).await;
@@ -1921,7 +1924,7 @@ async fn ownership_codes_are_read_through_gitea_gitlab_and_bitbucket_apis(db: Pg
 // ---------------------------------------------------------------------------------------------
 // No passkey for what decides where players' downloads come from (bug b23, undone 2026-10-25)
 
-/// Bug b23 made moving an app to another repository, saving the token Slop reads it with, and
+/// Bug b23 made moving an app to another repository, saving the token SLAPorSLOP reads it with, and
 /// turning on release watching or automatic updates need a passkey once the maker's grace period
 /// was over. Passkeys are optional since 2026-10-25 (SECURITY §4.3): all three go through without
 /// one, past that old deadline.
@@ -3206,7 +3209,7 @@ async fn slop_build_app(db: PgPool) -> (TestApp, FakeGh, Uuid, String) {
 }
 
 /// Repojacking: a run in a repository registered again under the app's name (other GitHub IDs)
-/// is refused, and Slop doesn't guess when it can't ask GitHub.
+/// is refused, and SLAPorSLOP doesn't guess when it can't ask GitHub.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn slop_build_refuses_a_repository_registered_again_under_the_same_name(db: PgPool) {
     let (app, gh, _, _) = slop_build_app(db).await;
@@ -3432,7 +3435,7 @@ async fn slop_check_reports_are_checked_like_slop_build_runs(db: PgPool) {
     .await;
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(count(&app, "select count(*) from defender_checks").await, 2);
-    // A check for a file Slop already has is attached to it at once.
+    // A check for a file SLAPorSLOP already has is attached to it at once.
     let release = release_with_file(
         &app,
         "game",
@@ -3785,7 +3788,7 @@ async fn slop_build_takes_source_checks_up_to_their_own_limit(db: PgPool) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Slop's GitHub App (github_app.rs)
+// SLAPorSLOP's GitHub App (github_app.rs)
 
 /// Webhooks: only with the App set up and GitHub's signature; installations are remembered and
 /// forgotten (with their cached tokens); events without one change nothing.
@@ -3989,7 +3992,7 @@ async fn github_app_installation_tokens_are_cached_and_dropped_when_gone(db: PgP
     // Asked for with the App's own signed JWT.
     assert!(gh.auths("/app/installations/78/access_tokens")[0].starts_with("Bearer ey"));
 
-    // Uninstalled while Slop missed the webhook.
+    // Uninstalled while SLAPorSLOP missed the webhook.
     assert_eq!(
         auth("octo/gone").await,
         Some(("gh-shared".to_string(), true))
@@ -4138,7 +4141,7 @@ async fn the_watcher_waits_for_files_then_gives_up_and_records_problems(db: PgPo
     // The files are there but the app is frozen: the reason is kept for the maker.
     sqlx::query(
         "update apps set watch_last_tag = null, watch_problem = null, watch_checked_at = null, watch_etag = null,
-                frozen_at = now(), frozen_reason = 'Slop can''t read the repository'",
+                frozen_at = now(), frozen_reason = 'SLAPorSLOP can''t read the repository'",
     )
     .execute(&app.db)
     .await
@@ -4495,7 +4498,7 @@ fn detect(url: &str) -> Req {
     )
 }
 
-/// A private repository Slop's App can read: its owner learns the licence, nobody else learns
+/// A private repository SLAPorSLOP's App can read: its owner learns the licence, nobody else learns
 /// anything, and the owner's answer isn't cached for others. Public answers are cached for a
 /// day; uncached lookups are rate limited per account.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -4553,7 +4556,7 @@ async fn licence_lookups_reveal_private_repositories_only_to_their_owner(db: PgP
         theirs["note"]
             .as_str()
             .unwrap()
-            .contains("isn't visible to Slop")
+            .contains("isn't visible to SLAPorSLOP")
     );
     assert_eq!(
         gh.auths("/repos/octo/secret/license"),
@@ -4693,7 +4696,7 @@ async fn github_ownership_is_proved_by_a_linked_owner_account(db: PgPool) {
         a["message"]
             .as_str()
             .unwrap()
-            .contains("install Slop's GitHub App on it"),
+            .contains("install SLAPorSLOP's GitHub App on it"),
         "{a}"
     );
     let a = ask(&newbie, "octo/game").await;
@@ -4713,7 +4716,7 @@ async fn github_ownership_is_proved_by_a_linked_owner_account(db: PgPool) {
         a["message"]
             .as_str()
             .unwrap()
-            .contains("install Slop's GitHub App on it first"),
+            .contains("install SLAPorSLOP's GitHub App on it first"),
         "{a}"
     );
 
@@ -4747,7 +4750,7 @@ async fn github_ownership_is_proved_by_a_linked_owner_account(db: PgPool) {
     );
 }
 
-/// A repository already on Slop is refused, naming only an app in the store; on a server that
+/// A repository already on SLAPorSLOP is refused, naming only an app in the store; on a server that
 /// doesn't require ownership, anything else is fine.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn ownership_names_a_taken_repositorys_app_only_when_its_public(db: PgPool) {
@@ -4795,7 +4798,7 @@ async fn ownership_names_a_taken_repositorys_app_only_when_its_public(db: PgPool
         a["message"]
             .as_str()
             .unwrap()
-            .contains("already on Slop as Pixel Dungeon Delver"),
+            .contains("already on SLAPorSLOP as Pixel Dungeon Delver"),
         "{a}"
     );
     for repo in ["octo/drafty", "octo/hidden"] {
@@ -4807,7 +4810,7 @@ async fn ownership_names_a_taken_repositorys_app_only_when_its_public(db: PgPool
         assert_eq!(a["ok"], false);
         let message = a["message"].as_str().unwrap();
         assert!(
-            message.contains("already linked to an app on Slop"),
+            message.contains("already linked to an app on SLAPorSLOP"),
             "{message}"
         );
         assert!(!message.contains("Pixel"), "{message}");
@@ -5031,7 +5034,7 @@ async fn ownership_codes_are_personal_found_in_either_file_and_expire(db: PgPool
     assert_eq!(a["ok"], false);
     assert_eq!(a["code"], ann_code.as_str());
 
-    // A repository Slop can't read.
+    // A repository SLAPorSLOP can't read.
     let missing = format!("{base}nothing.git");
     let _ = code_for_repo(&app, &ann, &missing).await;
     let res = app.send(check_code(&ann, &missing)).await;
@@ -5039,7 +5042,7 @@ async fn ownership_codes_are_personal_found_in_either_file_and_expire(db: PgPool
     assert!(
         error_message(res)
             .await
-            .contains("Slop couldn't read the repository")
+            .contains("SLAPorSLOP couldn't read the repository")
     );
 
     // Checking too often.
@@ -5058,7 +5061,7 @@ async fn code_for_repo(app: &TestApp, cookie: &str, repo: &str) -> String {
         .to_string()
 }
 
-/// On a real server, Slop never reads a repository on a private network address.
+/// On a real server, SLAPorSLOP never reads a repository on a private network address.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn ownership_checks_refuse_private_network_hosts(db: PgPool) {
     let app = test_app_with(db, |c| {
@@ -5843,7 +5846,7 @@ async fn fixes_cover_the_newest_release_and_its_advisories(db: PgPool) {
     );
 }
 
-/// The Publish dashboard lists the maker's own apps, drafts and Private Slop included; an
+/// The Publish dashboard lists the maker's own apps, drafts and private apps included; an
 /// agent token sees them too (reading is allowed for all the maker's apps).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn the_publish_dashboard_lists_only_the_makers_own_apps(db: PgPool) {
@@ -6644,7 +6647,7 @@ fn the_scanner_notes_capabilities_worth_a_reviewers_look() {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Progress while Slop checks a release, file by file (release_progress.rs)
+// Progress while SLAPorSLOP checks a release, file by file (release_progress.rs)
 
 /// A scanner stand-in that waits until `gate` exists, then passes the file; it holds any file
 /// whose name has "held" in it.
@@ -6708,7 +6711,9 @@ async fn release_progress_is_shown_file_by_file(db: PgPool) {
         created["progress"]["summary"]
             .as_str()
             .unwrap()
-            .starts_with("Waiting its turn: Slop checks one release at a time. Then its 3 files")
+            .starts_with(
+                "Waiting its turn: SLAPorSLOP checks one release at a time. Then its 3 files"
+            )
     );
     let list = || async {
         body_json(
@@ -6720,7 +6725,7 @@ async fn release_progress_is_shown_file_by_file(db: PgPool) {
 
     let state = app.state.clone();
     let fetch = tokio::spawn(async move { releases::fetch_next(&state).await.unwrap() });
-    // The first file (in the order Slop checks them) reaches the scanner, and waits there.
+    // The first file (in the order SLAPorSLOP checks them) reaches the scanner, and waits there.
     let mut now = Value::Null;
     for _ in 0..200 {
         now = list().await;
@@ -6797,7 +6802,7 @@ async fn release_progress_is_shown_file_by_file(db: PgPool) {
     assert!(r["progress"]["seconds_per_file"].is_null());
     assert_eq!(
         r["progress"]["summary"],
-        "Linux (.deb) is on hold: YARA: Packed_UPX. A person at Slop looks at it, and can clear a false positive; you'll get a notification when the release is decided."
+        "Linux (.deb) is on hold: YARA: Packed_UPX. A person at SLAPorSLOP looks at it, and can clear a false positive; you'll get a notification when the release is decided."
     );
     for f in r["files"].as_array().unwrap() {
         assert_eq!(f["check"], "checked", "{f}");
@@ -6814,7 +6819,7 @@ async fn release_progress_is_shown_file_by_file(db: PgPool) {
         now[0]["progress"]["summary"]
             .as_str()
             .unwrap()
-            .contains("Waiting for review by a person at Slop, usually within a day or two"),
+            .contains("Waiting for review by a person at SLAPorSLOP, usually within a day or two"),
         "{}",
         now[0]["progress"]
     );

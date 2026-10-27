@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Shared runtimes (DESIGN §6): the Windows runtimes games often need, from an approved list.
-//! A release names the ones it needs (by `id`, signed into its manifest); the Slop app installs a
+//! A release names the ones it needs (by `id`, signed into its manifest); the SLAPorSLOP app installs a
 //! missing one before the game starts, once the player agrees, from the vendor's own download,
 //! after Windows confirms the file is validly signed by that vendor.
 //!
 //! The vendors' links always serve the newest version, so files are checked by their signature
 //! (`signer`, the certificate's organisation), not a fixed hash.
 
-/// How the Slop app tells a runtime is already installed (Windows).
+/// How the SLAPorSLOP app tells a runtime is already installed (Windows).
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Detect {
     /// A registry value under HKEY_LOCAL_MACHINE that's 1 when installed.

@@ -1,23 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Chat's delivery service (DESIGN §19, SECURITY §8.5).
 //!
-//! Messages are end-to-end encrypted with MLS (RFC 9420) in the Slop app (`slop-client`'s
-//! `chat`), so Slop can't read them. This module only:
+//! Messages are end-to-end encrypted with MLS (RFC 9420) in the SLAPorSLOP app (`slop-client`'s
+//! `chat`), so SLAPorSLOP can't read them. This module only:
 //!
 //! - **keeps the devices list**: each device's public signing key and its public MLS key
 //!   packages. A user's first device stands alone; later ones are approved by an existing device,
-//!   which signs the new key. Slop checks that signature and can't approve a device itself, so a
-//!   stolen Slop session can't add a device that reads chats. "Start over" (every device lost)
+//!   which signs the new key. SLAPorSLOP checks that signature and can't approve a device itself, so a
+//!   stolen SLAPorSLOP session can't add a device that reads chats. "Start over" (every device lost)
 //!   needs a fresh sign-in and is shown to everyone the user chats with.
 //! - **orders each chat's messages.** A commit (adding or removing devices) must build on the
-//!   epoch Slop last saw and moves it on; a message must use the current epoch. So everyone
+//!   epoch SLAPorSLOP last saw and moves it on; a message must use the current epoch. So everyone
 //!   processes the same sequence.
 //! - **delivers**: encrypted messages, commits and Welcomes wait here until fetched, for 30
 //!   days at most. A device long-polls `/chat/sync` for whatever is new.
 //! - **decides who may chat**: members of a chat, and who may start one (`friends::may_message`).
 //!
-//! What Slop sees: who is in which chat, which device sent each message and when, and sizes.
-//! Message franking lets a reported message be checked as genuine without Slop reading others.
+//! What SLAPorSLOP sees: who is in which chat, which device sent each message and when, and sizes.
+//! Message franking lets a reported message be checked as genuine without SLAPorSLOP reading others.
 
 use std::{collections::HashMap, sync::Arc, time::Duration as StdDuration};
 
@@ -201,7 +201,7 @@ fn b64(field: &'static str, value: &str, max: usize) -> ApiResult<Vec<u8>> {
     Ok(bytes)
 }
 
-/// Chat is in the Slop app only (SECURITY §8.5): devices register from desktop sign-ins.
+/// Chat is in the SLAPorSLOP app only (SECURITY §8.5): devices register from desktop sign-ins.
 async fn require_app(db: &PgPool, user: &CurrentUser) -> ApiResult<()> {
     let kind: String = sqlx::query_scalar("select kind from sessions where id = $1")
         .bind(user.session_id)
@@ -209,7 +209,8 @@ async fn require_app(db: &PgPool, user: &CurrentUser) -> ApiResult<()> {
         .await?;
     if kind != "desktop" {
         return Err(ApiError::Conflict(
-            "chat is in the Slop app only, where messages are encrypted on your device".into(),
+            "chat is in the SLAPorSLOP app only, where messages are encrypted on your device"
+                .into(),
         ));
     }
     Ok(())
@@ -308,7 +309,7 @@ async fn my_devices(
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct NewDevice {
-    /// Chosen by the device, since its MLS credential names it before Slop has seen it.
+    /// Chosen by the device, since its MLS credential names it before SLAPorSLOP has seen it.
     id: Uuid,
     name: String,
     /// The device's MLS signing key (Ed25519), base64.
@@ -1457,7 +1458,7 @@ fn stale(current: i64) -> impl IntoResponse {
     )
 }
 
-/// A commit: adds or removes devices (or just updates keys). It must build on the epoch Slop
+/// A commit: adds or removes devices (or just updates keys). It must build on the epoch SLAPorSLOP
 /// last saw, so concurrent commits can't fork the chat; the loser fetches and tries again.
 async fn commit(
     State(state): State<AppState>,
@@ -1633,7 +1634,7 @@ async fn send(
 }
 
 /// A bell notice (and, if they want, an email) for members whose apps haven't been online for a
-/// few minutes, without what was said: Slop can't read it. One per chat until they read it.
+/// few minutes, without what was said: SLAPorSLOP can't read it. One per chat until they read it.
 async fn tell_away(
     conn: &mut PgConnection,
     conversation: Uuid,
@@ -1671,7 +1672,7 @@ async fn tell_away(
                 user_id: *user,
                 category: "chat",
                 title,
-                body: "Messages are end-to-end encrypted, so open the Slop app to read them."
+                body: "Messages are end-to-end encrypted, so open the SLAPorSLOP app to read them."
                     .into(),
                 link: format!("/chat/{conversation}"),
                 collapse_key: Some(format!("chat:{conversation}")),
@@ -1963,7 +1964,7 @@ pub struct ChatEvidence {
 }
 
 /// Checks a reported message against its franking tag (SECURITY §8.5): proof that its sender
-/// really sent exactly this, without Slop reading any other message. Returns the sender and the
+/// really sent exactly this, without SLAPorSLOP reading any other message. Returns the sender and the
 /// chat's kind.
 pub async fn check_evidence(
     db: &PgPool,
@@ -1986,7 +1987,7 @@ pub async fn check_evidence(
     .await?;
     let (Some(sender), Some(tag), kind, name) = row.ok_or_else(|| {
         ApiError::Conflict(
-            "that message is older than 30 days, so Slop can't check it any more".into(),
+            "that message is older than 30 days, so SLAPorSLOP can't check it any more".into(),
         )
     })?
     else {
