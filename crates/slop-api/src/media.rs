@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Store-page pictures and videos, from the maker's repository (decided 2026-10-19).
 //!
-//! Slop doesn't host them. A maker lists them in `.slop/media.json` in their repository:
+//! SLAPorSLOP doesn't host them. A maker lists them in `.slop/media.json` in their repository:
 //!
 //! ```json
 //! {
@@ -14,7 +14,7 @@
 //! }
 //! ```
 //!
-//! Slop reads that file **at one commit** (the default branch's newest when the maker presses
+//! SLAPorSLOP reads that file **at one commit** (the default branch's newest when the maker presses
 //! "check", or a release's commit when one is fetched), downloads each picture once to check it
 //! (format, size, dimensions, SHA-256), and keeps links to the files **at that commit**. Git
 //! content at a commit can't change, so the pictures people see are the ones that were reviewed.
@@ -62,7 +62,7 @@ use crate::{
 pub const MANIFEST_DIR: &str = ".slop";
 pub const MANIFEST_PATH: &str = ".slop/media.json";
 const MAX_MANIFEST_BYTES: u64 = 64 * 1024;
-/// The largest picture Slop accepts.
+/// The largest picture SLAPorSLOP accepts.
 pub const MAX_IMAGE_BYTES: u64 = 8 * 1024 * 1024;
 /// Screenshots and videos in one app's gallery.
 pub const MAX_GALLERY: usize = 20;
@@ -77,7 +77,7 @@ pub const ICON_MIN: u32 = 256;
 pub const ICON_MAX: u32 = 1024;
 /// What the guides suggest.
 pub const ICON_BEST: u32 = 512;
-/// The largest icon Slop accepts: plenty for 1024×1024.
+/// The largest icon SLAPorSLOP accepts: plenty for 1024×1024.
 pub const MAX_ICON_BYTES: u64 = 4 * 1024 * 1024;
 /// Icons are still pictures: no GIFs.
 const ICON_EXTS: &[&str] = &[".png", ".jpg", ".jpeg", ".webp"];
@@ -92,7 +92,7 @@ pub fn routes() -> Router<AppState> {
 // ---------------------------------------------------------------------------------------------
 // What's stored
 
-/// A picture Slop checked, linked at the commit it was read at.
+/// A picture SLAPorSLOP checked, linked at the commit it was read at.
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 pub struct Picture {
     /// Inside `.slop/`.
@@ -399,11 +399,11 @@ pub(crate) async fn download(
 }
 
 /// Checks a picture's format and size from its header. Pictures are never decoded in full or
-/// re-served by Slop; browsers load them from the repository.
+/// re-served by SLAPorSLOP; browsers load them from the repository.
 fn inspect(path: &str, bytes: &[u8], min: (u32, u32)) -> Result<(String, u32, u32), Problem> {
     let reader = ImageReader::new(Cursor::new(bytes))
         .with_guessed_format()
-        .map_err(|_| Problem(format!("{path} isn't a picture Slop can read")))?;
+        .map_err(|_| Problem(format!("{path} isn't a picture SLAPorSLOP can read")))?;
     let format = match reader.format() {
         Some(ImageFormat::Png) => "png",
         Some(ImageFormat::Jpeg) => "jpeg",
@@ -1014,7 +1014,7 @@ pub fn missing_icon() -> Fix {
         kind: "icon:missing".into(),
         severity: "recommended",
         problem:
-            "The app has no icon yet. Slop shows it in players' libraries, on store tiles and \
+            "The app has no icon yet. SLAPorSLOP shows it in players' libraries, on store tiles and \
                   on the app's page; until there is one, it crops the thumbnail or shows the \
                   app's first letter."
                 .into(),
@@ -1064,7 +1064,7 @@ struct Overview {
     rejected: Option<MediaSet>,
     #[serde(with = "time::serde::rfc3339::option")]
     checked_at: Option<OffsetDateTime>,
-    /// What was wrong the last time Slop read the repository.
+    /// What was wrong the last time SLAPorSLOP read the repository.
     problem: Option<String>,
     /// The same, when it was the icon that was wrong (without the "icon: " it starts with).
     icon_problem: Option<String>,

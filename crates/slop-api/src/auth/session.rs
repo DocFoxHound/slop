@@ -99,7 +99,7 @@ pub async fn create(
     ))
 }
 
-/// A cookie scoped the way every Slop auth cookie is: whole site, `HttpOnly`, `SameSite=Lax`.
+/// A cookie scoped the way every SLAPorSLOP auth cookie is: whole site, `HttpOnly`, `SameSite=Lax`.
 pub fn build_cookie(
     config: &Config,
     name: &'static str,

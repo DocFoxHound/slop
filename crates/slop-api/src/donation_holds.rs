@@ -2,11 +2,11 @@
 //! Donation holds: staff stop donations to one app (DESIGN §12, PAYMENTS §5.5).
 //!
 //! When a complaint says an app shouldn't be making money (someone else's work, a trademark, a
-//! law), Slop can stop the money without taking the app down:
+//! law), SLAPorSLOP can stop the money without taking the app down:
 //!
-//! - **Paused for review** (`review`): quick and reversible, while Slop looks into it. A
+//! - **Paused for review** (`review`): quick and reversible, while SLAPorSLOP looks into it. A
 //!   moderator or finance staff member places it on their own word.
-//! - **Turned off** (`off`): Slop found a problem the maker has to fix. A sensitive action, so it
+//! - **Turned off** (`off`): SLAPorSLOP found a problem the maker has to fix. A sensitive action, so it
 //!   goes through two-person approval (staff.rs).
 //!
 //! Either way the app stays in the store, new donations stop (also its share of donations to
@@ -66,7 +66,7 @@ impl Kind {
 
     fn words(self) -> &'static str {
         match self {
-            Self::Review => "paused while Slop reviews it",
+            Self::Review => "paused while SLAPorSLOP reviews it",
             Self::Off => "turned off until the problem is fixed",
         }
     }

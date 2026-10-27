@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! A maker's own signature on a release file (SECURITY §5.3, "files attached by hand"): an
 //! OpenSSH signature (`ssh-keygen -Y sign -n slop-release`) made with an Ed25519 key the maker
-//! registered on Slop. The format is OpenSSH's PROTOCOL.sshsig; only `ssh-ed25519` keys and the
+//! registered on SLAPorSLOP. The format is OpenSSH's PROTOCOL.sshsig; only `ssh-ed25519` keys and the
 //! `sha512` and `sha256` message hashes are accepted, so no RSA code is involved.
 //!
-//! Slop and the desktop app both check it against the file's digest, so the file itself never
+//! SLAPorSLOP and the desktop app both check it against the file's digest, so the file itself never
 //! needs to be in memory.
 
 use base64::{Engine, engine::general_purpose::STANDARD as B64};

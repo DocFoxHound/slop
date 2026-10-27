@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! Signed documents shared by the Slop API and the Slop client (docs/SECURITY.md §5.3, §5.5).
+//! Signed documents shared by the SLAPorSLOP API and the SLAPorSLOP client (docs/SECURITY.md §5.3, §5.5).
 //!
 //! - A **release manifest** lists every file of a release with its URL on the maker's release
 //!   page, SHA-256 and size, and how to launch it. The client installs only files whose hash
-//!   matches a manifest Slop signed.
+//!   matches a manifest SLAPorSLOP signed.
 //! - The **revocation list** names releases that must no longer launch (the kill switch).
-//! - A **file verification** answers "does Slop know this file?" for anyone, such as another
-//!   store showing "verified by Slop": the releases it belongs to, their scan results, and
+//! - A **file verification** answers "does SLAPorSLOP know this file?" for anyone, such as another
+//!   store showing "verified by SLAPorSLOP": the releases it belongs to, their scan results, and
 //!   whether they were revoked.
 //!
-//! The formats are specified in `docs/standard/` (the Slop open standard).
+//! The formats are specified in `docs/standard/` (the SLAPorSLOP open standard).
 //!
 //! A signed document carries the exact JSON text that was signed, so both sides verify the same
 //! bytes. Signatures are Ed25519 over a purpose prefix plus that text, so a document signed for
@@ -40,7 +40,7 @@ pub const VERIFICATION_SCHEMA: u32 = 1;
 pub enum Platform {
     Windows,
     Mac,
-    /// Linux: a `.tar.gz` (or `.zip`) of the app's files, which the Slop app installs and runs.
+    /// Linux: a `.tar.gz` (or `.zip`) of the app's files, which the SLAPorSLOP app installs and runs.
     Linux,
     Android,
     /// A Debian/Ubuntu package of the same Linux build, for players who prefer one.
@@ -49,7 +49,7 @@ pub enum Platform {
     /// A Fedora/RHEL package of the same Linux build.
     #[serde(rename = "linux-rpm")]
     LinuxRpm,
-    /// A mod: one `.zip` for every platform, with nothing to start. The Slop app installs it for
+    /// A mod: one `.zip` for every platform, with nothing to start. The SLAPorSLOP app installs it for
     /// the game it belongs to.
     Any,
 }
@@ -81,7 +81,7 @@ impl Platform {
         Self::ALL.into_iter().find(|p| p.as_str() == value)
     }
 
-    /// The platform this code was compiled for, if Slop supports it.
+    /// The platform this code was compiled for, if SLAPorSLOP supports it.
     pub fn current() -> Option<Self> {
         if cfg!(target_os = "windows") {
             Some(Self::Windows)
@@ -101,7 +101,7 @@ impl Platform {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum FileKind {
-    /// A zip of the app's files, installed into Slop's library folder. Preferred.
+    /// A zip of the app's files, installed into SLAPorSLOP's library folder. Preferred.
     Archive,
     /// The maker's own installer, run only after the user confirms.
     Installer,
@@ -139,7 +139,7 @@ pub struct Launch {
 pub struct ManifestFile {
     pub platform: Platform,
     pub kind: FileKind,
-    /// Where the file lives: the maker's release page. Slop stores no builds.
+    /// Where the file lives: the maker's release page. SLAPorSLOP stores no builds.
     pub url: String,
     pub file_name: String,
     pub size: u64,
@@ -180,7 +180,7 @@ pub struct FilePart {
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct MakerSignature {
-    /// `ssh-ed25519 <base64>`: the key registered on the maker's Slop account.
+    /// `ssh-ed25519 <base64>`: the key registered on the maker's SLAPorSLOP account.
     pub public_key: String,
     /// The armored `ssh-keygen -Y sign -n slop-release` signature.
     pub signature: String,
@@ -207,15 +207,15 @@ pub struct ReleaseManifest {
     /// Absent on everything else, so older apps still read those manifests.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mod_for: Option<ModFor>,
-    /// A community build: the original app it's a build of, so the Slop app can offer it on the
+    /// A community build: the original app it's a build of, so the SLAPorSLOP app can offer it on the
     /// original's Play button. Absent on everything else.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build_of: Option<ModFor>,
-    /// The folder the app reads mods from, when its maker named one: the Slop app keeps only
+    /// The folder the app reads mods from, when its maker named one: the SLAPorSLOP app keeps only
     /// approved mods there (DESIGN §9). Absent: the app reads `SLOP_MODS`.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub mods_folder: Option<ModsFolder>,
-    /// Shared runtimes the app needs (runtimes.rs IDs); the Slop app installs missing ones
+    /// Shared runtimes the app needs (runtimes.rs IDs); the SLAPorSLOP app installs missing ones
     /// before the first start, with the player's say-so.
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub runtimes: Vec<String>,
@@ -243,7 +243,7 @@ pub enum ModsBase {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum ModsLayout {
-    /// Each mod in a folder of its own, named after its Slop address.
+    /// Each mod in a folder of its own, named after its SLAPorSLOP address.
     Folder,
     /// Every mod's files straight in the folder (for games that read `.pak` or `.zip` files
     /// there).
@@ -309,7 +309,7 @@ impl RevocationList {
     }
 }
 
-/// What Slop knows about one file, by its SHA-256 (docs/standard/file-verification.md).
+/// What SLAPorSLOP knows about one file, by its SHA-256 (docs/standard/file-verification.md).
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct FileVerification {
@@ -319,7 +319,7 @@ pub struct FileVerification {
     /// RFC 3339. Past `expires_at` the answer is stale: ask again.
     pub issued_at: String,
     pub expires_at: String,
-    /// Releases of public apps with a file of this hash, newest first. Empty: Slop doesn't know
+    /// Releases of public apps with a file of this hash, newest first. Empty: SLAPorSLOP doesn't know
     /// the file (or only as part of a private app, which it never discloses).
     pub matches: Vec<FileMatch>,
 }
@@ -338,8 +338,8 @@ pub struct FileMatch {
     pub approved_at: String,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub revoked_at: Option<String>,
-    /// Slop's scan of the file: `passed`, `note` (passed with something a person looked at),
-    /// `on_hold`, `rejected`, `blocked`, or `not_scanned` (the Slop that answered doesn't scan).
+    /// SLAPorSLOP's scan of the file: `passed`, `note` (passed with something a person looked at),
+    /// `on_hold`, `rejected`, `blocked`, or `not_scanned` (the SLAPorSLOP that answered doesn't scan).
     pub scan: String,
     /// Microsoft Defender's check of a Windows file: `clean` or `detections` (a reviewer cleared
     /// them as false positives before approving). Absent when there was none.
@@ -352,7 +352,7 @@ pub struct FileMatch {
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "snake_case")]
 pub enum MatchStatus {
-    /// Approved, and installable from Slop.
+    /// Approved, and installable from SLAPorSLOP.
     Approved,
     /// Withdrawn after approval: it must not be installed or launched.
     Revoked,
@@ -385,7 +385,7 @@ impl Purpose {
     }
 }
 
-/// A document and Slop's signature over it.
+/// A document and SLAPorSLOP's signature over it.
 #[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Signed {

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Slop Link (DESIGN §9): how a running game asks the Slop app for mods. When a server or lobby
-//! needs mods, the game names them (by Slop address, and version if it likes); the Slop app asks
-//! the player, downloads and checks each one against Slop's signature, adds them, and tells the
-//! game where they are. Servers only ever name mods; their files always come from Slop.
+//! Slop Link (DESIGN §9): how a running game asks the SLAPorSLOP app for mods. When a server or lobby
+//! needs mods, the game names them (by SLAPorSLOP address, and version if it likes); the SLAPorSLOP app asks
+//! the player, downloads and checks each one against SLAPorSLOP's signature, adds them, and tells the
+//! game where they are. Servers only ever name mods; their files always come from SLAPorSLOP.
 //!
 //! It's a pair of folders, so it works the same everywhere, sandbox mode included (an
 //! AppContainer can't reach the loopback interface, and a sandbox with the internet blocked has
@@ -11,11 +11,11 @@
 //! - it writes a request as `requests/<name>.json` (write `<name>.tmp`, then rename it), with
 //!   `<name>` made of letters, digits, `-` and `_`: `{"mods": [{"slug": "dragons", "version":
 //!   "1.2.0"}], "for": "Castle Rock server"}`;
-//! - Slop takes it, and writes `answers/<name>.json`: `{"status": "waiting"}`, then `"done"`
+//! - SLAPorSLOP takes it, and writes `answers/<name>.json`: `{"status": "waiting"}`, then `"done"`
 //!   (with `mods`, each `added`, `already_added`, `version_differs` or `unavailable`, and
 //!   `folders`), `"declined"` or `"failed"` (with `message`).
 //!
-//! In sandbox mode the game can write only `requests/`; `answers/` is read-only to it. Slop
+//! In sandbox mode the game can write only `requests/`; `answers/` is read-only to it. SLAPorSLOP
 //! reads requests as plain files of at most 16 KiB and never follows links in either folder.
 
 use std::{
@@ -45,7 +45,7 @@ pub struct Wanted {
 #[derive(Clone, Debug, Serialize)]
 pub struct ModRequest {
     pub id: String,
-    /// The game that asked (its Slop address).
+    /// The game that asked (its SLAPorSLOP address).
     pub game: String,
     /// Who wants the mods, as the game puts it ("Castle Rock server"). Untrusted text.
     pub from: Option<String>,
@@ -100,7 +100,7 @@ struct Inner {
     on_request: OnRequest,
 }
 
-/// The Slop app's end. Cloning shares it.
+/// The SLAPorSLOP app's end. Cloning shares it.
 #[derive(Clone)]
 pub struct Link(Arc<Inner>);
 
@@ -283,7 +283,7 @@ impl Link {
         let mut mods: Vec<Wanted> = Vec::new();
         for m in b.mods {
             if !valid_slug(&m.slug) {
-                return fail(format!("{:?} isn't a Slop address", m.slug));
+                return fail(format!("{:?} isn't a SLAPorSLOP address", m.slug));
             }
             if !mods.iter().any(|x| x.slug == m.slug) {
                 mods.push(Wanted {
@@ -337,7 +337,7 @@ pub fn write_request(link: &Path, name: &str, mods: &[&str], from: &str) -> io::
 
 /// Reads a request the game left, at most `MAX_REQUEST` bytes, and only if the file opened is
 /// the plain file that was checked: a link swapped in between the check and the read (to make
-/// Slop read some other file) is refused.
+/// SLAPorSLOP read some other file) is refused.
 fn read_plain(path: &Path, checked: &fs::Metadata) -> Option<Vec<u8>> {
     use std::io::Read;
     let file = fs::File::open(path).ok()?;

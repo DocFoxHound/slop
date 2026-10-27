@@ -1,13 +1,13 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Save sync (plan phase 15): a player's saves follow them between their computers.
 //!
-//! - **End-to-end encrypted.** The Slop app packs and encrypts an app's save folder with a key
+//! - **End-to-end encrypted.** The SLAPorSLOP app packs and encrypts an app's save folder with a key
 //!   only the player's devices have (derived from their chat backup key, slop-client
-//!   `save_sync.rs`); Slop stores and returns ciphertext it can't read.
+//!   `save_sync.rs`); SLAPorSLOP stores and returns ciphertext it can't read.
 //! - **Limits:** 20 MB per app, 200 MB per player across apps (everything kept counts), and
 //!   the newest plus the one before are kept, so a bad save can be undone once.
 //! - **No silent overwrites:** an upload names the generation it builds on; if another device
-//!   uploaded since, it's refused (409) and the Slop app keeps both copies for the player.
+//!   uploaded since, it's refused (409) and the SLAPorSLOP app keeps both copies for the player.
 //! - Only the player's own sessions use these routes; makers' agent tokens can't.
 
 use axum::{
@@ -222,7 +222,7 @@ async fn upload(
     Ok(Json(serde_json::json!({ "generation": generation })))
 }
 
-/// Stops syncing an app: its saves are deleted from Slop (the ones on the player's computers
+/// Stops syncing an app: its saves are deleted from SLAPorSLOP (the ones on the player's computers
 /// stay).
 async fn forget(
     State(state): State<AppState>,

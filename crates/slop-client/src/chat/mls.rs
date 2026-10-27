@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The MLS side of chat (RFC 9420, through OpenMLS): this device's identity, its key packages,
-//! and each chat's group. Everything here runs on the device; Slop only relays the results.
+//! and each chat's group. Everything here runs on the device; SLAPorSLOP only relays the results.
 //!
-//! A device's credential names it as `slop:{user}:{device}`; its signing key is the one Slop
+//! A device's credential names it as `slop:{user}:{device}`; its signing key is the one SLAPorSLOP
 //! lists for that device, so every app can check who sent what.
 
 use std::{collections::HashMap, sync::RwLock};
@@ -70,7 +70,7 @@ pub fn credential_name(user: Uuid, device: Uuid) -> Vec<u8> {
     format!("slop:{user}:{device}").into_bytes()
 }
 
-/// (user, device) from a credential, if it's one of Slop's.
+/// (user, device) from a credential, if it's one of SLAPorSLOP's.
 pub fn parse_credential(credential: &Credential) -> Option<(Uuid, Uuid)> {
     let basic = BasicCredential::try_from(credential.clone()).ok()?;
     let text = std::str::from_utf8(basic.identity()).ok()?;
@@ -81,7 +81,7 @@ pub fn parse_credential(credential: &Credential) -> Option<(Uuid, Uuid)> {
 }
 
 impl Identity {
-    /// A new signing key, kept in the provider's storage. The credential is set once Slop has
+    /// A new signing key, kept in the provider's storage. The credential is set once SLAPorSLOP has
     /// given the device its ID (`named`).
     pub fn generate(provider: &Provider) -> Result<SignatureKeyPair> {
         let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm()).map_err(mls_err)?;
@@ -236,7 +236,7 @@ pub struct Commit {
     pub welcome: Option<Vec<u8>>,
 }
 
-/// Adds and removes devices in one commit (left pending until Slop accepts it).
+/// Adds and removes devices in one commit (left pending until SLAPorSLOP accepts it).
 pub fn change_members(
     provider: &Provider,
     me: &Identity,

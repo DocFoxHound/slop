@@ -3,7 +3,7 @@
 //! scanned again at least weekly, with the scanner's latest signatures, and straight away when
 //! someone reports the app for malware or for not matching its source.
 //!
-//! Slop downloads the file again from the maker's page (as when it was first fetched), checks it's
+//! SLAPorSLOP downloads the file again from the maker's page (as when it was first fetched), checks it's
 //! still the approved file, scans it and deletes it. A new finding doesn't take anything down by
 //! itself: it puts the release in the review queue, and the admins get an alert (ops.rs). A
 //! reviewer withdraws it (the kill switch) or keeps it, with a reason. A finding a reviewer

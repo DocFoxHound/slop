@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sandbox mode (DESIGN §6, SECURITY §6.2): an app started in its own box, where it can read
 //! its installed files and mods, write only its save folder, and use the screen, sound, graphics
-//! card and controllers. The rest of the computer (documents, browsers, keys, other apps, Slop
-//! itself) isn't there. Players choose it per app; Slop suggests it for apps that go online.
+//! card and controllers. The rest of the computer (documents, browsers, keys, other apps, SLAPorSLOP
+//! itself) isn't there. Players choose it per app; SLAPorSLOP suggests it for apps that go online.
 //!
 //! Linux uses bubblewrap, the sandbox Flatpak is built on. Windows uses an AppContainer, the
 //! box Store apps run in (appcontainer.rs).
@@ -33,7 +33,7 @@ pub struct Sandbox<'a> {
     pub saves: &'a Path,
     /// Its cache folder (writable, never copied or kept with saves).
     pub cache: &'a Path,
-    /// Folders kept read-only: a mods folder in the saves the game reads, which only Slop
+    /// Folders kept read-only: a mods folder in the saves the game reads, which only SLAPorSLOP
     /// fills (DESIGN §9), and Slop Link's answers.
     pub read_only: &'a [PathBuf],
     /// More writable folders: Slop Link's requests.
@@ -131,7 +131,7 @@ pub fn available() -> Result<(), String> {
         // Making (or finding) a container is the check: it fails where AppContainers can't be
         // used, such as on old Windows or locked-down machines.
         crate::appcontainer::check()
-            .map_err(|e| format!("Windows didn't let Slop make a sandbox: {e}"))
+            .map_err(|e| format!("Windows didn't let SLAPorSLOP make a sandbox: {e}"))
     }
     #[cfg(not(any(target_os = "linux", windows)))]
     {
@@ -209,7 +209,7 @@ pub fn quote_windows_arg(arg: &str) -> String {
     out
 }
 
-/// The Windows launcher's entry point: the Slop app calls this when started with
+/// The Windows launcher's entry point: the SLAPorSLOP app calls this when started with
 /// `--slop-sandbox <spec>`, and exits with what it returns.
 #[cfg(windows)]
 pub fn launcher_main(spec: &str) -> i32 {
@@ -270,7 +270,7 @@ pub fn command(
     Ok(cmd)
 }
 
-/// On Windows: the Slop app itself, as the launcher (`--slop-sandbox <spec>`). `name` is the
+/// On Windows: the SLAPorSLOP app itself, as the launcher (`--slop-sandbox <spec>`). `name` is the
 /// app's container (`container_name`).
 #[cfg(windows)]
 pub fn command(

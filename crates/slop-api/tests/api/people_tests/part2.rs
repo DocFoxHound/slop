@@ -613,7 +613,7 @@ async fn only_a_teams_owner_and_admins_change_its_settings(db: PgPool) {
         ("Night Owls Club", "We play late.", "open")
     );
 
-    // Private Slop shared with it keeps it invite-only.
+    // Private apps shared with it keep it invite-only.
     app.send(patch(&owner, json!({ "join_policy": "invite" })))
         .await;
     private_app(&app, owner_id, &owner, "owl-tool").await;
@@ -1075,7 +1075,7 @@ async fn removing_team_members_follows_roles_and_takes_away_what_the_team_shares
         .unwrap();
     assert!(!left.contains(&pal_id) && !left.contains(&admin2_id));
     assert_eq!(left.len(), 4);
-    // The removed member loses the team's Private Slop and its chat; the others keep them.
+    // The removed member loses the team's private apps and its chat; the others keep them.
     for path in [
         "/v1/apps/owl-tool".to_string(),
         format!("/v1/chat/conversations/{chat}"),
@@ -1220,7 +1220,11 @@ async fn team_picks_are_store_apps_from_members_of_player_teams(db: PgPool) {
         );
     }
     let res = app.send(pick(&owner, "owl-tool", None)).await;
-    assert_eq!(field_of(res).await, "app_slug", "Private Slop isn't picked");
+    assert_eq!(
+        field_of(res).await,
+        "app_slug",
+        "private apps aren't picked"
+    );
     let res = app
         .send(pick(&pal, "co-op-caves", Some("x".repeat(281))))
         .await;
@@ -1348,7 +1352,7 @@ async fn game_nights_are_in_the_coming_year_and_removed_by_their_creator_or_an_a
         assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{change}");
         assert_eq!(field_of(res).await, field, "{change}");
     }
-    // Private Slop is never named, even by its owner (to others it doesn't exist).
+    // A private app is never named, even by its owner (to others it doesn't exist).
     let private = json!({ "app_slug": "owl-tool" });
     let res = app.send(night(&owner, "night-owls", private.clone())).await;
     assert_eq!(field_of(res).await, "app_slug");
@@ -1631,7 +1635,7 @@ async fn staff_fixing_a_team_need_moderation_rights_and_a_reason(db: PgPool) {
             .map(|n| n.0)
             .collect();
         assert_eq!(
-            titles.contains(&"Slop changed your team's page".to_string()),
+            titles.contains(&"SLAPorSLOP changed your team's page".to_string()),
             told,
             "{titles:?}"
         );
@@ -1804,7 +1808,7 @@ async fn staff_fixing_a_profile_need_moderation_rights_a_reason_and_valid_text(d
             .fetch_one(&app.db)
             .await
             .unwrap();
-    assert_eq!(title, "Slop changed your profile");
+    assert_eq!(title, "SLAPorSLOP changed your profile");
     assert!(body.contains("Impersonation."), "{body}");
     let details: Value = sqlx::query_scalar(
         "select detail from audit_log where action = 'user.profile_edited' and subject = $1",
@@ -1827,7 +1831,7 @@ async fn staff_fixing_a_profile_need_moderation_rights_a_reason_and_valid_text(d
 // Official team verification, against a GitHub of our own
 
 /// What the stand-in GitHub says about one organization. Organizations not in the map don't have
-/// Slop's App installed.
+/// SLAPorSLOP's App installed.
 #[derive(Clone, Default)]
 struct Org {
     verified_domain: bool,
@@ -1840,7 +1844,7 @@ struct Org {
 
 type Orgs = std::sync::Arc<std::sync::Mutex<std::collections::HashMap<String, Org>>>;
 
-/// A GitHub with Slop's App installed on the organizations in `orgs`. GitHub account 42 is
+/// A GitHub with SLAPorSLOP's App installed on the organizations in `orgs`. GitHub account 42 is
 /// "octo", 43 "bob".
 async fn fake_orgs(orgs: Orgs) -> String {
     use axum::extract::{Path, State};
@@ -1921,7 +1925,7 @@ async fn fake_orgs(orgs: Orgs) -> String {
     format!("http://{addr}/")
 }
 
-/// An app whose GitHub is `fake_orgs`, with Slop's GitHub App set up.
+/// An app whose GitHub is `fake_orgs`, with SLAPorSLOP's GitHub App set up.
 async fn official_app(db: PgPool, orgs: Orgs) -> TestApp {
     let base = fake_orgs(orgs).await;
     test_app_with(db, |c| {
@@ -2096,7 +2100,7 @@ async fn official_teams_need_an_organization_owner_two_factor_and_a_verified_dom
         "{detail}"
     );
 
-    // An organization without Slop's App: nothing can be checked until it's installed.
+    // An organization without SLAPorSLOP's App: nothing can be checked until it's installed.
     make_team(
         &app,
         &carl,
@@ -2108,7 +2112,7 @@ async fn official_teams_need_an_organization_owner_two_factor_and_a_verified_dom
     assert_eq!(res["verified"], false);
     assert_eq!(res["checks"].as_array().unwrap().len(), 1);
     let (ok, detail) = check(&res, "app_installed");
-    assert!(!ok && detail.contains("Install Slop's GitHub App on the initech organization"));
+    assert!(!ok && detail.contains("Install SLAPorSLOP's GitHub App on the initech organization"));
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -4281,7 +4285,7 @@ async fn reported_chat_messages_are_checked_for_who_may_report_and_whether_they_
         .unwrap();
     assert_eq!(reports, 0);
 
-    // Older than 30 days, it's gone: Slop says so rather than taking it on trust.
+    // Older than 30 days, it's gone: SLAPorSLOP says so rather than taking it on trust.
     sqlx::query("update chat_messages set created_at = now() - interval '31 days'")
         .execute(&app.db)
         .await
@@ -4429,7 +4433,7 @@ async fn chat_cleanup_deletes_only_what_is_over_thirty_days_and_expires_waiting_
 }
 
 // ---------------------------------------------------------------------------------------------
-// The Slop app's chat library (slop-client), against the API
+// The SLAPorSLOP app's chat library (slop-client), against the API
 
 /// Like `chat_app`, with the data folder and secure store given, to reopen or lose them.
 async fn chat_in(
@@ -4478,7 +4482,7 @@ async fn the_chat_library_backs_up_and_restores_after_starting_over(db: PgPool) 
         .unwrap();
     ann.sync(0).await.unwrap();
 
-    // The backup is sealed with the recovery code: Slop can't read it.
+    // The backup is sealed with the recovery code: SLAPorSLOP can't read it.
     let code = ann.set_backups(true).await.unwrap().unwrap();
     assert!(ann.status().await.unwrap().backups);
     let sealed: Vec<u8> = sqlx::query_scalar("select body from chat_backups where user_id = $1")
@@ -4551,7 +4555,7 @@ async fn the_chat_library_backs_up_and_restores_after_starting_over(db: PgPool) 
         "{texts:?}"
     );
 
-    // Turning backups off deletes the copy at Slop.
+    // Turning backups off deletes the copy at SLAPorSLOP.
     ann2.set_backups(false).await.unwrap();
     assert_eq!(
         app.send(req(Method::GET, "/v1/chat/backup").cookie(&ann_web))
@@ -4772,11 +4776,11 @@ fn payment_warnings_catch_every_off_platform_payment_phrase() {
     ] {
         let text = format!("hey, about the sprites: {phrase} ok?");
         let warning = payment_warning(&text).unwrap_or_else(|| panic!("{phrase}"));
-        assert!(warning.contains("outside Slop"), "{warning}");
+        assert!(warning.contains("outside SLAPorSLOP"), "{warning}");
     }
     for fine in [
         "see you at game night",
-        "payment through Slop is fine",
+        "payment through SLAPorSLOP is fine",
         "the bank in the game",
     ] {
         assert_eq!(payment_warning(fine), None, "{fine}");
@@ -4786,7 +4790,7 @@ fn payment_warnings_catch_every_off_platform_payment_phrase() {
 // ---------------------------------------------------------------------------------------------
 // Bug reports
 
-/// Records that a user played an app (as a launch through the Slop app would).
+/// Records that a user played an app (as a launch through the SLAPorSLOP app would).
 async fn played(app: &TestApp, user: Uuid, slug: &str) {
     sqlx::query(
         "insert into user_app_usage (user_id, app_id, days_launched) select $1, id, 1 from apps where slug = $2",
@@ -4920,7 +4924,7 @@ async fn bug_report_lists_filter_by_status_and_show_players_only_open_ones_and_t
     assert_eq!(mine["mine"], true);
     assert_eq!(mine["log"], "panic at main.rs:1", "their own in full");
 
-    // Private Slop: players it's shared with, while it's shared.
+    // Private apps: players it's shared with, while it's shared.
     let (_, olive) = (maker_id, maker.clone());
     private_app(&app, maker_id, &olive, "secret-tool").await;
     let (finn_id, finn) = app.user("Finn Friend", "US").await;

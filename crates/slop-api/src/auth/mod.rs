@@ -321,7 +321,7 @@ async fn callback(
                 Ok((jar, Redirect::to(&with_param(&return_to, "linked=already"))).into_response())
             }
             Some(other) => {
-                // That sign-in has its own Slop account: offer to combine the two.
+                // That sign-in has its own SLAPorSLOP account: offer to combine the two.
                 let token = new_token();
                 sqlx::query("delete from pending_merges where expires_at < now()")
                     .execute(&state.db)
@@ -365,7 +365,7 @@ async fn callback(
         return Ok((jar.add(cookie), Redirect::to(&return_to)).into_response());
     }
 
-    // New to Slop: hold the provider details until the user finishes sign-up.
+    // New to SLAPorSLOP: hold the provider details until the user finishes sign-up.
     let signup_token = new_token();
     let suggested_name: String = profile.name.chars().take(40).collect();
     sqlx::query("delete from pending_signups where expires_at < now()")
@@ -557,13 +557,13 @@ async fn signup(
     let Some(min_age) = min_age else {
         return Err(ApiError::invalid(
             "country_code",
-            "Slop isn't available in this country yet",
+            "SLAPorSLOP isn't available in this country yet",
         ));
     };
     if !req.age_confirmed {
         return Err(ApiError::invalid(
             "age_confirmed",
-            format!("you must be {min_age} or older to use Slop"),
+            format!("you must be {min_age} or older to use SLAPorSLOP"),
         ));
     }
 
@@ -614,7 +614,7 @@ async fn signup(
         .await
         .map_err(|err| {
             if is_unique_violation(&err) {
-                ApiError::Conflict("this sign-in already has a Slop account".into())
+                ApiError::Conflict("this sign-in already has a SLAPorSLOP account".into())
             } else {
                 err.into()
             }
@@ -684,7 +684,7 @@ struct Me {
     display_name: String,
     email: Option<String>,
     country_code: String,
-    /// Slop staff: the UI shows the admin panel.
+    /// SLAPorSLOP staff: the UI shows the admin panel.
     is_admin: bool,
     /// "Share my playtime" (PRIV-9).
     share_playtime: bool,

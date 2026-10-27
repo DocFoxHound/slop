@@ -2,8 +2,8 @@
 //! Updates without the paperwork (decided 2026-10-19).
 //!
 //! - **Picking a release:** makers choose one of their repository's GitHub releases instead of
-//!   typing a version, commit and file links. Slop resolves the tag to its commit.
-//! - **Watching:** Slop checks each app's repository for a new published GitHub release and
+//!   typing a version, commit and file links. SLAPorSLOP resolves the tag to its commit.
+//! - **Watching:** SLAPorSLOP checks each app's repository for a new published GitHub release and
 //!   submits it, using the previous release's files as the pattern (same file names with the
 //!   version swapped, same program to start). Apps built by Slop Build are left to it.
 //! - **Automatic approval:** once a person has approved one release of an app, later releases
@@ -38,7 +38,7 @@ const WATCH_INTERVAL: StdDuration = StdDuration::from_secs(10 * 60);
 /// A new GitHub release whose files don't match yet is retried for this long, since files are
 /// often uploaded after the release is published.
 const WAIT_FOR_FILES: Duration = Duration::hours(2);
-/// Below this many requests left on Slop's shared GitHub token, the watcher stops for the hour.
+/// Below this many requests left on SLAPorSLOP's shared GitHub token, the watcher stops for the hour.
 const LOW_BUDGET: i64 = 500;
 
 pub fn routes() -> Router<AppState> {
@@ -304,7 +304,7 @@ struct PickableAsset {
     name: String,
     url: String,
     size: u64,
-    /// Slop's guess, for the form to start from.
+    /// SLAPorSLOP's guess, for the form to start from.
     platform: Option<&'static str>,
     kind: Option<&'static str>,
 }
@@ -317,7 +317,7 @@ struct PickableRelease {
     published_at: Option<String>,
     prerelease: bool,
     html_url: String,
-    /// Already sent to Slop (any status).
+    /// Already sent to SLAPorSLOP (any status).
     submitted: bool,
     assets: Vec<PickableAsset>,
 }
@@ -469,7 +469,7 @@ async fn submit_from_github(
 
 #[derive(Serialize)]
 struct Settings {
-    /// Slop's GitHub App on this repository; absent when Slop has no App.
+    /// SLAPorSLOP's GitHub App on this repository; absent when SLAPorSLOP has no App.
     github_app: Option<GithubAppStatus>,
     watch_releases: bool,
     auto_update: bool,
@@ -484,7 +484,7 @@ struct Settings {
     watch_problem: Option<String>,
 }
 
-/// Slop's GitHub App on the app's repository, when Slop has one.
+/// SLAPorSLOP's GitHub App on the app's repository, when SLAPorSLOP has one.
 #[derive(Serialize)]
 struct GithubAppStatus {
     installed: bool,

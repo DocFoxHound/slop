@@ -1739,7 +1739,7 @@ pub struct PeopleReport {
     pub live_profiles: i64,
     pub portfolios_waiting_for_review: i64,
     pub jobs_by_status: BTreeMap<String, i64>,
-    /// Simulated payments recorded, their total and Slop's fees.
+    /// Simulated payments recorded, their total and SLAPorSLOP's fees.
     pub payments: i64,
     pub paid_total_usd: f64,
     pub slop_fees_usd: f64,
@@ -1761,7 +1761,7 @@ pub struct PeopleReport {
     /// Must be 0: reviews on jobs that aren't completed, or not by the job's client.
     pub reviews_not_completed: i64,
     pub reviews_not_by_client: i64,
-    /// Creatives' % Not Slop (real code) vs their true quality.
+    /// Creatives' % Slaps (real code) vs their true quality.
     pub rated_creatives: usize,
     pub creative_rating_truth_correlation: f64,
     pub no_ai_average_percent: f64,

@@ -464,7 +464,7 @@ async fn connecting_a_stripe_account_for_donations_needs_an_adult_but_no_fresh_s
     let ok =
         json!({ "tax_notice_ack": true, "confirm_adult": true, "return_to": "//evil.example/x" });
 
-    // A new account still signing up: Stripe's sign-up link, coming back to Slop only.
+    // A new account still signing up: Stripe's sign-up link, coming back to SLAPorSLOP only.
     let res = app.send(connect(ok)).await;
     let on = body_json(res).await;
     assert_eq!(on["status"], "pending", "{on}");
@@ -1156,7 +1156,7 @@ async fn fee_statements_cover_people_jobs_and_only_the_users_own_accounts(db: Pg
     );
 }
 
-/// b30: Slop's fee on bounty payouts is a fee like any other: in the builder's statements, and in
+/// b30: SLAPorSLOP's fee on bounty payouts is a fee like any other: in the builder's statements, and in
 /// the daily comparison with Stripe's application fees.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn bounty_fees_are_in_statements_and_reconciliation(db: PgPool) {

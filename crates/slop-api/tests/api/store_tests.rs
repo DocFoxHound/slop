@@ -10,7 +10,7 @@ use std::sync::{Arc, Mutex};
 // Helpers for this area
 
 /// A small GitHub API for licence lookups that counts what it was asked. octo/secret is private:
-/// its licence is there only with Slop's token. octo/flaky answers 502. Every repository is
+/// its licence is there only with SLAPorSLOP's token. octo/flaky answers 502. Every repository is
 /// owned by GitHub account 42.
 async fn counting_github() -> (String, Arc<Mutex<HashMap<String, usize>>>) {
     let hits: Arc<Mutex<HashMap<String, usize>>> = Arc::default();
@@ -75,7 +75,7 @@ async fn count(db: &PgPool, sql: &str) -> i64 {
 // ---------------------------------------------------------------------------------------------
 // Licence detection (catalog.rs)
 
-/// Only the repository's owner asks GitHub with Slop's credentials, and what they see isn't
+/// Only the repository's owner asks GitHub with SLAPorSLOP's credentials, and what they see isn't
 /// cached for anyone else; public answers are cached for a day, lookups are limited per account,
 /// and GitHub's other answers become a note.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -105,7 +105,7 @@ async fn licence_lookups_use_slops_token_only_for_the_owner_and_are_cached_and_l
     .await;
     assert!(found["spdx"].is_null(), "{found}");
     assert!(found["note"].as_str().unwrap().contains("no licence file"));
-    // The owner gets it with Slop's token...
+    // The owner gets it with SLAPorSLOP's token...
     let found = body_json(
         app.send(license_lookup("https://github.com/octo/secret").cookie(&owner))
             .await,
@@ -738,7 +738,7 @@ async fn browser_demos_refuse_strangers_bad_builds_and_full_slots(db: PgPool) {
 async fn demo_status_says_when_an_app_can_have_one(db: PgPool) {
     let s = demo_setup(db, 10).await;
     let app = &s.app;
-    // The same app on a Slop without a play origin: not available, and starting one is refused.
+    // The same app on a SLAPorSLOP without a play origin: not available, and starting one is refused.
     let off = test_app(app.db.clone()).await;
     let status = body_json(
         off.send(req(Method::GET, "/v1/apps/game/demo").cookie(&s.maker))
@@ -1481,7 +1481,7 @@ async fn notifications_read_by_kind_unread_again_and_dismissed(db: PgPool) {
     );
 }
 
-/// Email choices: every category on by default, whether this Slop sends email and whether the
+/// Email choices: every category on by default, whether this SLAPorSLOP sends email and whether the
 /// account has an address; only known categories and true/false, and a change keeps the rest.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn email_preferences_default_on_and_change_one_at_a_time(db: PgPool) {
@@ -1559,7 +1559,7 @@ async fn email_preferences_default_on_and_change_one_at_a_time(db: PgPool) {
     let mailing = test_app_with(db, |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: "smtp://localhost:2525".into(),
-            from: "Slop <n@slop.test>".into(),
+            from: "SLAPorSLOP <n@slop.test>".into(),
         })
     })
     .await;
@@ -1657,7 +1657,7 @@ async fn notification_emails_skip_old_news_and_accounts_without_email(db: PgPool
     let app = test_app_with(db, |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: "smtp://localhost:2525".into(),
-            from: "Slop <n@slop.test>".into(),
+            from: "SLAPorSLOP <n@slop.test>".into(),
         })
     })
     .await;
@@ -1820,7 +1820,7 @@ async fn the_email_worker_sends_retries_and_gives_up(db: PgPool) {
     let app = test_app_with(db.clone(), |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: format!("smtp://127.0.0.1:{port}"),
-            from: "Slop <n@slop.test>".into(),
+            from: "SLAPorSLOP <n@slop.test>".into(),
         })
     })
     .await;
@@ -1908,7 +1908,7 @@ async fn the_email_worker_sends_retries_and_gives_up(db: PgPool) {
     let broken = test_app_with(db, |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: "carrier-pigeon://coop".into(),
-            from: "Slop <n@slop.test>".into(),
+            from: "SLAPorSLOP <n@slop.test>".into(),
         })
     })
     .await;
@@ -1948,7 +1948,7 @@ async fn signed_out_reporters_get_the_outcome_by_email(db: PgPool) {
     let app = test_app_with(db.clone(), |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: "smtp://localhost:2525".into(),
-            from: "Slop <n@slop.test>".into(),
+            from: "SLAPorSLOP <n@slop.test>".into(),
         })
     })
     .await;
@@ -3951,7 +3951,7 @@ async fn upcoming_without_personalization_leaves_out_what_you_marked(db: PgPool)
 // ---------------------------------------------------------------------------------------------
 // The catalog: ratings on tiles, my apps, similar apps (catalog.rs)
 
-/// Tiles show % Not Slop, the rating filter and the rating sort count an app only from
+/// Tiles show % Slaps, the rating filter and the rating sort count an app only from
 /// votes::MIN_VOTES votes.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn tile_ratings_need_the_minimum_number_of_votes(db: PgPool) {
@@ -4343,7 +4343,7 @@ async fn glow_ups_take_the_later_of_two_votes_at_the_same_moment(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, _) = app.user("Maker", "US").await;
     let voters = plain_voters(&app, 5).await;
-    // Then: each voter said Slop and, in the same instant, changed to Not Slop (100% then).
+    // Then: each voter said Slop and, in the same instant, changed to Slaps (100% then).
     // Written in both orders, so neither the table's order nor luck decides.
     for (slug, later_first) in [("tower-a", true), ("tower-b", false)] {
         listed_with(&app, maker_id, slug, "released", "").await;
@@ -5106,7 +5106,7 @@ async fn required_emails_skip_closed_accounts_and_need_smtp(db: PgPool) {
     let app = test_app_with(db.clone(), |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: "smtp://localhost:2525".into(),
-            from: "Slop <n@slop.test>".into(),
+            from: "SLAPorSLOP <n@slop.test>".into(),
         })
     })
     .await;
@@ -5164,7 +5164,7 @@ async fn required_emails_skip_closed_accounts_and_need_smtp(db: PgPool) {
         "{body}"
     );
 
-    // Without SMTP: the reminder is in Slop, but no email is queued.
+    // Without SMTP: the reminder is in SLAPorSLOP, but no email is queued.
     sqlx::query("update server_donations set first_reminder_at = null")
         .execute(&app.db)
         .await

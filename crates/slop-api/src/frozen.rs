@@ -1,17 +1,17 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Repository access (SECURITY §12.2–12.3, DESIGN §17 decision 11).
 //!
-//! Slop keeps no copies of source or builds, so it has to be able to read every app's repository.
+//! SLAPorSLOP keeps no copies of source or builds, so it has to be able to read every app's repository.
 //! A daily check looks at each app's repository:
 //!
-//! - **Lost access** (the repository is gone, Slop's access was removed, or a public app's
+//! - **Lost access** (the repository is gone, SLAPorSLOP's access was removed, or a public app's
 //!   repository was made private): the app is **frozen**. It takes no new releases, because they
 //!   couldn't be checked. Installed copies keep working. The owner is told straight away.
-//! - **After 14 days frozen**, a public app is delisted and Private Slop is no longer shared
+//! - **After 14 days frozen**, a public app is delisted and a private app is no longer shared
 //!   (`catalog::push_shared_with` leaves it out).
 //! - **Access back:** the freeze ends, and an app delisted only for being frozen is listed again.
 //!
-//! Also here: **making Private Slop public**. The owner asks once the repository is public under
+//! Also here: **making a private app public**. The owner asks once the repository is public under
 //! an open-source licence; a reviewer checks it again from scratch before it goes in the store.
 
 use axum::{
@@ -50,10 +50,10 @@ pub fn routes() -> Router<AppState> {
 #[derive(Debug, PartialEq, Eq)]
 pub enum Access {
     Readable,
-    /// Slop can't read it, or a public app's source isn't public any more. The reason is shown to
+    /// SLAPorSLOP can't read it, or a public app's source isn't public any more. The reason is shown to
     /// the owner.
     Lost(String),
-    /// Couldn't tell (the host had an error, or Slop has no way to check this host yet).
+    /// Couldn't tell (the host had an error, or SLAPorSLOP has no way to check this host yet).
     Unknown,
 }
 
@@ -66,7 +66,7 @@ pub async fn check_app(state: &AppState, app_id: Uuid, repo_url: &str, public: b
             Some(true) => return Access::Readable,
             Some(false) => {
                 return Access::Lost(
-                    "Slop's token can't read the repository any more: it was revoked or expired, \
+                    "SLAPorSLOP's token can't read the repository any more: it was revoked or expired, \
                      or the repository moved. Save a new one on the Manage page"
                         .into(),
                 );
@@ -112,7 +112,7 @@ pub async fn check(state: &AppState, repo_url: &str, public: bool) -> Access {
                 }
             }
             404 | 410 | 451 => Access::Lost(
-                "Slop can't read the repository: it was deleted, renamed, or Slop's access was removed"
+                "SLAPorSLOP can't read the repository: it was deleted, renamed, or SLAPorSLOP's access was removed"
                     .into(),
             ),
             _ => Access::Unknown,
@@ -189,12 +189,12 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
                 Notice {
                     user_id: maker,
                     category: "apps",
-                    title: format!("{title} is frozen: Slop can't check its repository"),
+                    title: format!("{title} is frozen: SLAPorSLOP can't check its repository"),
                     body: format!(
-                        "Slop checked {title}'s repository and {reason}. Until it can read it again, \
+                        "SLAPorSLOP checked {title}'s repository and {reason}. Until it can read it again, \
                          {title} takes no new releases; copies people installed keep working. \
                          If nothing changes within 14 days, it leaves the store (or stops being \
-                         shared, for Private Slop). Restore access and Slop picks it up at the \
+                         shared, for a private app). Restore access and SLAPorSLOP picks it up at the \
                          next daily check, or press Check now on the app's Manage page."
                     ),
                     link: format!("/publish/{slug}/manage"),
@@ -221,7 +221,7 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
                     category: "apps",
                     title: format!("{title} isn't frozen any more"),
                     body: format!(
-                        "Slop can read {title}'s repository again, so it takes new releases{}.",
+                        "SLAPorSLOP can read {title}'s repository again, so it takes new releases{}.",
                         if frozen_delisted {
                             " and is back in the store"
                         } else {
@@ -240,7 +240,7 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
     Ok(())
 }
 
-/// Delists public apps frozen for longer than the grace period. Private Slop needs nothing done:
+/// Delists public apps frozen for longer than the grace period. Private apps need nothing done:
 /// `catalog::push_shared_with` stops sharing it by itself.
 pub async fn end_grace(state: &AppState) -> anyhow::Result<usize> {
     let mut tx = state.db.begin().await?;
@@ -260,7 +260,7 @@ pub async fn end_grace(state: &AppState) -> anyhow::Result<usize> {
                 category: "apps",
                 title: format!("{title} left the store"),
                 body: format!(
-                    "Slop still can't read {title}'s repository after 14 days, so it's out of the \
+                    "SLAPorSLOP still can't read {title}'s repository after 14 days, so it's out of the \
                      store. Installed copies keep working. Restore access and it's listed again."
                 ),
                 link: format!("/publish/{slug}/manage"),
@@ -315,7 +315,7 @@ pub async fn frozen_reason<'c>(
     app_id: Uuid,
 ) -> sqlx::Result<Option<String>> {
     sqlx::query_scalar(
-        "select coalesce(frozen_reason, 'Slop can''t read the repository') from apps
+        "select coalesce(frozen_reason, 'SLAPorSLOP can''t read the repository') from apps
          where id = $1 and frozen_at is not null",
     )
     .bind(app_id)
@@ -364,7 +364,7 @@ pub async fn status(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Option<Froz
 }
 
 // ---------------------------------------------------------------------------------------------
-// Checking now, and making Private Slop public
+// Checking now, and making a private app public
 
 async fn owned(
     state: &AppState,
@@ -397,7 +397,7 @@ pub async fn check_now(
     Ok(status(&state.db, id).await?)
 }
 
-/// The owner asks for Private Slop to go in the store (SECURITY §12.3). The repository has to be
+/// The owner asks for a private app to go in the store (SECURITY §12.3). The repository has to be
 /// public, under the open-source licence the app names; a reviewer then checks it from scratch.
 async fn request_public(
     State(state): State<AppState>,
@@ -418,7 +418,7 @@ async fn request_public(
         }
         Access::Unknown => {
             return Err(ApiError::Conflict(
-                "Slop couldn't confirm the repository is public. Make sure anyone can read it \
+                "SLAPorSLOP couldn't confirm the repository is public. Make sure anyone can read it \
                  without signing in, then try again."
                     .into(),
             ));

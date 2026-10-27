@@ -148,7 +148,7 @@ async fn fake_github() -> String {
             }),
         )
         .route("/repos/octo/game", get(|| async { axum::Json(json!({ "default_branch": "trunk", "id": 1001, "owner": { "id": 42 } })) }))
-        // The source archive Slop's source check reads (source_scan.rs), and OSV (dep_watch.rs).
+        // The source archive SLAPorSLOP's source check reads (source_scan.rs), and OSV (dep_watch.rs).
         .route("/repos/octo/scanned/tarball/{sha}", get(|| async { source_archive(SCANNED_SOURCE) }))
         .route("/repos/octo/game/tarball/{sha}", get(|| async { source_archive(&SCANNED_SOURCE[..1]) }))
         .route(
@@ -404,7 +404,7 @@ async fn fake_github() -> String {
                     .into_response()
             }),
         )
-        // Slop's GitHub App: installation 77 gets a token, which one private repository needs.
+        // SLAPorSLOP's GitHub App: installation 77 gets a token, which one private repository needs.
         .route(
             "/app/installations/{id}/access_tokens",
             post(|axum::extract::Path(id): axum::extract::Path<i64>, headers: axum::http::HeaderMap| async move {
@@ -425,7 +425,7 @@ async fn fake_github() -> String {
                 }
             }),
         )
-        // Official teams (teams.rs): the "acme" organization has Slop's App installed.
+        // Official teams (teams.rs): the "acme" organization has SLAPorSLOP's App installed.
         .route(
             "/orgs/{org}/installation",
             get(|axum::extract::Path(org): axum::extract::Path<String>| async move {
@@ -444,7 +444,7 @@ async fn fake_github() -> String {
             }),
         )
         // Who owns a repository (repo_owner.rs): octo is account 42, bob 43; acme and globex are
-        // organizations (only acme has Slop's App). Deleted repositories aren't there.
+        // organizations (only acme has SLAPorSLOP's App). Deleted repositories aren't there.
         .route(
             "/repos/{owner}/{repo}",
             get(|axum::extract::Path((owner, repo)): axum::extract::Path<(String, String)>| async move {
@@ -779,7 +779,7 @@ async fn github_signup_then_signin(db: PgPool) {
         pkce_challenge(&verifier)
     );
 
-    // Callback for a new GitHub account: no Slop account yet, so go to sign-up.
+    // Callback for a new GitHub account: no SLAPorSLOP account yet, so go to sign-up.
     let res = app
         .send(
             req(
@@ -1746,7 +1746,7 @@ async fn desktop_sign_in(app: &TestApp, web_cookie: &str) -> Value {
             "code_challenge": pkce_challenge(&verifier),
             "redirect_port": 49152,
             "state": "state-state-state-1",
-            "device_name": "Slop for Linux"
+            "device_name": "SLAPorSLOP for Linux"
         })))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
@@ -1762,7 +1762,7 @@ async fn desktop_sign_in(app: &TestApp, web_cookie: &str) -> Value {
             .await,
     )
     .await;
-    assert_eq!(info["device_name"], "Slop for Linux");
+    assert_eq!(info["device_name"], "SLAPorSLOP for Linux");
 
     let res = app
         .send(
@@ -1813,7 +1813,7 @@ async fn desktop_sign_in_and_refresh(db: PgPool) {
             .as_array()
             .unwrap()
             .iter()
-            .any(|s| s["kind"] == "desktop" && s["user_agent"] == "Slop for Linux")
+            .any(|s| s["kind"] == "desktop" && s["user_agent"] == "SLAPorSLOP for Linux")
     );
 
     // Refresh rotates both tokens.
@@ -2046,7 +2046,7 @@ async fn submit_and_fetch(app: &TestApp, cookie: &str, version: &str) -> String 
     release["id"].as_str().unwrap().to_string()
 }
 
-/// Slop's source check reads the repository at the release commit, and the daily dependency
+/// SLAPorSLOP's source check reads the repository at the release commit, and the daily dependency
 /// watch tells the maker about advisories published since (but not ones the build showed).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn source_checks_and_the_dependency_watch(db: PgPool) {
@@ -2245,7 +2245,7 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
     assert_eq!(scan["licence"]["files"][0]["spdx"], "MIT", "{scan}");
     assert!(scan.get("online_undeclared").is_none(), "declared now");
 
-    // Repositories Slop can't read are recorded as not checked.
+    // Repositories SLAPorSLOP can't read are recorded as not checked.
     sqlx::query("update apps set repo_url = 'https://bitbucket.org/octo/scanned' where id = $1")
         .bind(app_id)
         .execute(&app.db)
@@ -2266,7 +2266,7 @@ async fn source_checks_and_the_dependency_watch(db: PgPool) {
     assert_eq!(status, "not_checked");
 }
 
-/// A file over GitHub's 2 GiB limit, released in numbered parts: Slop fetches and hashes each,
+/// A file over GitHub's 2 GiB limit, released in numbered parts: SLAPorSLOP fetches and hashes each,
 /// and the manifest lists them for the desktop app to download and join.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn release_files_in_parts(db: PgPool) {
@@ -2420,7 +2420,7 @@ async fn release_review_and_signed_manifest(db: PgPool) {
         .unwrap();
     admin::list_app(&app.db, "game", "rev").await.unwrap();
 
-    // Anyone can now fetch the signed manifest, and it verifies with Slop's key.
+    // Anyone can now fetch the signed manifest, and it verifies with SLAPorSLOP's key.
     let res = app
         .send(req(Method::GET, "/v1/apps/game/manifest").header("x-country", "US"))
         .await;
@@ -2970,7 +2970,7 @@ async fn slop_build_submits_releases_with_a_github_token(db: PgPool) {
     let release = body_json(res).await;
     assert_eq!(release["status"], "fetching");
     assert_eq!(release["version"], "build.12");
-    // URLs are built by Slop from the app's repository.
+    // URLs are built by SLAPorSLOP from the app's repository.
     let urls: Vec<&str> = release["files"]
         .as_array()
         .unwrap()
@@ -3149,7 +3149,11 @@ async fn private_release_files_get_short_lived_links(db: PgPool) {
 async fn the_api_can_serve_the_website(db: PgPool) {
     let dir = std::env::temp_dir().join(format!("slop-web-test-{}", Uuid::now_v7()));
     std::fs::create_dir_all(dir.join("assets")).unwrap();
-    std::fs::write(dir.join("index.html"), "<!doctype html><title>Slop</title>").unwrap();
+    std::fs::write(
+        dir.join("index.html"),
+        "<!doctype html><title>SLAPorSLOP</title>",
+    )
+    .unwrap();
     std::fs::write(
         dir.join("login.html"),
         "<!doctype html><title>Sign in</title>",
@@ -3161,7 +3165,7 @@ async fn the_api_can_serve_the_website(db: PgPool) {
         "<!doctype html><title>How to publish</title>",
     )
     .unwrap();
-    std::fs::write(dir.join("publishing.md"), "# Publishing → Slop").unwrap();
+    std::fs::write(dir.join("publishing.md"), "# Publishing → SLAPorSLOP").unwrap();
 
     let base = test_app(db).await;
     let mut config = base.config.clone();
@@ -3183,12 +3187,12 @@ async fn the_api_can_serve_the_website(db: PgPool) {
         "{csp}"
     );
     assert_eq!(home.headers()["cache-control"], "no-cache");
-    assert!(text(home).await.contains("<title>Slop</title>"));
+    assert!(text(home).await.contains("<title>SLAPorSLOP</title>"));
     // Browser-side routes get the app; real files are served as they are.
     assert!(
         text(app.send(req(Method::GET, "/app/some-game")).await)
             .await
-            .contains("<title>Slop</title>")
+            .contains("<title>SLAPorSLOP</title>")
     );
     assert!(
         text(app.send(req(Method::GET, "/login.html")).await)
@@ -3204,7 +3208,7 @@ async fn the_api_can_serve_the_website(db: PgPool) {
     );
     let md = app.send(req(Method::GET, "/publishing.md")).await;
     assert_eq!(md.headers()["content-type"], "text/markdown; charset=utf-8");
-    assert!(text(md).await.contains("Publishing → Slop"));
+    assert!(text(md).await.contains("Publishing → SLAPorSLOP"));
     let asset = app.send(req(Method::GET, "/assets/app-1234.js")).await;
     assert_eq!(
         asset.headers()["cache-control"],
@@ -3280,7 +3284,7 @@ async fn desktop_builds_are_uploaded_signed_and_offered(db: PgPool) {
         StatusCode::NO_CONTENT
     );
 
-    // Only the pipeline on main in Slop's repository, in the approved environment, may upload.
+    // Only the pipeline on main in SLAPorSLOP's repository, in the approved environment, may upload.
     for bad in [
         json!({ "repository": "mallory/slop", "job_workflow_ref": "mallory/slop/.github/workflows/pipeline.yml@refs/heads/main" }),
         json!({ "job_workflow_ref": "octo/slop/.github/workflows/other.yml@refs/heads/main" }),
@@ -3968,7 +3972,7 @@ async fn updates_are_approved_automatically_after_a_person_approves_one(db: PgPo
     .await
     .unwrap();
 
-    // The next one passes every check, so Slop approves and signs it.
+    // The next one passes every check, so SLAPorSLOP approves and signs it.
     let second = submit_and_fetch(&app, &maker, "1.1.0").await;
     assert_eq!(
         release_status(&app, &second).await,
@@ -4142,7 +4146,7 @@ async fn makers_pick_a_github_release_and_slop_watches_for_the_next(db: PgPool) 
     assert!(settings["watch_note"].is_null());
 
     // The next check sends the ETag, and GitHub's "not modified" means nothing to do, even
-    // with the release gone from Slop.
+    // with the release gone from SLAPorSLOP.
     sqlx::query("delete from releases where version = '1.1.0'")
         .execute(&app.db)
         .await
@@ -4468,7 +4472,7 @@ async fn the_github_app_gets_webhooks_and_its_own_tokens(db: PgPool) {
     })
     .await;
     let (maker_id, maker) = app.user("Maker", "US").await;
-    // The maker's linked GitHub account owns octo/hooked: only an owner's lookup uses Slop's
+    // The maker's linked GitHub account owns octo/hooked: only an owner's lookup uses SLAPorSLOP's
     // App to read a private repository.
     sqlx::query(
         "insert into identities (provider, provider_subject, user_id) values ('github', '42', $1)",
@@ -4493,7 +4497,7 @@ async fn the_github_app_gets_webhooks_and_its_own_tokens(db: PgPool) {
             .await
         }
     };
-    // A private repository Slop can't see yet.
+    // A private repository SLAPorSLOP can't see yet.
     assert!(license(maker.clone()).await["spdx"].is_null());
 
     // A webhook with the wrong signature is refused.
@@ -5342,7 +5346,7 @@ async fn only_players_vote_and_ratings_add_up(db: PgPool) {
     assert_eq!(r["percent"], 60, "3 of 5");
     // Two votes weigh 1 (10 hours); three weigh ≈0.29 (one launch day): (2 + 0.29) / (2 + 0.87).
     assert_eq!(r["percent_weighted"], 80);
-    assert_eq!(r["label"], "Very Not Slop");
+    assert_eq!(r["label"], "Really Slaps");
     let months = r["monthly"].as_array().unwrap();
     assert_eq!(months.last().unwrap()["not_slop"], 3);
     assert_eq!(months.last().unwrap()["percent_weighted"], 80);
@@ -5386,7 +5390,7 @@ async fn beta_apps_can_be_rated_and_the_rating_says_so(db: PgPool) {
         async { body_json(app.send(r).await).await }
     };
 
-    // Open in Beta, but still only for players who launched it from the Slop app.
+    // Open in Beta, but still only for players who launched it from the SLAPorSLOP app.
     let r = ratings(Some(stranger.clone()), "early").await;
     assert_eq!(
         (r["open"].as_bool(), r["stage"].as_str()),
@@ -6482,7 +6486,7 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
         .await;
     let record =
         String::from_utf8(res.into_body().collect().await.unwrap().to_bytes().to_vec()).unwrap();
-    assert!(record.contains("2 messages match Slop's fingerprints, 0 don't"));
+    assert!(record.contains("2 messages match SLAPorSLOP's fingerprints, 0 don't"));
     let res = app
         .send(post(
             format!("/v1/admin/problems/{problem}/suggest"),
@@ -6586,7 +6590,7 @@ async fn hiring_runs_from_request_to_credit(db: PgPool) {
     assert_eq!(page["reviews"], json!([]));
     assert_eq!(page["rating"]["slop"], 0);
 
-    // Thirty days after the conversation closed, Slop forgets the text; copies still verify.
+    // Thirty days after the conversation closed, SLAPorSLOP forgets the text; copies still verify.
     let n = slop_api::people::jobs::forget_conversations(
         &app.db,
         OffsetDateTime::now_utc() + time::Duration::days(31),
@@ -6810,7 +6814,7 @@ async fn fake_stripe() -> String {
                     "currency": form["line_items[0][price_data][currency]"],
                     "application_fee": form.get("payment_intent_data[application_fee_amount]").map(|f| f.parse::<i64>().unwrap()),
                     "metadata": metadata,
-                    // What Slop sent, for tests to check.
+                    // What SLAPorSLOP sent, for tests to check.
                     "form": form,
                 });
                 sessions.lock().unwrap().insert(id, session.clone());
@@ -6943,7 +6947,7 @@ async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgP
     )
     .await;
 
-    // Pay: a Checkout session on the creative's account, with Slop's 5% fee; pressing again
+    // Pay: a Checkout session on the creative's account, with SLAPorSLOP's 5% fee; pressing again
     // reuses it.
     let paid = body_json(
         app.send(req(Method::POST, format!("/v1/jobs/{id}/pay")).cookie(&client_cookie))
@@ -7013,7 +7017,7 @@ async fn stripe_payments_are_direct_charges_confirmed_by_signed_webhooks(db: PgP
         )]
     );
 
-    // The creative refunds part of it from their Stripe dashboard; Slop records it.
+    // The creative refunds part of it from their Stripe dashboard; SLAPorSLOP records it.
     let event = json!({ "id": "evt_2", "type": "charge.refunded", "account": "acct_vera", "data": { "object": { "id": "ch_cs_1" } } });
     let (body, sig) = stripe_signed(&event, "whsec_slop");
     let res = app.router.clone().oneshot(hook(body, sig)).await.unwrap();
@@ -7630,7 +7634,7 @@ async fn interested_players_hear_when_an_app_moves_on(db: PgPool) {
     let app = test_app_with(db, |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: "smtp://localhost:2525".into(),
-            from: "Slop <n@slop.test>".into(),
+            from: "SLAPorSLOP <n@slop.test>".into(),
         })
     })
     .await;
@@ -7812,7 +7816,7 @@ async fn donations_on(app: &TestApp, maker: &str, slug: &str, servers: bool) {
 }
 
 /// A donation to a mod or community build is shared: 30% to the original's maker first, as its
-/// own donation, then the rest to the branch's author. Slop never splits one payment.
+/// own donation, then the rest to the branch's author. SLAPorSLOP never splits one payment.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn donations_to_mods_are_shared_with_the_original(db: PgPool) {
     let app = test_app_with(db, |c| {
@@ -8244,7 +8248,7 @@ async fn donations_go_to_the_maker_and_give_nothing_back(db: PgPool) {
     );
     assert_eq!(
         statements["vat"]["kind"], "none",
-        "no VAT on Slop's fee in the US"
+        "no VAT on SLAPorSLOP's fee in the US"
     );
 }
 
@@ -8284,7 +8288,7 @@ async fn stripe_donations_are_direct_charges_named_as_donations(db: PgPool) {
     .await;
     let url = started["url"].as_str().unwrap();
     let session = url.rsplit('/').next().unwrap();
-    // The Checkout session Slop asked for: the donor's total, Slop's 5% of the donation, "donation".
+    // The Checkout session SLAPorSLOP asked for: the donor's total, SLAPorSLOP's 5% of the donation, "donation".
     let s: Value = reqwest::Client::new()
         .get(format!("{stripe_base}v1/checkout/sessions/{session}"))
         .send()
@@ -8650,7 +8654,7 @@ async fn branches_are_community_builds_on_the_original_page(db: PgPool) {
     assert_eq!(own["maker"]["display_name"], "Bo Brancher");
 }
 
-/// Mods (Content Policy, "Code from outside Slop"): anyone publishes one for any app, it's
+/// Mods (Content Policy, "Code from outside SLAPorSLOP"): anyone publishes one for any app, it's
 /// checked and reviewed like an app, and it's listed only on the app's page, never on its own.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn mods_are_listed_on_their_game_page(db: PgPool) {
@@ -8734,7 +8738,7 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
 
     // Once approved and listed: on the game's page, not in the store or the Community shelf.
     // Fetched and scanned (the fake host isn't involved here), then approved: the signed
-    // manifest names the game, so the Slop app adds it only to that game.
+    // manifest names the game, so the SLAPorSLOP app adds it only to that game.
     sqlx::query(
         "update release_files set size_bytes = 10, sha256 = repeat('a', 64), scan_result = 'passed'
          where release_id = $1",
@@ -8810,7 +8814,7 @@ async fn mods_are_listed_on_their_game_page(db: PgPool) {
     .execute(&app.db)
     .await
     .unwrap();
-    // A community build's manifest names its original instead, so the Slop app can offer it
+    // A community build's manifest names its original instead, so the SLAPorSLOP app can offer it
     // on the original's Play button.
     let res = app
         .send(req(Method::POST, "/v1/apps/castle/branches").cookie(&author).json(json!({
@@ -9050,7 +9054,7 @@ async fn sandbox_mode_declarations_suggestions_and_reports(db: PgPool) {
         );
     }
 
-    // The library's update check carries the same, for the Slop app's switch and prompt.
+    // The library's update check carries the same, for the SLAPorSLOP app's switch and prompt.
     let updates = body_json(
         app.send(req(Method::GET, "/v1/library/updates?apps=castle,quiet"))
             .await,
@@ -9063,7 +9067,7 @@ async fn sandbox_mode_declarations_suggestions_and_reports(db: PgPool) {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Private Slop (DESIGN §13)
+// Private apps (DESIGN §13)
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn private_slop_is_seen_only_by_who_it_is_shared_with(db: PgPool) {
@@ -9298,7 +9302,7 @@ async fn player_teams_share_picks_nights_and_private_slop(db: PgPool) {
     .await;
     assert_eq!(inbox["items"][0]["title"], "Night Owls: Cave night");
 
-    // Private Slop shared with the team: members see it, others don't.
+    // Private apps shared with the team: members see it, others don't.
     let mut body = new_app("team-tool");
     body["visibility"] = json!("private");
     app.send(req(Method::POST, "/v1/apps").cookie(&owner).json(body))
@@ -9488,7 +9492,7 @@ async fn official_teams_are_verified_through_their_github_organization(db: PgPoo
     let other = body_json(app.send(req(Method::GET, "/v1/apps/side-thing")).await).await;
     assert!(other["official_team"].is_null());
 
-    // Never Private Slop, never picks.
+    // Never private apps, never picks.
     let mut body = new_app("secret");
     body["visibility"] = json!("private");
     app.send(req(Method::POST, "/v1/apps").cookie(&owner).json(body))
@@ -9574,7 +9578,7 @@ async fn search_finds_what_runs_on_a_platform_including_community_builds(db: PgP
         ["tower"]
     );
 
-    // Upcoming or released, % Not Slop, and the sorts.
+    // Upcoming or released, % Slaps, and the sorts.
     assert_eq!(
         list_slugs(&app, req(Method::GET, "/v1/apps?upcoming=true")).await,
         ["moat"]
@@ -10152,7 +10156,7 @@ async fn fee_statements_show_the_vat_inside_slops_fee(db: PgPool) {
             .await
         }
     };
-    // An individual in Germany: 19% VAT inside Slop's 5% (100 cents fee → 16 cents VAT).
+    // An individual in Germany: 19% VAT inside SLAPorSLOP's 5% (100 cents fee → 16 cents VAT).
     let s = statements(maker.clone()).await;
     assert_eq!(s["vat"]["kind"], "included");
     assert_eq!(s["vat"]["rate_bp"], 1900);
@@ -10197,7 +10201,7 @@ async fn serve(app: &TestApp) -> String {
     format!("http://{addr}/")
 }
 
-/// A user's Slop app with chat: signed in through the desktop flow, its own secure store and
+/// A user's SLAPorSLOP app with chat: signed in through the desktop flow, its own secure store and
 /// data folder.
 async fn chat_app(app: &TestApp, base: &str, user: Uuid, cookie: &str) -> Chat {
     let tokens = desktop_sign_in(app, cookie).await;
@@ -10271,7 +10275,7 @@ async fn chat_is_end_to_end_encrypted_and_slop_only_relays_it(db: PgPool) {
         (conv, "Ann")
     );
 
-    // Messages: Slop stores only ciphertext.
+    // Messages: SLAPorSLOP stores only ciphertext.
     ann.send(
         conv,
         "hello bob, pay me on paypal for the sprites",
@@ -10306,7 +10310,7 @@ async fn chat_is_end_to_end_encrypted_and_slop_only_relays_it(db: PgPool) {
     for body in &stored {
         assert!(
             !body.windows(5).any(|w| w == b"hello" || w == b"paypa"),
-            "Slop can't read messages"
+            "SLAPorSLOP can't read messages"
         );
     }
     let unread = &bob.conversations().await.unwrap()[0];
@@ -10414,14 +10418,14 @@ async fn chat_is_end_to_end_encrypted_and_slop_only_relays_it(db: PgPool) {
         "everyone sees the same security code"
     );
 
-    // Reporting: Bob's app sends the decrypted message; Slop checks it against the franking tag.
+    // Reporting: Bob's app sends the decrypted message; SLAPorSLOP checks it against the franking tag.
     let hello_id = hello.id;
     let ack = bob
         .report(
             conv,
             hello_id,
             "harassment",
-            "Asked me to pay outside Slop.",
+            "Asked me to pay outside SLAPorSLOP.",
         )
         .await
         .unwrap();
@@ -10984,10 +10988,10 @@ async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
         body_json(res).await["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("already linked to an app on Slop")
+            .contains("already linked to an app on SLAPorSLOP")
     );
 
-    // Organizations: only their owners, through Slop's App on the organization.
+    // Organizations: only their owners, through SLAPorSLOP's App on the organization.
     let res = app
         .send(publish(
             &octo,
@@ -11014,9 +11018,9 @@ async fn only_a_repositorys_owner_can_link_it(db: PgPool) {
             .await,
     )
     .await;
-    assert!(why.contains("install Slop's GitHub App"), "{why}");
+    assert!(why.contains("install SLAPorSLOP's GitHub App"), "{why}");
 
-    // A repository Slop can't see isn't accepted.
+    // A repository SLAPorSLOP can't see isn't accepted.
     let why = refused(
         app.send(publish(
             &octo,
@@ -11227,7 +11231,7 @@ async fn sign_ins_link_only_after_signing_in_to_them(db: PgPool) {
         .collect();
     assert_eq!(names, ["google", "gitlab"]);
     assert_eq!(linked[1]["login"], "ann");
-    // Signing in with the linked GitLab account opens the same Slop account.
+    // Signing in with the linked GitLab account opens the same SLAPorSLOP account.
     let res = oauth_flow(&app, "/v1/auth/gitlab/start", &[], "gl-ann").await;
     let other = set_cookie(&res, "slop_session").unwrap();
     let me = body_json(app.send(req(Method::GET, "/v1/me").cookie(&other)).await).await;
@@ -11580,13 +11584,13 @@ async fn other_hosts_prove_ownership_by_account_or_readme_code(db: PgPool) {
         a["message"]
             .as_str()
             .unwrap()
-            .contains("already linked to an app on Slop")
+            .contains("already linked to an app on SLAPorSLOP")
     );
     let _ = std::fs::remove_dir_all(&root);
 }
 
 // ---------------------------------------------------------------------------------------------
-// The scan pipeline (DESIGN §10): Slop's scanner, Microsoft Defender from Slop Check, and reviewers
+// The scan pipeline (DESIGN §10): SLAPorSLOP's scanner, Microsoft Defender from Slop Check, and reviewers
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn scans_and_defender_checks_gate_approval(db: PgPool) {
@@ -11661,7 +11665,7 @@ async fn scans_and_defender_checks_gate_approval(db: PgPool) {
     assert_eq!(
         res.status(),
         StatusCode::FORBIDDEN,
-        "only Slop's own check workflow"
+        "only SLAPorSLOP's own check workflow"
     );
     let res = send(
         github_token(
@@ -12074,7 +12078,7 @@ async fn private_repositories_outside_github_use_a_read_only_token(db: PgPool) {
     let (friend_id, friend) = app.user("Finn", "US").await;
     let repo = format!("{}ann/secret-game", app.fake_base);
 
-    // A wrong token is refused; the right one lets Slop read the README for the code.
+    // A wrong token is refused; the right one lets SLAPorSLOP read the README for the code.
     let ownership = |token: &str| {
         req(Method::POST, "/v1/repos/ownership")
             .cookie(&ann)
@@ -12098,7 +12102,7 @@ async fn private_repositories_outside_github_use_a_read_only_token(db: PgPool) {
     let checked = body_json(res).await;
     assert_eq!(checked["ok"], true, "{checked}");
 
-    // Publishing it as Private Slop keeps the token, encrypted, and never shows it.
+    // Publishing it as a private app keeps the token, encrypted, and never shows it.
     let mut body = new_app("secret-game");
     body["repo_url"] = json!(repo);
     body["visibility"] = json!("private");
@@ -13960,7 +13964,7 @@ async fn ratings_are_kept_per_release(db: PgPool) {
     );
 }
 
-/// A self-hosted Forgejo (or Gitea) server nobody configured: Slop asks it what it is, then
+/// A self-hosted Forgejo (or Gitea) server nobody configured: SLAPorSLOP asks it what it is, then
 /// reads the release's source from it (source_scan.rs `detect`).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn self_hosted_forges_are_recognised_and_read(db: PgPool) {
@@ -14012,7 +14016,7 @@ async fn self_hosted_forges_are_recognised_and_read(db: PgPool) {
     assert_eq!(scan["licence"]["declared"], "MIT");
 }
 
-/// Shared runtimes (slop-manifest runtimes.rs): only IDs from Slop's list, kept per release,
+/// Shared runtimes (slop-manifest runtimes.rs): only IDs from SLAPorSLOP's list, kept per release,
 /// inherited when an update leaves them out, and signed into the manifest.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn releases_name_shared_runtimes(db: PgPool) {
@@ -14099,7 +14103,7 @@ async fn the_source_code_is_offered(db: PgPool) {
     assert_eq!(body["version_url"], Value::Null);
 }
 
-/// "Does Slop know this file?" (docs/standard/file-verification.md): a signed answer for anyone,
+/// "Does SLAPorSLOP know this file?" (docs/standard/file-verification.md): a signed answer for anyone,
 /// naming public apps only, and revoked releases too.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn anyone_can_verify_a_file_by_its_hash(db: PgPool) {
@@ -14726,7 +14730,7 @@ async fn labels_accessibility_and_fair_shelves(db: PgPool) {
             .any(|x| x["slug"] == "tower")
     );
 
-    // Glow-ups: 2 of 6 Not Slop 90 days ago, 5 of 6 now.
+    // Glow-ups: 2 of 6 said it slaps 90 days ago, 5 of 6 now.
     let tower: Uuid = sqlx::query_scalar("select id from apps where slug = 'tower'")
         .fetch_one(&app.db)
         .await
@@ -14775,7 +14779,7 @@ async fn approved_release(app: &TestApp, slug: &str, by: Uuid) {
 }
 
 /// Fix bounties (bounties.rs), simulated payments: pledging, a community build delivering, the
-/// app's maker confirming, every pledge charged with Slop's 5%; the backers deciding the maker's
+/// app's maker confirming, every pledge charged with SLAPorSLOP's 5%; the backers deciding the maker's
 /// own delivery; withdrawing; staff hiding one; expiry.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn bounties_pay_whoever_delivers(db: PgPool) {
@@ -15039,9 +15043,9 @@ async fn bounties_pay_whoever_delivers(db: PgPool) {
     assert_eq!(released, "released");
 }
 
-/// With Stripe: a pledge saves the card on Slop's account (Checkout in setup mode); a confirmed
+/// With Stripe: a pledge saves the card on SLAPorSLOP's account (Checkout in setup mode); a confirmed
 /// delivery clones it to the builder's own Stripe account and charges it there, off-session,
-/// with Slop's 5% as the application fee.
+/// with SLAPorSLOP's 5% as the application fee.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn bounty_pledges_are_charged_on_the_builders_stripe_account(db: PgPool) {
     use std::sync::{Arc, Mutex};
@@ -15170,7 +15174,10 @@ async fn bounty_pledges_are_charged_on_the_builders_stripe_account(db: PgPool) {
     let seen = seen.lock().unwrap().clone();
     let find = |p: &str| seen.iter().find(|(path, ..)| path == p).unwrap().clone();
     let (_, account, body) = find("sessions");
-    assert_eq!(account, None, "the card is saved on Slop's own account");
+    assert_eq!(
+        account, None,
+        "the card is saved on SLAPorSLOP's own account"
+    );
     assert!(
         body.contains("mode=setup")
             && body.contains("customer=cus_1")
@@ -15507,7 +15514,7 @@ async fn saves_sync_without_silent_overwrites(db: PgPool) {
         big.status()
     );
 
-    // Stopping sync deletes them from Slop.
+    // Stopping sync deletes them from SLAPorSLOP.
     assert_eq!(
         app.send(req(Method::DELETE, "/v1/me/saves/tower").cookie(&pat))
             .await
@@ -15635,7 +15642,7 @@ async fn new_games_get_a_browser_demo_for_a_while(db: PgPool) {
             .status(),
         StatusCode::NOT_FOUND
     );
-    // Never on Slop's own origin; nothing but demos on the play origin.
+    // Never on SLAPorSLOP's own origin; nothing but demos on the play origin.
     assert_eq!(
         get("localhost:8080", "/play/game/").await.status(),
         StatusCode::NOT_FOUND
@@ -15998,7 +16005,7 @@ async fn staff_see_an_apps_whole_record_and_can_fix_its_store_page(db: PgPool) {
     let page = body_json(app.send(req(Method::GET, "/v1/apps/arena")).await).await;
     assert_eq!(page["title"], "Brawl Pit");
     let told: String = sqlx::query_scalar(
-        "select body from notifications where user_id = $1 and title like 'Slop changed%'",
+        "select body from notifications where user_id = $1 and title like 'SLAPorSLOP changed%'",
     )
     .bind(maker_id)
     .fetch_one(&app.db)
@@ -16126,11 +16133,11 @@ async fn staff_fix_profiles_and_teams_and_freeze_apps_by_hand(db: PgPool) {
     .await
     .unwrap();
     assert!(
-        told.contains(&"Slop changed your profile".to_string()),
+        told.contains(&"SLAPorSLOP changed your profile".to_string()),
         "{told:?}"
     );
     assert!(
-        told.contains(&"Slop changed your team's page".to_string()),
+        told.contains(&"SLAPorSLOP changed your team's page".to_string()),
         "{told:?}"
     );
 
@@ -16496,7 +16503,7 @@ async fn old_sessions_approve_desktop_sign_ins_and_close_the_account(db: PgPool)
             "code_challenge": pkce_challenge(&"v".repeat(43)),
             "redirect_port": 49152,
             "state": "state-state-state-1",
-            "device_name": "Slop for Linux"
+            "device_name": "SLAPorSLOP for Linux"
         })))
         .await;
     let id = body_json(res).await["id"].as_str().unwrap().to_string();

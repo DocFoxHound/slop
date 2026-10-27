@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! The Slop open standard's test files (docs/standard/vectors/): made here with a published test
+//! The SLAPorSLOP open standard's test files (docs/standard/vectors/): made here with a published test
 //! key, so they never change unless the formats do, and checked with the `slop-verify` program.
 //! `SLOP_UPDATE_VECTORS=1 cargo test -p slop-verify` rewrites them after a deliberate change.
 

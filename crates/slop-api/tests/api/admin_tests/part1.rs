@@ -43,7 +43,7 @@ async fn token(app: &TestApp, cookie: &str, scope: &str) -> String {
 fn with_email(c: &mut Config) {
     c.email = Some(slop_api::config::EmailConfig {
         smtp_url: "smtp://localhost:2525".into(),
-        from: "Slop <notifications@slop.example>".into(),
+        from: "SLAPorSLOP <notifications@slop.example>".into(),
     });
 }
 
@@ -679,7 +679,7 @@ async fn only_what_the_reporter_can_see_can_be_reported(db: PgPool) {
         .status(),
         StatusCode::OK
     );
-    // Private Slop nobody shared with them.
+    // A private app nobody shared with them.
     assert_eq!(
         send_report(&app, Some(&us), report_of("app", "secret", "scam"))
             .await
@@ -693,7 +693,7 @@ async fn only_what_the_reporter_can_see_can_be_reported(db: PgPool) {
     let job = reviewed_job(&app, creative, "cass", client, "song-game").await;
     let message = Uuid::now_v7();
     sqlx::query(
-        "insert into job_messages (id, job_id, author_id, body, sha256) values ($1, $2, $3, 'Pay me outside Slop.', 'h')",
+        "insert into job_messages (id, job_id, author_id, body, sha256) values ($1, $2, $3, 'Pay me outside SLAPorSLOP.', 'h')",
     )
     .bind(message)
     .bind(job)
@@ -727,7 +727,7 @@ async fn only_what_the_reporter_can_see_can_be_reported(db: PgPool) {
             .unwrap();
     assert_eq!(
         quoted.as_deref(),
-        Some("Pay me outside Slop."),
+        Some("Pay me outside SLAPorSLOP."),
         "the message is kept as it was"
     );
     let second = Uuid::now_v7();
@@ -1486,7 +1486,11 @@ async fn reporters_are_told_the_outcome_in_slop_or_by_email(db: PgPool) {
     assert_eq!(mail.len(), 1, "only the reporter who left an address");
     assert_eq!(mail[0].0, "sam@example.com");
     assert_eq!(mail[0].1, format!("Your report {sams} was answered"));
-    assert!(mail[0].2.contains("You reported App: castle to Slop."));
+    assert!(
+        mail[0]
+            .2
+            .contains("You reported App: castle to SLAPorSLOP.")
+    );
     assert!(
         mail[0]
             .2
@@ -2570,10 +2574,10 @@ async fn listing_an_app_checks_it_is_ready(db: PgPool) {
     .unwrap();
     let why = refusal(app.send(list("pictures", &owner)).await).await;
     assert!(why.contains("review the app's pictures first"), "{why}");
-    // Private Slop goes in the store only when its owner asked.
+    // A private app goes in the store only when its owner asked.
     draft("private", "visibility = 'private'").await;
     let why = refusal(app.send(list("private", &owner)).await).await;
-    assert!(why.contains("Private Slop"), "{why}");
+    assert!(why.contains("a private app"), "{why}");
     // Asked, but the repository is still private, or GitHub can't say.
     draft(
         "closed",
@@ -3071,7 +3075,7 @@ async fn reviewers_turn_down_pictures_and_portfolios_with_a_reason(db: PgPool) {
             (
                 "moderation".to_string(),
                 "Your People page is live".to_string(),
-                "Slop approved your portfolio: makers can find your page on People now. To be hired, set up payments under Get paid on your page's editor."
+                "SLAPorSLOP approved your portfolio: makers can find your page on People now. To be hired, set up payments under Get paid on your page's editor."
                     .to_string(),
                 "/people/cass".to_string()
             ),
@@ -3486,7 +3490,7 @@ async fn staff_roles_are_given_and_taken_by_security_and_owners(db: PgPool) {
     assert_eq!(res.status(), StatusCode::CONFLICT);
     assert_eq!(
         body_json(res).await["error"]["message"],
-        "Slop needs at least one owner"
+        "SLAPorSLOP needs at least one owner"
     );
     let failed: String =
         sqlx::query_scalar("select status from staff_actions order by requested_at desc limit 1")
@@ -3780,7 +3784,7 @@ async fn the_legal_index_splits_what_is_in_effect_from_what_is_announced(db: PgP
         assert!(d["current"]["version"].is_string(), "{d}");
     }
     let privacy = entry(&index, "privacy");
-    assert_eq!(privacy["current"]["version"], "2026-10-20");
+    assert_eq!(privacy["current"]["version"], "2026-10-27");
     assert_eq!(privacy["upcoming"]["version"], "2099-01-01");
     assert_eq!(privacy["upcoming"]["summary"], "Changes 2099-01-01");
     assert!(entry(&index, "terms")["upcoming"].is_null());
@@ -3788,7 +3792,7 @@ async fn the_legal_index_splits_what_is_in_effect_from_what_is_announced(db: PgP
     // One document: in effect now by default, or a named version from the past or the future.
     let doc = |q: &str| app.send(req(Method::GET, format!("/v1/legal/{q}")));
     let now = body_json(doc("privacy").await).await;
-    assert_eq!(now["version"], "2026-10-20");
+    assert_eq!(now["version"], "2026-10-27");
     assert_eq!(now["in_effect"], true);
     assert_eq!(now["title"], "Privacy Policy");
     let versions: Vec<&str> = now["versions"]
@@ -3797,7 +3801,7 @@ async fn the_legal_index_splits_what_is_in_effect_from_what_is_announced(db: PgP
         .iter()
         .map(|v| v["version"].as_str().unwrap())
         .collect();
-    assert_eq!(versions, ["2099-01-01", "2026-10-20", "2026-01-01"]);
+    assert_eq!(versions, ["2099-01-01", "2026-10-27", "2026-01-01"]);
     let future = body_json(doc("privacy?version=2099-01-01").await).await;
     assert_eq!(future["in_effect"], false);
     assert_eq!(future["body_md"], "Words of 2099-01-01");
@@ -4015,7 +4019,7 @@ async fn start_up_publishes_new_versions_and_never_changes_a_published_one(db: P
         privacy,
         [
             ("privacy".into(), "2026-01-01".into(), true, false),
-            ("privacy".into(), "2026-10-20".into(), false, true),
+            ("privacy".into(), "2026-10-27".into(), false, true),
         ]
     );
     // Nothing new: nothing changes.
@@ -4051,7 +4055,7 @@ async fn staff_publish_a_new_legal_version_with_notice(db: PgPool) {
     assert_eq!(docs.as_array().unwrap().len(), 5);
     let privacy = entry(&docs, "privacy");
     assert!(privacy["file_text"].is_null());
-    assert_eq!(privacy["latest_version"], "2026-10-20");
+    assert_eq!(privacy["latest_version"], "2026-10-27");
     assert_eq!(privacy["accepted"], false);
     assert!(privacy["versions"][0]["published_by"].is_null());
     assert!(!privacy["latest_body_md"].as_str().unwrap().is_empty());
@@ -4097,8 +4101,15 @@ async fn staff_publish_a_new_legal_version_with_notice(db: PgPool) {
     let res = app.send(publish("privacy", &agent, change.clone())).await;
     assert_eq!(res.status(), StatusCode::OK);
     let published = body_json(res).await;
+    // Today's date, with a letter when a repository file already has today's.
     let today = OffsetDateTime::now_utc().date().to_string();
-    assert_eq!(published["version"], today.as_str());
+    let version = published["version"].as_str().unwrap().to_string();
+    assert!(
+        version
+            .strip_prefix(today.as_str())
+            .is_some_and(|l| l.len() <= 1),
+        "{version}"
+    );
     let in_days = (published["effective_at"].as_i64().unwrap()
         - OffsetDateTime::now_utc().unix_timestamp()) as f64
         / 86_400.0;
@@ -4114,7 +4125,7 @@ async fn staff_publish_a_new_legal_version_with_notice(db: PgPool) {
     assert_eq!(
         (parsed.version, parsed.summary, parsed.body),
         (
-            today.as_str(),
+            version.as_str(),
             "Explains chat reports.",
             "New privacy words."
         )
@@ -4130,11 +4141,11 @@ async fn staff_publish_a_new_legal_version_with_notice(db: PgPool) {
             .fetch_one(&app.db)
             .await
             .unwrap();
-    assert_eq!(subject, format!("privacy {today}"));
+    assert_eq!(subject, format!("privacy {version}"));
 
     // A second version the same day, once the first is in effect, gets a letter.
     sqlx::query("update legal_documents set effective_at = now() - interval '1 second' where kind = 'privacy' and version = $1")
-        .bind(&today)
+        .bind(&version)
         .execute(&app.db)
         .await
         .unwrap();
@@ -4146,7 +4157,11 @@ async fn staff_publish_a_new_legal_version_with_notice(db: PgPool) {
         ))
         .await;
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_json(res).await["version"], format!("{today}b"));
+    let next = match version.as_bytes().get(10) {
+        Some(&letter) => format!("{today}{}", (letter + 1) as char),
+        None => format!("{today}b"),
+    };
+    assert_eq!(body_json(res).await["version"], next);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -4300,7 +4315,7 @@ async fn an_announced_version_can_be_withdrawn_before_it_takes_effect(db: PgPool
 }
 
 // ---------------------------------------------------------------------------------------------
-// Repository access: the daily check, freezing, Check now, making Private Slop public
+// Repository access: the daily check, freezing, Check now, making a private app public
 
 /// A test app whose GitHub API is `fake_host`, with the host's base URL.
 async fn app_with_fake_host(db: PgPool) -> (TestApp, String) {
@@ -4350,12 +4365,12 @@ async fn the_daily_check_freezes_only_on_a_clear_answer(db: PgPool) {
         ("git-404", format!("repo_url = '{host}404/a'")),
         ("git-410", format!("repo_url = '{host}410/a'")),
         ("git-500", format!("repo_url = '{host}500/a'")),
-        // Private Slop on another host, with no token saved: Slop can't tell.
+        // A private app on another host, with no token saved: SLAPorSLOP can't tell.
         (
             "git-private",
             format!("repo_url = '{host}404/b', visibility = 'private'"),
         ),
-        // Private Slop whose saved read-only token stopped working.
+        // A private app whose saved read-only token stopped working.
         (
             "token-revoked",
             format!(
@@ -4423,7 +4438,7 @@ async fn the_daily_check_freezes_only_on_a_clear_answer(db: PgPool) {
             ("git-410", unreadable.to_string()),
             (
                 "token-revoked",
-                "Slop's token can't read the repository any more: it was revoked or expired, or the repository moved. Save a new one on the Manage page"
+                "SLAPorSLOP's token can't read the repository any more: it was revoked or expired, or the repository moved. Save a new one on the Manage page"
                     .to_string()
             ),
         ],
@@ -4757,13 +4772,13 @@ async fn staff_freeze_an_app_by_hand(db: PgPool) {
     assert_eq!(frozen["by_staff"], true);
     assert_eq!(frozen["reason"], reason);
     let told: (String, String) = sqlx::query_as(
-        "select title, body from notifications where user_id = $1 and title like 'Slop froze%'",
+        "select title, body from notifications where user_id = $1 and title like 'SLAPorSLOP froze%'",
     )
     .bind(maker_id)
     .fetch_one(&app.db)
     .await
     .unwrap();
-    assert_eq!(told.0, "Slop froze Game");
+    assert_eq!(told.0, "SLAPorSLOP froze Game");
     assert!(told.1.contains(reason));
     // Once: lift it first to change the reason.
     assert_eq!(
@@ -4787,7 +4802,7 @@ async fn staff_freeze_an_app_by_hand(db: PgPool) {
         .to_string();
     assert!(
         message.starts_with(
-            "Slop staff froze this app, so it can't take new releases: A player reported"
+            "SLAPorSLOP staff froze this app, so it can't take new releases: A player reported"
         ),
         "{message}"
     );
@@ -4893,7 +4908,7 @@ async fn lifting_a_freeze_rechecks_an_automatic_one(db: PgPool) {
 }
 
 /// An app the 14-day grace period took out of the store, then frozen by staff on top: once staff
-/// lift their freeze and Slop can read the repository, it goes back in the store.
+/// lift their freeze and SLAPorSLOP can read the repository, it goes back in the store.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn lifting_a_staff_freeze_on_a_delisted_app_lets_it_come_back(db: PgPool) {
     let (app, host) = app_with_fake_host(db).await;
@@ -5358,7 +5373,7 @@ async fn staff_fixes_to_a_profile_are_checked_and_logged(db: PgPool) {
             .fetch_one(&app.db)
             .await
             .unwrap();
-    assert_eq!(told.0, "Slop changed your profile");
+    assert_eq!(told.0, "SLAPorSLOP changed your profile");
     assert_eq!(
         told.1,
         format!("Changed: display name, People name, about, location.\n\n{reason}")
@@ -5434,7 +5449,7 @@ async fn staff_fixes_to_a_team_page_tell_whoever_runs_it(db: PgPool) {
     assert_eq!(res.status(), StatusCode::OK);
     assert_eq!(body_json(res).await["changed"], json!(["description"]));
     let told: Vec<Uuid> = sqlx::query_scalar(
-        "select user_id from notifications where title = 'Slop changed your team''s page' order by user_id",
+        "select user_id from notifications where title = 'SLAPorSLOP changed your team''s page' order by user_id",
     )
     .fetch_all(&app.db)
     .await
@@ -6675,7 +6690,7 @@ async fn the_viewers_country_decides_the_under_18_view(db: PgPool) {
         resolve(config.clone(), None, headers(Some("GB"))).await,
         ViewerPolicy::UNDER_18_VIEW
     );
-    // No header, a country Slop has no policy for, or no header configured: the safe view.
+    // No header, a country SLAPorSLOP has no policy for, or no header configured: the safe view.
     assert_eq!(
         resolve(config.clone(), None, headers(None)).await,
         ViewerPolicy::UNDER_18_VIEW
@@ -6791,7 +6806,7 @@ async fn the_simulation_lets_anyone_view_as_its_own_users_only(db: PgPool) {
 // ---------------------------------------------------------------------------------------------
 // Reversing a delisting on appeal
 
-/// An app taken out of the store, then frozen (Slop lost its repository): reversing the
+/// An app taken out of the store, then frozen (SLAPorSLOP lost its repository): reversing the
 /// delisting on appeal mustn't put a frozen app back in the store. The appeal is recorded, the
 /// maker and staff are told why it stays out, and it goes back once the freeze ends.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -6974,7 +6989,7 @@ async fn the_apps_list_says_what_needs_staff(db: PgPool) {
         maker,
         "frozen",
         "released",
-        "frozen_at = now(), frozen_reason = 'Slop lost access to its repository'",
+        "frozen_at = now(), frozen_reason = 'SLAPorSLOP lost access to its repository'",
     )
     .await;
     listed_with(&app, maker, "reported", "released", "").await;
@@ -7109,7 +7124,7 @@ async fn the_apps_list_says_what_needs_staff(db: PgPool) {
     assert_eq!(by("rescanned")["downloads_lost"], 1);
     assert_eq!(
         by("frozen")["frozen_reason"],
-        "Slop lost access to its repository"
+        "SLAPorSLOP lost access to its repository"
     );
     assert_eq!(by("reported")["open_reports"], 1);
     assert_eq!(by("paused")["donations_paused"], true);

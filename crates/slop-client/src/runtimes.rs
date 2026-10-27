@@ -3,7 +3,7 @@
 //! Windows only: elsewhere every runtime counts as present.
 //!
 //! The file comes from the vendor's own link and is only run when Windows says it's validly
-//! signed (Authenticode) by the vendor named in Slop's list. Its installer asks for admin
+//! signed (Authenticode) by the vendor named in SLAPorSLOP's list. Its installer asks for admin
 //! rights itself.
 
 use std::path::Path;
@@ -14,7 +14,7 @@ use slop_manifest::runtimes::Runtime;
 
 use crate::{Error, Result};
 
-/// Biggest runtime installer Slop downloads.
+/// Biggest runtime installer SLAPorSLOP downloads.
 #[cfg(windows)]
 const MAX_BYTES: u64 = 512 * 1024 * 1024;
 
@@ -118,7 +118,7 @@ pub async fn install(http: &reqwest::Client, r: &Runtime, staging: &Path) -> Res
     if !ok {
         let _ = std::fs::remove_dir_all(&dir);
         return Err(Error::Verify(format!(
-            "the {} download isn't signed by {}, so Slop didn't run it",
+            "the {} download isn't signed by {}, so SLAPorSLOP didn't run it",
             r.name, r.signer
         )));
     }

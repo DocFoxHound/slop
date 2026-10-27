@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Load test: how much the API takes (docs/LOAD-TEST.md). Never against a real Slop.
+//! Load test: how much the API takes (docs/LOAD-TEST.md). Never against a real SLAPorSLOP.
 //!
-//! Starts the throwaway Slop (`e2e_server`, release build) filled by the simulation, then for
+//! Starts the throwaway SLAPorSLOP (`e2e_server`, release build) filled by the simulation, then for
 //! each kind of request runs a rising number of simultaneous clients for a few seconds and
 //! prints requests a second, latency percentiles and errors as a Markdown table.
 //!

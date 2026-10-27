@@ -218,7 +218,7 @@ pub struct AppSummary {
     pub icon_url: Option<String>,
     /// Current 👍/👎 votes (votes.rs).
     pub vote_count: i64,
-    /// Weighted % Not Slop; null below votes::MIN_VOTES.
+    /// Weighted % Slaps; null below votes::MIN_VOTES.
     pub not_slop_percent: Option<i32>,
     /// Has a completed, fully paid People job credited (DESIGN §15.4): the "Made with people" badge.
     pub made_with_people: bool,
@@ -249,12 +249,12 @@ enum Sort {
     Trending,
     /// Most people Interested ("Most anticipated", DESIGN §5).
     Anticipated,
-    /// Best rated (weighted % Not Slop, with enough votes), then most votes.
+    /// Best rated (weighted % Slaps, with enough votes), then most votes.
     Rating,
     /// Most added to libraries this calendar month ("Popular this month", DESIGN §5), then most
     /// players this month.
     Popular,
-    /// Best weighted % Not Slop among votes cast or changed in the last 30 days ("Most Not Slop
+    /// Best weighted % Slaps among votes cast or changed in the last 30 days ("Slaps hardest
     /// right now").
     NotSlopNow,
     /// Most weighted 👎 Slop votes in the last 30 days ("Fresh slop", for fun).
@@ -284,7 +284,7 @@ struct ListQuery {
     platform: Option<String>,
     /// Only Coming soon and Beta (`true`) or only released (`false`).
     upcoming: Option<bool>,
-    /// At least this weighted % Not Slop (apps without enough votes don't match).
+    /// At least this weighted % Slaps (apps without enough votes don't match).
     min_not_slop: Option<i32>,
     /// Has every one of these accessibility features (comma-separated, label.rs `FEATURES`).
     accessibility: Option<String>,
@@ -624,11 +624,11 @@ struct AppDetail {
     branch: Option<crate::branches::BranchInfo>,
     /// For an app: its community builds in the store.
     community: Vec<crate::branches::CommunityBuild>,
-    /// Private Slop (DESIGN §13): only its owner and the people it's shared with see it.
+    /// A private app (DESIGN §13): only its owner and the people it's shared with see it.
     private: bool,
     /// The verified official team that publishes it (DESIGN §14): (slug, name).
     official_team: Option<OfficialTeam>,
-    /// What it connects to online (servers Slop can't check): own_servers, player_servers,
+    /// What it connects to online (servers SLAPorSLOP can't check): own_servers, player_servers,
     /// peer_to_peer, other_services. Empty: it doesn't play online.
     online: Vec<String>,
     /// The maker's servers, by name (`play.example.com`, `api.example.com:7777`).
@@ -696,7 +696,7 @@ pub async fn visible_app(
     Ok((id, is_mine))
 }
 
-/// SQL condition: app `a` is Private Slop shared with the viewer, and has an approved release
+/// SQL condition: app `a` is a private app shared with the viewer, and has an approved release
 /// (DESIGN §13: same requirements as public apps). Checked on every request (SECURITY §12).
 pub(crate) fn push_shared_with(qb: &mut QueryBuilder<Postgres>, viewer: Option<Uuid>) {
     qb.push(
@@ -716,7 +716,7 @@ pub(crate) fn push_shared_with(qb: &mut QueryBuilder<Postgres>, viewer: Option<U
     .push(")))");
 }
 
-/// Private Slop has no store page features: no voting, reviews, donations, Interested or branches.
+/// Private apps have no store page features: no voting, reviews, donations, Interested or branches.
 pub async fn is_private<'c>(db: impl sqlx::PgExecutor<'c>, app_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar("select visibility = 'private' from apps where id = $1")
         .bind(app_id)
@@ -843,7 +843,7 @@ pub(crate) struct SandboxInfo {
     /// ...but the source check of its newest release found saves elsewhere, so players aren't
     /// told it works in sandbox mode.
     pub sandbox_mismatch: bool,
-    /// Sandbox mode is suggested: it plays online (servers Slop can't check), its newest
+    /// Sandbox mode is suggested: it plays online (servers SLAPorSLOP can't check), its newest
     /// release has networking code its store page doesn't declare, or it's a mod that goes
     /// online.
     pub sandbox_suggested: bool,
@@ -894,7 +894,7 @@ async fn report_sandbox(
     .await?;
     if !played {
         return Err(ApiError::Conflict(
-            "start it from the Slop app first, then tell Slop if it doesn't work in sandbox mode"
+            "start it from the SLAPorSLOP app first, then tell SLAPorSLOP if it doesn't work in sandbox mode"
                 .into(),
         ));
     }
@@ -994,7 +994,7 @@ async fn detect_license(
         ));
     };
     // Each repository is asked about at most once a day, and each account only so often: the
-    // lookups share Slop's GitHub allowance with the release watcher (security review,
+    // lookups share SLAPorSLOP's GitHub allowance with the release watcher (security review,
     // 2026-10-22).
     let key = repo.to_ascii_lowercase();
     if let Some((at, found)) = state
@@ -1025,9 +1025,9 @@ async fn detect_license(
         .github_api_base
         .join(&format!("repos/{repo}/license"))
         .map_err(|e| ApiError::Internal(e.into()))?;
-    // With Slop's credentials (its GitHub App, which can read private repositories) only for
+    // With SLAPorSLOP's credentials (its GitHub App, which can read private repositories) only for
     // the repository's owner; anyone else asks as nobody, so this can't reveal a private
-    // repository Slop can read (security review, 2026-10-22).
+    // repository SLAPorSLOP can read (security review, 2026-10-22).
     let owner = crate::repo_owner::assess(&state, _user.id, &repo_url)
         .await
         .is_ok_and(|a| a.ok);
@@ -1048,7 +1048,7 @@ async fn detect_license(
         200 => {}
         404 => {
             return Ok(none(
-                "no licence file found (or the repository isn't visible to Slop)",
+                "no licence file found (or the repository isn't visible to SLAPorSLOP)",
             ));
         }
         code => {
@@ -1103,7 +1103,7 @@ struct NewApp {
     #[serde(default)]
     tags: Vec<String>,
     platforms: Vec<String>,
-    /// "public" (the default) or "private" (Private Slop, DESIGN §13).
+    /// "public" (the default) or "private" (a private app, DESIGN §13).
     #[serde(default)]
     visibility: Option<String>,
     /// A private repository outside GitHub: a read-only token for it (repo_tokens.rs).

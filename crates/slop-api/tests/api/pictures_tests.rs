@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Profile pictures from a linked sign-in (avatars.rs): choosing one, Slop serving its own copy,
+//! Profile pictures from a linked sign-in (avatars.rs): choosing one, SLAPorSLOP serving its own copy,
 //! keeping it current, refusing what isn't allowed, and what removes it.
 
 use crate::*;
@@ -176,7 +176,7 @@ async fn avatar_url(app: &TestApp, cookie: &str) -> Value {
 async fn fetch_picture(app: &TestApp, url: &str) -> Response {
     let path = url
         .strip_prefix("http://localhost:8080")
-        .unwrap_or_else(|| panic!("{url} isn't on Slop's own origin"));
+        .unwrap_or_else(|| panic!("{url} isn't on SLAPorSLOP's own origin"));
     app.send(req(Method::GET, path)).await
 }
 
@@ -184,7 +184,7 @@ async fn bytes(res: Response) -> Vec<u8> {
     res.into_body().collect().await.unwrap().to_bytes().to_vec()
 }
 
-/// The colour in the middle of a served picture, which must be Slop's 128×128 PNG.
+/// The colour in the middle of a served picture, which must be SLAPorSLOP's 128×128 PNG.
 async fn colour(app: &TestApp, url: &str) -> [u8; 3] {
     let res = fetch_picture(app, url).await;
     assert_eq!(res.status(), StatusCode::OK, "{url}");
@@ -255,7 +255,7 @@ async fn a_github_picture_is_served_from_slops_own_copy_until_the_letter_comes_b
     // GitHub was asked for its 128-pixel size.
     assert_eq!(hits("u/9001").len(), 1);
 
-    // Anyone can load it, from Slop: cached for good at this address, a picture and nothing else.
+    // Anyone can load it, from SLAPorSLOP: cached for good at this address, a picture and nothing else.
     let res = fetch_picture(&app, &url).await;
     assert_eq!(res.status(), StatusCode::OK);
     let h = res.headers().clone();
@@ -397,7 +397,7 @@ async fn only_a_linked_sign_in_with_a_picture_on_its_own_host_can_be_chosen(db: 
         ])
     );
 
-    // Addresses Slop won't read: another host, a redirect to one, http, a private address.
+    // Addresses SLAPorSLOP won't read: another host, a redirect to one, http, a private address.
     let set = |url: String| {
         let db = app.db.clone();
         async move {
@@ -701,7 +701,7 @@ async fn unlinking_staff_and_closing_remove_the_picture_and_the_export_has_it(db
     );
     let told: i64 = scalar(
         &app,
-        "select count(*) from notifications where user_id = $1 and title = 'Slop changed your profile'",
+        "select count(*) from notifications where user_id = $1 and title = 'SLAPorSLOP changed your profile'",
         ann_id,
     )
     .await;

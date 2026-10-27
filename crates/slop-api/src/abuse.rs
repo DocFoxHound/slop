@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Abuse checks (SECURITY §11, METRICS §5). Every hour Slop looks for patterns a person should
+//! Abuse checks (SECURITY §11, METRICS §5). Every hour SLAPorSLOP looks for patterns a person should
 //! check, records each once (`abuse_signals`), and the admins see them in the queue and as an
 //! alert (ops.rs). Nothing is changed automatically: a reviewer decides, through the normal
 //! moderation tools, or dismisses it with a note.

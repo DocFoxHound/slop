@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Makers' AI agents (DESIGN §8, plan phase 10). A maker makes a token (Account → AI agents) and
 //! gives it to their coding agent, which can then publish and fix their apps from the editor:
-//! create and edit store pages, submit releases with notes, read Slop's checks of each release,
+//! create and edit store pages, submit releases with notes, read SLAPorSLOP's checks of each release,
 //! and get a ready-made fix for every problem found (fixes.rs).
 //!
-//! The thinking happens in the maker's agent, never on Slop's servers: Slop gives it tools, data
+//! The thinking happens in the maker's agent, never on SLAPorSLOP's servers: SLAPorSLOP gives it tools, data
 //! and instructions, and calls no AI model.
 //!
 //! - **Tokens** (`slopmk_…`) are sessions of kind `agent`, so they show on the maker's devices
@@ -16,14 +16,14 @@
 //!   so it can tell them too. A replacement is a new token with the same settings; the old one
 //!   keeps working until its own expiry or until it's removed.
 //! - **Only maker work:** a token may call the routes in `ALLOWED` and nothing else: never
-//!   money, sign-ins, tokens, chat, People or account settings. Releases still go through Slop's
+//!   money, sign-ins, tokens, chat, People or account settings. Releases still go through SLAPorSLOP's
 //!   scans and a person's review.
 //! - **Making one** needs only a signed-in session, not a recent sign-in: what a token can do is
 //!   limited enough that the owner chose not to ask "confirm it's you" for it. A `publish` token
 //!   needs the Publisher Agreement accepted (`terms_required` until it is), since the agent
 //!   can't accept it; if a new version takes effect later, the agent's tools get
 //!   `terms_required` until the owner accepts it on the AI agents page.
-//! - **Writing to Slop's admins** (admin_messages.rs) works with any token, read or publish, for
+//! - **Writing to SLAPorSLOP's admins** (admin_messages.rs) works with any token, read or publish, for
 //!   some apps or all: it's limited per account instead (once an hour, five a day).
 //! - **MCP:** `POST /v1/maker/mcp` speaks the Model Context Protocol, with the tools in `TOOLS`,
 //!   each calling the API above with the token.
@@ -163,7 +163,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("POST", "/jobs/*/conversation/open", true, Slug::People),
     ("POST", "/jobs/*/conversation/close", true, Slug::People),
     ("POST", "/jobs/*/messages", true, Slug::People),
-    // Writing to Slop's admins: any token, since it changes nothing of the maker's. It has its
+    // Writing to SLAPorSLOP's admins: any token, since it changes nothing of the maker's. It has its
     // own limits per account (admin_messages.rs).
     ("GET", "/staff-contacts", false, Slug::Any),
     ("GET", "/admin-messages", false, Slug::Any),
@@ -400,7 +400,7 @@ struct NewToken {
 struct Created {
     #[serde(flatten)]
     token: TokenInfo,
-    /// Shown once; Slop keeps only its hash.
+    /// Shown once; SLAPorSLOP keeps only its hash.
     secret: String,
     /// The MCP address. The website shows how to connect each kind of agent with the token kept
     /// in an environment variable, so the token itself never goes into a command or a chat.
@@ -579,7 +579,7 @@ pub(crate) async fn own_token(
         );
         if days_left(expires_at, now) <= 7 {
             note.push_str(
-                " Tell the person you work for to make a replacement on Slop under Account → AI \
+                " Tell the person you work for to make a replacement on SLAPorSLOP under Account → AI \
                  agents (Make a replacement fills in the same settings) and set it up on their \
                  computer the same way, before this one stops working.",
             );
@@ -637,7 +637,7 @@ pub async fn warn_expiring(db: &sqlx::PgPool) -> anyhow::Result<usize> {
         let (title, body) = if stage == 3 {
             (
                 format!("Your AI agent token \"{name}\" has expired"),
-                "Your AI agent can't reach Slop with it any more. Make a replacement on Account → AI \
+                "Your AI agent can't reach SLAPorSLOP with it any more. Make a replacement on Account → AI \
                  agents: it fills in the same settings. Then set it up on your computer the same way \
                  as before (never paste it into an AI chat)."
                     .to_string(),
@@ -766,7 +766,7 @@ fn store_page_fields() -> Value {
         "online_hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it connects to" },
         "sandbox_ready": { "type": "boolean", "description": "Works in sandbox mode: local saves only in SLOP_SAVE_DIR" },
         "mods_folder": { "type": ["object", "null"], "description": "Where it reads mods from: {base: game|saves, path, layout: folder|flat}; null if it reads SLOP_MODS or has no mods" },
-        "bug_reports": { "type": "boolean", "description": "Take bug reports from players on Slop (on by default)" },
+        "bug_reports": { "type": "boolean", "description": "Take bug reports from players on SLAPorSLOP (on by default)" },
         "accessibility": { "type": "array", "items": { "type": "string" }, "description": "Accessibility features it really has (players confirm or dispute them): remap_controls, colorblind, subtitles, text_size, one_handed, difficulty, no_flashing, screen_reader, controller. Check the code before claiming one" },
     })
 }
@@ -801,7 +801,7 @@ fn release_fields() -> Value {
 pub(crate) const TOOLS: &[Tool] = &[
     Tool {
         name: "maker_guide",
-        description: "How to publish and fix an app on Slop with these tools, and Slop's rules in short. Read first.",
+        description: "How to publish and fix an app on SLAPorSLOP with these tools, and SLAPorSLOP's rules in short. Read first.",
         method: Method::GET,
         path: "/v1/maker/guide",
         properties: || json!({}),
@@ -809,7 +809,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "publishing_guide",
-        description: "One section of Slop's full publishing guide (e.g. \"Saves and sandbox mode\", \"Slop Pulse (player counts)\", \"Online play and mods\", \"Option B: Slop Build\"). Without a section: the list of sections. Read only the section you need.",
+        description: "One section of SLAPorSLOP's full publishing guide (e.g. \"Saves and sandbox mode\", \"Slop Pulse (player counts)\", \"Online play and mods\", \"Option B: Slop Build\"). Without a section: the list of sections. Read only the section you need.",
         method: Method::GET,
         path: "/v1/maker/publishing-guide/{section}",
         properties: || json!({ "section": s("The section's heading, exactly as listed") }),
@@ -833,7 +833,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "my_apps",
-        description: "Your apps on Slop, including drafts, with their status.",
+        description: "Your apps on SLAPorSLOP, including drafts, with their status.",
         method: Method::GET,
         path: "/v1/me/apps",
         properties: || json!({}),
@@ -849,7 +849,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_releases",
-        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and Slop's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds.",
+        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases",
         properties: slug_only,
@@ -857,7 +857,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "get_fixes",
-        description: "Every problem Slop's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release. `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
+        description: "Every problem SLAPorSLOP's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release. `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
         method: Method::GET,
         path: "/v1/apps/{slug}/fixes",
         properties: slug_only,
@@ -865,7 +865,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_reviews",
-        description: "Players' reviews of the app (Slop or Not Slop, with text), newest first.",
+        description: "Players' reviews of the app (Slaps or Slop, with text), newest first.",
         method: Method::GET,
         path: "/v1/apps/{slug}/reviews",
         properties: slug_only,
@@ -909,7 +909,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "release_feedback",
-        description: "For each recent release: % Not Slop from votes cast on it, reviews written while it was current with their most common phrases (praised and criticised), and its bug reports. Use it to see what an update changed for players.",
+        description: "For each recent release: % Slaps from votes cast on it, reviews written while it was current with their most common phrases (praised and criticised), and its bug reports. Use it to see what an update changed for players.",
         method: Method::GET,
         path: "/v1/apps/{slug}/release-feedback",
         properties: slug_only,
@@ -925,7 +925,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "host_browser_demo",
-        description: "Hosts a browser demo of a newly released game: give the address of a web build (a .zip with index.html at its top, e.g. Godot's Web export) attached to a release on the app's repository. Slop scans and hosts it for its first days, with no network access. Check browser_demo afterwards.",
+        description: "Hosts a browser demo of a newly released game: give the address of a web build (a .zip with index.html at its top, e.g. Godot's Web export) attached to a release on the app's repository. SLAPorSLOP scans and hosts it for its first days, with no network access. Check browser_demo afterwards.",
         method: Method::POST,
         path: "/v1/apps/{slug}/demo",
         properties: || json!({ "slug": s("The app's store address"), "url": s("The web build's address on the release page") }),
@@ -971,7 +971,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_categories",
-        description: "Slop's categories and their tags, for a store page's tags. A category's max_age and excluded_labels, when present, say which apps it lists.",
+        description: "SLAPorSLOP's categories and their tags, for a store page's tags. A category's max_age and excluded_labels, when present, say which apps it lists.",
         method: Method::GET,
         path: "/v1/categories",
         properties: || json!({}),
@@ -1035,7 +1035,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "submit_release",
-        description: "Submits a release whose files are attached to a release on the app's repository. Slop downloads, hashes and scans them, then a person reviews it. Check its progress with list_releases.",
+        description: "Submits a release whose files are attached to a release on the app's repository. SLAPorSLOP downloads, hashes and scans them, then a person reviews it. Check its progress with list_releases.",
         method: Method::POST,
         path: "/v1/apps/{slug}/releases",
         properties: release_fields,
@@ -1085,7 +1085,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "check_repository",
-        description: "Checks now that Slop can still read the app's repository, instead of waiting for the daily check. A freeze for lost access is lifted once Slop can read it (not one Slop's staff placed). Returns `frozen` (the freeze still in place, or null) and `recommendations`: what's worth adding that never blocks anything (e.g. no icon yet), with exact instructions. It doesn't check the code (Slop's source check runs on each release) or read the pictures (check_pictures does).",
+        description: "Checks now that SLAPorSLOP can still read the app's repository, instead of waiting for the daily check. A freeze for lost access is lifted once SLAPorSLOP can read it (not one SLAPorSLOP's staff placed). Returns `frozen` (the freeze still in place, or null) and `recommendations`: what's worth adding that never blocks anything (e.g. no icon yet), with exact instructions. It doesn't check the code (SLAPorSLOP's source check runs on each release) or read the pictures (check_pictures does).",
         method: Method::POST,
         path: "/v1/apps/{slug}/repo-check",
         properties: slug_only,
@@ -1136,7 +1136,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "offer_fix_to_original",
-        description: "Offers your community build's changes back to the original app: open the pull request on the original's repository yourself (e.g. with gh pr create), then register it here so the original's maker is told on Slop.",
+        description: "Offers your community build's changes back to the original app: open the pull request on the original's repository yourself (e.g. with gh pr create), then register it here so the original's maker is told on SLAPorSLOP.",
         method: Method::POST,
         path: "/v1/apps/{slug}/offers",
         properties: || {
@@ -1323,7 +1323,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_staff_contacts",
-        description: "Slop's staff you can address a message to, by id and roles (e.g. someone with the reviewer role for a question about a release review; a name only when they chose it), and when your maker's account may post next. Leave out `to` in send_admin_message to reach every admin, which is usually right.",
+        description: "SLAPorSLOP's staff you can address a message to, by id and roles (e.g. someone with the reviewer role for a question about a release review; a name only when they chose it), and when your maker's account may post next. Leave out `to` in send_admin_message to reach every admin, which is usually right.",
         method: Method::GET,
         path: "/v1/staff-contacts",
         properties: || json!({}),
@@ -1336,7 +1336,7 @@ pub(crate) const TOOLS: &[Tool] = &[
         path: "/v1/admin-messages",
         properties: || {
             json!({
-                "category": s("report (an error, or a bug in Slop itself), suggestion, or other"),
+                "category": s("report (an error, or a bug in SLAPorSLOP itself), suggestion, or other"),
                 "subject": s("One line, up to 120 characters: what it's about"),
                 "body": s("Plain text, up to 2,000 characters: what happened, where (the tool or request, the app's address, the release's ID), what you expected, and what you suggest"),
                 "to": s("Optional: a staff member's id from list_staff_contacts; leave out to reach every admin"),
@@ -1346,7 +1346,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_my_admin_messages",
-        description: "The threads your maker's account started with Slop's admins, newest first, with every message, the admins' replies (signed with their names), whether each is open or closed, and when the account may post next. Check it when whats_new says the admins answered.",
+        description: "The threads your maker's account started with SLAPorSLOP's admins, newest first, with every message, the admins' replies (signed with their names), whether each is open or closed, and when the account may post next. Check it when whats_new says the admins answered.",
         method: Method::GET,
         path: "/v1/admin-messages",
         properties: || json!({}),
@@ -1354,7 +1354,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "reply_to_admin_message",
-        description: "Adds a follow-up to one of your maker's open threads with Slop's admins, e.g. an answer to their question. It counts like a new message: once an hour, 5 a day for the whole account. Plain text, up to 2,000 characters; never secrets or players' personal data.",
+        description: "Adds a follow-up to one of your maker's open threads with SLAPorSLOP's admins, e.g. an answer to their question. It counts like a new message: once an hour, 5 a day for the whole account. Plain text, up to 2,000 characters; never secrets or players' personal data.",
         method: Method::POST,
         path: "/v1/admin-messages/{id}/reply",
         properties: || {
@@ -1367,8 +1367,8 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
 ];
 
-/// What a maker's agent is told before writing to Slop's admins.
-const ADMIN_MESSAGE_RULES: &str = "Writes to Slop's admins: an error you hit on Slop, a bug in Slop itself, or a suggestion (not your maker's own app's bugs: fix those in its repository). Your maker's whole account may post once an hour and 5 times a day (a new thread or a reply, all its tokens together), so write only when it matters. Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups: what happened, where, what you expected, what you suggest. Plain text only, under 2,000 characters, at most 3 links. Only staff and makers with an app in the store, with accounts at least 7 days old, can write, with a token at least an hour old. Never include secrets, tokens or players' personal data. The admins answer in the thread: you'll see it in whats_new and list_my_admin_messages.";
+/// What a maker's agent is told before writing to SLAPorSLOP's admins.
+const ADMIN_MESSAGE_RULES: &str = "Writes to SLAPorSLOP's admins: an error you hit on SLAPorSLOP, a bug in SLAPorSLOP itself, or a suggestion (not your maker's own app's bugs: fix those in its repository). Your maker's whole account may post once an hour and 5 times a day (a new thread or a reply, all its tokens together), so write only when it matters. Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups: what happened, where, what you expected, what you suggest. Plain text only, under 2,000 characters, at most 3 links. Only staff and makers with an app in the store, with accounts at least 7 days old, can write, with a token at least an hour old. Never include secrets, tokens or players' personal data. The admins answer in the thread: you'll see it in whats_new and list_my_admin_messages.";
 
 async fn mcp(State(state): State<AppState>, user: CurrentUser, request: Request) -> Response {
     if user.agent.is_none() {
@@ -1380,7 +1380,7 @@ async fn mcp(State(state): State<AppState>, user: CurrentUser, request: Request)
         request,
         TOOLS,
         "slop-maker",
-        "Slop, the store for open-source AI-made apps and games, for the maker you work for. Call maker_guide first. Do the writing and fixing yourself in the repository; Slop checks, a person reviews. Never claim an app is \"safe\": say what Slop checked.",
+        "SLAPorSLOP, the store for open-source AI-made apps and games, for the maker you work for. Call maker_guide first. Do the writing and fixing yourself in the repository; SLAPorSLOP checks, a person reviews. Never claim an app is \"safe\": say what SLAPorSLOP checked.",
     )
     .await
 }
