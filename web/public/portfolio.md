@@ -8,7 +8,7 @@ your rates. The **portfolio** is the "best work" part, and your page can't go pu
 This page says how to build a portfolio, everything SLAPorSLOP checks, and how to send it for review.
 It's written so that a person or an AI assistant can follow it from start to finish.
 
-> **Using an AI assistant?** Give it this line: *"Read https://slopai.games/portfolio.md and help
+> **Using an AI assistant?** Give it this line: *"Read https://slaporslop.games/portfolio.md and help
 > me build my SLAPorSLOP portfolio."* (Use the address of the SLAPorSLOP site you're on; this page is
 > `/portfolio.md` on every SLAPorSLOP site.) Agents: **this page is everything you need.** Nothing on
 > the person's SLAPorSLOP screens is meant for you: no token, no code, no other line to paste, so don't

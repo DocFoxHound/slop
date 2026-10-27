@@ -1,17 +1,17 @@
 <p align="center">
-  <a href="https://slopai.games"><img src="docs/images/banner.svg" alt="SLAPorSLOP: the store for apps and games made with AI. Share what you made. The people who play it decide if it Slaps or if it's Slop." width="100%"></a>
+  <a href="https://slaporslop.games"><img src="docs/images/banner.svg" alt="SLAPorSLOP: the store for apps and games made with AI. Share what you made. The people who play it decide if it Slaps or if it's Slop." width="100%"></a>
 </p>
 
 <p align="center">
-  <a href="https://slopai.games"><img alt="Status: private testing" src="https://img.shields.io/badge/status-private%20testing-a3e635?style=for-the-badge&labelColor=151a21"></a>
+  <a href="https://slaporslop.games"><img alt="Status: private testing" src="https://img.shields.io/badge/status-private%20testing-a3e635?style=for-the-badge&labelColor=151a21"></a>
   <img alt="Windows and Linux" src="https://img.shields.io/badge/runs%20on-Windows%20%C2%B7%20Linux-60a5fa?style=for-the-badge&labelColor=151a21">
   <a href="#license"><img alt="Open source" src="https://img.shields.io/badge/open%20source-AGPL%20%C2%B7%20MIT%20%C2%B7%20Apache-e7ecf2?style=for-the-badge&labelColor=151a21"></a>
   <img alt="Built with Rust and Tauri" src="https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri-f59e0b?style=for-the-badge&labelColor=151a21">
 </p>
 
 <p align="center">
-  <a href="https://slopai.games"><b>slopai.games</b></a> ·
-  <a href="https://slopai.games/publish/guide">Publish your app</a> ·
+  <a href="https://slaporslop.games"><b>slaporslop.games</b></a> ·
+  <a href="https://slaporslop.games/publish/guide">Publish your app</a> ·
   <a href="docs/DESIGN.md">How it works</a> ·
   <a href="docs/DEVELOPING.md">Developing</a>
 </p>
@@ -64,13 +64,13 @@ checks every release for you. Launch a *Coming soon* page before it's done, see 
 Players can donate, straight into your own Stripe account; SLAPorSLOP takes a flat 5% and never holds
 your money.
 
-**[Read the publishing guide →](https://slopai.games/publish/guide)**
+**[Read the publishing guide →](https://slaporslop.games/publish/guide)**
 
 <br>
 
 ## Where it's at
 
-SLAPorSLOP is in **private testing** at [slopai.games](https://slopai.games). The desktop app runs on
+SLAPorSLOP is in **private testing** at [slaporslop.games](https://slaporslop.games). The desktop app runs on
 Windows and Linux and updates itself; macOS and phones come later.
 
 How SLAPorSLOP's Windows app is built and signed: [Code signing policy](docs/CODE-SIGNING.md).

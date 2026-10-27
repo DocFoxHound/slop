@@ -74,13 +74,13 @@
     "publisher": "IronPoint Development",
     "copyright": "Copyright © 2026 IronPoint Development LLC",
     "license": "AGPL-3.0-or-later",
-    "homepage": "https://slopai.games"
+    "homepage": "https://slaporslop.games"
   },
   "plugins": {
     "updater": {
       "pubkey": "dW50cnVzdGVkIGNvbW1lbnQ6IG1pbmlzaWduIHB1YmxpYyBrZXk6IDZCOUQzODg5OUZDODgxQzYKUldUR2djaWZpVGlkYTluOTk5Vmh1bGFJTVljRGFYOGROMlF6cTZVSFVKWm9FUldubGdYaXZ3Z2cK",
       "endpoints": [
-        "https://slopai.games/v1/desktop/update/{{target}}/{{arch}}/{{current_version}}?bundle={{bundle_type}}"
+        "https://slaporslop.games/v1/desktop/update/{{target}}/{{arch}}/{{current_version}}?bundle={{bundle_type}}"
       ],
       "requireSignedVersion": true,
       "windows": {

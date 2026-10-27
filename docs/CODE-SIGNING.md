@@ -10,7 +10,7 @@ is published unsigned.
 
 Only the SLAPorSLOP desktop app for Windows, built from this repository: the program (`slop.exe`) and
 its installer (`Slop_<version>_x64-setup.exe`), downloaded from
-[slopai.games/download](https://slopai.games/download). Nothing else is signed with this
+[slaporslop.games/download](https://slaporslop.games/download). Nothing else is signed with this
 certificate: not third-party programs or libraries, and not the apps and games people publish on
 SLAPorSLOP (their makers sign those themselves).
 
@@ -23,7 +23,7 @@ SLAPorSLOP (their makers sign those themselves).
    and the pipeline builds the Windows app from that commit on GitHub's Windows runner.
 3. **Nothing is released or signed until a release approver approves that run** (a GitHub
    environment with a required reviewer). Every release is approved by hand.
-4. The approved build is published to slopai.games, and installed SLAPorSLOP apps update to it. The
+4. The approved build is published to slaporslop.games, and installed SLAPorSLOP apps update to it. The
    update is also signed with SLAPorSLOP's own updater key, which the app checks before installing.
 
 The build scripts and pipeline are in this repository and are reviewed like any other change.
@@ -39,11 +39,11 @@ Everyone in these roles uses multi-factor authentication for GitHub and SignPath
 
 ## Privacy
 
-The SLAPorSLOP app connects to SLAPorSLOP's service at slopai.games, which is what it's for: signing in,
+The SLAPorSLOP app connects to SLAPorSLOP's service at slaporslop.games, which is what it's for: signing in,
 the store, your library, updates, ratings and chat. What SLAPorSLOP collects and why is in the
-[Privacy Policy](https://slopai.games/legal/privacy).
+[Privacy Policy](https://slaporslop.games/legal/privacy).
 
-Besides slopai.games, the app only contacts:
+Besides slaporslop.games, the app only contacts:
 
 - **the release pages of the apps you install** (usually GitHub), to download them;
 - **Microsoft's own download links**, when an app you're about to play needs a Windows runtime

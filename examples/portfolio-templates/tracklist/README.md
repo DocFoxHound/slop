@@ -47,4 +47,4 @@ Paths in `portfolio.json` are relative to `.slop/`: `"works/painting.png"` is
 - Skills: `2d-art`, `pixel-art`, `3d`, `animation`, `ui-ux`, `music`, `sound`, `writing`,
   `voice`, `localization`, `playtesting`.
 
-Everything else is in the [portfolio guide](https://slopai.games/portfolio.md).
+Everything else is in the [portfolio guide](https://slaporslop.games/portfolio.md).

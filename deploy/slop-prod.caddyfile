@@ -1,22 +1,36 @@
 # SLAPorSLOP's production site: copy to /etc/caddy/Caddyfile.d/ on the production server and reload
 # Caddy (`caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`). Caddy gets the Let's
 # Encrypt certificates itself once the names point at the server (deploy/README.md, "Production").
-slopai.games {
+slaporslop.games {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8090
 }
 
 # One address for the site, so sign-in cookies and links all use the same origin.
-www.slopai.games {
-	redir https://slopai.games{uri} permanent
+www.slaporslop.games {
+	redir https://slaporslop.games{uri} permanent
+}
+
+# The site's former address (SLOP_FORMER_URLS in slop.env). Keep it registered and here for good:
+# installed desktop apps update and sign in through its API, makers' workflows send builds to it,
+# and webhooks may still point at it. So its API (/v1/) is still served; pages move to the new
+# address, keeping the path (308 keeps the method and body).
+slopai.games, www.slopai.games {
+	encode zstd gzip
+	handle /v1/* {
+		reverse_proxy 127.0.0.1:8090
+	}
+	handle {
+		redir https://slaporslop.games{uri} 308
+	}
 }
 
 # Browser demos of new games (demos.rs): a separate origin, so a game's code never runs where
-# SLAPorSLOP's sign-in cookies are. The API serves only demos here. Off until set up: add a DNS record
-# for play.slopai.games pointing at this server, uncomment this block, and set
-# SLOP_PLAY_URL=https://play.slopai.games (and SLOP_DEMO_DIR) in slop.env (deploy/README.md,
+# SLAPorSLOP's sign-in cookies are. The API serves only demos here. Off until set up: add a DNS
+# record for play.slaporslop.games pointing at this server, uncomment this block, and set
+# SLOP_PLAY_URL=https://play.slaporslop.games (and SLOP_DEMO_DIR) in slop.env (deploy/README.md,
 # "Browser demos").
-# play.slopai.games {
+# play.slaporslop.games {
 # 	encode zstd gzip
 # 	reverse_proxy 127.0.0.1:8090
 # }
