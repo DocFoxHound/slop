@@ -77,3 +77,17 @@ export function isTyping(el: Element | null): boolean {
   if (el instanceof HTMLInputElement) return !["button", "checkbox", "radio", "submit", "reset", "range", "color", "file"].includes(el.type);
   return (el as HTMLElement).isContentEditable === true;
 }
+
+/**
+ * The element a link's fragment points at (`#decisions`), or "" when it doesn't name one: a
+ * handoff link's `#fill=…` (handoff.ts), or a fragment with a broken %-escape, which used to stop
+ * the whole page.
+ */
+export function fragmentId(hash: string): string {
+  if (hash.startsWith("#fill=")) return "";
+  try {
+    return decodeURIComponent(hash.slice(1));
+  } catch {
+    return "";
+  }
+}
