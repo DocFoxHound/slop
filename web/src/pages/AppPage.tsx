@@ -19,6 +19,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
 import { StoreNav } from "../components/StoreNav";
+import { StoreIcon } from "../components/StoreIcons";
 import { ModControls } from "../components/ModControls";
 import { DonateButton } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
@@ -203,7 +204,8 @@ function AppView({ app }: { app: AppDetail }) {
           {app.credits.length > 0 && (
             <div className="credits">
               <span className="badge official" title="This app's maker hired these creatives through People">
-                ✋ MADE WITH PEOPLE
+                <StoreIcon name="made" size={12} />
+                MADE WITH PEOPLE
               </span>
               <span className="small">
                 {creditsByRole(app.credits).map(([role, people], i) => (

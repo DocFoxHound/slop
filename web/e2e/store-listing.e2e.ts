@@ -195,10 +195,10 @@ test("Community builds lists only branches; Made with people only apps that hire
   const asked = page.waitForRequest((r) => new URL(r.url()).searchParams.get("made_with_people") === "true");
   await page.goto("/made-with-people");
   await asked;
-  await expect(page.getByRole("heading", { name: "✋ Made with people", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Made with people", exact: true, level: 1 })).toBeVisible();
   // Cleo hired Vera for Cleo's Tavern.
   await shows(page, ["cleos-tavern"], ["castle-rock", "lantern-keep"]);
-  await expect(tile(page, "cleos-tavern").getByText("✋ Made with people")).toBeVisible();
+  await expect(tile(page, "cleos-tavern").getByText("Made with people", { exact: true })).toBeVisible();
   await expect(page.getByRole("link", { name: "People", exact: true }).first()).toBeVisible();
 });
 
