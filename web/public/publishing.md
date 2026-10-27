@@ -1254,6 +1254,51 @@ separate address until the 14 days are up, then deletes it.
 - There are a limited number of demo slots, and a daily traffic limit; when it's reached,
   players are asked to install the game instead.
 
+## Hand the person one link
+
+Without a connection to SLAPorSLOP (or before the person has an account), you can still fill in
+the **New app** form for them and give them one link to open. They sign in if needed (a new
+account works too), see the form filled in, check it, and press **Create draft** themselves.
+Nothing is sent until they do.
+
+Build the link: `/publish/new#fill=` on this site, followed by
+`encodeURIComponent(JSON.stringify(fields))`. The fields go after `#`, so they never reach
+SLAPorSLOP's server. Leave out anything you don't know. Fields that are wrong or unknown are left
+out, and the form tells the person which ones and why.
+
+| Field | Type | Rules |
+|---|---|---|
+| `title` | string | 1–80 characters, one line |
+| `slug` | string | the store address: 3–60 lowercase letters, numbers and single dashes (check it with `/v1/check/store-address`). Leave it out and it follows the title. |
+| `summary` | string | 1–200 characters, one line |
+| `description_md` | string | up to 20,000 characters, Markdown (no HTML or images) |
+| `visibility` | `"public"` or `"private"` | |
+| `kind` | `"game"` or `"app"` | |
+| `stage` | `"coming_soon"`, `"beta"` or `"released"` | |
+| `repo_url` | string | the repository's `https://` address, up to 300 characters, no `?query` or `#fragment` |
+| `license_spdx` | string | an SPDX ID such as `MIT` or `GPL-3.0-only`, up to 64 characters |
+| `min_age` | number | 0, 3, 7, 12, 16 or 18 |
+| `content_labels` | list | `romance`, `suggestive`, `violence`, `horror`, `strong_language`, `gambling_themes` |
+| `platforms` | list | `windows`, `linux`, `linux-deb`, `linux-rpm` (Linux needs `linux-deb` and/or `linux-rpm` too) |
+| `tags` | list of tag slugs | up to 10, from `/v1/categories` |
+| `online` | list | `own_servers`, `player_servers`, `peer_to_peer`, `other_services` (empty if it never goes online) |
+| `online_hosts` | list of strings | up to 10 server names, like `play.example.com` or `play.example.com:7777` |
+| `sandbox_ready` | true/false | it keeps saves only in `SLOP_SAVE_DIR` |
+| `bug_reports` | true/false | take bug reports from players on SLAPorSLOP |
+| `accessibility` | list | `remap_controls`, `colorblind`, `subtitles`, `text_size`, `one_handed`, `difficulty`, `no_flashing`, `screen_reader`, `controller` |
+| `mods_folder` | object or null | `{"base": "game" or "saves", "path": "mods" (up to 200 characters), "layout": "folder" or "flat"}`; null if it reads `SLOP_MODS` or has no mods |
+
+Never put in a link (they're ignored): agreements, repository tokens, or anything about payments.
+The person accepts the Publisher Agreement themselves when they press Create. If the repository
+is private and outside GitHub, they paste a read-only token themselves.
+
+Example (on slaporslop.games):
+`https://slaporslop.games/publish/new#fill=%7B%22title%22%3A%22Harbour%20Lights%22%2C%22slug%22%3A%22harbour-lights%22%2C%22summary%22%3A%22Guide%20the%20boats%20home.%22%2C%22kind%22%3A%22game%22%2C%22stage%22%3A%22beta%22%2C%22repo_url%22%3A%22https%3A%2F%2Fgithub.com%2Fyou%2Fharbour-lights%22%2C%22license_spdx%22%3A%22MIT%22%2C%22min_age%22%3A7%2C%22platforms%22%3A%5B%22windows%22%5D%2C%22tags%22%3A%5B%22puzzle%22%5D%7D`
+
+Tell the person: the form opens filled in. They should check everything, especially the age
+rating, content labels, licence and repository, and then press **Create draft** themselves. A
+link is used once; make a new one if they need it again.
+
 ## Working with your AI agent
 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
@@ -1735,7 +1780,8 @@ client gets 20 repository checks an hour; a 429 or 503 answer says when to try a
    Option A, name files so the version is the only part that changes between releases
    (e.g. `game-1.0.0-windows.zip`), so SLAPorSLOP can pick up later releases by itself.
 7. **(token)** Create the store page (`create_store_page`, or **Publish → New app** on the
-   website) with the same store address, the repository URL, licence, type, stage, age rating,
+   website; without a token, [hand the person one link](#hand-the-person-one-link) that fills the
+   form in) with the same store address, the repository URL, licence, type, stage, age rating,
    tags, and **Online** if the project connects to anything (see step 3). Write the description
    from the repository. If a tool answers `terms_required` (the Publisher Agreement changed
    since the owner accepted it), tell them it's waiting for them on SLAPorSLOP under **Account → AI

@@ -130,3 +130,7 @@ person the steps to do on the website. These work for anyone, with no account (G
 - `/v1/check/repository?url=https://github.com/OWNER/REPO`: is the project ready to publish?
 - `/v1/check/store-address?slug=my-game`: is the store address free?
 - `/v1/check/portfolio?url=https://github.com/OWNER/portfolio`: is the People portfolio right?
+
+And you can fill in the store page or the People page for them: build one link, they open it, check
+it and press Create themselves. See [Hand the person one link](/publishing.md#hand-the-person-one-link)
+and [the People page link](/portfolio.md#hand-the-person-one-link-for-their-people-page).
