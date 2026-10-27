@@ -962,13 +962,13 @@ struct LicenseQuery {
 }
 
 #[derive(Serialize, Deserialize)]
-struct DetectedLicense {
+pub(crate) struct DetectedLicense {
     /// SPDX ID, when the repository has a licence GitHub recognises.
-    spdx: Option<String>,
+    pub spdx: Option<String>,
     /// The licence's full name, or what GitHub found if it couldn't identify it.
-    name: Option<String>,
+    pub name: Option<String>,
     /// Why nothing was detected.
-    note: Option<String>,
+    pub note: Option<String>,
 }
 
 /// Asks GitHub which licence a repository has (its LICENSE file). Signed-in makers only, since
@@ -996,20 +996,47 @@ async fn detect_license(
     // Each repository is asked about at most once a day, and each account only so often: the
     // lookups share SLAPorSLOP's GitHub allowance with the release watcher (security review,
     // 2026-10-22).
+    if let Some(found) = cached_license(&state, &repo) {
+        return Ok(Json(found));
+    }
+    crate::limits::check(&state, _user.id, crate::limits::Action::Lookup)?;
+    // With SLAPorSLOP's credentials (its GitHub App, which can read private repositories) only for
+    // the repository's owner; anyone else asks as nobody, so this can't reveal a private
+    // repository SLAPorSLOP can read (security review, 2026-10-22).
+    let owner = crate::repo_owner::assess(&state, _user.id, &repo_url)
+        .await
+        .is_ok_and(|a| a.ok);
+    Ok(Json(ask_license(&state, &repo, owner).await?.0))
+}
+
+/// What GitHub said about a repository's licence in the last day, when someone who doesn't own it
+/// asked (only what anyone could see is cached for anyone).
+pub(crate) fn cached_license(state: &AppState, repo: &str) -> Option<DetectedLicense> {
     let key = repo.to_ascii_lowercase();
-    if let Some((at, found)) = state
+    let (at, found) = state
         .license_cache
         .lock()
         .ok()
-        .and_then(|c| c.get(&key).cloned())
-        && at.elapsed() < std::time::Duration::from_secs(86_400)
-    {
-        return Ok(Json(
-            serde_json::from_value(found).map_err(|e| ApiError::Internal(e.into()))?,
-        ));
+        .and_then(|c| c.get(&key).cloned())?;
+    if at.elapsed() >= std::time::Duration::from_secs(86_400) {
+        return None;
     }
-    crate::limits::check(&state, _user.id, crate::limits::Action::Lookup)?;
+    serde_json::from_value(found).ok()
+}
 
+/// Asks GitHub which licence `repo` (`owner/name`) has: with SLAPorSLOP's credentials when
+/// `credentials` (the repository's owner is asking), otherwise as nobody, and then the answer is
+/// cached for a day. Also returns GitHub's status code (200, 404, or what went wrong).
+pub(crate) async fn ask_license(
+    state: &AppState,
+    repo: &str,
+    credentials: bool,
+) -> ApiResult<(DetectedLicense, u16)> {
+    let none = |note: &str| DetectedLicense {
+        spdx: None,
+        name: None,
+        note: Some(note.to_string()),
+    };
     #[derive(Deserialize)]
     struct GithubLicense {
         license: Option<LicenseInfo>,
@@ -1025,14 +1052,8 @@ async fn detect_license(
         .github_api_base
         .join(&format!("repos/{repo}/license"))
         .map_err(|e| ApiError::Internal(e.into()))?;
-    // With SLAPorSLOP's credentials (its GitHub App, which can read private repositories) only for
-    // the repository's owner; anyone else asks as nobody, so this can't reveal a private
-    // repository SLAPorSLOP can read (security review, 2026-10-22).
-    let owner = crate::repo_owner::assess(&state, _user.id, &repo_url)
-        .await
-        .is_ok_and(|a| a.ok);
-    let request = if owner {
-        crate::releases::github_get(&state, url).await
+    let request = if credentials {
+        crate::releases::github_get(state, url).await
     } else {
         state
             .http
@@ -1047,14 +1068,18 @@ async fn detect_license(
     match res.status().as_u16() {
         200 => {}
         404 => {
-            return Ok(none(
-                "no licence file found (or the repository isn't visible to SLAPorSLOP)",
+            return Ok((
+                none("no licence file found (or the repository isn't visible to SLAPorSLOP)"),
+                404,
             ));
         }
         code => {
-            return Ok(none(&format!(
-                "GitHub answered {code}; pick the licence yourself"
-            )));
+            return Ok((
+                none(&format!(
+                    "GitHub answered {code}; pick the licence yourself"
+                )),
+                code,
+            ));
         }
     }
     let found: GithubLicense = res.json().await.map_err(|e| ApiError::Internal(e.into()))?;
@@ -1070,16 +1095,19 @@ async fn detect_license(
     });
     let found = DetectedLicense { spdx, name, note };
     // Only what anyone could see is cached for anyone.
-    if !owner
+    if !credentials
         && let (Ok(mut cache), Ok(value)) =
             (state.license_cache.lock(), serde_json::to_value(&found))
     {
         if cache.len() > 10_000 {
             cache.clear();
         }
-        cache.insert(key, (std::time::Instant::now(), value));
+        cache.insert(
+            repo.to_ascii_lowercase(),
+            (std::time::Instant::now(), value),
+        );
     }
-    Ok(Json(found))
+    Ok((found, 200))
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1289,7 +1317,7 @@ async fn address_available(
 
 /// `None` when `slug` itself is free; otherwise the first free `<slug>-2`, `-3`… (a trailing
 /// number is replaced, so `game-2` suggests `game-3`, not `game-2-2`), kept within 60 characters.
-async fn free_address(db: &sqlx::PgPool, slug: &str) -> sqlx::Result<Option<String>> {
+pub(crate) async fn free_address(db: &sqlx::PgPool, slug: &str) -> sqlx::Result<Option<String>> {
     let base = match slug.rsplit_once('-') {
         Some((head, tail)) if !head.is_empty() && tail.bytes().all(|b| b.is_ascii_digit()) => head,
         _ => slug,
