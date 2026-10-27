@@ -1,16 +1,16 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
 //! Maker signatures (docs/SECURITY.md §5.3).
 //!
-//! Every build must carry its maker's signature as well as Slop's. The default is a GitHub
+//! Every build must carry its maker's signature as well as SLAPorSLOP's. The default is a GitHub
 //! artifact attestation: the maker's CI asks Sigstore for a short-lived certificate that says
 //! "workflow Y in repo X at commit Z", signs a SLSA provenance statement naming the file's hash,
 //! and logs it in Sigstore's public transparency log. There is no long-lived key to steal, and a
-//! stolen Slop session alone can't produce one.
+//! stolen SLAPorSLOP session alone can't produce one.
 //!
 //! [`ProvenanceVerifier`] checks such an attestation end to end (certificate chain to Sigstore's
 //! root, transparency log, signature, issuer) and then checks that it names *this* file, built
 //! from *this app's repository* at *this release's commit*. Both the API (before review) and the
-//! desktop client (before installing) run the same check, so a compromised Slop server can't
+//! desktop client (before installing) run the same check, so a compromised SLAPorSLOP server can't
 //! slip in a build the maker didn't sign.
 
 use serde::{Deserialize, Serialize};
@@ -33,7 +33,7 @@ pub struct Provenance {
     pub source_repo: String,
     /// The commit it was built from.
     pub commit: String,
-    /// The workflow that signed it (with its ref). For Slop Build, Slop's shared recipe.
+    /// The workflow that signed it (with its ref). For Slop Build, SLAPorSLOP's shared recipe.
     pub signer_workflow: String,
     /// Signed by Slop Build's recipe: shown as "Built by Slop Build from source".
     pub built_by_slop_build: bool,

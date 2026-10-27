@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Creatives' portfolios, from a public GitHub repository (DESIGN §15.1).
 //!
-//! Like store-page pictures (media.rs), Slop doesn't host them. The creative lists their work in
+//! Like store-page pictures (media.rs), SLAPorSLOP doesn't host them. The creative lists their work in
 //! `.slop/portfolio.json` in any public GitHub repository:
 //!
 //! ```json
@@ -16,7 +16,7 @@
 //! }
 //! ```
 //!
-//! Slop reads it at one commit, checks every file once (pictures from their header, audio from
+//! SLAPorSLOP reads it at one commit, checks every file once (pictures from their header, audio from
 //! its signature, sizes), and links to the files at that commit. Every new set waits for review
 //! (admin_web.rs, review.rs); a profile goes live with its first approved portfolio.
 //!
@@ -270,7 +270,7 @@ pub(super) async fn read_audio(
     };
     let Some(format) = audio_format(&bytes) else {
         problem!(
-            "{path} isn't an MP3, Ogg, WAV, FLAC or M4A file (Slop reads its first bytes, not its name)"
+            "{path} isn't an MP3, Ogg, WAV, FLAC or M4A file (SLAPorSLOP reads its first bytes, not its name)"
         );
     };
     Ok(AudioFile {
@@ -613,7 +613,7 @@ pub async fn approve_set(db: &sqlx::PgPool, id: Uuid, reviewer: &str) -> anyhow:
         (
             "Your People page is live".to_string(),
             format!(
-                "Slop approved your portfolio: makers can find your page on People now.{}",
+                "SLAPorSLOP approved your portfolio: makers can find your page on People now.{}",
                 if paid {
                     ""
                 } else {

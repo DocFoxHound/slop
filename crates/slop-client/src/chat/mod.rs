@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Chat on this device (DESIGN §19, SECURITY §8.5): end-to-end encrypted with MLS, so Slop's
+//! Chat on this device (DESIGN §19, SECURITY §8.5): end-to-end encrypted with MLS, so SLAPorSLOP's
 //! server (`slop-api`'s `chat.rs`) only relays what this module encrypts.
 //!
 //! - **This device** has its own signing key, kept with its MLS state in a local file encrypted
@@ -159,7 +159,7 @@ struct Message {
     attachments: Vec<AttachmentRef>,
     #[serde(default)]
     preview: Option<LinkPreview>,
-    /// A line from Slop itself (someone's security code changed, a rename).
+    /// A line from SLAPorSLOP itself (someone's security code changed, a rename).
     #[serde(default)]
     notice: bool,
     #[serde(default)]
@@ -180,7 +180,7 @@ struct Message {
 pub struct Person {
     pub id: Uuid,
     pub name: String,
-    /// Their profile picture, served by Slop; None: the letter.
+    /// Their profile picture, served by SLAPorSLOP; None: the letter.
     #[serde(default)]
     pub avatar_url: Option<String>,
 }
@@ -403,7 +403,7 @@ fn attachment_view(a: &AttachmentRef) -> AttachmentView {
     }
 }
 
-/// Words that often come with asking to be paid outside Slop, where Slop can't help.
+/// Words that often come with asking to be paid outside SLAPorSLOP, where SLAPorSLOP can't help.
 const PAYMENT_WORDS: &[&str] = &[
     "paypal",
     "venmo",
@@ -427,7 +427,7 @@ const PAYMENT_WORDS: &[&str] = &[
 pub fn payment_warning(text: &str) -> Option<String> {
     let lower = text.to_lowercase();
     PAYMENT_WORDS.iter().any(|w| lower.contains(w)).then(|| {
-        "Careful with payments outside Slop: Slop can't help if something goes wrong. Never pay for something you haven't received, and never send gift cards."
+        "Careful with payments outside SLAPorSLOP: SLAPorSLOP can't help if something goes wrong. Never pay for something you haven't received, and never send gift cards."
             .to_string()
     })
 }
@@ -635,7 +635,7 @@ impl Chat {
         })
     }
 
-    /// Sets chat up on this device: a new signing key and key packages, registered with Slop.
+    /// Sets chat up on this device: a new signing key and key packages, registered with SLAPorSLOP.
     /// The user's first device is ready at once; later ones wait for approval.
     pub async fn setup(&self, name: &str) -> Result<Status> {
         {
@@ -1953,8 +1953,8 @@ impl Chat {
             .collect())
     }
 
-    /// Reports someone's message to Slop's moderators, with its decrypted text and franking key
-    /// so Slop can check it's genuine (only this message is revealed).
+    /// Reports someone's message to SLAPorSLOP's moderators, with its decrypted text and franking key
+    /// so SLAPorSLOP can check it's genuine (only this message is revealed).
     pub async fn report(
         &self,
         conversation: Uuid,
@@ -2074,7 +2074,7 @@ impl Chat {
     }
 
     /// Turns the encrypted backup on (returning the new recovery code, shown once) or off
-    /// (deleting the copy at Slop).
+    /// (deleting the copy at SLAPorSLOP).
     pub async fn set_backups(&self, on: bool) -> Result<Option<String>> {
         if !on {
             let res = self

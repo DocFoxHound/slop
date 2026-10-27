@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! A fix for every problem Slop's checks find (plan phase 10): `GET /v1/apps/{slug}/fixes`, for
+//! A fix for every problem SLAPorSLOP's checks find (plan phase 10): `GET /v1/apps/{slug}/fixes`, for
 //! the maker and their AI agent (maker_agents.rs).
 //!
 //! Each fix says what's wrong, where (file and line, from the checks), and exactly what to do, as
 //! an instruction a coding agent can follow in the repository. They're built from fixed text and
-//! the check results: Slop calls no AI model. The guide sections they point to are readable with
+//! the check results: SLAPorSLOP calls no AI model. The guide sections they point to are readable with
 //! `GET /v1/maker/publishing-guide/{section}`.
 
 use axum::{
@@ -26,7 +26,7 @@ pub fn routes() -> Router<AppState> {
 pub struct Fix {
     /// A short key, e.g. `licence:no_file`, `saves`, `secret`.
     pub kind: String,
-    /// `must`: Slop won't approve the release until it's fixed. `should`: a reviewer may still
+    /// `must`: SLAPorSLOP won't approve the release until it's fixed. `should`: a reviewer may still
     /// approve, but players see it or it causes trouble. `recommended`: never holds anything up,
     /// but the store page is better with it (e.g. an icon).
     pub severity: &'static str,
@@ -127,7 +127,7 @@ async fn fixes(
         }),
         fixes: list,
         recommendations,
-        next: "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). Slop's checks run again on the new release.",
+        next: "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). SLAPorSLOP's checks run again on the new release.",
     }))
 }
 
@@ -155,7 +155,7 @@ fn labels(v: &Value) -> String {
         .join("; ")
 }
 
-/// Fixes from Slop's source check (source_scan.rs) and Slop Build's checks.
+/// Fixes from SLAPorSLOP's source check (source_scan.rs) and Slop Build's checks.
 pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
     let mut out = Vec::new();
     let mut fix = |kind: String, severity, problem: String, instruction: String, guide| {
@@ -245,7 +245,7 @@ pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
             "purchases".into(),
             "must",
             format!("The code sells things or takes payments: {}.", labels(&scan["monetization"])),
-            "Remove all purchases, payment links, loot boxes and premium currencies: apps on Slop are free and sell nothing. Players can support the maker with Slop's donate button instead, which gives nothing in return. Remove the payment libraries from the dependencies too.".into(),
+            "Remove all purchases, payment links, loot boxes and premium currencies: apps on SLAPorSLOP are free and sell nothing. Players can support the maker with SLAPorSLOP's donate button instead, which gives nothing in return. Remove the payment libraries from the dependencies too.".into(),
             None,
         );
     }
@@ -253,8 +253,8 @@ pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
         fix(
             "code_loading".into(),
             "must",
-            format!("The code loads or replaces code from outside Slop: {}.", labels(&scan["code_loading"])),
-            "Remove run-time code loading from the network, self-updaters and unsafe data formats (e.g. pickle, BinaryFormatter). Slop delivers every update itself, after checking it. Mods are fine when they come from Slop: read them from SLOP_MODS or your mods folder.".into(),
+            format!("The code loads or replaces code from outside SLAPorSLOP: {}.", labels(&scan["code_loading"])),
+            "Remove run-time code loading from the network, self-updaters and unsafe data formats (e.g. pickle, BinaryFormatter). SLAPorSLOP delivers every update itself, after checking it. Mods are fine when they come from SLAPorSLOP: read them from SLOP_MODS or your mods folder.".into(),
             Some("Rules for the code"),
         );
     }
@@ -271,7 +271,7 @@ pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
         fix(
             "saves".into(),
             if scan["sandbox_mismatch"] == true { "must" } else { "should" },
-            format!("The app saves outside Slop's save folder: {}.", labels(&scan["saves"])),
+            format!("The app saves outside SLAPorSLOP's save folder: {}.", labels(&scan["saves"])),
             "Save under the folder in the SLOP_SAVE_DIR environment variable when it's set, and keep the current location only as a fallback when it isn't. Write a new file and rename it over the old one, so a crash never leaves half a save. Then players' saves survive reinstalls and sandbox mode works.".into(),
             Some("Saves and sandbox mode"),
         );

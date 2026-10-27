@@ -1,18 +1,18 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Only a repository's owner can put it on Slop (DESIGN §8).
+//! Only a repository's owner can put it on SLAPorSLOP (DESIGN §8).
 //!
 //! Every way a repository gets linked (publishing an app, changing or moving its repository,
 //! registering a branch from a fork) goes through `check`. How ownership is proved depends on
 //! the host:
 //!
-//! - **GitHub:** a GitHub account linked to the Slop account (Account → Sign-ins) must own the
-//!   repository, or be an owner of the organization that does (checked through Slop's GitHub
+//! - **GitHub:** a GitHub account linked to the SLAPorSLOP account (Account → Sign-ins) must own the
+//!   repository, or be an owner of the organization that does (checked through SLAPorSLOP's GitHub
 //!   App installed on the organization). Collaborators can't, even with admin rights.
 //! - **GitLab.com:** a linked GitLab account must own the project, or be an Owner of its group.
 //! - **Bitbucket Cloud:** a linked Bitbucket account must own the repository. A workspace's
 //!   repository is proved with a code, as below.
-//! - **Anywhere else** (self-hosted GitLab, Gitea, Forgejo, cgit…), and groups or workspaces Slop
-//!   can't ask about: a code. Slop gives the user a code to put in the repository's README (or a
+//! - **Anywhere else** (self-hosted GitLab, Gitea, Forgejo, cgit…), and groups or workspaces SLAPorSLOP
+//!   can't ask about: a code. SLAPorSLOP gives the user a code to put in the repository's README (or a
 //!   `slop-verify.txt` file at its root) on the default branch, then reads it. That proves the
 //!   user can push to the repository, which is the most any host without an owner check allows.
 //!
@@ -73,8 +73,8 @@ async fn taken(
     .fetch_optional(&state.db)
     .await?;
     Ok(found.map(|title| match title {
-        Some(title) => format!("that repository is already on Slop as {title}"),
-        None => "that repository is already linked to an app on Slop".to_string(),
+        Some(title) => format!("that repository is already on SLAPorSLOP as {title}"),
+        None => "that repository is already linked to an app on SLAPorSLOP".to_string(),
     }))
 }
 
@@ -236,15 +236,15 @@ async fn github(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Asses
         404 => {
             return Ok(Assessment::no(
                 if state.config.releases.github_app.is_some() {
-                    "Slop can't see that repository. Check the address; if it's private, install Slop's GitHub App on it first"
+                    "SLAPorSLOP can't see that repository. Check the address; if it's private, install SLAPorSLOP's GitHub App on it first"
                 } else {
-                    "Slop can't see that repository. Check the address; private GitHub repositories need Slop's GitHub App, which this server hasn't set up yet, so use a public repository for now"
+                    "SLAPorSLOP can't see that repository. Check the address; private GitHub repositories need SLAPorSLOP's GitHub App, which this server hasn't set up yet, so use a public repository for now"
                 },
             ));
         }
         code => {
             return Err(ApiError::Unavailable(if code == 403 || code == 429 {
-                "GitHub is limiting Slop's requests right now; try again in a few minutes"
+                "GitHub is limiting SLAPorSLOP's requests right now; try again in a few minutes"
             } else {
                 "GitHub didn't answer; try again in a few minutes"
             }));
@@ -257,7 +257,7 @@ async fn github(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Asses
         return Ok(Assessment::link(
             "github",
             format!(
-                "link the GitHub account that owns this repository ({login}) to your Slop account, under Account → Sign-ins"
+                "link the GitHub account that owns this repository ({login}) to your SLAPorSLOP account, under Account → Sign-ins"
             ),
         ));
     }
@@ -267,7 +267,7 @@ async fn github(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Asses
             .map_err(ApiError::Internal)?;
         let Some(token) = token else {
             return Ok(Assessment::no(format!(
-                "{login} is an organization: install Slop's GitHub App on it (with read access to members) so Slop can check you're one of its owners"
+                "{login} is an organization: install SLAPorSLOP's GitHub App on it (with read access to members) so SLAPorSLOP can check you're one of its owners"
             )));
         };
         for (id, _) in &mine {
@@ -292,7 +292,7 @@ async fn github(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Asses
         return Ok(Assessment::link(
             "github",
             format!(
-                "only owners of the {login} organization can put its repositories on Slop. If you are one, link that GitHub account under Account → Sign-ins"
+                "only owners of the {login} organization can put its repositories on SLAPorSLOP. If you are one, link that GitHub account under Account → Sign-ins"
             ),
         ));
     }
@@ -303,7 +303,7 @@ async fn github(state: &AppState, user: Uuid, repo_url: &str) -> ApiResult<Asses
     Ok(Assessment::link(
         "github",
         format!(
-            "only the repository's owner can put it on Slop, and {login} owns this one. If that's you, link that GitHub account under Account → Sign-ins; otherwise fork it and register a branch from your fork"
+            "only the repository's owner can put it on SLAPorSLOP, and {login} owns this one. If that's you, link that GitHub account under Account → Sign-ins; otherwise fork it and register a branch from your fork"
         ),
     ))
 }
@@ -342,7 +342,7 @@ async fn gitlab(
         return Ok(state.config.gitlab.is_some().then(|| {
             Assessment::link(
                 "gitlab",
-                format!("link the GitLab account that owns {namespace} to your Slop account, under Account → Sign-ins"),
+                format!("link the GitLab account that owns {namespace} to your SLAPorSLOP account, under Account → Sign-ins"),
             )
         }));
     }
@@ -355,7 +355,7 @@ async fn gitlab(
                 Assessment::link(
                     "gitlab",
                     format!(
-                        "only the project's owner can put it on Slop, and {namespace} owns this one"
+                        "only the project's owner can put it on SLAPorSLOP, and {namespace} owns this one"
                     ),
                 )
             },
@@ -418,7 +418,7 @@ async fn bitbucket(
     Ok(Some(Assessment::link(
         "bitbucket",
         format!(
-            "only the repository's owner can put it on Slop, and {name} owns this one. If that's you, link that Bitbucket account under Account → Sign-ins"
+            "only the repository's owner can put it on SLAPorSLOP, and {name} owns this one. If that's you, link that Bitbucket account under Account → Sign-ins"
         ),
     )))
 }
@@ -482,7 +482,7 @@ async fn code_assessment(state: &AppState, user: Uuid, repo_url: &str) -> ApiRes
             "You proved you can change this repository.".into()
         } else {
             format!(
-                "Slop can't ask this host who owns the repository, so prove it: add {code} to the README (or a file named slop-verify.txt at the top of the repository) on its default branch, then press Check. You can remove it once the app is on Slop."
+                "SLAPorSLOP can't ask this host who owns the repository, so prove it: add {code} to the README (or a file named slop-verify.txt at the top of the repository) on its default branch, then press Check. You can remove it once the app is on SLAPorSLOP."
             )
         },
         link: None,
@@ -551,7 +551,7 @@ async fn check_code(
         Err(e) => {
             tracing::info!(error = %e, "repository proof");
             return Err(ApiError::Conflict(format!(
-                "Slop couldn't read the repository: {e}. It needs to be public and reachable over https"
+                "SLAPorSLOP couldn't read the repository: {e}. It needs to be public and reachable over https"
             )));
         }
     };
@@ -567,7 +567,7 @@ async fn check_code(
     let mut a = code_assessment(&state, user.id, &repo_url).await?;
     if !found {
         a.message = format!(
-            "Slop didn't find {code} in the README or slop-verify.txt on the default branch yet. Push it, wait a moment, and check again."
+            "SLAPorSLOP didn't find {code} in the README or slop-verify.txt on the default branch yet. Push it, wait a moment, and check again."
         );
     }
     Ok(Json(a))
@@ -634,7 +634,7 @@ async fn run(mut cmd: tokio::process::Command) -> anyhow::Result<std::process::O
         .map_err(Into::into)
 }
 
-/// Refuses hosts on private networks (Slop mustn't be used to reach its own neighbours).
+/// Refuses hosts on private networks (SLAPorSLOP mustn't be used to reach its own neighbours).
 pub async fn public_host(state: &AppState, url: &Url) -> anyhow::Result<()> {
     if state.config.releases.allow_http_downloads {
         return Ok(());
@@ -665,7 +665,9 @@ pub async fn read_proof(state: &AppState, repo_url: &str) -> anyhow::Result<Opti
         .get_or_init(|| tokio::sync::Semaphore::new(4))
         .try_acquire()
         .map_err(|_| {
-            anyhow::anyhow!("Slop is checking other repositories right now; try again in a minute")
+            anyhow::anyhow!(
+                "SLAPorSLOP is checking other repositories right now; try again in a minute"
+            )
         })?;
     let url = Url::parse(repo_url)?;
     // Tests serve repositories over plain http on this machine.
@@ -728,7 +730,7 @@ pub async fn read_proof(state: &AppState, repo_url: &str) -> anyhow::Result<Opti
             // any size: only for the tests' local repositories, never on a real server.
             anyhow::ensure!(
                 test_setup,
-                "Slop couldn't read it with a quick partial clone; prove it's yours with a linked sign-in instead"
+                "SLAPorSLOP couldn't read it with a quick partial clone; prove it's yours with a linked sign-in instead"
             );
             let _ = tokio::fs::remove_dir_all(&dir).await;
             let full = git(
@@ -737,7 +739,7 @@ pub async fn read_proof(state: &AppState, repo_url: &str) -> anyhow::Result<Opti
             );
             anyhow::ensure!(
                 run(full).await?.status.success(),
-                "it isn't a public Git repository Slop can read"
+                "it isn't a public Git repository SLAPorSLOP can read"
             );
         }
         let names = run(git(&["ls-tree", "--name-only", "HEAD"], &dir)).await?;

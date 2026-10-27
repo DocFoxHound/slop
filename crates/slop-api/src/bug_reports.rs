@@ -3,15 +3,15 @@
 //!
 //! - **Bug reports** go from a player who launched the app to its maker: what's wrong, the
 //!   version and platform, and, if the player chooses, the last lines of the game's output from
-//!   a crash (the Slop app offers them, with the home folder blanked out). They're private
+//!   a crash (the SLAPorSLOP app offers them, with the home folder blanked out). They're private
 //!   between the player, the maker and staff; logs are deleted after 90 days (retention.rs).
 //!   Players with the same problem add "me too" to an open report instead of filing another.
 //!   Makers mark reports fixed, won't fix or duplicate, and the player is told. Makers can turn
 //!   reports off on the store page.
-//! - **Issues stay the maker's:** Slop doesn't write to repositories. The website offers a
+//! - **Issues stay the maker's:** SLAPorSLOP doesn't write to repositories. The website offers a
 //!   prefilled GitHub issue, and a maker's AI agent can read reports and file them itself.
 //! - **Feedback per release** (`GET /v1/apps/{slug}/release-feedback`): for each recent release,
-//!   its % Not Slop from votes cast on it, the reviews written while it was current with their
+//!   its % Slaps from votes cast on it, the reviews written while it was current with their
 //!   most common phrases (counted, no AI), and its bug reports.
 
 use std::collections::HashMap;
@@ -57,7 +57,7 @@ async fn app_of(state: &AppState, slug: &str) -> ApiResult<(Uuid, Uuid, bool, St
 }
 
 /// Whether a player may read and file reports: they've played it, and can still get it (it's in
-/// the store, or Private Slop still shared with them). Someone removed from a share, or a player
+/// the store, or a private app still shared with them). Someone removed from a share, or a player
 /// of a delisted app, can't any more (security review, 2026-10-22).
 async fn has_played(state: &AppState, user: Uuid, app: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
@@ -199,7 +199,7 @@ async fn file(
     let (app_id, maker, accepting, app_title) = app_of(&state, &slug).await?;
     if !has_played(&state, user.id, app_id).await? {
         return Err(ApiError::Conflict(
-            "play it through Slop first, so the maker knows which build you ran".into(),
+            "play it through SLAPorSLOP first, so the maker knows which build you ran".into(),
         ));
     }
     if !accepting {
@@ -468,7 +468,7 @@ struct ReleaseFeedback {
     version: String,
     #[serde(with = "time::serde::rfc3339")]
     approved_at: OffsetDateTime,
-    /// Votes cast while players had this version: how many, and % Not Slop (unweighted).
+    /// Votes cast while players had this version: how many, and % Slaps (unweighted).
     votes: i64,
     not_slop_percent: Option<i64>,
     /// Reviews written or changed while it was the newest release.

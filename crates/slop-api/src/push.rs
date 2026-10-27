@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Phone and browser notifications through web push (DESIGN §19).
 //!
-//! Slop has no phone app, so phones get notifications through the website: Android browsers
-//! directly, iPhones once Slop is added to the home screen. A push carries **no content**: it
+//! SLAPorSLOP has no phone app, so phones get notifications through the website: Android browsers
+//! directly, iPhones once SLAPorSLOP is added to the home screen. A push carries **no content**: it
 //! only wakes the phone, whose service worker (`web/public/sw.js`) fetches the newest
-//! notification from Slop with the user's own sign-in and shows it. The push service (Google,
+//! notification from SLAPorSLOP with the user's own sign-in and shows it. The push service (Google,
 //! Apple, Mozilla, Microsoft) learns only that something happened. Chat notices are already
 //! content-free ("New message from Mia").
 //!
-//! Pushes are signed with Slop's VAPID key (RFC 8292). Only the big push services' addresses are
-//! accepted, so a subscription can't make Slop's server call anywhere else.
+//! Pushes are signed with SLAPorSLOP's VAPID key (RFC 8292). Only the big push services' addresses are
+//! accepted, so a subscription can't make SLAPorSLOP's server call anywhere else.
 
 use std::time::Duration as StdDuration;
 
@@ -124,7 +124,7 @@ async fn subscribe(
         "notifications on phones aren't switched on on this server",
     ))?;
     let endpoint = allowed(config, &b.endpoint)
-        .ok_or_else(|| ApiError::invalid("endpoint", "not a push service Slop knows"))?;
+        .ok_or_else(|| ApiError::invalid("endpoint", "not a push service SLAPorSLOP knows"))?;
     let mut tx = state.db.begin().await?;
     // The account's others: one it already has, posted again, doesn't count twice.
     let count: i64 = sqlx::query_scalar(

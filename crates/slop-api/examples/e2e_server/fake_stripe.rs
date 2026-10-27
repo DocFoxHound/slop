@@ -7,10 +7,10 @@
 //! through a payment in a browser:
 //!
 //! - `GET /checkout/<session>`: a "checkout" page with **Pay** and **Cancel**. Paying completes
-//!   the session as Stripe would, posts the signed webhooks to Slop (`checkout.session.completed`,
+//!   the session as Stripe would, posts the signed webhooks to SLAPorSLOP (`checkout.session.completed`,
 //!   and `invoice.paid` for a monthly one) and sends the browser to the session's `success_url`.
 //! - `GET /setup/<account>`: Stripe's sign-up for a connected account; it makes the account
-//!   active, tells Slop (`account.updated`) and sends the browser to the link's `return_url`.
+//!   active, tells SLAPorSLOP (`account.updated`) and sends the browser to the link's `return_url`.
 
 use std::{
     collections::HashMap,
@@ -48,7 +48,7 @@ struct StripeState {
 pub struct FakeStripe {
     pub base: String,
     state: Arc<Mutex<StripeState>>,
-    /// Slop's webhook endpoint.
+    /// SLAPorSLOP's webhook endpoint.
     webhook: String,
     http: reqwest::Client,
 }
@@ -79,7 +79,7 @@ fn metadata(form: &HashMap<String, String>, prefix: &str) -> serde_json::Map<Str
 }
 
 impl FakeStripe {
-    /// Starts it; `webhook` is Slop's `/v1/stripe/webhook`.
+    /// Starts it; `webhook` is SLAPorSLOP's `/v1/stripe/webhook`.
     pub async fn start(webhook: String) -> anyhow::Result<Self> {
         let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await?;
         let addr = listener.local_addr()?;
@@ -104,7 +104,7 @@ impl FakeStripe {
     }
 
     /// Makes a connected account active, as if its owner finished Stripe's sign-up, and tells
-    /// Slop.
+    /// SLAPorSLOP.
     pub async fn activate(&self, account: &str) -> anyhow::Result<()> {
         self.with(|s| {
             s.accounts
@@ -118,7 +118,7 @@ impl FakeStripe {
         .await
     }
 
-    /// Pays a Checkout session as its payer would, and tells Slop (the webhooks). Returns where
+    /// Pays a Checkout session as its payer would, and tells SLAPorSLOP (the webhooks). Returns where
     /// Stripe would send the browser next.
     pub async fn pay(&self, id: &str) -> anyhow::Result<String> {
         let (session, invoice) = self.with(|s| {
@@ -182,7 +182,7 @@ impl FakeStripe {
         Ok(success.replace("{CHECKOUT_SESSION_ID}", id))
     }
 
-    /// Posts a signed event to Slop's webhook.
+    /// Posts a signed event to SLAPorSLOP's webhook.
     async fn send_event(
         &self,
         kind: &str,
@@ -212,7 +212,7 @@ impl FakeStripe {
             .await?;
         anyhow::ensure!(
             res.status().is_success(),
-            "Slop answered the {kind} webhook with {}",
+            "SLAPorSLOP answered the {kind} webhook with {}",
             res.status()
         );
         Ok(())

@@ -668,7 +668,7 @@ async fn stripe_pledge(app: &TestApp, cookie: &str, bounty: &str, amount: i64) -
         .to_string()
 }
 
-/// The card is saved at Stripe and the backer comes back to Slop.
+/// The card is saved at Stripe and the backer comes back to SLAPorSLOP.
 async fn card_saved(
     app: &TestApp,
     fake: &FakeStripe,
@@ -707,7 +707,7 @@ async fn stripe_pledges_save_cards_on_one_customer_per_backer(db: PgPool) {
             .unwrap();
     for s in [&s1, &s2] {
         let session = fake.session(s);
-        assert!(session["account"].is_null(), "on Slop's own account");
+        assert!(session["account"].is_null(), "on SLAPorSLOP's own account");
         assert_eq!(session["form"]["customer"], customer.as_str());
         assert_eq!(session["form"]["mode"], "setup");
     }
@@ -1368,7 +1368,10 @@ async fn the_charger_charges_each_card_once_and_a_refusal_fails_only_that_pledge
         .unwrap();
     assert_eq!(charge.account.as_deref(), Some("acct_fix"));
     assert_eq!(charge.form["application_fee_amount"], "50");
-    assert_eq!(charge.form["description"], "Slop bounty: Fix lost saves");
+    assert_eq!(
+        charge.form["description"],
+        "SLAPorSLOP bounty: Fix lost saves"
+    );
     // Nothing left to charge.
     assert_eq!(slop_api::bounties::charge_due(&app.state).await.unwrap(), 0);
     assert_eq!(

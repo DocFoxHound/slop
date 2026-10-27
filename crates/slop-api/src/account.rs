@@ -12,7 +12,7 @@
 //!   record too) but it can't take new work, and it leaves the People directory;
 //! - the maker's apps leave the store (installs keep working), since nobody can answer for them;
 //!   their signing keys stop working and their repository tokens and push subscriptions go;
-//! - what its AI agents wrote to Slop's admins (admin_messages.rs) is deleted;
+//! - what its AI agents wrote to SLAPorSLOP's admins (admin_messages.rs) is deleted;
 //! - agreements, job records, reviews and moderation records stay as they were.
 //!
 //! An account with an unfinished People job, a payment it owes, or a bounty pledge being charged
@@ -119,8 +119,8 @@ const EXPORT: &[(&str, &str)] = &[
          from apps a where a.maker_id = $1",
     ),
     (
-        // Every release of the maker's apps, with Slop's signed manifest: what a maker needs to
-        // take their app elsewhere (the Publisher Agreement's "Leaving Slop").
+        // Every release of the maker's apps, with SLAPorSLOP's signed manifest: what a maker needs to
+        // take their app elsewhere (the Publisher Agreement's "Leaving SLAPorSLOP").
         "app_releases",
         "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'version', r.version, 'commit', r.commit_sha,
                 'status', r.status, 'submitted_at', r.created_at, 'reviewed_at', r.reviewed_at,
@@ -199,7 +199,7 @@ const EXPORT: &[(&str, &str)] = &[
     ),
     (
         "chats",
-        // Messages are end-to-end encrypted: Slop has only who is in each chat. Your app has the
+        // Messages are end-to-end encrypted: SLAPorSLOP has only who is in each chat. Your app has the
         // messages themselves.
         "select coalesce(jsonb_agg(jsonb_build_object('chat', c.id, 'kind', c.kind, 'created_at', c.created_at,
                 'members', (select jsonb_agg(m2.user_id) from chat_members m2 where m2.conversation_id = c.id))), '[]')
@@ -243,14 +243,14 @@ const EXPORT: &[(&str, &str)] = &[
          from moderation_decisions d where d.user_id = $1",
     ),
     (
-        // What the account's AI agents wrote to Slop's admins, and the answers.
+        // What the account's AI agents wrote to SLAPorSLOP's admins, and the answers.
         "messages_to_slop_admins",
         "select coalesce(jsonb_agg(jsonb_build_object('category', t.category, 'subject', t.subject,
                 'status', t.status, 'to', case when st.staff_listed_by_name then st.display_name when st.id is not null then 'a staff member' end, 'started_at', t.created_at, 'closed_at', t.closed_at,
                 'messages', (select coalesce(jsonb_agg(jsonb_build_object('from_staff', m.from_staff,
                                  -- Staff as agents see them: a name only if they chose it.
                                  'author', case when not m.from_staff or u.staff_listed_by_name then u.display_name
-                                                else 'Slop ' || coalesce((select r.role from staff_roles r where r.user_id = u.id and r.role <> 'owner'
+                                                else 'SLAPorSLOP ' || coalesce((select r.role from staff_roles r where r.user_id = u.id and r.role <> 'owner'
                                                                           order by array_position(array['moderator', 'reviewer', 'support', 'security', 'finance'], r.role)
                                                                           limit 1), 'admin') end,
                                  'token', m.token_name, 'body', m.body, 'sent_at', m.created_at)
@@ -267,7 +267,7 @@ async fn export(State(state): State<AppState>, user: CurrentUser) -> ApiResult<R
     let mut out = serde_json::Map::new();
     out.insert(
         "about".into(),
-        json!("Everything Slop holds that's linked to your account, downloaded from your account page. \
+        json!("Everything SLAPorSLOP holds that's linked to your account, downloaded from your account page. \
                Reports other people made about you aren't included, to protect them; ask us if you need them."),
     );
     out.insert(
@@ -553,7 +553,7 @@ pub async fn close_account(
     ] {
         sqlx::query(sql).bind(user_id).execute(&mut *tx).await?;
     }
-    // Private Slop: nothing is shared with them any more, and their own stops being shared, with
+    // Private apps: nothing is shared with them any more, and their own stops being shared, with
     // people and with teams.
     sqlx::query(
         "delete from app_shares where user_id = $1 or app_id in (select id from apps where maker_id = $1)",

@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Where a release is on its way through Slop's checks, file by file, for its maker and their AI
+//! Where a release is on its way through SLAPorSLOP's checks, file by file, for its maker and their AI
 //! agent (`GET /v1/apps/{slug}/releases`, the agent tool `list_releases`).
 //!
-//! Slop checks one release at a time, oldest first, and its files one at a time (releases.rs,
+//! SLAPorSLOP checks one release at a time, oldest first, and its files one at a time (releases.rs,
 //! `fetch_release`): download, maker signature, then the scanner (ClamAV, YARA and capa in a
 //! container), which takes minutes per file. Each file records its stage and when its check
 //! started and finished (migrations/0083_release_file_progress.sql), so the maker sees "checking
@@ -85,7 +85,7 @@ impl FileState<'_> {
 /// The file being checked right now.
 #[derive(Debug, Serialize)]
 pub struct CurrentFile {
-    /// Its place in the order Slop checks them, from 1.
+    /// Its place in the order SLAPorSLOP checks them, from 1.
     pub number: usize,
     pub platform: String,
     pub label: String,
@@ -105,7 +105,7 @@ pub struct ReleaseProgress {
     pub files_checked: usize,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub current: Option<CurrentFile>,
-    /// When Slop started checking the first file.
+    /// When SLAPorSLOP started checking the first file.
     #[serde(with = "time::serde::rfc3339::option")]
     pub started_at: Option<OffsetDateTime>,
     /// About how long one file takes on this server, from the last files it checked; null when
@@ -181,7 +181,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
             "queued",
             // How many releases come first is not told: only that this one waits its turn.
             format!(
-                "Waiting its turn: Slop checks one release at a time. Then its {files_word} are downloaded and scanned, one at a time."
+                "Waiting its turn: SLAPorSLOP checks one release at a time. Then its {files_word} are downloaded and scanned, one at a time."
             ),
         ),
         "fetching" => {
@@ -221,7 +221,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
             let on_hold: Vec<&FileState> = i.files.iter().filter(|f| held(f.scan_result)).collect();
             let s = if let Some(first) = on_hold.first() {
                 format!(
-                    "{} on hold: {}. A person at Slop looks at it, and can clear a false positive; you'll get a notification when the release is decided.",
+                    "{} on hold: {}. A person at SLAPorSLOP looks at it, and can clear a false positive; you'll get a notification when the release is decided.",
                     if on_hold.len() == 1 {
                         format!("{} is", file_label(first.platform, first.file_name))
                     } else {
@@ -234,7 +234,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
                 )
             } else {
                 format!(
-                    "All {files_word} are checked. Waiting for review by a person at Slop, usually within a day or two; you'll get a notification when it's decided."
+                    "All {files_word} are checked. Waiting for review by a person at SLAPorSLOP, usually within a day or two; you'll get a notification when it's decided."
                 )
             };
             ("waiting_for_review", s)
@@ -242,9 +242,9 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
         "approved" => (
             "approved",
             if i.auto_approved {
-                "Approved automatically as an update, and signed by Slop.".to_string()
+                "Approved automatically as an update, and signed by SLAPorSLOP.".to_string()
             } else {
-                "Approved by a person at Slop, and signed.".to_string()
+                "Approved by a person at SLAPorSLOP, and signed.".to_string()
             },
         ),
         "rejected" => (
@@ -259,7 +259,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
         "failed" => (
             "failed",
             format!(
-                "Slop couldn't check the files: {}. Fix it and submit the release again.",
+                "SLAPorSLOP couldn't check the files: {}. Fix it and submit the release again.",
                 i.status_reason
                     .unwrap_or("no reason given")
                     .trim_end_matches('.')
@@ -268,7 +268,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
         "revoked" => (
             "revoked",
             format!(
-                "Withdrawn by Slop: {}. It no longer launches.",
+                "Withdrawn by SLAPorSLOP: {}. It no longer launches.",
                 i.status_reason
                     .unwrap_or("no reason given")
                     .trim_end_matches('.')
@@ -444,8 +444,9 @@ mod tests {
         assert_eq!(p.files_checked, 2);
         assert_eq!((p.seconds_per_file, p.remaining_seconds), (None, None));
         assert!(
-            p.summary
-                .contains("Waiting for review by a person at Slop, usually within a day or two")
+            p.summary.contains(
+                "Waiting for review by a person at SLAPorSLOP, usually within a day or two"
+            )
         );
         assert!(p.summary.contains("notification"));
 
@@ -456,7 +457,7 @@ mod tests {
         let p = build(&inputs("awaiting_review", &files));
         assert_eq!(
             p.summary,
-            "Windows (.zip) is on hold: YARA: Packed_UPX. A person at Slop looks at it, and can clear a false positive; you'll get a notification when the release is decided."
+            "Windows (.zip) is on hold: YARA: Packed_UPX. A person at SLAPorSLOP looks at it, and can clear a false positive; you'll get a notification when the release is decided."
         );
     }
 
@@ -480,7 +481,7 @@ mod tests {
         i.auto_approved = true;
         assert_eq!(
             build(&i).summary,
-            "Approved automatically as an update, and signed by Slop."
+            "Approved automatically as an update, and signed by SLAPorSLOP."
         );
         i.status = "withdrawn";
         assert_eq!(build(&i).stage, "withdrawn");

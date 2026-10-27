@@ -747,9 +747,9 @@ async fn stripe_monthly_donations_are_subscriptions_taking_five_percent(db: PgPo
 }
 
 /// The monthly fee is sent as a percentage with two decimals, so for large donations Stripe takes
-/// a cent less than the 5% Slop records (and reconciliation then reports a mismatch).
+/// a cent less than the 5% SLAPorSLOP records (and reconciliation then reports a mismatch).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-#[ignore = "new: application_fee_percent rounding makes Stripe's fee differ from Slop's 5% on large monthly donations"]
+#[ignore = "new: application_fee_percent rounding makes Stripe's fee differ from SLAPorSLOP's 5% on large monthly donations"]
 async fn large_monthly_donations_also_take_exactly_five_percent(db: PgPool) {
     let fake = FakeStripe::start().await;
     let app = stripe_app(db, &fake).await;

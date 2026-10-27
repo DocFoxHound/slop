@@ -313,7 +313,7 @@ async fn tell(conn: &mut PgConnection, to: Uuid, title: &str, from: Uuid) -> sql
             user_id: to,
             category: "friends",
             title: title.to_string(),
-            body: "Friends can message each other in the Slop app.".into(),
+            body: "Friends can message each other in the SLAPorSLOP app.".into(),
             link: format!("/friends#{from}"),
             collapse_key: Some(format!("friend:{from}")),
         },

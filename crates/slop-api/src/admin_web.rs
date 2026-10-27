@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The admin panel's API: the review queue and moderation for Slop staff (`users.is_admin`).
+//! The admin panel's API: the review queue and moderation for SLAPorSLOP staff (`users.is_admin`).
 //!
 //! Every action goes through the same functions as the `slop-api review …` commands (admin.rs),
 //! so the same rules apply and each decision is written to the audit log with the admin's name
@@ -187,8 +187,8 @@ struct ReadyApp {
     approved_releases: i64,
     /// New pictures wait for review before the app can be listed.
     pictures_pending: bool,
-    /// Private Slop its owner asked to make public: listing it makes it public (SECURITY §12.3),
-    /// after Slop checks the repository is public again.
+    /// A private app its owner asked to make public: listing it makes it public (SECURITY §12.3),
+    /// after SLAPorSLOP checks the repository is public again.
     going_public: bool,
     /// Taken out of the store, then reinstated on appeal while it couldn't be listed.
     after_appeal: bool,
@@ -209,7 +209,7 @@ struct ServerChecks {
     maker_signatures_required: bool,
     /// Whether releases can be signed at all (SLOP_SIGNING_KEY).
     signing_key: bool,
-    /// Slop's GitHub App: without it, private GitHub repositories can't be published or shared,
+    /// SLAPorSLOP's GitHub App: without it, private GitHub repositories can't be published or shared,
     /// and every GitHub request shares one small allowance.
     github_app: bool,
     /// The server has a GitHub token (a higher allowance than none at all).
@@ -379,7 +379,7 @@ const FLAGS: &[(&str, &str)] = &[
     ("rescan_flagged", "x.rescan_flags > 0"),
     // The file players get changed on the maker's page, or can't be fetched.
     ("download_lost", "x.downloads_lost > 0"),
-    // Slop lost access to its repository, or staff froze it (admin_tools.rs).
+    // SLAPorSLOP lost access to its repository, or staff froze it (admin_tools.rs).
     ("frozen", "x.frozen_at is not null"),
     ("reports", "x.open_reports > 0"),
     // The newest release couldn't be fetched or scanned.
@@ -480,7 +480,7 @@ struct ModeratedApp {
     #[serde(with = "time::serde::rfc3339::option")]
     last_played_at: Option<OffsetDateTime>,
     vote_count: i64,
-    /// Weighted % Not Slop, as the store shows it; null below votes::MIN_VOTES.
+    /// Weighted % Slaps, as the store shows it; null below votes::MIN_VOTES.
     not_slop_percent: Option<i32>,
 }
 
@@ -903,7 +903,8 @@ async fn list_app(
                 }
                 crate::frozen::Access::Unknown => {
                     return Err(ApiError::Conflict(
-                        "Slop couldn't confirm the repository is public; try again shortly".into(),
+                        "SLAPorSLOP couldn't confirm the repository is public; try again shortly"
+                            .into(),
                     ));
                 }
             }

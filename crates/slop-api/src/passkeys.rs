@@ -3,7 +3,7 @@
 //! phishing-proof way to sign in, never required for anything.
 //!
 //! - **Adding or removing one** (Account → Sign-in & security) works from any signed-in session.
-//! - **Signing in** with one needs no username: the browser offers the passkeys it has for Slop,
+//! - **Signing in** with one needs no username: the browser offers the passkeys it has for SLAPorSLOP,
 //!   and the one chosen names its account. Closed accounts are refused, as with providers.
 //!
 //! Until 2026-10-25, sensitive actions (changing where donations go, linking sign-ins, closing the
@@ -11,7 +11,7 @@
 //! passkey every 12 hours to publish or change payouts. The owner dropped both as too much of a
 //! hassle: a signed-in session is trusted for them now (SECURITY §4.3).
 //!
-//! Slop keeps only public keys and signature counters. Each ceremony's state waits in
+//! SLAPorSLOP keeps only public keys and signature counters. Each ceremony's state waits in
 //! `webauthn_challenges` for five minutes and is used once.
 
 use axum::{
@@ -47,14 +47,14 @@ pub fn routes() -> Router<AppState> {
         .route("/auth/passkey/finish", post(sign_in_finish))
 }
 
-/// Slop as a WebAuthn relying party: its own host, its own origin.
+/// SLAPorSLOP as a WebAuthn relying party: its own host, its own origin.
 fn webauthn(state: &AppState) -> ApiResult<Webauthn> {
     let origin = &state.config.public_url;
     let rp_id = origin
         .host_str()
         .ok_or_else(|| ApiError::Internal(anyhow::anyhow!("SLOP_PUBLIC_URL has no host")))?;
     WebauthnBuilder::new(rp_id, origin)
-        .and_then(|b| b.rp_name("Slop").build())
+        .and_then(|b| b.rp_name("SLAPorSLOP").build())
         .map_err(|e| ApiError::Internal(anyhow::anyhow!("WebAuthn setup: {e}")))
 }
 
@@ -267,7 +267,7 @@ async fn register_finish(
     .await
     .map_err(|e| {
         if crate::error::is_unique_violation(&e) {
-            ApiError::Conflict("that passkey is already on a Slop account".into())
+            ApiError::Conflict("that passkey is already on a SLAPorSLOP account".into())
         } else {
             e.into()
         }
@@ -279,7 +279,7 @@ async fn register_finish(
             category: "security",
             title: "A passkey was added to your account".into(),
             body: format!(
-                "\"{name}\" can now sign in to your Slop account and confirm publishing and payouts. \
+                "\"{name}\" can now sign in to your SLAPorSLOP account and confirm publishing and payouts. \
                  If you didn't add it, remove it under Account → Sign-ins and sign out your other devices."
             ),
             link: "/account#sign-ins".into(),
@@ -339,7 +339,7 @@ async fn sign_in_finish(
     .fetch_optional(&state.db)
     .await?;
     let (id, user_id, cred, closed) =
-        row.ok_or_else(|| ApiError::invalid("credential", "Slop doesn't know that passkey"))?;
+        row.ok_or_else(|| ApiError::invalid("credential", "SLAPorSLOP doesn't know that passkey"))?;
     if closed.is_some() {
         return Err(ApiError::Conflict("that account is closed".into()));
     }

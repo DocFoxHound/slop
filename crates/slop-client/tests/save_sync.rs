@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Save sync between two computers, through a fake Slop that keeps saves the way slop-api's
+//! Save sync between two computers, through a fake SLAPorSLOP that keeps saves the way slop-api's
 //! save_sync.rs does (generations; an upload on top of an old one is refused).
 
 use std::{
@@ -106,7 +106,7 @@ async fn saves_follow_the_player_and_never_overwrite_silently() {
         }
     };
 
-    // The home PC plays and sends its save; Slop only ever sees ciphertext.
+    // The home PC plays and sends its save; SLAPorSLOP only ever sees ciphertext.
     std::fs::write(home.saves.join("pong.json"), r#"{"wins":3}"#).unwrap();
     let out = save_sync::push(&api, &key, "pong", &home.saves, &mut home.state, false)
         .await

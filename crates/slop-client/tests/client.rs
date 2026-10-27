@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The client core against a fake Slop API and release host.
+//! The client core against a fake SLAPorSLOP API and release host.
 
 use std::{
     io::Write,
@@ -162,7 +162,7 @@ async fn fake_api() -> (String, Arc<Fake>) {
         .route("/v1/me", get(me))
         .route("/v1/revocations", get(revocations))
         .route("/files/{name}", get(file))
-        // A private repository's file: refused at its own URL; Slop hands out a link instead.
+        // A private repository's file: refused at its own URL; SLAPorSLOP hands out a link instead.
         .route("/private/{name}", get(|| async { StatusCode::NOT_FOUND }))
         .route(
             "/v1/apps/game/releases/{release}/download/{platform}",
@@ -206,7 +206,7 @@ async fn browser_sign_in_through_loopback() {
     let (base, fake) = fake_api().await;
     let (api, store) = api_for(&base).await;
 
-    // The browser may only be sent to the Slop site itself.
+    // The browser may only be sent to the SLAPorSLOP site itself.
     fake.foreign_approve_url.store(true, Ordering::SeqCst);
     assert!(matches!(
         signin::begin(&api, "Laptop").await,
@@ -363,7 +363,7 @@ fn manifest_with(
     slop_manifest::sign(&manifest, Purpose::ReleaseManifest, &key())
 }
 
-/// A library that accepts unsigned builds: these tests are about Slop's signature and the
+/// A library that accepts unsigned builds: these tests are about SLAPorSLOP's signature and the
 /// download checks. Maker signatures are covered in `unsigned_builds_and_repo_switches_are_refused`
 /// and the slop-provenance tests.
 fn library(dir: &std::path::Path) -> Library {
@@ -668,7 +668,7 @@ async fn mods_are_added_to_their_game_and_handed_to_it_at_launch() {
     std::fs::remove_dir_all(dir).unwrap();
 }
 
-/// A game's own mods folder (DESIGN §9): before each start Slop puts the approved mods there
+/// A game's own mods folder (DESIGN §9): before each start SLAPorSLOP puts the approved mods there
 /// and moves anything else out, telling the player. A mods folder in the saves isn't swept for
 /// code: mods may carry it.
 #[cfg(unix)]
@@ -865,7 +865,7 @@ async fn a_changed_file_is_never_installed() {
     let (base, fake) = fake_api().await;
     let zip = zip_of(&[("bin/game", GAME, 0o755)]);
     let signed = manifest_for(&base, "game.zip", &zip, "r1");
-    // The maker's file was swapped after Slop scanned it.
+    // The maker's file was swapped after SLAPorSLOP scanned it.
     let mut swapped = zip.clone();
     swapped[10] ^= 0xff;
     fake.files
@@ -1153,7 +1153,7 @@ async fn hand_built_files_need_the_makers_signature() {
         let mut manifest: ReleaseManifest =
             serde_json::from_str(&manifest_for(&base, "game.zip", &zip, "r1").payload).unwrap();
         manifest.files[0].maker_signature = Some(slop_manifest::MakerSignature {
-            // Slop vouches for the maker's registered key; here it's the signer's own line, or
+            // SLAPorSLOP vouches for the maker's registered key; here it's the signer's own line, or
             // the maker's when testing a stranger's signature.
             public_key: if signer == &maker {
                 public_key
@@ -1256,7 +1256,7 @@ async fn files_in_parts_are_checked_and_joined() {
         GAME
     );
 
-    // A part swapped after Slop checked it: nothing is installed.
+    // A part swapped after SLAPorSLOP checked it: nothing is installed.
     lib.uninstall("game").unwrap();
     let mut swapped = two.to_vec();
     swapped[0] ^= 0xff;

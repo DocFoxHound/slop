@@ -156,7 +156,7 @@ struct NewToken {
 struct CreatedToken {
     #[serde(flatten)]
     info: TokenInfo,
-    /// Shown once; Slop keeps only its hash.
+    /// Shown once; SLAPorSLOP keeps only its hash.
     token: String,
     /// The admin MCP address. The website shows how to connect each kind of agent with the token
     /// kept in an environment variable, so the token itself never goes into a command or a chat.

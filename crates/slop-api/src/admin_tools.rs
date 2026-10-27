@@ -5,7 +5,7 @@
 //!   about, location, links). For an impersonating name, a slur in a headline, a scam link: the
 //!   smallest fix instead of hiding the whole page. Teams likewise (name and about).
 //! - **Freezing:** stops an app taking new releases while staff look into it (frozen.rs is the
-//!   automatic freeze when Slop loses its repository). It stays in the store and installed copies
+//!   automatic freeze when SLAPorSLOP loses its repository). It stays in the store and installed copies
 //!   keep working; the daily repository check never lifts it, and it never takes the app out of
 //!   the store on its own. Taking it out is delisting (admin.rs).
 //!
@@ -278,7 +278,7 @@ async fn edit_profile(
         Notice {
             user_id: id,
             category: "moderation",
-            title: "Slop changed your profile".into(),
+            title: "SLAPorSLOP changed your profile".into(),
             body: format!("Changed: {}.\n\n{reason}", fields.join(", ")),
             link: "/account".into(),
             collapse_key: None,
@@ -363,7 +363,7 @@ async fn edit_team(
             Notice {
                 user_id,
                 category: "teams",
-                title: "Slop changed your team's page".into(),
+                title: "SLAPorSLOP changed your team's page".into(),
                 body: format!("Changed: {}.\n\n{reason}", fields.join(", ")),
                 link: format!("/teams/{slug}"),
                 collapse_key: None,
@@ -431,10 +431,10 @@ async fn freeze(
         Notice {
             user_id: maker,
             category: "apps",
-            title: format!("Slop froze {title}"),
+            title: format!("SLAPorSLOP froze {title}"),
             body: format!(
                 "{title} can't take new releases for now: {reason}\n\nIt stays in the store and \
-                 copies people installed keep working. Slop lifts the freeze once it's dealt with."
+                 copies people installed keep working. SLAPorSLOP lifts the freeze once it's dealt with."
             ),
             link: format!("/publish/{slug}/manage"),
             collapse_key: Some(format!("frozen:{app_id}")),
@@ -487,7 +487,7 @@ async fn unfreeze(
     }
     let mut tx = state.db.begin().await?;
     if by.is_some() {
-        // Back to normal; the next daily check freezes it again if Slop can't read the repository.
+        // Back to normal; the next daily check freezes it again if SLAPorSLOP can't read the repository.
         sqlx::query(
             "update apps set frozen_at = null, frozen_reason = null, frozen_by = null,
                     repo_checked_at = null where id = $1",

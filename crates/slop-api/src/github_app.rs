@@ -1,12 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Slop's GitHub App (decided 2026-10-19).
+//! SLAPorSLOP's GitHub App (decided 2026-10-19).
 //!
 //! Makers install the App on their repository. GitHub then:
 //!
-//! - **tells Slop when a release is published** (a webhook), so the release watcher checks that
+//! - **tells SLAPorSLOP when a release is published** (a webhook), so the release watcher checks that
 //!   app straight away instead of polling it every few minutes;
 //! - **gives that repository its own API allowance**: requests about it use a short-lived
-//!   installation token instead of Slop's shared `GITHUB_TOKEN`, so Slop's request budget grows
+//!   installation token instead of SLAPorSLOP's shared `GITHUB_TOKEN`, so SLAPorSLOP's request budget grows
 //!   with the number of makers instead of running out.
 //!
 //! The App only needs read access to a repository's contents and metadata. Without it configured
@@ -72,7 +72,7 @@ pub fn install_url(app: &GithubAppConfig) -> String {
 }
 
 /// The token for a GitHub API request: the repository's installation token when the App is
-/// installed there, else Slop's shared token. The flag says whether it's the shared one.
+/// installed there, else SLAPorSLOP's shared token. The flag says whether it's the shared one.
 pub async fn auth_for(state: &AppState, url: &Url) -> Option<(String, bool)> {
     let cfg = &state.config.releases;
     if let (Some(app), Some(repo)) = (&cfg.github_app, repo_of_api_url(&cfg.github_api_base, url)) {
@@ -166,7 +166,7 @@ async fn installation_token(
         .send()
         .await?;
     if res.status() == StatusCode::NOT_FOUND {
-        // Uninstalled while Slop missed the webhook.
+        // Uninstalled while SLAPorSLOP missed the webhook.
         forget_installation(state, id).await?;
         anyhow::bail!("installation {id} is gone");
     }

@@ -4,7 +4,7 @@
 //! Token buckets kept in memory. Each API instance limits on its own, so with N instances behind
 //! the load balancer a client gets up to N times the limit; that's acceptable at launch scale
 //! and the limits are deliberately conservative. A shared limiter (Postgres or the load
-//! balancer's own) replaces this when Slop runs many instances.
+//! balancer's own) replaces this when SLAPorSLOP runs many instances.
 
 use std::{
     collections::HashMap,

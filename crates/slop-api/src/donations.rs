@@ -3,7 +3,7 @@
 //! LEGAL-GUIDANCE PAY-1 to PAY-17).
 //!
 //! - **Straight to the maker.** Every donation is a direct charge on the maker's own Stripe
-//!   account with `application_fee_amount` = Slop's 5% of the donation (PAY-1). Slop never
+//!   account with `application_fee_amount` = SLAPorSLOP's 5% of the donation (PAY-1). SLAPorSLOP never
 //!   holds the money; refunds are the maker's, through Stripe, as the maker (PAY-3).
 //! - **The donor pays the card fees**, as one all-in total shown first (PAY-10): the addition
 //!   comes from one published rate per currency, the same for every payment method (PAY-11).
@@ -99,7 +99,7 @@ pub struct Rate {
     pub fixed_minor: i32,
 }
 
-/// What a donation of `donation` (for the maker, before Slop's fee) costs the donor and gives
+/// What a donation of `donation` (for the maker, before SLAPorSLOP's fee) costs the donor and gives
 /// the maker. With `covers`, the total is chosen so that total − processing(total) = donation.
 #[derive(Clone, Debug, PartialEq, Serialize)]
 pub struct Quote {
@@ -1191,7 +1191,7 @@ pub async fn sync_checkout(
     .await?;
     let now = OffsetDateTime::now_utc();
     let mut tx = state.db.begin().await?;
-    // The row Slop made this very session for, on this account, for this amount and currency:
+    // The row SLAPorSLOP made this very session for, on this account, for this amount and currency:
     // never one named only in metadata, which whoever controls the account can write
     // (security review, 2026-10-22).
     let one_off: Option<Uuid> = sqlx::query_scalar(
@@ -1222,7 +1222,7 @@ pub async fn sync_checkout(
         tracing::warn!(
             session_id,
             acct,
-            "a Checkout session that isn't the one Slop made; ignored"
+            "a Checkout session that isn't the one SLAPorSLOP made; ignored"
         );
         return Ok(());
     }
@@ -1292,7 +1292,7 @@ pub async fn sync_invoice(
     let Some(id) = id else {
         return Ok(());
     };
-    // Only invoices of the subscription Slop's own Checkout session started, on this account:
+    // Only invoices of the subscription SLAPorSLOP's own Checkout session started, on this account:
     // the account's owner could start a subscription of their own naming any donation.
     let (stored_sub, stored_session): (Option<String>, Option<String>) = sqlx::query_as(
         "select stripe_subscription_id, checkout_session_id from server_donations
@@ -1325,7 +1325,7 @@ pub async fn sync_invoice(
         _ => false,
     };
     if !ours {
-        tracing::warn!(%id, invoice_id, acct, "an invoice from a subscription Slop didn't start; ignored");
+        tracing::warn!(%id, invoice_id, acct, "an invoice from a subscription SLAPorSLOP didn't start; ignored");
         return Ok(());
     }
     let paid_at = inv["status_transitions"]["paid_at"]
@@ -1374,7 +1374,7 @@ pub async fn subscription_ended(
     Ok(())
 }
 
-/// A refund on a donation's charge (the maker's, from Slop's button or their Stripe dashboard).
+/// A refund on a donation's charge (the maker's, from SLAPorSLOP's button or their Stripe dashboard).
 /// `keys` are the IDs the donation may be recorded under (the charge, or a monthly one's
 /// invoice).
 pub async fn refund_recorded(
@@ -2133,7 +2133,7 @@ async fn request_change(
     let (title, body) = if b.kind == "switch" {
         (
             "Your donations will be paid to a different Stripe account".to_string(),
-            "Someone signed in to your Slop account and asked to pay your donations into a new \
+            "Someone signed in to your SLAPorSLOP account and asked to pay your donations into a new \
              Stripe account. If it was you, finish the new account's set-up; the switch happens in \
              72 hours. If it wasn't you, cancel it on your account page now and sign out your \
              other sessions."
@@ -2142,7 +2142,7 @@ async fn request_change(
     } else {
         (
             "Donations to your apps will stop in 72 hours".to_string(),
-            "Someone signed in to your Slop account and asked to disconnect your Stripe account. \
+            "Someone signed in to your SLAPorSLOP account and asked to disconnect your Stripe account. \
              In 72 hours donations to your apps turn off and monthly server donations end. If it \
              wasn't you, cancel it on your account page now and sign out your other sessions."
                 .to_string(),
@@ -2362,7 +2362,7 @@ struct OnboardBody {
     tax_notice_ack: bool,
     #[serde(default)]
     confirm_adult: bool,
-    /// Where to come back to after Stripe (a path in Slop).
+    /// Where to come back to after Stripe (a path in SLAPorSLOP).
     return_to: Option<String>,
 }
 
@@ -2381,7 +2381,7 @@ async fn onboard(
     if !b.tax_notice_ack {
         return Err(ApiError::invalid(
             "tax_notice_ack",
-            "confirm you've read: donations may be taxable income for you, and Slop doesn't give tax advice",
+            "confirm you've read: donations may be taxable income for you, and SLAPorSLOP doesn't give tax advice",
         ));
     }
     if !user_is_adult(&state, &user, b.confirm_adult).await? {
@@ -2533,7 +2533,7 @@ struct Statement {
     received_minor: i64,
     slop_fee_minor: i64,
     simulated: bool,
-    /// The VAT included in Slop's fee (LEGAL §3.5); zero under the reverse charge.
+    /// The VAT included in SLAPorSLOP's fee (LEGAL §3.5); zero under the reverse charge.
     #[sqlx(skip)]
     vat_minor: i64,
 }
@@ -2544,10 +2544,10 @@ struct Statements {
     vat: VatTreatment,
 }
 
-/// How VAT applies to Slop's fee for this user (LEGAL §3.5): the 5% always includes it.
+/// How VAT applies to SLAPorSLOP's fee for this user (LEGAL §3.5): the 5% always includes it.
 #[derive(Serialize)]
 struct VatTreatment {
-    /// none (no VAT where they are), included (Slop pays it out of its 5%), or reverse_charge
+    /// none (no VAT where they are), included (SLAPorSLOP pays it out of its 5%), or reverse_charge
     /// (a VAT-registered business: they account for it).
     kind: &'static str,
     /// The country's standard rate, in basis points.
@@ -2556,7 +2556,7 @@ struct VatTreatment {
     vat_number: Option<String>,
     /// Whether the VAT number was confirmed with the EU's VIES service.
     vat_number_checked: bool,
-    /// Slop's own VAT registration, once it has one (SLOP_VAT_ID).
+    /// SLAPorSLOP's own VAT registration, once it has one (SLOP_VAT_ID).
     slop_vat_id: Option<String>,
 }
 
@@ -2595,7 +2595,7 @@ async fn vat_treatment(state: &AppState, user: &CurrentUser) -> sqlx::Result<Vat
     })
 }
 
-/// Monthly fee statements (PAYMENTS §8, TAX-4): what Slop's fee came to on the user's donations,
+/// Monthly fee statements (PAYMENTS §8, TAX-4): what SLAPorSLOP's fee came to on the user's donations,
 /// People jobs and bounty payouts, and the VAT included in it.
 async fn fee_statements(
     State(state): State<AppState>,
@@ -2637,7 +2637,7 @@ struct VatSaved {
     note: Option<String>,
 }
 
-/// A maker's or creative's VAT number, for the reverse charge on Slop's fee. EU numbers are
+/// A maker's or creative's VAT number, for the reverse charge on SLAPorSLOP's fee. EU numbers are
 /// confirmed with the EU's VIES service; until a number is confirmed, statements show the VAT as
 /// included in the fee.
 async fn set_vat(
@@ -2710,18 +2710,18 @@ async fn set_vat(
         Some(true) => None,
         Some(false) => Some(
             "The EU's VIES service says this number isn't valid for cross-border trade, so VAT \
-             stays included in Slop's fee. Check it, or ask your tax office to enable it for \
+             stays included in SLAPorSLOP's fee. Check it, or ask your tax office to enable it for \
              trade within the EU."
                 .into(),
         ),
         None if country == "GB" => Some(
-            "Saved. Slop can't check UK VAT numbers automatically yet, so VAT stays included in \
-             Slop's fee until it's confirmed."
+            "Saved. SLAPorSLOP can't check UK VAT numbers automatically yet, so VAT stays included in \
+             SLAPorSLOP's fee until it's confirmed."
                 .into(),
         ),
         None => Some(
-            "Saved, but the EU's VIES service didn't answer. Slop will check it again later; \
-             until then VAT stays included in Slop's fee."
+            "Saved, but the EU's VIES service didn't answer. SLAPorSLOP will check it again later; \
+             until then VAT stays included in SLAPorSLOP's fee."
                 .into(),
         ),
     };
@@ -2831,7 +2831,7 @@ pub async fn hourly(state: &AppState) -> anyhow::Result<()> {
     Ok(())
 }
 
-/// Per Stripe account: (Slop's fees Stripe says it collected, the fees in Slop's records).
+/// Per Stripe account: (SLAPorSLOP's fees Stripe says it collected, the fees in SLAPorSLOP's records).
 pub fn mismatches(stripe: &[(String, i64)], ours: &[(String, i64)]) -> Vec<(String, i64, i64)> {
     use std::collections::BTreeMap;
     let mut by: BTreeMap<&str, (i64, i64)> = BTreeMap::new();
@@ -2847,8 +2847,8 @@ pub fn mismatches(stripe: &[(String, i64)], ours: &[(String, i64)]) -> Vec<(Stri
         .collect()
 }
 
-/// Daily (PAY-2): Slop's Stripe balance holds only its own fees, and every fee matches a payment
-/// Slop recorded. Compares the last full day's application fees per account with the records.
+/// Daily (PAY-2): SLAPorSLOP's Stripe balance holds only its own fees, and every fee matches a payment
+/// SLAPorSLOP recorded. Compares the last full day's application fees per account with the records.
 pub async fn reconcile(state: &AppState) -> anyhow::Result<usize> {
     let Mode::Stripe(stripe) = stripe::mode(state) else {
         return Ok(0);
@@ -2899,7 +2899,7 @@ pub async fn reconcile(state: &AppState) -> anyhow::Result<usize> {
     if !bad.is_empty() {
         tracing::error!(
             ?bad,
-            "Stripe application fees don't match Slop's payment records"
+            "Stripe application fees don't match SLAPorSLOP's payment records"
         );
         let mut tx = state.db.begin().await?;
         admin::audit(

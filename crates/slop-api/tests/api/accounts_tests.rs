@@ -11,7 +11,7 @@ use std::sync::{Arc, Mutex};
 type Seen = Arc<Mutex<Vec<(String, String)>>>;
 
 /// Google, GitLab, Bitbucket, Microsoft and Discord in one fake. The code is the access token and
-/// names the account; "refused" gets a token error and "garbage" an account Slop can't read.
+/// names the account; "refused" gets a token error and "garbage" an account SLAPorSLOP can't read.
 /// Google "g-unverified" has an unverified email and "g-long" a 50-character name; GitLab
 /// "gl-unconfirmed" an unconfirmed email; Bitbucket "bb-noemails" can't list its emails.
 async fn fake_providers() -> (String, Seen) {
@@ -1498,7 +1498,7 @@ async fn an_old_session_is_never_asked_for_a_recent_sign_in(db: PgPool) {
 // ---------------------------------------------------------------------------------------------
 // Combining accounts
 
-/// The signed-in `cookie` links the Google account `code` (which has its own Slop account).
+/// The signed-in `cookie` links the Google account `code` (which has its own SLAPorSLOP account).
 /// Returns the pending combination's cookie.
 async fn start_combining(app: &TestApp, cookie: &str, code: &str) -> String {
     let res = oauth_flow(app, "/v1/auth/google/link", &[cookie], code).await;
@@ -2092,8 +2092,10 @@ async fn the_approval_page_shows_only_pending_requests_to_signed_in_people(db: P
     let create = || async {
         let res = app
             .send(
-                req(Method::POST, "/v1/auth/desktop/requests")
-                    .json(desktop_request("state-state-state-1", "Slop for Linux")),
+                req(Method::POST, "/v1/auth/desktop/requests").json(desktop_request(
+                    "state-state-state-1",
+                    "SLAPorSLOP for Linux",
+                )),
             )
             .await;
         body_json(res).await["id"].as_str().unwrap().to_string()
@@ -2103,7 +2105,7 @@ async fn the_approval_page_shows_only_pending_requests_to_signed_in_people(db: P
     assert_eq!(status(&app, show(&id)).await, StatusCode::UNAUTHORIZED);
     let res = app.send(show(&id).cookie(&web)).await;
     assert_eq!(res.status(), StatusCode::OK);
-    assert_eq!(body_json(res).await["device_name"], "Slop for Linux");
+    assert_eq!(body_json(res).await["device_name"], "SLAPorSLOP for Linux");
     assert_eq!(
         status(&app, show(&Uuid::now_v7().to_string()).cookie(&web)).await,
         StatusCode::NOT_FOUND
@@ -2422,7 +2424,7 @@ async fn signing_in_with_a_passkey_starts_a_session_that_has_used_it(db: PgPool)
     assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY);
     assert_eq!(body_json(res).await["error"]["field"], "credential");
 
-    // A passkey Slop doesn't know.
+    // A passkey SLAPorSLOP doesn't know.
     let (_, bob) = app.user("Bob", "US").await;
     let mut other = authenticator();
     let (_, unknown) = add_passkey(&app, &bob, &mut other).await;
@@ -4225,7 +4227,7 @@ async fn players_get_the_hosts_short_lived_link_or_nothing(db: PgPool) {
     );
     // A redirect on the same host would carry the token's access: not a link to hand out.
     assert!(link(&app.state, "same/game.zip").await.is_err());
-    // A host that serves the file itself: Slop doesn't relay files.
+    // A host that serves the file itself: SLAPorSLOP doesn't relay files.
     let err = link(&app.state, "direct/game.zip").await.unwrap_err();
     assert!(format!("{err:#}").contains("never relays files"), "{err:#}");
 
@@ -4287,7 +4289,7 @@ async fn a_repository_token_that_stops_working_freezes_the_app(db: PgPool) {
     assert!(frozen);
     assert!(reason.unwrap().contains("Save a new one"));
 
-    // A token that doesn't decrypt (the server's key changed): Slop can't tell, so it doesn't
+    // A token that doesn't decrypt (the server's key changed): SLAPorSLOP can't tell, so it doesn't
     // freeze the app on it.
     sqlx::query("update repo_tokens set sealed = '\\x00010203' where app_id = $1")
         .bind(game)

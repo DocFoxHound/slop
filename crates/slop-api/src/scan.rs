@@ -3,13 +3,13 @@
 //!
 //! Two parts, both free:
 //!
-//! - **Slop's scanner** (`SLOP_SCANNER=local`): every release file is downloaded once and handed
+//! - **SLAPorSLOP's scanner** (`SLOP_SCANNER=local`): every release file is downloaded once and handed
 //!   to `SLOP_SCAN_COMMAND` (`deploy/scanner/slop-scan`), which scans it in a container with no
 //!   network: ClamAV, YARA with YARA-Forge's core rules, and Mandiant's capa. Static only;
 //!   nothing in a build is run. It prints a verdict as JSON.
-//! - **Microsoft Defender** for Windows builds, which Slop can't run on Linux: Slop Build (and
+//! - **Microsoft Defender** for Windows builds, which SLAPorSLOP can't run on Linux: Slop Build (and
 //!   Slop Check, for builds made elsewhere) scans them on GitHub's Windows runners in the
-//!   maker's own repository, with today's definitions, and reports to Slop with the run's OIDC
+//!   maker's own repository, with today's definitions, and reports to SLAPorSLOP with the run's OIDC
 //!   token (slop_build.rs). That catches what would stop players' Windows from running the app
 //!   before it's published.
 //!
@@ -177,7 +177,7 @@ async fn run_local(command: &str, target: &Target<'_>) -> anyhow::Result<Verdict
 #[derive(Clone, Debug, serde::Deserialize, Serialize)]
 #[serde(deny_unknown_fields)]
 pub struct DefenderCheck {
-    /// The hash of the file that was checked (the release file, as Slop downloads it).
+    /// The hash of the file that was checked (the release file, as SLAPorSLOP downloads it).
     pub sha256: String,
     /// Defender's engine and definitions versions, and when the definitions were updated.
     pub engine: String,

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Alerts for Slop's admins (SECURITY §13, ARCHITECTURE §7). Every five minutes the API checks
+//! Alerts for SLAPorSLOP's admins (SECURITY §13, ARCHITECTURE §7). Every five minutes the API checks
 //! what needs a person and tells every admin under the 🔔, by phone push, and by email once SMTP
 //! is set up. Each alert is sent once, then repeated at most daily while it lasts.
 //!
@@ -260,7 +260,7 @@ pub fn config_alerts(config: &crate::config::Config) -> Vec<Alert> {
         out.push(alert(
             "client-ip-header-missing",
             "Rate limits can't tell visitors apart",
-            "Slop listens on localhost behind a proxy but SLOP_CLIENT_IP_HEADER isn't set, so every \
+            "SLAPorSLOP listens on localhost behind a proxy but SLOP_CLIENT_IP_HEADER isn't set, so every \
              visitor shares one rate limit. Set SLOP_CLIENT_IP_HEADER=x-forwarded-for in slop.env \
              (Caddy overwrites that header) and restart slop-api.",
             "/admin",
@@ -453,7 +453,7 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
             "payments.mismatch" => (
                 "Payments don't match Stripe",
                 format!(
-                    "Slop's records and Stripe's fees differ for {subject}. See the audit log."
+                    "SLAPorSLOP's records and Stripe's fees differ for {subject}. See the audit log."
                 ),
             ),
             _ => (

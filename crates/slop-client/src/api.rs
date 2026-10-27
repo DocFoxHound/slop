@@ -54,12 +54,12 @@ pub enum RawBody {
 pub struct RawResponse {
     pub status: u16,
     pub bytes: Vec<u8>,
-    /// Slop's own `x-slop-…` headers (lowercase names).
+    /// SLAPorSLOP's own `x-slop-…` headers (lowercase names).
     pub slop_headers: Vec<(String, String)>,
 }
 
 impl RawResponse {
-    /// One of Slop's own `x-slop-…` headers.
+    /// One of SLAPorSLOP's own `x-slop-…` headers.
     pub fn header(&self, name: &str) -> Option<String> {
         self.slop_headers
             .iter()

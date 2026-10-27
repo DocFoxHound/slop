@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The Featured carousel at the top of the front page (DESIGN §5): apps Slop staff pick, in
+//! The Featured carousel at the top of the front page (DESIGN §5): apps SLAPorSLOP staff pick, in
 //! their order, each with one line saying why. Only apps in the store for the viewer show.
 
 use axum::{Json, Router, extract::State, http::HeaderMap, routing::get};

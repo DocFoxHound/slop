@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! The simulation sandbox: a made-up store full of apps and players, for testing recommendations
-//! ("For you"), ratings (% Not Slop over time) and player counts against a known truth.
+//! ("For you"), ratings (% Slaps over time) and player counts against a known truth.
 //!
 //! **Only ever on a sandbox database** (its name ends in `_sim`, or a test database): it writes
 //! thousands of fake users, apps, votes and player counts. `slop-api simulate …` refuses
@@ -371,7 +371,7 @@ pub struct Generated {
     pub reviews: u64,
     /// Community branches (DESIGN §9).
     pub branches: usize,
-    /// Private Slop apps, each shared with a few players.
+    /// Private apps, each shared with a few players.
     pub private_apps: usize,
     /// Player teams, plus one official studio (verified by hand: the sandbox has no GitHub App).
     pub teams: usize,
@@ -1089,7 +1089,7 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
     .await?
     .rows_affected();
     let branches = sim_branches(db, now).await?;
-    // Private Slop: a few makers keep a tool to themselves and share it with a handful of players.
+    // Private apps: a few makers keep a tool to themselves and share it with a handful of players.
     let private_apps: Vec<Uuid> = sqlx::query_scalar(
         "update apps set visibility = 'private', status = 'draft'
          where id in (select id from apps where status = 'listed' and stage = 'released' and parent_app_id is null
@@ -1108,11 +1108,11 @@ pub async fn generate(db: &PgPool, settings: Settings) -> anyhow::Result<Generat
         .execute(db)
         .await?;
     }
-    // Frozen: one app whose repository Slop can't read any more, 4 days into its 14 (frozen.rs);
-    // and one Private Slop app waiting for a reviewer to make it public.
+    // Frozen: one app whose repository SLAPorSLOP can't read any more, 4 days into its 14 (frozen.rs);
+    // and one private app waiting for a reviewer to make it public.
     sqlx::query(
         "update apps set frozen_at = $1 - interval '4 days',
-                frozen_reason = 'Slop can''t read the repository: it was deleted, renamed, or Slop''s access was removed'
+                frozen_reason = 'SLAPorSLOP can''t read the repository: it was deleted, renamed, or SLAPorSLOP''s access was removed'
          where id = (select id from apps where status = 'listed' and visibility = 'public' and parent_app_id is null
                      order by md5(id::text) limit 1)",
     )
@@ -1514,7 +1514,7 @@ pub struct Report {
     /// Updated apps: the rating moved the way the update moved quality (before vs after).
     pub updates_checked: usize,
     pub updates_moved_right_way: usize,
-    /// How well % Not Slop tracks the truth: correlation across rated apps.
+    /// How well % Slaps tracks the truth: correlation across rated apps.
     pub rating_truth_correlation: f64,
     /// Players: apps whose "playing now" equals the live sessions made.
     pub players_checked: usize,

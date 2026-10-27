@@ -32,7 +32,7 @@ pub const BUILT_IN: &[(&str, &str)] = &[
     ("popular", "Popular this month"),
     ("upcoming", "Coming soon & in beta"),
     ("categories", "Browse by category"),
-    ("not_slop", "Most Not Slop right now"),
+    ("not_slop", "Slaps hardest right now"),
     ("barely_seen", "New and barely seen"),
     ("glow_ups", "Glow-ups"),
     ("community", "Community branches worth installing"),
@@ -327,7 +327,7 @@ async fn create(
     if count >= MAX_SHELVES {
         return Err(ApiError::invalid(
             "slug",
-            format!("Slop keeps at most {MAX_SHELVES} shelves: remove one first"),
+            format!("SLAPorSLOP keeps at most {MAX_SHELVES} shelves: remove one first"),
         ));
     }
     let id = Uuid::now_v7();

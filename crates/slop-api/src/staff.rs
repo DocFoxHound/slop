@@ -18,7 +18,7 @@
 //! **Two people.** Sensitive actions (withdrawing a release, taking an app out of the store,
 //! suspending or reinstating an account, turning off an app's donations, changing staff roles) don't happen on one person's
 //! word: they become a `staff_actions` request that needs `SLOP_APPROVALS_REQUIRED` different
-//! people (the requester is the first). While Slop has one person it's 1, so the action happens
+//! people (the requester is the first). While SLAPorSLOP has one person it's 1, so the action happens
 //! at once, but it's recorded the same way; set it to 2 when there's a second person. A token
 //! counts as its admin, and approving takes a person signed in themselves (never a token), so an
 //! agent can ask but never be the second person. Requests expire after three days.
@@ -428,7 +428,9 @@ async fn set_role(
             .fetch_one(&mut *tx)
             .await?;
             if owners == 0 {
-                return Err(ApiError::Conflict("Slop needs at least one owner".into()));
+                return Err(ApiError::Conflict(
+                    "SLAPorSLOP needs at least one owner".into(),
+                ));
             }
         }
         sqlx::query("delete from staff_roles where user_id = $1 and role = $2")
@@ -473,7 +475,9 @@ async fn remove_staff(state: &AppState, user_id: Uuid, reason: &str, actor: &str
     .fetch_one(&mut *tx)
     .await?;
     if other_owners == 0 {
-        return Err(ApiError::Conflict("Slop needs at least one owner".into()));
+        return Err(ApiError::Conflict(
+            "SLAPorSLOP needs at least one owner".into(),
+        ));
     }
     sqlx::query("update users set is_admin = false where id = $1")
         .bind(user_id)

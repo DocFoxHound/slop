@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! A game's own mods folder (DESIGN §9). Its maker can name the folder the game already reads
 //! mods from (`mods/` next to the game, `Content/Paks/~mods`, a folder in its saves). Before each
-//! start, and when the player adds mods while it runs, Slop makes that folder hold exactly the
-//! mods the player added from Slop: their files are copied in, files that changed are put back,
+//! start, and when the player adds mods while it runs, SLAPorSLOP makes that folder hold exactly the
+//! mods the player added from SLAPorSLOP: their files are copied in, files that changed are put back,
 //! and anything else, such as a mod someone dropped in by hand, is moved out to the quarantine
 //! folder and the player is told. In sandbox mode the folder is read-only, so the game can't
 //! put anything there itself.
@@ -17,7 +17,7 @@ use std::{
 use serde::{Deserialize, Serialize};
 use slop_manifest::ModsLayout;
 
-/// What Slop last put in the folder: path (with `/`) → (size, modified time in ns), to tell
+/// What SLAPorSLOP last put in the folder: path (with `/`) → (size, modified time in ns), to tell
 /// its own files apart from changed ones.
 type Record = BTreeMap<String, (u64, u128)>;
 
@@ -56,7 +56,7 @@ fn files_in(dir: &Path) -> io::Result<Vec<String>> {
 /// What a sync found.
 #[derive(Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 pub struct Synced {
-    /// Names (the first part of the path) of things in the folder that aren't mods from Slop;
+    /// Names (the first part of the path) of things in the folder that aren't mods from SLAPorSLOP;
     /// they were moved to the quarantine folder.
     pub unapproved: Vec<String>,
     /// Files two mods both have, in the `flat` layout: the first mod's copy is kept.
@@ -64,7 +64,7 @@ pub struct Synced {
 }
 
 /// Makes `target` hold exactly `mods` (address, unpacked files), laid out as `layout`.
-/// `record` is Slop's note of what it put there; unapproved files go under `quarantine`.
+/// `record` is SLAPorSLOP's note of what it put there; unapproved files go under `quarantine`.
 pub fn sync(
     target: &Path,
     layout: ModsLayout,
@@ -112,12 +112,12 @@ pub fn sync(
             } else if kind.is_file() {
                 let now = stamp(&entry.metadata()?);
                 if wanted.contains_key(&rel) {
-                    // Slop's own copy, unchanged since it was put there: keep it.
+                    // SLAPorSLOP's own copy, unchanged since it was put there: keep it.
                     if before.get(&rel) == Some(&now) {
                         keep.insert(rel, now);
                     }
                 } else if before.contains_key(&rel) {
-                    // A mod the player removed (or Slop pulled).
+                    // A mod the player removed (or SLAPorSLOP pulled).
                     fs::remove_file(&path)?;
                 } else {
                     let to = quarantine.join(&rel);
@@ -196,7 +196,7 @@ mod tests {
         fs::write(dragons.join("dragons.pck"), b"pack").unwrap();
         let mods = vec![("dragons".to_string(), dragons.clone())];
 
-        // Something put there by hand is moved out; Slop's mods go in, each in its own folder.
+        // Something put there by hand is moved out; SLAPorSLOP's mods go in, each in its own folder.
         fs::create_dir_all(target.join("my-hack")).unwrap();
         fs::write(target.join("my-hack/hack.gd"), b"extends Node").unwrap();
         fs::write(target.join("loose.zip"), b"zip").unwrap();
@@ -209,7 +209,7 @@ mod tests {
             b"{}"
         );
 
-        // A changed file is put back; nothing is reported for Slop's own files.
+        // A changed file is put back; nothing is reported for SLAPorSLOP's own files.
         fs::write(target.join("dragons/dragons.pck"), b"tampered!").unwrap();
         let got = sync(&target, ModsLayout::Folder, &mods, &record, &quarantine).unwrap();
         assert_eq!(got, Synced::default());

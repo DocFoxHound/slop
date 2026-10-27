@@ -2,9 +2,9 @@
 //! Stripe Connect for People payments (PAYMENTS §3, §7, §8).
 //!
 //! - Each creative connects **their own** Stripe account (full Stripe dashboard, Stripe carries
-//!   losses: what Stripe used to call "Standard"). Slop stores only the account ID and status.
+//!   losses: what Stripe used to call "Standard"). SLAPorSLOP stores only the account ID and status.
 //! - Each job payment is a **direct charge** on that account through Stripe Checkout, with
-//!   `application_fee_amount` = Slop's 5%. Slop never holds the money.
+//!   `application_fee_amount` = SLAPorSLOP's 5%. SLAPorSLOP never holds the money.
 //! - Webhooks are checked against Stripe's signature, handled once per event ID, and the state
 //!   is always re-read from Stripe's API rather than trusted from the webhook body.
 //!
@@ -33,7 +33,7 @@ use crate::{
     error::{ApiError, ApiResult},
 };
 
-/// Slop's platform fee, in basis points (PAYMENTS §2). VAT, where due, comes out of it.
+/// SLAPorSLOP's platform fee, in basis points (PAYMENTS §2). VAT, where due, comes out of it.
 pub const FEE_BASIS_POINTS: i64 = 500;
 
 pub fn fee(amount_minor: i64) -> i64 {
@@ -433,8 +433,8 @@ pub async fn sync_session(
     if s["payment_status"] != "paid" {
         return Ok(false);
     }
-    // A connected account's webhooks bring every sale on it, Slop's or not (the maker's own
-    // shop, say): one without a job payment isn't Slop's to record, and failing it would only
+    // A connected account's webhooks bring every sale on it, SLAPorSLOP's or not (the maker's own
+    // shop, say): one without a job payment isn't SLAPorSLOP's to record, and failing it would only
     // make Stripe retry it for days.
     let Some(job_payment_id) = s["metadata"]["job_payment_id"]
         .as_str()
@@ -442,7 +442,7 @@ pub async fn sync_session(
     else {
         return Ok(false);
     };
-    // Only the session Slop made for this payment, on the creative's account, for the amount and
+    // Only the session SLAPorSLOP made for this payment, on the creative's account, for the amount and
     // currency due. Metadata alone proves nothing: a creative controls their own Stripe account
     // and could make a session naming any payment, in a cheaper currency (security review,
     // 2026-10-22).
@@ -455,7 +455,7 @@ pub async fn sync_session(
     .fetch_optional(&state.db)
     .await?;
     let Some((want_session, want_amount, want_currency, want_account)) = expected else {
-        tracing::warn!(%job_payment_id, session_id, account, "a paid Checkout session for a job payment Slop doesn't know; ignored");
+        tracing::warn!(%job_payment_id, session_id, account, "a paid Checkout session for a job payment SLAPorSLOP doesn't know; ignored");
         return Ok(false);
     };
     let matches = want_session.as_deref() == Some(session_id)
@@ -463,7 +463,7 @@ pub async fn sync_session(
         && s["amount_total"].as_i64() == Some(i64::from(want_amount))
         && s["currency"].as_str() == Some(want_currency.as_str());
     if !matches {
-        tracing::warn!(%job_payment_id, session_id, account, "a paid Checkout session that isn't the one Slop made for this payment; ignored");
+        tracing::warn!(%job_payment_id, session_id, account, "a paid Checkout session that isn't the one SLAPorSLOP made for this payment; ignored");
         return Ok(false);
     }
     let payer: Option<Uuid> = s["metadata"]["payer"].as_str().and_then(|v| v.parse().ok());
@@ -599,7 +599,7 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
                 sync_session(state, stripe, acct, &object_id).await?;
             }
         }
-        // A bounty pledge's card saved on Slop's own account (bounties.rs).
+        // A bounty pledge's card saved on SLAPorSLOP's own account (bounties.rs).
         ("checkout.session.completed", None)
             if event.data.object["metadata"]["bounty_pledge_id"].is_string() =>
         {
@@ -659,7 +659,7 @@ async fn handle(state: &AppState, stripe: &StripeConfig, event: &Event) -> anyho
     Ok(())
 }
 
-/// The IDs Slop may have recorded a charge's payment under: the charge itself (People jobs,
+/// The IDs SLAPorSLOP may have recorded a charge's payment under: the charge itself (People jobs,
 /// one-off donations), its payment intent (bounty pledges) or its invoice (monthly donations).
 /// From Stripe's API version 2025-03-31, charges no longer name their invoice (the field is
 /// gone, not null), so the invoice is looked up through Stripe's invoice payments instead.

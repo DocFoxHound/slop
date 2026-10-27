@@ -3,9 +3,9 @@
 //!
 //! **Problems.** Either side opens one, states their case, the other answers, and either
 //! proposes outcomes (a refund, cancelling, redoing a part, something else). An outcome both
-//! accept is recorded and carried out where Slop can (cancelling; a simulated refund in the
-//! sandbox). A Slop mediator can read the job's record and **suggest** an outcome, which binds
-//! no one: Slop doesn't decide disputes. Unresolved problems close with the record available to
+//! accept is recorded and carried out where SLAPorSLOP can (cancelling; a simulated refund in the
+//! sandbox). A SLAPorSLOP mediator can read the job's record and **suggest** an outcome, which binds
+//! no one: SLAPorSLOP doesn't decide disputes. Unresolved problems close with the record available to
 //! both, for a card dispute or a court.
 //!
 //! **Review disputes.** A creative can dispute a review that breaks the rules, isn't about the
@@ -309,7 +309,7 @@ async fn propose(
 }
 
 /// Accept, reject or withdraw a proposal. Accepting one the other side made resolves the
-/// problem and carries it out where Slop can.
+/// problem and carries it out where SLAPorSLOP can.
 async fn answer(
     State(state): State<AppState>,
     user: CurrentUser,
@@ -784,7 +784,7 @@ async fn admin_record(
     .await?;
     for (who, good, bad, transcript) in evidence {
         text.push_str(&format!(
-            "\n## Conversation copy submitted by {who} ({good} messages match Slop's fingerprints, {bad} don't)\n\n"
+            "\n## Conversation copy submitted by {who} ({good} messages match SLAPorSLOP's fingerprints, {bad} don't)\n\n"
         ));
         if let Ok(copy) = serde_json::from_str::<jobs::ConversationCopy>(&transcript) {
             for m in copy.messages {
