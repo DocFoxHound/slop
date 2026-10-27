@@ -530,6 +530,7 @@ async fn test_app_with(db: PgPool, adjust: impl FnOnce(&mut Config)) -> TestApp 
         migrate_database_url: None,
         bad_link_feeds: vec![],
         public_url: "http://localhost:8080".parse().unwrap(),
+        former_urls: vec![],
         github: Some(GithubConfig {
             client_id: "client".into(),
             client_secret: "secret".into(),
@@ -3012,6 +3013,36 @@ async fn slop_build_submits_releases_with_a_github_token(db: PgPool) {
     )
     .await;
     assert_eq!(mine.as_array().unwrap().len(), 1);
+}
+
+/// After the site moves (SLOP_FORMER_URLS), makers' workflows set up with the old address still
+/// release: their tokens name it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn slop_build_tokens_for_the_former_address_still_work(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.public_url = "https://new.example".parse().unwrap();
+        c.former_urls = vec!["http://localhost:8080".parse().unwrap()];
+    })
+    .await;
+    github_app(&app).await;
+    let other = github_token(&app, json!({ "aud": "https://other.example" }));
+    assert_eq!(
+        submit_ci(&app, &other, ci_release()).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
+    // github_token names http://localhost:8080, the former address.
+    let former = github_token(&app, json!({}));
+    assert_eq!(
+        submit_ci(&app, &former, ci_release()).await.status(),
+        StatusCode::CREATED
+    );
+    let mut next = ci_release();
+    next["version"] = json!("build.13");
+    let new = github_token(&app, json!({ "aud": "https://new.example" }));
+    assert_ne!(
+        submit_ci(&app, &new, next).await.status(),
+        StatusCode::UNAUTHORIZED
+    );
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
