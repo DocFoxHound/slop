@@ -9,6 +9,7 @@ pub mod admin_messages;
 pub mod admin_tools;
 pub mod admin_web;
 pub mod agent;
+pub mod agent_oauth;
 pub mod auth;
 pub mod avatars;
 pub mod bad_links;
@@ -132,6 +133,8 @@ pub struct AppState {
     pub chat_hub: chat::Hub,
     /// Rate limits per account (limits.rs).
     pub account_limiter: Arc<limits::AccountLimiter>,
+    /// AI tools registering themselves, per address (agent_oauth.rs).
+    pub oauth_registrations: Arc<agent_oauth::Registrations>,
 }
 
 /// Resolves names to public addresses only (see `AppState::new`).
@@ -214,6 +217,7 @@ impl AppState {
             github_app_tokens: Arc::default(),
             chat_hub: chat::Hub::default(),
             account_limiter,
+            oauth_registrations: Arc::default(),
         })
     }
 }
@@ -221,7 +225,10 @@ impl AppState {
 pub fn router(state: AppState) -> anyhow::Result<Router> {
     // Cross-site state-changing requests are refused using Sec-Fetch-Site / Origin. With
     // SameSite=Lax cookies this replaces per-request CSRF tokens (docs/SECURITY.md §4.2).
-    let mut csrf = CsrfLayer::new();
+    // AI tools' token, registration and revocation requests carry no cookies, and browser-based
+    // tools send them from their own origin (agent_oauth.rs).
+    let mut csrf = CsrfLayer::new()
+        .with_insecure_bypass(|m, uri| agent_oauth::is_client_endpoint(m, uri.path()));
     for origin in &state.config.trusted_origins {
         csrf = csrf.add_trusted_origin(origin)?;
     }
@@ -248,6 +255,8 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(admin_messages::routes())
         .merge(agent::routes())
         .merge(maker_agents::routes())
+        .merge(agent_oauth::routes())
+        .merge(agent_oauth::client_routes().layer(agent_oauth::cors()))
         .merge(fixes::routes())
         .merge(offers::routes())
         .merge(label::routes())
@@ -396,6 +405,16 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
     let mut router = Router::new()
         .route("/healthz", get(health))
         .route("/.well-known/security.txt", get(security_txt))
+        // How AI tools find out how to connect, and the short MCP address (agent_oauth.rs).
+        .merge(agent_oauth::site_routes().layer(agent_oauth::cors()))
+        .merge(
+            maker_agents::short_mcp_routes()
+                .layer(RequestBodyLimitLayer::new(64 * 1024))
+                .layer(TimeoutLayer::with_status_code(
+                    StatusCode::SERVICE_UNAVAILABLE,
+                    Duration::from_secs(20),
+                )),
+        )
         .merge(demos::play_routes())
         .nest("/v1", v1.fallback(not_found));
     // Optionally serve the built website (web/dist) from the same origin, so one process runs the

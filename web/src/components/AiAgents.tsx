@@ -1,6 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Account → AI agents: tokens for a maker's or creative's own AI agent (crates/slop-api/src/
-// maker_agents.rs). The agent does the work in its own session; SLAPorSLOP gives it tools and checks.
+// Account → AI agents: a maker's or creative's own AI agents. The easy way comes first: the AI
+// tool is given SLAPorSLOP's address and approved in the browser (EasyConnect, crates/slop-api/src/
+// agent_oauth.rs), with no token to handle. The other way is a token (crates/slop-api/src/
+// maker_agents.rs). Both are listed together, and removed the same way. The agent does the work in its own session; SLAPorSLOP gives it tools and checks.
 // An agent can't accept agreements, so a publishing token needs the Publisher Agreement accepted
 // here: it's shown when the token is made, and again here whenever a new version waits.
 // Each token shows when it expires (agentTokens.ts); one expiring soon or expired offers Make a
@@ -13,9 +15,13 @@ import { api, ApiError, type AgentToken, type AppSummary, type LegalNotice } fro
 import { LIFETIMES, SOON_DAYS, expiryText, isExpired, lifetimeOf, needsReplacing, replacementOf } from "../agentTokens";
 import { formatDate } from "../format";
 import { useLoad, type Loaded } from "../hooks";
-import { AgentSetup, type MadeToken } from "./AgentSetup";
+import { mcpAddress } from "../agentSetup";
+import { siteOrigin } from "../browsing";
+import { AgentSetup, EasyConnect, type MadeToken } from "./AgentSetup";
 import { AcceptDocument, useTermsGate } from "./Terms";
 import { ErrorState } from "./ui";
+
+declare const __SLOP_SITE_URL__: string;
 
 /** The Publisher Agreement, waiting to be accepted (a version in effect or announced). */
 interface Waiting {
@@ -118,13 +124,14 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
         AI agents
       </h3>
       <p className="muted small">
-        Let your own AI coding agent (such as Claude Code) publish and fix your apps from your editor: create store pages,
+        Let your own AI agent (such as Claude Code, Claude or ChatGPT) publish and fix your apps: create store pages,
         submit releases with notes, read SLAPorSLOP's checks and get exact fixes, register community builds and mods, and
         offer fixes to other apps. With <b>People</b> access it can also watch your jobs, send quotes and talk in job
         conversations. It can never pay, accept agreements, change payouts or your account. Your agent does the work on
-        your side; SLAPorSLOP runs no AI for it. Each token lasts up to 12 months: SLAPorSLOP reminds you a week and a day before it
-        expires, and you can remove it any time.
+        your side; SLAPorSLOP runs no AI for it. Each connection lasts up to 12 months: SLAPorSLOP reminds you a week and a day
+        before it ends, and you can remove it any time.
       </p>
+      <EasyConnect mcpUrl={mcpAddress(siteOrigin(window.location, typeof __SLOP_SITE_URL__ === "string" ? __SLOP_SITE_URL__ : ""))} />
       {terms.prompt}
       {waiting.map((w) => (
         <div className="notice" key={w.version} role="status">
@@ -157,6 +164,11 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
           onCancel={() => setAccepting(undefined)}
         />
       )}
+      <h4 className="agent-way-title">The other way: make a token</h4>
+      <p className="muted small">
+        For AI tools that can't sign in to SLAPorSLOP in the browser: make a token here and set it up on your computer. Never paste
+        it into an AI chat.
+      </p>
       <form
         className="panel panel-pad form"
         aria-label="Make a token"
@@ -261,6 +273,7 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
             const expired = isExpired(t, now);
             const replaced = replacementOf(t, all, now);
             const soon = needsReplacing(t, all, SOON_DAYS, now);
+            const connected = t.connected;
             return (
               <li key={t.id} className={expired ? "token-expired" : soon ? "token-soon" : undefined}>
                 <div>
@@ -269,6 +282,13 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
                     {t.scope === "publish" ? "publishes" : "looks"} · {t.apps.length ? t.apps.join(", ") : "all apps"}
                     {t.people ? " · People jobs" : ""}
                   </span>
+                  {connected && (
+                    <div className="small muted token-connected">
+                      Approved in the browser for {connected.client}
+                      {connected.redirect_host ? ` (${connected.redirect_host})` : " on your computer"}
+                      {soon && !expired ? ": when it ends, approve it again when your tool asks" : ""}
+                    </div>
+                  )}
                   {expired ? (
                     <span className="badge token-flag bad">Expired</span>
                   ) : soon ? (
@@ -285,7 +305,7 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
                   </div>
                 </div>
                 <div className="row-actions token-actions">
-                  {soon && (
+                  {soon && !connected && (
                     <button
                       className="btn small slime"
                       type="button"

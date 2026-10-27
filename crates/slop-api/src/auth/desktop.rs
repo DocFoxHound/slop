@@ -252,13 +252,15 @@ async fn redeem_code(state: &AppState, code: &str, verifier: &str) -> ApiResult<
     Ok(tokens)
 }
 
+/// Desktop sessions only: an approved AI tool's refresh tokens (agent_oauth.rs) share the table
+/// and refresh at its own endpoint, checked against the tool.
 async fn refresh(state: &AppState, refresh_token: &str) -> ApiResult<TokenResponse> {
     let mut tx = state.db.begin().await?;
     let live = session::live_session_sql("$2", "$3");
     let row: Option<(Uuid, bool, bool)> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select r.session_id, r.used_at is not null, ({live})
          from refresh_tokens r join sessions s on s.id = r.session_id
-         where r.token_hash = $1 and r.expires_at > now()
+         where r.token_hash = $1 and r.expires_at > now() and s.kind = 'desktop'
          for update of r"
     )))
     .bind(hash_token(refresh_token))

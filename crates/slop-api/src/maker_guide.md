@@ -24,6 +24,9 @@ reviews it. Read only the guide sections you need (`publishing_guide`).
 - If the token expires within 7 days (`whats_new` shows `your_token`; so does the end of this
   guide), tell the person to make a replacement on Account → AI agents (**Make a replacement**
   fills in the same settings) and set it up the same way.
+- If the person connected you by approving you in their browser (your tool signed in to
+  SLAPorSLOP itself; the note at the end of this guide says so), there's no token for them to
+  handle: when the time they chose is up, your tool asks them to sign in and approve it again.
 
 ## Publish a new game or app
 

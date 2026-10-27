@@ -25,8 +25,11 @@
 //!   `terms_required` until the owner accepts it on the AI agents page.
 //! - **Writing to SLAPorSLOP's admins** (admin_messages.rs) works with any token, read or publish, for
 //!   some apps or all: it's limited per account instead (once an hour, five a day).
-//! - **MCP:** `POST /v1/maker/mcp` speaks the Model Context Protocol, with the tools in `TOOLS`,
-//!   each calling the API above with the token.
+//! - **MCP:** `POST /v1/maker/mcp` (and `/mcp`, the short address for AI tools) speaks the Model
+//!   Context Protocol, with the tools in `TOOLS`, each calling the API above with the token.
+//! - **Approved in the browser:** an AI tool can also connect without anyone handling a token
+//!   (agent_oauth.rs): what the person approves is a session like these, with an access token
+//!   (`access_tokens`, also `slopmk_…`) the tool refreshes itself.
 
 use axum::{
     Json, Router,
@@ -56,8 +59,8 @@ pub const MAX_DAYS: i64 = 365;
 const DEFAULT_DAYS: i64 = 30;
 /// Tokens that expire or expired within this are listed (expired ones until cleanup deletes them).
 const LISTED_AFTER_EXPIRY: Duration = crate::cleanup::ENDED_SESSION_RETENTION;
-/// Live tokens per maker.
-const MAX_TOKENS: i64 = 10;
+/// Live tokens per maker (approved AI tools included).
+pub const MAX_TOKENS: i64 = 10;
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 pub enum Scope {
@@ -107,6 +110,9 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("GET", "/maker/publishing-guide/*", false, Slug::Any),
     ("POST", "/maker/mcp", false, Slug::Any),
     ("GET", "/maker/mcp", false, Slug::Any),
+    // The same endpoint at the short address AI tools are given (agent_oauth.rs).
+    ("POST", "/mcp", false, Slug::Any),
+    ("GET", "/mcp", false, Slug::Any),
     ("GET", "/apps/{slug}", false, Slug::Any),
     ("GET", "/apps/{slug}/manage", false, Slug::Own),
     ("GET", "/apps/{slug}/releases", false, Slug::Own),
@@ -237,7 +243,8 @@ impl AgentToken {
     }
 }
 
-/// The maker a `slopmk_` token signs in as, with its limits.
+/// The maker a `slopmk_` token signs in as, with its limits: a token made on the website (the
+/// session's own), or an approved AI tool's access token (agent_oauth.rs).
 pub async fn lookup(state: &AppState, token: &str) -> ApiResult<Option<CurrentUser>> {
     let live = session::live_session_sql("$2", "$3");
     type Row = (
@@ -255,7 +262,10 @@ pub async fn lookup(state: &AppState, token: &str) -> ApiResult<Option<CurrentUs
         "select u.id, s.id, u.display_name, u.country_code, u.suspended_at is not null, m.scope,
                 m.app_ids, m.people, s.last_seen_at < now() - $4
          from sessions s join users u on u.id = s.user_id join maker_tokens m on m.session_id = s.id
-         where s.token_hash = $1 and s.kind = 'agent' and u.closed_at is null and {live}"
+         where s.id = coalesce(
+                   (select t.session_id from access_tokens t where t.token_hash = $1 and t.expires_at > now()),
+                   (select x.id from sessions x where x.token_hash = $1))
+           and s.kind = 'agent' and u.closed_at is null and {live}"
     )))
     .bind(hash_token(token))
     .bind(session::IDLE_TIMEOUT)
@@ -311,6 +321,11 @@ pub fn routes() -> Router<AppState> {
         .route("/maker/mcp", post(mcp).get(mcp_get))
 }
 
+/// The MCP endpoint at `/mcp`, outside `/v1`: the address AI tools are given.
+pub fn short_mcp_routes() -> Router<AppState> {
+    Router::new().route("/mcp", post(mcp).get(mcp_get))
+}
+
 // ---------------------------------------------------------------------------------------------
 // Tokens
 
@@ -331,11 +346,24 @@ struct TokenInfo {
     last_used_at: OffsetDateTime,
     /// Past its expiry: it no longer works (listed for a week, to be replaced or removed).
     expired: bool,
+    /// Approved in the browser (agent_oauth.rs): the AI tool's name for itself, and where the
+    /// approval sent the browser (a website's host, or null for this computer). Null for a
+    /// token made here.
+    connected: Option<Connected>,
+}
+
+#[derive(Serialize)]
+struct Connected {
+    client: String,
+    redirect_host: Option<String>,
 }
 
 const TOKEN_COLUMNS: &str = "s.id, m.name, m.scope,
     array(select a.slug from apps a where a.id = any(m.app_ids) order by a.slug), m.people,
-    s.created_at, s.expires_at, s.last_seen_at, s.expires_at <= now()";
+    s.created_at, s.expires_at, s.last_seen_at, s.expires_at <= now(),
+    exists (select 1 from agent_grants g where g.session_id = s.id),
+    (select c.name from agent_grants g join agent_clients c on c.id = g.client_id where g.session_id = s.id),
+    (select g.redirect_uri from agent_grants g where g.session_id = s.id)";
 
 type TokenRow = (
     Uuid,
@@ -347,6 +375,9 @@ type TokenRow = (
     OffsetDateTime,
     OffsetDateTime,
     bool,
+    bool,
+    Option<String>,
+    Option<String>,
 );
 
 fn info(r: TokenRow) -> TokenInfo {
@@ -360,6 +391,15 @@ fn info(r: TokenRow) -> TokenInfo {
         expires_at: r.6,
         last_used_at: r.7,
         expired: r.8,
+        connected: r.9.then(|| Connected {
+            client: r.10.unwrap_or_else(|| "AI tool".into()),
+            redirect_host: r
+                .11
+                .and_then(|u| match crate::agent_oauth::check_return(&u) {
+                    Ok(crate::agent_oauth::Return::Web(host)) => Some(host),
+                    _ => None,
+                }),
+        }),
     }
 }
 
@@ -563,21 +603,28 @@ pub(crate) async fn own_token(
     db: &sqlx::PgPool,
     session_id: Uuid,
 ) -> sqlx::Result<Option<OwnToken>> {
-    let row: Option<(String, OffsetDateTime)> = sqlx::query_as(
-        "select m.name, s.expires_at from maker_tokens m join sessions s on s.id = m.session_id
+    let row: Option<(String, OffsetDateTime, bool)> = sqlx::query_as(
+        "select m.name, s.expires_at, exists (select 1 from agent_grants g where g.session_id = s.id)
+         from maker_tokens m join sessions s on s.id = m.session_id
          where m.session_id = $1",
     )
     .bind(session_id)
     .fetch_optional(db)
     .await?;
-    Ok(row.map(|(name, expires_at)| {
+    Ok(row.map(|(name, expires_at, connected)| {
         let now = OffsetDateTime::now_utc();
-        let mut note = format!(
-            "This token (\"{name}\") {} ({}).",
-            when(expires_at, now),
-            expires_at.date()
-        );
-        if days_left(expires_at, now) <= 7 {
+        let what = if connected {
+            format!("This connection (\"{name}\", approved in the browser)")
+        } else {
+            format!("This token (\"{name}\")")
+        };
+        let mut note = format!("{what} {} ({}).", when(expires_at, now), expires_at.date());
+        if connected && days_left(expires_at, now) <= 7 {
+            note.push_str(
+                " When it ends, the person you work for approves you again in their browser: you'll \
+                 be asked to sign in to SLAPorSLOP (in Claude Code, /mcp; in Codex, codex mcp login).",
+            );
+        } else if days_left(expires_at, now) <= 7 {
             note.push_str(
                 " Tell the person you work for to make a replacement on SLAPorSLOP under Account → AI \
                  agents (Make a replacement fills in the same settings) and set it up on their \
@@ -598,7 +645,7 @@ pub(crate) async fn own_token(
 /// (a newer live token with the same name that lasts longer). Returns the warnings sent.
 pub async fn warn_expiring(db: &sqlx::PgPool) -> anyhow::Result<usize> {
     let mut tx = db.begin().await?;
-    let due: Vec<(Uuid, Uuid, String, OffsetDateTime, i16, bool)> = sqlx::query_as(
+    let due: Vec<(Uuid, Uuid, String, OffsetDateTime, i16, bool, bool)> = sqlx::query_as(
         "select m.session_id, s.user_id, m.name, s.expires_at,
                 (case when s.expires_at <= now() then 3
                       when s.expires_at <= now() + $1 then 2
@@ -606,7 +653,8 @@ pub async fn warn_expiring(db: &sqlx::PgPool) -> anyhow::Result<usize> {
                 exists (select 1 from sessions r join maker_tokens rm on rm.session_id = r.id
                         where r.user_id = s.user_id and r.kind = 'agent' and r.id <> s.id
                           and rm.name = m.name and r.revoked_at is null
-                          and r.created_at > s.created_at and r.expires_at > s.expires_at)
+                          and r.created_at > s.created_at and r.expires_at > s.expires_at),
+                exists (select 1 from agent_grants g where g.session_id = s.id)
          from maker_tokens m join sessions s on s.id = m.session_id
          where s.kind = 'agent' and s.revoked_at is null
            and s.expires_at - s.created_at > $3
@@ -625,7 +673,7 @@ pub async fn warn_expiring(db: &sqlx::PgPool) -> anyhow::Result<usize> {
     .await?;
     let now = OffsetDateTime::now_utc();
     let mut sent = 0;
-    for (id, user_id, name, expires_at, stage, replaced) in due {
+    for (id, user_id, name, expires_at, stage, replaced, connected) in due {
         sqlx::query("update maker_tokens set expiry_warning = $2 where session_id = $1")
             .bind(id)
             .bind(stage)
@@ -634,7 +682,33 @@ pub async fn warn_expiring(db: &sqlx::PgPool) -> anyhow::Result<usize> {
         if replaced {
             continue;
         }
-        let (title, body) = if stage == 3 {
+        let (title, body) = if connected {
+            // Approved in the browser (agent_oauth.rs): nothing to set up, only to approve again.
+            if stage == 3 {
+                (
+                    format!("Your AI tool \"{name}\" was disconnected"),
+                    "The time you chose for it is up, so it can't reach SLAPorSLOP any more. To connect \
+                     it again, let it sign in to SLAPorSLOP when it asks (in Claude Code: /mcp) and \
+                     approve it in your browser."
+                        .to_string(),
+                )
+            } else {
+                (
+                    format!(
+                        "Your AI tool \"{name}\" disconnects {}",
+                        match days_left(expires_at, now) {
+                            1 => "within a day".to_string(),
+                            n => format!("in {n} days"),
+                        }
+                    ),
+                    format!(
+                        "On {} the time you chose for it is up. After that, let it sign in to \
+                         SLAPorSLOP again when it asks, and approve it in your browser.",
+                        expires_at.date()
+                    ),
+                )
+            }
+        } else if stage == 3 {
             (
                 format!("Your AI agent token \"{name}\" has expired"),
                 "Your AI agent can't reach SLAPorSLOP with it any more. Make a replacement on Account → AI \
@@ -1370,7 +1444,31 @@ pub(crate) const TOOLS: &[Tool] = &[
 /// What a maker's agent is told before writing to SLAPorSLOP's admins.
 const ADMIN_MESSAGE_RULES: &str = "Writes to SLAPorSLOP's admins: an error you hit on SLAPorSLOP, a bug in SLAPorSLOP itself, or a suggestion (not your maker's own app's bugs: fix those in its repository). Your maker's whole account may post once an hour and 5 times a day (a new thread or a reply, all its tokens together), so write only when it matters. Be brief and thorough in one message, so you don't spend your maker's tokens on follow-ups: what happened, where, what you expected, what you suggest. Plain text only, under 2,000 characters, at most 3 links. Only staff and makers with an app in the store, with accounts at least 7 days old, can write, with a token at least an hour old. Never include secrets, tokens or players' personal data. The admins answer in the thread: you'll see it in whats_new and list_my_admin_messages.";
 
-async fn mcp(State(state): State<AppState>, user: CurrentUser, request: Request) -> Response {
+/// The MCP path a request came in on, for the discovery documents (agent_oauth.rs).
+fn mcp_path(request: &Request) -> &'static str {
+    if request.uri().path() == "/mcp" {
+        "/mcp"
+    } else {
+        "/v1/maker/mcp"
+    }
+}
+
+async fn mcp(
+    State(state): State<AppState>,
+    user: Result<CurrentUser, ApiError>,
+    request: Request,
+) -> Response {
+    let user = match user {
+        Ok(user) => user,
+        // No working token: say where an AI tool finds out how to get one (RFC 9728).
+        Err(ApiError::Unauthorized) => {
+            let had_token = request
+                .headers()
+                .contains_key(axum::http::header::AUTHORIZATION);
+            return crate::agent_oauth::unauthorized(&state, mcp_path(&request), had_token);
+        }
+        Err(err) => return err.into_response(),
+    };
     if user.agent.is_none() {
         // The website's own session can't drive the agent endpoint.
         return ApiError::Forbidden.into_response();
@@ -1385,8 +1483,21 @@ async fn mcp(State(state): State<AppState>, user: CurrentUser, request: Request)
     .await
 }
 
-async fn mcp_get(_user: CurrentUser) -> StatusCode {
-    StatusCode::METHOD_NOT_ALLOWED
+async fn mcp_get(
+    State(state): State<AppState>,
+    user: Result<CurrentUser, ApiError>,
+    request: Request,
+) -> Response {
+    match user {
+        Ok(_) => StatusCode::METHOD_NOT_ALLOWED.into_response(),
+        Err(ApiError::Unauthorized) => {
+            let had_token = request
+                .headers()
+                .contains_key(axum::http::header::AUTHORIZATION);
+            crate::agent_oauth::unauthorized(&state, mcp_path(&request), had_token)
+        }
+        Err(err) => err.into_response(),
+    }
 }
 
 #[cfg(test)]
