@@ -228,7 +228,7 @@ jobs:
           out=$(deploy/signing-allowance.sh --this-run)
           code=$?
           set -e
-          printf '%s\n' "$out" | grep -v '^[a-z_]*=' | tee -a "$GITHUB_STEP_SUMMARY"
+          printf '%s\n' "$out" | grep -v '^[a-z_]*=' | tee -a "$GITHUB_STEP_SUMMARY" || true
           on=$(printf '%s\n' "$out" | sed -n 's/^signing_on=//p')
           line=$(printf '%s\n' "$out" | sed -n '2p' | sed 's/^ *//')
           if [ "$on" != 1 ]; then
