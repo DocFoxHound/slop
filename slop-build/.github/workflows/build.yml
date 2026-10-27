@@ -5,21 +5,21 @@
 #   1. builds the app for each platform on GitHub-hosted runners,
 #   2. Windows: signs the program with the maker's free SignPath Foundation certificate, if they
 #      have one (optional), then checks the build with Microsoft Defender, today's definitions,
-#      so Slop knows before publishing whether players' Windows would stop it,
+#      so SLAPorSLOP knows before publishing whether players' Windows would stop it,
 #   3. packs each build (Windows: a .zip; Linux: a .tar.gz plus .deb and .rpm packages) and
 #      signs every file with a GitHub artifact attestation (Sigstore), which records that this
 #      recipe built it from the maker's repo at this commit,
 #   4. checks the source for leaked secrets (gitleaks) and dependencies with known
 #      vulnerabilities (OSV-Scanner),
-#   5. attaches the files to a release on the maker's repo (Slop stores no builds),
-#   6. tells Slop, using the run's GitHub OIDC token instead of any secret.
+#   5. attaches the files to a release on the maker's repo (SLAPorSLOP stores no builds),
+#   6. tells SLAPorSLOP, using the run's GitHub OIDC token instead of any secret.
 #
 # Project types: rust, go, godot (the project's export presets), python (PyInstaller), electron
 # (electron-builder, unpacked), tauri (no bundle), web (the built site in a small Tauri window),
 # and custom (any build command). With publish: false it builds and checks only.
 #
 # This recipe is trusted by every app built with it. Changes need two-person review, releases are
-# tagged, and makers pin a tag (SECURITY §5.1). It never handles Slop secrets.
+# tagged, and makers pin a tag (SECURITY §5.1). It never handles SLAPorSLOP secrets.
 
 name: Slop Build
 
@@ -27,11 +27,11 @@ on:
   workflow_call:
     inputs:
       app:
-        description: The app's address on Slop (its slug).
+        description: The app's address on SLAPorSLOP (its slug).
         required: true
         type: string
       slop-url:
-        description: The Slop site, e.g. https://slop.example
+        description: The SLAPorSLOP site, e.g. https://slop.example
         required: true
         type: string
       project-type:
@@ -45,7 +45,7 @@ on:
         default: windows,linux
       linux-packages:
         description: >-
-          Comma-separated Linux packages to make besides the .tar.gz, from deb and rpm. Slop uses
+          Comma-separated Linux packages to make besides the .tar.gz, from deb and rpm. SLAPorSLOP uses
           the ones your store page lists and ignores the rest.
         required: false
         type: string
@@ -62,9 +62,9 @@ on:
         default: ""
       sign:
         description: >-
-          Sign each build with a GitHub artifact attestation (the maker's signature Slop requires).
+          Sign each build with a GitHub artifact attestation (the maker's signature SLAPorSLOP requires).
           Attestations in private repositories need GitHub Enterprise Cloud, so private test
-          setups turn this off and run Slop with SLOP_REQUIRE_MAKER_SIGNATURE=false.
+          setups turn this off and run SLAPorSLOP with SLOP_REQUIRE_MAKER_SIGNATURE=false.
         required: false
         type: boolean
         default: true
@@ -134,7 +134,7 @@ on:
         default: "22"
       publish:
         description: >-
-          false builds and checks only: no release, nothing sent to Slop. For trying a build
+          false builds and checks only: no release, nothing sent to SLAPorSLOP. For trying a build
           (the files are kept as the run's artifacts for a day).
         required: false
         type: boolean
@@ -171,7 +171,7 @@ on:
         type: string
         default: ""
       signpath-project-slug:
-        description: Your SignPath project's slug (defaults to the app's Slop address).
+        description: Your SignPath project's slug (defaults to the app's SLAPorSLOP address).
         required: false
         type: string
         default: ""
@@ -228,7 +228,7 @@ jobs:
           [[ "$LINUX_RUNTIME" =~ ^(|steam-sniper)$ ]] || { echo "::error::linux-runtime is empty or steam-sniper"; exit 1; }
           if [ -n "$LINUX_RUNTIME" ] && ! [[ "$TYPE" =~ ^(rust|go|custom)$ ]]; then
             echo "::error::linux-runtime works with rust, go and custom builds"; exit 1; fi
-          [[ "$APP" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "::error::app must be your app's Slop address, e.g. my-game"; exit 1; }
+          [[ "$APP" =~ ^[a-z0-9]+(-[a-z0-9]+)*$ ]] || { echo "::error::app must be your app's SLAPorSLOP address, e.g. my-game"; exit 1; }
           [[ "$TYPE" =~ ^(rust|go|dotnet|godot|unity|web|electron|tauri|python|custom)$ ]] || { echo "::error::project-type must be rust, go, dotnet, godot, unity, web, electron, tauri, python or custom"; exit 1; }
           [[ "$SLOP_URL" =~ ^https?://[^/]+/?$ ]] || { echo "::error::slop-url must be a site address like https://slop.example"; exit 1; }
 
@@ -272,7 +272,7 @@ jobs:
           PY
 
   # Unity, through GameCI's builder (Docker, on Linux), for every requested platform. The
-  # licence is the maker's, from their own repository's secrets; Slop never sees it.
+  # licence is the maker's, from their own repository's secrets; SLAPorSLOP never sees it.
   unity:
     name: Build with Unity (${{ matrix.platform }})
     needs: prepare
@@ -469,7 +469,7 @@ jobs:
           ext=""; [ "$PLATFORM" = "windows" ] && ext=".exe"
           out="$PWD/slop-dist/app"
           mkdir -p "$out"
-          # Valve's Steam Runtime 3 (sniper) SDK, pinned to the version and image Slop tested
+          # Valve's Steam Runtime 3 (sniper) SDK, pinned to the version and image SLAPorSLOP tested
           # (examples/slop-pong's tests pass in it). Moving it is a change to this recipe.
           SNIPER_SDK=registry.gitlab.steamos.cloud/steamrt/sniper/sdk:3.0.20260928.262393@sha256:9ae8083ee9ae6298361a62f289e62f0a2b0779d23fc8c276304157f0c06010c5
           # Runs a compile command here, or for Linux with linux-runtime inside the Steam Runtime
@@ -600,7 +600,7 @@ jobs:
               [ -f package.json ] || { echo "::error::no package.json in $PROJECT (set project-path)"; exit 1; }
               npm ci
               [ -n "$BUILD_COMMAND" ] && bash -euo pipefail -c "$BUILD_COMMAND"
-              # An unpacked folder (no installer): Slop installs and updates it.
+              # An unpacked folder (no installer): SLAPorSLOP installs and updates it.
               npx --yes electron-builder@25 --dir --publish never
               unpacked=dist/linux-unpacked; [ "$PLATFORM" = "windows" ] && unpacked=dist/win-unpacked
               [ -d "$unpacked" ] || { echo "::error::electron-builder made no $unpacked"; exit 1; }
@@ -612,7 +612,7 @@ jobs:
               [ -d src-tauri ] || { echo "::error::no src-tauri folder in $PROJECT (set project-path)"; exit 1; }
               [ -f package.json ] && npm ci
               [ -n "$BUILD_COMMAND" ] && bash -euo pipefail -c "$BUILD_COMMAND"
-              # The program only: Tauri builds its web assets in, and Slop installs it.
+              # The program only: Tauri builds its web assets in, and SLAPorSLOP installs it.
               if [ -f package.json ] && npm ls @tauri-apps/cli >/dev/null 2>&1; then
                 npx tauri build --no-bundle
               else
@@ -630,7 +630,7 @@ jobs:
               exec="$APP$ext"
               ;;
             web)
-              # A website (HTML5 game or app) in Slop's small Tauri shell: a window showing the
+              # A website (HTML5 game or app) in SLAPorSLOP's small Tauri shell: a window showing the
               # built site, nothing else. The site is built into the program.
               [ -n "$OUTPUT_DIR" ] || { echo "::error::web builds need output-dir: the folder with index.html"; exit 1; }
               (cd "$PROJECT" && { [ -f package.json ] && npm ci || true; } && { [ -z "$BUILD_COMMAND" ] || bash -euo pipefail -c "$BUILD_COMMAND"; })
@@ -676,7 +676,7 @@ jobs:
                       "security": {"csp": None}},
               "bundle": {"active": False, "icon": ["icons/icon.png", "icons/icon.ico"]},
           }, open(os.path.join(shell, "tauri.conf.json"), "w"), indent=2)
-          # A plain icon (Windows needs one to build): Slop's green.
+          # A plain icon (Windows needs one to build): SLAPorSLOP's green.
           def png(size):
               raw = b"".join(b"\x00" + bytes([0xA3, 0xE6, 0x35, 0xFF]) * size for _ in range(size))
               chunk = lambda t, d: struct.pack(">I", len(d)) + t + d + struct.pack(">I", zlib.crc32(t + d) & 0xFFFFFFFF)
@@ -705,7 +705,7 @@ jobs:
           #   [launch]                 [launch.windows]
           #   exec = "game{ext}"        exec = "Game.exe"
           #   args = ["--fullscreen"]   args = []
-          # and the shared runtimes the Windows build needs, from Slop's list (Slop's /v1/runtimes):
+          # and the shared runtimes the Windows build needs, from SLAPorSLOP's list (SLAPorSLOP's /v1/runtimes):
           #   runtimes = ["vcredist-x64"]
           launch=$(python3 - "$PLATFORM" "$PROJECT" "$ext" <<'PY'
           import json, os, sys, tomllib
@@ -911,7 +911,7 @@ jobs:
 
       # Microsoft Defender, on GitHub's Windows runner with today's definitions: what players'
       # Windows would say about this build, found before it's published. Cloud lookups are on, as
-      # on players' PCs, but samples are never uploaded. A detection doesn't stop the build: Slop
+      # on players' PCs, but samples are never uploaded. A detection doesn't stop the build: SLAPorSLOP
       # holds the release for a person to look at (it may be a false positive).
       - name: Check with Microsoft Defender
         if: matrix.platform == 'windows'
@@ -948,11 +948,11 @@ jobs:
           }
           $report | ConvertTo-Json -Depth 4 | Set-Content slop-dist/defender.json
           if ($detections.Count -gt 0) {
-            foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($d.file)::$($d.threat). Slop holds the release for a person to look at. If it's a false positive, submit the file at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer); signing with SignPath helps most." }
+            foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($d.file)::$($d.threat). SLAPorSLOP holds the release for a person to look at. If it's a false positive, submit the file at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer); signing with SignPath helps most." }
           } else {
             echo "Microsoft Defender $($status.AMEngineVersion), definitions $($status.AntivirusSignatureVersion): nothing found."
           }
-          if (-not $signer) { echo "::notice title=Unsigned Windows program::$env:SLOP_EXEC isn't signed. Windows trusts signed programs more; open-source projects can sign for free with SignPath Foundation (see Slop's publishing guide)." }
+          if (-not $signer) { echo "::notice title=Unsigned Windows program::$env:SLOP_EXEC isn't signed. Windows trusts signed programs more; open-source projects can sign for free with SignPath Foundation (see SLAPorSLOP's publishing guide)." }
 
       - name: Add Defender's check to the files
         if: matrix.platform == 'windows'
@@ -1020,7 +1020,7 @@ jobs:
 
       # GitHub release files are limited to 2 GiB: a bigger archive goes up in numbered parts
       # (name.001, name.002, …), each signed and checked on its own; the desktop app downloads
-      # them in order, checks each, and joins them back into the archive Slop checked.
+      # them in order, checks each, and joins them back into the archive SLAPorSLOP checked.
       - name: Split files over 2 GiB
         run: |
           python3 - <<'PY'
@@ -1038,7 +1038,7 @@ jobs:
                   raise SystemExit(f"::error::{f['file_name']} is over 2 GiB, which GitHub releases can't hold. Turn off linux-packages for this app; the .tar.gz is split into parts instead.")
               count = -(-size // LIMIT)
               if count > 64:
-                  raise SystemExit(f"::error::{f['file_name']} is over 128 GB, more than Slop takes.")
+                  raise SystemExit(f"::error::{f['file_name']} is over 128 GB, more than SLAPorSLOP takes.")
               parts = []
               with open(src, "rb") as fh:
                   for n in range(1, count + 1):
@@ -1085,7 +1085,7 @@ jobs:
           python3 - "$PLATFORM" "$RUNNER_TEMP/butler" <<'PY'
           import hashlib, sys, urllib.request, zipfile, io, os
           platform, dest = sys.argv[1:3]
-          # butler 15.32.0 from itch.io, checked against the hash Slop recorded.
+          # butler 15.32.0 from itch.io, checked against the hash SLAPorSLOP recorded.
           builds = {
               "linux": ("linux-amd64", "2335971394ef6596f95ded0833e85ee28755e13761716ef4c91d6b11f69162f5"),
               "windows": ("windows-amd64", "5902c488b86bb3518ca00bf4e706d7687f229e3f0f28653cd943348ea9ec8878"),
@@ -1158,7 +1158,7 @@ jobs:
           path: slop-dist/out
           retention-days: 1
 
-      - name: Describe the files for Slop
+      - name: Describe the files for SLAPorSLOP
         env:
           PLATFORM: ${{ matrix.platform }}
         run: mv slop-dist/files.json "slop-dist/$PLATFORM.json"
@@ -1183,7 +1183,7 @@ jobs:
           fetch-depth: 1
 
       # Leaked keys and tokens (gitleaks), and dependencies with known vulnerabilities (OSV).
-      # Findings go to Slop for the maker and the reviewer; secrets' values are never sent.
+      # Findings go to SLAPorSLOP for the maker and the reviewer; secrets' values are never sent.
       - name: Secrets and dependencies
         run: |
           mkdir -p slop-checks
@@ -1224,10 +1224,10 @@ jobs:
           retention-days: 1
 
   notify:
-    name: Tell Slop
+    name: Tell SLAPorSLOP
     needs: [prepare, release, source-checks]
     # Without !cancelled(), GitHub needs every job upstream to have succeeded, and the unity job
-    # is skipped for every other project type, so Slop would never be told.
+    # is skipped for every other project type, so SLAPorSLOP would never be told.
     if: ${{ !cancelled() && inputs.publish && needs.prepare.result == 'success' && needs.release.result == 'success' && needs.source-checks.result == 'success' }}
     runs-on: ubuntu-latest
     permissions:
@@ -1244,7 +1244,7 @@ jobs:
           name: slop-source-checks
           path: slop-checks
 
-      - name: Submit the release to Slop
+      - name: Submit the release to SLAPorSLOP
         env:
           APP: ${{ inputs.app }}
           SLOP_URL: ${{ inputs.slop-url }}
@@ -1252,7 +1252,7 @@ jobs:
           VERSION: ${{ needs.prepare.outputs.version }}
         run: |
           # GitHub's OIDC token proves this run is this recipe, in this repo, at this commit.
-          # Slop checks it; no secret is shared.
+          # SLAPorSLOP checks it; no secret is shared.
           base="${SLOP_URL%/}"
           token=$(curl -sSf -H "Authorization: Bearer $ACTIONS_ID_TOKEN_REQUEST_TOKEN" \
             "$ACTIONS_ID_TOKEN_REQUEST_URL&audience=$base" | python3 -c 'import json,sys; print(json.load(sys.stdin)["value"])')
@@ -1263,7 +1263,7 @@ jobs:
           checks = json.load(open("slop-checks/source.json"))
           body = {"app": os.environ["APP"], "version": os.environ["VERSION"], "tag": os.environ["TAG"],
                   "commit": os.environ["GITHUB_SHA"], "files": files, "source_checks": checks}
-          # slop.toml's runtimes travel with the Windows file; Slop takes them for the release.
+          # slop.toml's runtimes travel with the Windows file; SLAPorSLOP takes them for the release.
           runtimes = [f.pop("runtimes", None) for f in files]
           if any(r is not None for r in runtimes):
               body["runtimes"] = next(r for r in runtimes if r is not None)
@@ -1273,7 +1273,7 @@ jobs:
             -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)
           cat response.json; echo
           if [ "$status" -ge 300 ]; then
-            echo "::error::Slop refused the release (HTTP $status). See the response above."
+            echo "::error::SLAPorSLOP refused the release (HTTP $status). See the response above."
             exit 1
           fi
-          echo "Submitted to Slop. It's checked and reviewed before players get it."
+          echo "Submitted to SLAPorSLOP. It's checked and reviewed before players get it."

@@ -1,5 +1,5 @@
 [Unit]
-Description=Back up Slop every night
+Description=Back up SLAPorSLOP every night
 
 [Timer]
 OnCalendar=*-*-* 03:30:00 UTC

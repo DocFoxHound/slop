@@ -1,4 +1,4 @@
-# .github/workflows/slop.yml in a maker's repo. Slop's "Add Slop Build" button fills this in.
+# .github/workflows/slop.yml in a maker's repo. SLAPorSLOP's "Add Slop Build" button fills this in.
 name: Slop Build
 on:
   push:

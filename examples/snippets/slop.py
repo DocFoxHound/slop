@@ -1,10 +1,10 @@
-# Slop for Python games: saves, mods and asking the Slop app for a server's mods.
-# Standard library only. Outside the Slop app it falls back: your own save folder, no mods,
+# SLAPorSLOP for Python games: saves, mods and asking the SLAPorSLOP app for a server's mods.
+# Standard library only. Outside the SLAPorSLOP app it falls back: your own save folder, no mods,
 # and request_mods answers "no_link".
 import json, os, time
 
 def save_dir(fallback):
-    """Where saves, settings and logs go: Slop's save folder, else `fallback`."""
+    """Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`."""
     path = os.environ.get("SLOP_SAVE_DIR") or fallback
     os.makedirs(path, exist_ok=True)
     return path
@@ -30,7 +30,7 @@ def load_json(fallback, name):
 
 def mod_dirs(own_folder=None):
     """Every mod folder: your game's own mods folder (if you named one on your store page),
-    then SLOP_MODS. Each holds one mod from Slop."""
+    then SLOP_MODS. Each holds one mod from SLAPorSLOP."""
     found, seen = [], set()
     if own_folder and os.path.isdir(own_folder):
         for name in sorted(os.listdir(own_folder)):
@@ -45,7 +45,7 @@ def mod_dirs(own_folder=None):
     return found
 
 def request_mods(mods, for_whom, give_up_after=600):
-    """Asks the Slop app for mods by address, e.g. [{"slug": "dragons", "version": "1.2.0"}].
+    """Asks the SLAPorSLOP app for mods by address, e.g. [{"slug": "dragons", "version": "1.2.0"}].
     The player confirms. Returns the answer: "done" (with "mods" and "folders"), "declined",
     "failed" (with "message"), "no_link" or "timeout"."""
     link = os.environ.get("SLOP_LINK")

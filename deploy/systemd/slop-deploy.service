@@ -1,5 +1,5 @@
 [Unit]
-Description=Deploy the newest Slop commit (deploy/update.sh)
+Description=Deploy the newest SLAPorSLOP commit (deploy/update.sh)
 After=slop-pg.service network-online.target
 
 [Service]

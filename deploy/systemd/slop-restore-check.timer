@@ -1,5 +1,5 @@
 [Unit]
-Description=Check Slop's backups restore, every week
+Description=Check SLAPorSLOP's backups restore, every week
 
 [Timer]
 OnCalendar=Sun *-*-* 05:00:00 UTC

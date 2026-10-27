@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1200 400" width="1200" height="400" role="img" aria-labelledby="t d">
   <title id="t">Checked before it reaches you</title>
-  <desc id="d">How an app gets to a player: the maker pushes open-source code; it's built and signed in CI; Slop scans it with ClamAV, YARA, capa and Microsoft Defender; a person reviews it; and the Slop app verifies every file before installing and at every launch.</desc>
+  <desc id="d">How an app gets to a player: the maker pushes open-source code; it's built and signed in CI; SLAPorSLOP scans it with ClamAV, YARA, capa and Microsoft Defender; a person reviews it; and the SLAPorSLOP app verifies every file before installing and at every launch.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0d1015"/>
@@ -83,12 +83,12 @@
       <text x="284" y="300">GitHub Actions, from the commit.</text>
       <text x="520" y="282">ClamAV, YARA, capa, Microsoft</text>
       <text x="520" y="300">Defender, licence and loot boxes.</text>
-      <text x="756" y="282">Someone at Slop looks at it</text>
+      <text x="756" y="282">Someone at SLAPorSLOP looks at it</text>
       <text x="756" y="300">before it's in the store.</text>
-      <text x="992" y="282">Anything that doesn't match</text>
-      <text x="992" y="300">what Slop signed won't run.</text>
+      <text x="992" y="282">Anything not matching what</text>
+      <text x="992" y="300">SLAPorSLOP signed won't run.</text>
     </g>
 
-    <text x="48" y="356" font-size="15" fill="#c4ced9">If something bad slips through anyway, Slop can switch it off on every computer.</text>
+    <text x="48" y="356" font-size="15" fill="#c4ced9">If something bad slips through anyway, SLAPorSLOP can switch it off on every computer.</text>
   </g>
 </svg>

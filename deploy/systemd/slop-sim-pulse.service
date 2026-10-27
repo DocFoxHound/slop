@@ -1,5 +1,5 @@
 [Unit]
-Description=Slop simulation sandbox: keeps simulated "playing now" alive
+Description=SLAPorSLOP simulation sandbox: keeps simulated "playing now" alive
 After=slop-sim.service
 Wants=slop-sim.service
 

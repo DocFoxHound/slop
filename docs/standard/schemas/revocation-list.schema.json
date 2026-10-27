@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://slop.example/standard/v1/revocation-list.schema.json",
-  "title": "Slop revocation list",
+  "title": "SLAPorSLOP revocation list",
   "description": "The payload of a revocation list (purpose slop/revocation-list/v1): revocation-list.md.",
   "type": "object",
   "additionalProperties": false,

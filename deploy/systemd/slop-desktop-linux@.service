@@ -1,5 +1,5 @@
 [Unit]
-Description=Build and publish Slop's Linux desktop packages for commit %i
+Description=Build and publish SLAPorSLOP's Linux desktop packages for commit %i
 After=slop-api.service
 
 [Service]

@@ -1,5 +1,5 @@
-// Slop for C++ games (Unreal, or your own engine): saves, mods and asking the Slop app for a
-// server's mods. C++17, standard library only. Outside the Slop app it falls back: your own
+// SLAPorSLOP for C++ games (Unreal, or your own engine): saves, mods and asking the SLAPorSLOP app for a
+// server's mods. C++17, standard library only. Outside the SLAPorSLOP app it falls back: your own
 // save folder, no mods, and request_mods answers "no_link".
 #pragma once
 #include <algorithm>
@@ -23,7 +23,7 @@ inline std::string env(const char* name) {
     return v ? v : "";
 }
 
-// Where saves, settings and logs go: Slop's save folder, else `fallback`.
+// Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`.
 inline fs::path save_dir(const fs::path& fallback) {
     std::string dir = env("SLOP_SAVE_DIR");
     fs::path path = dir.empty() ? fallback : fs::u8path(dir);
@@ -57,7 +57,7 @@ inline std::optional<std::string> load(const fs::path& fallback, const std::stri
 }
 
 // Every mod folder: your game's own mods folder (if you named one on your store page), then
-// SLOP_MODS. Each holds one mod from Slop.
+// SLOP_MODS. Each holds one mod from SLAPorSLOP.
 inline std::vector<fs::path> mod_dirs(const fs::path& own_folder = {}) {
     std::vector<fs::path> found;
     std::error_code ec;
@@ -104,7 +104,7 @@ inline std::string status(const std::string& answer) {
     return start == std::string::npos || end == std::string::npos ? "" : answer.substr(start + 1, end - start - 1);
 }
 
-// Asks the Slop app for mods by address and version ("" for any). The player confirms. Returns
+// Asks the SLAPorSLOP app for mods by address and version ("" for any). The player confirms. Returns
 // the answer's JSON (see status()). Blocks: call it on a worker thread.
 inline std::string request_mods(const std::vector<std::pair<std::string, std::string>>& mods,
                                 const std::string& for_whom, std::chrono::seconds give_up_after = std::chrono::seconds(600)) {

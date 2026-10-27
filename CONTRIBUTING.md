@@ -1,4 +1,4 @@
-# Contributing to Slop
+# Contributing to SLAPorSLOP
 
 Thanks for helping. Before you open a pull request:
 

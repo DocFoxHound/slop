@@ -1,5 +1,5 @@
 [Unit]
-Description=Back up Slop's database, settings and keys
+Description=Back up SLAPorSLOP's database, settings and keys
 After=slop-pg.service
 
 [Service]

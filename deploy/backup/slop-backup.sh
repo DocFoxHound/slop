@@ -1,5 +1,5 @@
 #!/bin/sh
-# Backs up Slop's production database and the server's settings and keys (deploy/README.md,
+# Backs up SLAPorSLOP's production database and the server's settings and keys (deploy/README.md,
 # "Backups"). Run daily by slop-backup.timer.
 #
 # - The database: pg_dump's compressed custom format, checked by listing it before it counts.

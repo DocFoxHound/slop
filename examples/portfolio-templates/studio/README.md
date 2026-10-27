@@ -7,7 +7,7 @@ tagged with the skill it shows.
 
 1. **Make a new public repository** on GitHub, e.g. `portfolio`
    ([github.com/new](https://github.com/new)). It has to belong to the GitHub account linked to
-   your Slop account (your page's editor on Slop shows which, or a **Link GitHub** button).
+   your SLAPorSLOP account (your page's editor on SLAPorSLOP shows which, or a **Link GitHub** button).
 2. **Copy this folder's `.slop/` folder** into it, keeping the name (it starts with a dot).
    - With git: copy the folder into your clone, then commit and push.
    - In the browser: on your new repository choose **Add file → Create new file**, type
@@ -16,10 +16,10 @@ tagged with the skill it shows.
      You don't need the placeholder pictures at all: just make the paths in `portfolio.json` match
      your files.
 3. **Replace everything below**, then commit and push.
-4. **On Slop**, open your page's editor (People → your page → Edit, or `/people/me`), go to
+4. **On SLAPorSLOP**, open your page's editor (People → your page → Edit, or `/people/me`), go to
    **Portfolio**, paste your repository's address and choose **Check my portfolio now**. If
-   anything needs fixing, Slop lists each problem with the work and field it's in. When it all
-   passes, a person at Slop reviews it, and your page goes public once it's approved.
+   anything needs fixing, SLAPorSLOP lists each problem with the work and field it's in. When it all
+   passes, a person at SLAPorSLOP reviews it, and your page goes public once it's approved.
 
 Paths in `portfolio.json` are relative to `.slop/`: `"works/painting.png"` is
 `.slop/works/painting.png`. Use letters, numbers, `.`, `_`, `-` and `/` only (no spaces).

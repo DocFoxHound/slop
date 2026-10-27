@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Cross-compiles Slop's Windows installer for a commit on this (Linux) server and publishes it for
+# Cross-compiles SLAPorSLOP's Windows installer for a commit on this (Linux) server and publishes it for
 # the desktop app's auto-updater (deploy/README.md, "The desktop app"). Run by
 # slop-desktop-windows@.service after a dev deploy that changed the app; production's Windows app
 # is built on GitHub's Windows runners instead (.github/workflows/pipeline.yml).

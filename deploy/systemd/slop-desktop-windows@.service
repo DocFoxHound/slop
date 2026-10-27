@@ -1,5 +1,5 @@
 [Unit]
-Description=Build and publish Slop's Windows desktop app (cross-compiled) for commit %i
+Description=Build and publish SLAPorSLOP's Windows desktop app (cross-compiled) for commit %i
 After=slop-api.service
 
 [Service]

@@ -2,7 +2,7 @@
 # "Database roles"). Its env file holds only the owner's URL, so the API never sees it.
 # Skipped (and the API starts as before) until ~/.config/slop/slop-migrate.env exists.
 [Unit]
-Description=Slop database migrations
+Description=SLAPorSLOP database migrations
 After=slop-pg.service
 ConditionPathExists=%h/.config/slop/slop-migrate.env
 
