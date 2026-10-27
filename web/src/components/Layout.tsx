@@ -139,7 +139,7 @@ export function Layout() {
         <Link className="logo" to="/" aria-label="SLAPorSLOP home">
           <img src="/logo.svg" alt="" width={28} height={28} />
           <span>
-            SLAPorSLOP
+            SLAP<span className="wm-or">or</span><b>SLOP</b>
           </span>
         </Link>
         {/* The website offers the desktop app; the app itself doesn't need to. */}

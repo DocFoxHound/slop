@@ -49,7 +49,7 @@ function LoginWindow() {
       <div className="login-brand" data-tauri-drag-region>
         <img src="/logo.svg" alt="" width={64} height={64} />
         <div className="login-logo" aria-label="SLAPorSLOP">
-          SLAPorSLOP
+          SLAP<span className="wm-or">or</span><b>SLOP</b>
         </div>
         <p className="muted">Apps and games made with AI. Open source, every one.</p>
       </div>
