@@ -256,6 +256,15 @@ fn family(id: &str) -> String {
     id.to_ascii_lowercase()
 }
 
+/// The licences in an SPDX expression that aren't on SLAPorSLOP's list of OSI-approved ones
+/// (empty when every one is).
+pub fn not_osi_approved(expr: &str) -> Vec<String> {
+    expression_ids(expr)
+        .into_iter()
+        .filter(|id| !OSI.iter().any(|o| family(o) == family(id)))
+        .collect()
+}
+
 /// The licence IDs in an SPDX expression (`MIT OR Apache-2.0`, `GPL-3.0-only WITH x`).
 pub fn expression_ids(expr: &str) -> Vec<String> {
     let mut out = Vec::new();
@@ -1392,10 +1401,7 @@ fn licence_problems(
         ));
     }
     if public {
-        let not_osi: Vec<String> = expression_ids(&l.declared)
-            .into_iter()
-            .filter(|id| !OSI.iter().any(|o| family(o) == family(id)))
-            .collect();
+        let not_osi = not_osi_approved(&l.declared);
         if !not_osi.is_empty() {
             problems.push((
                 "not_osi".into(),

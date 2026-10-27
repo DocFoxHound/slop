@@ -1,5 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Rate limits per client IP (SECURITY §8.1): strictest for sign-in, then writes, then reads.
+//! Anonymous repository and portfolio checks (checks.rs) have their own, per hour: each one makes
+//! SLAPorSLOP download from GitHub.
 //!
 //! Token buckets kept in memory. Each API instance limits on its own, so with N instances behind
 //! the load balancer a client gets up to N times the limit; that's acceptable at launch scale
@@ -32,14 +34,24 @@ pub enum Class {
     Write,
     /// Reads.
     Read,
+    /// Anonymous repository and portfolio checks (checks.rs).
+    Check,
 }
 
-/// Requests per minute for each class; each also allows a burst of that many at once.
+/// Requests per minute (per hour for checks) for each class; each also allows a burst of that
+/// many at once.
 #[derive(Clone, Copy, Debug)]
 pub struct Limits {
     pub auth_per_minute: u32,
     pub write_per_minute: u32,
     pub read_per_minute: u32,
+    /// Anonymous repository and portfolio checks from one address, per hour.
+    pub check_per_hour: u32,
+    /// GitHub API requests the anonymous checks may make per hour, from every address together
+    /// (checks.rs). They ask as nobody, so they share the server's anonymous GitHub allowance
+    /// (60 an hour on github.com) with licence lookups for people who don't own the repository.
+    /// 0 turns the repository and portfolio checks off.
+    pub check_github_per_hour: u32,
 }
 
 impl Default for Limits {
@@ -48,16 +60,20 @@ impl Default for Limits {
             auth_per_minute: 20,
             write_per_minute: 60,
             read_per_minute: 600,
+            check_per_hour: 20,
+            check_github_per_hour: 40,
         }
     }
 }
 
 impl Limits {
-    fn per_minute(&self, class: Class) -> u32 {
+    /// (how many, per how many seconds).
+    fn rate(&self, class: Class) -> (u32, f64) {
         match class {
-            Class::Auth => self.auth_per_minute,
-            Class::Write => self.write_per_minute,
-            Class::Read => self.read_per_minute,
+            Class::Auth => (self.auth_per_minute, 60.0),
+            Class::Write => (self.write_per_minute, 60.0),
+            Class::Read => (self.read_per_minute, 60.0),
+            Class::Check => (self.check_per_hour, 3600.0),
         }
     }
 }
@@ -89,8 +105,9 @@ impl RateLimiter {
     }
 
     fn check_at(&self, class: Class, ip: IpAddr, now: Instant) -> Result<(), Duration> {
-        let capacity = f64::from(self.limits.per_minute(class).max(1));
-        let per_second = capacity / 60.0;
+        let (n, period) = self.limits.rate(class);
+        let capacity = f64::from(n.max(1));
+        let per_second = capacity / period;
         let mut buckets = self.buckets.lock().expect("rate limiter lock");
         if buckets.len() >= MAX_BUCKETS && !buckets.contains_key(&(class, ip)) {
             prune(&mut buckets, &self.limits, now);
@@ -121,9 +138,10 @@ impl RateLimiter {
 
 fn prune(buckets: &mut HashMap<(Class, IpAddr), Bucket>, limits: &Limits, now: Instant) {
     buckets.retain(|(class, _), b| {
-        let capacity = f64::from(limits.per_minute(*class).max(1));
+        let (n, period) = limits.rate(*class);
+        let capacity = f64::from(n.max(1));
         let refilled =
-            b.tokens + now.saturating_duration_since(b.updated).as_secs_f64() * capacity / 60.0;
+            b.tokens + now.saturating_duration_since(b.updated).as_secs_f64() * capacity / period;
         refilled < capacity
     });
 }
@@ -135,6 +153,10 @@ fn classify(method: &Method, path: &str) -> Option<Class> {
     }
     if path.starts_with("/v1/auth/") && path != "/v1/auth/providers" {
         return Some(Class::Auth);
+    }
+    // The store-address check only asks the database: an ordinary read.
+    if path == "/v1/check/repository" || path == "/v1/check/portfolio" {
+        return Some(Class::Check);
     }
     if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
         Some(Class::Read)
@@ -168,6 +190,7 @@ pub async fn middleware(State(state): State<AppState>, req: Request, next: Next)
     let ip = client_ip(&state, &req).unwrap_or(IpAddr::from([0, 0, 0, 0]));
     match state.rate_limiter.check(class, ip) {
         Ok(()) => next.run(req).await,
+        Err(wait) if class == Class::Check => crate::checks::too_many(wait.as_secs()),
         Err(wait) => {
             let body = json!({ "error": { "code": "rate_limited", "message": "too many requests; try again shortly" } });
             let mut res = (StatusCode::TOO_MANY_REQUESTS, Json(body)).into_response();
@@ -191,8 +214,7 @@ mod tests {
     fn buckets_drain_and_refill() {
         let rl = RateLimiter::new(Limits {
             auth_per_minute: 3,
-            write_per_minute: 60,
-            read_per_minute: 600,
+            ..Limits::default()
         });
         let t0 = Instant::now();
         for _ in 0..3 {
@@ -212,6 +234,22 @@ mod tests {
             rl.check_at(Class::Auth, ip(1), t0 + Duration::from_secs(21))
                 .is_err()
         );
+    }
+
+    #[test]
+    fn checks_are_counted_per_hour() {
+        let rl = RateLimiter::new(Limits {
+            check_per_hour: 2,
+            ..Limits::default()
+        });
+        let t0 = Instant::now();
+        assert!(rl.check_at(Class::Check, ip(1), t0).is_ok());
+        assert!(rl.check_at(Class::Check, ip(1), t0).is_ok());
+        assert_eq!(
+            rl.check_at(Class::Check, ip(1), t0).unwrap_err(),
+            Duration::from_secs(1800)
+        );
+        assert!(rl.check_at(Class::Read, ip(1), t0).is_ok());
     }
 
     #[test]
@@ -244,5 +282,13 @@ mod tests {
         assert_eq!(classify(&Method::PATCH, "/v1/apps/x"), Some(Class::Write));
         assert_eq!(classify(&Method::GET, "/v1/apps"), Some(Class::Read));
         assert_eq!(classify(&Method::GET, "/healthz"), None);
+        assert_eq!(
+            classify(&Method::GET, "/v1/check/repository"),
+            Some(Class::Check)
+        );
+        assert_eq!(
+            classify(&Method::GET, "/v1/check/store-address"),
+            Some(Class::Read)
+        );
     }
 }

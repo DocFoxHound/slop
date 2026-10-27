@@ -29,6 +29,7 @@ use uuid::Uuid;
 mod accounts_tests;
 mod admin_tests;
 mod agents_tests;
+mod checks_tests;
 mod icons_tests;
 mod messages_tests;
 mod money_tests;
