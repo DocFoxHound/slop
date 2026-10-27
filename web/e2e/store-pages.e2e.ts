@@ -55,7 +55,8 @@ test("a document's earlier versions can be read, and an announced change is show
   });
   await signIn(page, "player");
   await page.goto("/legal/terms");
-  await expect(page.getByText(/^Version [\w-]+ · in effect since .+ · First version\.$/)).toBeVisible();
+  // The version in effect now, whatever it is (the repository's legal files are versioned by date).
+  await expect(page.getByText(new RegExp(`^Version ${current.version} · in effect since `))).toBeVisible();
   const list = page.locator(".legal-versions");
   await expect(list.getByRole("button", { name: current.version })).toHaveAttribute("aria-current", "page");
   await list.getByRole("button", { name: next.version }).click();

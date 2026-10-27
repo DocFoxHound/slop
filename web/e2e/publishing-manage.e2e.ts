@@ -104,7 +104,7 @@ test("moving the repository: players have it, so a person checks the move first"
   await section.getByRole("textbox", { name: "Move to" }).fill("https://github.com/e2e/lantern-keep");
   await request.click();
   await expect(section.locator(".form-error")).toHaveText(
-    "that repository is already on Slop as Lantern Keep. To build on it, fork it and register a branch",
+    "that repository is already on SLAPorSLOP as Lantern Keep. To build on it, fork it and register a branch",
   );
 
   const moved = fakeRepo("mia-studio", slug);

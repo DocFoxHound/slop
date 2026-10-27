@@ -224,7 +224,7 @@ test("an appeal reversed while the app is frozen: it stays out, and staff and ma
   await expect(appeal).toHaveCount(0);
   await expect(admin.getByRole("status").filter({ hasText: "Reversed, but" })).toHaveText(
     `Reversed, but App: ${app.title} can't go back in the store yet. The maker was told: It stays out of the store ` +
-      "while it's frozen (Checking its new release.). It goes back in once Slop can read its repository again.",
+      "while it's frozen (Checking its new release.). It goes back in once SLAPorSLOP can read its repository again.",
   );
 
   await maker.reload();

@@ -129,7 +129,7 @@ test("signing keys: add one (it works 72 hours later), refuse a bad one, remove 
 test("the publishing guide: an AI prompt to copy, and a message when it can't load", async ({ page, context }) => {
   await context.grantPermissions(["clipboard-read", "clipboard-write"]);
   await page.goto("/publish/guide");
-  await expect(page.getByRole("heading", { name: "Publishing on Slop", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Publishing on SLAPorSLOP", level: 1 })).toBeVisible();
   const notice = page.locator(".ai-notice");
   await notice.getByRole("button", { name: "Copy" }).click();
   await expect(notice.getByRole("button", { name: "Copied" })).toBeVisible();

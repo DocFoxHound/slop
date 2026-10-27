@@ -110,7 +110,7 @@ test("notifications: the bell counts them, opening one goes there, and Mark all 
   const shared = page.locator(".notifications li").filter({ hasText: "Vera Okafor shared Note Nook with you" });
   await expect(shared.nth(1)).toBeVisible();
   await expect(shared.first()).toHaveClass(/unread/);
-  await expect(shared.first().getByText("It's Private Slop: only the people it's shared with can see it.")).toBeVisible();
+  await expect(shared.first().getByText("It's private: only the people it's shared with can see it.")).toBeVisible();
 
   // Opening one marks it read and goes to what it's about.
   await shared.first().getByRole("button", { name: /Vera Okafor shared Note Nook with you/ }).click();

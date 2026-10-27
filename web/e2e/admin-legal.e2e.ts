@@ -143,7 +143,7 @@ test("a terrorist content removal order: down at once, timed, and logged", async
   // Something that isn't there.
   await form.getByRole("textbox", { name: "Which" }).fill(`no-such-team-${t}`);
   await form.getByRole("button", { name: "Take it down now" }).click();
-  await expect(form.getByRole("alert")).toHaveText("nothing on Slop by that name");
+  await expect(form.getByRole("alert")).toHaveText("nothing on SLAPorSLOP by that name");
   await form.getByRole("textbox", { name: "Which" }).fill(team);
   await form.getByRole("button", { name: "Take it down now" }).click();
   const done = form.getByRole("status");

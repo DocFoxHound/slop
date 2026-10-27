@@ -315,7 +315,7 @@ test.describe("legal requests and the transparency report", () => {
     await order.getByRole("combobox", { name: "What" }).selectOption("team");
     await order.getByRole("textbox", { name: "Which" }).fill("no-such-team-anywhere");
     await order.getByRole("button", { name: "Take it down now" }).click();
-    await expect(order.getByRole("alert")).toHaveText("nothing on Slop by that name");
+    await expect(order.getByRole("alert")).toHaveText("nothing on SLAPorSLOP by that name");
     await order.getByRole("textbox", { name: "Which" }).fill(slug);
     await order.getByRole("button", { name: "Take it down now" }).click();
     await expect(order.getByRole("status")).toContainText(/Team: Removal Test Team is down \(LR-[0-9A-F]+\), \d+ minutes after the order arrived\./);

@@ -314,7 +314,7 @@ test("the portfolio guide is served for people and AI assistants", async ({ requ
   const res = await request.get("/portfolio.md");
   expect(res.ok()).toBe(true);
   const text = await res.text();
-  expect(text).toContain("# Your Slop portfolio");
+  expect(text).toContain("# Your SLAPorSLOP portfolio");
   expect(text).toContain(".slop/portfolio.json");
   expect(text).toContain("## Your page's design");
   expect(text).toContain("<slop-works></slop-works>");

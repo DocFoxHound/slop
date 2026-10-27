@@ -66,12 +66,12 @@ SLAPorSLOP is a Steam-style store for **apps and games made with AI**, from smal
    - **For you:** upcoming apps that match tags in your library (weight 1) and your Interested list (weight 2), boosted by log(total interest). Each card says why it's shown ("Because you like Cozy & Roguelike"). Dead projects are never recommended.
    - **Most anticipated:** ranked by Interested count.
 4. Browse by category
-5. Slaps hardest right now
+5. Most Slaps right now
 6. Community branches worth installing
 7. New & updated
 8. "Fresh slop": the most 👎 Slop-voted apps, for fun
 
-**Built 2026-10-20:** the front page in this order (For you sits under the carousel for signed-in players). Featured is picked by staff in the admin Front page tab (`featured.rs`, up to 8, audit-logged) and never moves by itself. **Built 2026-10-22 (`shelves.rs`):** staff can add shelves of their own (a title, a line, up to 24 apps in order; shown after For you, each with a page at `/shelf/{address}`, or kept off the front page) and hide any automatic shelf. Popular this month = most library adds since the 1st, then most players. Slaps hardest right now = weighted rating from votes cast or changed in the last 30 days (5+ votes). Fresh slop = most weighted 👎 in the last 30 days. Game tiles show players now from Slop Pulse.
+**Built 2026-10-20:** the front page in this order (For you sits under the carousel for signed-in players). Featured is picked by staff in the admin Front page tab (`featured.rs`, up to 8, audit-logged) and never moves by itself. **Built 2026-10-22 (`shelves.rs`):** staff can add shelves of their own (a title, a line, up to 24 apps in order; shown after For you, each with a page at `/shelf/{address}`, or kept off the front page) and hide any automatic shelf. Popular this month = most library adds since the 1st, then most players. Most Slaps right now = weighted rating from votes cast or changed in the last 30 days (5+ votes). Fresh slop = most weighted 👎 in the last 30 days. Game tiles show players now from Slop Pulse.
 
 **Built 2026-10-24 (Steam-style shell, `web/src/components/StoreNav.tsx`):** the front page is all apps, full width; there's no category sidebar on it. A **store bar** along the top of store pages (the front page, list pages, app pages) has **Browse** (all categories and tags), **Recommended** (`/recommended`: For you for signed-in players; popular picks and a sign-in nudge for visitors), **Games**, **Kids & Family** (since 2026-10-26), **Utilities** and **More** (the other categories, Coming soon & beta, Everything, Made with people, Community builds, Teams, and the maker links), plus the store search, which left the top bar. SLAPorSLOP's own links (terms, Content Policy, Check a file, source code, contact) are at the bottom of store pages. List pages keep the sidebar for browsing. People has its own search.
 
