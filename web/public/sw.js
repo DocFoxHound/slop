@@ -1,6 +1,6 @@
-// Slop's service worker: phone and browser notifications (crates/slop-api/src/push.rs).
+// SLAPorSLOP's service worker: phone and browser notifications (crates/slop-api/src/push.rs).
 //
-// A push from Slop carries nothing. This wakes, fetches the newest notification with the user's
+// A push from SLAPorSLOP carries nothing. This wakes, fetches the newest notification with the user's
 // own sign-in, and shows it, so the push service never learns what it was about.
 
 self.addEventListener("install", () => self.skipWaiting());
@@ -9,8 +9,8 @@ self.addEventListener("activate", (event) => event.waitUntil(self.clients.claim(
 self.addEventListener("push", (event) => {
   event.waitUntil(
     (async () => {
-      let title = "Slop";
-      let options = { body: "You have something new on Slop.", icon: "/logo.svg", badge: "/logo.svg", data: { link: "/notifications" } };
+      let title = "SLAPorSLOP";
+      let options = { body: "You have something new on SLAPorSLOP.", icon: "/logo.svg", badge: "/logo.svg", data: { link: "/notifications" } };
       try {
         const res = await fetch("/v1/me/notifications", { credentials: "include", headers: { Accept: "application/json" } });
         if (res.ok) {

@@ -28,15 +28,15 @@ describe("RatingSummary", () => {
   it("waits for enough votes before showing a percentage", () => {
     render(<RatingSummary ratings={base} />, { wrapper: MemoryRouter });
     expect(screen.getByText("4 votes")).toBeTruthy();
-    expect(screen.queryByText(/% Not Slop/)).toBeNull();
+    expect(screen.queryByText(/% Slaps/)).toBeNull();
   });
 
   it("shows weighted first, unweighted beside it, with the label", () => {
-    render(<RatingSummary ratings={{ ...base, not_slop: 8, slop: 2, percent: 80, percent_weighted: 91, label: "Very Not Slop" }} />, {
+    render(<RatingSummary ratings={{ ...base, not_slop: 8, slop: 2, percent: 80, percent_weighted: 91, label: "Really Slaps" }} />, {
       wrapper: MemoryRouter,
     });
-    expect(screen.getByText("91% Not Slop")).toBeTruthy();
-    expect(screen.getByText("Very Not Slop")).toBeTruthy();
+    expect(screen.getByText("91% Slaps")).toBeTruthy();
+    expect(screen.getByText("Really Slaps")).toBeTruthy();
     expect(screen.getByText(/80% unweighted · 10 votes/)).toBeTruthy();
   });
 });
@@ -77,7 +77,7 @@ describe("rateStep", () => {
     expect(rateStep(base, true, true).kind).toBe("maker");
     expect(rateStep({ ...base, mine: { ...mine, can_vote: false, played: true, maker: true } }, false, true).kind).toBe("maker");
     expect(rateStep(base, false, false).kind).toBe("sign_in");
-    expect(rateStep({ ...base, mine: { ...mine, reason: "Launch it from the Slop app first: only players can vote." } }, false, true).kind).toBe(
+    expect(rateStep({ ...base, mine: { ...mine, reason: "Launch it from the SLAPorSLOP app first: only players can vote." } }, false, true).kind).toBe(
       "play",
     );
     expect(rateStep({ ...base, mine: { ...mine, played: true, reason: "Something else." } }, false, true)).toEqual({
@@ -115,13 +115,13 @@ describe("RatingHeader", () => {
     expect(screen.getByText(/your rating is marked Rated in Beta/)).toBeTruthy();
   });
 
-  it("gives signed-out visitors a Sign in button, and the website's players the Slop app", async () => {
+  it("gives signed-out visitors a Sign in button, and the website's players the SLAPorSLOP app", async () => {
     await show({ ...base, stage: "beta" }, { signedIn: false });
     expect(screen.getByRole("link", { name: "Sign in to rate" }).getAttribute("href")).toBe(`/signin?return_to=${encodeURIComponent("/app/herds")}`);
     cleanup();
-    await show({ ...base, stage: "beta", mine: { vote: null, can_vote: false, reason: "Launch it from the Slop app first: only players can vote.", played: false, weight: 0.1 } });
-    expect(screen.getByText("Play it from the Slop app to rate it.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "⬇ Get the Slop app" }).getAttribute("href")).toBe("/download");
+    await show({ ...base, stage: "beta", mine: { vote: null, can_vote: false, reason: "Launch it from the SLAPorSLOP app first: only players can vote.", played: false, weight: 0.1 } });
+    expect(screen.getByText("Play it from the SLAPorSLOP app to rate it.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "⬇ Get the SLAPorSLOP app" }).getAttribute("href")).toBe("/download");
   });
 
   it("tells the maker, and offers Interested while it's Coming soon", async () => {
@@ -153,21 +153,21 @@ describe("RatePrompt (the library)", () => {
 
   it("asks a player who played it, then shows their rating in grey with Change", async () => {
     show({ ...base, mine: played });
-    expect(await screen.findByRole("heading", { name: "You've played Angry Herds: is it Slop or Not Slop?" })).toBeTruthy();
+    expect(await screen.findByRole("heading", { name: "You've played Angry Herds: does it slap, or is it slop?" })).toBeTruthy();
     cleanup();
     show({ ...base, mine: { ...played, vote: "not_slop" } });
-    expect((await screen.findByText("👍 Not Slop")).closest(".rate-prompt-done")?.textContent).toContain("Your rating: 👍 Not Slop");
+    expect((await screen.findByText("👍 Slaps")).closest(".rate-prompt-done")?.textContent).toContain("Your rating: 👍 Slaps");
     fireEvent.click(screen.getByRole("button", { name: "Change" }));
     expect(screen.getByRole("heading", { name: "Change your rating of Angry Herds" })).toBeTruthy();
   });
 
-  it("before they can, says why with the step: sign in, or play it from the Slop app", async () => {
+  it("before they can, says why with the step: sign in, or play it from the SLAPorSLOP app", async () => {
     show({ ...base }, { signedIn: false });
     expect((await screen.findByRole("link", { name: "Sign in to rate" })).className).toContain("slime");
     cleanup();
-    show({ ...base, mine: { vote: null, can_vote: false, reason: "Launch it from the Slop app first: only players can vote.", played: false, weight: 0.1 } });
-    expect(await screen.findByText("Play it from the Slop app to rate it.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "⬇ Get the Slop app" }).className).toContain("slime");
+    show({ ...base, mine: { vote: null, can_vote: false, reason: "Launch it from the SLAPorSLOP app first: only players can vote.", played: false, weight: 0.1 } });
+    expect(await screen.findByText("Play it from the SLAPorSLOP app to rate it.")).toBeTruthy();
+    expect(screen.getByRole("link", { name: "⬇ Get the SLAPorSLOP app" }).className).toContain("slime");
   });
 
   it("stays out of the way for the maker and before it's playable", async () => {
@@ -192,7 +192,7 @@ describe("LineChart", () => {
   it("describes itself and shows its numbers on request", () => {
     const { container } = render(
       <LineChart
-        title="% Not Slop by month"
+        title="% Slaps by month"
         summary="Rating by month"
         labels={["2026-08", "2026-09", "2026-10"]}
         max={100}
@@ -245,11 +245,11 @@ describe("SinceNewWork", () => {
   it("shows the rating from votes since that release", () => {
     render(
       <SinceNewWork
-        s={{ since: "2026-10-01T00:00:00Z", version: "2.0.0", credits: ["Vera", "Loopsmith"], not_slop: 9, slop: 1, percent_weighted: 90, label: "Very Not Slop" }}
+        s={{ since: "2026-10-01T00:00:00Z", version: "2.0.0", credits: ["Vera", "Loopsmith"], not_slop: 9, slop: 1, percent_weighted: 90, label: "Really Slaps" }}
         min={5}
       />,
     );
-    expect(screen.getByText("90% Not Slop")).toBeTruthy();
+    expect(screen.getByText("90% Slaps")).toBeTruthy();
     expect(screen.getByText(/by Vera, Loopsmith, from version 2.0.0/)).toBeTruthy();
     expect(screen.getByText(/10 votes cast or changed since/)).toBeTruthy();
   });

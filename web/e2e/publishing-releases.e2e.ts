@@ -115,14 +115,14 @@ test("a release with its rating, runtimes and notes goes through, after the agre
   const dialog = page.getByRole("dialog");
   await dialog.getByRole("checkbox", { name: /I've read and accept/ }).check();
   await dialog.getByRole("button", { name: "Accept and continue" }).click();
-  await expect(form.getByRole("status")).toHaveText(/Submitted\. Slop is checking the files/);
+  await expect(form.getByRole("status")).toHaveText(/Submitted\. SLAPorSLOP is checking the files/);
   // The form starts over.
   await expect(form.getByRole("textbox", { name: /^Version/ })).toHaveValue("");
 
   const release = page.locator("ul.release-list > li").filter({ hasText: "1.0.0" });
   await expect(release.getByText("IN REVIEW", { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(release).toContainText("16+ · Violence");
-  await expect(release.getByText("Waiting for a person at Slop to review it.")).toBeVisible();
+  await expect(release.getByText("Waiting for a person at SLAPorSLOP to review it.")).toBeVisible();
   await expect(release.locator(".release-notes strong")).toHaveText("Tides");
   await expect(release.locator(".release-notes li")).toHaveText(["Crabs", "Shells"]);
   await expect(release).toContainText("starts pong.exe");
@@ -141,7 +141,7 @@ test("a release with its rating, runtimes and notes goes through, after the agre
   expect(saved[0]).toMatchObject({ version: "1.0.0", runtimes: ["dotnet-desktop-8"], files: [{ args: ["--windowed", "--fast"] }] });
 });
 
-test("a file Slop can't download fails, with the reason", async ({ page }) => {
+test("a file SLAPorSLOP can't download fails, with the reason", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto(page_);
   const form = page.locator("form").filter({ has: page.getByRole("heading", { name: "New release" }) });
@@ -154,7 +154,7 @@ test("a file Slop can't download fails, with the reason", async ({ page }) => {
   const release = page.locator("ul.release-list > li").filter({ hasText: "1.0.1-missing" });
   await expect(release.getByText("FAILED", { exact: true })).toBeVisible({ timeout: 20_000 });
   await expect(release.locator(".notice")).toContainText("download failed: HTTP 404");
-  await expect(release.getByText("Slop couldn't check the files. See the reason below.")).toBeVisible();
+  await expect(release.getByText("SLAPorSLOP couldn't check the files. See the reason below.")).toBeVisible();
 });
 
 test("while files are being fetched, the page checks again every 10 seconds", async ({ page }) => {
@@ -176,7 +176,7 @@ test("while files are being fetched, the page checks again every 10 seconds", as
   await expect.poll(() => loads).toBeGreaterThan(before);
 });
 
-test("the history shows what Slop's checks found", async ({ page }) => {
+test("the history shows what SLAPorSLOP's checks found", async ({ page }) => {
   await signIn(page, "maker");
   // This server doesn't scan files or read source: a release as a scanning server reports it.
   await page.route(`**/v1/apps/${slug}/releases`, async (route) => {
@@ -224,7 +224,7 @@ test("the history shows what Slop's checks found", async ({ page }) => {
   await expect(release.getByText("NO KNOWN-VULNERABLE DEPENDENCIES")).toBeVisible();
   await expect(release.getByText("LICENCE FILE MATCHES")).toBeVisible();
   await expect(release.getByText("POSSIBLE PURCHASES OR LOOT BOXES (1)")).toBeVisible();
-  await expect(release.getByText("SAVES IN SLOP'S SAVE FOLDER")).toBeVisible();
+  await expect(release.getByText("SAVES IN SLAPorSLOP'S SAVE FOLDER")).toBeVisible();
   await release.getByText("NEW ADVISORIES SINCE THIS BUILD (1)").click();
   await expect(release.getByRole("listitem").filter({ hasText: "GHSA-tide-0001" })).toContainText(
     "tidal 0.3.1 (crates.io): GHSA-tide-0001 Tidal reads past the end of a buffer Fixed in 0.3.2.",
@@ -270,16 +270,16 @@ test("update settings: pick up GitHub releases, approve updates automatically", 
   await answer(
     page,
     `/v1/apps/${slug}/update-settings`,
-    apiError("unavailable", "Slop is busy: try again in a minute"),
+    apiError("unavailable", "SLAPorSLOP is busy: try again in a minute"),
     503,
     "PUT",
   );
   await auto.click();
-  await expect(panel.locator(".form-error")).toHaveText("Slop is busy: try again in a minute");
+  await expect(panel.locator(".form-error")).toHaveText("SLAPorSLOP is busy: try again in a minute");
   await expect(auto).toBeChecked();
   await page.unroute(`**/v1/apps/${slug}/update-settings`);
 
-  // A watched GitHub repository: when Slop last looked, and the faster GitHub App.
+  // A watched GitHub repository: when SLAPorSLOP last looked, and the faster GitHub App.
   const settings = await call<Record<string, unknown>>("maker", "GET", `/v1/apps/${slug}/update-settings`);
   await answer(
     page,
@@ -319,7 +319,7 @@ test("fixes from the checks, ready to copy for an AI agent", async ({ page, cont
   await expect(panel.locator("li")).toContainText("Release 1.0.1-missing was failed: windows build: download failed: HTTP 404");
   await panel.getByRole("button", { name: "Copy for your AI" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-    "Slop's checks of my app found this. Release 1.0.1-missing was failed: windows build: download failed: HTTP 404\n" +
+    "SLAPorSLOP's checks of my app found this. Release 1.0.1-missing was failed: windows build: download failed: HTTP 404\n" +
       "Fix it in the repository: Read the reason, fix what it names in the repository (or the release's files), then submit a new release with a new version.",
   );
   await panel.getByRole("button", { name: "Copy all for your AI" }).click();
@@ -348,8 +348,8 @@ test("fixes from the checks, ready to copy for an AI agent", async ({ page, cont
   await expect(mocked.locator("li").nth(1)).toContainText("SHOULD FIX");
   await mocked.locator("li").nth(1).getByRole("button", { name: "Copy for your AI" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-    "Slop's checks of my app found this. Saves go to Documents.\nFix it in the repository: Write saves to SLOP_SAVE_DIR.\n" +
-      '(Slop\'s publishing guide, section "Saves and sandbox mode", has the details.)',
+    "SLAPorSLOP's checks of my app found this. Saves go to Documents.\nFix it in the repository: Write saves to SLOP_SAVE_DIR.\n" +
+      '(SLAPorSLOP\'s publishing guide, section "Saves and sandbox mode", has the details.)',
   );
 });
 
@@ -384,9 +384,9 @@ test("Slop Build: hidden where it isn't set up, a ready-made file where it is", 
 
   // A project it can't tell: a note instead of the guess.
   await page.unroute(`**/v1/apps/${slug}/slop-build`);
-  await answer(page, `/v1/apps/${slug}/slop-build`, { ...setup, supported: false, project_type: "custom", note: "Slop couldn't tell how to build this; fill in the build command." });
+  await answer(page, `/v1/apps/${slug}/slop-build`, { ...setup, supported: false, project_type: "custom", note: "SLAPorSLOP couldn't tell how to build this; fill in the build command." });
   await page.reload();
-  await expect(section.getByText("Slop couldn't tell how to build this; fill in the build command.")).toBeVisible();
+  await expect(section.getByText("SLAPorSLOP couldn't tell how to build this; fill in the build command.")).toBeVisible();
   await expect(section.getByText(/Detected a/)).toHaveCount(0);
 });
 
@@ -502,7 +502,7 @@ test("a GitHub app picks a release from GitHub instead of typing it", async ({ p
   await expect.poll(() => listed).toBeGreaterThan(before);
   await expect(choose).toHaveValue("v1.1.0-rc1");
   await expect(choose.locator("option", { hasText: "v1.0.0 — First flight (already sent)" })).toHaveAttribute("disabled", "");
-  await expect(picker.getByRole("status")).toHaveText(/Version 1\.0\.0 sent\. Slop is checking the files/);
+  await expect(picker.getByRole("status")).toHaveText(/Version 1\.0\.0 sent\. SLAPorSLOP is checking the files/);
 
   // GitHub apps can still be entered by hand: files must be on the repository's releases page.
   await page.getByText("Enter a release by hand").click();
@@ -524,9 +524,9 @@ test("staff approve the release, then withdraw it; Check a file says which", asy
   await page.goto(page_);
   const row = page.locator("ul.release-list > li").filter({ hasText: "16+ · Violence" });
   await expect(row.getByText("APPROVED", { exact: true })).toBeVisible();
-  await expect(row.getByText("Signed by Slop. Players can install it, and get it as an update.")).toBeVisible();
+  await expect(row.getByText("Signed by SLAPorSLOP. Players can install it, and get it as an update.")).toBeVisible();
 
-  // Anyone can check a copy they got elsewhere: the fake GitHub's build is the one Slop approved.
+  // Anyone can check a copy they got elsewhere: the fake GitHub's build is the one SLAPorSLOP approved.
   const zip = Buffer.from(await (await fetch(fakeZip(repo, "1.0.0"))).arrayBuffer());
   const sha = createHash("sha256").update(zip).digest("hex");
   expect(release.files[0].sha256).toBe(sha);
@@ -535,8 +535,8 @@ test("staff approve the release, then withdraw it; Check a file says which", asy
   await visitor.getByLabel("Choose the file").setInputFiles({ name: "tide.zip", mimeType: "application/zip", buffer: zip });
   await expect(visitor.getByLabel("Or paste its SHA-256")).toHaveValue(sha);
   const answerList = visitor.getByRole("status");
-  await expect(answerList.getByRole("listitem").filter({ hasText: /^Approved on Slop: Lantern Keep 1\.0\.0/ })).toContainText(
-    /Approved on Slop: Lantern Keep 1\.0\.0 by Mia Maker, for windows\. Approved .*; scanned, nothing found\./,
+  await expect(answerList.getByRole("listitem").filter({ hasText: /^Approved on SLAPorSLOP: Lantern Keep 1\.0\.0/ })).toContainText(
+    /Approved on SLAPorSLOP: Lantern Keep 1\.0\.0 by Mia Maker, for windows\. Approved .*; scanned, nothing found\./,
   );
   await expect(answerList.getByRole("link", { name: "Lantern Keep", exact: true })).toHaveAttribute("href", "/app/lantern-keep");
   // A draft isn't in the store, so it isn't named.
@@ -546,15 +546,15 @@ test("staff approve the release, then withdraw it; Check a file says which", asy
   await call("admin", "POST", `/v1/admin/releases/${release.id}/revoke`, { reason: "Ships a debug backdoor." });
   await page.reload();
   await expect(row.getByText("WITHDRAWN", { exact: true })).toBeVisible();
-  await expect(row.getByText("Slop withdrew this release; it no longer launches.")).toBeVisible();
+  await expect(row.getByText("SLAPorSLOP withdrew this release; it no longer launches.")).toBeVisible();
   await visitor.getByLabel("Or paste its SHA-256").fill(sha.toUpperCase());
   await visitor.getByRole("button", { name: "Check" }).click();
-  await expect(answerList.getByRole("listitem").filter({ hasText: title })).toContainText(/Withdrawn by Slop: .*Withdrawn .*: don't run it\./);
+  await expect(answerList.getByRole("listitem").filter({ hasText: title })).toContainText(/Withdrawn by SLAPorSLOP: .*Withdrawn .*: don't run it\./);
 
-  // A hash Slop never saw, pasted.
+  // A hash SLAPorSLOP never saw, pasted.
   await visitor.getByLabel("Or paste its SHA-256").fill("ab".repeat(32));
   await visitor.getByRole("button", { name: "Check" }).click();
-  await expect(visitor.getByText("Slop doesn't know this file.")).toBeVisible();
+  await expect(visitor.getByText("SLAPorSLOP doesn't know this file.")).toBeVisible();
   // Not a SHA-256: nothing to check.
   await visitor.getByLabel("Or paste its SHA-256").fill("not a hash");
   await expect(visitor.getByRole("button", { name: "Check" })).toBeDisabled();

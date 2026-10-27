@@ -53,7 +53,7 @@ export function Guide() {
           ref={body}
           className="prose doc"
           onClick={onClick}
-          // Slop's own document, rendered with raw HTML off (markdown.ts).
+          // SLAPorSLOP's own document, rendered with raw HTML off (markdown.ts).
           dangerouslySetInnerHTML={{ __html: renderDocument(doc.data) }}
         />
       )}
@@ -63,7 +63,7 @@ export function Guide() {
 
 /** Points makers at the easy route: hand this page to their AI assistant. */
 function AiNotice() {
-  const prompt = `Read ${window.location.origin}/publishing.md. Tell me what's required and what's optional for publishing on Slop, then set up my project so it's ready to deploy there.`;
+  const prompt = `Read ${window.location.origin}/publishing.md. Tell me what's required and what's optional for publishing on SLAPorSLOP, then set up my project so it's ready to deploy there.`;
   const [copied, setCopied] = useState(false);
   const copy = () => {
     void navigator.clipboard?.writeText(prompt).then(() => {
@@ -76,7 +76,7 @@ function AiNotice() {
       <b>Using an AI coding assistant?</b>
       <p className="small">
         Tell it to read this page: it can work out what's required and what's optional, and set your project up for
-        publishing on Slop. Paste this in:
+        publishing on SLAPorSLOP. Paste this in:
       </p>
       <div className="ai-prompt">
         <code>{prompt}</code>

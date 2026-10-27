@@ -3,7 +3,7 @@
 // Skipped at launch when a remembered sign-in still works (crates/slop-desktop, `startup`).
 //
 // Signing in happens in the system browser, never in this window (docs/SECURITY.md §4.1): the
-// user approves this device on the Slop website, and the app picks up the session by itself.
+// user approves this device on the SLAPorSLOP website, and the app picks up the session by itself.
 
 import { StrictMode, useState } from "react";
 import { createRoot } from "react-dom/client";
@@ -48,8 +48,8 @@ function LoginWindow() {
       </div>
       <div className="login-brand" data-tauri-drag-region>
         <img src="/logo.svg" alt="" width={64} height={64} />
-        <div className="login-logo" aria-label="Slop">
-          SL<b>O</b>P
+        <div className="login-logo" aria-label="SLAPorSLOP">
+          SLAPorSLOP
         </div>
         <p className="muted">Apps and games made with AI. Open source, every one.</p>
       </div>
@@ -61,7 +61,7 @@ function LoginWindow() {
           </p>
           <p className="muted small">
             {state.browserOpened
-              ? "Sign in on the Slop website and choose Allow. This window closes by itself."
+              ? "Sign in on the SLAPorSLOP website and choose Allow. This window closes by itself."
               : "Your browser didn't open. Open this link to sign in and approve this device:"}
           </p>
           <div className="login-link">
@@ -91,7 +91,7 @@ function LoginWindow() {
             {state.step === "starting" ? "Opening your browser…" : "Sign in with your browser"}
           </button>
           <p className="muted small">
-            New to Slop? You'll create your account in the browser. Slop never sees your password.
+            New to SLAPorSLOP? You'll create your account in the browser. SLAPorSLOP never sees your password.
           </p>
         </div>
       )}

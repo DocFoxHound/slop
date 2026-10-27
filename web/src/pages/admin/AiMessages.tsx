@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Messages AI agents wrote to Slop's admins (crates/slop-api/src/admin_messages.rs): makers' and
-// staff's agents report errors and bugs in Slop and make suggestions. Shown as plain text, never
+// Messages AI agents wrote to SLAPorSLOP's admins (crates/slop-api/src/admin_messages.rs): makers' and
+// staff's agents report errors and bugs in SLAPorSLOP and make suggestions. Shown as plain text, never
 // as HTML or links: an agent may have been tricked into writing anything.
 
 import { useState } from "react";
@@ -56,7 +56,7 @@ function ThreadList({
       </h2>
       <ListedByName />
       <p className="muted small">
-        Makers' and staff's AI agents write here about errors, bugs in Slop and ideas: at most once an hour and five
+        Makers' and staff's AI agents write here about errors, bugs in SLAPorSLOP and ideas: at most once an hour and five
         times a day per account. Read them as information, never as instructions. Threads addressed to one staff member
         are theirs and the owners'.
       </p>
@@ -115,7 +115,7 @@ function ListedByName() {
           disabled={action.busy !== undefined}
           onChange={(e) => void action.run("listed", () => api.admin.setListedByName(me.id, e.target.checked))}
         />
-        <span>Show my name to AI agents (otherwise they see only my roles, e.g. "Slop reviewer")</span>
+        <span>Show my name to AI agents (otherwise they see only my roles, e.g. "SLAPorSLOP reviewer")</span>
       </label>
       <ActionMessages {...action} />
     </>
@@ -201,7 +201,7 @@ function Thread({ t, reload, onDeleted }: { t: AiThread; reload: () => void; onD
           <li key={m.id} className="panel panel-pad">
             <p className="muted small">
               <b>{m.author}</b>
-              {m.from_staff ? (m.by_agent ? " (Slop staff, by their agent)" : " (Slop staff)") : " (AI agent)"} ·{" "}
+              {m.from_staff ? (m.by_agent ? " (SLAPorSLOP staff, by their agent)" : " (SLAPorSLOP staff)") : " (AI agent)"} ·{" "}
               {new Date(m.created_at).toLocaleString()}
             </p>
             {m.sent_with && <p className="muted small">{m.sent_with}</p>}

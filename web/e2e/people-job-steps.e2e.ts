@@ -125,10 +125,10 @@ test("the conversation: asked for, opened, recorded, kept on a failed send (b66)
   await expect(sendBtn).toBeDisabled();
   await conv(vera).getByRole("checkbox", { name: "I understand this conversation is recorded." }).check();
   await vera.route(`**/v1/jobs/${job}/messages`, (route) =>
-    route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy; try again" } } }),
+    route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy; try again" } } }),
   );
   await sendBtn.click();
-  await expect(vera.getByRole("alert")).toContainText("Slop is busy; try again");
+  await expect(vera.getByRole("alert")).toContainText("SLAPorSLOP is busy; try again");
   await expect(box).toHaveValue("Serif, script or blackletter. Any favourite?");
   await vera.unroute(`**/v1/jobs/${job}/messages`);
   await sendBtn.click();
@@ -162,10 +162,10 @@ test("the conversation: asked for, opened, recorded, kept on a failed send (b66)
   // Vera closes it: the text is kept for a while, then deleted.
   await vera.reload();
   await conv(vera).getByRole("button", { name: "Close the conversation" }).click();
-  await expect(conv(vera).getByText(/Closed\. Slop deletes the text after .*: download your copy before then\./)).toBeVisible();
+  await expect(conv(vera).getByText(/Closed\. SLAPorSLOP deletes the text after .*: download your copy before then\./)).toBeVisible();
   await expect(conv(vera).getByRole("textbox", { name: "Message" })).toHaveCount(0);
 
-  // The job goes ahead, and Cleo opens a problem: her copy is evidence that matches Slop's record.
+  // The job goes ahead, and Cleo opens a problem: her copy is evidence that matches SLAPorSLOP's record.
   await offerAndAccept(job, offerBody("Tavern shop sign", "on_delivery"));
   await cleo.reload();
   const problem = cleo.locator("section.problem-panel");
@@ -175,9 +175,9 @@ test("the conversation: asked for, opened, recorded, kept on a failed send (b66)
   await expect(problem.getByText("You said:")).toBeVisible();
   const upload = problem.getByLabel(/Submit your copy of the conversation/);
   await upload.setInputFiles({ name: "notes.json", mimeType: "application/json", buffer: Buffer.from("not a copy") });
-  await expect(problem.getByText("That isn't a conversation copy downloaded from Slop.")).toBeVisible();
+  await expect(problem.getByText("That isn't a conversation copy downloaded from SLAPorSLOP.")).toBeVisible();
   await upload.setInputFiles(copyPath);
-  await expect(problem.getByText("2 messages match Slop's fingerprints, 0 don't.")).toBeVisible();
+  await expect(problem.getByText("2 messages match SLAPorSLOP's fingerprints, 0 don't.")).toBeVisible();
   await problem.getByRole("button", { name: "Withdraw the problem" }).click();
   await expect(problem.getByText(/Last problem: withdrawn/)).toBeVisible();
 

@@ -21,7 +21,7 @@ test("a maker creates a store page, submits a release, and staff approve it", as
   await maker.getByRole("textbox", { name: /^Program to start/ }).fill("pong.exe");
   await maker.getByRole("button", { name: "Submit" }).click();
   await expect(maker.getByRole("status")).toContainText("Submitted");
-  // Slop fetches the file from the (fake) release page, then it waits for a person.
+  // SLAPorSLOP fetches the file from the (fake) release page, then it waits for a person.
   await expect(async () => {
     await maker.reload();
     await expect(maker.getByText("IN REVIEW").first()).toBeVisible({ timeout: 1000 });

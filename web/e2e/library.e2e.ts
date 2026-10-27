@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The library laid out like Steam's (pages/Library.tsx): the sidebar's groups, counts, search,
 // filter and arrow keys; the selected app in the address; the big button on the website and in
-// the Slop app (installed apps, updates, downloads and running apps come from the pretend app in
-// desktop-helpers.ts); Donate beside the big button; tabs; friends' ratings; the "is it Slop?"
+// the SLAPorSLOP app (installed apps, updates, downloads and running apps come from the pretend app in
+// desktop-helpers.ts); Donate beside the big button; tabs; friends' ratings; the "is it SLAPorSLOP?"
 // prompt after playing (and why not, before); a phone's two screens; and accessibility. The apps
 // added to Pat's library here are taken out again.
 import AxeBuilder from "@axe-core/playwright";
@@ -108,7 +108,7 @@ test("the sidebar: groups with counts, search, filter, arrow keys, and the app i
   await expect(page).toHaveURL(/\/library\/neon-drift$/);
 });
 
-test("on the website: get the Slop app to play, tabs, the info button, and friends' ratings", async ({ page }) => {
+test("on the website: get the SLAPorSLOP app to play, tabs, the info button, and friends' ratings", async ({ page }) => {
   // Bo, Pat's friend, rated Castle Rock on his public profile.
   await page.route(
     (u) => u.pathname === `/v1/users/${ids.maker2}`,
@@ -124,7 +124,7 @@ test("on the website: get the Slop app to play, tabs, the info button, and frien
   await signIn(page, "player");
   await page.goto("/library/castle-rock");
   const castle = app(page, "Castle Rock");
-  await expect(castle.getByRole("link", { name: "⬇ Get the Slop app to play" })).toHaveAttribute("href", "/download");
+  await expect(castle.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" })).toHaveAttribute("href", "/download");
   await expect(castle.getByRole("button", { name: "✓ In your library" })).toBeVisible();
   await expect(castle.getByRole("button", { name: "Install" })).toHaveCount(0);
 
@@ -132,7 +132,7 @@ test("on the website: get the Slop app to play, tabs, the info button, and frien
   const friends = castle.locator(".lib-box").filter({ hasText: "Friends who rated it" });
   await expect(friends.getByText("1 friend rated it")).toBeVisible();
   await expect(friends.getByRole("link", { name: "Bo Builder" })).toHaveAttribute("href", `/u/${ids.maker2}`);
-  await expect(friends.getByText("👍 Not Slop")).toBeVisible();
+  await expect(friends.getByText("👍 Slaps")).toBeVisible();
   await page.goto("/library/neon-drift");
   await expect(app(page, "Neon Drift").getByText("None of your friends has rated it on their profile yet.")).toBeVisible();
 
@@ -172,14 +172,14 @@ test("on the website: get the Slop app to play, tabs, the info button, and frien
   await axe(page);
 });
 
-test("after playing, the library asks: Slop or Not Slop? It keeps the vote, which can be changed", async ({ page }) => {
+test("after playing, the library asks: Slap or SLAPorSLOP? It keeps the vote, which can be changed", async ({ page }) => {
   await tryCall("player", "POST", `/v1/apps/${larks}/vote`, { vote: null });
   await signIn(page, "player");
   await page.goto(`/library/${larks}`);
   const prompt = app(page, "Loot Larks").getByRole("region", { name: "Rate Loot Larks" });
-  await expect(prompt.getByRole("heading", { name: "You've played Loot Larks: is it Slop or Not Slop?" })).toBeVisible();
-  await prompt.getByRole("button", { name: "👍 Not Slop" }).click();
-  await expect(prompt.getByText("Your rating: 👍 Not Slop")).toBeVisible();
+  await expect(prompt.getByRole("heading", { name: "You've played Loot Larks: does it slap, or is it slop?" })).toBeVisible();
+  await prompt.getByRole("button", { name: "👍 Slaps" }).click();
+  await expect(prompt.getByText("Your rating: 👍 Slaps")).toBeVisible();
   expect((await call<{ mine: { vote: string } }>("player", "GET", `/v1/apps/${larks}/ratings`)).mine.vote).toBe("not_slop");
   // A written review goes with it.
   await expect(prompt.getByRole("button", { name: "Add a written review" })).toBeVisible();
@@ -193,8 +193,8 @@ test("after playing, the library asks: Slop or Not Slop? It keeps the vote, whic
   await expect(app(page, "Neon Drift").getByRole("heading", { level: 2 })).toBeVisible();
   await expect(page.getByRole("region", { name: /^Rate / })).toHaveCount(0);
   const why = app(page, "Neon Drift").locator(".rate-prompt-callout").getByRole("group", { name: "Rate it" });
-  await expect(why.getByText("Play it from the Slop app to rate it.")).toBeVisible();
-  await expect(why.getByRole("link", { name: "⬇ Get the Slop app" })).toHaveCSS("background-color", SLIME);
+  await expect(why.getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
+  await expect(why.getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveCSS("background-color", SLIME);
 });
 
 test("on the website: Donate beside the big button: green, quiet when off, grey once given, monthly with Cancel", async ({ page }) => {
@@ -209,7 +209,7 @@ test("on the website: Donate beside the big button: green, quiet when off, grey 
     await expect(off).toHaveAccessibleName("Donate");
     await expect(off).not.toHaveCSS("background-color", SLIME);
     await expect(castle.locator(".lib-bar").getByText("Donations off")).toBeVisible();
-    await expectSameRow(castle.getByRole("link", { name: "⬇ Get the Slop app to play" }), off);
+    await expectSameRow(castle.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" }), off);
 
     // Lantern Keep: Pat has donated, so it's grey, says what and when, and offers Donate again.
     await page.goto(`/library/${ids.listedApp}`);
@@ -217,7 +217,7 @@ test("on the website: Donate beside the big button: green, quiet when off, grey 
     const given = donateButton(lantern);
     await expect(given).toHaveAccessibleName("Donated");
     await expect(given).not.toHaveCSS("background-color", SLIME);
-    await expectSameRow(lantern.getByRole("link", { name: "⬇ Get the Slop app to play" }), given);
+    await expectSameRow(lantern.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" }), given);
     await given.click();
     await expect(donatePanel(lantern).getByText(/^You donated \$[\d.]+ on /)).toBeVisible();
     await donatePanel(lantern).getByRole("button", { name: "Donate again" }).click();
@@ -248,7 +248,7 @@ test("on the website: Donate beside the big button: green, quiet when off, grey 
     await expect(green).toHaveAccessibleName("Donate");
     await expect(green).toHaveCSS("background-color", SLIME);
     await expect(green).not.toHaveClass(/\bbig\b/);
-    await expectSameRow(loot.getByRole("link", { name: "⬇ Get the Slop app to play" }), green);
+    await expectSameRow(loot.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" }), green);
     await green.click();
     await expect(donatePanel(loot)).toBeFocused();
     await expect(donateForm(loot)).toBeVisible();
@@ -284,7 +284,7 @@ const installed: FakeLibrary["installed"] = [
   { slug: "pocket-golf", title: "Pocket Golf", maker: "Bo Builder", version: "1.0.0" },
 ];
 
-/** Pat in the Slop app, with apps installed in different states. */
+/** Pat in the SLAPorSLOP app, with apps installed in different states. */
 async function desktopLibrary(page: Page, extra: FakeLibrary = {}) {
   await asDesktop(page, { state: "none" }, {
     installed,
@@ -313,7 +313,7 @@ async function desktopLibrary(page: Page, extra: FakeLibrary = {}) {
 const emit = (page: Page, event: string, payload: unknown) =>
   page.evaluate(([e, p]) => (window as unknown as { __emit: (e: string, p: unknown) => void }).__emit(e as string, p), [event, payload]);
 
-test("in the Slop app: downloads sit by Friends & Chat, and their panel doesn't cover the chat bar", async ({ page }) => {
+test("in the SLAPorSLOP app: downloads sit by Friends & Chat, and their panel doesn't cover the chat bar", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await desktopLibrary(page);
   await page.goto("/store");
@@ -342,7 +342,7 @@ test("in the Slop app: downloads sit by Friends & Chat, and their panel doesn't 
   await expect(dock).toHaveCount(0);
 });
 
-test("in the Slop app: what each app is doing, the big button, and downloads", async ({ page }) => {
+test("in the SLAPorSLOP app: what each app is doing, the big button, and downloads", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await desktopLibrary(page);
   await page.goto("/library/lantern-keep");
@@ -373,7 +373,7 @@ test("in the Slop app: what each app is doing, the big button, and downloads", a
   await expect(lantern.getByRole("combobox", { name: "Which version of Lantern Keep Play starts" })).toContainText(
     "Lantern Keep for Linux (community, by Bo Builder)",
   );
-  await expect(lantern.getByText(/^\d+% Not Slop$/)).toBeVisible();
+  await expect(lantern.getByText(/^\d+% Slaps$/)).toBeVisible();
   await expect(lantern.locator(".lib-hero").getByText("INSTALLED", { exact: true })).toBeVisible();
 
   // Downloads: one going, one queued; then the one going finishes.
@@ -385,7 +385,7 @@ test("in the Slop app: what each app is doing, the big button, and downloads", a
   const list = side(page).getByRole("group", { name: "Downloads" });
   await expect(list.locator("li").filter({ hasText: "Lantern Keep" })).toContainText("Update queued: 1.0.0 → 1.1.0");
   await expect(list.locator("li").filter({ hasText: "Pocket Golf" })).toContainText("Complete");
-  await expect(list.locator("li").filter({ hasText: "Mia's First Game" })).toContainText("being downloaded and scanned by Slop");
+  await expect(list.locator("li").filter({ hasText: "Mia's First Game" })).toContainText("being downloaded and scanned by SLAPorSLOP");
   await expect(list.getByRole("button", { name: "Update 1 app now" })).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(list).toHaveCount(0);
@@ -412,7 +412,7 @@ test("in the Slop app: what each app is doing, the big button, and downloads", a
   await axe(page);
 });
 
-test("in the Slop app: installing shows its progress; settings, saves and uninstalling", async ({ page }) => {
+test("in the SLAPorSLOP app: installing shows its progress; settings, saves and uninstalling", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
   await desktopLibrary(page, { holdInstalls: true, installable: [{ slug: "neon-drift", title: "Neon Drift", maker: "Sam Seed" }] });
   await page.goto("/library/neon-drift");
@@ -467,7 +467,7 @@ test("on a phone, the list and the app are two screens", async ({ page }) => {
   await expect(side(page)).toBeHidden();
   const castle = app(page, "Castle Rock");
   await expect(castle.getByRole("heading", { name: "Castle Rock", level: 2 })).toBeFocused();
-  await expect(castle.getByRole("link", { name: "⬇ Get the Slop app to play" })).toBeVisible();
+  await expect(castle.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" })).toBeVisible();
   await axe(page);
   await castle.getByRole("link", { name: "← Library" }).click();
   await expect(page).toHaveURL(/\/library$/);

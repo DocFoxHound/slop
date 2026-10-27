@@ -6,7 +6,7 @@ import { expect, server, signIn, test } from "./fixtures";
 test.describe("the sign-in page", () => {
   test("offers the sign-ins this server has, and keeps where you were going", async ({ page }) => {
     await page.goto("/signin?return_to=%2Flibrary%3Ftab%3Dinstalled");
-    await expect(page.getByRole("heading", { name: "Sign in to Slop" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in to SLAPorSLOP" })).toBeVisible();
     // The test server has GitHub and a stand-in Google, nothing else (crates/slop-api/examples/e2e_server/main.rs).
     const github = page.getByRole("link", { name: "Continue with GitHub" });
     await expect(github).toHaveAttribute("href", "/v1/auth/github/start?return_to=%2Flibrary%3Ftab%3Dinstalled");
@@ -33,7 +33,7 @@ test.describe("the sign-in page", () => {
     const messages: Record<string, string> = {
       cancelled: "Sign-in was cancelled.",
       provider: "That sign-in didn't work. Please try again.",
-      closed: "That account was closed, so its sign-in can't be used on Slop again.",
+      closed: "That account was closed, so its sign-in can't be used on SLAPorSLOP again.",
       link_expired: "Linking was started in another session. Start it again from your account page.",
       something_new: "Sign-in failed. Please try again.",
     };
@@ -57,7 +57,7 @@ test.describe("the sign-in page", () => {
 
   test("GitHub sign-in goes to GitHub and back, and a failed or cancelled one says so", async ({ page }) => {
     // The fake GitHub can't sign anyone in: the browser lands on its (empty) sign-in page, then
-    // comes back to Slop the way GitHub sends it. Slop can't swap the made-up code, or the
+    // comes back to SLAPorSLOP the way GitHub sends it. SLAPorSLOP can't swap the made-up code, or the
     // person said no.
     const toGithub = async () => {
       await page.getByRole("link", { name: "Continue with GitHub" }).click();
@@ -105,16 +105,16 @@ test.describe("the sign-in page", () => {
     await expect(page).toHaveURL(/\/signin$/);
   });
 
-  test("a passkey Slop doesn't know is refused", async ({ page }) => {
+  test("a passkey SLAPorSLOP doesn't know is refused", async ({ page }) => {
     await stubPasskeys(page);
     await fake(page, "POST", "/v1/auth/passkey/start", { status: 200, body: { challenge_id: "c1", options: passkeyOptions } });
     await fake(page, "POST", "/v1/auth/passkey/finish", {
       status: 400,
-      body: apiError("invalid", "Slop doesn't know that passkey", "credential"),
+      body: apiError("invalid", "SLAPorSLOP doesn't know that passkey", "credential"),
     });
     await page.goto("/signin");
     await page.getByRole("button", { name: "Sign in with a passkey" }).click();
-    await expect(page.getByRole("alert")).toHaveText("Slop doesn't know that passkey");
+    await expect(page.getByRole("alert")).toHaveText("SLAPorSLOP doesn't know that passkey");
   });
 
   test("browsers without passkeys aren't offered them", async ({ page }) => {
@@ -130,7 +130,7 @@ test.describe("signing up", () => {
     await page.goto("/signup");
     await expect(page.getByRole("heading", { name: "Sign-up expired" })).toBeVisible();
     await page.getByRole("link", { name: "Start again" }).click();
-    await expect(page.getByRole("heading", { name: "Sign in to Slop" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in to SLAPorSLOP" })).toBeVisible();
   });
 
   test("asks for a country, the age and the terms, shows what's wrong, then goes on", async ({ page }) => {
@@ -149,7 +149,7 @@ test.describe("signing up", () => {
         : { status: 201, body: { user: {}, return_to: "//evil.example/steal" } },
     );
     await page.goto("/signup");
-    await expect(page.getByRole("heading", { name: "Create your Slop account" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Create your SLAPorSLOP account" })).toBeVisible();
     await expect(page.getByText("Signed in with GitHub as gita@example.com.")).toBeVisible();
     const name = page.getByRole("textbox", { name: "Display name" });
     await expect(name).toHaveValue("Gita Newcomer");
@@ -214,11 +214,11 @@ test.describe("approving the desktop app", () => {
     let callback: URL | undefined;
     await page.route(`http://127.0.0.1:${port}/**`, async (route) => {
       callback = new URL(route.request().url());
-      await route.fulfill({ status: 200, contentType: "text/html", body: "<title>Slop</title><p>You can close this tab.</p>" });
+      await route.fulfill({ status: 200, contentType: "text/html", body: "<title>SLAPorSLOP</title><p>You can close this tab.</p>" });
     });
     await signIn(page, "support");
     await page.goto(`/desktop-signin/${req.id}`);
-    await expect(page.getByRole("heading", { name: "Sign in to the Slop app?" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Sign in to the SLAPorSLOP app?" })).toBeVisible();
     await expect(page.getByText("Sue's test PC wants to sign in as Sue Support.")).toBeVisible();
     await page.getByRole("button", { name: "Allow", exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`^http://127\\.0\\.0\\.1:${port}/callback\\?`));
@@ -267,7 +267,7 @@ test.describe("approving the desktop app", () => {
     await signIn(page, "support");
     await page.goto("/desktop-signin/01a00000-0000-7000-8000-000000000000");
     await expect(page.getByRole("heading", { name: "This sign-in link has expired" })).toBeVisible();
-    await expect(page.getByText("Go back to the Slop app and choose Sign in again.")).toBeVisible();
+    await expect(page.getByText("Go back to the SLAPorSLOP app and choose Sign in again.")).toBeVisible();
   });
 
   test("approving a new device never asks to confirm it's you", async ({ page }) => {
@@ -284,7 +284,7 @@ test.describe("approving the desktop app", () => {
 });
 
 test.describe("combining accounts", () => {
-  // A combination waits only after linking a sign-in that has its own Slop account, which takes
+  // A combination waits only after linking a sign-in that has its own SLAPorSLOP account, which takes
   // a real provider: the waiting combination is stood in for; the rest is the real page.
   const preview = {
     provider: "github",
@@ -305,7 +305,7 @@ test.describe("combining accounts", () => {
     await signIn(page, "support");
     await page.goto("/account/combine");
     await expect(page.getByRole("heading", { name: "Combine accounts?" })).toBeVisible();
-    await expect(page.getByText("That GitHub sign-in already has its own Slop account, Old Sue.")).toBeVisible();
+    await expect(page.getByText("That GitHub sign-in already has its own SLAPorSLOP account, Old Sue.")).toBeVisible();
     const list = page.getByRole("list").filter({ hasText: "its sign-ins, reports" });
     await expect(list.getByRole("listitem")).toHaveText([
       "1 app",

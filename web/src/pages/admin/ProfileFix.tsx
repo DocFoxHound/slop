@@ -268,7 +268,7 @@ export function StaffControls({ id, name, isStaff, onDone }: { id: string; name:
         )}
       </div>
       <p className="muted small">
-        Staff changes are sensitive: they wait for a second person when Slop requires two. When an AI agent asks for one, it always waits for a person to approve it here.
+        Staff changes are sensitive: they wait for a second person when SLAPorSLOP requires two. When an AI agent asks for one, it always waits for a person to approve it here.
       </p>
       <ActionMessages {...action} />
     </section>

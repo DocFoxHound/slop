@@ -272,7 +272,7 @@ test("the report form: already reported, too many, and a signed-out reporter's d
   await expect(limited.getByRole("alert")).toHaveText("too many reports for now: try again in a while");
   await limited.getByRole("button", { name: "Cancel" }).click();
 
-  // Signed out, Slop asks who's reporting.
+  // Signed out, SLAPorSLOP asks who's reporting.
   const visitor = await newPage(browser);
   await visitor.goto(`/teams/${team}`);
   await visitor.getByRole("button", { name: "⚑ Report" }).click();

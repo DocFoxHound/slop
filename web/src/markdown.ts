@@ -33,7 +33,7 @@ export function renderMarkdown(source: string): string {
   return md.render(source);
 }
 
-// Slop's own documents (e.g. public/publishing.md): normal headings with anchors, images allowed,
+// SLAPorSLOP's own documents (e.g. public/publishing.md): normal headings with anchors, images allowed,
 // raw HTML still off. Links that leave the page go to the system browser on desktop.
 const docs = new MarkdownIt({ html: false, linkify: true, typographer: false });
 const slugify = (text: string) =>

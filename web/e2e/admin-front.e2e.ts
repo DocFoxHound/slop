@@ -133,7 +133,7 @@ test("an automatic shelf hidden from the front page, and shown again", async ({ 
   await visitor.goto("/");
   await expect(visitor.getByRole("heading", { name: "Browse by category" })).toBeVisible();
 
-  // It changes once Slop has it (the box follows the server).
+  // It changes once SLAPorSLOP has it (the box follows the server).
   await categories.click();
   await expect(categories).not.toBeChecked();
   await expect(auto.getByText("HIDDEN", { exact: true })).toBeVisible();

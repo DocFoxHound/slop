@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// "Does Slop know this file?" (docs/standard/file-verification.md): a player picks a download
+// "Does SLAPorSLOP know this file?" (docs/standard/file-verification.md): a player picks a download
 // or pastes its SHA-256. The file is hashed here, in the browser, and never uploaded.
 
 import { useState } from "react";
@@ -17,7 +17,7 @@ const SCAN: Record<string, string> = {
   on_hold: "a re-scan found something a person is checking",
   rejected: "rejected by the scan",
   blocked: "blocked by the scan",
-  not_scanned: "not scanned (this Slop doesn't scan files)",
+  not_scanned: "not scanned (this SLAPorSLOP doesn't scan files)",
 };
 
 async function sha256Hex(file: File): Promise<string> {
@@ -65,7 +65,7 @@ export function Verify() {
     <div className="page narrow doc">
       <h1>Check a file</h1>
       <p>
-        Got a game or app from somewhere else? See whether it's a build Slop scanned and approved, or one Slop withdrew.
+        Got a game or app from somewhere else? See whether it's a build SLAPorSLOP scanned and approved, or one SLAPorSLOP withdrew.
         Your file stays on your computer: only its fingerprint (SHA-256) is sent.
       </p>
       <p>
@@ -99,17 +99,17 @@ export function Verify() {
         {answer &&
           (answer.matches.length === 0 ? (
             <p>
-              <strong>Slop doesn't know this file.</strong> It isn't a build of any public app on Slop. That doesn't make
-              it bad, but Slop hasn't scanned it.
+              <strong>SLAPorSLOP doesn't know this file.</strong> It isn't a build of any public app on SLAPorSLOP. That doesn't make
+              it bad, but SLAPorSLOP hasn't scanned it.
             </p>
           ) : (
             <ul>
               {answer.matches.map((m) => (
                 <li key={`${m.release_id}-${m.platform}`}>
                   {m.status === "revoked" ? (
-                    <strong>Withdrawn by Slop</strong>
+                    <strong>Withdrawn by SLAPorSLOP</strong>
                   ) : (
-                    <strong>Approved on Slop</strong>
+                    <strong>Approved on SLAPorSLOP</strong>
                   )}
                   : <Link to={`/app/${m.app_slug}`}>{m.app_title}</Link> {m.version} by {m.maker}, for {m.platform}.{" "}
                   {m.status === "revoked"
@@ -123,7 +123,7 @@ export function Verify() {
           ))}
       </div>
       <p className="muted small">
-        Other stores and launchers can ask the same question: see <Link to="/source">Slop's open standard</Link>.
+        Other stores and launchers can ask the same question: see <Link to="/source">SLAPorSLOP's open standard</Link>.
       </p>
     </div>
   );

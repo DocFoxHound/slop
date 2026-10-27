@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Makers' releases: submit builds from your own release page, and follow them through review
-// (docs/ARCHITECTURE.md §6.3-6.4). Slop never stores builds; it hashes them and signs a manifest.
+// (docs/ARCHITECTURE.md §6.3-6.4). SLAPorSLOP never stores builds; it hashes them and signs a manifest.
 
 import {
   FileChecks,
@@ -39,17 +39,17 @@ const STATUS: Record<
   fetching: {
     label: "CHECKING FILES",
     badge: "neutral",
-    help: "Slop is downloading, hashing and scanning each file, one at a time: Publishing progress above shows which.",
+    help: "SLAPorSLOP is downloading, hashing and scanning each file, one at a time: Publishing progress above shows which.",
   },
   awaiting_review: {
     label: "IN REVIEW",
     badge: "soon",
-    help: "Waiting for a person at Slop to review it.",
+    help: "Waiting for a person at SLAPorSLOP to review it.",
   },
   approved: {
     label: "APPROVED",
     badge: "official",
-    help: "Signed by Slop. Players can install it, and get it as an update.",
+    help: "Signed by SLAPorSLOP. Players can install it, and get it as an update.",
   },
   rejected: {
     label: "REJECTED",
@@ -59,12 +59,12 @@ const STATUS: Record<
   failed: {
     label: "FAILED",
     badge: "bad",
-    help: "Slop couldn't check the files. See the reason below.",
+    help: "SLAPorSLOP couldn't check the files. See the reason below.",
   },
   revoked: {
     label: "WITHDRAWN",
     badge: "bad",
-    help: "Slop withdrew this release; it no longer launches.",
+    help: "SLAPorSLOP withdrew this release; it no longer launches.",
   },
   withdrawn: {
     label: "WITHDRAWN BEFORE REVIEW",
@@ -187,7 +187,7 @@ export function Releases() {
       <h1 className="page-title">Releases</h1>
       <p className="muted">
         A release is one version of your app: a GitHub release with your builds
-        attached. Slop downloads each file once to record its size and SHA-256,
+        attached. SLAPorSLOP downloads each file once to record its size and SHA-256,
         checks it, and signs it. Players' apps then download from your release
         page and refuse any file that doesn't match.
       </p>
@@ -531,14 +531,14 @@ function SigningHelp() {
         Build your release files in GitHub Actions and add GitHub's attestation
         step. It signs each file with a short-lived certificate tied to your
         repository, workflow and commit, and records it in Sigstore's public
-        log. There's no key for you to manage, and nobody who only has your Slop
+        log. There's no key for you to manage, and nobody who only has your SLAPorSLOP
         password can fake it.
       </p>
       <pre>
         <code>{WORKFLOW_SNIPPET}</code>
       </pre>
       <p className="muted small">
-        Slop finds the attestation by each file's hash. The commit you enter
+        SLAPorSLOP finds the attestation by each file's hash. The commit you enter
         below must be the one the workflow built. Slop Build will set this up
         for you automatically. Only GitHub repositories are supported so far.
       </p>
@@ -627,7 +627,7 @@ function ReleaseForm({
       <h2>New release</h2>
       {done && (
         <p className="notice" role="status">
-          Submitted. Slop is checking the files; you'll see the review status
+          Submitted. SLAPorSLOP is checking the files; you'll see the review status
           below.
         </p>
       )}
@@ -746,7 +746,7 @@ interface PickRow {
   exec: string;
 }
 
-/** Starts from Slop's guesses: the first file that fits each of the app's platforms is ticked. */
+/** Starts from SLAPorSLOP's guesses: the first file that fits each of the app's platforms is ticked. */
 export function pickRows(
   release: GithubRelease,
   platforms: AppPlatform[],
@@ -864,7 +864,7 @@ function ReleasePicker({
       <h2>Submit a release</h2>
       <p className="muted small">
         Make a release on GitHub with your builds attached, then pick it here.
-        Slop reads the version from its tag and the commit from GitHub. Each
+        SLAPorSLOP reads the version from its tag and the commit from GitHub. Each
         release needs:{" "}
         {platforms
           .map((p) => `${PLATFORM_LABEL[p]} (${BUILD[p].describe})`)
@@ -873,7 +873,7 @@ function ReleasePicker({
       </p>
       {done && (
         <p className="notice" role="status">
-          Version {done} sent. Slop is checking the files; follow it in the
+          Version {done} sent. SLAPorSLOP is checking the files; follow it in the
           progress above.
         </p>
       )}
@@ -976,7 +976,7 @@ function ReleasePicker({
                     onChange={(e) => update(i, { exec: e.target.value })}
                   />
                   <span className="hint">
-                    Its path inside the zip. Slop remembers it for your next
+                    Its path inside the zip. SLAPorSLOP remembers it for your next
                     releases.
                   </span>
                 </label>
@@ -1062,7 +1062,7 @@ export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: ()
           <b>Pick up new GitHub releases</b>
           <span className="muted small" style={{ display: "block" }}>
             When you publish a new release on GitHub (not a draft or
-            pre-release), Slop sends it for you, usually within 10 minutes
+            pre-release), SLAPorSLOP sends it for you, usually within 10 minutes
             (longer for apps that haven't updated in a while). It expects the
             same files as last time, with the new version in their names.
           </span>
@@ -1082,14 +1082,14 @@ export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: ()
           {s.github_app.installed ? (
             <>
               <span className="badge official">GITHUB APP INSTALLED</span>{" "}
-              GitHub tells Slop the moment you publish a release, so it's picked
+              GitHub tells SLAPorSLOP the moment you publish a release, so it's picked
               up within a minute.
             </>
           ) : (
             <>
-              <b>Faster pickup:</b> install Slop's GitHub App on this repository
-              and GitHub tells Slop the moment you publish a release, instead of
-              Slop checking every so often. It only reads your releases and
+              <b>Faster pickup:</b> install SLAPorSLOP's GitHub App on this repository
+              and GitHub tells SLAPorSLOP the moment you publish a release, instead of
+              SLAPorSLOP checking every so often. It only reads your releases and
               code.{" "}
               <ExternalLink href={s.github_app.install_url}>
                 Install on GitHub
@@ -1107,7 +1107,7 @@ export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: ()
         <span>
           <b>Approve updates automatically</b>
           <span className="muted small" style={{ display: "block" }}>
-            After a person at Slop approves your first release, new versions
+            After a person at SLAPorSLOP approves your first release, new versions
             that pass every check go out to players straight away. Players get a
             notice and update when they want.
           </span>
@@ -1158,7 +1158,7 @@ function RatingFields({
   );
 }
 
-/** Shared runtimes the release needs: the Slop app installs missing ones from the vendor. */
+/** Shared runtimes the release needs: the SLAPorSLOP app installs missing ones from the vendor. */
 function RuntimeFields({ value, onChange }: { value: string[]; onChange: (v: string[]) => void }) {
   const list = useLoad(() => api.runtimes(), []);
   if (!list.data) return null;
@@ -1169,7 +1169,7 @@ function RuntimeFields({ value, onChange }: { value: string[]; onChange: (v: str
         <b>{value.length === 0 ? "none" : list.data.filter((r) => value.includes(r.id)).map((r) => r.name).join(", ")}</b>
       </summary>
       <p className="muted small">
-        Tick what your game needs and doesn't ship. Before it starts, the Slop app installs any that are missing, from the
+        Tick what your game needs and doesn't ship. Before it starts, the SLAPorSLOP app installs any that are missing, from the
         vendor, once the player agrees.
       </p>
       {list.data.map((r) => (
@@ -1202,20 +1202,20 @@ function NotesField({ value, onChange, fromGithub }: { value: string; onChange: 
   );
 }
 
-/** Problems Slop's checks found in the newest release, each with a fix to hand to an AI agent. */
+/** Problems SLAPorSLOP's checks found in the newest release, each with a fix to hand to an AI agent. */
 function FixesPanel({ slug, nonce }: { slug: string; nonce: string }) {
   const fixes = useLoad(() => api.fixes(slug), [slug, nonce]);
   const list = fixes.data?.fixes ?? [];
   if (list.length === 0) return null;
   const prompt = (f: Fix) =>
-    `Slop's checks of my app found this. ${f.problem}\nFix it in the repository: ${f.instruction}` +
-    (f.guide_section ? `\n(Slop's publishing guide, section "${f.guide_section}", has the details.)` : "");
+    `SLAPorSLOP's checks of my app found this. ${f.problem}\nFix it in the repository: ${f.instruction}` +
+    (f.guide_section ? `\n(SLAPorSLOP's publishing guide, section "${f.guide_section}", has the details.)` : "");
   const all = list.map(prompt).join("\n\n") + `\n\n${fixes.data?.next ?? ""}`;
   return (
     <section className="panel panel-pad" id="fixes" aria-labelledby="fixes-title">
       <h2 id="fixes-title">To fix in {fixes.data?.release?.version}</h2>
       <p className="muted small">
-        Copy these to your AI coding agent, or connect it to Slop (Account → AI agents) and ask it to run get_fixes.
+        Copy these to your AI coding agent, or connect it to SLAPorSLOP (Account → AI agents) and ask it to run get_fixes.
       </p>
       <ul className="fix-list">
         {list.map((f, i) => (

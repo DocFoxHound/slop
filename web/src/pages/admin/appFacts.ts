@@ -76,7 +76,7 @@ export function flagFact(app: AdminApp, flag: AdminAppFlag, now: number = Date.n
           : "Dead? Nobody has played it yet",
       };
     case "low_rating":
-      return { tone: "warn", text: `Rated ${app.not_slop_percent ?? 0}% Not Slop (${plural(app.vote_count, "vote")})` };
+      return { tone: "warn", text: `Rated ${app.not_slop_percent ?? 0}% Slaps (${plural(app.vote_count, "vote")})` };
   }
 }
 
@@ -96,7 +96,7 @@ export function quietLine(app: AdminApp, now: number = Date.now()): string {
   else parts.push(app.newest_release ? `${app.newest_release.version} ${app.newest_release.status.replace(/_/g, " ")}` : "No release yet");
   if (app.players > 0) parts.push(plural(app.players, "player"));
   if (app.last_played_at) parts.push(`played ${timeAgo(app.last_played_at, now)}`);
-  if (app.not_slop_percent !== null) parts.push(`${app.not_slop_percent}% Not Slop`);
+  if (app.not_slop_percent !== null) parts.push(`${app.not_slop_percent}% Slaps`);
   return parts.join(" · ");
 }
 

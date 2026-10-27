@@ -2,7 +2,7 @@
 // The page bar under the top navigation (web/src/components/BrowserBar.tsx): Back and Forward
 // through the history (off when there's nowhere to go), Reload this page without reloading the
 // app, and the page's address. It's for the desktop app above all, where there's no browser
-// around Slop: there it shows from 601px and answers the browser's shortcuts; on the website only
+// around SLAPorSLOP: there it shows from 601px and answers the browser's shortcuts; on the website only
 // on wide screens; never on phones.
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
@@ -156,7 +156,7 @@ test.describe("in the desktop app", () => {
     await expect(page).toHaveURL(`${server.url}/`);
     await page.keyboard.press("Alt+ArrowRight");
     await expect(page).toHaveURL(`${server.url}/app/lantern-keep`);
-    // At the start there's nowhere further back: Slop stays.
+    // At the start there's nowhere further back: SLAPorSLOP stays.
     await page.keyboard.press("Alt+ArrowLeft");
     await page.keyboard.press("Alt+ArrowLeft");
     await expect(page).toHaveURL(`${server.url}/`);

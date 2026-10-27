@@ -63,10 +63,10 @@ test("search: each filter goes in the address and changes the results", async ({
   await shows(page, ["lantern-keep"], ["castle-rock", "neon-drift"]);
   await select(page, "Runs on").selectOption("");
 
-  await select(page, "Not Slop").selectOption({ label: "70% or more" });
+  await select(page, "Slaps").selectOption({ label: "70% or more" });
   await expect(page).toHaveURL(/[?&]not_slop=70/);
   await shows(page, ["lantern-keep"], ["castle-rock", "pocket-golf"]);
-  await select(page, "Not Slop").selectOption("");
+  await select(page, "Slaps").selectOption("");
 
   await select(page, "Accessibility").selectOption({ label: "Full controller support" });
   await expect(page).toHaveURL(/[?&]accessibility=controller/);
@@ -74,7 +74,7 @@ test("search: each filter goes in the address and changes the results", async ({
 
   // Nonsense in the address is left out.
   await page.goto("/search?not_slop=500&runs_on=mac&stage=nope");
-  await expect(select(page, "Not Slop")).toHaveValue("");
+  await expect(select(page, "Slaps")).toHaveValue("");
   await expect(select(page, "Runs on")).toHaveValue("");
   await expect(tile(page, "castle-rock")).toHaveCount(1);
 });
@@ -86,10 +86,10 @@ test("search with no results says so; a failed search offers Try again", async (
   let fail = true;
   await page.route(
     (u) => u.pathname === "/v1/apps",
-    (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } }) : route.fallback()),
+    (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy. Try again soon." } } }) : route.fallback()),
   );
   await page.goto("/search?q=Castle");
-  await expect(page.getByRole("alert")).toContainText("Slop is busy. Try again soon.");
+  await expect(page.getByRole("alert")).toContainText("SLAPorSLOP is busy. Try again soon.");
   fail = false;
   await page.getByRole("button", { name: "Try again" }).click();
   await shows(page, ["castle-rock"], ["lantern-keep"]);
@@ -110,7 +110,7 @@ test("Show more adds the next page, says when it can't, and starts over when a f
       }
       if (failNext) {
         failNext = false;
-        return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } });
+        return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy. Try again soon." } } });
       }
       const more = { ...(first as object), slug: "page-two-pinnace", title: "Page Two Pinnace" };
       return route.fulfill({ json: { apps: [more], next_offset: null } });
@@ -120,7 +120,7 @@ test("Show more adds the next page, says when it can't, and starts over when a f
   await expect(tile(page, "castle-rock")).toBeVisible();
   const count = await page.locator("a.tile").count();
   await page.getByRole("button", { name: "Show more" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Slop is busy. Try again soon.");
+  await expect(page.getByRole("alert")).toHaveText("SLAPorSLOP is busy. Try again soon.");
   await expect(page.locator("a.tile")).toHaveCount(count);
   await page.getByRole("button", { name: "Show more" }).click();
   await expect(page.locator("a.tile").last()).toHaveAttribute("href", "/app/page-two-pinnace");
@@ -190,7 +190,7 @@ test("Community builds lists only branches; Made with people only apps that hire
   await shows(page, ["lantern-keep-linux"], ["lantern-keep", "castle-rock"]);
   // Other test files add community builds of their own, so the badge is looked for on the seed's.
   await expect(tile(page, "lantern-keep-linux").getByText("COMMUNITY")).toBeVisible();
-  await expect(select(page, "Sort").locator("option")).toHaveText(["Most Not Slop", "Recently updated", "A–Z"]);
+  await expect(select(page, "Sort").locator("option")).toHaveText(["Most Slaps", "Recently updated", "A–Z"]);
 
   const asked = page.waitForRequest((r) => new URL(r.url()).searchParams.get("made_with_people") === "true");
   await page.goto("/made-with-people");
@@ -207,14 +207,14 @@ test("How ratings work explains the weighting", async ({ page }) => {
   await expect(page.getByRole("heading", { name: "How ratings work", level: 1 })).toBeVisible();
   await expect(page.getByRole("heading", { name: "What you see" })).toBeVisible();
   await expect(page.getByRole("heading", { name: "Your votes and privacy" })).toBeVisible();
-  await expect(page.getByRole("cell", { name: "Overwhelmingly Not Slop" })).toBeVisible();
+  await expect(page.getByRole("cell", { name: "Overwhelmingly Slaps" })).toBeVisible();
   await expect(page.getByRole("cell", { name: "10 hours or more" })).toBeVisible();
 });
 
 test("a failed category list offers Try again", async ({ page }) => {
-  await failApi(page, (u) => u.pathname === "/v1/categories", { status: 503, message: "Slop is busy. Try again soon." });
+  await failApi(page, (u) => u.pathname === "/v1/categories", { status: 503, message: "SLAPorSLOP is busy. Try again soon." });
   await page.goto("/browse");
-  await expect(page.getByRole("alert")).toContainText("Slop is busy. Try again soon.");
+  await expect(page.getByRole("alert")).toContainText("SLAPorSLOP is busy. Try again soon.");
   await page.unrouteAll();
   await page.getByRole("button", { name: "Try again" }).click();
   // The categories' own list (the store bar always has Games).

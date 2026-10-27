@@ -22,7 +22,7 @@ function prerenderGuide(): Plugin {
       const dir = options.dir ?? "dist";
       const guide = renderDocument(readFileSync("public/publishing.md", "utf8"));
       const html = readFileSync(join(dir, "index.html"), "utf8")
-        .replace("<title>Slop</title>", "<title>How to publish · Slop</title>")
+        .replace("<title>SLAPorSLOP</title>", "<title>How to publish · SLAPorSLOP</title>")
         .replace(
           '<div id="root"></div>',
           `<div id="root"><div class="page narrow guide">` +

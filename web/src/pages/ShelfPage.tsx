@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// A shelf Slop staff made (crates/slop-api/src/shelves.rs): its apps in staff's order.
+// A shelf SLAPorSLOP staff made (crates/slop-api/src/shelves.rs): its apps in staff's order.
 
 import { Link, useParams } from "react-router";
 
@@ -15,7 +15,7 @@ export function ShelfPage() {
   return (
     <StoreFrame sidebar>
       <div className="crumbs">
-        <Link to="/">Store</Link> › Picked by Slop
+        <Link to="/">Store</Link> › Picked by SLAPorSLOP
       </div>
       {shelf.error ? (
         <ErrorState error={shelf.error} onRetry={shelf.reload} />

@@ -184,7 +184,7 @@ test("community builds of a game that counts players are told about Slop Pulse",
   await page.unroute(`**/v1/apps/${build}/manage`);
   await answer(page, `/v1/apps/${build}/manage`, { ...overview, pulse_required: true });
   await page.reload();
-  await expect(pulse).toContainText("✓ Slop has had a Pulse handshake from this build");
+  await expect(pulse).toContainText("✓ SLAPorSLOP has had a Pulse handshake from this build");
   // Lantern Keep doesn't count players: no Pulse section for its build.
   await page.unroute(`**/v1/apps/${build}/manage`);
   await page.reload();
@@ -202,7 +202,7 @@ test("Lantern Keep's maker reads its ratings, how its release landed, and its bu
   await expect(ratings.getByRole("link", { name: "How ratings work" })).toHaveAttribute("href", "/ratings");
 
   const landed = page.getByRole("region", { name: "How each release landed" });
-  await expect(landed.getByRole("listitem").filter({ hasText: "1.0.0" })).toContainText(/\d+% Not Slop from \d+ votes · \d+ 👍 and \d+ 👎 reviews · \d+ bug reports?/);
+  await expect(landed.getByRole("listitem").filter({ hasText: "1.0.0" })).toContainText(/\d+% Slaps from \d+ votes · \d+ 👍 and \d+ 👎 reviews · \d+ bug reports?/);
 
   // Triage: open ones first, by status; each can go to GitHub as an issue, filled in.
   const bugs = page.getByRole("region", { name: "Bug reports" });
@@ -212,7 +212,7 @@ test("Lantern Keep's maker reads its ratings, how its release landed, and its bu
   const issue = new URL((await fog.getByRole("link", { name: "Open as a GitHub issue" }).getAttribute("href"))!);
   expect(issue.origin + issue.pathname).toBe("https://github.com/e2e/lantern-keep/issues/new");
   expect(issue.searchParams.get("title")).toBe("Fog covers the menu after alt-tab");
-  expect(issue.searchParams.get("body")).toContain("Version: 1.0.0 · Platform: windows · 2 players on Slop");
+  expect(issue.searchParams.get("body")).toContain("Version: 1.0.0 · Platform: windows · 2 players on SLAPorSLOP");
   await expect(fog.getByRole("button", { name: "Mark fixed" })).toBeVisible();
   await expect(fog.getByRole("button", { name: "Open again" })).toHaveCount(0);
   await expect(bugs.getByRole("listitem").filter({ hasText: "Crash on level 3" })).toHaveCount(0);

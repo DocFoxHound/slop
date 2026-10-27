@@ -38,7 +38,7 @@ export function DonationsPanel({
       {note && <p className="muted small">{note}</p>}
       <HoldNotice slug={slug} />
       {s.private ? (
-        <p className="muted">Private Slop takes no donations. They can be turned on once it's public.</p>
+        <p className="muted">A private app takes no donations. They can be turned on once it's public.</p>
       ) : s.payments === "off" ? (
         <p className="muted">Payments aren't switched on on this server yet.</p>
       ) : s.account_status !== "active" ? (
@@ -75,7 +75,7 @@ function HoldNotice({ slug }: { slug: string }) {
       <p>
         <b>
           {h.kind === "review"
-            ? "Donations to this app are paused while Slop reviews it."
+            ? "Donations to this app are paused while SLAPorSLOP reviews it."
             : "Donations to this app are turned off until the problem below is fixed."}
         </b>{" "}
         Your app stays in the store. Donors see only that donations are paused, and monthly server donations aren't
@@ -92,10 +92,10 @@ function HoldNotice({ slug }: { slug: string }) {
                 You asked on {formatDate(r.created_at)}: <span className="pre-wrap">{r.message}</span>
               </p>
               {r.outcome === null ? (
-                <p className="muted">Waiting for Slop's answer.</p>
+                <p className="muted">Waiting for SLAPorSLOP's answer.</p>
               ) : (
                 <p>
-                  Slop {r.outcome === "kept" ? "kept the pause" : "lifted it"}: <span className="pre-wrap">{r.answer}</span>
+                  SLAPorSLOP {r.outcome === "kept" ? "kept the pause" : "lifted it"}: <span className="pre-wrap">{r.answer}</span>
                 </p>
               )}
             </li>
@@ -129,7 +129,7 @@ function AskToLift({ slug, hold, canAskAt, onDone }: { slug: string; hold: Donat
   };
   return (
     <form className="form" onSubmit={send}>
-      <label htmlFor="hold-fix">Fixed it? Tell Slop what you changed and ask for donations back.</label>
+      <label htmlFor="hold-fix">Fixed it? Tell SLAPorSLOP what you changed and ask for donations back.</label>
       <textarea id="hold-fix" rows={3} maxLength={4000} value={message} onChange={(e) => setMessage(e.target.value)} required />
       {error && (
         <p className="form-error" role="alert">
@@ -145,7 +145,7 @@ function AskToLift({ slug, hold, canAskAt, onDone }: { slug: string; hold: Donat
 
 /**
  * The maker's fix where donations are off, on their app's store page: finish Stripe's sign-up, or
- * switch the Donate button on, or ask Slop to lift a pause. Nothing when payments are off on the
+ * switch the Donate button on, or ask SLAPorSLOP to lift a pause. Nothing when payments are off on the
  * server: that's not theirs to fix, and the box already says so.
  */
 export function DonationsFix({ slug, onChanged }: { slug: string; onChanged: () => void }) {
@@ -195,7 +195,7 @@ function TurnOn({ slug, s, onDone }: { slug: string; s: DonationSettings; onDone
     <div className="form">
       <p className="small">
         Your Stripe account is ready. Donors are offered amounts around {amount(s.donation_suggested_minor, s.donation_currency)};
-        Slop's fee is 5%.
+        SLAPorSLOP's fee is 5%.
       </p>
       {error && (
         <p className="form-error" role="alert">
@@ -233,7 +233,7 @@ function EnableDonations({ status, onDone, slug, returnTo }: { status: string; o
     <div className="form">
       {gate.prompt}
       <p>
-        Donations go straight to your own Stripe account. Slop takes a 5% platform fee; donors pay the card processing on
+        Donations go straight to your own Stripe account. SLAPorSLOP takes a 5% platform fee; donors pay the card processing on
         top, so you receive the amount they chose less 5%. Donations never unlock anything, and your app can't tell who
         donated.
       </p>
@@ -242,7 +242,7 @@ function EnableDonations({ status, onDone, slug, returnTo }: { status: string; o
       <label className="check">
         <input type="checkbox" checked={ack} onChange={(e) => setAck(e.target.checked)} />
         <span>
-          I understand that <b>donations may be taxable income for me</b>, and that Slop doesn't give tax advice.
+          I understand that <b>donations may be taxable income for me</b>, and that SLAPorSLOP doesn't give tax advice.
         </span>
       </label>
       {me && !me.adult_confirmed && (
@@ -398,7 +398,7 @@ function Summary({ slug }: { slug: string }) {
           {s.currency_totals.map((t) => (
             <li key={t.currency}>
               <b>{amount(t.donated_minor - t.slop_fee_minor, t.currency)}</b> to you from {t.donations} donation
-              {t.donations === 1 ? "" : "s"} <span className="muted small">({amount(t.slop_fee_minor, t.currency)} Slop fees
+              {t.donations === 1 ? "" : "s"} <span className="muted small">({amount(t.slop_fee_minor, t.currency)} SLAPorSLOP fees
               {t.refunded_minor > 0 && `, ${amount(t.refunded_minor, t.currency)} refunded`})</span>
             </li>
           ))}

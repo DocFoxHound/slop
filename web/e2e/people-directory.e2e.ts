@@ -162,7 +162,7 @@ test("a page waiting for its first portfolio shows only to its creative", async 
   await expect(remy.getByRole("heading", { name: "Remy Pending", level: 1 })).toBeVisible();
   const status = remy.getByRole("region", { name: "Your page's status" });
   await expect(status).toContainText("This is your page.");
-  await expect(status).toContainText("Waiting for Slop's review");
+  await expect(status).toContainText("Waiting for SLAPorSLOP's review");
   await expect(status).toContainText("Only you can see your page until it's approved");
   await expect(remy.getByRole("link", { name: "Edit your page" })).toHaveAttribute("href", "/people/me");
   // Your own page has no Hire or Report buttons, and can't be hired yet.
@@ -183,7 +183,7 @@ test("a hidden page tells its creative why; a closed account's page takes no wor
   await vera.goto(`/people/${ids.creativeHandle}`);
   const status = vera.getByRole("region", { name: "Your page's status" });
   await expect(status).toContainText("Hidden: only you can see your page");
-  await expect(status).toContainText("Slop hid your page: a link to a gold seller.");
+  await expect(status).toContainText("SLAPorSLOP hid your page: a link to a gold seller.");
   await expect(status.getByRole("link", { name: "see it in your account" })).toHaveAttribute("href", "/account#decisions");
   // Her own reviews have Reply and, if not yet disputed, Dispute; no Report.
   const review = vera.locator(`#review-${ids.completedJob}`);
@@ -197,7 +197,7 @@ test("a hidden page tells its creative why; a closed account's page takes no wor
     await route.fulfill({ response: res, json: { ...(await res.json()), closed: true, can_hire: false, taking_work: false } });
   });
   await visitor.goto(`/people/${ids.creativeHandle}`);
-  await expect(visitor.getByText(/Vera Okafor closed their Slop account\./)).toBeVisible();
+  await expect(visitor.getByText(/Vera Okafor closed their SLAPorSLOP account\./)).toBeVisible();
   await expect(visitor.getByRole("button", { name: "Account closed" })).toBeDisabled();
   await expect(visitor.getByRole("button", { name: "Hire for this" })).toHaveCount(0);
 });

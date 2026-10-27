@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The law-enforcement request log (crates/slop-api/src/legal_requests.rs, LEGAL-GUIDANCE CHAT-3):
-// log a request as it arrives, then record what Slop gave and whether the person was told.
+// log a request as it arrives, then record what SLAPorSLOP gave and whether the person was told.
 
 import { useState, type FormEvent } from "react";
 
@@ -36,7 +36,7 @@ export function LegalRequestsTab() {
   return (
     <>
       <p className="muted small">
-        Every request from police, a court or an authority, as it arrives. Slop can only give what it has: account details,
+        Every request from police, a court or an authority, as it arrives. SLAPorSLOP can only give what it has: account details,
         the metadata it keeps and reported messages; chat is end-to-end encrypted. Tell the person unless a law or the
         order forbids it. Kept 6 years; the yearly transparency report counts them.
       </p>
@@ -246,7 +246,7 @@ function AnswerForm({ r, onAnswered }: { r: LegalRequest; onAnswered: () => void
           </select>
         </label>
         <label>
-          What Slop gave, or why not
+          What SLAPorSLOP gave, or why not
           <textarea value={response} rows={3} maxLength={4000} required onChange={(e) => setResponse(e.target.value)} />
         </label>
         <label>

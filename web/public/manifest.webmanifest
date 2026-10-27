@@ -1,6 +1,6 @@
 {
-  "name": "Slop",
-  "short_name": "Slop",
+  "name": "SLAPorSLOP",
+  "short_name": "SLAPorSLOP",
   "description": "Apps and games made with AI. Open source, every one.",
   "start_url": "/",
   "display": "standalone",

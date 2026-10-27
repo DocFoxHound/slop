@@ -3,7 +3,7 @@ import { expect, signIn, test } from "./fixtures";
 
 test("a player who played a game reports a bug to its maker", async ({ page }) => {
   await signIn(page, "player");
-  // Launching through Slop is what lets a player report (the Slop app does this on Play).
+  // Launching through SLAPorSLOP is what lets a player report (the SLAPorSLOP app does this on Play).
   const launched = await page.request.post("/v1/apps/castle-rock/launch?platform=windows");
   expect(launched.ok()).toBeTruthy();
   await page.goto("/app/castle-rock");

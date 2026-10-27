@@ -168,7 +168,7 @@ test("presets and your own amount show what you pay, what the maker gets and the
   await presets.nth(1).click();
   await expect(presets.nth(1)).toHaveAttribute("aria-checked", "true");
   const quoteLine = (q: Quote) =>
-    `You pay ${amount(q.total, "usd")} · Mia Maker receives ${amount(q.maker_receives, "usd")} · ${amount(q.slop_fee, "usd")} Slop fee · ` +
+    `You pay ${amount(q.total, "usd")} · Mia Maker receives ${amount(q.maker_receives, "usd")} · ${amount(q.slop_fee, "usd")} SLAPorSLOP fee · ` +
     (q.donor_covers_fees
       ? `${amount(q.processing, "usd")} card processing`
       : `about ${amount(q.processing, "usd")} card processing comes out of what they receive`);

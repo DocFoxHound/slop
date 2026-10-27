@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Slop's terms and policies for staff (crates/slop-api/src/legal.rs): every version, and
+// SLAPorSLOP's terms and policies for staff (crates/slop-api/src/legal.rs): every version, and
 // publishing a new one from here. A new version is announced at once and takes effect 15 days
-// later; until then it can be withdrawn. Publishing is sensitive (two people, once Slop requires
+// later; until then it can be withdrawn. Publishing is sensitive (two people, once SLAPorSLOP requires
 // two). Versions published here live in the database: copy the file text into
 // crates/slop-api/legal/ so the repository keeps up.
 

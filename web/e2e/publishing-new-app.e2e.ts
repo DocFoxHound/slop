@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Publishing, part 1: the dashboard, a new store page (errors, ownership, licence, private), editing
-// it, its pictures, and a freeze when Slop can't read its repository.
+// it, its pictures, and a freeze when SLAPorSLOP can't read its repository.
 import { expect, server, signIn, test } from "./fixtures";
 import { answer, apiError, call, fakeRepo, readNotices, uniq } from "./publishing-helpers";
 
@@ -12,7 +12,7 @@ const title = `Lamp Lighter ${slug.slice(-4)}`;
 
 test("signed out, /publish explains publishing and asks to sign in", async ({ page }) => {
   await page.goto("/publish");
-  await expect(page.getByRole("heading", { name: "Publish on Slop", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Publish on SLAPorSLOP", level: 1 })).toBeVisible();
   await expect(page.getByRole("link", { name: "Sign in to start" })).toHaveAttribute("href", "/signin?return_to=%2Fpublish");
   await page.getByRole("link", { name: "How to publish" }).click();
   await expect(page).toHaveURL(/\/publish\/guide$/);
@@ -43,7 +43,7 @@ test("the dashboard says where each app is, and checks again while one is moving
   await page.goto("/publish");
   const row = (name: string) => page.locator("li.status-row").filter({ hasText: name });
   await expect(row("Delisted Dash")).toContainText("Stuck at: In the store");
-  await expect(row("Delisted Dash")).toContainText("Taken out of the store by Slop staff.");
+  await expect(row("Delisted Dash")).toContainText("Taken out of the store by SLAPorSLOP staff.");
   // Pocket Golf's new release is still being looked at.
   await expect(row("Pocket Golf")).toContainText(/Waiting on: /);
   await expect(row("Pocket Golf")).toContainText("v1.1.0");
@@ -131,7 +131,7 @@ test("the new app form: the address follows the name, errors show where they bel
   await expect(address).toHaveValue(free);
   await expect(addressLabel.getByRole("status")).toHaveText(`✓ slop/app/${free} is free.`);
 
-  // A repository that's already on Slop: the form says so before sending, and the API refuses.
+  // A repository that's already on SLAPorSLOP: the form says so before sending, and the API refuses.
   await address.fill(uniq("ferry"));
   await page.getByRole("textbox", { name: /Source repository/ }).fill("https://github.com/e2e/lantern-keep");
   await expect(page.getByRole("status").filter({ hasText: "already on Slop as Lantern Keep" })).toBeVisible();
@@ -140,9 +140,9 @@ test("the new app form: the address follows the name, errors show where they bel
     "that repository is already on Slop as Lantern Keep. To build on it, fork it and register a branch",
   );
 
-  // Private Slop from a private repository elsewhere: a token the host refuses shows by its
+  // Private from a private repository elsewhere: a token the host refuses shows by its
   // field (it used to show nowhere).
-  await page.getByRole("radio", { name: /Private Slop/ }).check();
+  await page.getByRole("radio", { name: /Private/ }).check();
   await page.getByRole("textbox", { name: /Source repository/ }).fill(fakeRepo("fin", "ledger"));
   const token = page.getByRole("group", { name: "Private repository on another host" });
   await token.getByLabel("Read-only token").fill("fin-token");
@@ -203,7 +203,7 @@ test("the repository: whose it is, how to prove it, and a token for a private on
   await repo.fill(`https://github.com/e2e/${uniq("mine")}`);
   await expect(page.getByText("✓ You own this repository.")).toBeVisible();
 
-  // Hosts Slop can't ask: a code for the README, then Check (this server trusts every account,
+  // Hosts SLAPorSLOP can't ask: a code for the README, then Check (this server trusts every account,
   // so these answers stand in for a stricter one's).
   const code = "slop-verify-k7q2m9";
   await answer(page, "/v1/repos/ownership", {
@@ -263,10 +263,10 @@ test("the repository: whose it is, how to prove it, and a token for a private on
   );
   await page.unroute("**/v1/repos/ownership");
 
-  // Private Slop outside GitHub takes a read-only token; on GitHub, the GitHub App instead.
+  // Private outside GitHub takes a read-only token; on GitHub, the GitHub App instead.
   const token = page.getByRole("group", { name: "Private repository on another host" });
   await expect(token).toBeHidden();
-  await page.getByRole("radio", { name: /Private Slop/ }).check();
+  await page.getByRole("radio", { name: /Private/ }).check();
   await expect(token).toBeVisible();
   // Guessed from the address.
   await expect(token.getByRole("combobox", { name: "Host" })).toHaveValue("gitlab");
@@ -437,7 +437,7 @@ test("pictures come from the repository: checked, ordered, turned down", async (
   await readNotices("maker", slug);
 });
 
-test("Slop can't read the repository: the app freezes, Check now, and it thaws", async ({ page }) => {
+test("SLAPorSLOP can't read the repository: the app freezes, Check now, and it thaws", async ({ page }) => {
   await signIn(page, "maker");
   // The daily check, run now: the fake GitHub doesn't know this repository.
   await call("maker", "POST", `/v1/apps/${slug}/repo-check`);
@@ -445,20 +445,20 @@ test("Slop can't read the repository: the app freezes, Check now, and it thaws",
   await page.getByRole("button", { name: new RegExp(`${title} is frozen`) }).click();
   // The notice leads to the app's Manage page.
   await expect(page).toHaveURL(new RegExp(`/publish/${slug}/manage$`));
-  const frozen = page.getByRole("status").filter({ has: page.getByRole("heading", { name: "Frozen: Slop can't check the repository" }) });
+  const frozen = page.getByRole("status").filter({ has: page.getByRole("heading", { name: "Frozen: SLAPorSLOP can't check the repository" }) });
   await expect(frozen).toContainText("Slop can't read the repository: it was deleted, renamed, or Slop's access was removed");
   await expect(frozen).toContainText(/If it's still frozen on .*, it leaves the store\./);
   await frozen.getByRole("button", { name: "Check now" }).click();
-  await expect(frozen.getByText("Still can't read it. Check the repository's address and Slop's access.")).toBeVisible();
+  await expect(frozen.getByText("Still can't read it. Check the repository's address and SLAPorSLOP's access.")).toBeVisible();
 
-  // Moved somewhere Slop can read (this server answers Git's discovery request for any path).
+  // Moved somewhere SLAPorSLOP can read (this server answers Git's discovery request for any path).
   await page.goto(`/publish/${slug}`);
   await page.getByRole("textbox", { name: /Source repository/ }).fill(`${server.url}/mia/${slug}`);
   await page.getByRole("button", { name: "Save changes" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/${slug}$`));
   await page.goto(`/publish/${slug}/manage`);
   await page.getByRole("button", { name: "Check now" }).click();
-  await expect(page.getByRole("heading", { name: "Frozen: Slop can't check the repository" })).toBeHidden();
+  await expect(page.getByRole("heading", { name: "Frozen: SLAPorSLOP can't check the repository" })).toBeHidden();
   await page.goto("/notifications");
   await page.getByRole("button", { name: new RegExp(`${title} isn't frozen any more`) }).click();
   await expect(page).toHaveURL(new RegExp(`/publish/${slug}/manage$`));
@@ -468,7 +468,7 @@ test("Slop can't read the repository: the app freezes, Check now, and it thaws",
 test("frozen by staff: the maker sees why, and no Check now", async ({ page }) => {
   await signIn(page, "maker2");
   await page.goto(`/publish/${server.ids.frozenApp}/manage`);
-  const frozen = page.getByRole("status").filter({ has: page.getByRole("heading", { name: "Frozen by Slop" }) });
+  const frozen = page.getByRole("status").filter({ has: page.getByRole("heading", { name: "Frozen by SLAPorSLOP" }) });
   await expect(frozen).toContainText("Checking a report that the last build mines cryptocurrency.");
   await expect(frozen.getByRole("button", { name: "Check now" })).toHaveCount(0);
 });

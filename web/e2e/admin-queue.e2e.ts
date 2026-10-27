@@ -2,7 +2,7 @@
 // The review queue's items opened in full from the inbox (admin-inbox.e2e.ts tests the inbox
 // itself): releases (refused while frozen, scan holds cleared, approved, rejected), changes (a
 // repository move turned down, then approved), pictures (turned down, approved, then listed from
-// Apps to list), Private Slop going public, and the seeded re-scan flag, possible-abuse signal and
+// Apps to list), Private going public, and the seeded re-scan flag, possible-abuse signal and
 // portfolio (looked at and answered without changing them: the other tests need them as they
 // are). The apps are Sec Security's, made here (admin-helpers.ts).
 import type { Page } from "@playwright/test";
@@ -215,9 +215,9 @@ test("pictures: looked at, turned down, approved, and the app put in the store",
   await seeDecisions(MAKER);
 });
 
-test("Private Slop going public: the maker asks, changes their mind, asks again; staff make it public", async ({ browser }) => {
+test("Private going public: the maker asks, changes their mind, asks again; staff make it public", async ({ browser }) => {
   const t = tag();
-  // A repository Slop can read without signing in (the test server answers Git's discovery
+  // A repository SLAPorSLOP can read without signing in (the test server answers Git's discovery
   // request), and one it can't (the fake GitHub doesn't have it).
   const app = { slug: `adm-q5-${t}`, title: `Hideout ${t}` };
   const unreadable = { slug: `adm-q7-${t}`, title: `Bunker ${t}` };
@@ -250,7 +250,7 @@ test("Private Slop going public: the maker asks, changes their mind, asks again;
   await expect(panel.getByRole("button", { name: "Keep it private" })).toBeVisible();
   await openItem(admin, "listing", app.title);
   const ready = admin.getByRole("listitem").filter({ has: admin.getByRole("link", { name: app.title, exact: true }) });
-  await expect(ready.getByText(/Private Slop going public: check the repository and licence from scratch/)).toBeVisible();
+  await expect(ready.getByText(/Private app going public: check the repository and licence from scratch/)).toBeVisible();
   await ready.getByRole("button", { name: "Make public and list" }).click();
   await expect(ready).toHaveCount(0);
   await maker.goto("/notifications");

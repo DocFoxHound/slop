@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A creative's own page editor (DESIGN §15.1): profile, look, packages, portfolio and "Get paid".
-// Three steps for a new creative: describe yourself, point Slop at your portfolio, set up Stripe.
+// Three steps for a new creative: describe yourself, point SLAPorSLOP at your portfolio, set up Stripe.
 
 import { useEffect, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
@@ -139,7 +139,7 @@ function ShopWindow() {
         </li>
         <li>
           <b>Add your portfolio</b>: your best work, from a public GitHub repository of your own (there are ready-made templates, and a
-          line to hand an AI assistant). A person at Slop looks at it, then your page goes public.
+          line to hand an AI assistant). A person at SLAPorSLOP looks at it, then your page goes public.
         </li>
         <li>
           <b>Get paid</b>: connect Stripe, so makers can hire you.
@@ -189,8 +189,8 @@ function GetPaid({ profile, onChange }: { profile: MyProfile; onChange: (s: MyPr
       ) : (
         <>
           <p className="muted">
-            Makers pay you directly through Stripe: Slop never holds your money. Slop's fee is 5% of each payment, taken from what you
-            receive. Stripe asks for your identity, bank and tax details (it may report your income to tax authorities); Slop only keeps
+            Makers pay you directly through Stripe: SLAPorSLOP never holds your money. SLAPorSLOP's fee is 5% of each payment, taken from what you
+            receive. Stripe asks for your identity, bank and tax details (it may report your income to tax authorities); SLAPorSLOP only keeps
             your Stripe account's ID.
           </p>
           {s === "pending" && <p>Stripe hasn't finished checking your details yet.</p>}
@@ -231,12 +231,12 @@ const EXAMPLE = `{
   ]
 }`;
 
-/** Ready-to-copy portfolio repositories (examples/portfolio-templates in Slop's own repository). */
+/** Ready-to-copy portfolio repositories (examples/portfolio-templates in SLAPorSLOP's own repository). */
 export const PORTFOLIO_TEMPLATES = "https://github.com/DocFoxHound/slop/tree/main/examples/portfolio-templates";
 
 /** The line to hand an AI assistant: the guide, on this site (public/portfolio.md). */
 export function portfolioPrompt(origin: string): string {
-  return `Read ${origin}/portfolio.md and help me build my Slop portfolio.`;
+  return `Read ${origin}/portfolio.md and help me build my SLAPorSLOP portfolio.`;
 }
 
 /** A line to copy, with its own Copy button. */
@@ -264,7 +264,7 @@ function Problems({ text }: { text: string }) {
   if (lines.length === 1) return <p className="form-error" role="alert">{lines[0]}</p>;
   return (
     <div className="form-error" role="alert">
-      <p>Slop found {lines.length} things to fix in your portfolio:</p>
+      <p>SLAPorSLOP found {lines.length} things to fix in your portfolio:</p>
       <ul className="portfolio-problems">
         {lines.map((l, i) => (
           <li key={i}>{l}</li>
@@ -326,8 +326,8 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
       <h2 id="portfolio-title">Portfolio</h2>
       <p>
         Your portfolio is your shop window: your style and your best work, shown on your page next to your rates (your services) for
-        makers who might hire you. Slop doesn't host the files: they stay in a public GitHub repository of your own, and Slop shows them
-        from there. A person at Slop looks at every new portfolio before it shows.
+        makers who might hire you. SLAPorSLOP doesn't host the files: they stay in a public GitHub repository of your own, and SLAPorSLOP shows them
+        from there. A person at SLAPorSLOP looks at every new portfolio before it shows.
       </p>
       <details className="portfolio-setup" open={!ov.repo_url}>
         <summary>
@@ -348,7 +348,7 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
                 .{" "}
               </>
             ) : identities.data ? (
-              <>It has to belong to a GitHub account linked to your Slop account: {linkGithub} </>
+              <>It has to belong to a GitHub account linked to your SLAPorSLOP account: {linkGithub} </>
             ) : null}
             <ExternalLink className="btn small" href="https://github.com/new">
               New repository on GitHub
@@ -364,7 +364,7 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
           </li>
           <li>Doll it up: a banner and avatar, titles and captions, and your best work first.</li>
           <li>
-            Paste the repository's address below and choose <b>Check my portfolio now</b>. If anything needs fixing, Slop says exactly
+            Paste the repository's address below and choose <b>Check my portfolio now</b>. If anything needs fixing, SLAPorSLOP says exactly
             what and where.
           </li>
         </ol>
@@ -457,8 +457,8 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
       <h3 id="design">Your page's design</h3>
       <p className="muted small">
         Optional: design your page yourself with <code>.slop/page/index.html</code> (up to 64 KB) and <code>.slop/page/style.css</code> (up to
-        32 KB) in the same repository. Slop checks them with your portfolio, removes anything pages can't have (scripts, forms, other sites'
-        files…) and shows the result between Slop's header and your services and reviews. Put your works where you like with{" "}
+        32 KB) in the same repository. SLAPorSLOP checks them with your portfolio, removes anything pages can't have (scripts, forms, other sites'
+        files…) and shows the result between SLAPorSLOP's header and your services and reviews. Put your works where you like with{" "}
         <code>{"<slop-works></slop-works>"}</code> and <code>{'<slop-work ref="1"></slop-work>'}</code>. Every rule is in the guide, under <a href="/portfolio.md">Your page's design</a>.
       </p>
       {shown?.design ? (
@@ -472,7 +472,7 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
           />
         </>
       ) : (
-        shown && <p className="muted small">No design yet: your page uses Slop's standard layout.</p>
+        shown && <p className="muted small">No design yet: your page uses SLAPorSLOP's standard layout.</p>
       )}
     </section>
   );
@@ -731,7 +731,7 @@ function ProfileForm({
         )}
       </div>
       <p className="muted small">
-        You set your own prices, choose which jobs to take and how you work. Slop doesn't settle disputes between you and clients. See also{" "}
+        You set your own prices, choose which jobs to take and how you work. SLAPorSLOP doesn't settle disputes between you and clients. See also{" "}
         <ExternalLink href="https://stripe.com/legal/connect-account">Stripe's terms</ExternalLink>.
       </p>
     </form>

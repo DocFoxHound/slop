@@ -24,7 +24,7 @@ const DEFAULT_SORTS: Array<NonNullable<AppQuery["sort"]>> = [
   "title",
 ];
 
-/** The platform filter's "my platform", where Slop has builds for it. */
+/** The platform filter's "my platform", where SLAPorSLOP has builds for it. */
 function myPlatform(): "windows" | "linux" | undefined {
   const os = detectOs();
   return os === "windows" || os === "linux" ? os : undefined;
@@ -75,8 +75,8 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
     trending: "Most played this week",
     popular: "Popular this month",
     anticipated: "Most anticipated",
-    rating: "Most Not Slop",
-    not_slop_now: "Most Not Slop right now",
+    rating: "Most Slaps",
+    not_slop_now: "Most Slaps right now",
     fresh_slop: "Fresh slop (most 👎 this month)",
     reviewed: "Most reviewed",
     recent: "Recently updated",
@@ -122,7 +122,7 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
           </select>
         </label>
         <label>
-          Not Slop{" "}
+          Slaps{" "}
           <select value={min_not_slop ?? ""} onChange={(e) => set("not_slop", e.target.value)}>
             <option value="">Any rating</option>
             <option value="70">70% or more</option>
@@ -206,7 +206,7 @@ export function Community() {
       <h1 className="page-title">Community builds</h1>
       <p className="muted">
         Branches of apps, built from forks: mods, fixes, translations and ports. Each is made by its author, not the
-        original publisher, and checked the same way as every app on Slop.
+        original publisher, and checked the same way as every app on SLAPorSLOP.
       </p>
       <AppGrid base={{ community: true }} sorts={["rating", "recent", "title"]} />
     </StoreFrame>

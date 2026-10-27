@@ -63,7 +63,7 @@ export function AppRecord({ slug }: { slug: string }) {
           <>
             {" "}
             · frozen since {formatDate(app.frozen_at)}
-            {app.frozen_by ? <> by staff ({app.frozen_reason})</> : <> (Slop lost access to its repository)</>}
+            {app.frozen_by ? <> by staff ({app.frozen_reason})</> : <> (SLAPorSLOP lost access to its repository)</>}
           </>
         )}
       </p>
@@ -160,7 +160,7 @@ export function AppRecord({ slug }: { slug: string }) {
                 <th>Currency</th>
                 <th>Donations</th>
                 <th>Donated</th>
-                <th>Slop's fees</th>
+                <th>SLAPorSLOP's fees</th>
                 <th>Refunded</th>
               </tr>
             </thead>

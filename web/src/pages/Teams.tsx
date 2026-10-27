@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Teams (DESIGN §14): player teams with picks, game nights and shared Private Slop; official
+// Teams (DESIGN §14): player teams with picks, game nights and shared private apps; official
 // studio teams verified through their GitHub organization (crates/slop-api/src/teams.rs).
 
 import { useState, type FormEvent } from "react";
@@ -51,7 +51,7 @@ export function Teams() {
         )}
       </div>
       <p className="muted">
-        <b>Player teams</b> share picks, plan game nights and can see Private Slop shared with them. <b>Official teams</b> are
+        <b>Player teams</b> share picks, plan game nights and can see private apps shared with them. <b>Official teams</b> are
         studios, verified through their GitHub organization.
       </p>
       {creating && <CreateTeam onCancel={() => setCreating(false)} />}
@@ -160,7 +160,7 @@ function CreateTeam({ onCancel }: { onCancel: () => void }) {
         <label>
           GitHub organization
           <input value={org} required onChange={(e) => setOrg(e.target.value)} placeholder="your-studio" />
-          <span className="hint">You must be an owner of it. Next, you'll install Slop's GitHub App there so Slop can check it.</span>
+          <span className="hint">You must be an owner of it. Next, you'll install SLAPorSLOP's GitHub App there so SLAPorSLOP can check it.</span>
           {fieldError("github_org")}
         </label>
       )}
@@ -182,7 +182,7 @@ function CreateTeam({ onCancel }: { onCancel: () => void }) {
 const errorText = (err: unknown) => (err instanceof ApiError ? err.message : String(err));
 
 const CHECK_NAME: Record<string, string> = {
-  app_installed: "Slop's GitHub App is installed",
+  app_installed: "SLAPorSLOP's GitHub App is installed",
   owner: "You own the organization",
   domain: "A verified domain",
   two_factor: "Two-factor authentication required",
@@ -299,7 +299,7 @@ export function Team() {
             <Picks t={t} onChange={team.reload} isAdmin={admin} />
             {t.shared.length > 0 && (
               <>
-                <h2 className="section-title">Private Slop shared with the team</h2>
+                <h2 className="section-title">Private apps shared with the team</h2>
                 <Shelf apps={t.shared} empty="" />
               </>
             )}
@@ -527,7 +527,7 @@ function Verification({ t, onChange }: { t: TeamPage; onChange: () => void }) {
     <section className="panel panel-pad verification">
       <h2>Verification</h2>
       <p className="muted small">
-        Slop checks these through its GitHub App on github.com/{t.github_org}, and again every day. While any fails, the
+        SLAPorSLOP checks these through its GitHub App on github.com/{t.github_org}, and again every day. While any fails, the
         badge is off.
         {t.checked_at && ` Last checked ${formatDate(t.checked_at)}.`}
       </p>

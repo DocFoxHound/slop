@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// How to reach Slop (the Terms' "contact page on Slop"): the published address from
+// How to reach SLAPorSLOP (the Terms' "contact page on SLAPorSLOP"): the published address from
 // SLOP_CONTACT_EMAIL, and the quicker routes for reports and account requests.
 
 import { Link } from "react-router";
@@ -20,15 +20,15 @@ export function Contact() {
       ) : contact.data.email ? (
         <p>
           Email <a href={`mailto:${contact.data.email}`}>{contact.data.email}</a> for legal notices, requests from
-          authorities, copyright and other legal claims, security problems, and anything else about Slop.
+          authorities, copyright and other legal claims, security problems, and anything else about SLAPorSLOP.
         </p>
       ) : (
-        <p>Slop's contact address isn't published yet.</p>
+        <p>SLAPorSLOP's contact address isn't published yet.</p>
       )}
       <h2>Quicker routes</h2>
       <ul>
         <li>
-          <b>Something on Slop breaks the rules or the law:</b> use <b>Report</b> on its page. Reports are tracked, and
+          <b>Something on SLAPorSLOP breaks the rules or the law:</b> use <b>Report</b> on its page. Reports are tracked, and
           the <Link to="/legal/content">Content Policy</Link> says how they're handled.
         </li>
         <li>

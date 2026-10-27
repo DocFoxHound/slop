@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Chat (docs/DESIGN.md §19, SECURITY §8.5): direct messages, group chats and team chats, end-to-end
-// encrypted in the Slop app's Rust core (crates/slop-client/src/chat). This page only shows what
+// encrypted in the SLAPorSLOP app's Rust core (crates/slop-client/src/chat). This page only shows what
 // the app decrypts and asks it to send; keys never reach it. On the website, chat isn't
 // available: browsers can't keep keys as safely, so the page explains and offers the app.
 //
@@ -86,12 +86,12 @@ function ChatOnWeb() {
 /** Why chat isn't on the website, and where to get the app. In the full page and the panel. */
 export function ChatInAppNote({ compact = false }: { compact?: boolean }) {
   const os = detectOs();
-  const get = `⬇ Get Slop for ${os === "mac" || os === "windows" || os === "linux" ? OS_LABEL[os] : "your computer"}`;
+  const get = `⬇ Get SLAPorSLOP for ${os === "mac" || os === "windows" || os === "linux" ? OS_LABEL[os] : "your computer"}`;
   if (compact) {
     return (
       <div className="notice dock-note">
         <p>
-          <b>Chat is in the Slop app.</b> Messages are end-to-end encrypted on your devices, so Slop can't read them.
+          <b>Chat is in the SLAPorSLOP app.</b> Messages are end-to-end encrypted on your devices, so SLAPorSLOP can't read them.
         </p>
         <Link className="btn small slime" to="/download">
           {get}
@@ -102,7 +102,7 @@ export function ChatInAppNote({ compact = false }: { compact?: boolean }) {
   return (
     <div className="panel panel-pad">
       <p>
-        <b>Chat is in the Slop app.</b> Messages are end-to-end encrypted on your devices, so Slop can't read them, and a
+        <b>Chat is in the SLAPorSLOP app.</b> Messages are end-to-end encrypted on your devices, so SLAPorSLOP can't read them, and a
         website can't keep the keys as safely as the app can.
       </p>
       <p className="muted">
@@ -337,7 +337,7 @@ function RecoveryCode({ code, onDone }: { code: string; onDone: () => void }) {
     <Screen title="Save your recovery code">
       <div className="panel panel-pad">
         <p>
-          Chat is ready on this computer. Your chat history is backed up to Slop, encrypted with this code. Slop never sees
+          Chat is ready on this computer. Your chat history is backed up to SLAPorSLOP, encrypted with this code. SLAPorSLOP never sees
           it. If you lose every device you chat on, this code is the only way to get your history back.
         </p>
         <p className="recovery-code mono" aria-label="Recovery code">
@@ -379,7 +379,7 @@ function Waiting({ status, onDone }: { status: ChatStatus; onDone: () => void })
     <Screen title="Approve this device">
       <div className="panel panel-pad">
         <p>
-          Open <b>Chat → Devices</b> in Slop on a computer where you already chat, and approve this one. Check the code there
+          Open <b>Chat → Devices</b> in SLAPorSLOP on a computer where you already chat, and approve this one. Check the code there
           matches:
         </p>
         <p className="recovery-code mono" aria-label="This device's code">
@@ -517,7 +517,7 @@ function Chats({
   // The panel leaves the page's title alone: the page behind it is what's open.
   const title = current ? `${current.title} · Chat` : "Chat";
   useEffect(() => {
-    if (!compact) document.title = `${title} · Slop`;
+    if (!compact) document.title = `${title} · SLAPorSLOP`;
   }, [compact, title]);
 
   // In the panel, one thing at a time: the list, or the open chat.
@@ -723,7 +723,7 @@ function Devices({ status, onChanged }: { status: ChatStatus; onChanged: () => v
         </>
       ) : status.backups ? (
         <>
-          <p className="muted small">On: your history is backed up, encrypted with your recovery code. Slop can't read it.</p>
+          <p className="muted small">On: your history is backed up, encrypted with your recovery code. SLAPorSLOP can't read it.</p>
           <div className="row-actions">
             <button
               className="btn small"
@@ -1056,7 +1056,7 @@ function Conversation({
         )}
         {!conv.ready && (
           <p className="notice">
-            Waiting to be added to this chat's encryption. Someone in it adds this device next time their Slop app is open.
+            Waiting to be added to this chat's encryption. Someone in it adds this device next time their SLAPorSLOP app is open.
           </p>
         )}
         {!messages ? (
@@ -1570,7 +1570,7 @@ function LinkWarning({ url, onClose }: { url: string; onClose: () => void }) {
       {host ? (
         <>
           <p>
-            This link goes to <b className="mono">{host}</b>, outside Slop. Only open it if you trust who sent it: links in
+            This link goes to <b className="mono">{host}</b>, outside SLAPorSLOP. Only open it if you trust who sent it: links in
             chats are a common way to steal accounts.
           </p>
           <p className="muted small mono break">{url}</p>
@@ -1590,7 +1590,7 @@ function LinkWarning({ url, onClose }: { url: string; onClose: () => void }) {
           </div>
         </>
       ) : (
-        <p>That link doesn't look right, so Slop won't open it.</p>
+        <p>That link doesn't look right, so SLAPorSLOP won't open it.</p>
       )}
     </Panel>
   );
@@ -1665,7 +1665,7 @@ function AddPeople({ conv, onDone }: { conv: ChatConversation; onDone: () => voi
   );
 }
 
-/** Reporting a message: the app sends Slop this one message, decrypted, with proof it's genuine. */
+/** Reporting a message: the app sends SLAPorSLOP this one message, decrypted, with proof it's genuine. */
 function ReportMessage({ conv, m, onClose }: { conv: ChatConversation; m: ChatMessage; onClose: () => void }) {
   const [reasons, setReasons] = useState<ReportReason[]>();
   const [reason, setReason] = useState("");
@@ -1702,7 +1702,7 @@ function ReportMessage({ conv, m, onClose }: { conv: ChatConversation; m: ChatMe
       ) : (
         <form className="form" onSubmit={(e) => void send(e)}>
           <p className="muted small">
-            Slop can't read chats. Reporting sends this one message to Slop's moderators, with a check that proves it's
+            SLAPorSLOP can't read chats. Reporting sends this one message to SLAPorSLOP's moderators, with a check that proves it's
             exactly what {m.sender.name} sent. Nothing else from the chat is shared.
           </p>
           <blockquote className="quoted small">{m.text || "📎 Attachment"}</blockquote>

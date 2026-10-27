@@ -17,13 +17,13 @@ test("the job page: Rate the creative in green once it's done, your rating in gr
   await expect(rate).not.toHaveClass(/\bbig\b/);
   await rate.click();
   await expect(page.locator("form#review")).toBeFocused();
-  await expect(page.getByRole("heading", { name: "Was Vera Okafor's work slop?" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Did Vera Okafor's work slap, or was it slop?" })).toBeVisible();
   await noSeriousAxeViolations(page);
 
   // Her real review: grey, and it still takes her to the form to change it.
   const real = await page.context().newPage();
   await real.goto(`/jobs/${ids.completedJob}`);
-  const mine = real.locator(".next-step").getByRole("button", { name: /^Your rating: (👍 Not Slop|👎 Slop)$/ });
+  const mine = real.locator(".next-step").getByRole("button", { name: /^Your rating: (👍 Slaps|👎 Slop)$/ });
   await expect(mine).toBeVisible();
   await expect(mine).not.toHaveCSS("background-color", SLIME);
   await mine.click();

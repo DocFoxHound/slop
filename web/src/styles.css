@@ -1,5 +1,5 @@
 /* SPDX-License-Identifier: AGPL-3.0-or-later */
-/* Slop UI. Visual language from the mockup (mockup/styles.css): dark panels, slime-green accent. */
+/* SLAPorSLOP UI. Visual language from the mockup (mockup/styles.css): dark panels, slime-green accent. */
 
 :root {
   --bg: #0d1015;
@@ -29,7 +29,7 @@
   color-scheme: dark;
 }
 
-/* Slop is dark only so far; a light theme would set data-theme="light" and get these (AA on white). */
+/* SLAPorSLOP is dark only so far; a light theme would set data-theme="light" and get these (AA on white). */
 :root[data-theme="light"] {
   --ai-none: #1e40af;
   --ai-none-soft: #dbeafe;
@@ -668,7 +668,7 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .person-page .section-h h2 { border-left: 4px solid var(--accent); padding-left: 10px; }
 .person-body { margin-top: 20px; }
 /* The fonts a creative's page design can use (crates/slop-api/src/people/design.rs FONTS), served
- * by Slop itself (public/fonts, SIL Open Font License). A browser downloads one only when a page uses it. */
+ * by SLAPorSLOP itself (public/fonts, SIL Open Font License). A browser downloads one only when a page uses it. */
 @font-face { font-family: "Inter"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/fonts/inter-latin.woff2") format("woff2"); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
 @font-face { font-family: "Inter"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/fonts/inter-latin-ext.woff2") format("woff2"); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 @font-face { font-family: "Fraunces"; font-style: normal; font-weight: 100 900; font-display: swap; src: url("/fonts/fraunces-latin.woff2") format("woff2"); unicode-range: U+0000-00FF,U+0131,U+0152-0153,U+02BB-02BC,U+02C6,U+02DA,U+02DC,U+0304,U+0308,U+0329,U+2000-206F,U+20AC,U+2122,U+2191,U+2193,U+2212,U+2215,U+FEFF,U+FFFD; }
@@ -683,8 +683,8 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 @font-face { font-family: "Bebas Neue"; font-style: normal; font-weight: 400; font-display: swap; src: url("/fonts/bebas-neue-latin-ext.woff2") format("woff2"); unicode-range: U+0100-02BA,U+02BD-02C5,U+02C7-02CC,U+02CE-02D7,U+02DD-02FF,U+0304,U+0308,U+0329,U+1D00-1DBF,U+1E00-1E9F,U+1EF2-1EFF,U+2020,U+20A0-20AB,U+20AD-20C0,U+2113,U+2C60-2C7F,U+A720-A7FF; }
 
 /* A creative's own page design (components/PeopleDesign.tsx): its own box, which contains its layout
- * and paint, so nothing in it can cover Slop's header or reach outside. Inside the box the design
- * is in charge: the works it places start from Slop's own panel and text styles (so they read on
+ * and paint, so nothing in it can cover SLAPorSLOP's header or reach outside. Inside the box the design
+ * is in charge: the works it places start from SLAPorSLOP's own panel and text styles (so they read on
  * any background), but the design can still lay its own things over them. That's why services and
  * Hire buttons are never inside a design. */
 .person-design { display: block; position: relative; contain: layout paint; isolation: isolate; overflow: clip; max-width: 100%; margin-top: 20px; border-radius: var(--radius); }
@@ -898,7 +898,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .community-builds li { margin-bottom: 8px; }
 .community-badge { align-self: flex-start; }
 
-/* ---- Private Slop ----------------------------------------------------------- */
+/* ---- Private ----------------------------------------------------------- */
 .visibility-choice { border: 1px solid var(--line); border-radius: 8px; padding: 8px 12px; display: flex; flex-direction: column; gap: 6px; }
 .share-panel { margin-bottom: 14px; }
 .share-panel h3 { margin: 0 0 6px; }
@@ -1194,7 +1194,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 /* ==== Library, laid out like Steam's (pages/Library.tsx, components/Downloads.tsx) ============
    A sidebar of your apps beside the selected app: banner, action bar, tabs, activity and
    friends. The two panes scroll on their own; on a phone they're two screens. Also the rating
-   at the top of an app's page and the library's "is it Slop?" prompt (components/RatingPanel). */
+   at the top of an app's page and the library's "does it slap, or is it slop?" prompt (components/RatingPanel). */
 .lib { display: grid; grid-template-columns: 300px minmax(0, 1fr); height: 100%; min-height: 0; }
 .lib-side { display: flex; flex-direction: column; min-height: 0; background: #10141a; border-right: 1px solid var(--line); }
 .lib-side-head { display: flex; align-items: center; justify-content: space-between; gap: 8px; padding: 14px 12px 8px 14px; }

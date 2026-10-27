@@ -77,7 +77,7 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
         <span className="d">{app.summary}</span>
         {app.not_slop_percent !== null && (
           <span className={`tile-rating ${app.not_slop_percent >= 70 ? "good" : app.not_slop_percent < 40 ? "bad" : "mixed"}`}>
-            {app.not_slop_percent}% Not Slop <span className="faint">· {app.vote_count.toLocaleString()} votes</span>
+            {app.not_slop_percent}% Slaps <span className="faint">· {app.vote_count.toLocaleString()} votes</span>
           </span>
         )}
         {app.players_now !== null && app.players_now > 0 && (
@@ -116,7 +116,7 @@ export function Shelf({ apps, empty }: { apps: Array<AppSummary & { reason?: str
   );
 }
 
-/** A link that leaves Slop. In the desktop app it opens the system browser. */
+/** A link that leaves SLAPorSLOP. In the desktop app it opens the system browser. */
 export function ExternalLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
   const onClick = (e: MouseEvent) => {
     e.preventDefault();

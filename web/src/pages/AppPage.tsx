@@ -60,7 +60,7 @@ function AppView({ app }: { app: AppDetail }) {
   const age = ageLabel(app.min_age);
   const firstCategory = app.kind === "game" ? { slug: "games", name: "Games" } : null;
   const hasGallery = app.gallery.length > 0;
-  // Donate, next to Play/Install in the Get it box (not for Coming soon or Private Slop).
+  // Donate, next to Play/Install in the Get it box (not for Coming soon or Private).
   const donate =
     app.stage !== "coming_soon" && !app.private ? <DonateButton slug={app.slug} title={app.title} isMine={app.is_mine} /> : null;
   // The Play/Install control: in the Get it box with Donate, and offered again (without it) by the
@@ -83,7 +83,7 @@ function AppView({ app }: { app: AppDetail }) {
   // in the Get it box.
   const interested = !app.private && <InterestedButton app={app} isInterested={app.is_interested} isMine={app.is_mine} />;
 
-  // Links inside the maker's Markdown leave Slop.
+  // Links inside the maker's Markdown leave SLAPorSLOP.
   const onDescriptionClick = (e: MouseEvent) => {
     const link = (e.target as HTMLElement).closest("a[data-external]");
     if (link) {
@@ -111,7 +111,7 @@ function AppView({ app }: { app: AppDetail }) {
 
       {app.private && (
         <div className="notice">
-          <span className="badge neutral">PRIVATE SLOP</span>{" "}
+          <span className="badge neutral">PRIVATE</span>{" "}
           {app.is_mine
             ? "Only you and the people you share it with can see this. It's never in the store."
             : `${app.maker.display_name} shared this with you. Only the people it's shared with can see it.`}
@@ -194,7 +194,7 @@ function AppView({ app }: { app: AppDetail }) {
             </div>
           )}
           {counted && players.data && (
-            <div className="playing" title="Counted by Slop Pulse: players who launched it from Slop">
+            <div className="playing" title="Counted by Slop Pulse: players who launched it from SLAPorSLOP">
               <b>{players.data.playing_now.toLocaleString()}</b> playing now ·{" "}
               {players.data.peak_this_month.toLocaleString()} peak this month
             </div>
@@ -300,7 +300,7 @@ function AppView({ app }: { app: AppDetail }) {
                     <ExternalLink href={f.url}>{f.platform === "linux-deb" ? ".deb" : ".rpm"}</ExternalLink>
                   </span>
                 ))}{" "}
-                <span className="faint">(installed by your system, not by Slop)</span>
+                <span className="faint">(installed by your system, not by SLAPorSLOP)</span>
               </p>
             )}
           </div>
@@ -422,7 +422,7 @@ function CommunityGate({ app, donate, children }: { app: AppDetail; donate?: Rea
           <li>
             Made by {app.maker.display_name}, not {app.branch.parent_maker}.
           </li>
-          <li>Checked the same way as every app on Slop.</li>
+          <li>Checked the same way as every app on SLAPorSLOP.</li>
           <li>May lag behind {app.branch.parent_title}'s official updates.</li>
           <li>
             Read <ExternalLink href={app.repo_url}>its README</ExternalLink> first.
@@ -462,7 +462,7 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
               <div className="muted small">
                 by {b.author}
                 {b.branch_note && <> · {b.branch_note}</>}
-                {b.not_slop_percent !== null && <> · {b.not_slop_percent}% Not Slop</>}
+                {b.not_slop_percent !== null && <> · {b.not_slop_percent}% Slaps</>}
               </div>
             </li>
           ))}
@@ -482,7 +482,7 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
               <div className="muted small">
                 {BRANCH_LABEL[b.branch_kind] ?? b.branch_kind} by {b.author}
                 {b.adds.length > 0 && <> · adds {b.adds.map((p) => PLATFORM_NAME[p] ?? p).join(", ")}</>}
-                {b.not_slop_percent !== null && <> · {b.not_slop_percent}% Not Slop</>}
+                {b.not_slop_percent !== null && <> · {b.not_slop_percent}% Slaps</>}
               </div>
             </li>
           ))}
@@ -498,7 +498,7 @@ function CommunityBuilds({ app }: { app: AppDetail }) {
   );
 }
 
-/** Who a Private Slop app is shared with (the owner's view): people, and player teams. */
+/** Who a private app is shared with (the owner's view): people, and player teams. */
 function SharePanel({ slug }: { slug: string }) {
   const shares = useLoad(() => api.private.shares(slug), [slug]);
   const myTeams = useLoad(() => api.teams.mine().then((m) => m.teams.filter((t) => t.kind === "player")), []);
@@ -615,7 +615,7 @@ function SandboxNote({ app }: { app: AppDetail }) {
       {ready && (
         <>
           <span className="badge neutral">WORKS IN SANDBOX MODE</span>{" "}
-          <span className="muted">The maker says so: it keeps its saves in Slop's save folder.</span>
+          <span className="muted">The maker says so: it keeps its saves in SLAPorSLOP's save folder.</span>
         </>
       )}
       {app.sandbox_trouble && (
@@ -627,14 +627,14 @@ function SandboxNote({ app }: { app: AppDetail }) {
   );
 }
 
-/** Apps that go online talk to servers Slop can't check (SECURITY §6.1). */
+/** Apps that go online talk to servers SLAPorSLOP can't check (SECURITY §6.1). */
 function OnlineNotice({ app }: { app: AppDetail }) {
   return (
     <div className="notice online-notice" role="note">
       <span className="badge warn">PLAYS ONLINE · SERVERS NOT CHECKED</span>{" "}
-      Slop checked this {app.kind === "game" ? "game" : "app"}'s code, but it can't check the servers it connects to, and
+      SLAPorSLOP checked this {app.kind === "game" ? "game" : "app"}'s code, but it can't check the servers it connects to, and
       those can change at any time. A server could send something that harms your computer through a bug in the{" "}
-      {app.kind === "game" ? "game" : "app"}. We suggest running it in <b>sandbox mode</b> in the Slop app, where it can use
+      {app.kind === "game" ? "game" : "app"}. We suggest running it in <b>sandbox mode</b> in the SLAPorSLOP app, where it can use
       only its own files and saves.
       <ul className="small">
         {app.online.map((k) => (

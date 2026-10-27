@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A running game asking for mods (Slop Link, DESIGN §9): a server or lobby needs them. The
-// player sees each one and says yes or no; on yes the Slop app fetches each from Slop, checks it
-// against Slop's signature, adds it to the game, and tells the game. Servers only name mods.
+// player sees each one and says yes or no; on yes the SLAPorSLOP app fetches each from SLAPorSLOP, checks it
+// against SLAPorSLOP's signature, adds it to the game, and tells the game. Servers only name mods.
 
 import { useEffect, useRef, useState } from "react";
 
@@ -71,7 +71,7 @@ function RequestDialog({ request, onDone }: { request: ModRequest; onDone: () =>
             For <b>{request.from}</b> (the game's words).{" "}
           </>
         ) : null}
-        Only mods published and approved on Slop can be added. Each comes from Slop and is checked against Slop's
+        Only mods published and approved on SLAPorSLOP can be added. Each comes from SLAPorSLOP and is checked against SLAPorSLOP's
         signature, never from the server.
       </p>
       {!info ? (
@@ -91,9 +91,9 @@ function RequestDialog({ request, onDone }: { request: ModRequest; onDone: () =>
                 </>
               ) : (
                 <>
-                  <code>{wanted.slug}</code> <span className="badge bad">NOT ON SLOP</span>
+                  <code>{wanted.slug}</code> <span className="badge bad">NOT ON SLAPorSLOP</span>
                   <div className="muted small">
-                    Not an approved mod for {title}, so it can't be added. Mods must be published on Slop and follow its
+                    Not an approved mod for {title}, so it can't be added. Mods must be published on SLAPorSLOP and follow its
                     guidelines.
                   </div>
                 </>
@@ -104,7 +104,7 @@ function RequestDialog({ request, onDone }: { request: ModRequest; onDone: () =>
       )}
       {online && (
         <p className="small">
-          A mod here goes online, on servers Slop can't check. We suggest playing {title} in <b>sandbox mode</b>.
+          A mod here goes online, on servers SLAPorSLOP can't check. We suggest playing {title} in <b>sandbox mode</b>.
         </p>
       )}
       {error && (
