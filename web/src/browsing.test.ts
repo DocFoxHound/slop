@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import { browsingKey, displayAddress, furthest, isTyping, siteOrigin } from "./browsing";
+import { browsingKey, displayAddress, fragmentId, furthest, isTyping, siteOrigin } from "./browsing";
 
 describe("furthest", () => {
   it("drops what was ahead on a new page, keeps it going back and forth", () => {
@@ -82,5 +82,19 @@ describe("isTyping", () => {
     expect(isTyping(make("<textarea></textarea>"))).toBe(true);
     expect(isTyping(make("<button>Go</button>"))).toBe(false);
     expect(isTyping(null)).toBe(false);
+  });
+});
+
+describe("fragmentId", () => {
+  it("names the element a link points at", () => {
+    expect(fragmentId("#decisions")).toBe("decisions");
+    expect(fragmentId("#pictures-and-videos")).toBe("pictures-and-videos");
+    expect(fragmentId("#caf%C3%A9")).toBe("café");
+    expect(fragmentId("")).toBe("");
+  });
+
+  it("is empty for a handoff link's fill, or a fragment that can't be decoded", () => {
+    expect(fragmentId("#fill=%7B%22title%22%3A%22Ferry%22%7D")).toBe("");
+    expect(fragmentId("#%E0%A4%A")).toBe("");
   });
 });

@@ -26,6 +26,7 @@ import { useChosen, useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { desktop, detectOs, isDesktop, type InstalledApp, type SaveCopy } from "../platform";
 import { useSession } from "../session";
+import { fragmentId } from "../browsing";
 import {
   buildEntries,
   countLabel,
@@ -88,7 +89,7 @@ export function Library() {
 
   // Links to the old library's parts (/library#<app>) open that app.
   useEffect(() => {
-    const id = decodeURIComponent(location.hash.slice(1));
+    const id = fragmentId(location.hash);
     if (!slug && id && entries.some((e) => e.slug === id)) navigate(`/library/${encodeURIComponent(id)}`, { replace: true });
   }, [slug, location.hash, entries, navigate]);
 

@@ -17,6 +17,7 @@ import { SaveSyncEvents } from "./Sandbox";
 import { UpdateNotice } from "./UpdateNotice";
 import { WindowControls } from "./WindowControls";
 import { useSession } from "../session";
+import { fragmentId } from "../browsing";
 
 const TABS = [
   {
@@ -97,7 +98,7 @@ export function Layout() {
   // above it may still be loading and push it down, so it's followed until the page settles
   // (or the person scrolls themselves).
   useEffect(() => {
-    const id = decodeURIComponent(location.hash.slice(1));
+    const id = fragmentId(location.hash);
     if (!id) return;
     let tries = 0;
     let observer: ResizeObserver | undefined;
