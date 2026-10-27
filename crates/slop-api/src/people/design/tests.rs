@@ -68,7 +68,7 @@ fn warned(warnings: &[String], what: &str) -> bool {
     warnings.iter().any(|w| w.contains(what))
 }
 
-/// Every element and attribute in a tree is one Slop allows.
+/// Every element and attribute in a tree is one SLAPorSLOP allows.
 fn assert_clean(nodes: &[Node]) {
     for n in nodes {
         if let Node::Element {
@@ -337,11 +337,11 @@ fn slops_parts_are_named_strictly() {
         "<slop-track> takes nothing inside it",
         "<slop-works> shows once",
         "<slop-works> can't be inside a link",
-        "<slop-evil> isn't one of Slop's parts",
+        "<slop-evil> isn't one of SLAPorSLOP's parts",
     ] {
         assert!(warned(&d.warnings, w), "{w}: {:?}", d.warnings);
     }
-    // Services are never inside a design (it could cover or imitate them): Slop shows them below.
+    // Services are never inside a design (it could cover or imitate them): SLAPorSLOP shows them below.
     let d = page("<section><slop-services><p>Hire me</p></slop-services></section>");
     assert_eq!(html(&d), "<section><p>Hire me</p></section>");
     assert!(warned(
@@ -486,7 +486,7 @@ fn css_that_could_escape_load_or_hide_is_removed() {
         ("button { color: red }", "<button> isn't one of the tags"),
         (
             "slop-works { display: none }",
-            "Slop's parts keep Slop's own look",
+            "SLAPorSLOP's parts keep SLAPorSLOP's own look",
         ),
         (".a:has(.b) { color: red }", ":has() isn't allowed"),
         (".a:visited { color: red }", ":visited isn't allowed"),
@@ -549,7 +549,7 @@ fn css_that_could_escape_load_or_hide_is_removed() {
         css(".a::before { content: \"</style>\" }").css,
         ".a::before{content:\"\\3c /style>\";}"
     );
-    // !important goes (Slop's reduced-motion rule has to win), the declaration stays.
+    // !important goes (SLAPorSLOP's reduced-motion rule has to win), the declaration stays.
     let out = css(".a { color: red !important }");
     assert_eq!(out.css, ".a{color:red;}");
     assert!(warned(

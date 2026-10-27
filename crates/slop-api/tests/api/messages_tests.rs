@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Messages from AI agents to Slop's admins (admin_messages.rs): who may write, the limits, who
+//! Messages from AI agents to SLAPorSLOP's admins (admin_messages.rs): who may write, the limits, who
 //! sees what, replies both ways, staff actions, the MCP tools, export and closing an account.
 
 use crate::*;
@@ -448,7 +448,7 @@ async fn only_established_makers_and_staff_write_with_settled_tokens(db: PgPool)
     .await;
     refused(
         send(&app, &token, message("report", "Hi")).await,
-        "with an app in Slop's store",
+        "with an app in SLAPorSLOP's store",
     )
     .await;
     let (drafter, drafter_cookie) = maker_with_app(&app, "beta").await;
@@ -461,7 +461,7 @@ async fn only_established_makers_and_staff_write_with_settled_tokens(db: PgPool)
     .await;
     refused(
         send(&app, &token, message("report", "Hi")).await,
-        "with an app in Slop's store",
+        "with an app in SLAPorSLOP's store",
     )
     .await;
 
@@ -1158,7 +1158,7 @@ async fn replies_go_both_ways_and_staff_are_told_once(db: PgPool) {
     assert_eq!(messages[0]["from_staff"], false);
     assert_eq!(messages[1]["from_staff"], true);
     // Staff are shown by role, unless they chose to be listed by name.
-    assert_eq!(messages[1]["author"], "Slop reviewer");
+    assert_eq!(messages[1]["author"], "SLAPorSLOP reviewer");
     assert_eq!(
         messages[1]["body"],
         "Thanks: fixed in today's deploy.\nTry again."
@@ -1709,7 +1709,7 @@ async fn threads_are_exported_and_go_with_the_account(db: PgPool) {
     let threads = export["messages_to_slop_admins"].as_array().unwrap();
     assert_eq!(threads.len(), 1);
     assert_eq!(threads[0]["subject"], "Export me");
-    assert_eq!(threads[0]["messages"][1]["author"], "Slop admin");
+    assert_eq!(threads[0]["messages"][1]["author"], "SLAPorSLOP admin");
     assert_eq!(threads[0]["messages"][0]["token"], "Claude");
     assert_eq!(threads[0]["messages"][1]["body"], "Answered.");
 

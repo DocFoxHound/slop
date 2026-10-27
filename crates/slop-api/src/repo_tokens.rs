@@ -1,15 +1,15 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Read-only access tokens for private repositories outside GitHub (DESIGN §13, ARCHITECTURE
-//! §6.5): GitLab, Bitbucket, and Gitea or Forgejo servers. GitHub uses Slop's GitHub App instead.
+//! §6.5): GitLab, Bitbucket, and Gitea or Forgejo servers. GitHub uses SLAPorSLOP's GitHub App instead.
 //!
-//! - The maker pastes a token that can only read the repository. Slop checks it works, then keeps
+//! - The maker pastes a token that can only read the repository. SLAPorSLOP checks it works, then keeps
 //!   it encrypted (ChaCha20-Poly1305 with `SLOP_REPO_TOKEN_KEY`, bound to the app) and never shows
 //!   it again.
 //! - It's only sent to the repository's own host, in the `Authorization` header, which the HTTP
 //!   client drops if a redirect leaves that host.
 //! - It's tied to the repository: moving the app to another repository forgets it.
 //! - Players the app is shared with get the host's short-lived download link, like GitHub's. A
-//!   host that serves the file directly instead can't be shared through Slop: Slop never relays
+//!   host that serves the file directly instead can't be shared through SLAPorSLOP: SLAPorSLOP never relays
 //!   files.
 
 use anyhow::{Context, anyhow, bail};
@@ -99,7 +99,7 @@ pub async fn verify_given(state: &AppState, repo_url: &str, given: &Given) -> Ap
     if slop_provenance::github_repo_path(repo_url).is_some() {
         return Err(ApiError::invalid(
             "repo_token",
-            "GitHub repositories use Slop's GitHub App instead of a token",
+            "GitHub repositories use SLAPorSLOP's GitHub App instead of a token",
         ));
     }
     let token = given.token.trim();
@@ -442,7 +442,7 @@ pub async fn still_works(state: &AppState, app_id: Uuid) -> Option<bool> {
 
 /// A short-lived download link for a private file: the host's redirect to its file storage,
 /// asked for with the token and not followed. Hosts that answer with the file itself can't give
-/// players a link, and Slop doesn't relay files.
+/// players a link, and SLAPorSLOP doesn't relay files.
 pub async fn short_lived_link(state: &AppState, url: &str, auth: &str) -> anyhow::Result<String> {
     let res = state
         .http
@@ -467,7 +467,7 @@ pub async fn short_lived_link(state: &AppState, url: &str, auth: &str) -> anyhow
     }
     bail!(
         "this repository's host serves private files directly instead of through short-lived links, \
-         so Slop can't pass them on (it never relays files): the people it's shared with need their own access"
+         so SLAPorSLOP can't pass them on (it never relays files): the people it's shared with need their own access"
     )
 }
 
@@ -485,7 +485,7 @@ struct Status {
     last_used_at: Option<OffsetDateTime>,
     /// Off on this server (no SLOP_REPO_TOKEN_KEY).
     available: bool,
-    /// GitHub repositories use Slop's GitHub App instead.
+    /// GitHub repositories use SLAPorSLOP's GitHub App instead.
     github: bool,
 }
 

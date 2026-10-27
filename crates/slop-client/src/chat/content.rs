@@ -50,7 +50,7 @@ pub enum Body {
     Delete {
         target: Uuid,
     },
-    /// A group chat's name. Slop never sees it.
+    /// A group chat's name. SLAPorSLOP never sees it.
     Rename {
         name: String,
     },
@@ -67,7 +67,7 @@ pub enum Body {
 /// An attachment, encrypted on the sending device with its own key (SECURITY §8.5).
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 pub struct AttachmentRef {
-    /// Slop's ID for the encrypted bytes.
+    /// SLAPorSLOP's ID for the encrypted bytes.
     pub id: Uuid,
     /// The key and nonce, base64.
     pub key: String,
@@ -114,7 +114,7 @@ impl Content {
         }
     }
 
-    /// The plaintext that's encrypted, and its franking tag for Slop.
+    /// The plaintext that's encrypted, and its franking tag for SLAPorSLOP.
     pub fn seal(&self) -> Result<(Vec<u8>, [u8; 32])> {
         let plaintext = serde_json::to_vec(self).map_err(|e| Error::Verify(e.to_string()))?;
         let tag = franking_tag(&self.fk, &plaintext)?;
@@ -127,7 +127,7 @@ impl Content {
     }
 }
 
-/// HMAC-SHA256(franking key, plaintext): Slop stores it, and checks a reported message against it.
+/// HMAC-SHA256(franking key, plaintext): SLAPorSLOP stores it, and checks a reported message against it.
 pub fn franking_tag(key_b64: &str, plaintext: &[u8]) -> Result<[u8; 32]> {
     let key = B64
         .decode(key_b64)
@@ -231,7 +231,7 @@ pub fn new_recovery_code() -> String {
 }
 
 /// The backup key from a recovery code (Argon2id, salted with the user's ID). Only the user
-/// has the code, so Slop can't decrypt the backup.
+/// has the code, so SLAPorSLOP can't decrypt the backup.
 pub fn backup_key(recovery_code: &str, user: Uuid) -> Result<[u8; 32]> {
     let normalized: String = recovery_code
         .chars()

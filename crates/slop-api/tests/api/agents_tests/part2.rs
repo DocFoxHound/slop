@@ -328,7 +328,14 @@ async fn an_agent_reads_publishes_and_withdraws_legal_documents(db: PgPool) {
     assert!(!failed, "{text}");
     let published = parsed(&text);
     let version = published["version"].as_str().unwrap().to_string();
-    assert_eq!(version, OffsetDateTime::now_utc().date().to_string());
+    // Today's date, with a letter when a repository file already has today's.
+    let today = OffsetDateTime::now_utc().date().to_string();
+    assert!(
+        version
+            .strip_prefix(today.as_str())
+            .is_some_and(|l| l.len() <= 1),
+        "{version}"
+    );
     let days = (published["effective_at"].as_i64().unwrap()
         - OffsetDateTime::now_utc().unix_timestamp()) as f64
         / 86_400.0;
@@ -605,7 +612,7 @@ async fn an_agent_asks_to_remove_staff_and_a_person_decides(db: PgPool) {
         &app,
         &moderate,
         "remove_from_staff",
-        json!({ "user_id": rev_id, "reason": "No longer reviewing for Slop." }),
+        json!({ "user_id": rev_id, "reason": "No longer reviewing for SLAPorSLOP." }),
     )
     .await;
     assert!(!failed, "{text}");
@@ -1890,7 +1897,7 @@ async fn owners_are_warned_a_week_and_a_day_before_a_token_expires_and_when_it_h
         inbox["your_token"]["note"]
             .as_str()
             .unwrap()
-            .contains("make a replacement on Slop under Account → AI agents"),
+            .contains("make a replacement on SLAPorSLOP under Account → AI agents"),
         "{inbox}"
     );
     // The token-expiry kind is for the agent too (it's about maker work).
@@ -2164,7 +2171,10 @@ async fn the_maker_guides_are_for_signed_in_makers_and_agents(db: PgPool) {
     .await;
     assert_eq!(status, StatusCode::OK);
     assert_eq!(kind, "text/markdown; charset=utf-8");
-    assert!(guide.starts_with("# Slop for makers' AI agents"), "{guide}");
+    assert!(
+        guide.starts_with("# SLAPorSLOP for makers' AI agents"),
+        "{guide}"
+    );
     let (failed, text) = maker_tool(&app, &agent, "maker_guide", json!({})).await;
     assert!(!failed);
     // The agent's copy ends with its own token's expiry; a person's doesn't.
@@ -3281,7 +3291,7 @@ async fn check_repository_checks_that_slop_can_still_read_the_repository(db: PgP
     assert!(!frozen);
 }
 
-/// check_repository checks Slop can read the repository, freezing or unfreezing the app, and
+/// check_repository checks SLAPorSLOP can read the repository, freezing or unfreezing the app, and
 /// says so; it doesn't check the code (bug b111: it used to say it ran the source check).
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn check_repository_freezes_and_unfreezes_by_repository_access(db: PgPool) {

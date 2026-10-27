@@ -4,9 +4,9 @@
 //! and sandbox mode, so switching loses nothing.
 //!
 //! That makes it the one bridge between a sandboxed session and a normal one, so before every
-//! launch Slop sweeps it: links are removed, programs and libraries are moved out to a
+//! launch SLAPorSLOP sweeps it: links are removed, programs and libraries are moved out to a
 //! quarantine folder, and execute permission is taken off. A sandboxed session can only leave
-//! data behind, and before each one Slop keeps a copy of the folder so the player can go back.
+//! data behind, and before each one SLAPorSLOP keeps a copy of the folder so the player can go back.
 
 use std::{
     fs, io,
@@ -52,7 +52,7 @@ fn is_native_code(path: &Path) -> bool {
 
 /// Sweeps a save folder before a launch. Returns the paths (relative to the folder) of the
 /// programs and libraries moved into `quarantine`. `skip` is a mods folder inside it, which
-/// Slop fills with approved mods (code included) and checks itself (mods_folder.rs).
+/// SLAPorSLOP fills with approved mods (code included) and checks itself (mods_folder.rs).
 pub fn sweep(dir: &Path, quarantine: &Path, skip: Option<&Path>) -> io::Result<Vec<String>> {
     let mut moved = Vec::new();
     if dir.exists() {
@@ -76,7 +76,7 @@ fn sweep_in(
             continue;
         }
         if kind.is_symlink() {
-            // A link could point Slop or the app outside the folder.
+            // A link could point SLAPorSLOP or the app outside the folder.
             fs::remove_file(&path)?;
         } else if kind.is_dir() {
             sweep_in(root, &path, quarantine, skip, moved)?;

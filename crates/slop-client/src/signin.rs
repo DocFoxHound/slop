@@ -57,12 +57,14 @@ pub async fn begin(api: &ApiClient, device_name: &str) -> Result<PendingSignIn> 
     }
     let created: Created =
         serde_json::from_value(res.body).map_err(|e| Error::Verify(e.to_string()))?;
-    // Only ever open the configured Slop site in the browser.
+    // Only ever open the configured SLAPorSLOP site in the browser.
     if !created
         .approve_url
         .starts_with(api.base().as_str().trim_end_matches('/'))
     {
-        return Err(Error::Verify("sign-in page isn't on the Slop site".into()));
+        return Err(Error::Verify(
+            "sign-in page isn't on the SLAPorSLOP site".into(),
+        ));
     }
     Ok(PendingSignIn {
         approve_url: created.approve_url,
@@ -78,12 +80,12 @@ fn slop_pkce_challenge(verifier: &str) -> String {
     URL_SAFE_NO_PAD.encode(Sha256::digest(verifier.as_bytes()))
 }
 
-const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Slop</title>\
+const DONE_PAGE: &str = "<!doctype html><meta charset=utf-8><title>SLAPorSLOP</title>\
 <body style=\"font:16px system-ui;background:#0d1015;color:#e7ecf2;display:grid;place-items:center;height:100vh;margin:0\">\
-<div><h1 style=\"color:#a3e635\">You're signed in</h1><p>You can close this tab and go back to Slop.</p></div>";
-const FAILED_PAGE: &str = "<!doctype html><meta charset=utf-8><title>Slop</title>\
+<div><h1 style=\"color:#a3e635\">You're signed in</h1><p>You can close this tab and go back to SLAPorSLOP.</p></div>";
+const FAILED_PAGE: &str = "<!doctype html><meta charset=utf-8><title>SLAPorSLOP</title>\
 <body style=\"font:16px system-ui;background:#0d1015;color:#e7ecf2;display:grid;place-items:center;height:100vh;margin:0\">\
-<div><h1>Sign-in didn't work</h1><p>Go back to Slop and try again.</p></div>";
+<div><h1>Sign-in didn't work</h1><p>Go back to SLAPorSLOP and try again.</p></div>";
 
 impl PendingSignIn {
     /// Waits for the browser to come back, then stores the new tokens in `api`.

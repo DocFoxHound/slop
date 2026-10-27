@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Notifications in Slop (the bell) and product emails (decided 2026-10-20).
+//! Notifications in SLAPorSLOP (the bell) and product emails (decided 2026-10-20).
 //!
 //! Anything that should reach a user calls `send` inside its own transaction; it only writes a
 //! row. The email worker (`run_email`, only when SMTP is set up) then emails the ones the user
@@ -50,14 +50,14 @@ pub const CATEGORIES: &[(&str, &str)] = &[
         "donations",
         "Donations: receipts, server donation reminders and changes to where yours are paid",
     ),
-    ("shared", "Private Slop someone shares with you"),
+    ("shared", "Private apps someone shares with you"),
     (
         "teams",
         "Your teams: invitations, game nights and verification",
     ),
     (
         "apps",
-        "Your apps: every release (received, approved, rejected, withdrawn), going public, and when Slop can't read a repository",
+        "Your apps: every release (received, approved, rejected, withdrawn), going public, and when SLAPorSLOP can't read a repository",
     ),
     ("chat", "New chat messages while you're away"),
     ("friends", "Friend requests, and when someone accepts yours"),
@@ -167,7 +167,7 @@ pub(crate) async fn email(
         .bind(to)
         .bind(subject)
         .bind(format!(
-            "{body}\n\n— Slop\n{}\n\nYou get this email because you sent a report to Slop.",
+            "{body}\n\n— SLAPorSLOP\n{}\n\nYou get this email because you sent a report to SLAPorSLOP.",
             config.public_url
         ))
         .execute(conn)
@@ -201,7 +201,7 @@ pub(crate) async fn email_user(
         .bind(to)
         .bind(subject)
         .bind(format!(
-            "Hi {name},\n\n{body}\n\n— Slop\n{}",
+            "Hi {name},\n\n{body}\n\n— SLAPorSLOP\n{}",
             config.public_url
         ))
         .execute(conn)
@@ -592,7 +592,7 @@ pub async fn queue_emails(db: &PgPool, config: &Config) -> anyhow::Result<usize>
             .map(String::from)
             .unwrap_or_default();
         let text = format!(
-            "Hi {name},\n\n{title}\n{}{}\n\nOpen it: {url}\n\n— Slop\n\nYou can choose which emails Slop sends you on your account page: {account}",
+            "Hi {name},\n\n{title}\n{}{}\n\nOpen it: {url}\n\n— SLAPorSLOP\n\nYou can choose which emails SLAPorSLOP sends you on your account page: {account}",
             if body.is_empty() { "" } else { "\n" },
             body
         );

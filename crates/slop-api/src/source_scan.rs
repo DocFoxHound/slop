@@ -1,21 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Slop's own look at an app's source, at the commit a release was built from (DESIGN §10's
-//! "Licence" and "Monetization rules" rows, LEGAL-GUIDANCE IP-2). Slop downloads the
+//! SLAPorSLOP's own look at an app's source, at the commit a release was built from (DESIGN §10's
+//! "Licence" and "Monetization rules" rows, LEGAL-GUIDANCE IP-2). SLAPorSLOP downloads the
 //! repository's archive at that commit once, reads it in memory, and deletes it:
 //!
 //! - **Licence:** which licence the repository's own licence files are, against the store page's.
 //!   Missing or contradicting licence files, source files whose SPDX headers name a different
 //!   licence, and (for public apps) licences that aren't OSI-approved become notes.
-//! - **Monetization:** apps on Slop can't sell anything (LEGAL §8). Payment libraries, in-app
+//! - **Monetization:** apps on SLAPorSLOP can't sell anything (LEGAL §8). Payment libraries, in-app
 //!   purchase APIs, checkout links, loot boxes and premium currencies in the code become notes.
-//! - **Code from outside Slop:** apps may only run code from releases and mods Slop checked
-//!   (Content Policy, "Code from outside Slop"). Code that loads programs, libraries or scripts at
+//! - **Code from outside SLAPorSLOP:** apps may only run code from releases and mods SLAPorSLOP checked
+//!   (Content Policy, "Code from outside SLAPorSLOP"). Code that loads programs, libraries or scripts at
 //!   run time, self-updaters, and data formats that can rebuild arbitrary objects (the usual way a
 //!   hostile game server takes over a player's computer) become notes.
 //! - **Online play:** networking code (engines' multiplayer, sockets, HTTP and WebSocket
 //!   clients, online-service SDKs). An app whose store page doesn't say it goes online gets a
-//!   note, since players are told about servers Slop can't check. Files with the Slop Pulse
-//!   snippet (which only talks to Slop) don't count.
+//!   note, since players are told about servers SLAPorSLOP can't check. Files with the Slop Pulse
+//!   snippet (which only talks to SLAPorSLOP) don't count.
 //! - **Packages:** the dependencies named in lockfiles (Cargo.lock, package-lock.json, yarn.lock,
 //!   go.mod, poetry.lock, Pipfile.lock, requirements.txt, NuGet's packages.lock.json), kept for
 //!   the daily advisory watch (dep_watch.rs).
@@ -23,7 +23,7 @@
 //! Everything here is a note for the reviewer and the maker: patterns in text have false
 //! positives, so nothing is held or rejected by itself.
 //!
-//! Slop reads repositories on GitHub, GitLab and Codeberg (and other GitLab or Gitea servers
+//! SLAPorSLOP reads repositories on GitHub, GitLab and Codeberg (and other GitLab or Gitea servers
 //! listed in `SLOP_SOURCE_HOSTS`, or whose maker saved a read-only token), through each host's
 //! archive API. Private ones are read with the maker's token (repo_tokens.rs). Anything else is
 //! recorded as not checked, for a reviewer to look at by hand.
@@ -44,7 +44,7 @@ use url::Url;
 
 use crate::{AppState, repo_tokens::Kind};
 
-/// Largest repository archive Slop downloads (hosts' archives leave out Git LFS files).
+/// Largest repository archive SLAPorSLOP downloads (hosts' archives leave out Git LFS files).
 const MAX_ARCHIVE: u64 = 512 * 1024 * 1024;
 /// Text files bigger than this aren't read.
 const MAX_TEXT_FILE: u64 = 2 * 1024 * 1024;
@@ -84,7 +84,7 @@ pub struct Report {
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub saves: Vec<Hit>,
     /// Where local saves go, as far as the source shows: `slop` (it reads SLOP_SAVE_DIR),
-    /// `engine` (an engine folder the Slop app points into the save folder, like Godot's
+    /// `engine` (an engine folder the SLAPorSLOP app points into the save folder, like Godot's
     /// `user://`), `elsewhere` (fixed per-user folders: see `saves`) or `none` (no local saves
     /// found). Every checked release says which, so makers and reviewers see it's there.
     #[serde(skip_serializing_if = "str::is_empty")]
@@ -104,7 +104,7 @@ pub struct Report {
     #[serde(skip_serializing_if = "std::ops::Not::not")]
     pub mod_online: bool,
     /// Pay-to-win designs a person should look at (premium currencies, energy skips, VIP tiers,
-    /// battle passes, bought boosts). Notes only: nothing on Slop can be sold anyway.
+    /// battle passes, bought boosts). Notes only: nothing on SLAPorSLOP can be sold anyway.
     #[serde(skip_serializing_if = "Vec::is_empty")]
     pub design: Vec<Hit>,
     /// Slop Pulse in the code: `none`, `start_only` (never sends heartbeats) or `heartbeat`.
@@ -141,7 +141,7 @@ pub struct Licence {
 #[derive(Debug, Serialize)]
 pub struct LicenceFile {
     pub path: String,
-    /// The licence it is, when Slop recognises the text.
+    /// The licence it is, when SLAPorSLOP recognises the text.
     pub spdx: Option<&'static str>,
 }
 
@@ -419,7 +419,7 @@ static RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     ]
 });
 
-/// Code from outside Slop: loading code at run time, self-updaters, and data formats that can
+/// Code from outside SLAPorSLOP: loading code at run time, self-updaters, and data formats that can
 /// rebuild arbitrary objects. (rule, label, file extensions it applies to, pattern)
 static CODE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new(|| {
     let r = |rule, label, exts, re: &str| {
@@ -464,7 +464,7 @@ static CODE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::ne
         ),
         r(
             "self_update",
-            "Updates itself outside Slop",
+            "Updates itself outside SLAPorSLOP",
             &["rs", "go", "cs", "js", "mjs", "cjs", "ts", "py", "gd"][..],
             r"\belectron-updater\b|\bautoUpdater\.|\bSquirrel\.|\bVelopack\b|\bNetSparkle\b|\bself_update::|\bgo-selfupdate\b|\bpyupdater\b|\btufup\b",
         ),
@@ -533,7 +533,7 @@ static NET_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new
 });
 
 /// Saves written to fixed places in the user's folders rather than SLOP_SAVE_DIR (sandbox mode,
-/// DESIGN §10). Godot's `user://` isn't listed: the Slop app points it at the save folder.
+/// DESIGN §10). Godot's `user://` isn't listed: the SLAPorSLOP app points it at the save folder.
 /// (rule, label, file extensions, pattern)
 static SAVE_RULES: LazyLock<Vec<(Rule, &'static [&'static str])>> = LazyLock::new(|| {
     let r = |rule, label, exts, re: &str| {
@@ -697,7 +697,7 @@ static DESIGN_RULES: LazyLock<Vec<Rule>> = LazyLock::new(|| {
     ]
 });
 
-/// Self-updaters: they replace the app with whatever their server sends, bypassing Slop.
+/// Self-updaters: they replace the app with whatever their server sends, bypassing SLAPorSLOP.
 const UPDATER_PACKAGES: &[(&str, &str)] = &[
     ("npm", "electron-updater"),
     ("npm", "update-electron-app"),
@@ -1108,7 +1108,7 @@ pub fn scan_archive(
     let mut network = Tally::default();
     let mut saves = Tally::default();
     let mut code_files = Tally::default();
-    // Code that reads SLOP_SAVE_DIR knows about Slop's save folder: no save notes then.
+    // Code that reads SLOP_SAVE_DIR knows about SLAPorSLOP's save folder: no save notes then.
     let mut uses_save_dir = false;
     // Godot's user:// lands in the save folder by itself.
     let mut engine_saves = false;
@@ -1205,7 +1205,7 @@ pub fn scan_archive(
             }
         }
         if unity_manifest || source {
-            // The Slop Pulse snippet only talks to Slop.
+            // The Slop Pulse snippet only talks to SLAPorSLOP.
             let pulse = text.contains("SLOP_PULSE");
             if text.contains("SLOP_PULSE_TOKEN") {
                 pulse_uses = true;
@@ -1270,7 +1270,7 @@ pub fn scan_archive(
     for p in packages.iter().filter(|p| in_list(UPDATER_PACKAGES, p)) {
         code_loading.add(
             "self_update",
-            "Updates itself outside Slop",
+            "Updates itself outside SLAPorSLOP",
             format!("{} {} ({})", p.name, p.version, p.ecosystem),
         );
     }
@@ -1335,7 +1335,7 @@ fn licence_problems(
             problems.push((
                 "unidentified".into(),
                 format!(
-                    "Slop couldn't tell which licence {} is. A reviewer checks that it's {}.",
+                    "SLAPorSLOP couldn't tell which licence {} is. A reviewer checks that it's {}.",
                     l.files[0].path, l.declared
                 ),
             ));
@@ -1400,7 +1400,7 @@ fn licence_problems(
             problems.push((
                 "not_osi".into(),
                 format!(
-                    "{} isn't on Slop's list of OSI-approved licences, which apps in the store need (opensource.org/licenses).",
+                    "{} isn't on SLAPorSLOP's list of OSI-approved licences, which apps in the store need (opensource.org/licenses).",
                     not_osi.join(", ")
                 ),
             ));
@@ -1409,9 +1409,9 @@ fn licence_problems(
     problems
 }
 
-/// The repository is bigger than Slop reads: recorded as not checked, not as a failure.
+/// The repository is bigger than SLAPorSLOP reads: recorded as not checked, not as a failure.
 #[derive(Debug, thiserror::Error)]
-#[error("the repository is bigger than the {} MiB Slop reads, so a reviewer checks the licence by hand", MAX_ARCHIVE / 1024 / 1024)]
+#[error("the repository is bigger than the {} MiB SLAPorSLOP reads, so a reviewer checks the licence by hand", MAX_ARCHIVE / 1024 / 1024)]
 struct TooBig;
 
 /// Where a repository's archive at a commit comes from.
@@ -1420,7 +1420,7 @@ pub struct Source {
     /// The host's name for messages ("GitHub", "GitLab", "Codeberg").
     pub host: String,
     pub url: Url,
-    /// Whether it's GitHub's API, asked with Slop's GitHub App or token.
+    /// Whether it's GitHub's API, asked with SLAPorSLOP's GitHub App or token.
     pub github: bool,
 }
 
@@ -1489,7 +1489,7 @@ async fn detect(state: &AppState, repo: &Url) -> Option<Kind> {
     None
 }
 
-/// Where to read a release's source, or None for hosts Slop can't read.
+/// Where to read a release's source, or None for hosts SLAPorSLOP can't read.
 async fn source(
     state: &AppState,
     app_id: Uuid,
@@ -1595,7 +1595,7 @@ async fn download_archive(
     match res.status().as_u16() {
         200 => {}
         401 | 403 | 404 => bail!(
-            "{host} can't find that commit (or the repository isn't visible to Slop; for a private repository, save a read-only token)"
+            "{host} can't find that commit (or the repository isn't visible to SLAPorSLOP; for a private repository, save a read-only token)"
         ),
         code => bail!("{host} answered {code} for the source archive"),
     }
@@ -1642,7 +1642,7 @@ pub async fn scan_release(
             (serde_json::to_value(report).unwrap_or_default(), packages)
         }
         Ok(None) => (
-            json!({ "status": "not_checked", "detail": "Slop can only read source on GitHub, GitLab, Bitbucket, Codeberg and other Gitea or Forgejo servers so far; a reviewer checks the licence by hand." }),
+            json!({ "status": "not_checked", "detail": "SLAPorSLOP can only read source on GitHub, GitLab, Bitbucket, Codeberg and other Gitea or Forgejo servers so far; a reviewer checks the licence by hand." }),
             vec![],
         ),
         Err(err) if err.downcast_ref::<TooBig>().is_some() => (
@@ -1804,7 +1804,7 @@ pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result
     .await?;
     let Some(now) = concerns(this.as_ref().unwrap_or(&Value::Null)) else {
         return Ok(Some(
-            "Slop couldn't read this release's source, so a person checks it".into(),
+            "SLAPorSLOP couldn't read this release's source, so a person checks it".into(),
         ));
     };
     let before = before.as_ref().and_then(concerns).unwrap_or_default();
@@ -1814,7 +1814,7 @@ pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result
     }
     let kinds: Vec<&str> = [
         ("monetization:", "possible purchases or loot boxes"),
-        ("code:", "code loading from outside Slop"),
+        ("code:", "code loading from outside SLAPorSLOP"),
         ("online:", "online play the store page doesn't mention"),
         ("licence:", "licence problems"),
     ]
@@ -2024,7 +2024,7 @@ mod tests {
             "save notes don't hold updates"
         );
 
-        // Code that reads SLOP_SAVE_DIR knows about Slop's save folder.
+        // Code that reads SLOP_SAVE_DIR knows about SLAPorSLOP's save folder.
         let data = archive(&[
             mit,
             (

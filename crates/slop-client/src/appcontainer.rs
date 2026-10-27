@@ -2,12 +2,12 @@
 //! Sandbox mode on Windows (DESIGN §6, SECURITY §6.2): the app runs in an AppContainer, the box
 //! Windows gives Store apps. A process in one can only open files and folders whose permissions
 //! name its container (or all app packages, as Windows' own files do), so it can't see the
-//! player's documents, other apps or Slop. Slop gives its container read access to the app's
+//! player's documents, other apps or SLAPorSLOP. SLAPorSLOP gives its container read access to the app's
 //! files and mods, and write access to its save and cache folders; a mods folder inside the
 //! saves gets a deny-write entry on top. The network is a capability: given unless the player
 //! blocked it.
 //!
-//! The Slop app starts a copy of itself as the launcher (`--slop-sandbox <spec>`, so the
+//! The SLAPorSLOP app starts a copy of itself as the launcher (`--slop-sandbox <spec>`, so the
 //! command still looks like any other to the caller), which sets this up, starts the app in a
 //! job object that ends it if the launcher goes, waits, and exits with the app's exit code.
 
@@ -80,7 +80,7 @@ impl Drop for ContainerSid {
 
 /// Creates the app's container, or finds the one made before.
 fn container(name: &str) -> io::Result<ContainerSid> {
-    let (wname, display) = (wide(name), wide(format!("Slop sandbox: {name}")));
+    let (wname, display) = (wide(name), wide(format!("SLAPorSLOP sandbox: {name}")));
     let mut sid: PSID = ptr::null_mut();
     let res = unsafe {
         CreateAppContainerProfile(
@@ -103,7 +103,7 @@ fn container(name: &str) -> io::Result<ContainerSid> {
     Ok(ContainerSid(sid))
 }
 
-/// Whether AppContainers work here: makes (or finds) Slop's test container.
+/// Whether AppContainers work here: makes (or finds) SLAPorSLOP's test container.
 pub fn check() -> io::Result<()> {
     container("slop.check").map(drop)
 }
@@ -115,7 +115,7 @@ pub fn remove(name: &str) {
 }
 
 /// Whether the folder's own permissions already have this entry. Then what's in it inherited it
-/// too, and a launch needn't walk the whole folder again. A folder Slop replaces (an update, a
+/// too, and a launch needn't walk the whole folder again. A folder SLAPorSLOP replaces (an update, a
 /// restored save) comes without it.
 fn has_entry(acl: *const ACL, sid: PSID, access: u32, mode: i32) -> bool {
     if acl.is_null() {

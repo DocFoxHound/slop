@@ -1,11 +1,11 @@
 ---
 title: Privacy Policy
-version: 2026-10-20
-summary: First version.
+version: 2026-10-27
+summary: The platform is now called SLAPorSLOP. Nothing else changes.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
-IronPoint Development LLC ("Slop") is the controller of the personal data described here.
+IronPoint Development LLC ("SLAPorSLOP") is the controller of the personal data described here.
 
 ## What we collect, and why
 
@@ -28,7 +28,7 @@ We never sell your data, and we don't use it to train AI models.
 Our hosting provider, GitHub (sign-in, apps' repositories), and Stripe (payments, as an independent controller). Makers never learn who donated unless the donor chooses to tell them.
 
 ## Transfers
-Slop is a US company. Transfers from the EU and UK rely on the EU-US Data Privacy Framework (and its UK Extension), with standard contractual clauses as a fallback.
+SLAPorSLOP is a US company. Transfers from the EU and UK rely on the EU-US Data Privacy Framework (and its UK Extension), with standard contractual clauses as a fallback.
 
 ## Your rights
 You can see, download, correct and delete your data.

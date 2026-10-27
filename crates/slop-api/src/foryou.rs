@@ -9,7 +9,7 @@
 //! | in their library | +1 |
 //! | marked Interested | +2 |
 //! | launched it | + its vote weight (0.1–1: more for more playtime or launch days) |
-//! | voted 👍 Not Slop | +2 |
+//! | voted 👍 Slaps | +2 |
 //! | voted 👎 Slop | −2 |
 //!
 //! **Matches** are scored by how well an app's tags line up with that taste (a cosine, so an app
@@ -211,9 +211,9 @@ pub fn recommend(
                 let reason = if p >= q.max(f) && p > 0.0 {
                     "Popular right now"
                 } else if q >= f && q > 0.0 {
-                    "Players say it's Not Slop"
+                    "Players say it slaps"
                 } else {
-                    "New on Slop"
+                    "New on SLAPorSLOP"
                 };
                 (
                     i,
@@ -383,7 +383,7 @@ pub fn recommend(
         }
         let reason = match (lead, c.app.not_slop_percent) {
             (Some(t), Some(p)) if p >= 80 => format!(
-                "Something different: {}, {p}% Not Slop",
+                "Something different: {}, {p}% Slaps",
                 names(&[t], tag_names)
             ),
             (Some(t), _) => format!("Something different: {}", names(&[t], tag_names)),

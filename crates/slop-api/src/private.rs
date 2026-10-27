@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Private Slop (DESIGN §13, SECURITY §12): apps only their owner and the people they choose can
+//! Private apps (DESIGN §13, SECURITY §12): apps only their owner and the people they choose can
 //! see. Same requirements as public apps (an approved release), and the source may be a private
-//! repository Slop can read; builds stay on the owner's release page and are downloaded through
+//! repository SLAPorSLOP can read; builds stay on the owner's release page and are downloaded through
 //! short-lived links (releases.rs). Never in the store, search or recommendations; no store
 //! listing, donations or voting. Access is checked on every request (`catalog::push_shared_with`).
 
@@ -46,7 +46,7 @@ async fn owned_private(
         Some((id, maker, title, visibility)) if maker == user.id => {
             if visibility != "private" {
                 return Err(ApiError::Conflict(
-                    "only Private Slop is shared this way; public apps are in the store".into(),
+                    "only private apps are shared this way; public apps are in the store".into(),
                 ));
             }
             Ok((id, title))
@@ -109,14 +109,14 @@ async fn share_team(
     if kind != "player" {
         return Err(ApiError::invalid(
             "team",
-            "Private Slop is never shared with official teams",
+            "Private apps are never shared with official teams",
         ));
     }
     // Anyone can join an open team, so sharing with one would be sharing with anyone.
     if join_policy != "invite" {
         return Err(ApiError::invalid(
             "team",
-            "Private Slop is only shared with invite-only teams",
+            "Private apps are only shared with invite-only teams",
         ));
     }
     let mut tx = state.db.begin().await?;
@@ -143,7 +143,7 @@ async fn share_team(
                     user_id: m,
                     category: "shared",
                     title: format!("{} shared {title} with {team_name}", user.display_name),
-                    body: "It's Private Slop: only the team can see it.".into(),
+                    body: "It's private: only the team can see it.".into(),
                     link: format!("/app/{slug}"),
                     collapse_key: None,
                 },
@@ -215,7 +215,10 @@ async fn share(
     .fetch_one(&state.db)
     .await?;
     if !exists {
-        return Err(ApiError::invalid("user", "no Slop account has that link"));
+        return Err(ApiError::invalid(
+            "user",
+            "no SLAPorSLOP account has that link",
+        ));
     }
     let mut tx = state.db.begin().await?;
     let added = sqlx::query(
@@ -233,7 +236,7 @@ async fn share(
                 user_id: to,
                 category: "shared",
                 title: format!("{} shared {title} with you", user.display_name),
-                body: "It's Private Slop: only the people it's shared with can see it.".into(),
+                body: "It's private: only the people it's shared with can see it.".into(),
                 link: format!("/app/{slug}"),
                 collapse_key: None,
             },
@@ -271,7 +274,7 @@ struct SharedApp {
 
 #[derive(Serialize)]
 struct Mine {
-    /// The user's own Private Slop.
+    /// The user's own private apps.
     mine: Vec<AppSummary>,
     /// Shared with them (with an approved release).
     shared: Vec<SharedApp>,

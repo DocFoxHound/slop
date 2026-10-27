@@ -11,8 +11,8 @@
 //!
 //! A **mod** (kind `addon`) is a branch too: anyone can publish one for any app, from their own
 //! repository, and it's checked, reviewed and signed the same way. Its releases are one `.zip`
-//! for every platform (`any`) with nothing to start; the Slop app installs it for the game, which
-//! loads it. Apps may only load mods approved on Slop (Content Policy, "Code from outside Slop").
+//! for every platform (`any`) with nothing to start; the SLAPorSLOP app installs it for the game, which
+//! loads it. Apps may only load mods approved on SLAPorSLOP (Content Policy, "Code from outside SLAPorSLOP").
 //! Mods show beside community builds on the original's page, never in the store on their own.
 
 use axum::{
@@ -60,7 +60,7 @@ pub async fn needs_pulse(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<
     .await
 }
 
-/// Whether the app has ever sent a Pulse handshake (a launch through Slop that called `start`).
+/// Whether the app has ever sent a Pulse handshake (a launch through SLAPorSLOP that called `start`).
 pub async fn has_pulse(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "select exists (select 1 from pulse_sessions where app_id = $1 and started_at is not null)",
@@ -244,7 +244,7 @@ struct Register {
 }
 
 /// Registers a branch of an app the author can see. It starts as a draft: the author submits a
-/// release, which is checked and reviewed like any other, and Slop lists it.
+/// release, which is checked and reviewed like any other, and SLAPorSLOP lists it.
 async fn register(
     State(state): State<AppState>,
     user: CurrentUser,

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: MIT OR Apache-2.0
-//! `slop-verify`: check Slop's signed documents yourself, without trusting a Slop server (the
-//! Slop open standard, docs/standard/README.md).
+//! `slop-verify`: check SLAPorSLOP's signed documents yourself, without trusting a SLAPorSLOP server (the
+//! SLAPorSLOP open standard, docs/standard/README.md).
 //!
 //! ```text
 //! slop-verify manifest <signed.json> --key <key> [--file <path>]... [--attestations] [--slop-build <prefix>]
@@ -9,7 +9,7 @@
 //! slop-verify sha256 <path>
 //! ```
 //!
-//! `<key>` is one of Slop's public keys (`public_key` from `GET /v1/keys`); repeat `--key` for
+//! `<key>` is one of SLAPorSLOP's public keys (`public_key` from `GET /v1/keys`); repeat `--key` for
 //! several. Exit status: 0 verified, 1 not verified, 2 a usage mistake.
 
 use std::{
@@ -34,7 +34,7 @@ usage:
   slop-verify file <signed.json> --key <key> [--file <path>]
   slop-verify sha256 <path>
 
-<key> is a Slop public key (public_key from GET /v1/keys); repeat --key for several.
+<key> is a SLAPorSLOP public key (public_key from GET /v1/keys); repeat --key for several.
 --file checks a downloaded file belongs to the document.
 --attestations also checks each file's maker signature (a Sigstore attestation) offline.
 --slop-build names Slop Build's workflow prefix, to report \"built by Slop Build\".";
@@ -90,12 +90,14 @@ fn run(args: &[String]) -> Result<Vec<String>, Fail> {
         .as_deref()
         .ok_or_else(|| Fail::Usage("which document?".into()))?;
     if args.keys.is_empty() {
-        return Err(Fail::Usage("give Slop's public key with --key".into()));
+        return Err(Fail::Usage(
+            "give SLAPorSLOP's public key with --key".into(),
+        ));
     }
     let text = std::fs::read_to_string(doc)
         .map_err(|e| Fail::Usage(format!("can't read {}: {e}", doc.display())))?;
     let signed: Signed = serde_json::from_str(&text)
-        .map_err(|e| Fail::NotVerified(format!("not a signed Slop document: {e}")))?;
+        .map_err(|e| Fail::NotVerified(format!("not a signed SLAPorSLOP document: {e}")))?;
     match command.as_str() {
         "manifest" => manifest(&signed, &args),
         "revocations" => revocations(&signed, &args),
@@ -139,7 +141,7 @@ fn check<T: serde::de::DeserializeOwned>(
     args: &Args,
 ) -> Result<T, Fail> {
     slop_manifest::verify(signed, purpose, &args.keys)
-        .map_err(|e| Fail::NotVerified(format!("Slop's signature: {e}")))
+        .map_err(|e| Fail::NotVerified(format!("SLAPorSLOP's signature: {e}")))
 }
 
 /// Lowercase hex SHA-256 and the raw SHA-512 of a file, read once.
@@ -164,7 +166,7 @@ fn hash_file(path: &Path) -> Result<(String, [u8; 64]), Fail> {
 fn manifest(signed: &Signed, args: &Args) -> Result<Vec<String>, Fail> {
     let m: ReleaseManifest = check(signed, Purpose::ReleaseManifest, args)?;
     let mut out = vec![
-        format!("Signed by Slop (key {})", signed.key_id),
+        format!("Signed by SLAPorSLOP (key {})", signed.key_id),
         format!(
             "{} {} by {}, approved {}",
             m.app_title, m.version, m.maker, m.approved_at
@@ -322,7 +324,7 @@ fn revocations(signed: &Signed, args: &Args) -> Result<Vec<String>, Fail> {
         )));
     }
     let mut out = vec![
-        format!("Signed by Slop (key {})", signed.key_id),
+        format!("Signed by SLAPorSLOP (key {})", signed.key_id),
         format!(
             "Revocation list issued {}, valid until {}: {} revoked",
             list.issued_at,
@@ -347,7 +349,7 @@ fn file(signed: &Signed, args: &Args) -> Result<Vec<String>, Fail> {
             answer.expires_at
         )));
     }
-    let mut out = vec![format!("Signed by Slop (key {})", signed.key_id)];
+    let mut out = vec![format!("Signed by SLAPorSLOP (key {})", signed.key_id)];
     match args.files.as_slice() {
         [] => {}
         [path] => {
@@ -365,7 +367,7 @@ fn file(signed: &Signed, args: &Args) -> Result<Vec<String>, Fail> {
     }
     if answer.matches.is_empty() {
         out.push(format!(
-            "Slop doesn't know sha256 {} (as of {})",
+            "SLAPorSLOP doesn't know sha256 {} (as of {})",
             answer.sha256, answer.issued_at
         ));
     }

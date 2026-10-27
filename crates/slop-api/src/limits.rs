@@ -3,7 +3,7 @@
 //! with many addresses still can't vote, report, message or invite faster than a person would.
 //!
 //! Token buckets in memory, like ratelimit.rs (each API instance limits on its own). The limits
-//! are generous: a person using Slop normally never meets them. Hitting one answers 429 with
+//! are generous: a person using SLAPorSLOP normally never meets them. Hitting one answers 429 with
 //! `Retry-After`, and repeated hits are a signal for abuse checks (abuse.rs).
 
 use std::{
@@ -62,7 +62,7 @@ impl Action {
             Self::JobMessage => (60, MINUTE),
             // Each one notifies (and emails) the original's maker.
             Self::Offer => (5, DAY),
-            // Lookups that cost Slop a GitHub request.
+            // Lookups that cost SLAPorSLOP a GitHub request.
             Self::Lookup => (30, HOUR),
             // Opening fix bounties (pledging counts as Donation).
             Self::Bounty => (10, HOUR),

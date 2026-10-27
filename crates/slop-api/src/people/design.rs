@@ -2,7 +2,7 @@
 //! A creative's own People page design (DESIGN §15.1), from their portfolio repository.
 //!
 //! Beside `.slop/portfolio.json`, a creative can add `.slop/page/index.html` (up to 64 KB) and
-//! `.slop/page/style.css` (up to 32 KB). Slop reads them at the portfolio's commit, with it, so a
+//! `.slop/page/style.css` (up to 32 KB). SLAPorSLOP reads them at the portfolio's commit, with it, so a
 //! design is reviewed and approved together with the works: what was reviewed is what shows, and
 //! a changed design is a new portfolio set.
 //!
@@ -10,14 +10,14 @@
 //!
 //! - The HTML is parsed as a browser would (html5ever) and rebuilt as a tree of allowed elements
 //!   and attributes ([`Node`]). The website draws that tree itself, element by element, never as
-//!   HTML, so nothing in it can run. `<slop-…>` tags stand for Slop's own parts (a work, the works,
+//!   HTML, so nothing in it can run. `<slop-…>` tags stand for SLAPorSLOP's own parts (a work, the works,
 //!   a YouTube video, a track, the services), which the website draws in their place.
 //! - The CSS is parsed (cssparser) and rebuilt from allowed rules, selectors, properties and
 //!   values. Pictures in `url()` and `<img>` come from the repository at that commit, checked like
 //!   the works.
 //!
 //! The website shows the design in a shadow root inside a box that contains its layout and paint
-//! (People.tsx), under Slop's own header and above Slop's reviews. What isn't allowed is dropped
+//! (People.tsx), under SLAPorSLOP's own header and above SLAPorSLOP's reviews. What isn't allowed is dropped
 //! and said in a warning; what can't work (a missing picture, a file over its limit, a
 //! `<slop-work>` that isn't a work) is a problem, like a broken portfolio.json.
 
@@ -52,7 +52,7 @@ pub const HTML_PATH: &str = ".slop/page/index.html";
 pub const CSS_PATH: &str = ".slop/page/style.css";
 pub const MAX_HTML_BYTES: u64 = 64 * 1024;
 pub const MAX_CSS_BYTES: u64 = 32 * 1024;
-/// Elements in one page, Slop's parts included.
+/// Elements in one page, SLAPorSLOP's parts included.
 const MAX_ELEMENTS: usize = 2_000;
 const MAX_DEPTH: usize = 32;
 /// Parsing stops past this depth (pages are refused past MAX_DEPTH anyway).
@@ -65,12 +65,12 @@ const MAX_CLASS_LEN: usize = 40;
 const MAX_TITLE: usize = 80;
 const MAX_ALT: usize = 300;
 const MAX_HREF: usize = 500;
-/// z-index stays small: the design can layer its own parts, not reach above Slop's.
+/// z-index stays small: the design can layer its own parts, not reach above SLAPorSLOP's.
 const MAX_Z: i32 = 100;
 /// Pictures used only in the design can be small (a pattern tile, a divider).
 const PICTURE_MIN: (u32, u32) = (1, 1);
 
-/// Font families a design can use. Slop serves them itself (web/public/fonts, all SIL Open Font
+/// Font families a design can use. SLAPorSLOP serves them itself (web/public/fonts, all SIL Open Font
 /// License): a clean sans, an editorial serif, a pixel font, a handwritten one, a monospace and
 /// a display face.
 pub const FONTS: &[&str] = &[
@@ -136,7 +136,7 @@ const VOID: &[&str] = &["br", "hr", "img"];
 /// Whitespace between these elements' children isn't content (and React refuses it in tables).
 const NO_TEXT: &[&str] = &["table", "thead", "tbody", "tfoot", "tr"];
 
-/// Slop's own parts, drawn by the website where the design puts them.
+/// SLAPorSLOP's own parts, drawn by the website where the design puts them.
 pub const SLOP_TAGS: &[&str] = &["slop-work", "slop-works", "slop-video", "slop-track"];
 
 /// Links get these, whatever the page says.
@@ -145,7 +145,7 @@ pub const LINK_REL: &str = "nofollow noopener noreferrer ugc";
 // ---------------------------------------------------------------------------------------------
 // What's stored
 
-/// One node of a design's page: text, or an allowed element (or one of Slop's parts).
+/// One node of a design's page: text, or an allowed element (or one of SLAPorSLOP's parts).
 #[derive(Clone, Debug, Serialize, Deserialize, PartialEq)]
 #[serde(untagged)]
 pub enum Node {
@@ -815,12 +815,14 @@ fn dropped(tag: &str) -> Option<&'static str> {
             "pages can't show other pages: use <slop-video> for a YouTube video"
         }
         "input" | "button" | "select" | "textarea" | "option" | "optgroup" | "datalist"
-        | "output" => "pages can't have buttons or forms: Slop's Hire button is above your page",
+        | "output" => {
+            "pages can't have buttons or forms: SLAPorSLOP's Hire button is above your page"
+        }
         "svg" | "math" | "canvas" => "use a picture file (PNG, JPEG, WebP or GIF) instead",
         "video" | "audio" | "source" | "track" | "picture" | "map" | "area" => {
             "use <slop-video> for videos, <slop-track> for tracks and <img> for pictures"
         }
-        "meta" | "base" | "title" => "Slop's page sets these itself",
+        "meta" | "base" | "title" => "SLAPorSLOP's page sets these itself",
         "template" | "slot" | "dialog" | "xmp" | "plaintext" | "noembed" | "noframes" => {
             "it isn't supported"
         }
@@ -990,7 +992,7 @@ impl HtmlWalk<'_> {
         let tag = if tag == "h1" {
             self.warn(
                 line,
-                "<h1> became <h2>: the page's one <h1> is your name, in Slop's header".into(),
+                "<h1> became <h2>: the page's one <h1> is your name, in SLAPorSLOP's header".into(),
             );
             "h2"
         } else {
@@ -1109,7 +1111,7 @@ impl HtmlWalk<'_> {
                     kept.insert("alt".into(), value.chars().take(MAX_ALT).collect());
                     continue;
                 }
-                // Slop sets a picture's size from the file itself.
+                // SLAPorSLOP sets a picture's size from the file itself.
                 ("width" | "height" | "loading" | "decoding", "img") => continue,
                 ("start", "ol") => value.parse::<u32>().is_ok_and(|n| n < 100_000),
                 ("reversed", "ol") => true,
@@ -1191,7 +1193,7 @@ impl HtmlWalk<'_> {
         (!kept.is_empty()).then(|| kept.join(" "))
     }
 
-    /// One of Slop's parts. Anything inside it is moved after it.
+    /// One of SLAPorSLOP's parts. Anything inside it is moved after it.
     #[allow(clippy::too_many_arguments)]
     fn slop(
         &mut self,
@@ -1210,10 +1212,10 @@ impl HtmlWalk<'_> {
             .map(|a| (a.name.local.to_string(), a.value.trim().to_string()))
             .collect();
         if tag == "slop-services" {
-            // Inside a design, the design could cover or fake them: they're Slop's, below it.
+            // Inside a design, the design could cover or fake them: they're SLAPorSLOP's, below it.
             self.warn(
                 line,
-                "<slop-services> was removed: your services always appear below your design, where Slop shows them with their Hire buttons".into(),
+                "<slop-services> was removed: your services always appear below your design, where SLAPorSLOP shows them with their Hire buttons".into(),
             );
             return self.children(node, depth + 1, in_link, parent, out);
         }
@@ -1226,7 +1228,7 @@ impl HtmlWalk<'_> {
                 self.warn(
                     line,
                     format!(
-                        "<{tag}> isn't one of Slop's parts ({}), so it was taken out",
+                        "<{tag}> isn't one of SLAPorSLOP's parts ({}), so it was taken out",
                         SLOP_TAGS.join(", ")
                     ),
                 );
@@ -1500,7 +1502,7 @@ const PROPERTIES: &str = concat!(
     "grid-auto-columns grid-auto-rows grid-auto-flow grid-column grid-row grid-area ",
     "grid-column-start grid-column-end grid-row-start grid-row-end table-layout caption-side ",
     "empty-cells ",
-    // Movement (Slop turns it off for people who ask for reduced motion)
+    // Movement (SLAPorSLOP turns it off for people who ask for reduced motion)
     "transform transform-origin transform-style translate rotate scale perspective ",
     "perspective-origin backface-visibility transition transition-property transition-duration ",
     "transition-timing-function transition-delay animation animation-name animation-duration ",
@@ -1643,7 +1645,7 @@ impl CssState<'_> {
                 "rules can't be nested inside other rules".into()
             }
             ParseErrorKind::Basic(BasicParseErrorKind::EndOfInput) => "it isn't finished".into(),
-            ParseErrorKind::Basic(_) => "Slop couldn't read it".into(),
+            ParseErrorKind::Basic(_) => "SLAPorSLOP couldn't read it".into(),
         };
         if what.is_empty() {
             self.warn(line, format!("something was removed: {why}"));
@@ -1768,12 +1770,12 @@ impl<'i> AtRuleParser<'i> for Rules<'_, '_> {
             }
             "import" => Err(removed(
                 input,
-                "@import isn't allowed: the whole style is style.css, and Slop loads nothing else",
+                "@import isn't allowed: the whole style is style.css, and SLAPorSLOP loads nothing else",
             )),
             "font-face" => Err(removed(
                 input,
                 format!(
-                    "@font-face isn't allowed: use one of the fonts Slop has ({})",
+                    "@font-face isn't allowed: use one of the fonts SLAPorSLOP has ({})",
                     FONTS.join(", ")
                 ),
             )),
@@ -2069,7 +2071,7 @@ fn declaration<'i>(
         "position" if !only(&["static", "relative", "absolute"]) => {
             return Err(removed(
                 input,
-                "position can be static, relative or absolute: fixed and sticky could cover Slop's page",
+                "position can be static, relative or absolute: fixed and sticky could cover SLAPorSLOP's page",
             ));
         }
         "z-index"
@@ -2292,7 +2294,7 @@ fn value<'i>(
             _ => {
                 return Err(removed(
                     input,
-                    "it has something Slop doesn't allow in a value",
+                    "it has something SLAPorSLOP doesn't allow in a value",
                 ));
             }
         }
@@ -2333,7 +2335,7 @@ fn picture_url<'i>(
     Ok(())
 }
 
-/// `font-family`: Slop's fonts and the generic families. Others are dropped with a warning.
+/// `font-family`: SLAPorSLOP's fonts and the generic families. Others are dropped with a warning.
 fn font_family<'i>(
     st: &mut CssState<'_>,
     input: &mut Parser<'i, '_>,
@@ -2370,7 +2372,7 @@ fn font_family<'i>(
         }
     }
     if kept.is_empty() {
-        return Err(removed(input, "none of its fonts are ones Slop has"));
+        return Err(removed(input, "none of its fonts are ones SLAPorSLOP has"));
     }
     out.push_str(&kept.join(","));
     Ok(())
@@ -2405,7 +2407,7 @@ fn selector<'i>(
                                 "{tag} isn't part of your page: your page's outermost box is .page"
                             )
                         } else if tag.starts_with("slop-") {
-                            "Slop's parts keep Slop's own look".to_string()
+                            "SLAPorSLOP's parts keep SLAPorSLOP's own look".to_string()
                         } else {
                             format!("<{tag}> isn't one of the tags pages can use")
                         },
@@ -2462,7 +2464,7 @@ fn selector<'i>(
                         out.push(')');
                         last = TokenSerializationType::Other;
                     }
-                    _ => return Err(removed(input, "Slop couldn't read the selector")),
+                    _ => return Err(removed(input, "SLAPorSLOP couldn't read the selector")),
                 }
             }
             Token::Hash(_) | Token::IDHash(_) => {
@@ -2475,7 +2477,7 @@ fn selector<'i>(
                 ));
             }
             Token::Delim('&') => return Err(removed(input, "nested rules aren't allowed")),
-            _ => return Err(removed(input, "Slop couldn't read the selector")),
+            _ => return Err(removed(input, "SLAPorSLOP couldn't read the selector")),
         }
     }
     Ok(())
@@ -2532,7 +2534,7 @@ fn media_query<'i>(
                 out.push(')');
                 last = TokenSerializationType::Other;
             }
-            _ => return Err(removed(input, "Slop couldn't read the media query")),
+            _ => return Err(removed(input, "SLAPorSLOP couldn't read the media query")),
         }
     }
 }
@@ -2575,7 +2577,7 @@ fn media_feature<'i>(
                 out.push(')');
                 last = TokenSerializationType::Other;
             }
-            _ => return Err(removed(input, "Slop couldn't read the media query")),
+            _ => return Err(removed(input, "SLAPorSLOP couldn't read the media query")),
         }
     }
 }

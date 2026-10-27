@@ -1229,7 +1229,7 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
         body["error"]["message"]
             .as_str()
             .unwrap()
-            .contains("only the repository's owner can put it on Slop"),
+            .contains("only the repository's owner can put it on SLAPorSLOP"),
         "{body}"
     );
     let (status, _) = call(&app, fetch("/v1/me/creative/portfolio", &cookie)).await;
@@ -1322,7 +1322,7 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
     assert_eq!(lines.len(), 2, "{body}");
     assert!(lines[0].starts_with("work 1 \"image\": "), "{body}");
     assert!(lines[1].starts_with("work 3 \"skill\": "), "{body}");
-    // Not JSON Slop knows: says where, and what the file looks like.
+    // Not JSON SLAPorSLOP knows: says where, and what the file looks like.
     put_file(
         &files,
         "portfolio.json",
@@ -1373,7 +1373,7 @@ async fn portfolios_come_from_the_creatives_own_repository_and_are_checked(db: P
 }
 
 /// The starter portfolios in `examples/portfolio-templates/` (pointed to from portfolio.md and
-/// the editor) pass every check "Check my portfolio now" makes, read the way Slop reads them.
+/// the editor) pass every check "Check my portfolio now" makes, read the way SLAPorSLOP reads them.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn the_portfolio_templates_pass_the_portfolio_check(db: PgPool) {
     let (app, files, vera, cookie) = portfolio_app(db).await;
@@ -2443,7 +2443,7 @@ async fn checking_a_payment_reads_the_session_slop_made(db: PgPool) {
     assert_eq!(job["status"], "awaiting_payment");
     assert_eq!(count(&app, "select count(*) from payments").await, 0);
 
-    // Paid as Slop asked, without a webhook: checking moves the job on, once.
+    // Paid as SLAPorSLOP asked, without a webhook: checking moves the job on, once.
     fake.lock().unwrap().sessions.get_mut("cs_1").unwrap()["amount_total"] = json!(12001);
     let (status, job) = check(&h.tavern).await;
     assert_eq!(
@@ -2582,7 +2582,7 @@ async fn the_stripe_webhook_handles_people_events_once_and_only_from_the_right_a
             .any(|t| t.contains("disputed your review")),
         "a card dispute isn't a review dispute"
     );
-    // A dispute about a charge Slop doesn't know: nothing recorded.
+    // A dispute about a charge SLAPorSLOP doesn't know: nothing recorded.
     let unknown = json!({ "id": "evt_dp2", "type": "charge.dispute.created", "account": "acct_vera",
                           "data": { "object": { "id": "dp_2", "charge": "ch_unknown", "amount": 500 } } });
     assert_eq!(webhook(&app, &unknown).await, StatusCode::OK);
@@ -3134,7 +3134,7 @@ async fn the_job_record_is_for_its_two_sides(db: PgPool) {
     .unwrap();
     let (_, _, record) = call_text(app, fetch(format!("/v1/jobs/{id}/record"), &h.vera)).await;
     assert!(!record.contains("Blue armour, please."));
-    assert!(record.contains("deleted from Slop; fingerprint `"));
+    assert!(record.contains("deleted from SLAPorSLOP; fingerprint `"));
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -4974,7 +4974,7 @@ async fn agreed_cancelling_ends_the_job_and_agreed_redoing_reopens_it(db: PgPool
     h.ok(&id, &h.vera, "deliver", json!({ "note": "Redone." }))
         .await;
     assert_eq!(h.view(&id, &h.tavern).await["payments"][0]["status"], "due");
-    // "Other" is recorded; Slop carries nothing out.
+    // "Other" is recorded; SLAPorSLOP carries nothing out.
     let id = h.job("upfront", "in_progress").await;
     let job = settle(id, "other").await;
     assert_eq!(
@@ -5493,7 +5493,7 @@ async fn mediators_keep_note_or_remove_a_disputed_review_with_a_reason(db: PgPoo
 }
 
 // ---------------------------------------------------------------------------------------------
-// Slop's own steps: completing, forgetting, payments and credits (people-054 … people-056)
+// SLAPorSLOP's own steps: completing, forgetting, payments and credits (people-054 … people-056)
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn delivered_jobs_complete_themselves_after_seven_days_once(db: PgPool) {
@@ -6116,7 +6116,7 @@ async fn blocking_keeps_someone_away_until_unblocked(db: PgPool) {
     );
 }
 
-/// A user's Slop app session (chat starts only there), as an Authorization header.
+/// A user's SLAPorSLOP app session (chat starts only there), as an Authorization header.
 async fn app_session(app: &TestApp, web: &str) -> String {
     let tokens = desktop_sign_in(app, web).await;
     format!("Bearer {}", tokens["access_token"].as_str().unwrap())

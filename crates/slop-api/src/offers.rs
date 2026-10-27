@@ -3,7 +3,7 @@
 //!
 //! The community build's maker (or their agent) opens a pull request on the original's
 //! repository, then registers it here; the original's maker is told, and accepts or declines.
-//! Merging happens on the repository: Slop only keeps track and tells both sides, so it needs no
+//! Merging happens on the repository: SLAPorSLOP only keeps track and tells both sides, so it needs no
 //! write access to anyone's code.
 
 use axum::{

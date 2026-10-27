@@ -20,7 +20,7 @@
 //! ```
 //!
 //! Nothing is written into `apps/` until the download matches the size and SHA-256 in a manifest
-//! signed by a trusted Slop key. Every launch re-checks the manifest signature, the revocation
+//! signed by a trusted SLAPorSLOP key. Every launch re-checks the manifest signature, the revocation
 //! list and the hash of the program being started, so tampering with the library folder can't
 //! slip anything past verification.
 
@@ -101,7 +101,7 @@ pub struct Launch {
     pub quarantined: Vec<String>,
     /// The saves were too big to copy before this sandboxed session.
     pub copy_skipped: bool,
-    /// Things in the game's mods folder that aren't mods from Slop, moved out (DESIGN §9).
+    /// Things in the game's mods folder that aren't mods from SLAPorSLOP, moved out (DESIGN §9).
     pub unapproved_mods: Vec<String>,
 }
 
@@ -387,7 +387,7 @@ impl Library {
     }
 
     /// Downloads, verifies and adds a mod to its game, which must be installed. Mods are a
-    /// `.zip` of files for the game to load; nothing in one is started by Slop.
+    /// `.zip` of files for the game to load; nothing in one is started by SLAPorSLOP.
     pub async fn install_mod(
         &self,
         signed: &Signed,
@@ -506,8 +506,8 @@ impl Library {
         file: &slop_manifest::ManifestFile,
     ) -> Result<Option<slop_provenance::Provenance>> {
         let provenance = self.verify_maker_signature(previous, manifest, file)?;
-        // The same signer as the installed version (SECURITY §5.3): Slop's signature on the
-        // manifest vouches for the maker's, so without this whoever held Slop's key could swap
+        // The same signer as the installed version (SECURITY §5.3): SLAPorSLOP's signature on the
+        // manifest vouches for the maker's, so without this whoever held SLAPorSLOP's key could swap
         // in a key of their own, or a repository that took over the old one's name.
         if let Some(installed) = previous
             && let Some(before) = installed.files.iter().find(|f| f.platform == file.platform)
@@ -572,7 +572,7 @@ impl Library {
         manifest: &ReleaseManifest,
         file: &slop_manifest::ManifestFile,
     ) -> Result<Option<slop_provenance::Provenance>> {
-        // An update must come from the same repository as what's installed: not even Slop can
+        // An update must come from the same repository as what's installed: not even SLAPorSLOP can
         // quietly repoint an installed app at someone else's code.
         if let Some(installed) = previous {
             let norm = |s: &str| {
@@ -673,7 +673,7 @@ impl Library {
             self.download_parts_verified(file, links, &link_path, &download, progress)
                 .await?
         };
-        // Built and signed by hand: the maker's key (vouched for by Slop's signature on the
+        // Built and signed by hand: the maker's key (vouched for by SLAPorSLOP's signature on the
         // manifest) must have signed exactly this file.
         if file.attestation.is_none()
             && let Some(sig) = &file.maker_signature
@@ -762,7 +762,7 @@ impl Library {
     }
 
     /// Downloads to `dest`, refusing anything bigger than `size` and anything whose SHA-256
-    /// doesn't match. The maker's file must be exactly the one Slop scanned and signed.
+    /// doesn't match. The maker's file must be exactly the one SLAPorSLOP scanned and signed.
     /// A file released in parts: each downloaded in order and checked against its own hash, then
     /// the joined file against the whole's. Returns the joined file's SHA-512.
     async fn download_parts_verified(
@@ -805,7 +805,7 @@ impl Library {
                 got += chunk.len() as u64;
                 if got > part.size {
                     return Err(Error::Verify(format!(
-                        "part {} changed after Slop checked it (it's bigger)",
+                        "part {} changed after SLAPorSLOP checked it (it's bigger)",
                         i + 1
                     )));
                 }
@@ -818,7 +818,7 @@ impl Library {
             }
             if got != part.size || hex::encode(part256.finalize()) != part.sha256 {
                 return Err(Error::Verify(format!(
-                    "part {} changed after Slop checked it; not installing",
+                    "part {} changed after SLAPorSLOP checked it; not installing",
                     i + 1
                 )));
             }
@@ -826,7 +826,7 @@ impl Library {
         out.sync_all()?;
         if hex::encode(whole256.finalize()) != file.sha256 {
             return Err(Error::Verify(
-                "the joined file isn't the one Slop checked; not installing".into(),
+                "the joined file isn't the one SLAPorSLOP checked; not installing".into(),
             ));
         }
         Ok(whole512.finalize().into())
@@ -842,7 +842,7 @@ impl Library {
         progress: &impl Fn(u64, u64),
     ) -> Result<[u8; 64]> {
         let mut res = self.http.get(self.download_url(url)?).send().await?;
-        // Private repositories: the release file isn't public, so ask Slop for a short-lived link.
+        // Private repositories: the release file isn't public, so ask SLAPorSLOP for a short-lived link.
         if matches!(res.status().as_u16(), 401 | 403 | 404)
             && let Some((api, path)) = links
         {
@@ -867,7 +867,7 @@ impl Library {
             got += chunk.len() as u64;
             if got > size {
                 return Err(Error::Verify(
-                    "the file changed after Slop checked it (it's bigger)".into(),
+                    "the file changed after SLAPorSLOP checked it (it's bigger)".into(),
                 ));
             }
             hasher.update(&chunk);
@@ -878,7 +878,7 @@ impl Library {
         out.sync_all()?;
         if got != size || hex::encode(hasher.finalize()) != sha256 {
             return Err(Error::Verify(
-                "the file changed after Slop checked it; not installing".into(),
+                "the file changed after SLAPorSLOP checked it; not installing".into(),
             ));
         }
         Ok(hasher512.finalize().into())

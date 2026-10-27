@@ -3,11 +3,11 @@
 //!
 //! - **The label** (`GET /v1/apps/{slug}/label`): online, saves, sandbox mode, outside code,
 //!   purchases, mods, its own installer, shared runtimes, licence and scans, each marked as
-//!   found by Slop's checks or said by the maker. Built from the store page and the newest
-//!   approved release's checks; Slop calls no AI. Says "checked" or "scanned", never "safe".
+//!   found by SLAPorSLOP's checks or said by the maker. Built from the store page and the newest
+//!   approved release's checks; SLAPorSLOP calls no AI. Says "checked" or "scanned", never "safe".
 //! - **Accessibility:** the features the maker says it has, and players who launched it
 //!   confirming or disputing each (`PUT`/`DELETE /v1/apps/{slug}/accessibility/{feature}`).
-//! - **Glow-ups** (`GET /v1/shelves/glow-ups`): apps whose % Not Slop rose clearly since 60 days
+//! - **Glow-ups** (`GET /v1/shelves/glow-ups`): apps whose % Slaps rose clearly since 60 days
 //!   ago, with the before and after, for the store front.
 
 use axum::{
@@ -81,7 +81,7 @@ pub struct Item {
     pub title: String,
     #[serde(skip_serializing_if = "Option::is_none")]
     pub detail: Option<String>,
-    /// From Slop's own checks (true) or what the maker says (false).
+    /// From SLAPorSLOP's own checks (true) or what the maker says (false).
     pub checked: bool,
     /// `good`, `info` or `note` (something to know before installing).
     pub tone: &'static str,
@@ -156,10 +156,10 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
             "online",
             "Goes online".into(),
             Some(if app.online_hosts.is_empty() {
-                "To servers Slop can't check. Sandbox mode is suggested.".into()
+                "To servers SLAPorSLOP can't check. Sandbox mode is suggested.".into()
             } else {
                 format!(
-                    "To {}. Slop can't check those servers.",
+                    "To {}. SLAPorSLOP can't check those servers.",
                     app.online_hosts.join(", ")
                 )
             }),
@@ -190,13 +190,13 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
     if let Some(s) = scan {
         let (title, detail, tone) = match s["save_folder"].as_str() {
             Some("slop" | "engine") => (
-                "Saves in Slop's save folder",
+                "Saves in SLAPorSLOP's save folder",
                 "They stay when you uninstall, and work in sandbox mode.",
                 "good",
             ),
             Some("elsewhere") => (
-                "Saves outside Slop's save folder",
-                "Slop can't keep them when you uninstall, and sandbox mode may lose them.",
+                "Saves outside SLAPorSLOP's save folder",
+                "SLAPorSLOP can't keep them when you uninstall, and sandbox mode may lose them.",
                 "note",
             ),
             _ => (
@@ -224,7 +224,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
         if code.is_empty() {
             push(
                 "outside_code",
-                "Loads no code from outside Slop".into(),
+                "Loads no code from outside SLAPorSLOP".into(),
                 None,
                 true,
                 "good",
@@ -232,7 +232,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
         } else {
             push(
                 "outside_code",
-                "Loads code from outside Slop".into(),
+                "Loads code from outside SLAPorSLOP".into(),
                 Some(format!(
                     "{}. A person reviewed it before approving.",
                     code.join(", ")
@@ -255,7 +255,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
             push(
                 "design",
                 "A person checked its design".into(),
-                Some(format!("Slop noticed: {}.", design.join(", "))),
+                Some(format!("SLAPorSLOP noticed: {}.", design.join(", "))),
                 true,
                 "info",
             );
@@ -273,8 +273,8 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
     if app.takes_mods {
         push(
             "mods",
-            "Uses mods from Slop".into(),
-            Some("Only mods approved on Slop are kept in its mods folder.".into()),
+            "Uses mods from SLAPorSLOP".into(),
+            Some("Only mods approved on SLAPorSLOP are kept in its mods folder.".into()),
             false,
             "info",
         );
@@ -286,7 +286,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
             push(
                 "installer",
                 "Runs its own installer".into(),
-                Some("The Slop app asks you first.".into()),
+                Some("The SLAPorSLOP app asks you first.".into()),
                 false,
                 "note",
             );
@@ -317,7 +317,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
             push(
                 "scanned",
                 "Files scanned".into(),
-                Some("Slop scanned every file before approving it.".into()),
+                Some("SLAPorSLOP scanned every file before approving it.".into()),
                 true,
                 "good",
             );
@@ -325,7 +325,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
             push(
                 "scanned",
                 "Files not scanned".into(),
-                Some("This Slop doesn't scan files.".into()),
+                Some("This SLAPorSLOP doesn't scan files.".into()),
                 true,
                 "note",
             );
@@ -489,7 +489,9 @@ async fn report(
     .fetch_one(&state.db)
     .await?;
     if !played {
-        return Err(ApiError::Conflict("play it through Slop first".into()));
+        return Err(ApiError::Conflict(
+            "play it through SLAPorSLOP first".into(),
+        ));
     }
     sqlx::query(
         "insert into accessibility_reports (user_id, app_id, feature, works) values ($1, $2, $3, $4)
@@ -521,19 +523,19 @@ async fn withdraw(
     Ok(StatusCode::NO_CONTENT)
 }
 
-/// A clear rise: at least this many points of % Not Slop.
+/// A clear rise: at least this many points of % Slaps.
 const GLOW_UP_POINTS: f64 = 15.0;
 
 #[derive(Serialize)]
 struct GlowUp {
     #[serde(flatten)]
     app: AppSummary,
-    /// % Not Slop 60 days ago, and now (unweighted).
+    /// % Slaps 60 days ago, and now (unweighted).
     before: i32,
     after: i32,
 }
 
-/// Apps whose % Not Slop rose clearly since 60 days ago: each player's vote as it stood then
+/// Apps whose % Slaps rose clearly since 60 days ago: each player's vote as it stood then
 /// (vote_events) against the votes now, both with enough votes.
 async fn glow_ups(
     State(state): State<AppState>,

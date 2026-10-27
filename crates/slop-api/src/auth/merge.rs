@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Combining two Slop accounts (DESIGN §4).
+//! Combining two SLAPorSLOP accounts (DESIGN §4).
 //!
-//! When someone links a sign-in that already has its own Slop account, signing in to it proves
+//! When someone links a sign-in that already has its own SLAPorSLOP account, signing in to it proves
 //! they control that account too. After they confirm, everything moves into the account they're
 //! signed in to: apps, library, playtime, votes and reviews, friends, chats, teams, People jobs,
 //! donations, notifications, reports and decisions. Where both had the same thing (both voted on

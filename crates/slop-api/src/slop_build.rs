@@ -4,7 +4,7 @@
 //! `POST /v1/slop-build/releases` here.
 //!
 //! The call carries the run's GitHub OIDC token instead of any secret. The token is signed by
-//! GitHub and says which repository, commit and workflow the run is; Slop accepts it only from
+//! GitHub and says which repository, commit and workflow the run is; SLAPorSLOP accepts it only from
 //! the Slop Build recipe, for the app's own repository, at the commit being released. The release
 //! then goes through the same fetch, signature and review steps as one a maker submits by hand.
 
@@ -69,7 +69,7 @@ fn recipe(state: &AppState) -> ApiResult<&str> {
 // ---------------------------------------------------------------------------------------------
 // Releases submitted by the recipe
 
-/// The GitHub Actions OIDC claims Slop relies on.
+/// The GitHub Actions OIDC claims SLAPorSLOP relies on.
 #[derive(Debug, Deserialize)]
 pub(crate) struct GithubClaims {
     /// `owner/repo`.
@@ -98,7 +98,7 @@ pub(crate) async fn same_repository(
 ) -> ApiResult<()> {
     let Some((repo_id, owner_id)) = crate::repo_identity::ensure(state, app_id).await? else {
         return Err(ApiError::Unavailable(
-            "Slop couldn't check the repository's identity with GitHub; try again shortly",
+            "SLAPorSLOP couldn't check the repository's identity with GitHub; try again shortly",
         ));
     };
     let same = |found: &Option<String>, want: i64| {
@@ -153,7 +153,7 @@ async fn signing_keys(state: &AppState, kid: &str) -> ApiResult<DecodingKey> {
     }
 }
 
-/// Checks a GitHub Actions OIDC token: signature, issuer, audience (this Slop site) and expiry.
+/// Checks a GitHub Actions OIDC token: signature, issuer, audience (this SLAPorSLOP site) and expiry.
 pub(crate) async fn verify_github_token(state: &AppState, token: &str) -> ApiResult<GithubClaims> {
     let header = jsonwebtoken::decode_header(token).map_err(|_| ApiError::Unauthorized)?;
     if header.alg != Algorithm::RS256 {
@@ -338,7 +338,7 @@ async fn submit_from_ci(
             .execute(&state.db)
             .await?;
     }
-    // Defender's checks, by file hash: matched to the files once Slop has fetched them.
+    // Defender's checks, by file hash: matched to the files once SLAPorSLOP has fetched them.
     for check in &checks {
         record_defender(&state, app_id, check).await?;
     }
@@ -388,7 +388,7 @@ struct CiChecks {
 
 #[derive(Serialize)]
 struct ChecksRecorded {
-    /// Release files the checks were attached to now (others attach when Slop fetches them).
+    /// Release files the checks were attached to now (others attach when SLAPorSLOP fetches them).
     matched: u64,
 }
 
@@ -476,7 +476,7 @@ fn check_yaml(recipe: &str, version: &str, slug: &str, site: &str) -> String {
     let dir = recipe.rsplit_once('/').map_or(recipe, |(d, _)| d);
     format!(
         "# Slop Check: when you publish a release, Microsoft Defender checks its Windows files\n\
-         # and tells Slop. Docs: {site}/publish/guide#slop-check\n\
+         # and tells SLAPorSLOP. Docs: {site}/publish/guide#slop-check\n\
          name: Slop Check\n\
          on:\n  \
            release:\n    \
@@ -583,7 +583,7 @@ fn workflow_yaml(
          #   BUTLER_API_KEY: ${{ secrets.BUTLER_API_KEY }}\n"
     };
     format!(
-        "# Slop Build: builds, signs and attaches your app to a release, then sends it to Slop.\n\
+        "# Slop Build: builds, signs and attaches your app to a release, then sends it to SLAPorSLOP.\n\
          # Docs: {site}/publish\n\
          name: Slop Build\n\
          on:\n  \

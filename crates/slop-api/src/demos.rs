@@ -4,11 +4,11 @@
 //! into a hosting bill.
 //!
 //! - **Off** unless `SLOP_PLAY_URL` names a separate origin (`play.…`) for them. Demos never run
-//!   on Slop's own origin, so a game's code can't reach anyone's Slop session; there they're
+//!   on SLAPorSLOP's own origin, so a game's code can't reach anyone's SLAPorSLOP session; there they're
 //!   only for playing: no network beyond their own files (content security policy).
 //! - **The maker opts in** with a web build (a .zip with `index.html`, e.g. Godot's HTML5
 //!   export) attached to a release on the app's repository, during the first `days` after the
-//!   app's release (14 by default). Slop downloads it once, scans it like any release file, and
+//!   app's release (14 by default). SLAPorSLOP downloads it once, scans it like any release file, and
 //!   unpacks it. Up to 100 MB zipped and 250 MB unpacked.
 //! - **Limits:** `max_live` demos at once (10), and `daily_bytes` served per day across all of
 //!   them (20 GB); past that, players are told to install the game instead.
@@ -80,7 +80,7 @@ struct Demo {
 
 #[derive(Serialize)]
 struct DemoStatus {
-    /// Demos are hosted on this Slop.
+    /// Demos are hosted on this SLAPorSLOP.
     available: bool,
     /// The app can have one now: released within the last `days`.
     eligible: bool,
@@ -157,7 +157,7 @@ async fn start(
 ) -> ApiResult<StatusCode> {
     if state.config.demos.play_url.is_none() {
         return Err(ApiError::Unavailable(
-            "browser demos aren't offered on this Slop",
+            "browser demos aren't offered on this SLAPorSLOP",
         ));
     }
     let (app_id, repo_url) = crate::updates::owned(&state, &slug, &user).await?;
@@ -418,7 +418,7 @@ async fn serve_file(state: &AppState, slug: &str, path: &str, req: Request) -> R
     let Some(app_id) = live else {
         return plain(
             StatusCode::NOT_FOUND,
-            "<!doctype html><title>Demo ended</title><p>This demo isn't available. Get the game on Slop.</p>",
+            "<!doctype html><title>Demo ended</title><p>This demo isn't available. Get the game on SLAPorSLOP.</p>",
         );
     };
     let rel = PathBuf::from(path);
@@ -450,7 +450,7 @@ async fn serve_file(state: &AppState, slug: &str, path: &str, req: Request) -> R
     if used as u64 > state.config.demos.daily_bytes {
         return plain(
             StatusCode::SERVICE_UNAVAILABLE,
-            "<!doctype html><title>Demos are busy</title><p>Demos have had a lot of players today. Install the game from Slop to play, or try again tomorrow.</p>",
+            "<!doctype html><title>Demos are busy</title><p>Demos have had a lot of players today. Install the game from SLAPorSLOP to play, or try again tomorrow.</p>",
         );
     }
     if path == "index.html" && req.method() == axum::http::Method::GET {

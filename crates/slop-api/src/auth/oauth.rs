@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 //! Sign-in providers: GitHub, Google, GitLab, Bitbucket, Microsoft and Discord (SECURITY §4.1).
 //!
-//! The same authorization-code flow for each (with PKCE where the provider supports it). Slop
+//! The same authorization-code flow for each (with PKCE where the provider supports it). SLAPorSLOP
 //! reads the account's stable ID, its name at the provider, where its picture is (avatars.rs)
 //! and, where the provider has verified it, the email; the provider's token is used once and
 //! never stored.
@@ -88,7 +88,7 @@ impl Provider {
     }
 }
 
-/// What Slop keeps from a provider account.
+/// What SLAPorSLOP keeps from a provider account.
 #[derive(Debug)]
 pub struct Profile {
     /// The provider's stable account ID.

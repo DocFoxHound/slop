@@ -105,7 +105,7 @@ pub(crate) struct ChangeInfo {
     pub created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     pub reviewed_at: Option<OffsetDateTime>,
-    /// Approved by Slop without a person.
+    /// Approved by SLAPorSLOP without a person.
     pub automatic: bool,
 }
 
@@ -199,9 +199,9 @@ struct Overview {
     auto_approval_note: Option<String>,
     /// Open requests first, then the latest decisions.
     changes: Vec<ChangeInfo>,
-    /// Slop can't read the repository (frozen.rs): no new releases until it can.
+    /// SLAPorSLOP can't read the repository (frozen.rs): no new releases until it can.
     frozen: Option<crate::frozen::Frozen>,
-    /// Private Slop: the owner asked to make it public and it waits for a reviewer.
+    /// A private app: the owner asked to make it public and it waits for a reviewer.
     public_requested: bool,
     /// Community builds of games whose original counts players with Slop Pulse need a Pulse
     /// handshake before they're listed (DESIGN §9): none, waiting, or received.

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Review and moderation actions, run by Slop staff from the command line (`slop-api review …`).
+//! Review and moderation actions, run by SLAPorSLOP staff from the command line (`slop-api review …`).
 //!
 //! Phase 1 has no web admin: an operator with production access runs these, which keeps the
 //! admin surface off the public site (SECURITY §8.4). Every action is written to the audit log.
@@ -472,15 +472,15 @@ pub(crate) enum NotListable {
 impl NotListable {
     fn for_reviewer(&self) -> String {
         match self {
-            Self::Private => "it's Private Slop: private apps are never listed in the store \
+            Self::Private => "it's a private app: private apps are never listed in the store \
                               (unless the owner asks to make it public)"
                 .into(),
             Self::Frozen(reason) => format!(
-                "the app is frozen ({reason}); it can be listed once Slop can read its repository"
+                "the app is frozen ({reason}); it can be listed once SLAPorSLOP can read its repository"
             ),
             Self::NoPulse => "this community build's original counts players with Slop Pulse, so \
                               the build must too (DESIGN §9): no Pulse handshake from it yet. The \
-                              author launches it through Slop once and the handshake is recorded."
+                              author launches it through SLAPorSLOP once and the handshake is recorded."
                 .into(),
             Self::NoRelease(stage) => format!(
                 "approve a release before listing a {stage:?} app: it has no approved release \
@@ -497,13 +497,13 @@ impl NotListable {
     /// For the maker, when an appeal reverses a delisting but the app can't go back in yet.
     pub(crate) fn for_maker(&self) -> String {
         match self {
-            Self::Private => "It's Private Slop, so it isn't listed in the store.".into(),
+            Self::Private => "It's private, so it isn't listed in the store.".into(),
             Self::Frozen(reason) => format!(
                 "It stays out of the store while it's frozen ({reason}). It goes back in once \
-                 Slop can read its repository again."
+                 SLAPorSLOP can read its repository again."
             ),
-            Self::NoPulse => "It stays out of the store until Slop records a Pulse handshake \
-                              from it: launch it through Slop once. A reviewer then puts it back."
+            Self::NoPulse => "It stays out of the store until SLAPorSLOP records a Pulse handshake \
+                              from it: launch it through SLAPorSLOP once. A reviewer then puts it back."
                 .into(),
             Self::NoRelease(_) => "It stays out of the store until a release is approved: submit \
                                    one from Releases & progress. A reviewer then puts it back."
@@ -545,7 +545,7 @@ pub async fn list_app(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result
     list_app_as(db, slug, reviewer, false).await
 }
 
-/// Private Slop whose owner asked to make it public (SECURITY §12.3), once the admin panel has
+/// Private apps whose owner asked to make it public (SECURITY §12.3), once the admin panel has
 /// checked its repository is public (frozen.rs): it becomes public and goes in the store. Its
 /// private shares end, since everyone can see it now.
 pub async fn make_public(db: &PgPool, slug: &str, reviewer: &str) -> anyhow::Result<()> {

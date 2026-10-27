@@ -39,7 +39,7 @@ pub struct Config {
     pub demos: DemoConfig,
     pub media: MediaConfig,
     pub payments: PaymentsConfig,
-    /// Product emails (notify.rs). Unset: notifications stay in Slop, nothing is emailed.
+    /// Product emails (notify.rs). Unset: notifications stay in SLAPorSLOP, nothing is emailed.
     pub email: Option<EmailConfig>,
     /// Phone and browser notifications (push.rs). Unset: switched off.
     pub push: Option<PushConfig>,
@@ -59,17 +59,17 @@ pub struct Config {
     /// Where to report security problems (`mailto:` or https), published in
     /// /.well-known/security.txt. Unset: no security.txt.
     pub security_contact: Option<String>,
-    /// Slop's published email for legal notices and everything else (`SLOP_CONTACT_EMAIL`),
+    /// SLAPorSLOP's published email for legal notices and everything else (`SLOP_CONTACT_EMAIL`),
     /// shown on the contact page and, without `security_contact`, in security.txt.
     pub contact_email: Option<String>,
-    /// Where this Slop's source code is published (`SLOP_SOURCE_URL`, https). The AGPL asks a
+    /// Where this SLAPorSLOP's source code is published (`SLOP_SOURCE_URL`, https). The AGPL asks a
     /// network service to offer its users the source (lib.rs `source`). Unset: not public yet.
     pub source_url: Option<String>,
     /// Encrypts personal fields at rest (fields.rs): base64 of 32 random bytes in
     /// `SLOP_FIELD_KEY`. Unset: stored as they are.
     pub field_key: Option<[u8; 32]>,
     /// How many different staff must approve a sensitive action (staff.rs), counting the one
-    /// who asks: 1 while Slop has one person, 2 once there's a second.
+    /// who asks: 1 while SLAPorSLOP has one person, 2 once there's a second.
     pub approvals_required: u8,
 }
 
@@ -82,12 +82,12 @@ pub struct OpsConfig {
     pub deploy_dir: Option<std::path::PathBuf>,
 }
 
-/// Updates for the Slop desktop app itself (desktop_updates.rs).
+/// Updates for the SLAPorSLOP desktop app itself (desktop_updates.rs).
 /// Browser demos (demos.rs): off unless `SLOP_PLAY_URL` names the separate origin they're
 /// served from.
 #[derive(Clone, Debug)]
 pub struct DemoConfig {
-    /// The demos' own origin, e.g. https://play.slop.example (never Slop's own).
+    /// The demos' own origin, e.g. https://play.slop.example (never SLAPorSLOP's own).
     pub play_url: Option<Url>,
     /// Where unpacked demos are kept.
     pub dir: std::path::PathBuf,
@@ -122,7 +122,7 @@ pub struct DesktopConfig {
     pub dir: Option<std::path::PathBuf>,
     /// Signs builds for the app's updater (`slop-api keys generate-updater`).
     pub updater_key: Option<minisign::SecretKey>,
-    /// Slop's own repository (`owner/repo`); only its `workflow` on `git_ref` may upload.
+    /// SLAPorSLOP's own repository (`owner/repo`); only its `workflow` on `git_ref` may upload.
     pub repo: Option<String>,
     /// The git ref whose workflow runs may upload (`SLOP_DESKTOP_REF`, main by default).
     pub git_ref: String,
@@ -172,9 +172,9 @@ impl fmt::Debug for DesktopConfig {
 /// Phone and browser notifications (push.rs).
 #[derive(Clone)]
 pub struct PushConfig {
-    /// Slop's VAPID key (`SLOP_VAPID_PRIVATE_KEY`).
+    /// SLAPorSLOP's VAPID key (`SLOP_VAPID_PRIVATE_KEY`).
     pub key: p256::ecdsa::SigningKey,
-    /// Who push services contact about Slop's pushes (`SLOP_VAPID_SUBJECT`, mailto: or https:).
+    /// Who push services contact about SLAPorSLOP's pushes (`SLOP_VAPID_SUBJECT`, mailto: or https:).
     pub subject: String,
     /// Push hosts besides the known ones. Tests only.
     pub extra_hosts: Vec<String>,
@@ -196,7 +196,7 @@ impl fmt::Debug for PushConfig {
 pub struct EmailConfig {
     /// `smtps://user:password@host:465` or `smtp://user:password@host:587` (STARTTLS).
     pub smtp_url: String,
-    /// The From address, e.g. `Slop <notifications@slop.example>`.
+    /// The From address, e.g. `SLAPorSLOP <notifications@slop.example>`.
     pub from: String,
 }
 
@@ -216,7 +216,7 @@ pub struct PaymentsConfig {
     /// Without Stripe, record payments as simulated instead of refusing them. Only the simulation
     /// sandbox and development servers turn this on; `serve` refuses it on other databases.
     pub simulated: bool,
-    /// Slop's VAT registration numbers, shown on fee statements (`SLOP_VAT_ID`).
+    /// SLAPorSLOP's VAT registration numbers, shown on fee statements (`SLOP_VAT_ID`).
     pub vat_id: Option<String>,
     /// The EU's VIES service for checking VAT numbers (`SLOP_VIES_URL`; "off" to skip).
     pub vies_url: Option<Url>,
@@ -247,7 +247,7 @@ impl fmt::Debug for StripeConfig {
 #[derive(Clone, Debug)]
 pub struct MediaConfig {
     /// Where GitHub serves repository files: `<base><owner>/<repo>/<commit>/<path>`. Not the
-    /// API, so it doesn't use Slop's request allowance. Changed only by tests.
+    /// API, so it doesn't use SLAPorSLOP's request allowance. Changed only by tests.
     pub github_raw_base: Url,
     /// Where GitHub serves account pictures: `<base>u/<account ID>`. Changed only by tests.
     pub github_avatar_base: Url,
@@ -273,10 +273,10 @@ impl Default for MediaConfig {
 /// Release fetching and signing.
 #[derive(Clone)]
 pub struct ReleaseConfig {
-    /// Slop's manifest signing key (base64 Ed25519 secret). Without it, nothing can be approved.
+    /// SLAPorSLOP's manifest signing key (base64 Ed25519 secret). Without it, nothing can be approved.
     /// Production keeps this in a KMS (SECURITY §8.3); see `slop-api keys generate`.
     pub signing_key: Option<slop_manifest::ed25519_dalek::SigningKey>,
-    /// Largest release file Slop will fetch and hash. GitHub's own limit is 2 GiB per file.
+    /// Largest release file SLAPorSLOP will fetch and hash. GitHub's own limit is 2 GiB per file.
     pub max_file_bytes: u64,
     /// GitHub REST API, for checking that a release's commit exists in the linked repo.
     pub github_api_base: Url,
@@ -295,7 +295,7 @@ pub struct ReleaseConfig {
     pub github_oidc_issuer: String,
     /// Optional GitHub token, for higher API rate limits when checking commits and attestations.
     pub github_token: Option<String>,
-    /// Slop's GitHub App, when configured (github_app.rs).
+    /// SLAPorSLOP's GitHub App, when configured (github_app.rs).
     pub github_app: Option<GithubAppConfig>,
     /// Only a repository's GitHub owner may link it (repo_owner.rs). Off only in tests and the
     /// simulation sandbox, whose players have no GitHub accounts (`SLOP_REQUIRE_REPO_OWNER`).
@@ -310,7 +310,7 @@ pub struct ReleaseConfig {
     pub source_hosts: Vec<(String, crate::repo_tokens::Kind)>,
 }
 
-/// Slop's GitHub App: makers install it on a repository so GitHub sends release webhooks and
+/// SLAPorSLOP's GitHub App: makers install it on a repository so GitHub sends release webhooks and
 /// requests about that repository use the installation's own API allowance.
 #[derive(Clone)]
 pub struct GithubAppConfig {

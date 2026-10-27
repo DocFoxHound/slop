@@ -2,9 +2,9 @@
 //! Profile pictures from a linked sign-in (built 2026-10-24).
 //!
 //! On the account page someone picks which linked sign-in's picture to show, or keeps the letter
-//! (the default). Slop downloads that picture, decodes it and re-encodes it as a 128×128 PNG, and
+//! (the default). SLAPorSLOP downloads that picture, decodes it and re-encodes it as a 128×128 PNG, and
 //! serves its own copy at `/v1/users/{id}/avatar`: people looking at it never contact Google,
-//! Discord or the others, the site's CSP keeps allowing only Slop's own images, and re-encoding
+//! Discord or the others, the site's CSP keeps allowing only SLAPorSLOP's own images, and re-encoding
 //! strips metadata and anything else hidden in the file.
 //!
 //! Keeping it current:
@@ -52,11 +52,11 @@ use crate::{
     limits::{self, Action},
 };
 
-/// Width and height of Slop's copy, in pixels.
+/// Width and height of SLAPorSLOP's copy, in pixels.
 pub const SIZE: u32 = 128;
-/// The largest picture Slop downloads.
+/// The largest picture SLAPorSLOP downloads.
 pub const MAX_BYTES: u64 = 1024 * 1024;
-/// The largest picture Slop decodes, on each side.
+/// The largest picture SLAPorSLOP decodes, on each side.
 const MAX_SIDE: u32 = 4096;
 /// Redirects followed for one picture.
 const MAX_REDIRECTS: usize = 3;
@@ -210,7 +210,7 @@ async fn gitlab_picture(state: &AppState, subject: &str) -> anyhow::Result<Optio
     Ok(clean_picture(user.avatar_url.as_deref()))
 }
 
-/// Where to read the picture of one linked sign-in; None when it has none Slop can show.
+/// Where to read the picture of one linked sign-in; None when it has none SLAPorSLOP can show.
 async fn source(
     state: &AppState,
     provider: Provider,
@@ -259,7 +259,7 @@ fn header_text(headers: &HeaderMap, name: header::HeaderName) -> Option<String> 
         .map(String::from)
 }
 
-/// Reads a picture from one of `provider`'s hosts and makes Slop's copy.
+/// Reads a picture from one of `provider`'s hosts and makes SLAPorSLOP's copy.
 pub(crate) async fn fetch(
     state: &AppState,
     provider: Provider,
@@ -368,7 +368,7 @@ pub fn normalize(bytes: &[u8]) -> anyhow::Result<Vec<u8>> {
 }
 
 // ---------------------------------------------------------------------------------------------
-// Addresses Slop hands out
+// Addresses SLAPorSLOP hands out
 
 /// SQL for the site-relative address of the picture of the user `user` (a column or parameter),
 /// or null: the letter. Suspended and closed accounts show the letter.
@@ -381,7 +381,7 @@ pub fn path_sql(user: &str) -> String {
 }
 
 /// Makes a path from `path_sql` a full address. The desktop app shows the website from its own
-/// files, so a relative one wouldn't reach Slop there.
+/// files, so a relative one wouldn't reach SLAPorSLOP there.
 pub fn absolute(config: &crate::config::Config, path: Option<String>) -> Option<String> {
     path.map(|p| format!("{}{p}", config.public_url.as_str().trim_end_matches('/')))
 }
@@ -404,7 +404,7 @@ struct Choice {
     provider: String,
     subject: String,
     login: Option<String>,
-    /// Slop can show this sign-in's picture now.
+    /// SLAPorSLOP can show this sign-in's picture now.
     available: bool,
     /// "daily", "sign_in" (updated when they sign in with it) or "never" (no picture).
     updates: &'static str,
@@ -521,9 +521,12 @@ async fn choose(
         ApiError::invalid(
             "provider",
             match updates(provider) {
-                "never" => format!("{} doesn't share a picture with Slop", provider.label()),
+                "never" => format!(
+                    "{} doesn't share a picture with SLAPorSLOP",
+                    provider.label()
+                ),
                 "sign_in" => format!(
-                    "Slop doesn't have your {} picture yet: press Refresh to sign in with it again",
+                    "SLAPorSLOP doesn't have your {} picture yet: press Refresh to sign in with it again",
                     provider.label()
                 ),
                 _ => format!("your {} account has no picture", provider.label()),
@@ -581,14 +584,14 @@ pub async fn remove(conn: &mut PgConnection, user: Uuid) -> sqlx::Result<Option<
 }
 
 // ---------------------------------------------------------------------------------------------
-// Serving Slop's copy
+// Serving SLAPorSLOP's copy
 
 #[derive(Deserialize)]
 struct ServeQuery {
     v: Option<String>,
 }
 
-/// Slop's copy of someone's picture. The address the API hands out carries the version, so it
+/// SLAPorSLOP's copy of someone's picture. The address the API hands out carries the version, so it
 /// can be cached for good; without it (or with an old one) for five minutes.
 async fn serve(
     State(state): State<AppState>,
@@ -763,7 +766,7 @@ async fn moved(state: &AppState, chosen: &mut Chosen, to: &str) -> anyhow::Resul
 }
 
 /// After a sign-in with a linked account (its `identities.picture_url` already updated): if
-/// that's the chosen picture, bring Slop's copy up to date, waiting a few seconds at most.
+/// that's the chosen picture, bring SLAPorSLOP's copy up to date, waiting a few seconds at most.
 pub async fn signed_in(state: &AppState, provider: Provider, subject: &str) {
     let work = async {
         let row: Option<(Chosen, Option<String>)> = sqlx::query_as::<_, (Uuid, String, String, String, Option<String>, Option<String>, Option<String>)>(

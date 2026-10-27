@@ -3172,7 +3172,7 @@ async fn serve_until_listening(env: &[(&str, &str)]) -> Result<Server, String> {
     });
     let deadline = std::time::Instant::now() + std::time::Duration::from_secs(120);
     loop {
-        if log.lock().unwrap().contains("Slop API listening") {
+        if log.lock().unwrap().contains("SLAPorSLOP API listening") {
             return Ok(Server {
                 _child: child,
                 base: format!("http://127.0.0.1:{port}"),
@@ -3859,7 +3859,7 @@ async fn notification_emails_are_sent_retried_and_given_up(db: PgPool) {
     let app = test_app_with(db, |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: format!("smtp://127.0.0.1:{port}"),
-            from: "Slop <notifications@slop.example>".into(),
+            from: "SLAPorSLOP <notifications@slop.example>".into(),
         })
     })
     .await;
@@ -3939,7 +3939,7 @@ async fn notification_emails_are_sent_retried_and_given_up(db: PgPool) {
         "{lines}"
     );
     assert!(
-        lines.contains("From: Slop <notifications@slop.example>"),
+        lines.contains("From: SLAPorSLOP <notifications@slop.example>"),
         "{lines}"
     );
 }
@@ -3950,7 +3950,7 @@ async fn email_stays_off_without_a_usable_smtp_address(db: PgPool) {
         let app = test_app_with(db.clone(), |c| {
             c.email = url.map(|u| slop_api::config::EmailConfig {
                 smtp_url: u.into(),
-                from: "Slop <notifications@slop.example>".into(),
+                from: "SLAPorSLOP <notifications@slop.example>".into(),
             })
         })
         .await;
@@ -3979,7 +3979,7 @@ async fn an_smtp_password_never_crosses_the_network_in_the_clear(db: PgPool) {
     let app = test_app_with(db, |c| {
         c.email = Some(slop_api::config::EmailConfig {
             smtp_url: format!("smtp://slop:hunter2@127.0.0.1:{port}"),
-            from: "Slop <notifications@slop.example>".into(),
+            from: "SLAPorSLOP <notifications@slop.example>".into(),
         })
     })
     .await;

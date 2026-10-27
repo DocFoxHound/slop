@@ -2,7 +2,7 @@
 //! Serving the built website (`web/dist`) from the API, when `SLOP_WEB_DIR` is set.
 //!
 //! The site and the API then share an origin, which the session cookie and the CSRF checks
-//! need. Pages get a Content-Security-Policy that allows only Slop's own scripts and styles
+//! need. Pages get a Content-Security-Policy that allows only SLAPorSLOP's own scripts and styles
 //! (SECURITY §8.1); API responses keep the stricter one set in `router`.
 
 use std::path::Path;
@@ -17,7 +17,7 @@ use axum::{
 use tower::ServiceExt;
 use tower_http::services::{ServeDir, ServeFile};
 
-/// Pages may load only Slop's own scripts, styles, images and API. Inline styles are allowed
+/// Pages may load only SLAPorSLOP's own scripts, styles, images and API. Inline styles are allowed
 /// because the UI sets per-app colours with `style`; inline scripts are not. Store-page pictures
 /// come from makers' GitHub repositories (media.rs). The one frame is
 /// YouTube's privacy-enhanced player, loaded when someone plays a store-page video. Composers'
@@ -118,7 +118,11 @@ mod tests {
     async fn a_missing_document_is_a_404_and_a_page_route_is_the_website() {
         let dir = std::env::temp_dir().join(format!("slop-web-test-{}", std::process::id()));
         std::fs::create_dir_all(&dir).unwrap();
-        std::fs::write(dir.join("index.html"), "<!doctype html><title>Slop</title>").unwrap();
+        std::fs::write(
+            dir.join("index.html"),
+            "<!doctype html><title>SLAPorSLOP</title>",
+        )
+        .unwrap();
         std::fs::write(dir.join("publishing.md"), "# How to publish").unwrap();
         let app: Router = service(&dir);
         let get = |path: &str| {
@@ -136,7 +140,7 @@ mod tests {
         let body = axum::body::to_bytes(page.into_body(), 1 << 16)
             .await
             .unwrap();
-        assert!(String::from_utf8_lossy(&body).contains("<title>Slop</title>"));
+        assert!(String::from_utf8_lossy(&body).contains("<title>SLAPorSLOP</title>"));
         std::fs::remove_dir_all(&dir).ok();
     }
 }

@@ -2,7 +2,7 @@
 //! Teams (DESIGN §14).
 //!
 //! - **Player teams:** anyone creates one; others join (open teams) or are invited. Members share
-//!   **picks** (apps they recommend) and **game nights**, and see Private Slop shared with the team.
+//!   **picks** (apps they recommend) and **game nights**, and see private apps shared with the team.
 //! - **Official teams:** developer studios, verified through their **GitHub organization**:
 //!   1. the person setting it up is an **owner** of the organization;
 //!   2. the organization has GitHub's **verified domain** badge, or a DNS TXT record on the
@@ -12,8 +12,8 @@
 //!      are shown as the team's);
 //!   5. if they take donations, Stripe has verified the studio's account as a **business**.
 //!
-//!   Slop reads the organization through its GitHub App installed there. Every check is re-run
-//!   daily; while any fails, the badge is off. Official teams can never receive Private Slop.
+//!   SLAPorSLOP reads the organization through its GitHub App installed there. Every check is re-run
+//!   daily; while any fails, the badge is off. Official teams can never receive private apps.
 
 use axum::{
     Json, Router,
@@ -350,7 +350,7 @@ struct Page {
     apps: Vec<AppSummary>,
     picks: Vec<Pick>,
     events: Vec<Event>,
-    /// Private Slop shared with this player team (members only).
+    /// Private apps shared with this player team (members only).
     shared: Vec<AppSummary>,
     hidden: bool,
     /// Whether the viewer has this team's chat: members of an invite-only player team, outside
@@ -593,7 +593,7 @@ async fn update(
                 "player teams: open or invite",
             ));
         }
-        // Private Slop shared with the team would be open to anyone who joins.
+        // Private apps shared with the team would be open to anyone who joins.
         let shared: bool =
             sqlx::query_scalar("select exists (select 1 from app_team_shares where team_id = $1)")
                 .bind(t.id)
@@ -720,7 +720,7 @@ async fn invite(
     if !ok {
         return Err(ApiError::invalid(
             "user",
-            "no Slop account with that link, or they're already in the team",
+            "no SLAPorSLOP account with that link, or they're already in the team",
         ));
     }
     // An invite is a message: not to someone who blocked the inviter (or whom they blocked),
@@ -746,7 +746,7 @@ async fn invite(
     if crate::friends::blocked(&mut conn, user.id, to).await? || (minor && !friends) {
         return Err(ApiError::invalid(
             "user",
-            "no Slop account with that link, or they're already in the team",
+            "no SLAPorSLOP account with that link, or they're already in the team",
         ));
     }
     drop(conn);
@@ -914,7 +914,7 @@ async fn add_pick(
     if catalog::is_private(&state.db, app_id).await? {
         return Err(ApiError::invalid(
             "app_slug",
-            "pick apps from the store; share Private Slop from its page",
+            "pick apps from the store; share a private app from its page",
         ));
     }
     sqlx::query(
@@ -1000,7 +1000,7 @@ async fn add_event(
             if !public {
                 return Err(ApiError::invalid(
                     "app_slug",
-                    "pick an app in the store: Private Slop isn't named in game nights",
+                    "pick an app in the store: private apps aren't named in game nights",
                 ));
             }
             Some(id)
@@ -1147,7 +1147,7 @@ pub async fn run_checks(state: &AppState, team_id: Uuid) -> anyhow::Result<Vec<C
             check: "organization",
             ok: false,
             detail: format!(
-                "Another team on Slop is already the verified team for {org}. Ask its owners to add you."
+                "Another team on SLAPorSLOP is already the verified team for {org}. Ask its owners to add you."
             ),
         });
         return Ok(out);
@@ -1157,7 +1157,7 @@ pub async fn run_checks(state: &AppState, team_id: Uuid) -> anyhow::Result<Vec<C
             check: "app_installed",
             ok: false,
             detail: format!(
-                "Install Slop's GitHub App on the {org} organization so Slop can check it."
+                "Install SLAPorSLOP's GitHub App on the {org} organization so SLAPorSLOP can check it."
             ),
         });
         return Ok(out);
@@ -1188,7 +1188,7 @@ pub async fn run_checks(state: &AppState, team_id: Uuid) -> anyhow::Result<Vec<C
             Some(l) if owner => format!("@{l} is an owner of {org}."),
             Some(l) => format!("@{l} isn't an owner of {org} on GitHub."),
             None => {
-                "The team's owner signs in with GitHub; Slop couldn't find their GitHub account."
+                "The team's owner signs in with GitHub; SLAPorSLOP couldn't find their GitHub account."
                     .into()
             }
         },
@@ -1212,7 +1212,7 @@ pub async fn run_checks(state: &AppState, team_id: Uuid) -> anyhow::Result<Vec<C
         } else if dns_ok {
             format!("The DNS record on {} matches.", dns_domain.clone().unwrap_or_default())
         } else {
-            "Verify a domain on GitHub, or add the DNS record Slop shows you to your studio's domain.".into()
+            "Verify a domain on GitHub, or add the DNS record SLAPorSLOP shows you to your studio's domain.".into()
         },
     });
     // 3. Two-factor authentication required for every member.
@@ -1223,7 +1223,7 @@ pub async fn run_checks(state: &AppState, team_id: Uuid) -> anyhow::Result<Vec<C
         detail: if two_factor {
             "Two-factor authentication is required for every member.".into()
         } else {
-            "Require two-factor authentication in the organization's settings (Slop's GitHub App needs to read the organization's administration settings).".into()
+            "Require two-factor authentication in the organization's settings (SLAPorSLOP's GitHub App needs to read the organization's administration settings).".into()
         },
     });
     // 4. Apps come from the organization's repositories: only those show as the team's.

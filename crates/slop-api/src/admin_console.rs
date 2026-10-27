@@ -324,7 +324,7 @@ async fn edit_listing(
         Notice {
             user_id: maker,
             category: "apps",
-            title: format!("Slop changed {now_title}'s store page"),
+            title: format!("SLAPorSLOP changed {now_title}'s store page"),
             body: format!("Changed: {}.\n\n{reason}", fields.join(", ")),
             link: format!("/app/{slug}"),
             collapse_key: None,
@@ -373,14 +373,14 @@ struct PaymentRow {
 
 #[derive(Serialize)]
 struct Money {
-    /// The last 12 months: payments and Slop's fees, by kind and currency.
+    /// The last 12 months: payments and SLAPorSLOP's fees, by kind and currency.
     months: Vec<MonthRow>,
     /// The newest 100 entries in the payments record.
     recent: Vec<PaymentRow>,
     active_server_donations: i64,
     open_holds: i64,
     hold_requests_waiting: i64,
-    /// Webhook events received in the last day: Stripe is talking to Slop.
+    /// Webhook events received in the last day: Stripe is talking to SLAPorSLOP.
     stripe_events_today: i64,
     /// stripe, simulated or off.
     payments: &'static str,

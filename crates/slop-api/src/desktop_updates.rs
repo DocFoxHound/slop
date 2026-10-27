@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! Updates for the Slop desktop app itself (SECURITY §7: self-updates are signed and verified).
+//! Updates for the SLAPorSLOP desktop app itself (SECURITY §7: self-updates are signed and verified).
 //!
 //! Production's Windows app is built on GitHub by the pipeline (.github/workflows/pipeline.yml),
 //! after the owner approves the run's `production` environment, and uploaded here with the run's
@@ -61,7 +61,10 @@ pub fn updater_key_from_base64(value: &str) -> anyhow::Result<minisign::SecretKe
 /// A new updater key pair: (SLOP_UPDATER_KEY, the public key for tauri.conf.json).
 pub fn generate_updater_key() -> anyhow::Result<(String, String)> {
     let pair = minisign::KeyPair::generate_unencrypted_keypair()?;
-    let secret = pair.sk.to_box(Some("Slop desktop updater"))?.to_string();
+    let secret = pair
+        .sk
+        .to_box(Some("SLAPorSLOP desktop updater"))?
+        .to_string();
     let public = pair.pk.to_box()?.to_string();
     Ok((STANDARD.encode(secret), STANDARD.encode(public)))
 }
@@ -78,7 +81,13 @@ pub fn sign_build(
         "timestamp:{}\tfile:{file_name}\tversion:{version}",
         OffsetDateTime::now_utc().unix_timestamp()
     );
-    let sig = minisign::sign(None, key, data, Some(&trusted), Some("signature from Slop"))?;
+    let sig = minisign::sign(
+        None,
+        key,
+        data,
+        Some(&trusted),
+        Some("signature from SLAPorSLOP"),
+    )?;
     Ok(STANDARD.encode(sig.to_string()))
 }
 
@@ -202,7 +211,7 @@ async fn upload(
     Ok((StatusCode::CREATED, Json(published?)))
 }
 
-/// Only Slop's own pipeline on main (SLOP_DESKTOP_WORKFLOW, SLOP_DESKTOP_REF) in Slop's own
+/// Only SLAPorSLOP's own pipeline on main (SLOP_DESKTOP_WORKFLOW, SLOP_DESKTOP_REF) in SLAPorSLOP's own
 /// repository, and only a job in the approved environment (SLOP_DESKTOP_ENVIRONMENT): a run
 /// waiting for, or refused, the owner's approval never gets that far, and no other workflow,
 /// branch or fork can update the players.

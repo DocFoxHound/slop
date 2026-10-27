@@ -56,7 +56,7 @@ impl Found {
     }
 }
 
-/// Ecosystems OSV has advisories for, as Slop names them.
+/// Ecosystems OSV has advisories for, as SLAPorSLOP names them.
 const OSV_ECOSYSTEMS: &[&str] = &["crates.io", "npm", "PyPI", "Go", "NuGet", "Maven"];
 
 /// Asks OSV which advisories affect these packages. Returns (package index, advisory ID) pairs.

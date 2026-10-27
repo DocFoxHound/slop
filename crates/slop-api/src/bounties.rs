@@ -4,7 +4,7 @@
 //! - **Anyone signed in opens one** on a public app: what they want fixed or added, in one
 //!   currency. It's public, reportable, and expires after 180 days without a delivery.
 //! - **Pledging saves a card, nothing more.** The backer goes through Stripe Checkout in setup
-//!   mode on Slop's platform account; Slop keeps only Stripe's IDs. A pledge can be withdrawn
+//!   mode on SLAPorSLOP's platform account; SLAPorSLOP keeps only Stripe's IDs. A pledge can be withdrawn
 //!   until a delivery is confirmed.
 //! - **Delivering:** the app's maker, or the maker of a community build of it, claims an approved
 //!   release delivers it. They need a donation account (their own Stripe account) to be paid.
@@ -12,8 +12,8 @@
 //!   don't answer within 14 days, the backers vote: more than half of the pledged amount decides.
 //!   If every pledge that counts is withdrawn, the delivery is declined and the bounty reopens.
 //! - **Paying:** each pledge is charged off-session as a **direct charge on the builder's own
-//!   Stripe account** (the card is cloned there), with Slop's 5% as the application fee, and
-//!   recorded in `payments`. Slop never holds the money. A refused card marks that pledge failed
+//!   Stripe account** (the card is cloned there), with SLAPorSLOP's 5% as the application fee, and
+//!   recorded in `payments`. SLAPorSLOP never holds the money. A refused card marks that pledge failed
 //!   and tells its backer; the rest still pay. Stripe being down leaves it due for the next run.
 //! - Without Stripe keys, pledges and charges are simulated where People payments are.
 
@@ -297,7 +297,7 @@ async fn open(
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     if catalog::is_private(&state.db, app_id).await? {
-        return Err(ApiError::Conflict("Private Slop has no bounties".into()));
+        return Err(ApiError::Conflict("Private apps have no bounties".into()));
     }
     let title = b.title.trim();
     let body = b.body.trim();
@@ -366,7 +366,7 @@ async fn pledge(
     Path(id): Path<Uuid>,
     Json(b): Json<NewPledge>,
 ) -> ApiResult<Json<PledgeStarted>> {
-    // Saving a card is a way to test stolen ones on Slop's own Stripe account: the same limits
+    // Saving a card is a way to test stolen ones on SLAPorSLOP's own Stripe account: the same limits
     // as donations (security review, 2026-10-22).
     crate::limits::check(&state, user.id, crate::limits::Action::Donation)?;
     let (_, status, _) = load_visible(&state, id, Some(&user), &headers).await?;
@@ -439,7 +439,7 @@ async fn pledge(
     }))
 }
 
-/// The backer's Stripe customer on Slop's platform account, made once.
+/// The backer's Stripe customer on SLAPorSLOP's platform account, made once.
 async fn customer(
     state: &AppState,
     stripe: &StripeConfig,
@@ -624,7 +624,7 @@ pub(crate) async fn forget_cards(state: &AppState, cards: &[String]) {
     }
 }
 
-/// Forgets a saved card at Stripe (best effort: Slop stops using it either way).
+/// Forgets a saved card at Stripe (best effort: SLAPorSLOP stops using it either way).
 async fn detach(state: &AppState, stripe: &StripeConfig, payment_method: &str) {
     if let Err(e) = call(
         state,
@@ -640,7 +640,7 @@ async fn detach(state: &AppState, stripe: &StripeConfig, payment_method: &str) {
     }
 }
 
-/// A closed account's saved cards: its Stripe customer on Slop's account is deleted, which
+/// A closed account's saved cards: its Stripe customer on SLAPorSLOP's account is deleted, which
 /// removes every card saved to it (best effort, like `detach`).
 pub async fn forget_customer(state: &AppState, user: Uuid) {
     let Mode::Stripe(stripe) = stripe::mode(state) else {
@@ -1344,7 +1344,7 @@ pub async fn dispute_recorded(
 }
 
 /// One pledge, as a direct charge on the builder's Stripe account: the saved card is cloned
-/// there, then charged off-session with Slop's fee as the application fee.
+/// there, then charged off-session with SLAPorSLOP's fee as the application fee.
 #[allow(clippy::too_many_arguments)]
 async fn charge(
     state: &AppState,
@@ -1392,7 +1392,7 @@ async fn charge(
             ("confirm", "true".into()),
             ("off_session", "true".into()),
             ("application_fee_amount", slop_fee.to_string()),
-            ("description", format!("Slop bounty: {title}")),
+            ("description", format!("SLAPorSLOP bounty: {title}")),
             ("metadata[bounty_pledge_id]", pledge.to_string()),
         ],
         Some(&format!("bounty-pledge-{pledge}")),
