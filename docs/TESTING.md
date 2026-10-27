@@ -1,4 +1,4 @@
-# Testing Slop privately
+# Testing SLAPorSLOP privately
 
 Everything stays private: the `slop` repository, the Slop Build recipe and your test apps.
 
@@ -16,7 +16,7 @@ Put its client ID and a client secret in `~/.config/slop/slop.env` on the server
 
 Open the site and click **Download** at the top left, then **Windows** (it appears once the first
 build has been published). The test server's app is **Slop Dev**, built on the server after each
-deploy that changed it; it installs beside the real Slop and keeps its own sign-in and settings
+deploy that changed it; it installs beside the real SLAPorSLOP and keeps its own sign-in and settings
 (`deploy/README.md`, "The desktop app"). Windows warns that the publisher is unknown, because the
 installer isn't code-signed: choose **More info → Run anyway**. From then on the app offers each
 new version itself.
@@ -24,7 +24,7 @@ new version itself.
 ## 3. Private repositories
 
 - **Release files:** give the server a fine-grained GitHub token with read-only **Contents** and
-  **Metadata** on your test repositories (`GITHUB_TOKEN` in `slop.env`). Slop uses it to check
+  **Metadata** on your test repositories (`GITHUB_TOKEN` in `slop.env`). SLAPorSLOP uses it to check
   commits, find attestations, and hand players' apps short-lived download links.
 - **Maker signatures:** GitHub only makes artifact attestations in private repositories on
   GitHub Enterprise Cloud. The deployment therefore runs with `SLOP_REQUIRE_MAKER_SIGNATURE=false`,
@@ -37,10 +37,10 @@ new version itself.
    into its root, so the recipe is at `.github/workflows/build.yml`. Tag it `v1`.
 2. In that repository: **Settings → Actions → General → Access →** "Accessible from repositories
    owned by the user 'DocFoxHound'".
-3. On Slop: **Publish → New app** (repository URL of your private test app), then **Releases →
+3. On SLAPorSLOP: **Publish → New app** (repository URL of your private test app), then **Releases →
    Add to my repository on GitHub**, and add `sign: false` under `with:` before committing.
 4. Push to the test app's main branch. The run builds, attaches the zips to a release, and sends
-   it to Slop. Review it on the server:
+   it to SLAPorSLOP. Review it on the server:
 
    ```sh
    set -a; . ~/.config/slop/slop.env; set +a

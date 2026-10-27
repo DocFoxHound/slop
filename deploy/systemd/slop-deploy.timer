@@ -1,5 +1,5 @@
 [Unit]
-Description=Check for new Slop commits every two minutes
+Description=Check for new SLAPorSLOP commits every two minutes
 
 [Timer]
 OnBootSec=1min

@@ -1,5 +1,5 @@
-//! Slop for Rust games: saves, mods and asking the Slop app for a server's mods. Needs
-//! `serde_json`. Outside the Slop app it falls back: your own save folder, no mods, and
+//! SLAPorSLOP for Rust games: saves, mods and asking the SLAPorSLOP app for a server's mods. Needs
+//! `serde_json`. Outside the SLAPorSLOP app it falls back: your own save folder, no mods, and
 //! `request_mods` answers "no_link".
 use std::{
     env, fs, io,
@@ -7,7 +7,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Where saves, settings and logs go: Slop's save folder, else `fallback`.
+/// Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`.
 pub fn save_dir(fallback: &Path) -> PathBuf {
     env::var_os("SLOP_SAVE_DIR")
         .filter(|d| !d.is_empty())
@@ -30,7 +30,7 @@ pub fn load(fallback: &Path, name: &str) -> Option<Vec<u8>> {
 }
 
 /// Every mod folder: your game's own mods folder (if you named one on your store page), then
-/// `SLOP_MODS`. Each holds one mod from Slop.
+/// `SLOP_MODS`. Each holds one mod from SLAPorSLOP.
 pub fn mod_dirs(own_folder: Option<&Path>) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     if let Some(own) = own_folder {
@@ -56,7 +56,7 @@ pub fn mod_dirs(own_folder: Option<&Path>) -> Vec<PathBuf> {
     found
 }
 
-/// Asks the Slop app for mods by address, e.g. `json!([{"slug": "dragons", "version": "1.2.0"}])`.
+/// Asks the SLAPorSLOP app for mods by address, e.g. `json!([{"slug": "dragons", "version": "1.2.0"}])`.
 /// The player confirms. Returns the answer: "done" (with "mods" and "folders"), "declined",
 /// "failed" (with "message"), "no_link" or "timeout". Blocks: call it off your main loop.
 pub fn request_mods(mods: serde_json::Value, for_whom: &str, give_up_after: Duration) -> serde_json::Value {

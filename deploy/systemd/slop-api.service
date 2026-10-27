@@ -1,5 +1,5 @@
 [Unit]
-Description=Slop API and website
+Description=SLAPorSLOP API and website
 After=slop-pg.service network-online.target
 Wants=slop-pg.service
 

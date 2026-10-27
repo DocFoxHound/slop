@@ -6,7 +6,7 @@ For composers and sound designers: tracks that play right on your page, each wit
 
 1. **Make a new public repository** on GitHub, e.g. `portfolio`
    ([github.com/new](https://github.com/new)). It has to belong to the GitHub account linked to
-   your Slop account (your page's editor on Slop shows which, or a **Link GitHub** button).
+   your SLAPorSLOP account (your page's editor on SLAPorSLOP shows which, or a **Link GitHub** button).
 2. **Copy this folder's `.slop/` folder** into it, keeping the name (it starts with a dot).
    - With git: copy the folder into your clone, then commit and push.
    - In the browser: on your new repository choose **Add file → Create new file**, type
@@ -15,10 +15,10 @@ For composers and sound designers: tracks that play right on your page, each wit
      You don't need the placeholder pictures at all: just make the paths in `portfolio.json` match
      your files.
 3. **Replace everything below**, then commit and push.
-4. **On Slop**, open your page's editor (People → your page → Edit, or `/people/me`), go to
+4. **On SLAPorSLOP**, open your page's editor (People → your page → Edit, or `/people/me`), go to
    **Portfolio**, paste your repository's address and choose **Check my portfolio now**. If
-   anything needs fixing, Slop lists each problem with the work and field it's in. When it all
-   passes, a person at Slop reviews it, and your page goes public once it's approved.
+   anything needs fixing, SLAPorSLOP lists each problem with the work and field it's in. When it all
+   passes, a person at SLAPorSLOP reviews it, and your page goes public once it's approved.
 
 Paths in `portfolio.json` are relative to `.slop/`: `"works/painting.png"` is
 `.slop/works/painting.png`. Use letters, numbers, `.`, `_`, `-` and `/` only (no spaces).
@@ -27,9 +27,9 @@ Paths in `portfolio.json` are relative to `.slop/`: `"works/painting.png"` is
 
 - `.slop/avatar.png` (256×256 placeholder) and `.slop/banner.png` (1600×400 placeholder).
 - `.slop/tracks/placeholder.wav` and `placeholder-2.wav`: one-second test tones, only there so the
-  template passes Slop's check. Replace them with your tracks: MP3, Ogg, WAV, FLAC or M4A, up to
+  template passes SLAPorSLOP's check. Replace them with your tracks: MP3, Ogg, WAV, FLAC or M4A, up to
   15 MB each (an Ogg or MP3 excerpt of a minute or two is plenty), and update the paths.
-- `.slop/covers/*.png`: a cover for each track (optional: remove `"poster"` and Slop shows a ♪).
+- `.slop/covers/*.png`: a cover for each track (optional: remove `"poster"` and SLAPorSLOP shows a ♪).
 - The `"youtube"` work: a sound design breakdown or a gameplay video with your audio. Replace the
   `REPLACE_ME4` placeholder with your video's link, or remove the work.
 - In `.slop/portfolio.json`: every `title`, `caption` (the game, the mood, loops or not) and

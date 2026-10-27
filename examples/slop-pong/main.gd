@@ -1,6 +1,6 @@
-# Slop Pong: the test game for Slop. You against the computer, first to 7. It keeps your wins
-# and best rally in Slop's save folder, loads mods from Slop (colours, speed, and code that
-# changes the game), asks the Slop app for a test server's mods, and counts players with Pulse.
+# Slop Pong: the test game for SLAPorSLOP. You against the computer, first to 7. It keeps your wins
+# and best rally in SLAPorSLOP's save folder, loads mods from SLAPorSLOP (colours, speed, and code that
+# changes the game), asks the SLAPorSLOP app for a test server's mods, and counts players with Pulse.
 extends Node2D
 
 const SIZE := Vector2(800, 600)
@@ -8,7 +8,7 @@ const PADDLE := Vector2(14, 90)
 const BALL := 12.0
 const WIN_SCORE := 7
 const SAVE := "pong.json"
-## The mod the pretend online server needs (its Slop address).
+## The mod the pretend online server needs (its SLAPorSLOP address).
 const SERVER_MODS := [{"slug": "slop-pong-neon"}]
 
 var paddle_speed := 420.0
@@ -124,9 +124,9 @@ func _show_menu(message: String) -> void:
 	_menu.get_child(1).grab_focus()
 
 
-## The pretend server needs the Neon mod: ask the Slop app for it, then play.
+## The pretend server needs the Neon mod: ask the SLAPorSLOP app for it, then play.
 func _play_online() -> void:
-	_status.text = "The test server needs the Neon mod. Asking the Slop app; answer it there…"
+	_status.text = "The test server needs the Neon mod. Asking the SLAPorSLOP app; answer it there…"
 	var answer: Dictionary = await Slop.request_mods(SERVER_MODS, "Slop Pong test server")
 	match answer.get("status"):
 		"done":
@@ -135,7 +135,7 @@ func _play_online() -> void:
 		"declined":
 			_show_menu("You said no to the server's mods, so you can't join it.")
 		"no_link":
-			_show_menu("Start Slop Pong from the Slop app to get the server's mods.")
+			_show_menu("Start Slop Pong from the SLAPorSLOP app to get the server's mods.")
 		_:
 			_show_menu("Couldn't get the server's mods: %s" % answer.get("message", answer.get("status")))
 

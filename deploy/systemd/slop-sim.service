@@ -1,5 +1,5 @@
 [Unit]
-Description=Slop simulation sandbox (made-up apps, players and votes; docs/SIMULATION.md)
+Description=SLAPorSLOP simulation sandbox (made-up apps, players and votes; docs/SIMULATION.md)
 After=slop-pg.service network-online.target
 Wants=slop-pg.service
 

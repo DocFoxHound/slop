@@ -30,7 +30,7 @@ die() { echo "promote: $*" >&2; exit 1; }
 cd "$(dirname "$0")/.."
 # The lists below print straight out: in a terminal, git would open a pager and wait there.
 export GIT_PAGER=cat PAGER=cat
-git rev-parse --git-dir >/dev/null 2>&1 || die "run it from a Slop checkout"
+git rev-parse --git-dir >/dev/null 2>&1 || die "run it from a SLAPorSLOP checkout"
 
 git fetch -q origin main dev || die "couldn't fetch main and dev from origin"
 main=$(git rev-parse origin/main)

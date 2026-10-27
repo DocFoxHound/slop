@@ -1,5 +1,5 @@
-// Slop for C# games (Unity, .NET, Godot C#): saves, mods and asking the Slop app for a server's
-// mods. No packages needed. Outside the Slop app it falls back: your own save folder, no mods,
+// SLAPorSLOP for C# games (Unity, .NET, Godot C#): saves, mods and asking the SLAPorSLOP app for a server's
+// mods. No packages needed. Outside the SLAPorSLOP app it falls back: your own save folder, no mods,
 // and RequestMods answers "no_link".
 using System;
 using System.Collections.Generic;
@@ -11,7 +11,7 @@ using System.Threading.Tasks;
 
 public static class Slop
 {
-    /// Where saves, settings and logs go: Slop's save folder, else `fallback`
+    /// Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`
     /// (in Unity, Application.persistentDataPath).
     public static string SaveDir(string fallback)
     {
@@ -38,7 +38,7 @@ public static class Slop
     }
 
     /// Every mod folder: your game's own mods folder (if you named one on your store page), then
-    /// SLOP_MODS. Each holds one mod from Slop.
+    /// SLOP_MODS. Each holds one mod from SLAPorSLOP.
     public static List<string> ModDirs(string ownFolder = null)
     {
         var found = new List<string>();
@@ -52,7 +52,7 @@ public static class Slop
         return found;
     }
 
-    /// Asks the Slop app for mods by address (and version, or null). The player confirms.
+    /// Asks the SLAPorSLOP app for mods by address (and version, or null). The player confirms.
     /// Returns the answer's JSON; its "status" is "done", "declined", "failed", "no_link" or
     /// "timeout" (see Status). Await it; it doesn't block your game.
     public static async Task<string> RequestMods(IEnumerable<(string slug, string version)> mods, string forWhom,

@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://slop.example/standard/v1/release-manifest.schema.json",
-  "title": "Slop release manifest",
+  "title": "SLAPorSLOP release manifest",
   "description": "The payload of a release manifest (purpose slop/release-manifest/v1): release-manifest.md.",
   "type": "object",
   "additionalProperties": false,

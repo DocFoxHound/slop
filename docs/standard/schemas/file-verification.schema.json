@@ -1,7 +1,7 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://slop.example/standard/v1/file-verification.schema.json",
-  "title": "Slop file verification",
+  "title": "SLAPorSLOP file verification",
   "description": "The payload of a file verification (purpose slop/file-verification/v1): file-verification.md.",
   "type": "object",
   "additionalProperties": false,

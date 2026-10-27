@@ -13,6 +13,10 @@
 //           so it installs beside "Slop" and keeps its own settings, library, sign-in and chat
 //           keys (the OS keychain entries are named after the identifier), and its own
 //           single-instance lock. deploy/README.md, "The desktop app".
+//
+// Those are the product names the installers and packages are keyed by, so they stay "Slop" and
+// "Slop Dev" after the rename to SLAPorSLOP (changing them would install a second copy instead
+// of updating). The window titles say "SLAPorSLOP" and "SLAPorSLOP Dev".
 "use strict";
 const fs = require("fs");
 const path = require("path");
@@ -24,6 +28,7 @@ const DEV = {
   // two Linux packages don't both install /usr/bin/slop-desktop.
   mainBinaryName: "slop-dev",
 };
+const DEV_TITLE = "SLAPorSLOP Dev";
 
 function configure(conf, { version, site, channel }) {
   if (!/^\d+\.\d+\.\d+$/.test(version || "")) throw new Error(`VERSION must look like 0.1.42, not ${JSON.stringify(version)}`);
@@ -33,13 +38,13 @@ function configure(conf, { version, site, channel }) {
   conf.version = version;
   conf.bundle.homepage = site;
   conf.plugins.updater.endpoints = conf.plugins.updater.endpoints.map((e) => site + e.slice(e.indexOf("/v1/")));
-  // Pictures the app shows: its own, the site's (profile pictures are served by Slop itself),
+  // Pictures the app shows: its own, the site's (profile pictures are served by SLAPorSLOP itself),
   // and repositories' (store pages, portfolios, page designs). Nothing else.
   const csp = conf.app.security.csp;
   if (!csp["img-src"].split(" ").includes(site)) csp["img-src"] += ` ${site}`;
   if (channel === "dev") {
     Object.assign(conf, DEV);
-    for (const w of conf.app.windows) if (w.title === "Slop") w.title = DEV.productName;
+    for (const w of conf.app.windows) if (w.title === "SLAPorSLOP") w.title = DEV_TITLE;
   }
   return conf;
 }
@@ -53,4 +58,4 @@ if (require.main === module) {
   console.log(`desktop-config: ${conf.productName} ${conf.version} (${conf.identifier}) for ${conf.bundle.homepage}`);
 }
 
-module.exports = { configure, DEV };
+module.exports = { configure, DEV, DEV_TITLE };

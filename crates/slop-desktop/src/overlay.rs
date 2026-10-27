@@ -1,10 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The in-game overlay (DESIGN §19): Shift+Tab over a game launched from Slop brings up a small
+//! The in-game overlay (DESIGN §19): Shift+Tab over a game launched from SLAPorSLOP brings up a small
 //! panel with friends and chats, and Shift+Tab (or Esc) puts the game back.
 //!
 //! It stays out of the way everywhere else. Shift+Tab is only taken while **a game started from
-//! Slop is the window in front and fills its screen**: fullscreen, borderless fullscreen, or a
-//! maximized window. Anywhere else (a tool, the desktop, the Slop window itself) the shortcut is
+//! SLAPorSLOP is the window in front and fills its screen**: fullscreen, borderless fullscreen, or a
+//! maximized window. Anywhere else (a tool, the desktop, the SLAPorSLOP window itself) the shortcut is
 //! released, so Shift+Tab keeps doing what it normally does.
 //!
 //! The overlay is an ordinary always-on-top window over the game; nothing is injected into the
@@ -20,7 +20,7 @@ use tauri_plugin_global_shortcut::{Code, GlobalShortcutExt, Modifiers, Shortcut,
 
 use crate::{Desktop, OVERLAY_WINDOW};
 
-/// Games started from Slop: process ID → the app's address.
+/// Games started from SLAPorSLOP: process ID → the app's address.
 #[derive(Default)]
 pub struct Running(pub Mutex<HashMap<u32, String>>);
 
@@ -78,7 +78,7 @@ pub fn fills_screen(f: &Foreground) -> bool {
     f.fullscreen_state || f.maximized || f.rect.covers(&f.monitor) || f.rect.covers(&f.work_area)
 }
 
-/// Whether `pid` is one of the games started from Slop, or a process one of them started.
+/// Whether `pid` is one of the games started from SLAPorSLOP, or a process one of them started.
 pub fn belongs_to(pid: u32, games: &[u32], parent_of: &dyn Fn(u32) -> Option<u32>) -> bool {
     let mut current = pid;
     for _ in 0..32 {
@@ -117,7 +117,7 @@ fn overlay_window(app: &AppHandle) -> Option<tauri::WebviewWindow> {
         OVERLAY_WINDOW,
         tauri::WebviewUrl::App("overlay.html".into()),
     )
-    .title("Slop")
+    .title("SLAPorSLOP")
     .decorations(false)
     .transparent(true)
     .always_on_top(true)
@@ -229,7 +229,7 @@ pub fn set_enabled(desktop: &Desktop, on: bool) -> std::io::Result<()> {
     )
 }
 
-/// Runs for the life of the app: takes Shift+Tab only while a Slop game fills the screen in
+/// Runs for the life of the app: takes Shift+Tab only while a SLAPorSLOP game fills the screen in
 /// front, and lets it go otherwise.
 pub async fn watch(app: AppHandle) {
     loop {
@@ -569,7 +569,7 @@ mod tests {
 
     #[test]
     fn only_games_started_from_slop_count() {
-        // 30 is a launcher Slop started; 31 is the game it started; 40 is something else.
+        // 30 is a launcher SLAPorSLOP started; 31 is the game it started; 40 is something else.
         let parents = |pid: u32| match pid {
             31 => Some(30),
             30 => Some(5),
@@ -652,7 +652,7 @@ mod x11_tests {
         assert!(f.fullscreen_state);
         assert_eq!((f.rect.w, f.rect.h), (i32::from(w), i32::from(h)));
         assert!(super::fills_screen(&f));
-        // Started by this process's parent: a game launched from Slop, or a child of one.
+        // Started by this process's parent: a game launched from SLAPorSLOP, or a child of one.
         let parent = super::platform::parent_of(std::process::id()).unwrap();
         assert!(super::belongs_to(
             f.pid,

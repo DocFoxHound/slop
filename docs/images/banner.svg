@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1280 440" width="1280" height="440" role="img" aria-labelledby="t d">
-  <title id="t">Slop</title>
-  <desc id="d">Slop: the store for apps and games made with AI, rated Slop or Not Slop by the people who played them.</desc>
+  <title id="t">SLAPorSLOP</title>
+  <desc id="d">SLAPorSLOP: the store for apps and games made with AI, rated Slaps or Slop by the people who played them.</desc>
   <defs>
     <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
       <stop offset="0" stop-color="#0d1015"/>
@@ -41,11 +41,11 @@
   <!-- Wordmark -->
   <g font-family="'Segoe UI', Inter, 'Helvetica Neue', Arial, sans-serif">
     <use href="#logo" transform="translate(72 92) scale(3.4)"/>
-    <text x="196" y="178" font-size="104" font-weight="900" fill="#e7ecf2" letter-spacing="2">SL<tspan fill="#a3e635">O</tspan>P</text>
+    <text x="196" y="170" font-size="64" font-weight="900" fill="#e7ecf2" letter-spacing="1">SLAP<tspan fill="#a3e635">or</tspan>SLOP</text>
     <text x="76" y="250" font-size="34" font-weight="700" fill="#e7ecf2">The store for apps and games</text>
     <text x="76" y="292" font-size="34" font-weight="700" fill="#e7ecf2">made with <tspan fill="#a3e635">AI</tspan>.</text>
     <text x="76" y="340" font-size="20" fill="#8d99a8">Share what you made. The people who play it decide</text>
-    <text x="76" y="368" font-size="20" fill="#8d99a8">if it's <tspan fill="#f87171" font-weight="700">Slop</tspan> or <tspan fill="#a3e635" font-weight="700">Not Slop</tspan>.</text>
+    <text x="76" y="368" font-size="20" fill="#8d99a8">if it <tspan fill="#a3e635" font-weight="700">Slaps</tspan> or it's <tspan fill="#f87171" font-weight="700">Slop</tspan>.</text>
   </g>
 
   <!-- App cards -->
@@ -70,8 +70,8 @@
       <text x="20" y="112" font-size="21" font-weight="800" fill="#fff">Pocket Golf</text>
       <text x="20" y="160" font-size="14" fill="#8d99a8">Sports · Casual</text>
       <text x="20" y="208" font-size="30" font-weight="900" fill="#a3e635">81%</text>
-      <text x="90" y="208" font-size="15" font-weight="700" fill="#a3e635">Not Slop</text>
-      <text x="20" y="234" font-size="13" fill="#8d99a8">Very Not Slop · 1,208 votes</text>
+      <text x="90" y="208" font-size="15" font-weight="700" fill="#a3e635">Slaps</text>
+      <text x="20" y="234" font-size="13" fill="#8d99a8">Really Slaps · 1,208 votes</text>
       <rect x="20" y="252" width="170" height="8" rx="4" fill="#242c37"/>
       <rect x="20" y="252" width="137" height="8" rx="4" fill="#a3e635"/>
     </g>
@@ -87,8 +87,8 @@
       <text x="20" y="112" font-size="21" font-weight="800" fill="#fff">Lantern Keep</text>
       <text x="20" y="160" font-size="14" fill="#8d99a8">Puzzle · Strategy</text>
       <text x="20" y="208" font-size="30" font-weight="900" fill="#a3e635">96%</text>
-      <text x="90" y="208" font-size="15" font-weight="700" fill="#a3e635">Not Slop</text>
-      <text x="20" y="234" font-size="13" fill="#8d99a8">Overwhelmingly Not Slop</text>
+      <text x="90" y="208" font-size="15" font-weight="700" fill="#a3e635">Slaps</text>
+      <text x="20" y="234" font-size="13" fill="#8d99a8">Overwhelmingly Slaps</text>
       <rect x="20" y="252" width="170" height="8" rx="4" fill="#242c37"/>
       <rect x="20" y="252" width="163" height="8" rx="4" fill="#a3e635"/>
     </g>

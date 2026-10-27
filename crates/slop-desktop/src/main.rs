@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-//! The Slop desktop app: a Tauri shell around the shared web UI (`web/`).
+//! The SLAPorSLOP desktop app: a Tauri shell around the shared web UI (`web/`).
 //!
 //! The commands here are thin wrappers over `slop-client`, which does the real work (and is
 //! tested on its own): API calls with the user's tokens, browser sign-in, and verified installs.
@@ -25,7 +25,7 @@ use slop_client::{
 };
 use tauri::{AppHandle, Emitter, Manager, State};
 
-/// The Slop site and API. Set SLOP_API_URL when building a release; the default is the local
+/// The SLAPorSLOP site and API. Set SLOP_API_URL when building a release; the default is the local
 /// development site (Vite on :5173, which proxies /v1 to the API).
 const API_URL: &str = match option_env!("SLOP_API_URL") {
     Some(url) => url,
@@ -138,12 +138,12 @@ struct SignInStarted {
     browser_opened: bool,
 }
 
-/// Starts a browser sign-in: asks Slop for an approval page and tries to open it in the system
+/// Starts a browser sign-in: asks SLAPorSLOP for an approval page and tries to open it in the system
 /// browser. The UI then calls `sign_in_finish` to wait for the approval.
 #[tauri::command]
 async fn sign_in_start(desktop: State<'_, Desktop>) -> CommandResult<SignInStarted> {
     let device = format!(
-        "Slop for {}",
+        "SLAPorSLOP for {}",
         desktop.platform.map_or("desktop", |p| match p {
             Platform::Windows => "Windows",
             Platform::Mac => "macOS",
@@ -229,7 +229,7 @@ struct UpdateInfo {
     notes: Option<String>,
 }
 
-/// Asks Slop whether a newer version exists. `None` when up to date, offline, or in debug builds.
+/// Asks SLAPorSLOP whether a newer version exists. `None` when up to date, offline, or in debug builds.
 async fn check_for_update(app: &AppHandle) -> Option<tauri_plugin_updater::Update> {
     use tauri_plugin_updater::UpdaterExt;
     if cfg!(debug_assertions) {
@@ -296,6 +296,18 @@ async fn install_update(app: AppHandle) -> CommandResult<()> {
 // Windows: a small sign-in window first, then the store (docs: like Steam's launcher).
 
 const LOGIN_WINDOW: &str = "login";
+
+/// The name people see in window titles and the tray: "SLAPorSLOP", or "SLAPorSLOP Dev" for the
+/// test server's app. The bundle's product name (`package_info().name`) stays "Slop" or "Slop Dev"
+/// after the rename: Tauri's Windows installer keys the install folder, the uninstall entry, the
+/// saved install location and the Start menu shortcut on it, and the Linux packages are named
+/// after it, so a new one would install a second copy instead of updating this one.
+fn display_name(product_name: &str) -> String {
+    match product_name.strip_prefix("Slop") {
+        Some(rest) => format!("SLAPorSLOP{rest}"),
+        None => product_name.to_string(),
+    }
+}
 /// The in-game overlay (overlay.rs).
 const OVERLAY_WINDOW: &str = "overlay";
 
@@ -310,7 +322,10 @@ fn open_login(app: &AppHandle) {
         LOGIN_WINDOW,
         tauri::WebviewUrl::App("login.html".into()),
     )
-    .title(format!("Sign in to {}", app.package_info().name))
+    .title(format!(
+        "Sign in to {}",
+        display_name(&app.package_info().name)
+    ))
     .decorations(false)
     .shadow(true)
     .inner_size(420.0, 560.0)
@@ -325,7 +340,7 @@ fn open_login(app: &AppHandle) {
 }
 
 /// On Windows, closing the store hides it to the notification area (the tray), like Steam:
-/// Slop keeps running so it can tell you about updates, and the tray icon brings it back.
+/// SLAPorSLOP keeps running so it can tell you about updates, and the tray icon brings it back.
 /// Minimizing still goes to the taskbar. Elsewhere, closing quits: the tray needs an
 /// appindicator library on Linux, which not every distro has.
 #[cfg(windows)]
@@ -334,8 +349,8 @@ fn make_tray(app: &tauri::App) -> tauri::Result<()> {
         menu::{Menu, MenuItem},
         tray::{MouseButton, MouseButtonState, TrayIconBuilder, TrayIconEvent},
     };
-    // "Slop", or "Slop Dev" for the test server's app (deploy/desktop-config.js).
-    let name = app.package_info().name.clone();
+    // "SLAPorSLOP", or "SLAPorSLOP Dev" for the test server's app (deploy/desktop-config.js).
+    let name = display_name(&app.package_info().name);
     let open = MenuItem::with_id(app, "open", format!("Open {name}"), true, None::<&str>)?;
     let quit = MenuItem::with_id(app, "quit", format!("Quit {name}"), true, None::<&str>)?;
     let menu = Menu::with_items(app, &[&open, &quit])?;
@@ -423,7 +438,7 @@ async fn startup(app: AppHandle) {
         }
         Err(_) => {
             tracing::warn!(
-                "Slop didn't answer at launch; opening the store with the saved sign-in"
+                "SLAPorSLOP didn't answer at launch; opening the store with the saved sign-in"
             );
             show_main(&app);
         }
@@ -465,7 +480,7 @@ async fn install_app(
 ) -> CommandResult<InstalledApp> {
     let platform = desktop.platform.ok_or_else(|| CommandError {
         code: "install",
-        message: "Slop can't install apps on this system".into(),
+        message: "SLAPorSLOP can't install apps on this system".into(),
     })?;
     let signed: Signed = desktop
         .api
@@ -638,7 +653,7 @@ struct Launched {
     quarantined: Vec<String>,
     /// The saves were too big to copy before this sandboxed session.
     copy_skipped: bool,
-    /// Things in the game's mods folder that aren't mods from Slop, moved out.
+    /// Things in the game's mods folder that aren't mods from SLAPorSLOP, moved out.
     unapproved_mods: Vec<String>,
     /// What save sync did before the start, when it's on (slop-client save_sync.rs).
     save_sync: Option<slop_client::save_sync::Outcome>,
@@ -651,7 +666,7 @@ fn mod_request(desktop: State<'_, Desktop>, id: String) -> Option<ModRequest> {
 }
 
 /// The player's answer to a game's request for mods. On yes, each mod is fetched, checked
-/// against Slop's signature, and added if it's an approved mod for that game; the game is told
+/// against SLAPorSLOP's signature, and added if it's an approved mod for that game; the game is told
 /// how each went and where its mods are now.
 #[tauri::command]
 async fn answer_mod_request(
@@ -1206,7 +1221,7 @@ fn load_notify_settings(desktop: &Desktop) -> NotifySettings {
         .unwrap_or_default()
 }
 
-/// A desktop notification for new messages while Slop isn't in front (DESIGN §19). Muted chats
+/// A desktop notification for new messages while SLAPorSLOP isn't in front (DESIGN §19). Muted chats
 /// never notify; the text is left out if the user chose that.
 fn notify_new_messages(app: &AppHandle, messages: &[slop_client::chat::NewMessage]) {
     use tauri_plugin_notification::NotificationExt;
@@ -1527,7 +1542,7 @@ fn auto_update_setting(desktop: State<'_, Desktop>, on: Option<bool>) -> Command
         .unwrap_or(true))
 }
 
-/// The apps Slop started that are still running: they're not updated until they close.
+/// The apps SLAPorSLOP started that are still running: they're not updated until they close.
 #[tauri::command]
 fn running_apps(app: AppHandle) -> Vec<String> {
     let mut slugs: Vec<String> = app
@@ -1586,7 +1601,7 @@ fn main() {
         )
         .init();
     tauri::Builder::default()
-        // A second launch (e.g. from the Start menu while Slop is in the tray) brings back the
+        // A second launch (e.g. from the Start menu while SLAPorSLOP is in the tray) brings back the
         // running one instead of starting another. Registered first, as the plugin asks.
         .plugin(tauri_plugin_single_instance::init(|app, _args, _cwd| {
             bring_back(app)
@@ -1618,7 +1633,7 @@ fn main() {
                     .notification()
                     .builder()
                     .title("A game wants to add mods")
-                    .body("Open Slop to see them and say yes or no.")
+                    .body("Open SLAPorSLOP to see them and say yes or no.")
                     .show();
             })?;
             app.manage(Desktop {
@@ -1706,5 +1721,17 @@ fn main() {
             running_apps,
         ])
         .run(tauri::generate_context!())
-        .expect("error while running the Slop desktop app");
+        .expect("error while running the SLAPorSLOP desktop app");
+}
+
+#[cfg(test)]
+mod tests {
+    use super::display_name;
+
+    #[test]
+    fn windows_and_the_tray_say_slaporslop() {
+        assert_eq!(display_name("Slop"), "SLAPorSLOP");
+        assert_eq!(display_name("Slop Dev"), "SLAPorSLOP Dev");
+        assert_eq!(display_name("SLAPorSLOP"), "SLAPorSLOP");
+    }
 }
