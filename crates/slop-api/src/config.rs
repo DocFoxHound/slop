@@ -17,6 +17,10 @@ pub struct Config {
     pub bad_link_feeds: Vec<Url>,
     /// Public origin of the site (web UI and API share it), e.g. `https://slop.example`.
     pub public_url: Url,
+    /// The site's earlier addresses (SLOP_FORMER_URLS, comma-separated origins), still served for
+    /// what can't move with it: GitHub build tokens from makers' workflows name the address they
+    /// were set up with, so those are accepted for these too (slop_build.rs).
+    pub former_urls: Vec<Url>,
     /// GitHub sign-in. `None` turns sign-in off.
     pub github: Option<GithubConfig>,
     /// More sign-in providers (auth/oauth.rs), each off unless its client ID is set.
@@ -491,6 +495,17 @@ impl Config {
         if public_url.path() != "/" {
             bail!("SLOP_PUBLIC_URL must be an origin with no path");
         }
+        let former_urls: Vec<Url> = env::var("SLOP_FORMER_URLS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(|s| s.parse::<Url>())
+            .collect::<Result<_, _>>()
+            .context("SLOP_FORMER_URLS: origins separated by commas")?;
+        if former_urls.iter().any(|u| u.path() != "/") {
+            bail!("SLOP_FORMER_URLS must be origins with no path");
+        }
 
         let github = match (
             env::var("GITHUB_CLIENT_ID"),
@@ -618,6 +633,7 @@ impl Config {
             migrate_database_url,
             bad_link_feeds,
             public_url,
+            former_urls,
             github,
             google,
             gitlab,
