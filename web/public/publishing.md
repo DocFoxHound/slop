@@ -1682,6 +1682,24 @@ To prepare someone's project for SLAPorSLOP, in order. Steps marked **(person)**
 project owner; steps marked **(token)** are yours if the owner gave you a SLAPorSLOP token, and theirs
 if not.
 
+**Before there's an account (no token needed):** check the project with plain GET requests; each
+answer is JSON with a one-line `summary`, and nothing is saved:
+
+- `GET /v1/check/repository?url=https://github.com/OWNER/REPO` on this site: a readiness report
+  at the default branch's newest commit: the licence (and whether it's OSI-approved), a dry run of
+  the pictures check (every problem in `.slop/media.json`, plus a missing icon or thumbnail), and
+  the builds (`.github/workflows/slop.yml`, or the newest GitHub release's files against the
+  platforms). Each item in `findings` has a `severity` (`must`, `should`, `recommended`), the
+  `problem`, and an `instruction` to follow; `passed` and `not_checked` say what was and wasn't
+  covered (the source check and a person's review still run on the first release). Fix `must`
+  first, commit and push, then check again; a report is kept for 5 minutes per commit.
+- `GET /v1/check/store-address?slug=my-game`: whether the store address is valid and free, and a
+  free one if it isn't. Use the same address as `app` in `slop.yml`. Addresses aren't held until
+  the store page is created.
+
+GitHub repositories only so far (other hosts are checked after the store page is created). Each
+client gets 20 repository checks an hour; a 429 or 503 answer says when to try again.
+
 0. **Ask for a token first** if you don't have SLAPorSLOP's tools (`maker_guide`, `create_store_page`…).
    The owner signs in to SLAPorSLOP, opens **Account → AI agents → Make token** (`/account/agents`),
    chooses **Publish** and **All my apps** (a token for some apps can't create new ones),
@@ -1743,6 +1761,9 @@ if not.
 
 Facts an agent may need:
 
+- Anyone can check a repository or a store address without an account:
+  `/v1/check/repository?url=…` and `/v1/check/store-address?slug=…` (JSON, a `summary` first,
+  nothing saved).
 - Pictures live in the repository under `.slop/`, listed in `.slop/media.json`; SLAPorSLOP reads them
   at one commit (`check_pictures`, and at each release) and a person reviews each new set. The
   icon: `"icon": "icon.png"`, square PNG/JPEG/WebP, 256×256 to 1024×1024 (512×512 is best), up to
