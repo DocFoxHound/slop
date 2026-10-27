@@ -10,11 +10,11 @@ publish: what SLAPorSLOP asks of your project, how to set it up, and what happen
 > and what's optional for publishing on SLAPorSLOP, then set up my project so it's ready to deploy
 > there."*
 
-**Want your agent to do all of it, store page included?** Make it a token under **Account → AI
-agents** (`/account/agents`: publish, all your apps), accept the Publisher Agreement that page
-shows you, and connect it with the command it gives; see
-[Working with your AI agent](#working-with-your-ai-agent). With a token it creates the store page,
-submits releases and follows the review itself. Without one it can only prepare the repository.
+**Want your agent to do all of it, store page included?** Connect it to SLAPorSLOP: give your AI
+tool this site's `/mcp` address and approve it in your browser (Account → AI agents shows the
+steps for each tool; see [Working with your AI agent](#working-with-your-ai-agent)). Then it
+creates the store page, submits releases and follows the review itself. Without a connection it
+can prepare the repository, check it, and hand you a link that fills in the store page.
 
 It's written so that a person or an AI agent can follow it from start to finish. Agents: the
 [checklist for agents](#checklist-for-agents) near the end lists every step in order, and
@@ -1306,6 +1306,37 @@ store page, submit releases with notes, read SLAPorSLOP's checks of each release
 register community builds and mods, and offer fixes to the apps you build on. Creatives can let it
 watch People jobs, send quotes and talk in job conversations.
 
+**The easy way: approve it in your browser.** There's no token to copy or keep safe.
+
+1. **Give your AI tool SLAPorSLOP's address**: this site's `/mcp`, e.g.
+   `https://slaporslop.games/mcp`. Account → AI agents shows the steps for each tool:
+   - Claude Code: `claude mcp add --transport http --scope user slaporslop https://slaporslop.games/mcp`,
+     then type `/mcp` in Claude Code (or run `claude mcp login slaporslop`).
+   - Claude (web, desktop or phone app): **Customize → Connectors → Add custom connector**, with
+     that address as the URL, then **Connect**.
+   - ChatGPT: [chatgpt.com/plugins](https://chatgpt.com/plugins) → **+** → **Add custom MCP
+     server**, that address, authentication **OAuth**, then **Create as a plugin**.
+   - Codex: `codex mcp add slaporslop --url https://slaporslop.games/mcp`, then
+     `codex mcp login slaporslop`.
+   - Cursor: `{"mcpServers": {"slaporslop": {"url": "https://slaporslop.games/mcp"}}}` in
+     `~/.cursor/mcp.json`.
+   - Gemini CLI: `gemini mcp add --scope user --transport http slaporslop https://slaporslop.games/mcp`,
+     then `/mcp auth slaporslop`.
+   - Grok Build: `grok mcp add --transport http slaporslop https://slaporslop.games/mcp`.
+2. **Approve it.** Your tool opens SLAPorSLOP in your browser. Sign in, check which tool is asking
+   and where approving sends you, and choose what it can do: look, or also publish; all your apps
+   or some; People jobs; how long (a day up to 12 months). Publishing needs the Publisher
+   Agreement: the page shows it for you to accept. Only approve a request you just started
+   yourself.
+3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on SLAPorSLOP",
+   "fix what SLAPorSLOP found in my last release", "offer this fix to the original".
+
+It's listed under Account → AI agents, and you can remove it there (or sign it out like a device)
+any time. SLAPorSLOP tells you a week and a day before the time you chose is up; after that, your
+tool asks you to sign in and approve it again.
+
+**The other way: a token**, for tools that can't sign in to SLAPorSLOP like that.
+
 1. **Account → AI agents → Make token.** Choose what it can do (look, or also publish), which
    apps, whether it handles People jobs, and how long it lasts (a day up to 12 months). A token
    that publishes needs the Publisher Agreement: the page shows it for you to accept when you
@@ -1322,9 +1353,6 @@ watch People jobs, send quotes and talk in job conversations.
    Other tools: the MCP address the page shows, with the header
    `Authorization: Bearer <your token>`, set in the tool's MCP or connector settings (or SLAPorSLOP's
    API with the same header).
-3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on SLAPorSLOP",
-   "fix what SLAPorSLOP found in my last release", "offer this fix to the original". No token is
-   needed in the chat.
 
 **When a token runs out:** the page shows how long each token has left. SLAPorSLOP tells you a week
 and a day before one expires (and when it has), and so does your agent. **Make a replacement**
@@ -1745,16 +1773,20 @@ answer is JSON with a one-line `summary`, and nothing is saved:
 GitHub repositories only so far (other hosts are checked after the store page is created). Each
 client gets 20 repository checks an hour; a 429 or 503 answer says when to try again.
 
-0. **Ask for a token first** if you don't have SLAPorSLOP's tools (`maker_guide`, `create_store_page`…).
-   The owner signs in to SLAPorSLOP, opens **Account → AI agents → Make token** (`/account/agents`),
-   chooses **Publish** and **All my apps** (a token for some apps can't create new ones),
-   accepts the Publisher Agreement the page shows them, and follows the setup steps it shows, in
-   their own terminal window: the token goes into the `SLOP_TOKEN` environment variable, and
-   your tool is connected with a reference to it (see
-   [Working with your AI agent](#working-with-your-ai-agent)). Never ask them to paste the token
-   into the chat, and never print `SLOP_TOKEN`; if a token shows up in the conversation, tell
-   them to remove it on Account → AI agents and make a new one. Then read `maker_guide`. Without
-   a token, do steps 1–6 and 10 and hand the rest to the owner.
+0. **Get connected first** if you don't have SLAPorSLOP's tools (`maker_guide`, `create_store_page`…).
+   Ask the owner to add SLAPorSLOP to your tool at this site's `/mcp` address (e.g.
+   `https://slaporslop.games/mcp`); Account → AI agents (`/account/agents`), "Connect your AI tool:
+   the easy way", shows the steps for each tool (in Claude Code:
+   `claude mcp add --transport http --scope user slaporslop https://slaporslop.games/mcp`, then
+   `/mcp`). They approve you in their browser: **Also change store pages and submit releases**, and
+   **All my apps** (a connection for some apps can't create new ones), and accept the Publisher
+   Agreement the page shows. If your tool can't sign in that way, they make a token instead
+   (**Make token** on the same page) and follow its setup steps in their own terminal window (see
+   [Working with your AI agent](#working-with-your-ai-agent)). Never ask them to paste a token
+   into the chat, and never print `SLOP_TOKEN`; if a token shows up in the conversation, tell them
+   to remove it on Account → AI agents and make a new one. Then read `maker_guide`. Without a
+   connection, do steps 1–6 and 10, [hand the person one link](#hand-the-person-one-link) for the
+   store page, and hand them the rest.
 1. Confirm the project is open source in a Git repository, and that it has a `LICENSE` file with an
    OSI-approved licence. If not, ask the owner which licence to use; don't choose one for them. If
    the owner has no repository or GitHub account yet (many people who build with AI don't),

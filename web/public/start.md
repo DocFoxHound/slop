@@ -118,9 +118,11 @@ project's files in (up to 100 files at a time, 25 MB each).
 ## Connecting your tools to SLAPorSLOP
 
 With SLAPorSLOP's tools you can create the store page, submit releases, follow the review and fix
-what it finds. The publishing guide's
-[Working with your AI agent](/publishing.md#working-with-your-ai-agent) says how the person
-connects you. Then call `maker_guide`, and `whats_left`: it lists every step still open, saying
+what it finds. The person connects you once: they add this site's `/mcp` address (e.g.
+`https://slaporslop.games/mcp`) to their AI tool and approve it in their browser; no token to
+copy. The publishing guide's [Working with your AI agent](/publishing.md#working-with-your-ai-agent)
+has the steps for each tool (Claude Code, Claude, ChatGPT, Codex, Cursor, Gemini CLI, Grok
+Build). Then call `maker_guide`, and `whats_left`: it lists every step still open, saying
 who does it, with a link.
 
 Without a connection you can still do the repository and the code, check them, and give the
