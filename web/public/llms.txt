@@ -18,6 +18,9 @@
   checklist for agents. This one Markdown file is the whole guide; the page at /publish/guide
   shows the same text.
 
+- Checks without an account: `/v1/check/store-address?slug=…`, `/v1/check/repository?url=…`,
+  `/v1/check/portfolio?url=…` (GET, JSON with a `summary` first; dry runs, nothing saved).
+
 ## People
 
 - [Your SLAPorSLOP portfolio](/portfolio.md): how creatives (artists, animators, composers, sound

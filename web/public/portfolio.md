@@ -285,7 +285,13 @@ ask them for.
 7. Make it good, not just valid: best work first, a title and a caption on every work saying what
    it was for and what the person did, a banner and an avatar, and the skills they want to be
    hired for. Ask them before writing anything about clients or projects.
-8. Commit and push to the default branch.
+8. Commit and push to the default branch, then check it yourself, before the person has a People
+   page: `GET /v1/check/portfolio?url=https://github.com/YOU/portfolio` on this site runs the same
+   check as **Check my portfolio now** at the repository's newest commit, without saving anything.
+   The answer is JSON: a one-line `summary`, `status` (`must_fix` or `looks_good`), and
+   `problems`, every one naming the work or file and what to change; `design_warnings` lists what
+   the page design's checks dropped. Fix, commit, push and check again (a report is kept for 5
+   minutes per commit) until it's clean.
 9. **(person)** In the editor's **Portfolio** section, paste the repository address and choose
    **Check my portfolio now**. If SLAPorSLOP lists problems, they can paste them to you: each line names
    the work and field. Fix, push, and check again.

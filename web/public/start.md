@@ -123,5 +123,10 @@ what it finds. The publishing guide's
 connects you. Then call `maker_guide`, and `whats_left`: it lists every step still open, saying
 who does it, with a link.
 
-Without a connection you can still do the repository and the code, and give the person the steps
-to do on the website.
+Without a connection you can still do the repository and the code, check them, and give the
+person the steps to do on the website. These work for anyone, with no account (GET, JSON with a
+`summary` first, nothing saved):
+
+- `/v1/check/repository?url=https://github.com/OWNER/REPO`: is the project ready to publish?
+- `/v1/check/store-address?slug=my-game`: is the store address free?
+- `/v1/check/portfolio?url=https://github.com/OWNER/portfolio`: is the People portfolio right?
