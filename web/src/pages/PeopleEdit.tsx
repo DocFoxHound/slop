@@ -28,6 +28,7 @@ import { formatDate, money, toMinor } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { siteOrigin } from "../browsing";
 import { isDesktop, openExternal } from "../platform";
+import { LinkSignIn } from "../components/LinkSignIn";
 import { useSession } from "../session";
 
 /** The site the desktop app was built for (vite.config.ts, from SLOP_API_URL). */
@@ -316,9 +317,9 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
   };
   const github = identities.data?.filter((i) => i.provider === "github") ?? [];
   const linkGithub = (
-    <a className="btn small" href={api.linkUrl("github", "/people/me#portfolio")}>
+    <LinkSignIn provider="github" returnTo="/people/me#portfolio" onReturn={identities.reload}>
       Link GitHub
-    </a>
+    </LinkSignIn>
   );
   const origin = siteOrigin(window.location, typeof __SLOP_SITE_URL__ === "string" ? __SLOP_SITE_URL__ : "");
   return (

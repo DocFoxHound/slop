@@ -7,7 +7,8 @@ import { expect, ids, signIn, test, type Who } from "./fixtures";
 test("the directory filters by skill, availability, AI use and kind, and says when nobody matches", async ({ page }) => {
   await page.goto("/people");
   await expect(page.getByRole("heading", { name: "People", level: 1 })).toBeVisible();
-  const vera = page.getByRole("link", { name: /Vera Okafor/ });
+  // Everyone, under the day's shelves.
+  const vera = page.locator(".people-grid").getByRole("link", { name: /Vera Okafor/ });
   await expect(vera).toBeVisible();
   // Remy's first portfolio isn't approved yet: he isn't listed.
   await expect(page.getByText("Remy Pending")).toHaveCount(0);
@@ -53,7 +54,7 @@ test("the directory filters by skill, availability, AI use and kind, and says wh
 
 test("the AI-use filter is neutral: each way of working on its own, in the address", async ({ page }) => {
   await page.goto("/people");
-  const vera = page.getByRole("link", { name: /Vera Okafor/ });
+  const vera = page.locator(".people-grid").getByRole("link", { name: /Vera Okafor/ });
   await expect(vera).toBeVisible();
   const ai = page.getByRole("combobox", { name: "AI use" });
   await expect(ai.locator("option")).toHaveText(["Any", "No AI", "AI-assisted", "Mostly AI"]);
@@ -83,15 +84,41 @@ test("AI-use badges: their own neutral colours, readable, with words and not col
     await route.fulfill({ response: res, json: { ...body, people } });
   });
   await page.goto("/people");
-  const badges = page.locator(".person-card .badge");
+  const badges = page.locator(".people-grid .person-card .badge");
   await expect(badges).toHaveText([/NO AI/, /AI-ASSISTED/, /MOSTLY AI-GENERATED/]);
   const looks = await badges.evaluateAll((els) => els.map((e) => [e.className, getComputedStyle(e).color]));
   expect(looks.map(([cls]) => cls)).toEqual(["badge ai-none", "badge ai-assisted", "badge ai-heavy"]);
   // Blue, teal and green: three different colours, none of them the warning or error ones.
   expect(looks.map(([, color]) => color)).toEqual(["rgb(124, 184, 251)", "rgb(45, 212, 191)", "rgb(74, 222, 128)"]);
-  const results = await new AxeBuilder({ page }).include(".person-card .badge").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
+  // Everyone is under the day's shelves: in view, so the contrast can be measured.
+  await badges.first().scrollIntoViewIfNeeded();
+  const results = await new AxeBuilder({ page }).include(".people-grid .person-card .badge").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
   expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
   expect(results.passes.map((v) => v.id)).toContain("color-contrast");
+});
+
+test("the skills and the search are the page's header; the day's shelves show until you filter", async ({ page }) => {
+  await page.goto("/people");
+  const header = page.getByRole("navigation", { name: "People" });
+  await expect(header.getByRole("group", { name: "Skill" }).getByRole("button", { name: "Everyone" })).toHaveAttribute("aria-pressed", "true");
+  await expect(header.getByRole("searchbox", { name: "Search people" })).toBeVisible();
+  // Vera is live, set up for payments and taking work; she makes pixel art and music.
+  const taking = page.getByRole("region", { name: "Taking work now" });
+  await expect(taking.getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: /^Spotlight: / })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Everyone" }).getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+  await expect(page.getByText("How hiring works")).toHaveCount(0);
+  const results = await new AxeBuilder({ page }).include(".people-nav").include(".people-shelf-section").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
+  expect(results.violations.map((v) => `${v.id}: ${v.nodes.map((n) => n.target.join(" ")).join(", ")}`)).toEqual([]);
+
+  // See all: the directory filtered to match, without the shelves.
+  await taking.getByRole("link", { name: "See all →" }).click();
+  await expect(page).toHaveURL(/\/people\?taking=1$/);
+  await expect(page.getByRole("checkbox", { name: "Taking work now" })).toBeChecked();
+  await expect(page.getByRole("region", { name: "Taking work now" })).toHaveCount(0);
+  await header.getByRole("button", { name: /^Music/ }).click();
+  await expect(page.getByRole("heading", { name: "Music", level: 2 })).toBeVisible();
+  await expect(page.locator(".people-grid").getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
 });
 
 test("someone without a page is told what a People page is for, with the way to make one", async ({ page }) => {

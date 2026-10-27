@@ -990,6 +990,18 @@ export interface CreativeRating {
   min_reviews: number;
 }
 
+/** The People front page's shelves (crates/slop-api/src/people/discover.rs), a new mix every day. */
+export interface PeopleDiscover {
+  /** Can be hired now, shuffled for the day. */
+  taking_work: CreativeCard[];
+  /** Went live in the last 60 days, newest first. */
+  new: CreativeCard[];
+  /** Today's skill, in turn, with the day's shuffle of who offers it. */
+  spotlight: { skill: Skill; people: CreativeCard[] } | null;
+  /** Studios, shuffled for the day. */
+  studios: CreativeCard[];
+}
+
 export interface CreativeCard {
   handle: string;
   name: string;
@@ -3288,6 +3300,7 @@ export const api = {
         skills: Array<Skill & { count: number }>;
       }>("GET", `/v1/people${query(q)}`),
     skills: () => request<Skill[]>("GET", "/v1/people/skills"),
+    discover: () => request<PeopleDiscover>("GET", "/v1/people/discover"),
     page: (handle: string) =>
       request<CreativePage>("GET", `/v1/people/${encodeURIComponent(handle)}`),
     mine: () => request<MyProfile>("GET", "/v1/me/creative"),

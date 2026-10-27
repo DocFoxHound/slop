@@ -28,6 +28,7 @@ import { disablePush, enablePush, pushState, type PushState } from "../push";
 import { useSession } from "../session";
 import { Avatar } from "./Avatar";
 import { AcceptDocument, useTermsGate } from "./Terms";
+import { LinkSignIn } from "./LinkSignIn";
 import { ErrorState } from "./ui";
 
 /** The Content Policy section a rule title points to (headings get ids from their text). */
@@ -134,9 +135,17 @@ export function AccountPicture() {
                 </span>
               </label>
               {c.can_refresh && (
-                <a className="btn small ghost" href={api.linkUrl(c.provider, "/account?picture=refresh#picture")}>
+                <LinkSignIn
+                  provider={c.provider}
+                  returnTo="/account?picture=refresh#picture"
+                  className="btn small ghost"
+                  onReturn={() => {
+                    loaded.reload();
+                    void refresh();
+                  }}
+                >
                   Refresh picture
-                </a>
+                </LinkSignIn>
               )}
             </div>
           ))}
