@@ -167,7 +167,12 @@ pub(crate) async fn verify_github_token(state: &AppState, token: &str) -> ApiRes
         .releases
         .github_oidc_issuer
         .trim_end_matches('/')]);
-    validation.set_audience(&[state.config.public_url.as_str().trim_end_matches('/')]);
+    // The site's address, or an earlier one: makers' workflows keep the address they were set up with.
+    let audiences: Vec<&str> = std::iter::once(&state.config.public_url)
+        .chain(&state.config.former_urls)
+        .map(|u| u.as_str().trim_end_matches('/'))
+        .collect();
+    validation.set_audience(&audiences);
     validation.validate_nbf = true;
     validation.leeway = 30;
     jsonwebtoken::decode::<GithubClaims>(token, &key, &validation)
