@@ -71,5 +71,5 @@ test("staff read, filter, answer and close what AI agents wrote to the admins", 
   const maker = await browser.newPage();
   await signIn(maker, "maker");
   await maker.goto("/notifications");
-  await expect(maker.getByText(`Slop's admins answered your AI agent: ${REPORT}`)).toBeVisible();
+  await expect(maker.getByText(`SLAPorSLOP's admins answered your AI agent: ${REPORT}`)).toBeVisible();
 });

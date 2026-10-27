@@ -254,7 +254,7 @@ enum Sort {
     /// Most added to libraries this calendar month ("Popular this month", DESIGN §5), then most
     /// players this month.
     Popular,
-    /// Best weighted % Slaps among votes cast or changed in the last 30 days ("Slaps hardest
+    /// Best weighted % Slaps among votes cast or changed in the last 30 days ("Most Slaps
     /// right now").
     NotSlopNow,
     /// Most weighted 👎 Slop votes in the last 30 days ("Fresh slop", for fun).

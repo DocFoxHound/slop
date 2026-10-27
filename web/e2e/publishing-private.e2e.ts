@@ -139,7 +139,7 @@ test("sharing: with a friend, a profile link and an invite-only team, not an ope
   const teams = panel.getByRole("combobox", { name: "One of your teams" });
   await teams.selectOption({ label: "Open Crew" });
   await panel.getByRole("button", { name: "Share with the team" }).click();
-  await expect(panel.getByRole("alert")).toHaveText("Private Slop is only shared with invite-only teams");
+  await expect(panel.getByRole("alert")).toHaveText("Private apps are only shared with invite-only teams");
   await teams.selectOption({ label: "Night Owls" });
   await panel.getByRole("button", { name: "Share with the team" }).click();
   await expect(panel.getByRole("link", { name: "👥 Night Owls" })).toHaveAttribute("href", `/teams/${ids.inviteTeam}`);

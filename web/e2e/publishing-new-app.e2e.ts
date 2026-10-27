@@ -134,10 +134,10 @@ test("the new app form: the address follows the name, errors show where they bel
   // A repository that's already on SLAPorSLOP: the form says so before sending, and the API refuses.
   await address.fill(uniq("ferry"));
   await page.getByRole("textbox", { name: /Source repository/ }).fill("https://github.com/e2e/lantern-keep");
-  await expect(page.getByRole("status").filter({ hasText: "already on Slop as Lantern Keep" })).toBeVisible();
+  await expect(page.getByRole("status").filter({ hasText: "already on SLAPorSLOP as Lantern Keep" })).toBeVisible();
   await create.click();
   await expect(page.locator("form > p.form-error")).toHaveText(
-    "that repository is already on Slop as Lantern Keep. To build on it, fork it and register a branch",
+    "that repository is already on SLAPorSLOP as Lantern Keep. To build on it, fork it and register a branch",
   );
 
   // Private from a private repository elsewhere: a token the host refuses shows by its
@@ -211,11 +211,11 @@ test("the repository: whose it is, how to prove it, and a token for a private on
     method: "code",
     link: null,
     code,
-    message: `slop can't ask this host who owns the repository, so prove it: add ${code} to the README`,
+    message: `SLAPorSLOP can't ask this host who owns the repository, so prove it: add ${code} to the README`,
   });
   await repo.fill("https://git.example.org/fin/ledger");
   const panel = page.getByRole("status").filter({ hasText: "prove it" });
-  await expect(panel).toContainText("Slop can't ask this host");
+  await expect(panel).toContainText("SLAPorSLOP can't ask this host");
   await expect(panel.locator("code")).toHaveText(code);
   await panel.getByRole("button", { name: "Copy" }).click();
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(code);
@@ -225,10 +225,10 @@ test("the repository: whose it is, how to prove it, and a token for a private on
     method: "code",
     link: null,
     code,
-    message: `slop didn't find ${code} in the README or slop-verify.txt on the default branch yet.`,
+    message: `SLAPorSLOP didn't find ${code} in the README or slop-verify.txt on the default branch yet.`,
   });
   await panel.getByRole("button", { name: "Check" }).click();
-  await expect(page.getByRole("status").filter({ hasText: "didn't find" })).toContainText("Slop didn't find");
+  await expect(page.getByRole("status").filter({ hasText: "didn't find" })).toContainText("SLAPorSLOP didn't find");
   await page.unroute("**/v1/repos/ownership/check");
   await answer(page, "/v1/repos/ownership/check", {
     ok: true,
@@ -446,7 +446,7 @@ test("SLAPorSLOP can't read the repository: the app freezes, Check now, and it t
   // The notice leads to the app's Manage page.
   await expect(page).toHaveURL(new RegExp(`/publish/${slug}/manage$`));
   const frozen = page.getByRole("status").filter({ has: page.getByRole("heading", { name: "Frozen: SLAPorSLOP can't check the repository" }) });
-  await expect(frozen).toContainText("Slop can't read the repository: it was deleted, renamed, or Slop's access was removed");
+  await expect(frozen).toContainText("SLAPorSLOP can't read the repository: it was deleted, renamed, or SLAPorSLOP's access was removed");
   await expect(frozen).toContainText(/If it's still frozen on .*, it leaves the store\./);
   await frozen.getByRole("button", { name: "Check now" }).click();
   await expect(frozen.getByText("Still can't read it. Check the repository's address and SLAPorSLOP's access.")).toBeVisible();

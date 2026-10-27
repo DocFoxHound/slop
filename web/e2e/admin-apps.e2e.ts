@@ -180,7 +180,7 @@ test("an app's record: fixing the store page, stage, out and back in, withdrawin
   const maker = await newPage(browser);
   await signIn(maker, MAKER);
   await maker.goto("/notifications");
-  await expect(maker.getByText(`Slop changed Moss Garden Deluxe ${t}'s store page`)).toBeVisible();
+  await expect(maker.getByText(`SLAPorSLOP changed Moss Garden Deluxe ${t}'s store page`)).toBeVisible();
 
   // The stage, out of the store and back, and a release withdrawn.
   const store = admin.locator("section").filter({ has: admin.getByRole("heading", { name: "In the store" }) });

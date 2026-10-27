@@ -32,7 +32,7 @@ pub const BUILT_IN: &[(&str, &str)] = &[
     ("popular", "Popular this month"),
     ("upcoming", "Coming soon & in beta"),
     ("categories", "Browse by category"),
-    ("not_slop", "Slaps hardest right now"),
+    ("not_slop", "Most Slaps right now"),
     ("barely_seen", "New and barely seen"),
     ("glow_ups", "Glow-ups"),
     ("community", "Community branches worth installing"),

@@ -1464,7 +1464,7 @@ mod tests {
             .unwrap();
         assert!(saves.contains("SLOP_SAVE_DIR"));
         assert!(
-            !saves.contains("## Slop in your code"),
+            !saves.contains("## SLAPorSLOP in your code"),
             "stops at the next section"
         );
     }

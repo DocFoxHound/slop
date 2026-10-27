@@ -325,7 +325,7 @@ test("fixes from the checks, ready to copy for an AI agent", async ({ page, cont
   await panel.getByRole("button", { name: "Copy all for your AI" }).click();
   const all = await page.evaluate(() => navigator.clipboard.readText());
   expect(all).toContain("Release 1.0.1-missing was failed");
-  expect(all).toMatch(/Slop's checks run again on the new release\.$/);
+  expect(all).toMatch(/SLAPorSLOP's checks run again on the new release\.$/);
 
   // What the source checks find on a scanning server: a "should", with its guide section.
   await answer(page, `/v1/apps/${slug}/fixes`, {

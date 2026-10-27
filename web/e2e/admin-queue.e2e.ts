@@ -231,7 +231,7 @@ test("Private going public: the maker asks, changes their mind, asks again; staf
   await maker.goto(`/publish/${unreadable.slug}/manage`);
   await panel.getByRole("button", { name: "Ask to make it public" }).click();
   await expect(panel.getByRole("alert")).toHaveText(
-    "make the repository public first: Slop can't read the repository: it was deleted, renamed, or Slop's access was removed",
+    "make the repository public first: SLAPorSLOP can't read the repository: it was deleted, renamed, or SLAPorSLOP's access was removed",
   );
 
   await maker.goto(`/publish/${app.slug}/manage`);

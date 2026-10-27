@@ -69,7 +69,7 @@ test("only players who played it can vote; makers, visitors and upcoming apps ca
   const teen = await browser.newPage();
   await signIn(teen, "teen");
   await teen.goto(`/app/${rated}`);
-  await expect(ratings(teen).getByText("Launch it from the Slop app first: only players can vote.")).toBeVisible();
+  await expect(ratings(teen).getByText("Launch it from the SLAPorSLOP app first: only players can vote.")).toBeVisible();
   await expect(ratings(teen).getByRole("button", { name: "👍 Slaps" })).toHaveCount(0);
 
   const maker = await browser.newPage();
