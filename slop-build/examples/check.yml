@@ -18,4 +18,4 @@ jobs:
     with:
       tag: ${{ inputs.tag }}
       app: your-app
-      slop-url: https://slopai.games
+      slop-url: https://slaporslop.games

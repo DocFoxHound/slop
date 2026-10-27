@@ -37,7 +37,7 @@ deploys every push to `dev` within minutes, without running the tests, and then 
 **Slop Dev** desktop app for Linux and Windows, which installs beside the real SLAPorSLOP and updates
 itself from the test server. Testing with private repositories: `docs/TESTING.md`.
 
-Production, **https://slopai.games**, runs only what reaches `main`: `deploy/promote.sh`
+Production, **https://slaporslop.games**, runs only what reaches `main`: `deploy/promote.sh`
 fast-forwards main to dev, GitHub's pipeline (`.github/workflows/pipeline.yml`) runs every check
 and builds the Windows app, and production deploys once the owner approves the run's
 `production` environment (`deploy/README.md`, "How changes ship"). Run the checks yourself

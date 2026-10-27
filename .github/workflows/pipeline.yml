@@ -5,20 +5,20 @@
 #
 #   checks ─────────┐
 #                   ├─► production: waits for the owner's approval, moves the `production` tag
-#   build-windows ──┘   (slopai.games deploys it), then publishes the Windows app there
+#   build-windows ──┘   (slaporslop.games deploys it), then publishes the Windows app there
 #
 # checks         The same tests, lints, builds and browser tests the deploy's test mode runs:
 #                deploy/build/build.sh in the deploy/build/Containerfile image, against a Postgres
 #                service, so CI and the old test-server checks are one and the same. On main it
 #                passes at once when the same commit already passed them on dev. A browser test
 #                that fails once and then passes is retried, and named as a warning to be fixed.
-# build-windows  The "Slop" Windows installer for slopai.games, built while the checks run, with
+# build-windows  The "Slop" Windows installer for slaporslop.games, built while the checks run, with
 #                no write access and no tokens.
 # production     Runs in the `production` environment, which needs the owner's approval (set up
 #                in the repository's settings, deploy/README.md). Moves the annotated tag
 #                `production` to this commit (production's update.sh deploys it within minutes),
-#                waits until slopai.games runs it, then uploads the Windows installer with this
-#                job's GitHub OIDC token. slopai.games takes desktop uploads only from this
+#                waits until slaporslop.games runs it, then uploads the Windows installer with this
+#                job's GitHub OIDC token. slaporslop.games takes desktop uploads only from this
 #                workflow on main, in the approved environment (SLOP_DESKTOP_WORKFLOW,
 #                SLOP_DESKTOP_REF, SLOP_DESKTOP_ENVIRONMENT; desktop_updates.rs).
 #
@@ -41,7 +41,7 @@ concurrency:
   cancel-in-progress: true
 
 env:
-  SLOP_URL: https://slopai.games
+  SLOP_URL: https://slaporslop.games
 
 jobs:
   checks:
@@ -225,7 +225,7 @@ jobs:
 
       # The version and site, as every desktop build sets them; "Slop", not the test server's
       # "Slop Dev".
-      - name: Set up the app for slopai.games
+      - name: Set up the app for slaporslop.games
         env:
           SITE: ${{ env.SLOP_URL }}
           CHANNEL: production
@@ -266,7 +266,7 @@ jobs:
     timeout-minutes: 90
     environment:
       name: production
-      url: https://slopai.games
+      url: https://slaporslop.games
     # One at a time, and never cancelled halfway.
     concurrency:
       group: production
@@ -307,10 +307,10 @@ jobs:
             "$tag" "$GITHUB_SHA"
           # Only the tag, and only if nobody moved it since it was read above.
           git push -q --force-with-lease="refs/tags/$tag:$remote_tag" origin "refs/tags/$tag:refs/tags/$tag"
-          echo "production -> ${GITHUB_SHA:0:12}; slopai.games deploys it within a few minutes."
+          echo "production -> ${GITHUB_SHA:0:12}; slaporslop.games deploys it within a few minutes."
 
       # The app talks to the server, so it's published only once the server runs the same commit.
-      - name: Wait for slopai.games to run it
+      - name: Wait for slaporslop.games to run it
         id: live
         run: |
           set -uo pipefail
@@ -318,21 +318,21 @@ jobs:
           for _ in $(seq 120); do
             live=$(curl -sf "$SLOP_URL/v1/source" | jq -r '.commit // empty' || true)
             if [ "$live" = "$GITHUB_SHA" ]; then
-              echo "slopai.games runs ${GITHUB_SHA:0:12}."
+              echo "slaporslop.games runs ${GITHUB_SHA:0:12}."
               exit 0
             fi
             # A newer approved run got there first; its own Windows build is the one to publish.
             if [ -n "$live" ]; then
               git cat-file -e "$live^{commit}" 2>/dev/null || git fetch -q origin main || true
               if git merge-base --is-ancestor "$GITHUB_SHA" "$live" 2>/dev/null; then
-                echo "slopai.games already runs a newer commit, ${live:0:12}."
+                echo "slaporslop.games already runs a newer commit, ${live:0:12}."
                 echo "superseded=1" >> "$GITHUB_OUTPUT"
                 exit 0
               fi
             fi
             sleep 30
           done
-          echo "::error::slopai.games still runs ${live:0:12} after an hour; see its deploy log (journalctl --user -u slop-deploy)"
+          echo "::error::slaporslop.games still runs ${live:0:12} after an hour; see its deploy log (journalctl --user -u slop-deploy)"
           exit 1
 
       - uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
@@ -341,7 +341,7 @@ jobs:
           name: slop-windows
           path: ${{ runner.temp }}/windows
 
-      - name: Publish the Windows app to slopai.games
+      - name: Publish the Windows app to slaporslop.games
         if: needs.build-windows.result == 'success' && steps.live.outputs.superseded != '1'
         env:
           VERSION: ${{ needs.build-windows.outputs.version }}

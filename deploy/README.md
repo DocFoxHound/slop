@@ -4,7 +4,7 @@ SLAPorSLOP runs in two places:
 
 - **The test server**, **https://slop.188-68-41-241.sslip.io** (this machine), deploys every
   push to the `dev` branch by itself, within minutes. No GitHub involved.
-- **Production**, **https://slopai.games** (its own server, "Production" below), deploys only
+- **Production**, **https://slaporslop.games** (its own server, "Production" below), deploys only
   commits on `main` that passed every check on GitHub and that the owner approved.
 
 ## How changes ship
@@ -56,7 +56,7 @@ dev → main ──► (promote.sh: only once dev's run passed) GitHub's pipelin
 4. **Approve.** The run then waits at the `production` job: open it, **Review deployments**, tick
    **production**, **Approve and deploy**. The job moves the annotated tag `production` to the
    commit (refusing to take production back to an older one), production's `update.sh` deploys it
-   within a few minutes, and once slopai.games runs it the job uploads the Windows installer
+   within a few minutes, and once slaporslop.games runs it the job uploads the Windows installer
    there. Reject it, or just leave it, and nothing changes; a later approved run ships everything
    up to its own commit.
 
@@ -72,7 +72,7 @@ it doesn't exist yet, with no reviewers, and that first run would ship without a
    (DocFoxHound); leave **Prevent self-review** off while you're the only reviewer. Under
    **Deployment branches and tags** choose **Selected branches and tags → Add deployment branch or
    tag rule**, `main`. **Save protection rules.** No environment secrets are needed: the upload to
-   slopai.games is authenticated with the job's GitHub OIDC token, which names the environment.
+   slaporslop.games is authenticated with the job's GitHub OIDC token, which names the environment.
 3. **Actions:** **Settings → Actions → General**. Actions permissions: **Allow DocFoxHound, and
    select non-DocFoxHound, actions and reusable workflows** with **Allow actions created by
    GitHub** ticked (the pipeline uses only `actions/*`, pinned by commit), or allow all.
@@ -123,7 +123,7 @@ There are two apps, and they install side by side:
 
 | | **SLAPorSLOP** | **Slop Dev** |
 |---|---|---|
-| Talks to and updates from | slopai.games | this test server |
+| Talks to and updates from | slaporslop.games | this test server |
 | Product name (installers, packages), window title | `Slop`, SLAPorSLOP | `Slop Dev`, SLAPorSLOP Dev |
 | Identifier, program | `dev.ironpoint.slop`, `slop-desktop` | `dev.ironpoint.slopdev`, `slop-dev` |
 | Windows installer | built on GitHub's Windows runner by the pipeline, uploaded once the owner approved | cross-compiled here after each deploy that changed the app |
@@ -200,9 +200,9 @@ set -a; . ~/.config/slop/slop.env; set +a
 ~/slop-deploy/current/slop-api review pending
 ```
 
-## Production (slopai.games)
+## Production (slaporslop.games)
 
-Production runs at **https://slopai.games** on its own server (Fedora, user `slop`, rootless
+Production runs at **https://slaporslop.games** on its own server (Fedora, user `slop`, rootless
 podman), laid out like this one: `~/slop-deploy`, `~/.config/slop/slop.env`, the user units from
 `deploy/systemd`, Postgres in `slop-pg` on `127.0.0.1:5433`, the API on `127.0.0.1:8090`.
 
@@ -228,7 +228,8 @@ Environment=SLOP_DEPLOY_REMOTE=git@github-slop-deploy:DocFoxHound/slop.git
 pipeline runs on main ("The desktop app", above).
 
 ```sh
-SLOP_PUBLIC_URL=https://slopai.games
+SLOP_PUBLIC_URL=https://slaporslop.games
+SLOP_FORMER_URLS=https://slopai.games
 SLOP_DESKTOP_REPO=DocFoxHound/slop
 SLOP_DESKTOP_REF=refs/heads/main
 SLOP_DESKTOP_WORKFLOW=pipeline.yml
@@ -240,8 +241,11 @@ Both apps trust the same keys, so production uses this server's `SLOP_UPDATER_KE
 `SLOP_SIGNING_KEY`, and the same `~/.config/slop/desktop-build.env`. Production's app never accepts
 releases without a maker signature; only test sites' do (`crates/slop-desktop/build.rs`).
 
-**Caddy.** `deploy/slop-prod.caddyfile` serves `slopai.games`, sends `www.slopai.games` there, and
-has the browser demos' `play.slopai.games` commented out until it has a DNS record and
+**Caddy.** `deploy/slop-prod.caddyfile` serves `slaporslop.games`, sends `www.slaporslop.games` there,
+keeps serving the API on the former address `slopai.games` (installed desktop apps, makers' build
+workflows and webhooks still call it; its pages redirect; keep the domain registered for good, and
+`SLOP_FORMER_URLS` lists it so build tokens naming it are accepted), and
+has the browser demos' `play.slaporslop.games` commented out until it has a DNS record and
 `SLOP_PLAY_URL` ("Browser demos", below). Copy it to `/etc/caddy/Caddyfile.d/` there and reload.
 
 ## GitHub App

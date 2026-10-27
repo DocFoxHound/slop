@@ -16,21 +16,21 @@ describe("furthest", () => {
 
 describe("siteOrigin", () => {
   it("is the page's own origin on the website", () => {
-    expect(siteOrigin({ origin: "https://slopai.games", protocol: "https:", hostname: "slopai.games" }, "")).toBe("https://slopai.games");
+    expect(siteOrigin({ origin: "https://slaporslop.games", protocol: "https:", hostname: "slaporslop.games" }, "")).toBe("https://slaporslop.games");
     expect(siteOrigin({ origin: "http://localhost:5173", protocol: "http:", hostname: "localhost" }, "https://x.example/")).toBe("http://localhost:5173");
   });
   it("is the site the packaged desktop app was built for", () => {
     expect(siteOrigin({ origin: "tauri://localhost", protocol: "tauri:", hostname: "localhost" }, "https://test.slop.example/")).toBe("https://test.slop.example");
-    expect(siteOrigin({ origin: "http://tauri.localhost", protocol: "http:", hostname: "tauri.localhost" }, "")).toBe("https://slopai.games");
-    expect(siteOrigin({ origin: "http://tauri.localhost", protocol: "http:", hostname: "tauri.localhost" }, "not a url")).toBe("https://slopai.games");
+    expect(siteOrigin({ origin: "http://tauri.localhost", protocol: "http:", hostname: "tauri.localhost" }, "")).toBe("https://slaporslop.games");
+    expect(siteOrigin({ origin: "http://tauri.localhost", protocol: "http:", hostname: "tauri.localhost" }, "not a url")).toBe("https://slaporslop.games");
   });
 });
 
 describe("displayAddress", () => {
   it("reads like an address bar", () => {
-    expect(displayAddress("https://slopai.games", "/app/lantern-keep")).toBe("slopai.games/app/lantern-keep");
+    expect(displayAddress("https://slaporslop.games", "/app/lantern-keep")).toBe("slaporslop.games/app/lantern-keep");
     expect(displayAddress("http://localhost:5173", "/search?q=caf%C3%A9")).toBe("localhost:5173/search?q=café");
-    expect(displayAddress("https://slopai.games", "/bad%E0%A4%A")).toBe("slopai.games/bad%E0%A4%A");
+    expect(displayAddress("https://slaporslop.games", "/bad%E0%A4%A")).toBe("slaporslop.games/bad%E0%A4%A");
   });
 });
 

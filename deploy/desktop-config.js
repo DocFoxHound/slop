@@ -8,7 +8,7 @@
 //
 // VERSION   the app's version (0.1.<number of commits>, shared by all platforms)
 // SITE      the site the app talks to and updates from
-// CHANNEL   production: "Slop", as the file has it (slopai.games's app)
+// CHANNEL   production: "Slop", as the file has it (slaporslop.games's app)
 //           dev: "Slop Dev", the test server's app. Its own name, identifier and program name,
 //           so it installs beside "Slop" and keeps its own settings, library, sign-in and chat
 //           keys (the OS keychain entries are named after the identifier), and its own
@@ -32,7 +32,7 @@ const DEV_TITLE = "SLAPorSLOP Dev";
 
 function configure(conf, { version, site, channel }) {
   if (!/^\d+\.\d+\.\d+$/.test(version || "")) throw new Error(`VERSION must look like 0.1.42, not ${JSON.stringify(version)}`);
-  if (!/^https?:\/\/[^/]+$/.test((site || "").replace(/\/$/, ""))) throw new Error(`SITE must be an origin like https://slopai.games, not ${JSON.stringify(site)}`);
+  if (!/^https?:\/\/[^/]+$/.test((site || "").replace(/\/$/, ""))) throw new Error(`SITE must be an origin like https://slaporslop.games, not ${JSON.stringify(site)}`);
   if (channel !== "production" && channel !== "dev") throw new Error(`CHANNEL must be production or dev, not ${JSON.stringify(channel)}`);
   site = site.replace(/\/$/, "");
   conf.version = version;

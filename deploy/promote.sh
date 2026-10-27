@@ -95,5 +95,5 @@ git push -q origin "$dev:refs/heads/main" || die "not pushed (main changed on Gi
 echo "main -> ${dev:0:12}."
 echo "GitHub now builds the Windows app (about 10-15 minutes; the checks already passed on dev),"
 echo "then waits for you: open $ACTIONS, pick the newest \"Pipeline\" run on main, Review deployments -> production ->"
-echo "Approve and deploy. slopai.games deploys it within minutes after that, and its Windows app"
+echo "Approve and deploy. slaporslop.games deploys it within minutes after that, and its Windows app"
 echo "follows."

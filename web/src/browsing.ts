@@ -25,15 +25,15 @@ export function furthest(previous: number, idx: number, action: "PUSH" | "POP" |
 export function siteOrigin(location: Pick<Location, "origin" | "protocol" | "hostname">, builtFor: string): string {
   if (location.protocol === "tauri:" || location.hostname === "tauri.localhost") {
     try {
-      return new URL(builtFor || "https://slopai.games").origin;
+      return new URL(builtFor || "https://slaporslop.games").origin;
     } catch {
-      return "https://slopai.games";
+      return "https://slaporslop.games";
     }
   }
   return location.origin;
 }
 
-/** "slopai.games/app/lantern-keep": the address as people read it, without https://. */
+/** "slaporslop.games/app/lantern-keep": the address as people read it, without https://. */
 export function displayAddress(origin: string, path: string): string {
   let shown = path;
   try {

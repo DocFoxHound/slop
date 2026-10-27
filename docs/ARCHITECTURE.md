@@ -35,7 +35,7 @@ The diagram in §2 is the target. Today everything runs on **one server** (detai
 | Slop Build | GitHub Actions on makers' repositories (§6.2) | Plus SLAPorSLOP-run builders for other hosts |
 
 The `sslip.io` server is the test deployment, which deploys every push to `dev` within minutes;
-production (`slopai.games`, its own server set up the same way) runs only commits that reached
+production (`slaporslop.games`, its own server set up the same way) runs only commits that reached
 `main`, passed GitHub's pipeline and were approved, which moves the `production` tag to them
 (`deploy/README.md`, "How changes ship").
 

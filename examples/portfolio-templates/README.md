@@ -1,6 +1,6 @@
 # Portfolio templates
 
-Ready-to-copy portfolios for [People pages on SLAPorSLOP](https://slopai.games/people). Your People page
+Ready-to-copy portfolios for [People pages on SLAPorSLOP](https://slaporslop.games/people). Your People page
 is your shop window: who you are, your style, your best work and your rates. The portfolio is the
 "best work" part, and it lives in a public GitHub repository of your own.
 
@@ -20,6 +20,6 @@ Gallery a big wall of pictures, Showreel one featured video, Tracklist a numbere
 Studio the team and its services. Keep it, change it, or delete the `page/` folder for SLAPorSLOP's
 standard layout; the rules are under "Your page's design" in the guide.
 
-The full guide, with every rule: [portfolio.md](https://slopai.games/portfolio.md) (also on any
+The full guide, with every rule: [portfolio.md](https://slaporslop.games/portfolio.md) (also on any
 SLAPorSLOP site at `/portfolio.md`). Using an AI assistant? Tell it: *"Read
-https://slopai.games/portfolio.md and help me build my SLAPorSLOP portfolio."*
+https://slaporslop.games/portfolio.md and help me build my SLAPorSLOP portfolio."*

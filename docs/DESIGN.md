@@ -2,7 +2,7 @@
 
 **Status:** Built and running as a private test deployment; sections say what's built and when. The original clickable mockup is kept in `mockup/` for reference
 **Last updated:** 2026-10-21
-**Name:** renamed from Slop to SLAPorSLOP on 2026-10-27 (owner decision): the positive vote is now **Slaps** (was "Not Slop"), the negative one is still **Slop**, and "Private Slop" is now **Private**. The domain stays slopai.games for now, and the desktop app's installers keep the product name "Slop" so existing installs update in place (`deploy/README.md`, "The desktop app").
+**Name:** renamed from Slop to SLAPorSLOP on 2026-10-27 (owner decision): the positive vote is now **Slaps** (was "Not Slop"), the negative one is still **Slop**, and "Private Slop" is now **Private**. The site moved from slopai.games to slaporslop.games the same day; slopai.games stays registered and still serves the API (`/v1/`: installed desktop apps, makers' build workflows, webhooks) while its pages redirect (`deploy/slop-prod.caddyfile`, `SLOP_FORMER_URLS`). The desktop app's installers keep the product name "Slop" so existing installs update in place (`deploy/README.md`, "The desktop app").
 **Related:** [`ARCHITECTURE.md`](ARCHITECTURE.md) (how it's built) · [`PAYMENTS.md`](PAYMENTS.md) (donations and People payments) · [`SECURITY.md`](SECURITY.md) (security and trust) · [`METRICS.md`](METRICS.md) (donation & vote history) · `LEGAL.md` (private) (legal framework)
 
 ---
