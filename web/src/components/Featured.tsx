@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The Featured carousel at the top of the front page (DESIGN §5), picked by Slop staff.
+// The Featured carousel at the top of the front page (DESIGN §5), picked by SLAPorSLOP staff.
 // It never moves by itself (WCAG 2.2.2): players page through it with the buttons or arrow keys.
 
 import { useState, type KeyboardEvent } from "react";
@@ -34,7 +34,7 @@ export function FeaturedCarousel({ slides }: { slides: FeaturedApp[] }) {
           <p className="small">
             {app.not_slop_percent !== null && (
               <span className={app.not_slop_percent >= 70 ? "good" : app.not_slop_percent < 40 ? "bad" : ""}>
-                {app.not_slop_percent}% Not Slop
+                {app.not_slop_percent}% Slaps
               </span>
             )}
             {app.players_now !== null && app.players_now > 0 && <span className="muted"> · {app.players_now.toLocaleString()} playing now</span>}

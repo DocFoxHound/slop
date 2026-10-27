@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A read-only token for a private repository outside GitHub (crates/slop-api/src/repo_tokens.rs).
-// Slop keeps it encrypted, only sends it to the repository's own host, and never shows it again.
+// SLAPorSLOP keeps it encrypted, only sends it to the repository's own host, and never shows it again.
 
 import { useState } from "react";
 
@@ -59,9 +59,9 @@ export function TokenFields({ value, onChange }: { value: RepoTokenInput; onChan
         />
       </label>
       <p className="muted small">
-        {HOSTS[value.kind].how} Slop keeps it encrypted, only uses it with this repository's host, and never shows it again.
+        {HOSTS[value.kind].how} SLAPorSLOP keeps it encrypted, only uses it with this repository's host, and never shows it again.
         People you share the app with download straight from your host through short-lived links; hosts that can't give those
-        can't be shared through Slop.
+        can't be shared through SLAPorSLOP.
       </p>
     </div>
   );
@@ -101,7 +101,7 @@ export function RepoAccessPanel({ slug, repoUrl }: { slug: string; repoUrl: stri
               ? `A ${HOSTS[s.kind ?? "gitea"].label} token is saved (since ${formatDate(s.saved_at!)}${
                   s.last_used_at ? `, last used ${formatDate(s.last_used_at)}` : ""
                 }). Replace it before it expires.`
-              : "Slop needs a read-only token to fetch releases from this private repository and share them."}
+              : "SLAPorSLOP needs a read-only token to fetch releases from this private repository and share them."}
           </p>
           <TokenFields value={value} onChange={setValue} />
           <div className="row-actions">

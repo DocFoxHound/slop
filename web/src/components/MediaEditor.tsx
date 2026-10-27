@@ -70,7 +70,7 @@ export function MediaEditor({ app }: { app: AppDetail }) {
         <Link to="/publish/guide#pictures-and-videos">How to publish</Link>.
       </p>
       <p className="muted small">
-        Every new set of pictures is reviewed before it shows (and before the app first goes in the store). Slop also
+        Every new set of pictures is reviewed before it shows (and before the app first goes in the store). SLAPorSLOP also
         reads them again with each release. Changing the order below isn't reviewed.
       </p>
 

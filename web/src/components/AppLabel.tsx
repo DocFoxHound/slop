@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// "What this app does" (crates/slop-api/src/label.rs): what Slop's checks found and what the
+// "What this app does" (crates/slop-api/src/label.rs): what SLAPorSLOP's checks found and what the
 // maker says, in plain words, plus accessibility features players confirm or dispute.
 
 import { useState } from "react";
@@ -28,7 +28,7 @@ export function AppLabel({ slug }: { slug: string }) {
       <h2 id="label-title">What this app does</h2>
       <p className="faint small">
         {l.version ? `From version ${l.version}: ` : ""}
-        <b>Checked</b> means Slop's own checks found it; <b>the maker says</b> means it's the maker's word.
+        <b>Checked</b> means SLAPorSLOP's own checks found it; <b>the maker says</b> means it's the maker's word.
       </p>
       <ul className="label-items">
         {l.items.map((i) => (

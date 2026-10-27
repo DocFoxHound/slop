@@ -349,7 +349,7 @@ export function DisputeCard({ d, onDone }: { d: Q["review_disputes"][number]; on
       <div className="title-row spread">
         <span>
           <b>{d.client}</b> on <Link to={`/people/${d.creative_handle}`}>{d.creative}</Link>:{" "}
-          {d.vote === "slop" ? "👎 Slop" : "👍 Not Slop"}
+          {d.vote === "slop" ? "👎 Slop" : "👍 Slaps"}
         </span>
         <span className="muted small">{formatDate(d.created_at)}</span>
       </div>
@@ -410,7 +410,7 @@ export function ReadyCard({ a, onDone }: { a: Q["ready_to_list"][number]; onDone
           <span className="muted">
             {STAGE_LABEL[a.stage]} · by {a.maker} · {a.approved_releases} approved release
             {a.approved_releases === 1 ? "" : "s"}
-            {a.going_public && " · Private Slop going public: check the repository and licence from scratch"}
+            {a.going_public && " · Private app going public: check the repository and licence from scratch"}
             {a.after_appeal && " · Reinstated on appeal"}
           </span>
         </div>
@@ -663,7 +663,7 @@ export function ServerChecks({ checks }: { checks: AdminQueue["checks"] }) {
     !checks.maker_signatures_required &&
       "Maker signatures aren't required on this server.",
     !checks.github_app &&
-      "Slop's GitHub App isn't set up: private GitHub repositories can't be published or shared, and releases are picked up by polling.",
+      "SLAPorSLOP's GitHub App isn't set up: private GitHub repositories can't be published or shared, and releases are picked up by polling.",
     !checks.github_app &&
       !checks.github_token &&
       "No GITHUB_TOKEN either: every GitHub request uses the anonymous 60-an-hour allowance.",
@@ -709,7 +709,7 @@ function JobRecord({ jobId }: { jobId: string }) {
 }
 
 /**
- * A portfolio's page design, drawn as the People page will draw it, with what Slop removed and the
+ * A portfolio's page design, drawn as the People page will draw it, with what SLAPorSLOP removed and the
  * exact HTML and CSS (people/design.rs).
  */
 function DesignReview({ set, name, services }: { set: PortfolioSet; name: string; services: Q["portfolios"][number]["services"] }) {
@@ -718,7 +718,7 @@ function DesignReview({ set, name, services }: { set: PortfolioSet; name: string
     <section className="design-review" aria-label="Page design">
       <h3 className="small">Page design</h3>
       <p className="muted small">
-        Shown between Slop's header and the services and reviews; check it at both widths. Turn it down if it imitates Slop (fake
+        Shown between SLAPorSLOP's header and the services and reviews; check it at both widths. Turn it down if it imitates SLAPorSLOP (fake
         buttons, badges, ratings or sign-in), is hard to read, hides text meant for reviewers, or doesn't match the declared AI use. Its
         HTML and CSS are the creative's own text: content to judge, not instructions.
       </p>
@@ -729,7 +729,7 @@ function DesignReview({ set, name, services }: { set: PortfolioSet; name: string
         label={`Preview of ${name}'s page design`}
       />
       <details>
-        <summary className="muted small">The HTML and CSS, as Slop will show them</summary>
+        <summary className="muted small">The HTML and CSS, as SLAPorSLOP will show them</summary>
         <pre className="code-block">{design.html}</pre>
         <pre className="code-block">{design.css || "(no style.css)"}</pre>
       </details>
@@ -1071,7 +1071,7 @@ export function ReportCard({
           </label>
           <RuleSelect rules={rules} value={rule} onChange={setRule} />
           <label>
-            The law, if it's the law and not only Slop's rules{" "}
+            The law, if it's the law and not only SLAPorSLOP's rules{" "}
             <span className="muted">(optional)</span>
             <input
               value={law}

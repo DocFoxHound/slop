@@ -199,7 +199,7 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
         {isClient && can("review") && (
           <div className="row-actions">
             <button type="button" className={`btn ${j.review ? "" : "slime"}`} onClick={jumpToReview}>
-              {j.review ? `Your rating: ${j.review.vote === "not_slop" ? "👍 Not Slop" : "👎 Slop"}` : `Rate ${j.creative.name}`}
+              {j.review ? `Your rating: ${j.review.vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}` : `Rate ${j.creative.name}`}
             </button>
           </div>
         )}
@@ -296,7 +296,7 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
               : j.payment_mode === "off"
                 ? "Payments aren't switched on yet on this server."
                 : `Paid directly to ${j.creative.name} through Stripe.`}{" "}
-            Your contract is with {j.creative.name}, not Slop. Your rights are against {j.creative.name}.
+            Your contract is with {j.creative.name}, not SLAPorSLOP. Your rights are against {j.creative.name}.
           </p>
         </div>
       )}
@@ -386,7 +386,7 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
           <ol className="timeline">
             {j.events.map((e, i) => (
               <li key={i}>
-                <span className="faint small">{formatDate(e.created_at)}</span> <b>{e.actor ?? "Slop"}</b> {eventWords(e.kind)}
+                <span className="faint small">{formatDate(e.created_at)}</span> <b>{e.actor ?? "SLAPorSLOP"}</b> {eventWords(e.kind)}
                 {e.note && <div className="pre small">{e.note}</div>}
                 {e.links.map((l) => (
                   <div key={l} className="small">
@@ -431,7 +431,7 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
               {j.refunded_minor > 0 && j.offer && <div className="small">Refunded {money(j.refunded_minor, j.offer.currency)}</div>}
               {j.creative_receives_minor !== null && j.offer && (
                 <div className="muted small">
-                  You receive about {money(j.creative_receives_minor, j.offer.currency)} of the original price after Slop's 5% fee;
+                  You receive about {money(j.creative_receives_minor, j.offer.currency)} of the original price after SLAPorSLOP's 5% fee;
                   Stripe's card fee also comes out.
                 </div>
               )}
@@ -650,7 +650,7 @@ function OfferForm({ j, busy, onSend }: { j: Job; busy: boolean; onSend: (o: Off
       </div>
       {minor !== null && minor > 0 && (
         <p className="hint">
-          They pay {money(minor, o.currency)}. You receive about {money(minor - Math.round(minor * 0.05), o.currency)} after Slop's 5% fee
+          They pay {money(minor, o.currency)}. You receive about {money(minor - Math.round(minor * 0.05), o.currency)} after SLAPorSLOP's 5% fee
           (Stripe's card fee also comes out).
         </p>
       )}
@@ -925,7 +925,7 @@ function ConversationPanel({ j, busy, step, onError }: { j: Job; busy: boolean; 
         ● {c.notice}
       </p>
       {c.text_deleted_after && c.messages.some((m) => m.body) && (
-        <p className="small warn">Closed. Slop deletes the text after {formatDate(c.text_deleted_after)}: download your copy before then.</p>
+        <p className="small warn">Closed. SLAPorSLOP deletes the text after {formatDate(c.text_deleted_after)}: download your copy before then.</p>
       )}
       {c.messages.length > 0 && (
         <ol className="messages">
@@ -940,7 +940,7 @@ function ConversationPanel({ j, busy, step, onError }: { j: Job; busy: boolean; 
                   </>
                 )}
               </span>
-              {m.body ? <p className="pre">{m.body}</p> : <p className="faint small">Deleted from Slop · fingerprint {m.sha256.slice(0, 12)}…</p>}
+              {m.body ? <p className="pre">{m.body}</p> : <p className="faint small">Deleted from SLAPorSLOP · fingerprint {m.sha256.slice(0, 12)}…</p>}
             </li>
           ))}
         </ol>
@@ -1020,9 +1020,9 @@ function ProblemPanel({ j, busy, step }: { j: Job; busy: boolean; step: Step }) 
     try {
       const copy = JSON.parse(await file.text()) as ConversationCopy;
       const r = await api.people.submitCopy(j.id, copy);
-      setCopyResult(`${r.verified_messages} messages match Slop's fingerprints, ${r.unverified_messages} don't.`);
+      setCopyResult(`${r.verified_messages} messages match SLAPorSLOP's fingerprints, ${r.unverified_messages} don't.`);
     } catch (err) {
-      setCopyResult(err instanceof ApiError ? err.message : "That isn't a conversation copy downloaded from Slop.");
+      setCopyResult(err instanceof ApiError ? err.message : "That isn't a conversation copy downloaded from SLAPorSLOP.");
     }
   };
   return (
@@ -1041,7 +1041,7 @@ function ProblemPanel({ j, busy, step }: { j: Job; busy: boolean; step: Step }) 
               label="Open a problem"
               busy={busy}
               required
-              hint="State what's wrong, pointing at the agreement. The other side answers, and you both propose outcomes. A Slop mediator can suggest one, but only what you both agree to happens."
+              hint="State what's wrong, pointing at the agreement. The other side answers, and you both propose outcomes. A SLAPorSLOP mediator can suggest one, but only what you both agree to happens."
               onSend={(statement) => step("problem", { statement })}
             />
           )}
@@ -1060,7 +1060,7 @@ function ProblemPanel({ j, busy, step }: { j: Job; busy: boolean; step: Step }) 
           )}
           {p.mediator_suggestion && (
             <div className="mediator-note">
-              <b>A Slop mediator suggests</b> (this binds neither of you): {p.mediator_suggestion}
+              <b>A SLAPorSLOP mediator suggests</b> (this binds neither of you): {p.mediator_suggestion}
             </div>
           )}
           <ul className="proposals">
@@ -1131,7 +1131,7 @@ function ProblemPanel({ j, busy, step }: { j: Job; busy: boolean; step: Step }) 
             </button>
           )}
           <p className="muted small">
-            If you can't agree: the record (download it above) is yours for a card dispute or a court. Slop doesn't decide who's right.
+            If you can't agree: the record (download it above) is yours for a card dispute or a court. SLAPorSLOP doesn't decide who's right.
           </p>
         </>
       )}
@@ -1173,11 +1173,11 @@ function ReviewForm({
         if (vote) onSend({ vote, body });
       }}
     >
-      <h2>{j.review ? "Your review" : `Was ${j.creative.name}'s work slop?`}</h2>
+      <h2>{j.review ? "Your review" : `Did ${j.creative.name}'s work slap, or was it slop?`}</h2>
       <p className="muted small">Judge it against the agreement: did you get exactly what it says?</p>
       <div className="vote-row">
         <button type="button" className={`btn vote ${vote === "not_slop" ? "on up" : ""}`} aria-pressed={vote === "not_slop"} onClick={() => setVote("not_slop")}>
-          👍 Not Slop
+          👍 Slaps
         </button>
         <button type="button" className={`btn vote ${vote === "slop" ? "on down" : ""}`} aria-pressed={vote === "slop"} onClick={() => setVote("slop")}>
           👎 Slop

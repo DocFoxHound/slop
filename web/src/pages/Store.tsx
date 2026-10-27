@@ -73,7 +73,7 @@ export function Store() {
   const freshSlop = useLoad(() => api.apps({ sort: "fresh_slop", limit: 4 }).then((p) => p.apps), []);
   const barelySeen = useLoad(() => api.apps({ sort: "barely_seen", limit: 4 }).then((p) => p.apps), []);
   const glowUps = useLoad(
-    () => api.glowUps().then((list) => list.map((a) => ({ ...a, reason: `${a.before}% → ${a.after}% Not Slop` }))),
+    () => api.glowUps().then((list) => list.map((a) => ({ ...a, reason: `${a.before}% → ${a.after}% Slaps` }))),
     [],
   );
 
@@ -84,7 +84,7 @@ export function Store() {
           <b>Test server.</b> Automatic scanning isn't running here yet, so uploads are not scanned.
         </p>
       )}
-      {/* What Slop is: for visitors who haven't signed in, and never in the desktop app. */}
+      {/* What SLAPorSLOP is: for visitors who haven't signed in, and never in the desktop app. */}
       {me === null && !isDesktop && (
       <section className="intro panel">
         <h1>
@@ -174,7 +174,7 @@ export function Store() {
 
       {show("not_slop") && (
       <>
-      <SectionHeader title="Most Not Slop right now" sub="Best rated by votes from the last 30 days" />
+      <SectionHeader title="Most Slaps right now" sub="Best rated by votes from the last 30 days" />
       {notSlop.error ? (
         <ErrorState error={notSlop.error} onRetry={notSlop.reload} />
       ) : (
@@ -192,7 +192,7 @@ export function Store() {
 
       {show("glow_ups") && glowUps.data && glowUps.data.length > 0 && (
         <>
-          <SectionHeader title="Glow-ups" sub="Updates turned these from Slop toward Not Slop in the last 60 days" />
+          <SectionHeader title="Glow-ups" sub="Updates turned these from Slop toward Slaps in the last 60 days" />
           <Shelf apps={glowUps.data} empty="" />
         </>
       )}
@@ -282,7 +282,7 @@ export function Recommended() {
         <>
           <div className="panel panel-pad signin-nudge">
             <p>
-              <b>Picks of your own.</b> Sign in and Slop recommends apps from what's in your library and what you play, with
+              <b>Picks of your own.</b> Sign in and SLAPorSLOP recommends apps from what's in your library and what you play, with
               something different mixed in. You can turn it off on your account page.
             </p>
             {isDesktop ? (

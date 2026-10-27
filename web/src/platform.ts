@@ -29,8 +29,8 @@ export const OS_LABEL: Record<Os, string> = {
 };
 
 /**
- * Opens a link outside Slop. In the desktop app links must go to the system browser; following
- * them inside the app's window would navigate away from Slop.
+ * Opens a link outside SLAPorSLOP. In the desktop app links must go to the system browser; following
+ * them inside the app's window would navigate away from SLAPorSLOP.
  */
 /** Saves text as a file the user downloads (job records, conversation copies, data exports). */
 export function saveFile(name: string, text: string, type: string) {
@@ -76,7 +76,7 @@ export interface InstalledMod {
   game_slug: string;
   game_title: string;
   installed_at: string;
-  /** Why Slop pulled it; a pulled mod isn't handed to its game. */
+  /** Why SLAPorSLOP pulled it; a pulled mod isn't handed to its game. */
   revoked: string | null;
 }
 
@@ -101,7 +101,7 @@ export interface Launched {
   /** Programs found in the save folder and moved out before the start. */
   quarantined: string[];
   copy_skipped: boolean;
-  /** Things in the game's own mods folder that aren't mods from Slop, moved out (DESIGN §9). */
+  /** Things in the game's own mods folder that aren't mods from SLAPorSLOP, moved out (DESIGN §9). */
   unapproved_mods: string[];
   /** What save sync did before the start, when it's on. */
   save_sync?: SaveSyncOutcome | null;
@@ -165,7 +165,7 @@ export interface ChatStatus {
 export interface ChatPerson {
   id: string;
   name: string;
-  /** Their profile picture, served by Slop; null: the letter. */
+  /** Their profile picture, served by SLAPorSLOP; null: the letter. */
   avatar_url?: string | null;
 }
 
@@ -260,7 +260,7 @@ export type ChatAction =
 
 export const desktop = {
   sessionStatus: () => call<{ signed_in: boolean }>("session_status"),
-  /** Asks Slop for an approval page and tries to open it in the system browser. */
+  /** Asks SLAPorSLOP for an approval page and tries to open it in the system browser. */
   signInStart: () => call<{ approve_url: string; browser_opened: boolean }>("sign_in_start"),
   /** Resolves once the user has approved this device; the app then opens the store. */
   signInFinish: () => call<void>("sign_in_finish"),
@@ -285,7 +285,7 @@ export const desktop = {
   installed: () => call<InstalledApp[]>("installed_apps"),
   /** "Update apps automatically": read, or switch on or off. On by default. */
   autoUpdateSetting: (on?: boolean) => call<boolean>("auto_update_setting", { on: on ?? null }),
-  /** Apps Slop started that are still running; they're updated once they close. */
+  /** Apps SLAPorSLOP started that are still running; they're updated once they close. */
   running: () => call<string[]>("running_apps"),
   install: (slug: string) => call<InstalledApp>("install_app", { slug }),
   uninstall: (slug: string, deleteSaves = false) => call<void>("uninstall_app", { slug, deleteSaves }),
@@ -345,7 +345,7 @@ export const desktop = {
   runInstaller: (slug: string) => call<void>("run_installer", { slug }),
   /** Chat, encrypted in the app (see ChatAction). */
   chat: <T>(action: ChatAction) => call<T>("chat", { action }),
-  /** The in-game overlay (Shift+Tab over a fullscreen Slop game): read, or switch on or off. */
+  /** The in-game overlay (Shift+Tab over a fullscreen SLAPorSLOP game): read, or switch on or off. */
   overlaySetting: (on?: boolean) => call<boolean>("overlay_setting", { on: on ?? null }),
   /** Closes the overlay and returns to the game. */
   overlayHide: () => call<void>("overlay_hide"),

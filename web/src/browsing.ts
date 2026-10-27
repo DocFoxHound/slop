@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // What the page bar (components/BrowserBar.tsx) needs to know: whether Back and Forward lead
-// anywhere inside Slop, the page's address, and the browser's own keyboard shortcuts, which the
+// anywhere inside SLAPorSLOP, the page's address, and the browser's own keyboard shortcuts, which the
 // desktop app's window doesn't have.
 
 /** React Router numbers this tab's history entries from 0 (`window.history.state.idx`). */

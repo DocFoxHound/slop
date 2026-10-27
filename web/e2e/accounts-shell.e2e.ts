@@ -12,7 +12,7 @@ test.describe("the app shell", () => {
     await expect(page.getByText("Page not found.")).toBeVisible();
     await page.getByRole("link", { name: "Back to the store" }).click();
     await expect(page).toHaveURL(`${server.url}/`);
-    await expect(page).toHaveTitle(/Slop/);
+    await expect(page).toHaveTitle(/SLAPorSLOP/);
   });
 
   test("the top tabs mark the section you're in", async ({ page }) => {
@@ -73,7 +73,7 @@ test.describe("the app shell", () => {
     await expect(page.getByRole("button", { name: /^Friends & Chat/ })).toBeHidden();
     await bottom.getByRole("link", { name: "Chat" }).click();
     await expect(page).toHaveURL(/\/chat$/);
-    await expect(page.getByText("Chat is in the Slop app.")).toBeVisible();
+    await expect(page.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
     await expect(bottom.getByRole("link", { name: "Chat" })).toHaveClass(/on/);
     await bottom.getByRole("link", { name: "Account" }).click();
     await expect(page.getByRole("heading", { name: "Your account" })).toBeVisible();
@@ -139,7 +139,7 @@ test.describe("the app shell", () => {
     await expect(page.getByRole("heading", { level: 1 }).first()).toBeVisible();
     await page.locator("main").evaluate((m) => m.scrollTo({ top: 3000 }));
     expect(await page.locator("main").evaluate((m) => m.scrollTop)).toBeGreaterThan(0);
-    await page.getByRole("link", { name: "Slop home" }).click();
+    await page.getByRole("link", { name: "SLAPorSLOP home" }).click();
     await expect(page).toHaveURL(`${server.url}/`);
     await expect.poll(() => page.locator("main").evaluate((m) => m.scrollTop)).toBe(0);
   });
@@ -283,7 +283,7 @@ test.describe("notices about your account", () => {
     await signIn(page, "suspended");
     await page.goto("/bounties");
     const notice = page.locator(".account-notices");
-    await expect(notice).toContainText("Your account is suspended. You can read Slop, download your data and appeal.");
+    await expect(notice).toContainText("Your account is suspended. You can read SLAPorSLOP, download your data and appeal.");
     await expect(notice.getByRole("link", { name: "See why, and appeal" })).toHaveAttribute("href", "/account/moderation#decisions");
     // The link stands out by more than its colour.
     await expect(notice.getByRole("link", { name: "See why, and appeal" })).toHaveCSS("text-decoration-line", "underline");
@@ -293,7 +293,7 @@ test.describe("notices about your account", () => {
     await tweak(page, "/v1/me", (me) => ({ ...me, new_decisions: 2 }));
     await signIn(page, "player");
     await page.goto("/");
-    await expect(page.locator(".account-notices")).toContainText("Slop made 2 decisions about your content.");
+    await expect(page.locator(".account-notices")).toContainText("SLAPorSLOP made 2 decisions about your content.");
     await expect(page.getByRole("link", { name: "See what, why, and how to appeal" })).toHaveAttribute("href", "/account/moderation#decisions");
   });
 
@@ -316,7 +316,7 @@ test.describe("notices about your account", () => {
     await expect(terms).toContainText("The Terms of Service changed on Oct 1, 2026.");
     await expect(terms.getByRole("link", { name: "Review and accept" })).toHaveAttribute("href", "/legal/terms");
     await expect(terms.getByRole("button", { name: "Dismiss" })).toHaveCount(0);
-    await expect(notices.locator(".account-notice").filter({ hasText: "Slop has published its Content Policy." })).toBeVisible();
+    await expect(notices.locator(".account-notice").filter({ hasText: "SLAPorSLOP has published its Content Policy." })).toBeVisible();
 
     await privacy.getByRole("button", { name: "Dismiss" }).click();
     await expect(privacy).toHaveCount(0);
@@ -442,11 +442,11 @@ test.describe("the notifications page", () => {
   });
 
   test("Mark all as read that fails says so", async ({ page }) => {
-    await fake(page, "POST", "/v1/me/notifications/read", { status: 503, body: apiError("unavailable", "Slop is busy: try again in a minute") });
+    await fake(page, "POST", "/v1/me/notifications/read", { status: 503, body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute") });
     await signIn(page, "player");
     await page.goto("/notifications");
     await page.getByRole("button", { name: "Mark all as read" }).click();
-    await expect(page.getByRole("alert")).toHaveText("Slop is busy: try again in a minute");
+    await expect(page.getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
     await expect(page.getByRole("button", { name: "Mark all as read" })).toBeVisible();
   });
 });

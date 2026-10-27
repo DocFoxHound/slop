@@ -99,7 +99,7 @@ test("staff can't act on their own account, and a suspension may wait for a seco
   await page.getByRole("form", { name: "Warn: warn" }).getByRole("button", { name: "Warn" }).click();
   await expect(page.getByRole("alert")).toHaveText("not on your own account");
 
-  // Where Slop requires two people, asking records it and says so.
+  // Where SLAPorSLOP requires two people, asking records it and says so.
   await page.route("**/v1/admin/users/*/decide", (route) =>
     route.fulfill({ status: 202, json: { pending_action: "00000000-0000-7000-8000-000000000003", approvals_still_needed: 1 } }),
   );

@@ -58,7 +58,7 @@ export function RatingLine({ rating, clients }: { rating: CreativeRating; client
   const cls = rating.percent >= 70 ? "good" : rating.percent < 40 ? "bad" : "mixed";
   return (
     <span className="small">
-      <b className={`tile-rating ${cls}`}>{rating.percent}% Not Slop</b>{" "}
+      <b className={`tile-rating ${cls}`}>{rating.percent}% Slaps</b>{" "}
       <span className="muted">
         · {rating.label} · {clients} verified client{clients === 1 ? "" : "s"}
       </span>

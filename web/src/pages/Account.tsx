@@ -273,8 +273,8 @@ function ProfileSection() {
             <span>
               <b>Share my playtime</b>
               <span className="muted small" style={{ display: "block" }}>
-                Games you launch from Slop can count you in their "playing now" numbers, and your playtime makes your votes
-                count more. Slop gets nothing but a launch token and a heartbeat; never what you do in the game.
+                Games you launch from SLAPorSLOP can count you in their "playing now" numbers, and your playtime makes your votes
+                count more. SLAPorSLOP gets nothing but a launch token and a heartbeat; never what you do in the game.
               </span>
             </span>
           </label>
@@ -295,7 +295,7 @@ function ProfileSection() {
           )}
           {me.gpc && (
             <p className="muted small">
-              Your browser sends Global Privacy Control, asking sites not to sell or share your data. Slop never does, and
+              Your browser sends Global Privacy Control, asking sites not to sell or share your data. SLAPorSLOP never does, and
               because of it, recommendations based on your activity stay off unless you turn them on.
             </p>
           )}
@@ -335,7 +335,7 @@ function SecuritySection() {
           Where you're signed in
         </h3>
         <p className="muted small">
-          Browsers, Slop apps and AI agents signed in to your account. Sign out any you don't recognise.
+          Browsers, SLAPorSLOP apps and AI agents signed in to your account. Sign out any you don't recognise.
         </p>
         {sessions.error && <ErrorState error={sessions.error} onRetry={sessions.reload} />}
         {sessionError && (
@@ -349,7 +349,7 @@ function SecuritySection() {
               <div>
                 <b>
                   {s.kind === "desktop"
-                    ? (s.user_agent ?? "Slop app")
+                    ? (s.user_agent ?? "SLAPorSLOP app")
                     : s.kind === "agent"
                       ? (s.user_agent ?? "AI agent")
                       : describeAgent(s.user_agent)}
@@ -401,7 +401,7 @@ function ThisDevice() {
               <span>
                 <b>Notifications for new chat messages</b>
                 <span className="muted small" style={{ display: "block" }}>
-                  Shown when Slop isn't in front. Muted chats never notify.
+                  Shown when SLAPorSLOP isn't in front. Muted chats never notify.
                 </span>
               </span>
             </label>
@@ -426,7 +426,7 @@ function ThisDevice() {
             <span>
               <b>In-game overlay (Shift+Tab)</b>
               <span className="muted small" style={{ display: "block" }}>
-                Chats and friends over a game you started from Slop, when it's fullscreen or maximized. Shift+Tab works as
+                Chats and friends over a game you started from SLAPorSLOP, when it's fullscreen or maximized. Shift+Tab works as
                 usual everywhere else.
               </span>
             </span>

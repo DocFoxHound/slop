@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// A pretend desktop app for the browser tests: the website runs as it does inside the Slop app
+// A pretend desktop app for the browser tests: the website runs as it does inside the SLAPorSLOP app
 // (platform.ts `isDesktop`), with the app's Rust side faked in the page. API requests go to the
 // test server with the page's sign-in cookie; chat is a small in-page stand-in for the app's
 // encrypted chat (crates/slop-client/src/chat), enough to test what the pages do with it.
@@ -29,7 +29,7 @@ export interface FakeLibrary {
     kind?: "archive" | "installer" | "apk";
     build_of?: string | null;
   }>;
-  /** Apps Slop started that are still running. */
+  /** Apps SLAPorSLOP started that are still running. */
   running?: string[];
   /** "Update apps automatically" (on unless said). */
   autoUpdate?: boolean;

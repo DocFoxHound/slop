@@ -32,7 +32,7 @@ export async function pushState(): Promise<PushState> {
   return sub ? "on" : "off";
 }
 
-/** Asks permission, subscribes this browser and tells Slop. */
+/** Asks permission, subscribes this browser and tells SLAPorSLOP. */
 export async function enablePush(): Promise<PushState> {
   let key: string;
   try {

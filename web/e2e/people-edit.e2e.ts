@@ -170,7 +170,7 @@ test("a new creative makes their page: details, services, look, links; then gets
   // Get paid: Stripe's sign-up (the fake finishes at once) and back.
   await page.goto("/people/me");
   const paid = page.locator("section").filter({ has: page.getByRole("heading", { name: "Get paid" }) });
-  await expect(paid.getByText(/Slop's fee is 5% of each payment/)).toBeVisible();
+  await expect(paid.getByText(/SLAPorSLOP's fee is 5% of each payment/)).toBeVisible();
   const refreshed = page.waitForRequest((r) => r.url().endsWith("/v1/me/creative/stripe/refresh"));
   await paid.getByRole("button", { name: "Set up payments with Stripe" }).click();
   await refreshed;
@@ -195,7 +195,7 @@ test("the portfolio panel: waiting vs live, checking a repository, reordering, a
   await remy.goto("/people/me");
   const panel = remy.locator("section").filter({ has: remy.getByRole("heading", { name: "Portfolio" }) });
   await expect(panel.getByText("New portfolio waiting for review (3 works).")).toBeVisible();
-  await expect(remy.getByText("Waiting for Slop's review")).toBeVisible();
+  await expect(remy.getByText("Waiting for SLAPorSLOP's review")).toBeVisible();
   await expect(remy.getByText("Live: everyone can see your page")).toHaveCount(0);
   // How to set one up shows open until a repository is set, then folds away.
   const setup = panel.locator("details.portfolio-setup");
@@ -236,10 +236,10 @@ test("the portfolio panel: waiting vs live, checking a repository, reordering, a
   // A portfolio that couldn't load says so and can be tried again, rather than loading forever.
   let fail = true;
   await remy.route("**/v1/me/creative/portfolio", (route) =>
-    fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy" } } }) : route.continue(),
+    fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy" } } }) : route.continue(),
   );
   await remy.reload();
-  const failed = remy.getByRole("alert").filter({ hasText: "Slop is busy" });
+  const failed = remy.getByRole("alert").filter({ hasText: "SLAPorSLOP is busy" });
   await expect(failed).toBeVisible();
   fail = false;
   await failed.getByRole("button", { name: "Try again" }).click();
@@ -276,14 +276,14 @@ test("the portfolio panel explains the portfolio, how to make one, and hands an 
   await expect(panel.getByRole("button", { name: "Copy the line for your AI assistant" })).toHaveText("Copied");
   const origin = new URL(page.url()).origin;
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-    `Read ${origin}/portfolio.md and help me build my Slop portfolio.`,
+    `Read ${origin}/portfolio.md and help me build my SLAPorSLOP portfolio.`,
   );
 
   // A repository that needs a linked GitHub account offers the button right by the message.
   await page.route("**/v1/me/creative/portfolio/check", (route) =>
     route.fulfill({
       status: 422,
-      json: { error: { code: "invalid", field: "github_account", message: "link the GitHub account that owns this repository (remy) to your Slop account, under Account → Sign-ins" } },
+      json: { error: { code: "invalid", field: "github_account", message: "link the GitHub account that owns this repository (remy) to your SLAPorSLOP account, under Account → Sign-ins" } },
     }),
   );
   await panel.getByRole("textbox", { name: "Repository" }).fill("https://github.com/remy/portfolio");
@@ -306,7 +306,7 @@ test("the portfolio panel explains the portfolio, how to make one, and hands an 
     });
   });
   await panel.getByRole("button", { name: "Check my portfolio now" }).click();
-  await expect(alert).toContainText("Slop found 2 things to fix in your portfolio:");
+  await expect(alert).toContainText("SLAPorSLOP found 2 things to fix in your portfolio:");
   await expect(alert.getByRole("listitem")).toHaveText([/^work 1 "image": tiny\.png is 16×16/, /^work 3 "skill"/]);
 });
 

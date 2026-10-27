@@ -108,7 +108,7 @@ test("the Edit store page's Icon slot: missing, waiting, problem, in the store, 
   await expect(slot.getByText(/players see a square from the middle of your thumbnail/)).toBeVisible();
   await expect(slot.locator(".icon-previews .app-icon").first()).toHaveAttribute("data-kind", "crop");
   await slot.getByRole("button", { name: "Use a crop of one of my pictures as the icon" }).click();
-  await expect(slot.getByText(/It isn't stored on Slop/)).toBeVisible();
+  await expect(slot.getByText(/It isn't stored on SLAPorSLOP/)).toBeVisible();
   await expect(slot.getByRole("combobox", { name: "Picture" })).toHaveValue("0");
   await expect(slot.getByRole("img", { name: `Crop for ${noIcon.slug}'s icon` })).toBeVisible();
   // The thumbnail is 920×430: a 430-pixel square, slid along it.

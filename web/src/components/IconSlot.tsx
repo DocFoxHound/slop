@@ -3,7 +3,7 @@
 // the sizes players see it, whether it's in the store, waiting for review, missing or refused,
 // and how to add one. Like every picture it lives in the maker's repository (`"icon"` in
 // .slop/media.json, crates/slop-api/src/media.rs), so "choosing" an icon means naming it there.
-// The crop helper only makes a file for the maker to download and commit: Slop never stores it.
+// The crop helper only makes a file for the maker to download and commit: SLAPorSLOP never stores it.
 
 import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router";
@@ -146,7 +146,7 @@ function crop(img: HTMLImageElement, at: number, out: number): HTMLCanvasElement
 /**
  * "Use a crop of this picture as the icon", within the repository model: the browser cuts a
  * square from one of the maker's own pictures and offers it as a file to commit. Nothing is sent
- * to Slop.
+ * to SLAPorSLOP.
  */
 function IconCropper({ pictures, slug }: { pictures: Array<{ label: string; picture: RepoPicture }>; slug: string }) {
   const [open, setOpen] = useState(false);
@@ -212,7 +212,7 @@ function IconCropper({ pictures, slug }: { pictures: Array<{ label: string; pict
   return (
     <div className="icon-cropper">
       <p className="muted small">
-        Slop can cut a square from one of your pictures for you to download. It isn't stored on Slop: add the file to
+        SLAPorSLOP can cut a square from one of your pictures for you to download. It isn't stored on SLAPorSLOP: add the file to
         your repository as <code>.slop/icon.png</code>, add the line above, push, and check again.
       </p>
       <label>

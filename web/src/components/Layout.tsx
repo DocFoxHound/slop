@@ -136,10 +136,10 @@ export function Layout() {
       </a>
       {/* In the desktop app the window has no system title bar: drag it by the bar's empty space. */}
       <nav className={`nav ${isDesktop ? "titlebar" : ""}`} aria-label="Main" data-tauri-drag-region>
-        <Link className="logo" to="/" aria-label="Slop home">
+        <Link className="logo" to="/" aria-label="SLAPorSLOP home">
           <img src="/logo.svg" alt="" width={28} height={28} />
           <span>
-            SL<b>O</b>P
+            SLAPorSLOP
           </span>
         </Link>
         {/* The website offers the desktop app; the app itself doesn't need to. */}
@@ -204,7 +204,7 @@ export function Layout() {
   );
 }
 
-/** Shown only to Slop staff. */
+/** Shown only to SLAPorSLOP staff. */
 function AdminTab() {
   const { me } = useSession();
   if (!me?.is_admin) return null;
@@ -308,20 +308,20 @@ function AccountNotices() {
     <div className="account-notices" role="status">
       {me.suspended && (
         <div className="account-notice bad-notice">
-          <b>Your account is suspended.</b> You can read Slop, download your data and appeal.{" "}
+          <b>Your account is suspended.</b> You can read SLAPorSLOP, download your data and appeal.{" "}
           <Link to="/account/moderation#decisions">See why, and appeal</Link>
         </div>
       )}
       {!me.suspended && me.new_decisions > 0 && (
         <div className="account-notice">
-          Slop made {me.new_decisions === 1 ? "a decision" : `${me.new_decisions} decisions`} about your content.{" "}
+          SLAPorSLOP made {me.new_decisions === 1 ? "a decision" : `${me.new_decisions} decisions`} about your content.{" "}
           <Link to="/account/moderation#decisions">See what, why, and how to appeal</Link>
         </div>
       )}
       {legal.map((n) => (
         <div className="account-notice" key={`${n.kind}:${n.version}`}>
           {n.first
-            ? `Slop has published its ${n.title}.`
+            ? `SLAPorSLOP has published its ${n.title}.`
             : n.in_effect
               ? `The ${n.title} changed on ${formatDate(n.effective_at)}.`
               : `The ${n.title} changes on ${formatDate(n.effective_at)}.`}{" "}

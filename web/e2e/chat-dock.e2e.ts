@@ -29,8 +29,8 @@ test.describe("on the website", () => {
     const p = panel(page);
     await expect(p).toBeVisible();
     await expect(p).toBeFocused();
-    await expect(p.getByText("Chat is in the Slop app.")).toBeVisible();
-    await expect(p.getByRole("link", { name: /Get Slop for/ })).toHaveAttribute("href", "/download");
+    await expect(p.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
+    await expect(p.getByRole("link", { name: /Get SLAPorSLOP for/ })).toHaveAttribute("href", "/download");
     await expect(p.getByRole("heading", { name: `Your friends (${friends.friends.length})` })).toBeVisible();
     for (const f of friends.friends) await expect(p.getByRole("link", { name: f.name })).toBeVisible();
     for (const f of friends.incoming) {
@@ -80,7 +80,7 @@ test.describe("on the website", () => {
   test("the chat and friends pages still work on their own; the chat page has no bar", async ({ page }) => {
     await signIn(page, "player");
     await page.goto("/chat");
-    await expect(page.getByText("Chat is in the Slop app.")).toBeVisible();
+    await expect(page.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
     await expect(chatBar(page)).toHaveCount(0);
     await page.goto("/friends");
     await expect(page.getByRole("heading", { name: "🤝 Friends", level: 1 })).toBeVisible();
@@ -91,7 +91,7 @@ test.describe("on the website", () => {
     await signIn(page, "player");
     await page.goto("/");
     await page.locator("main").evaluate((m) => m.scrollTo({ top: m.scrollHeight }));
-    const contact = page.getByRole("navigation", { name: "About Slop" }).getByRole("link", { name: "Contact" });
+    const contact = page.getByRole("navigation", { name: "About SLAPorSLOP" }).getByRole("link", { name: "Contact" });
     const link = (await contact.boundingBox())!;
     const bar = (await chatBar(page).boundingBox())!;
     expect(link.y + link.height).toBeLessThanOrEqual(bar.y);

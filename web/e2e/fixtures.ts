@@ -78,7 +78,7 @@
 //   Unread notifications: most accounts have some.
 //
 // Payments are Stripe, faked (e2e_server/fake_stripe.rs): checkout links lead to its "Fake
-// Stripe Checkout" page, whose Pay button completes the payment, sends Slop the webhooks and
+// Stripe Checkout" page, whose Pay button completes the payment, sends SLAPorSLOP the webhooks and
 // returns to the site (donations open it in a new tab). Stripe sign-up links finish at once.
 import { test as base, type Page } from "@playwright/test";
 import { readFileSync } from "node:fs";

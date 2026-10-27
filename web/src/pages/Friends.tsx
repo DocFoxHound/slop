@@ -68,7 +68,7 @@ export function FriendsPage() {
     <div className="page narrow">
       <h1 className="page-title">🤝 Friends</h1>
       <p className="muted">
-        Friends can message each other in the Slop app, along with teammates and the people you work with on People.{" "}
+        Friends can message each other in the SLAPorSLOP app, along with teammates and the people you work with on People.{" "}
         {!isDesktop && <Link to="/chat">About chat</Link>}
       </p>
       <form className="panel panel-pad form inline-form wide" onSubmit={add}>
@@ -100,7 +100,7 @@ export function FriendsPage() {
               checked={settings.data?.from_anyone ?? false}
               onChange={(e) => void run(() => api.friends.setChatSettings(e.target.checked)).then(settings.reload)}
             />
-            <span>Anyone on Slop (otherwise only friends, teammates and People job partners)</span>
+            <span>Anyone on SLAPorSLOP (otherwise only friends, teammates and People job partners)</span>
           </label>
         )}
       </div>

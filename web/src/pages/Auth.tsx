@@ -16,7 +16,7 @@ import { useSession } from "../session";
 const SIGNIN_ERRORS: Record<string, string> = {
   cancelled: "Sign-in was cancelled.",
   provider: "That sign-in didn't work. Please try again.",
-  closed: "That account was closed, so its sign-in can't be used on Slop again.",
+  closed: "That account was closed, so its sign-in can't be used on SLAPorSLOP again.",
   link_expired: "Linking was started in another session. Start it again from your account page.",
 };
 
@@ -63,8 +63,8 @@ function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null
   return (
     <div className="page narrow">
       <div className="panel panel-pad auth-card">
-        <h1>Sign in to Slop</h1>
-        <p className="muted">Slop never sees or stores a password. You sign in with an account you already have.</p>
+        <h1>Sign in to SLAPorSLOP</h1>
+        <p className="muted">SLAPorSLOP never sees or stores a password. You sign in with an account you already have.</p>
         {error && (
           <p className="form-error" role="alert">
             {SIGNIN_ERRORS[error] ?? "Sign-in failed. Please try again."}
@@ -86,7 +86,7 @@ function WebSignIn({ returnTo, error }: { returnTo: string; error: string | null
         </div>
         <p className="faint small">
           Already have an account with another sign-in? Sign in with that one, then link this one under Account → Sign-ins.
-          Slop never joins accounts just because their emails match.
+          SLAPorSLOP never joins accounts just because their emails match.
         </p>
       </div>
     </div>
@@ -162,7 +162,7 @@ export function Passkeys() {
       <div className="panel panel-pad">
         <p className="muted small">
           Optional: sign in with Face ID, Touch ID, Windows Hello or a security key instead of a provider. Nobody can phish
-          a passkey, and Slop keeps only the public half.
+          a passkey, and SLAPorSLOP keeps only the public half.
         </p>
         {keys.data && keys.data.length > 0 && (
           <ul className="report-list">
@@ -212,7 +212,7 @@ function DesktopSignIn() {
   return (
     <div className="page narrow">
       <div className="panel panel-pad auth-card">
-        <h1>Sign in to Slop</h1>
+        <h1>Sign in to SLAPorSLOP</h1>
         <p className="muted">Continue in the sign-in window.</p>
         <button className="btn" onClick={() => void desktop.showLogin()}>
           Show the sign-in window
@@ -230,7 +230,7 @@ export function DesktopApprove() {
   const { id = "" } = useParams();
   const location = useLocation();
   const { me } = useSession();
-  useDocumentTitle("Approve the Slop app");
+  useDocumentTitle("Approve the SLAPorSLOP app");
   const request = useLoad(() => (me ? api.desktopRequest(id) : Promise.resolve(undefined)), [id, me?.id]);
   const [state, setState] = useState<"ask" | "sending" | "done" | "cancelled">("ask");
   const [error, setError] = useState<string>();
@@ -242,7 +242,7 @@ export function DesktopApprove() {
       <div className="page narrow">
         <div className="panel panel-pad">
           <h1>This sign-in link has expired</h1>
-          <p>Go back to the Slop app and choose Sign in again.</p>
+          <p>Go back to the SLAPorSLOP app and choose Sign in again.</p>
         </div>
       </div>
     );
@@ -273,16 +273,16 @@ export function DesktopApprove() {
         ) : state === "done" ? (
           <>
             <h1>Done</h1>
-            <p>Go back to the Slop app. You can close this tab.</p>
+            <p>Go back to the SLAPorSLOP app. You can close this tab.</p>
           </>
         ) : (
           <>
-            <h1>Sign in to the Slop app?</h1>
+            <h1>Sign in to the SLAPorSLOP app?</h1>
             <p>
               <b>{request.data.device_name}</b> wants to sign in as <b>{me.display_name}</b>.
             </p>
             <p className="notice">
-              Only continue if you just chose <b>Sign in</b> in the Slop app on this computer. If you didn't, someone may be
+              Only continue if you just chose <b>Sign in</b> in the SLAPorSLOP app on this computer. If you didn't, someone may be
               trying to get into your account: choose <b>Don't allow</b>.
             </p>
             {error && (
@@ -365,7 +365,7 @@ export function SignUp() {
   return (
     <div className="page narrow">
       <form className="panel panel-pad auth-card form" onSubmit={(e) => void submit(e)}>
-        <h1>Create your Slop account</h1>
+        <h1>Create your SLAPorSLOP account</h1>
         {info.data.email && <p className="muted">Signed in with GitHub as {info.data.email}.</p>}
 
         <label>
@@ -387,7 +387,7 @@ export function SignUp() {
               </option>
             ))}
           </select>
-          <span className="hint">Slop is available in the US, the EU and the UK. Some rules depend on where you live.</span>
+          <span className="hint">SLAPorSLOP is available in the US, the EU and the UK. Some rules depend on where you live.</span>
           {fieldError("country_code")}
         </label>
 
@@ -452,7 +452,7 @@ export function SignIns() {
       <div className="panel panel-pad">
         {linked && linked !== "already" && (
           <p className="notice" role="status">
-            {PROVIDER_LABEL[linked as SignInProvider] ?? linked} is linked: you can sign in with it, and Slop knows the
+            {PROVIDER_LABEL[linked as SignInProvider] ?? linked} is linked: you can sign in with it, and SLAPorSLOP knows the
             repositories it owns are yours.
           </p>
         )}
@@ -480,7 +480,7 @@ export function SignIns() {
         <p className="muted small">
           Link the accounts you use: to sign in with any of them, and to publish repositories they own (GitHub, GitLab and
           Bitbucket check who owns a repository by the linked account). Linking asks you to sign in to that account, so
-          nobody can link someone else's. If it already has its own Slop account, you can combine the two.
+          nobody can link someone else's. If it already has its own SLAPorSLOP account, you can combine the two.
         </p>
         <div className="row-actions">
           {available.map((p) => (
@@ -499,7 +499,7 @@ export function SignIns() {
   );
 }
 
-/** After linking a sign-in that has its own Slop account: combine the two? */
+/** After linking a sign-in that has its own SLAPorSLOP account: combine the two? */
 export function CombineAccounts() {
   useDocumentTitle("Combine accounts");
   const navigate = useNavigate();
@@ -549,7 +549,7 @@ export function CombineAccounts() {
       <h1 className="page-title">Combine accounts?</h1>
       <div className="panel panel-pad">
         <p>
-          That {PROVIDER_LABEL[p.provider]} sign-in already has its own Slop account, <b>{p.name}</b>. You've just proved it's
+          That {PROVIDER_LABEL[p.provider]} sign-in already has its own SLAPorSLOP account, <b>{p.name}</b>. You've just proved it's
           yours by signing in to it.
         </p>
         <p>Combining moves everything from it into the account you're signed in to now:</p>

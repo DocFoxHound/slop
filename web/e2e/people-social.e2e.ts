@@ -101,7 +101,7 @@ test("friends: a request by link, cancelled, sent again and accepted; removed; d
 
 test("who can message you: anyone, or only people you know; the under-18 view can't change it", async ({ browser }) => {
   const olly = await as(browser, "overdue", "/friends#settings");
-  const anyone = olly.getByRole("checkbox", { name: /Anyone on Slop/ });
+  const anyone = olly.getByRole("checkbox", { name: /Anyone on SLAPorSLOP/ });
   await expect(anyone).not.toBeChecked();
   await anyone.click();
   await expect(anyone).toBeChecked();
@@ -114,7 +114,7 @@ test("who can message you: anyone, or only people you know; the under-18 view ca
 
   const tia = await as(browser, "teen", "/friends");
   await expect(tia.getByText(/In the under-18 view nobody else can message you/)).toBeVisible();
-  await expect(tia.getByRole("checkbox", { name: /Anyone on Slop/ })).toHaveCount(0);
+  await expect(tia.getByRole("checkbox", { name: /Anyone on SLAPorSLOP/ })).toHaveCount(0);
 
   const visitor = await browser.newPage();
   await visitor.goto("/friends");
@@ -279,10 +279,10 @@ test("the seed's teams: the invited player sees the invitation; members see the 
 
 test("chat on the website says it's in the app", async ({ browser }) => {
   const pat = await as(browser, "player", "/chat");
-  await expect(pat.getByText("Chat is in the Slop app.")).toBeVisible();
-  await expect(pat.getByRole("link", { name: /Get Slop for/ })).toHaveAttribute("href", "/download");
+  await expect(pat.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
+  await expect(pat.getByRole("link", { name: /Get SLAPorSLOP for/ })).toHaveAttribute("href", "/download");
   await pat.goto(`/chat/${ids.directChat}`);
-  await expect(pat.getByText("Chat is in the Slop app.")).toBeVisible();
+  await expect(pat.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
   await pat.getByRole("link", { name: "Your friends" }).click();
   await expect(pat).toHaveURL("/friends");
 });

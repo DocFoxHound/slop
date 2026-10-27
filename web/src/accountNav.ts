@@ -34,7 +34,7 @@ export const ACCOUNT_SECTIONS: AccountSection[] = [
   {
     id: "profile",
     label: "Profile",
-    intro: "How you appear on Slop, and what other people can see.",
+    intro: "How you appear on SLAPorSLOP, and what other people can see.",
     group: "Account",
     parts: ["profile", "details", "picture", "people-page", "privacy"],
   },
@@ -55,7 +55,7 @@ export const ACCOUNT_SECTIONS: AccountSection[] = [
   {
     id: "device",
     label: "This computer",
-    intro: "Settings for the Slop app on this computer only.",
+    intro: "Settings for the SLAPorSLOP app on this computer only.",
     group: "Account",
     parts: ["this-device", "device"],
     desktopOnly: true,
@@ -70,7 +70,7 @@ export const ACCOUNT_SECTIONS: AccountSection[] = [
   {
     id: "money",
     label: "Money",
-    intro: "Donations you give and receive, and Slop's fee statements.",
+    intro: "Donations you give and receive, and SLAPorSLOP's fee statements.",
     group: "Publishing & money",
     parts: ["money", "donations", "receiving", "fee-statements"],
   },

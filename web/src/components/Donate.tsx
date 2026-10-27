@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The Donate button, next to Play, Install or Download on an app's store page and in the library
 // (DESIGN §12, PAYMENTS §5–6). It opens the donate form right there: the donor sees what they pay
-// first and largest (PAY-10), what the maker receives, Slop's fee and the processing addition.
+// first and largest (PAY-10), what the maker receives, SLAPorSLOP's fee and the processing addition.
 // Donations give nothing back, and the app is the same for everyone.
 //
 // Green like Play while the viewer can donate; grey once they have ("Donated"), or with their
@@ -10,7 +10,7 @@
 // the app's maker gets the fix in its panel (DonationsFix).
 //
 // On a community build or mod, a one-off donation is shared: the original's maker gets 30% as its
-// own donation, paid first, then the branch's author gets the rest. Two payments, because Slop
+// own donation, paid first, then the branch's author gets the rest. Two payments, because SLAPorSLOP
 // never splits one; after Stripe the donor comes back here (?shared=…&rest=…) for the second.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type KeyboardEvent } from "react";
@@ -388,7 +388,7 @@ function DonateForm({
     try {
       return await api.donations.start(to, body);
     } catch (err) {
-      // After a few unfinished checkouts Slop asks the browser for a quick proof of work
+      // After a few unfinished checkouts SLAPorSLOP asks the browser for a quick proof of work
       // (card testing, PAYMENTS §9). It takes a second or two.
       if (!(err instanceof ApiError) || err.code !== "challenge_required") throw err;
       setChecking(true);
@@ -548,7 +548,7 @@ function DonateForm({
         <p className="donate-total" aria-live="polite">
           You pay <b>{amount(q.total, d.currency)}</b>
           {monthly && " every month"} · {d.maker} receives {amount(q.maker_receives, d.currency)} ·{" "}
-          {amount(q.slop_fee, d.currency)} Slop fee ·{" "}
+          {amount(q.slop_fee, d.currency)} SLAPorSLOP fee ·{" "}
           {q.donor_covers_fees
             ? `${amount(q.processing, d.currency)} card processing`
             : `about ${amount(q.processing, d.currency)} card processing comes out of what they receive`}

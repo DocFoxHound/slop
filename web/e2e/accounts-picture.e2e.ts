@@ -10,7 +10,7 @@ import { expect, ids, server, signIn, test } from "./fixtures";
 
 const avatarUrl = new RegExp(`^${server.url}/v1/users/${ids.pictured}/avatar\\?v=[0-9a-f]+$`);
 
-/** Slop's copy loaded: a 128-pixel square. */
+/** SLAPorSLOP's copy loaded: a 128-pixel square. */
 async function loaded(img: Locator) {
   await expect(img).toHaveAttribute("src", avatarUrl);
   await expect.poll(() => img.evaluate((i: HTMLImageElement) => (i.complete ? i.naturalWidth : 0))).toBe(128);
@@ -22,7 +22,7 @@ test.afterEach(async () => {
   await call("pictured", "PUT", "/v1/me/avatar", { provider: null });
 });
 
-test("choosing the GitHub picture shows Slop's copy beside her name, and the letter comes back", async ({ page }) => {
+test("choosing the GitHub picture shows SLAPorSLOP's copy beside her name, and the letter comes back", async ({ page }) => {
   await signIn(page, "pictured");
   await page.goto("/account#picture");
   const section = page.locator("#picture");
@@ -31,7 +31,7 @@ test("choosing the GitHub picture shows Slop's copy beside her name, and the let
   const github = section.getByRole("radio", { name: /Your GitHub picture/ });
   await expect(letter).toBeChecked();
   await expect(section.getByText("pia-gh")).toBeVisible();
-  await expect(section.getByText("Kept up to date: Slop checks it every day.")).toBeVisible();
+  await expect(section.getByText("Kept up to date: SLAPorSLOP checks it every day.")).toBeVisible();
   await expect(section.locator(".picture-current")).toContainText("P");
   await expect(menu(page).locator("img")).toHaveCount(0);
 
@@ -77,7 +77,7 @@ test("a sign-in that shares its picture only at sign-in offers Refresh, and a re
   const section = page.locator("#picture");
   await expect(section.getByRole("radio", { name: /Your Discord picture/ })).toBeDisabled();
   await expect(
-    section.getByText("Slop gets this picture when you sign in with Discord: press Refresh picture to fetch it now (a quick trip to Discord and back)."),
+    section.getByText("SLAPorSLOP gets this picture when you sign in with Discord: press Refresh picture to fetch it now (a quick trip to Discord and back)."),
   ).toBeVisible();
   const discord = section.locator(".picture-choice").filter({ hasText: "Your Discord picture" });
   await expect(discord.getByRole("link", { name: "Refresh picture" })).toHaveAttribute(
@@ -85,14 +85,14 @@ test("a sign-in that shares its picture only at sign-in offers Refresh, and a re
     "/v1/auth/discord/link?return_to=%2Faccount%3Fpicture%3Drefresh%23picture",
   );
   await expect(section.getByRole("radio", { name: /Your Microsoft picture/ })).toBeDisabled();
-  await expect(section.getByText("Microsoft doesn't share a picture with Slop.")).toBeVisible();
+  await expect(section.getByText("Microsoft doesn't share a picture with SLAPorSLOP.")).toBeVisible();
 
   // Back from the refresh, through the link flow.
   await page.goto("/account?picture=refresh&linked=already#picture");
-  await expect(section.getByRole("status")).toHaveText("Signed in again: Slop has your newest picture from there.");
+  await expect(section.getByRole("status")).toHaveText("Signed in again: SLAPorSLOP has your newest picture from there.");
   await expect(page.getByText("That account was already linked.")).toHaveCount(0);
 
-  // Slop couldn't read it: the choice stays as it was.
+  // SLAPorSLOP couldn't read it: the choice stays as it was.
   await fake(page, "PUT", "/v1/me/avatar", {
     status: 422,
     body: apiError("invalid", "couldn't get your picture from GitHub: try again later", "provider"),
@@ -111,13 +111,13 @@ test("Refresh picture for a sign-in with no picture yet goes to it and straight 
   const google = section.getByRole("radio", { name: /Your Google picture/ });
   await expect(google).toBeDisabled();
   await expect(
-    section.getByText("Slop gets this picture when you sign in with Google: press Refresh picture to fetch it now (a quick trip to Google and back)."),
+    section.getByText("SLAPorSLOP gets this picture when you sign in with Google: press Refresh picture to fetch it now (a quick trip to Google and back)."),
   ).toBeVisible();
   const choice = section.locator(".picture-choice").filter({ hasText: "Your Google picture" });
   await choice.getByRole("link", { name: "Refresh picture" }).click();
   // Through the link flow and back to the account page, signed in as before.
   await expect(page).toHaveURL(new RegExp(`^${server.url}/account\\?picture=refresh&linked=already#picture$`));
-  await expect(section.getByRole("status")).toHaveText("Signed in again: Slop has your newest picture from there.");
+  await expect(section.getByRole("status")).toHaveText("Signed in again: SLAPorSLOP has your newest picture from there.");
   await expect(page.getByText("Page not found")).toHaveCount(0);
   await expect(google).toBeEnabled();
   await expect(section.getByText("Updated each time you sign in with Google.")).toBeVisible();

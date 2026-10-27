@@ -31,7 +31,7 @@ describe("UpdateNotice", () => {
     await act(async () => {});
     expect(screen.queryByRole("status")).toBeNull();
     await act(async () => emit({ version: "0.1.40", current_version: "0.1.33", notes: null }));
-    expect(screen.getByText(/Slop 0.1.40 is available/)).toBeTruthy();
+    expect(screen.getByText(/SLAPorSLOP 0.1.40 is available/)).toBeTruthy();
     expect(desktop.installUpdate).not.toHaveBeenCalled();
   });
 

@@ -78,8 +78,8 @@ export function Transparency() {
     <div className="page narrow doc">
       <h1>Transparency report</h1>
       <p>
-        What authorities asked Slop for, and how Slop handled reports about content, each year. Counts only: never who.
-        Slop can only give authorities what it has (account details, the metadata it keeps, reported messages): chat is
+        What authorities asked SLAPorSLOP for, and how SLAPorSLOP handled reports about content, each year. Counts only: never who.
+        SLAPorSLOP can only give authorities what it has (account details, the metadata it keeps, reported messages): chat is
         end-to-end encrypted, and we tell people about requests unless a law or the order forbids it.
       </p>
       <label>
@@ -112,7 +112,7 @@ export function Transparency() {
           <Table caption="Decisions by action" rows={report.data.decisions.by_action} />
           <p>
             Decisions made by automated tools alone: {report.data.decisions.automated}. A person makes every decision on
-            Slop.
+            SLAPorSLOP.
           </p>
           <Table caption="Appeals by outcome" rows={report.data.appeals.by_outcome} />
         </>
