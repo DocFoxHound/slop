@@ -2,7 +2,7 @@
 // A creative's own page editor (DESIGN §15.1): profile, look, packages, portfolio and "Get paid".
 // Three steps for a new creative: describe yourself, point SLAPorSLOP at your portfolio, set up Stripe.
 
-import { useEffect, useState, type FormEvent } from "react";
+import { useEffect, useMemo, useState, type FormEvent } from "react";
 import { Link, useNavigate, useSearchParams } from "react-router";
 
 import {
@@ -20,6 +20,7 @@ import {
 } from "../api";
 import { ACCENTS, AI_USE, accentStyle } from "../components/People";
 import { DesignPreview, portfolioWork } from "../components/PeopleDesign";
+import { HandoffError, HandoffNotice, HandoffWaiting, useHandoff } from "../components/Handoff";
 import { PasskeyNotice } from "../components/PasskeyNotice";
 import { PageStatusDetails, type PeopleSaved } from "../components/PeopleStatus";
 import { useTermsGate } from "../components/Terms";
@@ -30,6 +31,15 @@ import { siteOrigin } from "../browsing";
 import { isDesktop, openExternal } from "../platform";
 import { LinkSignIn } from "../components/LinkSignIn";
 import { useSession } from "../session";
+import {
+  PEOPLE_LABELS,
+  forgetHandoff,
+  forgetPortfolioRepo,
+  keepPortfolioRepo,
+  keptPortfolioRepo,
+  peopleFill,
+  type PeopleFill,
+} from "../handoff";
 
 /** The site the desktop app was built for (vite.config.ts, from SLOP_API_URL). */
 declare const __SLOP_SITE_URL__: string;
@@ -78,10 +88,24 @@ export function PeopleEdit() {
   const skills = useLoad(() => api.people.skills(), []);
   const [profile, setProfile] = useState<MyProfile | null>();
   const current = profile === undefined ? mine.data : profile;
+  // A page prepared by the person's AI assistant (handoff.ts): kept through signing in, the 18+
+  // question and the People Terms, and filled in once the editor shows.
+  const { link: handoff, n } = useHandoff("people");
+  const [clearedLink, setClearedLink] = useState<number>();
+  const fill = useMemo(
+    () =>
+      handoff && "fields" in handoff && skills.data && clearedLink !== n
+        ? peopleFill(handoff.fields, new Set(skills.data.map((k) => k.slug)))
+        : undefined,
+    [handoff, skills.data, clearedLink, n],
+  );
+  // Its portfolio repository, kept from when the page was created.
+  const [keptRepo] = useState(() => keptPortfolioRepo());
 
   if (me === null) {
     return (
       <div className="page narrow">
+        <HandoffWaiting link={handoff} />
         <div className="empty-state">
           <p>Sign in to offer your services on People.</p>
           <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent("/people/me")}`}>
@@ -100,6 +124,30 @@ export function PeopleEdit() {
         <Link to="/people">People</Link> › Your page
       </div>
       <h1>{current ? "Your People page" : "Offer your services"}</h1>
+      {handoff && "error" in handoff && (
+        <HandoffError
+          error={handoff.error}
+          then={current ? "Your saved page is shown as it is." : "The form is empty: fill it in yourself, or ask your assistant for a new link."}
+        />
+      )}
+      {fill && (
+        <HandoffNotice
+          fill={fill}
+          labels={PEOPLE_LABELS}
+          check={current ? "what it changed from your saved page, your services and their prices" : "your page address, your services and their prices"}
+          button={current ? "Save" : "Create my page"}
+          onClear={() => setClearedLink(n)}
+          clearLabel={current ? "Put back my saved page" : "Clear the form"}
+        >
+          <p>
+            Whether you offer services as a business is yours to answer (it's your legal status), so it {current ? "stays as you saved it" : "isn't filled in"}.
+            {!me?.adult_confirmed && " Saying you're 18 or older is yours to tick, too."}
+          </p>
+          {!current && fill.values.portfolio_repo && (
+            <p>Your portfolio repository is filled in under Portfolio once your page is created.</p>
+          )}
+        </HandoffNotice>
+      )}
       {current && (
         <ol className="step-track">
           <li className="done">Describe yourself</li>
@@ -121,8 +169,23 @@ export function PeopleEdit() {
       )}
       {!current && <ShopWindow />}
       {current && <GetPaid profile={current} onChange={(status) => setProfile({ ...current, stripe_status: status })} />}
-      {current && <PortfolioPanel profile={current} skills={skills.data} />}
-      <ProfileForm initial={current} skills={skills.data} adultConfirmed={Boolean(me?.adult_confirmed)} onSaved={setProfile} />
+      {current && (
+        <PortfolioPanel
+          key={`portfolio-${n}${fill ? "-filled" : ""}`}
+          profile={current}
+          skills={skills.data}
+          // A page made just now waits for the repository on its next visit (ProfileForm keeps it).
+          suggested={(mine.data ? fill?.values.portfolio_repo : undefined) ?? keptRepo}
+        />
+      )}
+      <ProfileForm
+        key={`profile-${n}${fill ? "-filled" : ""}`}
+        initial={current}
+        skills={skills.data}
+        adultConfirmed={Boolean(me?.adult_confirmed)}
+        fill={fill}
+        onSaved={setProfile}
+      />
     </div>
   );
 }
@@ -275,18 +338,22 @@ function Problems({ text }: { text: string }) {
   );
 }
 
-function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill[] }) {
+function PortfolioPanel({ profile, skills, suggested }: { profile: MyProfile; skills: Skill[]; suggested?: string }) {
   const loaded = useLoad(() => api.people.portfolio(), []);
   // Which GitHub account the repository has to belong to, or a button to link one.
   const identities = useLoad(() => api.identities().catch(() => null), []);
   const [o, setO] = useState<PortfolioOverview>();
-  const [repo, setRepo] = useState("");
+  // The person's AI assistant may have named the repository (handoff.ts): filled in, not checked.
+  const [repo, setRepo] = useState(suggested ?? "");
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<ApiError | string>();
   const ov = o ?? loaded.data;
   useEffect(() => {
-    if (loaded.data?.repo_url) setRepo(loaded.data.repo_url);
+    if (loaded.data?.repo_url && !suggested) setRepo(loaded.data.repo_url);
   }, [loaded.data]);
+  useEffect(() => {
+    if (suggested) forgetPortfolioRepo();
+  }, [suggested]);
   if (!ov) return loaded.error ? <ErrorState error={loaded.error} onRetry={loaded.reload} /> : <Loading />;
   const check = async (e: FormEvent) => {
     e.preventDefault();
@@ -391,6 +458,9 @@ function PortfolioPanel({ profile, skills }: { profile: MyProfile; skills: Skill
         <label>
           Repository
           <input value={repo} onChange={(e) => setRepo(e.target.value)} placeholder="https://github.com/you/portfolio" required />
+          {suggested && repo === suggested && (
+            <span className="hint">Filled in by your AI assistant: check it's yours, then choose Check my portfolio now.</span>
+          )}
         </label>
         <div className="row-actions">
           <button className="btn slime" disabled={busy}>
@@ -501,15 +571,24 @@ function ProfileForm({
   initial,
   skills,
   adultConfirmed,
+  fill,
   onSaved,
 }: {
   initial: MyProfile | null;
   skills: Skill[];
   adultConfirmed: boolean;
+  /** What the person's AI assistant filled in, over the saved page if there is one. */
+  fill?: PeopleFill;
   onSaved: (p: MyProfile) => void;
 }) {
-  const [p, setP] = useState<ProfileInput>(() => (initial ? toInput(initial) : EMPTY));
+  const [p, setP] = useState<ProfileInput>(() => withFill(initial ? toInput(initial) : EMPTY, fill));
+  // Business or not is never answered for them: a new page from a fill starts with neither.
+  const [traderChosen, setTraderChosen] = useState(!(fill && !initial));
   const [adult, setAdult] = useState(false);
+  // In the form now: a reload shows the page as saved, not the link's fill over the person's changes.
+  useEffect(() => {
+    if (fill) forgetHandoff("people");
+  }, [fill]);
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const navigate = useNavigate();
@@ -521,6 +600,8 @@ function ProfileForm({
     setError(undefined);
     try {
       const out = await terms.guard(() => api.people.save({ ...p, confirm_adult: adult }));
+      // The Portfolio panel shows once the page exists: the repository waits for it there.
+      if (!initial && fill?.values.portfolio_repo) keepPortfolioRepo(fill.values.portfolio_repo);
       onSaved(out);
       // Saved: to the page itself, which says so and where it stands (draft, waiting for review…).
       const saved: PeopleSaved = initial ? "saved" : "created";
@@ -612,14 +693,38 @@ function ProfileForm({
       </fieldset>
       <fieldset className="choice-list">
         <legend>Are you offering services as a business?</legend>
+        {fill && fill.traderSuggested !== undefined && (!initial || fill.traderSuggested !== p.trader) && (
+          <p className="hint handoff-suggestion">
+            Your AI assistant suggested “{fill.traderSuggested ? "Yes, as a business" : "No, as a private individual"}”, but only you
+            can answer this{initial ? ": your saved answer is kept." : "."}
+          </p>
+        )}
         <label className="check">
-          <input type="radio" checked={p.trader} onChange={() => set("trader", true)} />
+          <input
+            type="radio"
+            name="trader"
+            required
+            checked={traderChosen && p.trader}
+            onChange={() => {
+              setTraderChosen(true);
+              set("trader", true);
+            }}
+          />
           <span>
             <b>Yes, as a business</b> <span className="hint">Consumer law applies when you work for consumers (for example the EU/UK 14-day right to cancel).</span>
           </span>
         </label>
         <label className="check">
-          <input type="radio" checked={!p.trader} onChange={() => set("trader", false)} />
+          <input
+            type="radio"
+            name="trader"
+            required
+            checked={traderChosen && !p.trader}
+            onChange={() => {
+              setTraderChosen(true);
+              set("trader", false);
+            }}
+          />
           <span>
             <b>No, as a private individual</b> <span className="hint">Shown to clients on your page and every offer.</span>
           </span>
@@ -737,6 +842,17 @@ function ProfileForm({
       </p>
     </form>
   );
+}
+
+/** The form's values with an AI assistant's fill over them (the portfolio repository goes elsewhere). */
+function withFill(base: ProfileInput, fill?: PeopleFill): ProfileInput {
+  if (!fill) return base;
+  const { portfolio_repo: _repo, ...values } = fill.values;
+  const out = { ...base, ...values };
+  // A studio's size shows as 2 until changed (as when "A studio of" is picked by hand).
+  if (out.kind === "studio" && out.team_size == null) out.team_size = 2;
+  if (out.kind === "individual") out.team_size = null;
+  return out;
 }
 
 function ServicesEditor({ services, skills, onChange }: { services: Service[]; skills: Skill[]; onChange: (s: Service[]) => void }) {

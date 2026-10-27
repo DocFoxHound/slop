@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Makers' side: their apps with where each one is on its way into the store, and the draft editor.
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
 
 import {
@@ -26,6 +26,7 @@ import {
 } from "../api";
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { DonationsPanel } from "../components/DonationsManage";
+import { HandoffError, HandoffNotice, HandoffWaiting, useHandoff } from "../components/Handoff";
 import { LicensePicker } from "../components/LicensePicker";
 import { LinkSignIn } from "../components/LinkSignIn";
 import { TagPicker } from "../components/TagPicker";
@@ -38,10 +39,12 @@ import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { PasskeyNotice } from "../components/PasskeyNotice";
 import { useTermsGate } from "../components/Terms";
+import { APP_LABELS, appFill, forgetHandoff, type Fill, type HandoffLink } from "../handoff";
 
-function SignInFirst({ what }: { what: string }) {
+function SignInFirst({ what, handoff = null }: { what: string; handoff?: HandoffLink | null }) {
   return (
     <div className="page narrow">
+      <HandoffWaiting link={handoff} />
       <div className="panel panel-pad">
         <h1>Publish on SLAPorSLOP</h1>
         <p>
@@ -234,18 +237,51 @@ export function AppEditor() {
   const existing = useLoad(() => (slug && me ? api.app(slug) : Promise.resolve(undefined)), [slug, me?.id]);
   const categories = useLoad(() => api.categories(), []);
   useDocumentTitle(slug ? "Edit app" : "New app");
+  // A new app's store page prepared by the person's AI assistant (handoff.ts): kept through
+  // signing in, and filled in once the form shows.
+  const { link: handoff, n } = useHandoff("app", !slug);
+  const [clearedLink, setClearedLink] = useState<number>();
+  const fill = useMemo(
+    () =>
+      handoff && "fields" in handoff && categories.data && clearedLink !== n
+        ? appFill(handoff.fields, new Set(categories.data.flatMap((c) => c.tags.map((t) => t.slug))))
+        : undefined,
+    [handoff, categories.data, clearedLink, n],
+  );
 
   if (me === undefined) return <Loading />;
-  if (!me) return <SignInFirst what={slug ? `/publish/${slug}` : "/publish/new"} />;
+  if (!me) return <SignInFirst what={slug ? `/publish/${slug}` : "/publish/new"} handoff={handoff} />;
   if (existing.error) return <div className="page"><ErrorState error={existing.error} /></div>;
   if (slug && !existing.data) return <Loading />;
   if (existing.data && !existing.data.is_mine) return <div className="page"><ErrorState error={new ApiError(404, "not_found", "")} /></div>;
   if (!categories.data) return <Loading />;
 
-  return <EditorForm key={slug ?? "new"} existing={existing.data} categories={categories.data} />;
+  return (
+    <EditorForm
+      key={slug ?? `new-${n}${fill ? "-filled" : ""}`}
+      existing={existing.data}
+      categories={categories.data}
+      fill={fill}
+      linkError={handoff && "error" in handoff ? handoff.error : undefined}
+      onClearFill={() => setClearedLink(n)}
+    />
+  );
 }
 
-function EditorForm({ existing, categories }: { existing?: AppDetail; categories: Category[] }) {
+function EditorForm({
+  existing,
+  categories,
+  fill,
+  linkError,
+  onClearFill,
+}: {
+  existing?: AppDetail;
+  categories: Category[];
+  /** What the person's AI assistant filled in (a new app only). */
+  fill?: Fill<NewApp>;
+  linkError?: string;
+  onClearFill?: () => void;
+}) {
   const navigate = useNavigate();
   const [form, setForm] = useState<NewApp>(
     existing
@@ -269,14 +305,22 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
           accessibility: existing.accessibility,
           bug_reports: existing.bug_reports,
         }
-      : EMPTY,
+      : {
+          ...EMPTY,
+          ...fill?.values,
+          slug: fill?.values.slug ?? slugify(fill?.values.title ?? ""),
+        },
   );
+  // In the form now: a reload shows it empty again, not the link's fill over the person's changes.
+  useEffect(() => {
+    if (fill) forgetHandoff("app");
+  }, [fill]);
   // Once players have the app, moving it to another repository is reviewed first (Manage).
   const repoLocked = useLoad(
     () => (existing ? api.manage(existing.slug).then((m) => m.repo_locked) : Promise.resolve(false)),
     [existing?.slug],
   ).data;
-  const [slugTouched, setSlugTouched] = useState(Boolean(existing));
+  const [slugTouched, setSlugTouched] = useState(Boolean(existing) || Boolean(fill?.values.slug));
   // A new app's address is checked as it's typed, with a free one offered when it's taken.
   const [address, setAddress] = useState<{ slug: string; available: boolean; suggestion: string | null }>();
   useEffect(() => {
@@ -303,7 +347,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
   // A mod's own page has no mods folder.
   const isMod = existing?.branch?.kind === "addon";
-  const [hostsText, setHostsText] = useState((existing?.online_hosts ?? []).join("\n"));
+  const [hostsText, setHostsText] = useState((existing?.online_hosts ?? fill?.values.online_hosts ?? []).join("\n"));
   const hosts = () => parseHosts(form.online ?? [], hostsText);
   // A private app from a private repository outside GitHub: a read-only token (repo_tokens.rs).
   const [token, setToken] = useState<RepoTokenInput>({ kind: "gitea", token: "" });
@@ -384,6 +428,19 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
         <Link to="/publish">Your apps</Link> › {existing ? existing.title : "New app"}
       </div>
       <h1 className="page-title">{existing ? "Edit store page" : "New app"}</h1>
+      {linkError && (
+        <HandoffError error={linkError} then="The form is empty: fill it in yourself, or ask your assistant for a new link." />
+      )}
+      {fill && onClearFill && (
+        <HandoffNotice
+          fill={fill}
+          labels={APP_LABELS}
+          check="the age rating, content labels, licence and source repository"
+          button="Create draft"
+          onClear={onClearFill}
+          clearLabel="Clear the form"
+        />
+      )}
       {/* Getting paid is part of the page (owner decision 2026-10-25): its state and every step
           to set it up, right here. */}
       {existing && !existing.private && (

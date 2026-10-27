@@ -7,6 +7,7 @@ import { useLocation } from "react-router";
 
 import { Loading } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
+import { fragmentId } from "../browsing";
 import { renderDocument } from "../markdown";
 import { openExternal } from "../platform";
 
@@ -26,7 +27,8 @@ export function Guide() {
   // Jump to the section in the URL once the document is in place.
   useEffect(() => {
     if (!doc.data || !location.hash) return;
-    document.getElementById(decodeURIComponent(location.hash.slice(1)))?.scrollIntoView();
+    const id = fragmentId(location.hash);
+    if (id) document.getElementById(id)?.scrollIntoView();
   }, [doc.data, location.hash]);
 
   const onClick = (e: MouseEvent) => {
