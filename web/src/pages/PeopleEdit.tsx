@@ -29,6 +29,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { siteOrigin } from "../browsing";
 import { isDesktop, openExternal } from "../platform";
 import { LinkSignIn } from "../components/LinkSignIn";
+import { CopyLine, siteAddress, startPrompt } from "../components/CopyLine";
 import { useSession } from "../session";
 
 /** The site the desktop app was built for (vite.config.ts, from SLOP_API_URL). */
@@ -146,6 +147,10 @@ function ShopWindow() {
           <b>Get paid</b>: connect Stripe, so makers can hire you.
         </li>
       </ol>
+      <p className="small">
+        <b>Using an AI assistant?</b> It can do most of this with you. Paste this in:
+      </p>
+      <CopyLine text={startPrompt(siteAddress(), "people")} label="Copy the line for your AI assistant" />
     </section>
   );
 }
@@ -238,25 +243,6 @@ export const PORTFOLIO_TEMPLATES = "https://github.com/DocFoxHound/slop/tree/mai
 /** The line to hand an AI assistant: the guide, on this site (public/portfolio.md). */
 export function portfolioPrompt(origin: string): string {
   return `Read ${origin}/portfolio.md and help me build my SLAPorSLOP portfolio.`;
-}
-
-/** A line to copy, with its own Copy button. */
-function CopyLine({ text, label }: { text: string; label: string }) {
-  const [copied, setCopied] = useState(false);
-  const copy = () => {
-    void navigator.clipboard?.writeText(text).then(() => {
-      setCopied(true);
-      setTimeout(() => setCopied(false), 2000);
-    });
-  };
-  return (
-    <div className="ai-prompt">
-      <code>{text}</code>
-      <button type="button" className="btn small" onClick={copy} aria-label={label}>
-        {copied ? "Copied" : "Copy"}
-      </button>
-    </div>
-  );
 }
 
 /** A problem from reading the portfolio: one line each (portfolio.rs lists them all). */

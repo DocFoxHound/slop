@@ -44,6 +44,7 @@ pub mod maker_keys;
 pub mod manage;
 pub mod media;
 pub mod moderation;
+pub mod next_steps;
 pub mod notify;
 pub mod offers;
 pub mod ops;
@@ -240,6 +241,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(updates::routes())
         .merge(maker_keys::routes())
         .merge(manage::routes())
+        .merge(next_steps::routes())
         .merge(media::routes())
         .merge(desktop_updates::routes())
         .merge(admin_web::routes())

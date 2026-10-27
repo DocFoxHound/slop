@@ -3,6 +3,12 @@
 > A store for open-source apps and games made with AI. Free to download, builds checked before
 > they're offered, rated by people who play them.
 
+## Start here
+
+- [Getting someone onto SLAPorSLOP](/start.md): for an AI assistant helping a person publish an app
+  or offer their services on People, including people who have never used Git or GitHub: what to
+  ask, what only the person can do, and how to make their first repository.
+
 ## Publishing
 
 - [How to publish on SLAPorSLOP](/publishing.md): requirements, store pages, releases, Slop Build

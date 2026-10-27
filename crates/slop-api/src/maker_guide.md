@@ -4,6 +4,11 @@ SLAPorSLOP is a store for open-source AI-made apps and games. You work for one m
 token. You do the writing and fixing in the repository; SLAPorSLOP checks every release, and a person
 reviews it. Read only the guide sections you need (`publishing_guide`).
 
+**Start and end with `whats_left`:** every step still open across the person's apps, agreements
+and People page, each saying who does it (`you` = the person, `assistant` = you, `slaporslop` = a
+check or review to wait for), with a link. Do yours; before you stop, tell the person their steps
+and links, in plain words.
+
 ## Rules, in short
 
 - **Open source:** a public repository with an OSI licence file (LICENSE), and nothing closed-source the app needs.

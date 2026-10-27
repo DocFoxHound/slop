@@ -28,6 +28,7 @@ import { AppIcon, appIconProps } from "../components/AppIcon";
 import { DonationsPanel } from "../components/DonationsManage";
 import { LicensePicker } from "../components/LicensePicker";
 import { LinkSignIn } from "../components/LinkSignIn";
+import { CopyLine, siteAddress, startPrompt } from "../components/CopyLine";
 import { TagPicker } from "../components/TagPicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
@@ -56,6 +57,10 @@ function SignInFirst({ what }: { what: string }) {
             How to publish
           </Link>
         </p>
+        <p className="small">
+          <b>Using an AI assistant?</b> It can get your project ready and walk you through the rest. Paste this in:
+        </p>
+        <CopyLine text={startPrompt(siteAddress(), "publish")} label="Copy the line for your AI assistant" />
       </div>
     </div>
   );

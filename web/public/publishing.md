@@ -1693,7 +1693,9 @@ if not.
    them to remove it on Account → AI agents and make a new one. Then read `maker_guide`. Without
    a token, do steps 1–6 and 10 and hand the rest to the owner.
 1. Confirm the project is open source in a Git repository, and that it has a `LICENSE` file with an
-   OSI-approved licence. If not, ask the owner which licence to use; don't choose one for them.
+   OSI-approved licence. If not, ask the owner which licence to use; don't choose one for them. If
+   the owner has no repository or GitHub account yet (many people who build with AI don't),
+   follow [Starting from nothing](/start.md#starting-from-nothing-no-github-yet) first.
 2. Make sure the project builds to a runnable program for each target platform, from a clean
    checkout, with a single command. Note the program's path relative to the build folder.
 3. If the project talks to servers or other players, or loads mods, saves or levels: follow

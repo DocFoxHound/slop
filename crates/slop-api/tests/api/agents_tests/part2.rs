@@ -3748,3 +3748,177 @@ async fn agents_decline_job_requests_with_or_without_a_note(db: PgPool) {
     assert!(!failed, "{text}");
     assert_eq!(parsed(&text)["status"], "declined");
 }
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn whats_left_says_who_does_each_step_with_a_link(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, maker) = app.user("Nia Newcomer", "US").await;
+    let add_app = |slug: &'static str| {
+        let app = &app;
+        async move {
+            let id = Uuid::now_v7();
+            sqlx::query(
+                "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx, platforms)
+                 values ($1, $2, initcap($2), 'An app', 'game', 'released', $3, 'https://github.com/octo/' || $2, 'MIT', '{windows}')",
+            )
+            .bind(id)
+            .bind(slug)
+            .bind(maker_id)
+            .execute(&app.db)
+            .await
+            .unwrap();
+            id
+        }
+    };
+    let release = |app_id: Uuid, status: &'static str, reason: Option<&'static str>| {
+        let app = &app;
+        async move {
+            sqlx::query(sqlx::AssertSqlSafe(format!(
+                "insert into releases (id, app_id, version, commit_sha, status, status_reason, submitted_by)
+                 values ($1, $2, '1.0.0', repeat('a', 40), '{status}', $3, $4)"
+            )))
+            .bind(Uuid::now_v7())
+            .bind(app_id)
+            .bind(reason)
+            .bind(maker_id)
+            .execute(&app.db)
+            .await
+            .unwrap();
+        }
+    };
+    add_app("fresh").await;
+    let checking = add_app("checking").await;
+    release(checking, "fetching", None).await;
+    let broken = add_app("broken").await;
+    release(
+        broken,
+        "rejected",
+        Some("the program wasn't in the archive"),
+    )
+    .await;
+    let frozen = add_app("frozen").await;
+    release(frozen, "awaiting_review", None).await;
+    sqlx::query(
+        "update apps set frozen_at = now(), frozen_reason = 'the repository is private' where id = $1",
+    )
+    .bind(frozen)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    // A People page without a portfolio yet.
+    sqlx::query(
+        "insert into creatives (user_id, handle, name, kind, skills, ai_use, trader, taking_work)
+         values ($1, 'nia', 'Nia', 'individual', '{pixel-art}', 'none', false, true)",
+    )
+    .bind(maker_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    // A token for the broken app only, made while the Publisher Agreement was accepted.
+    let (agent, _) = maker_token(
+        &app,
+        &maker,
+        json!({ "name": "Claude", "scope": "publish", "apps": ["broken"] }),
+    )
+    .await;
+    sqlx::query("delete from legal_acceptances where user_id = $1 and kind = 'publisher'")
+        .bind(maker_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    let res = app
+        .send(req(Method::GET, "/v1/me/next-steps").cookie(&maker))
+        .await;
+    assert_eq!(res.status(), StatusCode::OK);
+    let all = body_json(res).await;
+    let steps: Vec<(String, String, bool)> = all["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|s| {
+            (
+                s["who"].as_str().unwrap().to_string(),
+                s["app"].as_str().unwrap_or("").to_string(),
+                s["optional"].as_bool().unwrap(),
+            )
+        })
+        .collect();
+    let step = |who: &str, app: &str, optional: bool| (who.to_string(), app.to_string(), optional);
+    assert_eq!(
+        steps,
+        [
+            // The person's first: the agreement, the frozen repository, the portfolio.
+            step("you", "", false),
+            step("you", "frozen", false),
+            step("you", "", false),
+            // The assistant's (apps changed most lately first): fixing the rejected release, and
+            // a first release.
+            step("assistant", "broken", false),
+            step("assistant", "fresh", false),
+            // Waiting on SLAPorSLOP.
+            step("slaporslop", "frozen", false),
+            step("slaporslop", "checking", false),
+            // No icons anywhere yet.
+            step("assistant", "frozen", true),
+            step("assistant", "broken", true),
+            step("assistant", "checking", true),
+            step("assistant", "fresh", true),
+        ],
+        "{all:#}"
+    );
+    assert_eq!(
+        all["summary"],
+        "3 things for you, 2 things for your AI assistant and 2 things waiting on SLAPorSLOP, and 4 optional."
+    );
+    let first = &all["steps"][0];
+    assert!(
+        first["what"]
+            .as_str()
+            .unwrap()
+            .contains("Publisher Agreement")
+    );
+    assert!(first["link"].as_str().unwrap().ends_with("/account/agents"));
+    let fix = &all["steps"][3];
+    assert!(
+        fix["what"]
+            .as_str()
+            .unwrap()
+            .contains("the program wasn't in the archive")
+    );
+    assert!(
+        fix["link"]
+            .as_str()
+            .unwrap()
+            .ends_with("/publish/broken/releases#fixes")
+    );
+    assert!(
+        all["steps"][2]["link"]
+            .as_str()
+            .unwrap()
+            .ends_with("/people/me#portfolio")
+    );
+
+    // The agent's token sees its own app, and no People page (it doesn't handle People).
+    let (failed, text) = tool(&app, "/v1/maker/mcp", &agent, "whats_left", json!({})).await;
+    assert!(!failed, "{text}");
+    let mine: Value = serde_json::from_str(&text).unwrap();
+    let apps: Vec<&str> = mine["steps"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .filter_map(|s| s["app"].as_str())
+        .collect();
+    assert_eq!(apps, ["broken", "broken"]);
+    assert!(!text.contains("People page"));
+    assert!(text.contains("Publisher Agreement"));
+
+    // Nothing at all: a sentence that says where to start.
+    let (_, empty) = app.user("Ola", "US").await;
+    let res = app
+        .send(req(Method::GET, "/v1/me/next-steps").cookie(&empty))
+        .await;
+    let none = body_json(res).await;
+    assert_eq!(none["steps"], json!([]));
+    assert!(none["summary"].as_str().unwrap().starts_with("Nothing yet"));
+}
