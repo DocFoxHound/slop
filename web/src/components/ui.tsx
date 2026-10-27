@@ -9,6 +9,7 @@ import { ApiError } from "../api";
 import { ageLabel, artFor, deadlineText } from "../format";
 import { openExternal } from "../platform";
 import { AppIcon, appIconProps } from "./AppIcon";
+import { StoreIcon } from "./StoreIcons";
 
 /** The maker's thumbnail, or a colour made from the app's address with its initial. */
 export function Art({
@@ -71,7 +72,8 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
         {app.branch_of && <span className="badge neutral community-badge">COMMUNITY</span>}
         {app.made_with_people && (
           <span className="made-with-people" title="Made with creatives hired through People">
-            ✋ Made with people
+            <StoreIcon name="made" size={13} />
+            Made with people
           </span>
         )}
         <span className="d">{app.summary}</span>

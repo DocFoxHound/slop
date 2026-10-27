@@ -460,7 +460,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
             <div className="panel panel-pad small muted">
               <b className="text">Hiring through SLAPorSLOP</b>
               <p>You pay {p.name} directly through Stripe. SLAPorSLOP never holds the money.</p>
-              <p>When the job is done, your app's page credits them and gets the ✋ Made with people badge.</p>
+              <p>When the job is done, your app's page credits them and gets the Made with people badge.</p>
               <p>Your contract is with {p.name}, not SLAPorSLOP. SLAPorSLOP doesn't settle disputes.</p>
             </div>
           </aside>

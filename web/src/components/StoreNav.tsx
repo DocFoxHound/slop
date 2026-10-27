@@ -8,6 +8,8 @@ import { Link, useLocation, useNavigate } from "react-router";
 
 import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
+import type { StoreIconName } from "../storeIcons";
+import { CategoryIcon, StoreIcon } from "./StoreIcons";
 
 /** Categories with their own place on the bar; the rest are under More. */
 const ON_BAR = ["games", "family", "utilities"];
@@ -37,19 +39,20 @@ export function StoreNav() {
   const location = useLocation();
   const categories = useLoad(() => api.categories(), []);
   const section = storeSection(location.pathname, location.search, categories.data);
-  const item = (key: Exclude<Section, null>, to: string, label: string) => (
+  const item = (key: Exclude<Section, null>, to: string, label: string, icon: StoreIconName) => (
     <Link to={to} className={section === key ? "on" : ""} aria-current={section === key ? "page" : undefined}>
+      <StoreIcon name={icon} />
       {label}
     </Link>
   );
   return (
     <nav className="store-nav" aria-label="Store">
       <div className="store-nav-links">
-        {item("browse", "/browse", "Browse")}
-        {item("recommended", "/recommended", "Recommended")}
-        {item("games", "/browse/games", "Games")}
-        {item("family", "/browse/family", "Kids & Family")}
-        {item("utilities", "/browse/utilities", "Utilities")}
+        {item("browse", "/browse", "Browse", "browse")}
+        {item("recommended", "/recommended", "Recommended", "recommended")}
+        {item("games", "/browse/games", "Games", "games")}
+        {item("family", "/browse/family", "Kids & Family", "family")}
+        {item("utilities", "/browse/utilities", "Utilities", "utilities")}
       </div>
       <MoreMenu on={section === "more"} categories={categories.data?.filter((c) => !ON_BAR.includes(c.slug))} />
       <StoreSearch />
@@ -112,32 +115,50 @@ function MoreMenu({ on, categories }: { on: boolean; categories: Category[] | un
           "Categories",
           categories?.map((c) => (
             <Link key={c.slug} to={`/browse/${c.slug}`}>
+              <CategoryIcon slug={c.slug} />
               {c.name}
             </Link>
           )),
         )}
-        {group(
-          "Discover",
-          <>
-            <Link to="/upcoming">🔭 Coming soon &amp; beta</Link>
-            <Link to="/search">✨ Everything</Link>
-            <Link to="/made-with-people">✋ Made with people</Link>
-            <Link to="/community">🍴 Community builds</Link>
-            <Link to="/teams">👥 Teams</Link>
-          </>,
-        )}
-        {group(
-          "Makers",
-          <>
-            <Link to="/publish">⬆️ Publish your app</Link>
-            <Link to="/publish/guide">📖 How to publish</Link>
-            <Link to="/people">🎨 Hire artists &amp; composers</Link>
-            <Link to="/bounties">💰 Fix bounties</Link>
-          </>,
-        )}
+        {group("Discover", <DiscoverLinks />)}
+        {group("Makers", <MakerLinks />)}
       </div>
     </div>
   );
+}
+
+/** The rest of the store, in More and on the sidebar. */
+const DISCOVER: Array<[string, StoreIconName, string]> = [
+  ["/upcoming", "upcoming", "Coming soon & beta"],
+  ["/search", "everything", "Everything"],
+  ["/made-with-people", "made", "Made with people"],
+  ["/community", "community", "Community builds"],
+  ["/teams", "teams", "Teams"],
+];
+
+/** For makers, in More and on the sidebar. */
+const MAKERS: Array<[string, StoreIconName, string]> = [
+  ["/publish", "publish", "Publish your app"],
+  ["/publish/guide", "guide", "How to publish"],
+  ["/people", "hire", "Hire artists & composers"],
+  ["/bounties", "bounties", "Fix bounties"],
+];
+
+function links(list: Array<[string, StoreIconName, string]>) {
+  return list.map(([to, icon, label]) => (
+    <Link key={to} to={to}>
+      <StoreIcon name={icon} />
+      {label}
+    </Link>
+  ));
+}
+
+function DiscoverLinks() {
+  return <>{links(DISCOVER)}</>;
+}
+
+function MakerLinks() {
+  return <>{links(MAKERS)}</>;
 }
 
 /** Searches the store (/search?q=…); on the search page it shows what was searched. */
@@ -171,23 +192,20 @@ export function Sidebar({ active }: { active?: string }) {
   return (
     <aside className="sidebar" aria-label="Browse">
       <h4>Discover</h4>
-      <Link to="/upcoming">🔭 Coming soon &amp; beta</Link>
-      <Link to="/search">✨ Everything</Link>
-      <Link to="/made-with-people">✋ Made with people</Link>
-      <Link to="/community">🍴 Community builds</Link>
-      <Link to="/teams">👥 Teams</Link>
+      <DiscoverLinks />
       <h4>Browse</h4>
-      <Link to="/browse">🧭 All categories</Link>
+      <Link to="/browse">
+        <StoreIcon name="browse" />
+        All categories
+      </Link>
       {categories.data?.map((c: Category) => (
         <Link key={c.slug} to={`/browse/${c.slug}`} className={active === c.slug ? "on" : ""}>
+          <CategoryIcon slug={c.slug} />
           {c.name}
         </Link>
       ))}
       <h4>Makers</h4>
-      <Link to="/publish">⬆️ Publish your app</Link>
-      <Link to="/publish/guide">📖 How to publish</Link>
-      <Link to="/people">🎨 Hire artists &amp; composers</Link>
-      <Link to="/bounties">💰 Fix bounties</Link>
+      <MakerLinks />
     </aside>
   );
 }
@@ -197,12 +215,30 @@ export function StoreFooter() {
   return (
     <footer className="store-footer">
       <nav aria-label="About SLAPorSLOP">
-        <Link to="/legal">📜 Terms &amp; policies</Link>
-        <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>
-        <Link to="/verify">🔎 Check a file</Link>
-        <Link to="/source">🧾 Source code</Link>
-        <a href="https://github.com/DocFoxHound/slop/blob/main/docs/CODE-SIGNING.md">✍️ Code signing policy</a>
-        <Link to="/contact">✉️ Contact</Link>
+        <Link to="/legal">
+          <StoreIcon name="terms" />
+          Terms &amp; policies
+        </Link>
+        <Link to="/legal/content">
+          <StoreIcon name="policy" />
+          Content Policy &amp; reports
+        </Link>
+        <Link to="/verify">
+          <StoreIcon name="verify" />
+          Check a file
+        </Link>
+        <Link to="/source">
+          <StoreIcon name="source" />
+          Source code
+        </Link>
+        <a href="https://github.com/DocFoxHound/slop/blob/main/docs/CODE-SIGNING.md">
+          <StoreIcon name="signing" />
+          Code signing policy
+        </a>
+        <Link to="/contact">
+          <StoreIcon name="contact" />
+          Contact
+        </Link>
       </nav>
     </footer>
   );
