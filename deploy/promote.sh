@@ -1,14 +1,16 @@
 #!/usr/bin/env bash
 # Sends what's on dev to production (deploy/README.md, "How changes ship").
 #
-#   deploy/promote.sh [--yes] [--without-checks]
+#   deploy/promote.sh [--yes] [--without-checks] [--over-allowance]
 #
 # Fast-forwards main on GitHub to dev's newest commit and refuses anything that isn't a
 # fast-forward, so main only ever gets commits that are already on dev: signed by you and live on
 # the test server. It also refuses until that commit's run of GitHub's pipeline on dev passed
 # (every check and the Windows build); --without-checks skips that, for emergencies. On main the
 # pipeline (.github/workflows/pipeline.yml) then waits for your approval before production
-# deploys. Run it in your own checkout, with your GitHub access (not the deploy's clone, whose key
+# deploys. It shows the month's Windows code-signing allowance (deploy/signing.conf), and once
+# signing is on refuses a release that would go over it (--over-allowance sends it anyway, built
+# unsigned). Run it in your own checkout, with your GitHub access (not the deploy's clone, whose key
 # can only read).
 set -euo pipefail
 
@@ -17,11 +19,13 @@ ACTIONS=https://github.com/DocFoxHound/slop/actions
 RUNS_API=https://api.github.com/repos/DocFoxHound/slop/actions/workflows/pipeline.yml/runs
 yes=
 without_checks=
+over_allowance=
 for arg in "$@"; do
   case "$arg" in
     --yes | -y) yes=1 ;;
     --without-checks) without_checks=1 ;;
-    -h | --help) sed -n '2,12p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
+    --over-allowance) over_allowance=1 ;;
+    -h | --help) sed -n '2,15p' "$0" | sed 's/^# \{0,1\}//'; exit 0 ;;
     *) echo "unknown option: $arg (try --help)" >&2; exit 2 ;;
   esac
 done
@@ -78,6 +82,22 @@ else:
     *) die "dev's pipeline run for ${dev:0:12} didn't pass ($state: $url); fix it on dev first" ;;
   esac
 fi
+# The Windows code-signing allowance: every release on main builds, and so signs, the app.
+set +e
+allowance=$(deploy/signing-allowance.sh 2>&1)
+fits=$?
+set -e
+printf '%s\n' "$allowance" | grep -v '^[a-z_]*='
+if [ "$(printf '%s\n' "$allowance" | sed -n 's/^signing_on=//p')" = 1 ] && [ "$fits" -ne 0 ]; then
+  if [ -n "$over_allowance" ]; then
+    echo "WARNING: --over-allowance: sending it anyway; the pipeline builds it unsigned."
+  elif [ "$fits" -eq 4 ]; then
+    die "couldn't count this month's signings; try again in a minute (--over-allowance sends it anyway, built unsigned)"
+  else
+    die "this release would go over the month's signing allowance (deploy/signing.conf); let changes collect on dev until it starts again, or --over-allowance to send it now, built unsigned"
+  fi
+fi
+echo
 echo "New on main (and so on production, once you approve):"
 git log --oneline "$main..$dev"
 echo

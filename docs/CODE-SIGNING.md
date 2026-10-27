@@ -1,10 +1,9 @@
 # Code signing policy
 
-Free code signing provided by [SignPath.io](https://about.signpath.io), certificate by
-[SignPath Foundation](https://signpath.org).
-
-**Status:** applied for. Until SignPath Foundation approves the project, the SLAPorSLOP app for Windows
-is published unsigned.
+**Status:** not signed yet. The certificate will come from [SSL.com](https://www.ssl.com) (a
+code-signing certificate with eSigner cloud signing, so the pipeline signs each approved release
+without a key on anyone's computer). Until it's set up, the SLAPorSLOP app for Windows is published
+unsigned. (SignPath Foundation declined the project in October 2026.)
 
 ## What is signed
 
@@ -28,6 +27,16 @@ SLAPorSLOP (their makers sign those themselves).
 
 The build scripts and pipeline are in this repository and are reviewed like any other change.
 
+## The signing allowance
+
+SSL.com's eSigner plan allows a set number of signings a month (Tier 1: 20), and each release
+signs about three files (`slop.exe`, its uninstaller and the installer). `deploy/signing.conf` holds
+the numbers; `deploy/signing-allowance.sh` counts the pipeline's runs on `main` since the allowance
+last started again. `deploy/promote.sh` shows the count before every release and, once signing is
+on (`SIGNING_ON=1`), refuses a release that would go over it. The pipeline's Windows build checks
+again and builds a release past the allowance unsigned rather than signing it. Releases collect on
+`dev` and go to production a few at a time, so the allowance lasts the month.
+
 ## Team roles
 
 | Role | Who |
@@ -35,7 +44,7 @@ The build scripts and pipeline are in this repository and are reviewed like any 
 | Committers and reviewers (may change the source; review everyone else's changes) | [DocFoxHound](https://github.com/DocFoxHound) |
 | Approvers (approve each signed release) | [DocFoxHound](https://github.com/DocFoxHound) |
 
-Everyone in these roles uses multi-factor authentication for GitHub and SignPath.
+Everyone in these roles uses multi-factor authentication for GitHub and SSL.com.
 
 ## Privacy
 
