@@ -27,7 +27,7 @@ export function Profile() {
         <div>
           <h1 className="page-title">{p.name}</h1>
           <p className="muted small">
-            On Slop since {month}
+            On SLAPorSLOP since {month}
             {p.creative_handle && (
               <>
                 {" "}
@@ -67,7 +67,7 @@ export function Profile() {
               </div>
               <div className="profile-vote-text">
                 <span className={`vote-chip ${v.my_vote === "not_slop" ? "up" : "down"}`}>
-                  {v.my_vote === "not_slop" ? "👍 Not Slop" : "👎 Slop"}
+                  {v.my_vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}
                 </span>{" "}
                 <span className="faint small">{formatDate(v.voted_at)}</span>
                 {v.review && <p className="pre">{v.review}</p>}

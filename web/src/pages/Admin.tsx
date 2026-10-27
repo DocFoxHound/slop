@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The admin panel for Slop staff: the review queue (an inbox, admin/Inbox.tsx), apps, accounts,
+// The admin panel for SLAPorSLOP staff: the review queue (an inbox, admin/Inbox.tsx), apps, accounts,
 // the front page, money, the audit log, AI messages, AI reviewer tokens, staff, policies and legal
 // requests. Every action is recorded in the audit log under the admin's name
 // (crates/slop-api/src/admin_web.rs).

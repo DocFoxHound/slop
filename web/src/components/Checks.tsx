@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// What Slop's checks found on a release file (docs/DESIGN.md §10, crates/slop-api/src/scan.rs):
-// Slop's scanner (ClamAV, YARA, capa), Microsoft Defender for Windows builds, the program's
-// signature, Slop Build's source checks, and Slop's own source check and dependency watch. The wording says "scanned" and what was found,
+// What SLAPorSLOP's checks found on a release file (docs/DESIGN.md §10, crates/slop-api/src/scan.rs):
+// SLAPorSLOP's scanner (ClamAV, YARA, capa), Microsoft Defender for Windows builds, the program's
+// signature, Slop Build's source checks, and SLAPorSLOP's own source check and dependency watch. The wording says "scanned" and what was found,
 // never "safe" (docs/LEGAL.md §12).
 
 import { Link } from "react-router";
@@ -123,7 +123,7 @@ export function SignedLine({
   );
 }
 
-/** Findings and capabilities from Slop's scanner, for the reviewer. */
+/** Findings and capabilities from SLAPorSLOP's scanner, for the reviewer. */
 export function ScanFindings({ report }: { report: ScanReport | null }) {
   if (!report) return null;
   return (
@@ -231,8 +231,8 @@ function osvLink(id: string) {
 }
 
 /**
- * Slop's own source check at the release commit: whether the licence files match the store page,
- * signs of purchases or loot boxes (apps on Slop can't sell anything), and the dependency watch's
+ * SLAPorSLOP's own source check at the release commit: whether the licence files match the store page,
+ * signs of purchases or loot boxes (apps on SLAPorSLOP can't sell anything), and the dependency watch's
  * advisories. Notes for the maker and the reviewer; nothing here holds a release by itself.
  */
 export function RepoScanList({
@@ -247,7 +247,7 @@ export function RepoScanList({
   if (!scan) {
     return (
       <div className="small muted">
-        Slop hasn't read the source yet; it checks within a few minutes.
+        SLAPorSLOP hasn't read the source yet; it checks within a few minutes.
       </div>
     );
   }
@@ -296,7 +296,7 @@ export function RepoScanList({
           </span>{" "}
           <span className="muted">
             {audience === "maker"
-              ? "Apps on Slop can't sell anything: no items, currencies, loot boxes or paid access. A reviewer looks at each; if one isn't a purchase (a word in a comment, say), nothing needs changing."
+              ? "Apps on SLAPorSLOP can't sell anything: no items, currencies, loot boxes or paid access. A reviewer looks at each; if one isn't a purchase (a word in a comment, say), nothing needs changing."
               : "Patterns only: open the files and decide. Selling anything in the app breaks the Publisher Agreement."}
           </span>
           <ul>
@@ -321,12 +321,12 @@ export function RepoScanList({
       {code.length > 0 ? (
         <div>
           <span className="badge warn">
-            CODE FROM OUTSIDE SLOP? ({code.length})
+            CODE FROM OUTSIDE SLAPorSLOP? ({code.length})
           </span>{" "}
           <span className="muted">
             {audience === "maker"
-              ? "Apps on Slop only run code that came in a release or mod Slop checked, never programs, scripts or mods from a server. Data from servers must use formats that can't rebuild objects. A reviewer looks at each; loading your own files is fine. See \"Online play and mods\" in the publishing guide."
-              : "Patterns only: open the files and decide. Running code a server sends, a self-updater, or a mod loader outside Slop's mods breaks the Content Policy; an unsafe format reading server data is a reason to reject until it's fixed."}
+              ? "Apps on SLAPorSLOP only run code that came in a release or mod SLAPorSLOP checked, never programs, scripts or mods from a server. Data from servers must use formats that can't rebuild objects. A reviewer looks at each; loading your own files is fine. See \"Online play and mods\" in the publishing guide."
+              : "Patterns only: open the files and decide. Running code a server sends, a self-updater, or a mod loader outside SLAPorSLOP's mods breaks the Content Policy; an unsafe format reading server data is a reason to reject until it's fixed."}
           </span>
           <ul>
             {code.map((h) => (
@@ -357,7 +357,7 @@ export function RepoScanList({
           <span className="muted">
             {scan.online_undeclared
               ? audience === "maker"
-                ? "Your code connects to the network, but your store page doesn't say it plays online. Tick what it connects to under Online on Edit store page, so players know about servers Slop can't check."
+                ? "Your code connects to the network, but your store page doesn't say it plays online. Tick what it connects to under Online on Edit store page, so players know about servers SLAPorSLOP can't check."
                 : "The store page doesn't declare online play. Ask the maker to tick what it connects to, or reject it as a misleading page if it's hidden on purpose."
               : "Declared on the store page; players see a notice."}
           </span>
@@ -377,7 +377,7 @@ export function RepoScanList({
           <span className="badge warn">PAY-TO-WIN DESIGN? ({scan.design!.length})</span>{" "}
           <span className="muted">
             {audience === "maker"
-              ? "Patterns that usually go with paying to win: premium currencies, skipping timers, VIP tiers, passes, bought boosts. Nothing on Slop can be sold, so a reviewer checks they're earned in play. If they are, nothing needs changing."
+              ? "Patterns that usually go with paying to win: premium currencies, skipping timers, VIP tiers, passes, bought boosts. Nothing on SLAPorSLOP can be sold, so a reviewer checks they're earned in play. If they are, nothing needs changing."
               : "Patterns only: check each is earned in play and can't be bought or traded for anything outside the game. Paying to win breaks the Content Policy."}
           </span>
           <ul>
@@ -481,7 +481,7 @@ export function RepoScanList({
 }
 
 /**
- * A lookup of the file's hash on VirusTotal, as an optional second opinion. It's only a link: Slop
+ * A lookup of the file's hash on VirusTotal, as an optional second opinion. It's only a link: SLAPorSLOP
  * sends nothing to VirusTotal, and it shows a report only if someone has already uploaded the file.
  */
 export function VirusTotalLink({
@@ -544,7 +544,7 @@ function SaveFolderCheck({ scan, audience }: { scan: RepoScan; audience: "maker"
   if (scan.save_folder === "slop") {
     return (
       <div>
-        <span className="badge official">SAVES IN SLOP'S SAVE FOLDER</span>{" "}
+        <span className="badge official">SAVES IN SLAPorSLOP'S SAVE FOLDER</span>{" "}
         <span className="muted">the code reads SLOP_SAVE_DIR</span>
       </div>
     );
@@ -552,13 +552,13 @@ function SaveFolderCheck({ scan, audience }: { scan: RepoScan; audience: "maker"
   if (scan.save_folder === "engine") {
     return (
       <div>
-        <span className="badge official">SAVES IN SLOP'S SAVE FOLDER</span>{" "}
-        <span className="muted">through Godot's user://, which the Slop app points there</span>
+        <span className="badge official">SAVES IN SLAPorSLOP'S SAVE FOLDER</span>{" "}
+        <span className="muted">through Godot's user://, which the SLAPorSLOP app points there</span>
       </div>
     );
   }
   if (saves.length === 0) {
-    // "none", or a check from before Slop looked.
+    // "none", or a check from before SLAPorSLOP looked.
     return scan.save_folder === "none" ? (
       <div>
         <span className="badge neutral">NO LOCAL SAVES FOUND</span>{" "}
@@ -577,13 +577,13 @@ function SaveFolderCheck({ scan, audience }: { scan: RepoScan; audience: "maker"
       {scan.sandbox_mismatch ? (
         <span className="badge warn">SAYS IT WORKS IN SANDBOX MODE, BUT SAVES ELSEWHERE</span>
       ) : (
-        <span className="badge warn">SAVES OUTSIDE SLOP'S SAVE FOLDER</span>
+        <span className="badge warn">SAVES OUTSIDE SLAPorSLOP'S SAVE FOLDER</span>
       )}{" "}
       <span className="muted">
         {audience === "maker" ? (
           <>
-            Your code writes to fixed places in the player's folders. Slop asks apps to keep local saves, settings and logs in
-            SLOP_SAVE_DIR, which the Slop app sets when it starts yours, so they follow players into sandbox mode.
+            Your code writes to fixed places in the player's folders. SLAPorSLOP asks apps to keep local saves, settings and logs in
+            SLOP_SAVE_DIR, which the SLAPorSLOP app sets when it starts yours, so they follow players into sandbox mode.
             {scan.sandbox_mismatch && " Until it does, players aren't told your app works in sandbox mode."} See {guide}.
           </>
         ) : scan.sandbox_mismatch ? (

@@ -74,7 +74,7 @@ interface ReleaseRow {
   status: string;
 }
 
-/** Submits a Windows release from the fake host, waits for Slop to fetch it, and returns its ID. */
+/** Submits a Windows release from the fake host, waits for SLAPorSLOP to fetch it, and returns its ID. */
 export async function submitRelease(who: Who, slug: string, repo: string, version: string, notes?: string): Promise<string> {
   const release = await call<ReleaseRow>(who, "POST", `/v1/apps/${slug}/releases`, {
     version,

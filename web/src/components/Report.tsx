@@ -150,7 +150,7 @@ export function ReportForm({
     <form className="report-form form" onSubmit={(e) => void submit(e)}>
       <h2>Report {label}</h2>
       <p className="muted small">
-        A person at Slop reviews every report. If someone is in immediate danger, call your local emergency number first.
+        A person at SLAPorSLOP reviews every report. If someone is in immediate danger, call your local emergency number first.
       </p>
       <fieldset>
         <legend>What's wrong?</legend>

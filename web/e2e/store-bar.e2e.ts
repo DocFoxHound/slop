@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The store bar along the top of store pages (web/src/components/StoreNav.tsx): Browse,
-// Recommended, Games, Kids & Family, Utilities and More, the store search, and Slop's own links at the bottom.
+// Recommended, Games, Kids & Family, Utilities and More, the store search, and SLAPorSLOP's own links at the bottom.
 // Read-only.
 import type { Page } from "@playwright/test";
 
@@ -87,10 +87,10 @@ test("the bar is on the store's pages and app pages, not elsewhere", async ({ pa
   }
 });
 
-test("the store front is all apps; Slop's own links are at the bottom", async ({ page }) => {
+test("the store front is all apps; SLAPorSLOP's own links are at the bottom", async ({ page }) => {
   await page.goto("/");
   await expect(page.getByRole("complementary", { name: "Browse" })).toHaveCount(0);
-  const footer = page.getByRole("navigation", { name: "About Slop" });
+  const footer = page.getByRole("navigation", { name: "About SLAPorSLOP" });
   for (const [name, href] of [
     ["Terms & policies", "/legal"],
     ["Content Policy & reports", "/legal/content"],

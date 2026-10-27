@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Money on the account page (components/AccountSections.tsx): your donations, where donations to
-// your apps are paid, and Slop's fee statements with the VAT in them.
+// your apps are paid, and SLAPorSLOP's fee statements with the VAT in them.
 import { apiError, call, fake, tweak } from "./accounts-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
 
@@ -181,13 +181,13 @@ test.describe("receiving donations", () => {
 });
 
 test.describe("fee statements", () => {
-  test("show Slop's fee by month, with no VAT where there's none", async ({ page }) => {
+  test("show SLAPorSLOP's fee by month, with no VAT where there's none", async ({ page }) => {
     await signIn(page, "maker");
     await page.goto("/account#fee-statements");
     const section = page.locator("#fee-statements");
-    await expect(section).toContainText("Slop's 5% fee on the donations and People payments you received, by month.");
-    await expect(section).toContainText("There's no VAT on Slop's fee where you are.");
-    await expect(section.getByRole("columnheader")).toHaveText(["Month", "For", "Payments", "Received", "Slop fee"]);
+    await expect(section).toContainText("SLAPorSLOP's 5% fee on the donations and People payments you received, by month.");
+    await expect(section).toContainText("There's no VAT on SLAPorSLOP's fee where you are.");
+    await expect(section.getByRole("columnheader")).toHaveText(["Month", "For", "Payments", "Received", "SLAPorSLOP fee"]);
     const statement = (await call("maker", "GET", "/v1/me/fee-statements")).statements[0];
     const row = section.getByRole("row").filter({ hasText: statement.month });
     await expect(row).toContainText("Donations");
@@ -206,8 +206,8 @@ test.describe("fee statements", () => {
     await signIn(page, "maker");
     await page.goto("/account#fee-statements");
     const section = page.locator("#fee-statements");
-    await expect(section).toContainText("The fee includes 20% VAT, which Slop pays out of its 5%; it's never added on top.");
-    await expect(section).toContainText("Slop's VAT registration is still being set up.");
+    await expect(section).toContainText("The fee includes 20% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top.");
+    await expect(section).toContainText("SLAPorSLOP's VAT registration is still being set up.");
     await expect(section.getByRole("columnheader", { name: "VAT in the fee" })).toBeVisible();
     await expect(section.getByRole("row").filter({ hasText: "People jobs" })).toContainText("$0.07");
     await expect(section.getByRole("row").filter({ hasText: "People jobs" })).toContainText("simulated");
@@ -237,13 +237,13 @@ test.describe("fee statements", () => {
     await page.goto("/account#fee-statements");
     const section = page.locator("#fee-statements");
     await expect(section).toContainText("The fee includes 19% VAT");
-    await expect(section).toContainText("Slop's VAT number: EU372000041.");
-    await expect(section).toContainText("Not confirmed yet, so VAT is shown as included in Slop's fee.");
+    await expect(section).toContainText("SLAPorSLOP's VAT number: EU372000041.");
+    await expect(section).toContainText("Not confirmed yet, so VAT is shown as included in SLAPorSLOP's fee.");
     const box = section.getByRole("textbox", { name: /VAT number/ });
     await expect(box).toHaveValue("DE123456789");
     await section.getByRole("button", { name: "Save" }).click();
-    await expect(section).toContainText("Confirmed. Slop's fee is reverse-charged from now on.");
-    await expect(section).toContainText("Reverse charge: you account for the VAT on Slop's fee yourself (VAT number DE123456789).");
+    await expect(section).toContainText("Confirmed. SLAPorSLOP's fee is reverse-charged from now on.");
+    await expect(section).toContainText("Reverse charge: you account for the VAT on SLAPorSLOP's fee yourself (VAT number DE123456789).");
     await expect(section.getByRole("row").nth(1)).toContainText("Reverse charge");
     expect(put.calls[0].body).toEqual({ vat_number: "DE123456789" });
   });

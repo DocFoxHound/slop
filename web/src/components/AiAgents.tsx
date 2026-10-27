@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Account → AI agents: tokens for a maker's or creative's own AI agent (crates/slop-api/src/
-// maker_agents.rs). The agent does the work in its own session; Slop gives it tools and checks.
+// maker_agents.rs). The agent does the work in its own session; SLAPorSLOP gives it tools and checks.
 // An agent can't accept agreements, so a publishing token needs the Publisher Agreement accepted
 // here: it's shown when the token is made, and again here whenever a new version waits.
 // Each token shows when it expires (agentTokens.ts); one expiring soon or expired offers Make a
@@ -119,10 +119,10 @@ export function AiAgents({ notices, tokens }: { notices: Loaded<LegalNotice[]>; 
       </h3>
       <p className="muted small">
         Let your own AI coding agent (such as Claude Code) publish and fix your apps from your editor: create store pages,
-        submit releases with notes, read Slop's checks and get exact fixes, register community builds and mods, and
+        submit releases with notes, read SLAPorSLOP's checks and get exact fixes, register community builds and mods, and
         offer fixes to other apps. With <b>People</b> access it can also watch your jobs, send quotes and talk in job
         conversations. It can never pay, accept agreements, change payouts or your account. Your agent does the work on
-        your side; Slop runs no AI for it. Each token lasts up to 12 months: Slop reminds you a week and a day before it
+        your side; SLAPorSLOP runs no AI for it. Each token lasts up to 12 months: SLAPorSLOP reminds you a week and a day before it
         expires, and you can remove it any time.
       </p>
       {terms.prompt}

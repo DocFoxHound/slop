@@ -21,7 +21,7 @@ const card: CreativeCard = {
   avatar_url: null,
   preview: [],
   from_price: { minor: 2500, currency: "usd" },
-  rating: { not_slop: 9, slop: 1, percent: 90, label: "Very Not Slop", min_reviews: 3 },
+  rating: { not_slop: 9, slop: 1, percent: 90, label: "Really Slaps", min_reviews: 3 },
   clients: 10,
 };
 
@@ -38,7 +38,7 @@ describe("PersonCard", () => {
     expect(screen.getByText("from $25")).toBeTruthy();
     expect(screen.getByText(/NO AI/)).toBeTruthy();
     expect(screen.getByText("Taking work")).toBeTruthy();
-    expect(screen.getByText("90% Not Slop")).toBeTruthy();
+    expect(screen.getByText("90% Slaps")).toBeTruthy();
   });
 
   it("explains why someone can't be hired", () => {

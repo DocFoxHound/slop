@@ -55,13 +55,13 @@ export function HoldForm({
         <label className="check">
           <input type="radio" name={`hold-kind-${slug}`} checked={kind === "review"} onChange={() => setKind("review")} />
           <span>
-            <b>Pause for review.</b> Quick and reversible, while Slop looks into a complaint.
+            <b>Pause for review.</b> Quick and reversible, while SLAPorSLOP looks into a complaint.
           </span>
         </label>
         <label className="check">
           <input type="radio" name={`hold-kind-${slug}`} checked={kind === "off"} onChange={() => setKind("off")} />
           <span>
-            <b>Turn off until fixed.</b> Slop found a problem the maker must fix. A sensitive action: it may need a
+            <b>Turn off until fixed.</b> SLAPorSLOP found a problem the maker must fix. A sensitive action: it may need a
             second staff member's approval.
           </span>
         </label>

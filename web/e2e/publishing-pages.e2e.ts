@@ -135,7 +135,7 @@ test("the publishing guide: an AI prompt to copy, and a message when it can't lo
   await expect(notice.getByRole("button", { name: "Copied" })).toBeVisible();
   const origin = new URL(page.url()).origin;
   expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(
-    `Read ${origin}/publishing.md. Tell me what's required and what's optional for publishing on Slop, then set up my project so it's ready to deploy there.`,
+    `Read ${origin}/publishing.md. Tell me what's required and what's optional for publishing on SLAPorSLOP, then set up my project so it's ready to deploy there.`,
   );
   await expect(notice.getByRole("link", { name: "/publishing.md" })).toHaveAttribute("href", "/publishing.md");
 
@@ -149,7 +149,7 @@ test("the publishing guide: an AI prompt to copy, and a message when it can't lo
 test("the download page: a button per system when there's a build, and says when there isn't", async ({ page }) => {
   // This server has published no desktop builds.
   await page.goto("/download");
-  await expect(page.getByRole("heading", { name: "Get the Slop app", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Get the SLAPorSLOP app", level: 1 })).toBeVisible();
   for (const name of ["Windows", "Ubuntu / Debian", "RHEL / Rocky / Alma 10"]) {
     await expect(page.locator("section.download-card").filter({ has: page.getByRole("heading", { name }) })).toContainText(
       "Not available right now.",

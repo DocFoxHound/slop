@@ -26,7 +26,7 @@ test.describe("decisions about you", () => {
       await signIn(page, "finance");
       await page.goto("/bounties");
       const notice = page.locator(".account-notices");
-      await expect(notice).toContainText("Slop made 2 decisions about your content.");
+      await expect(notice).toContainText("SLAPorSLOP made 2 decisions about your content.");
       await notice.getByRole("link", { name: "See what, why, and how to appeal" }).click();
       await expect(page).toHaveURL(/\/account\/moderation#decisions$/);
       const section = page.locator("#decisions");
@@ -259,11 +259,11 @@ test.describe("the Report dialog", () => {
   });
 
   test("reasons that won't load say so", async ({ page }) => {
-    await fake(page, "GET", "/v1/reports/reasons", { status: 503, body: apiError("unavailable", "Slop is busy: try again in a minute") });
+    await fake(page, "GET", "/v1/reports/reasons", { status: 503, body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute") });
     await page.goto("/app/castle-rock");
     await page.getByRole("button", { name: "⚑ Report" }).click();
     const dialog = page.getByRole("dialog", { name: "Report this app" });
-    await expect(dialog.getByRole("alert")).toHaveText("Slop is busy: try again in a minute");
+    await expect(dialog.getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
     await expect(dialog.getByRole("radio")).toHaveCount(0);
   });
 });
@@ -299,11 +299,11 @@ test.describe("legal requests and the transparency report", () => {
     await expect(logged).toContainText("Fin Finance");
     await logged.getByText("Record the answer").click();
     await logged.getByRole("combobox", { name: "Outcome" }).selectOption("partly_answered");
-    await logged.getByRole("textbox", { name: "What Slop gave, or why not" }).fill("Sign-in dates only; Slop keeps no addresses.");
+    await logged.getByRole("textbox", { name: "What SLAPorSLOP gave, or why not" }).fill("Sign-in dates only; SLAPorSLOP keeps no addresses.");
     await expect(logged.getByRole("combobox", { name: "The person" })).toHaveValue("notified");
     await logged.getByRole("button", { name: "Save the answer" }).click();
     await expect(logged).toContainText("PARTLY ANSWERED");
-    await expect(logged).toContainText("Sign-in dates only; Slop keeps no addresses.");
+    await expect(logged).toContainText("Sign-in dates only; SLAPorSLOP keeps no addresses.");
     await expect(logged).toContainText("person notified");
     await expect(logged.getByText("Record the answer")).toHaveCount(0);
 

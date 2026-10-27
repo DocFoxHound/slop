@@ -139,7 +139,7 @@ export async function noPasskeys(page: Page) {
 export const passkeyOptions = {
   publicKey: {
     challenge: "AAAAAAAAAAAAAAAAAAAAAA",
-    rp: { id: "127.0.0.1", name: "Slop" },
+    rp: { id: "127.0.0.1", name: "SLAPorSLOP" },
     user: { id: "AAAAAAAAAAAAAAAAAAAAAA", name: "Someone", displayName: "Someone" },
     pubKeyCredParams: [{ type: "public-key", alg: -7 }],
   },

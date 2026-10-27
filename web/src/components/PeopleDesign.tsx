@@ -2,11 +2,11 @@
 // A creative's own page design (crates/slop-api/src/people/design.rs), drawn inside their People
 // page. The server already rebuilt their HTML as a tree of allowed elements and their CSS from
 // allowed rules; this draws the tree element by element (never as HTML) in a shadow root, so the
-// design's CSS can't reach Slop's page and Slop's can't fight the design. The box contains its
-// layout and paint: nothing in it can cover Slop's header or reach outside.
+// design's CSS can't reach SLAPorSLOP's page and SLAPorSLOP's can't fight the design. The box contains its
+// layout and paint: nothing in it can cover SLAPorSLOP's header or reach outside.
 //
-// Slop's own parts (<slop-works> and the rest) are Slop's components, slotted in from outside the
-// shadow root: they keep Slop's behaviour and accessibility, and the design's CSS can't select
+// SLAPorSLOP's own parts (<slop-works> and the rest) are SLAPorSLOP's components, slotted in from outside the
+// shadow root: they keep SLAPorSLOP's behaviour and accessibility, and the design's CSS can't select
 // them (though the design can still lay things over them, so nothing that matters for trust is a
 // part: a creative's services and Hire buttons are always below the design, never inside it).
 
@@ -18,7 +18,7 @@ import { workKey } from "../api";
 import { isDesktop, openExternal } from "../platform";
 import { Lightbox, ServicesList, WorkTile } from "./People";
 
-/** What draws each of Slop's parts. Returning null leaves the part out. */
+/** What draws each of SLAPorSLOP's parts. Returning null leaves the part out. */
 export interface DesignParts {
   works: () => ReactNode;
   work: (key: string) => ReactNode;
@@ -45,7 +45,7 @@ const srOnly: CSSProperties = {
   whiteSpace: "nowrap",
 };
 
-/** The design's content (for the shadow root) and Slop's parts (slotted in from outside). */
+/** The design's content (for the shadow root) and SLAPorSLOP's parts (slotted in from outside). */
 export interface BuiltDesign {
   content: ReactNode[];
   parts: Array<{ slot: string; node: ReactNode }>;
@@ -184,7 +184,7 @@ function trackWork(src: string, title: string | null): Work {
   return { key: `audio:${src}`, kind: "audio", url: null, width: null, height: null, youtube_id: null, audio_url: src, audio_format: null, title, caption: null, skill: null };
 }
 
-/** Slop's parts for a page: its works (the grid opens pictures large), videos and tracks. */
+/** SLAPorSLOP's parts for a page: its works (the grid opens pictures large), videos and tracks. */
 export function slopParts({ works, onOpen }: { works: Work[]; onOpen?: (w: Work) => void }): DesignParts {
   return {
     works: () =>
@@ -215,7 +215,7 @@ export function portfolioWork(w: PortfolioWork): Work {
 
 /**
  * A design as it will show, for its creative (the editor) and reviewers (the queue): at desktop or
- * phone width, with the creative's services below it as on their page, and what Slop removed or
+ * phone width, with the creative's services below it as on their page, and what SLAPorSLOP removed or
  * noted.
  */
 export function DesignPreview({
@@ -236,7 +236,7 @@ export function DesignPreview({
       {design.warnings.length > 0 ? (
         <details className="design-warnings">
           <summary>
-            {design.warnings.length === 1 ? "One note" : `${design.warnings.length} notes`} on the design: what Slop removed, and what it hides
+            {design.warnings.length === 1 ? "One note" : `${design.warnings.length} notes`} on the design: what SLAPorSLOP removed, and what it hides
           </summary>
           <ul className="small">
             {design.warnings.map((w) => (
@@ -245,7 +245,7 @@ export function DesignPreview({
           </ul>
         </details>
       ) : (
-        <p className="muted small">Slop didn't need to remove anything from the design.</p>
+        <p className="muted small">SLAPorSLOP didn't need to remove anything from the design.</p>
       )}
       <div className="row-actions" role="group" aria-label={`Preview width: ${label}`}>
         <button type="button" className="btn small" aria-pressed={!phone} onClick={() => setPhone(false)}>

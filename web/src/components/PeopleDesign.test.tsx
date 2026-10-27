@@ -50,7 +50,7 @@ describe("buildDesign", () => {
     expect(el(td).props.scope).toBeUndefined();
   });
 
-  it("puts Slop's parts in slots, in order, and leaves out ones that aren't there (services are never inside)", () => {
+  it("puts SLAPorSLOP's parts in slots, in order, and leaves out ones that aren't there (services are never inside)", () => {
     const tree: DesignNode[] = [
       { tag: "section", children: [{ tag: "slop-works" }, { tag: "slop-work", attrs: { work: "image:works/a.png" } }] },
       { tag: "slop-work", attrs: { work: "image:works/missing.png" } },
@@ -84,7 +84,7 @@ describe("DesignArea", () => {
     css: ".wall{display:grid;}@container (max-width: 600px){.wall{display:block;}}",
   };
 
-  it("draws the design in a shadow root, in a labelled region, with Slop's parts slotted in", async () => {
+  it("draws the design in a shadow root, in a labelled region, with SLAPorSLOP's parts slotted in", async () => {
     const works: Work[] = [
       { key: "image:a.png", kind: "image", url: "https://x/a.png", width: 64, height: 64, youtube_id: null, audio_url: null, audio_format: null, title: "Knight", caption: null, skill: null },
     ];
@@ -105,7 +105,7 @@ describe("DesignArea", () => {
     expect(root.querySelector("style")!.textContent).toContain("slop-frame { display: block; container-type: inline-size; }");
     const slot = root.querySelector(".wall slot")!;
     expect(slot.getAttribute("name")).toBe("slop-part-0");
-    // The works are Slop's, outside the shadow root: Slop's styles and behaviour apply.
+    // The works are SLAPorSLOP's, outside the shadow root: SLAPorSLOP's styles and behaviour apply.
     const part = region.querySelector(":scope > [slot='slop-part-0']")!;
     expect(part.className).toBe("design-part");
     expect(part.querySelector("button[aria-label='View larger: Knight']")).toBeTruthy();
@@ -140,7 +140,7 @@ describe("DesignPreview", () => {
     await act(async () => fireEvent.click(phone));
     expect(phone.getAttribute("aria-pressed")).toBe("true");
     expect(frame.className).toBe("design-preview-frame phone");
-    // Below the design, as on the page: Slop's own list, outside the design's box.
+    // Below the design, as on the page: SLAPorSLOP's own list, outside the design's box.
     const below = screen.getByRole("region", { name: "Services, below the design" });
     expect(below.textContent).toContain("Sprite sheet");
     expect(screen.queryByRole("button", { name: "Hire for this" })).toBeNull();

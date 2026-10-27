@@ -29,13 +29,13 @@ test("a missing page says so", async ({ page }) => {
 
 test("anyone can check a file they got elsewhere, without uploading it", async ({ page }) => {
   await page.goto("/verify");
-  // Hashed in the browser: this file's SHA-256 is one Slop has never seen.
+  // Hashed in the browser: this file's SHA-256 is one SLAPorSLOP has never seen.
   await page.getByLabel("Choose the file").setInputFiles({
     name: "game.zip",
     mimeType: "application/zip",
-    buffer: Buffer.from("not a game Slop knows"),
+    buffer: Buffer.from("not a game SLAPorSLOP knows"),
   });
-  await expect(page.getByText("Slop doesn't know this file.")).toBeVisible();
+  await expect(page.getByText("SLAPorSLOP doesn't know this file.")).toBeVisible();
   await expect(page.getByLabel("Or paste its SHA-256")).toHaveValue(/^[0-9a-f]{64}$/);
 });
 

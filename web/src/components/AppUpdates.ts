@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Updates for installed apps (DESIGN §6). Slop checks when the desktop app starts and every 30
+// Updates for installed apps (DESIGN §6). SLAPorSLOP checks when the desktop app starts and every 30
 // minutes; with "Update apps automatically" on, it installs approved updates for apps that
 // aren't running, one at a time. The library page shows what's waiting and what's being checked.
 

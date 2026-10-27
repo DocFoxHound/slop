@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Slop's own pages: terms and policies, the transparency report, checking a file, the source
+// SLAPorSLOP's own pages: terms and policies, the transparency report, checking a file, the source
 // code offer and downloading the desktop app.
 import { expect, ids, signIn, test } from "./fixtures";
 import { call, failApi, path } from "./store-helpers";
@@ -125,9 +125,9 @@ test("an agreement never accepted can be accepted on its page; signed out, it as
 
 test("the terms list offers Try again when it can't load", async ({ page }) => {
   let fail = true;
-  await page.route(path("/v1/legal"), (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } }) : route.fallback()));
+  await page.route(path("/v1/legal"), (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy. Try again soon." } } }) : route.fallback()));
   await page.goto("/legal");
-  await expect(page.getByRole("alert")).toContainText("Slop is busy. Try again soon.");
+  await expect(page.getByRole("alert")).toContainText("SLAPorSLOP is busy. Try again soon.");
   fail = false;
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("link", { name: "Terms of Service" })).toBeVisible();
@@ -204,10 +204,10 @@ test("checking a file: approved, withdrawn, a bad hash, and a server error", asy
   await check.click();
   const result = page.getByRole("status");
   const lantern = result.locator("li").filter({ has: page.getByRole("link", { name: "Lantern Keep", exact: true }) });
-  await expect(lantern).toContainText("Approved on Slop: Lantern Keep 1.0.0 by Mia Maker, for windows.");
+  await expect(lantern).toContainText("Approved on SLAPorSLOP: Lantern Keep 1.0.0 by Mia Maker, for windows.");
   await expect(lantern.getByRole("link", { name: "Lantern Keep", exact: true })).toHaveAttribute("href", `/app/${ids.listedApp}`);
 
-  // A build Slop withdrew, as the server signs it.
+  // A build SLAPorSLOP withdrew, as the server signs it.
   const withdrawn = {
     schema: 1,
     sha256: "f".repeat(64),
@@ -234,13 +234,13 @@ test("checking a file: approved, withdrawn, a bad hash, and a server error", asy
   );
   await hash.fill("f".repeat(64));
   await check.click();
-  await expect(result).toContainText("Withdrawn by Slop: Castle Rock 0.9.0 by Sam Seed, for windows.");
+  await expect(result).toContainText("Withdrawn by SLAPorSLOP: Castle Rock 0.9.0 by Sam Seed, for windows.");
   await expect(result).toContainText("don't run it.");
 
   await failApi(page, path(`/v1/verify/${"e".repeat(64)}`));
   await hash.fill("e".repeat(64));
   await check.click();
-  await expect(result).toContainText("Something broke on Slop's side.");
+  await expect(result).toContainText("Something broke on SLAPorSLOP's side.");
 });
 
 test("a file over 1 GB isn't read in the browser: it asks for the hash instead", async ({ page }) => {
@@ -259,9 +259,9 @@ test("a file over 1 GB isn't read in the browser: it asks for the hash instead",
 
 test("the source code page offers Try again when it can't load", async ({ page }) => {
   let fail = true;
-  await page.route(path("/v1/source"), (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } }) : route.fallback()));
+  await page.route(path("/v1/source"), (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy. Try again soon." } } }) : route.fallback()));
   await page.goto("/source");
-  await expect(page.getByRole("alert")).toContainText("Slop is busy. Try again soon.");
+  await expect(page.getByRole("alert")).toContainText("SLAPorSLOP is busy. Try again soon.");
   fail = false;
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByText(/GNU Affero General Public License/)).toBeVisible();
@@ -271,11 +271,11 @@ test("the source code page offers Try again when it can't load", async ({ page }
 test("the download page: a card per system, yours first in colour, and missing builds tolerated", async ({ page }) => {
   // This server has no desktop builds yet.
   await page.goto("/download");
-  await expect(page.getByRole("heading", { name: "Get the Slop app", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Get the SLAPorSLOP app", level: 1 })).toBeVisible();
   const cards = page.locator(".download-card");
   await expect(cards).toHaveCount(3);
   await expect(cards.getByText("Not available right now.")).toHaveCount(3);
-  await expect(page.getByText("You're already using the Slop app.")).toHaveCount(0);
+  await expect(page.getByText("You're already using the SLAPorSLOP app.")).toHaveCount(0);
 
   // With builds for Windows and RHEL, not Debian. The browser says Windows: that card is marked.
   await page.route(

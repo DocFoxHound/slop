@@ -46,7 +46,7 @@ export function DemoPanel({ slug }: { slug: string }) {
       <p className="muted small">
         For its first {s.days} days, a new game can be played in the browser from its store page, free, with nothing to
         install. Attach a web build (a .zip with index.html, like Godot's Web export) to a release on your repository.
-        Slop scans it and hosts it until {s.eligible_until ? formatDate(s.eligible_until) : "its days are up"}, then
+        SLAPorSLOP scans it and hosts it until {s.eligible_until ? formatDate(s.eligible_until) : "its days are up"}, then
         deletes it. Demos can't go online.
       </p>
       {d && (

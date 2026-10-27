@@ -21,10 +21,10 @@ test.describe("profiles", () => {
   test("a public profile shows votes and reviews, and the apps someone makes", async ({ page }) => {
     await page.goto(`/u/${ids.player}`);
     await expect(page.getByRole("heading", { name: "Pat Player", level: 1 })).toBeVisible();
-    await expect(page.getByText(/On Slop since \w+ \d{4}/)).toBeVisible();
+    await expect(page.getByText(/On SLAPorSLOP since \w+ \d{4}/)).toBeVisible();
     // (A tile's link is named by the app's summary, not its title: see the report.)
     const vote = page.locator(".profile-votes").getByRole("listitem").filter({ has: page.locator('a[href="/app/lantern-keep"]') });
-    await expect(vote).toContainText("👍 Not Slop");
+    await expect(vote).toContainText("👍 Slaps");
     await expect(vote).toContainText("The fog timer makes every level tense.");
     // Signed out: no friend buttons.
     await expect(page.getByRole("button", { name: /Add friend|Block/ })).toHaveCount(0);
@@ -197,16 +197,16 @@ test.describe("the friends page", () => {
     await signIn(page, "support");
     try {
       await page.goto("/friends#settings");
-      const anyone = page.getByRole("checkbox", { name: /Anyone on Slop/ });
+      const anyone = page.getByRole("checkbox", { name: /Anyone on SLAPorSLOP/ });
       await expect(anyone).not.toBeChecked();
       await anyone.click();
       await expect(anyone).toBeChecked();
       expect((await call("support", "GET", "/v1/me/chat-settings")).from_anyone).toBe(true);
       await page.reload();
       await expect(anyone).toBeChecked();
-      await fake(page, "PUT", "/v1/me/chat-settings", { status: 503, body: apiError("unavailable", "Slop is busy: try again in a minute") });
+      await fake(page, "PUT", "/v1/me/chat-settings", { status: 503, body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute") });
       await anyone.click();
-      await expect(page.getByRole("alert")).toHaveText("Slop is busy: try again in a minute");
+      await expect(page.getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
       await expect(anyone).toBeChecked();
     } finally {
       await call("support", "PUT", "/v1/me/chat-settings", { from_anyone: false });
@@ -217,7 +217,7 @@ test.describe("the friends page", () => {
     await signIn(page, "teen");
     await page.goto("/friends");
     await expect(page.getByText("In the under-18 view nobody else can message you.")).toBeVisible();
-    await expect(page.getByRole("checkbox", { name: /Anyone on Slop/ })).toHaveCount(0);
+    await expect(page.getByRole("checkbox", { name: /Anyone on SLAPorSLOP/ })).toHaveCount(0);
     await expect(page.getByRole("listitem").filter({ hasText: "Pat Player" })).toBeVisible();
   });
 });
@@ -226,9 +226,9 @@ test.describe("chat on the website", () => {
   test("points to the app for this computer, and to friends", async ({ page }) => {
     await page.goto("/chat");
     await expect(page.getByRole("heading", { name: "💬 Chat" })).toBeVisible();
-    await expect(page.getByText("Chat is in the Slop app.")).toBeVisible();
+    await expect(page.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
     // The browser here says it's Chrome on Windows.
-    await expect(page.getByRole("link", { name: "⬇ Get Slop for Windows" })).toHaveAttribute("href", "/download");
+    await expect(page.getByRole("link", { name: "⬇ Get SLAPorSLOP for Windows" })).toHaveAttribute("href", "/download");
     await page.getByRole("link", { name: "Your friends" }).click();
     await expect(page).toHaveURL(/\/friends$/);
   });
@@ -298,13 +298,13 @@ test.describe("teams", () => {
     await expect(page.getByText(`Studio · github.com/${org}`)).toBeVisible();
 
     const verification = page.locator("section.verification");
-    await expect(verification).toContainText(`Slop checks these through its GitHub App on github.com/${org}`);
+    await expect(verification).toContainText(`SLAPorSLOP checks these through its GitHub App on github.com/${org}`);
     await verification.getByText("No verified domain on GitHub? Prove one with DNS").click();
     await verification.getByRole("textbox", { name: "Your studio's domain" }).fill("studio.example");
     await expect(verification.getByText("_slop-team.studio.example")).toBeVisible();
     await verification.getByRole("button", { name: "Check now" }).click();
     // The test server has no GitHub App: the checks say what's missing.
-    await expect(verification.getByRole("listitem").filter({ hasText: "Slop's GitHub App is installed" })).toContainText("Not yet:");
+    await expect(verification.getByRole("listitem").filter({ hasText: "SLAPorSLOP's GitHub App is installed" })).toContainText("Not yet:");
     await expect(page.getByRole("heading", { name: /Accounts Studio/ })).toContainText("NOT VERIFIED YET");
     await expect(verification).toContainText(/Last checked \w{3} \d+, \d{4}\./);
   });
@@ -429,10 +429,10 @@ test.describe("teams", () => {
     // A remove that fails says so (it used to fail silently).
     await fake(page, "DELETE", new RegExp(`^/v1/teams/${slug}/picks/`), {
       status: 503,
-      body: apiError("unavailable", "Slop is busy: try again in a minute"),
+      body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute"),
     });
     await page.locator(".team-picks").getByRole("listitem").filter({ hasText: "Neon Drift" }).getByRole("button", { name: "Remove" }).click();
-    await expect(page.locator("form").filter({ has: app }).getByRole("alert")).toHaveText("Slop is busy: try again in a minute");
+    await expect(page.locator("form").filter({ has: app }).getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
     await expect(page.locator(".team-picks").getByRole("listitem").filter({ hasText: "Neon Drift" })).toBeVisible();
 
     const title = page.getByRole("textbox", { name: "Game night title" });
@@ -454,10 +454,10 @@ test.describe("teams", () => {
     await expect(page.locator("form").filter({ has: title }).getByRole("alert")).toHaveText("a time in the coming year");
     await fake(page, "DELETE", new RegExp(`^/v1/teams/${slug}/events/`), {
       status: 503,
-      body: apiError("unavailable", "Slop is busy: try again in a minute"),
+      body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute"),
     }, { times: 1 });
     await night.getByRole("button", { name: "Cancel it" }).click();
-    await expect(page.locator("form").filter({ has: title }).getByRole("alert")).toHaveText("Slop is busy: try again in a minute");
+    await expect(page.locator("form").filter({ has: title }).getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
     await night.getByRole("button", { name: "Cancel it" }).click();
     await expect(night).toHaveCount(0);
   });

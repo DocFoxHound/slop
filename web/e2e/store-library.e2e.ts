@@ -5,7 +5,7 @@
 import { expect, ids, server, signIn, test } from "./fixtures";
 import { call, delist, draftApp, failApi, listedApp, path, released, tryCall } from "./store-helpers";
 
-// Remy's coming-soon game, and Vera's Private Slop (shared with Fin Finance to notify him).
+// Remy's coming-soon game, and Vera's Private (shared with Fin Finance to notify him).
 const soon = "kelp-keepers";
 const nook = "note-nook";
 
@@ -68,7 +68,7 @@ test("the Interested list: what you're waiting for, Not interested, and released
   // Taking it off can fail: it says so.
   await failApi(page, path(`/v1/me/interested/${soon}`), { method: "DELETE" });
   await app.getByRole("button", { name: "Not interested" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Something broke on Slop's side.");
+  await expect(page.getByRole("alert")).toHaveText("Something broke on SLAPorSLOP's side.");
   await expect(link).toBeVisible();
   await page.unrouteAll();
   await app.getByRole("button", { name: "Not interested" }).click();
@@ -91,7 +91,7 @@ test("the Interested list: what you're waiting for, Not interested, and released
 });
 
 test("notifications: the bell counts them, opening one goes there, and Mark all as read clears it", async ({ browser }) => {
-  // Fin gets two when Vera shares her Private Slop with him, twice. (Other tests may have sent
+  // Fin gets two when Vera shares her Private with him, twice. (Other tests may have sent
   // him some too: the counts start from what he has.)
   const fin = `${server.url}/u/${ids.finance}`;
   await call("creative", "DELETE", `/v1/apps/${nook}/shares/${ids.finance}`);
@@ -124,7 +124,7 @@ test("notifications: the bell counts them, opening one goes there, and Mark all 
   // Marking all can fail: it says so and nothing changes.
   await failApi(page, path("/v1/me/notifications/read"), { method: "POST" });
   await page.getByRole("button", { name: "Mark all as read" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Something broke on Slop's side.");
+  await expect(page.getByRole("alert")).toHaveText("Something broke on SLAPorSLOP's side.");
   await expect(shared.nth(1)).toHaveClass(/unread/);
   await page.unrouteAll();
   await page.getByRole("button", { name: "Mark all as read" }).click();
@@ -151,9 +151,9 @@ test("public profiles show votes and reviews; private ones only to their owner",
   const visitor = await browser.newPage();
   await visitor.goto(`/u/${ids.player}`);
   await expect(visitor.getByRole("heading", { name: "Pat Player", level: 1 })).toBeVisible();
-  await expect(visitor.getByText(/^On Slop since /)).toBeVisible();
+  await expect(visitor.getByText(/^On SLAPorSLOP since /)).toBeVisible();
   const vote = visitor.locator(".profile-votes li").filter({ has: visitor.locator(`a[href="/app/${ids.listedApp}"]`) });
-  await expect(vote.getByText("👍 Not Slop")).toBeVisible();
+  await expect(vote.getByText("👍 Slaps")).toBeVisible();
   await expect(vote.getByText(/Forty hours in and still finding secrets/)).toBeVisible();
   await expect(visitor.getByText("This is how others see you.")).toHaveCount(0);
 
@@ -209,7 +209,7 @@ test("privacy switches save to the account and show where they matter", async ({
     // A change that doesn't save says so, and the switch shows what's saved.
     await failApi(sue, path("/v1/me"), { method: "PATCH" });
     await publicProfile.click();
-    await expect(sue.locator("#privacy").getByRole("alert")).toHaveText("Something broke on Slop's side.");
+    await expect(sue.locator("#privacy").getByRole("alert")).toHaveText("Something broke on SLAPorSLOP's side.");
     await expect(publicProfile).toBeChecked();
   } finally {
     await tryCall("support", "PATCH", "/v1/me", { profile_public: true, share_playtime: true });
@@ -266,7 +266,7 @@ test("email choices save per kind of notification; phone notifications say what 
   }
 
   // This browser blocks notifications (headless Chromium does, until a site is allowed).
-  await expect(section.getByText("📱 Notifications are blocked for Slop in this browser's settings.")).toBeVisible();
+  await expect(section.getByText("📱 Notifications are blocked for SLAPorSLOP in this browser's settings.")).toBeVisible();
 
   // A browser that hasn't been asked yet gets the switch; this server has no push set up, so
   // switching it on says so. (Headless Chromium always answers "denied": pretend it hasn't.)

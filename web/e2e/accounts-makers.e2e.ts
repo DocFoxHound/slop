@@ -38,7 +38,7 @@ test.describe("AI agent tokens", () => {
     const made = page.waitForRequest((r) => r.url().endsWith("/v1/me/maker-tokens") && r.method() === "POST");
     await section.getByRole("button", { name: "Make token" }).click();
     expect((await made).postDataJSON()).toEqual({ name: "Read-only helper", scope: "read", apps: ["lantern-keep"], people: false, days: 7 });
-    await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(section.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
     // The command connects Claude Code with the saved variable, never the token.
     await section.getByRole("button", { name: "Copy the Claude Code command" }).click();
     const command = await page.evaluate(() => navigator.clipboard.readText());
@@ -62,7 +62,7 @@ test.describe("AI agent tokens", () => {
     await section.getByRole("textbox", { name: "Name" }).fill("Publisher bot");
     await section.getByRole("combobox", { name: "Expires after" }).selectOption("1");
     await section.getByRole("button", { name: "Make token" }).click();
-    await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(section.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
     await expect(section.getByText(/passkey/i)).toHaveCount(0);
     await section.getByRole("button", { name: "Done" }).click();
     const row = section.getByRole("listitem").filter({ hasText: "Publisher bot" });
@@ -97,7 +97,7 @@ test.describe("AI agent tokens", () => {
     const made = page.waitForResponse((r) => r.url().endsWith("/v1/me/maker-tokens") && r.request().method() === "POST");
     await section.getByRole("button", { name: "Make token" }).click();
     expect((await made).status()).toBe(201);
-    await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(section.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
     await expect(page.getByText(/For your safety|confirm it's you/i)).toHaveCount(0);
     await expect(section.getByRole("alert")).toHaveCount(0);
     expect(stepUp.calls).toHaveLength(0);
@@ -135,8 +135,8 @@ test.describe("AI agent token setup and expiry", () => {
 
     const setup = section.getByRole("region", { name: "Set up “Year-long helper” on your computer" });
     await expect(setup.getByRole("note")).toContainText("Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.");
-    await expect(setup.getByRole("note")).toContainText("It's a password for your Slop account.");
-    await expect(setup.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(setup.getByRole("note")).toContainText("It's a password for your SLAPorSLOP account.");
+    await expect(setup.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
     await expect(setup.getByText(/not after Claude Code's/)).toBeVisible();
     await setup.getByRole("button", { name: "Copy the token" }).click();
     expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(secret);
@@ -171,7 +171,7 @@ test.describe("AI agent token setup and expiry", () => {
     await expect(setup.getByText("If a tool asks for the token in its chat, don't paste it there:")).toBeVisible();
     await expect(setup.getByText(`${server.url}/v1/maker/mcp`, { exact: true })).toBeVisible();
     await setup.getByRole("button", { name: "Copy what to ask your AI" }).click();
-    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Read maker_guide, then publish my game on Slop.");
+    expect(await page.evaluate(() => navigator.clipboard.readText())).toBe("Read maker_guide, then publish my game on SLAPorSLOP.");
 
     // The tabs work by keyboard.
     await computers.getByRole("tab", { name: "Windows" }).focus();
@@ -303,7 +303,7 @@ test.describe("AI agent tokens and the Publisher Agreement", () => {
     await accept.click();
     await made;
     await expect(dialog).toBeHidden();
-    await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+    await expect(section.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
     await expect(section.getByRole("alert")).toHaveCount(0);
     await expect(hint).toHaveCount(0);
     await section.getByRole("button", { name: "Done" }).click();
@@ -419,7 +419,7 @@ test.describe("a private repository's token", () => {
     });
     await page.goto("/publish/mias-first/manage");
     const panel = page.locator("section").filter({ has: page.getByRole("heading", { name: "Private repository access" }) });
-    await expect(panel).toContainText("Slop needs a read-only token to fetch releases from this private repository and share them.");
+    await expect(panel).toContainText("SLAPorSLOP needs a read-only token to fetch releases from this private repository and share them.");
     // Guessed from the repository's address.
     await expect(panel.getByRole("combobox", { name: "Host" })).toHaveValue("gitlab");
     await expect(panel).toContainText("Role Reporter, scopes read_api and read_repository.");
@@ -463,7 +463,7 @@ test.describe("a private repository's token", () => {
     expect(put.calls[0].body).toEqual({ kind: "gitlab", token: "glpat-abc" });
     await expect(panel.getByRole("button", { name: "Replace token" })).toBeDisabled();
     await panel.getByRole("button", { name: "Remove token" }).click();
-    await expect(panel).toContainText("Slop needs a read-only token");
+    await expect(panel).toContainText("SLAPorSLOP needs a read-only token");
     expect(del.calls).toHaveLength(1);
   });
 
@@ -570,12 +570,12 @@ test.describe("asked to accept the Publisher Agreement", () => {
 
   test("an agreement that won't load says so and can't be accepted", async ({ page }) => {
     await fake(page, "POST", "/v1/apps", { status: 403, body: apiError("terms_required", "accept the Publisher Agreement first", "publisher") });
-    await fake(page, "GET", "/v1/legal/publisher", { status: 503, body: apiError("unavailable", "Slop is busy: try again in a minute") });
+    await fake(page, "GET", "/v1/legal/publisher", { status: 503, body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute") });
     await signIn(page, "maker");
     await newApp(page, "Agreed Game");
     await page.getByRole("button", { name: "Create draft" }).click();
     const dialog = page.getByRole("dialog", { name: "Agreement" });
-    await expect(dialog.getByRole("alert")).toHaveText("Slop is busy: try again in a minute");
+    await expect(dialog.getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
     await expect(dialog.getByRole("button", { name: "Accept and continue" })).toBeDisabled();
   });
 });

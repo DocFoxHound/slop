@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// How to connect an AI tool to Slop with an agent token (components/AgentSetup.tsx) without the
+// How to connect an AI tool to SLAPorSLOP with an agent token (components/AgentSetup.tsx) without the
 // token ever going into an AI chat or a command the AI sees: the person saves it once in an
 // environment variable in their own terminal, and each tool is connected with a reference to that
 // variable. Only `saveCommand` contains the token itself. A maker's token (`slopmk_…`) goes in
@@ -52,9 +52,9 @@ export const SETUPS = {
   maker: {
     variable: "SLOP_TOKEN",
     server: "slop",
-    firstPrompt: "Read maker_guide, then publish my game on Slop.",
+    firstPrompt: "Read maker_guide, then publish my game on SLAPorSLOP.",
     apiGuide: "the publishing guide, “Working with your AI agent”",
-    account: "your Slop account",
+    account: "your SLAPorSLOP account",
     remove: "remove",
   },
   staff: {
@@ -62,7 +62,7 @@ export const SETUPS = {
     server: "slop-admin",
     firstPrompt: "Read review_guide, then go through the review queue and tell me what needs me.",
     apiGuide: "the reviewer guide at /v1/admin/review/guide",
-    account: "your Slop staff account, with your admin rights",
+    account: "your SLAPorSLOP staff account, with your admin rights",
     remove: "revoke",
   },
 } satisfies Record<string, SetupKind>;
@@ -111,7 +111,7 @@ export function checkCommand(os: SetupOs, kind: SetupKind = MAKER): string {
 }
 
 /**
- * Connects a tool to Slop's MCP address using the variable, never the token. The same on every
+ * Connects a tool to SLAPorSLOP's MCP address using the variable, never the token. The same on every
  * system (PowerShell reads single quotes the way bash and zsh do). Undefined: no command for it.
  */
 export function connectCommand(tool: SetupTool, mcpUrl: string, kind: SetupKind = MAKER): string | undefined {

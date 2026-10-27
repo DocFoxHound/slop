@@ -23,7 +23,7 @@ test("a read-only token for one app, for a day", async ({ page }) => {
   await section.getByRole("combobox", { name: "Expires after" }).selectOption({ label: "1 day" });
   await section.getByRole("button", { name: "Make token" }).click();
 
-  await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+  await expect(section.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
   await expect(section.getByText("Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.")).toBeVisible();
   await expect(section.getByText(/claude mcp add .*slopmk_/)).toHaveCount(0);
   await section.getByRole("button", { name: "Done" }).click();
@@ -46,7 +46,7 @@ test("a publishing token without a passkey is just made: passkeys are optional",
   const section = page.locator("#ai-agents");
   await section.getByRole("textbox", { name: "Name" }).fill(`Publisher ${tag()}`);
   await section.getByRole("button", { name: "Make token" }).click();
-  await expect(section.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+  await expect(section.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
   await expect(section.getByText(/passkey/i)).toHaveCount(0);
   await section.getByRole("button", { name: "Done" }).click();
   await expect(section.getByText(/publishes · all apps/)).toBeVisible();

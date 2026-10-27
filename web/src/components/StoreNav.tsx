@@ -192,11 +192,11 @@ export function Sidebar({ active }: { active?: string }) {
   );
 }
 
-/** Slop itself: the rules, checking a file, the code, and how to reach Slop. */
+/** SLAPorSLOP itself: the rules, checking a file, the code, and how to reach SLAPorSLOP. */
 export function StoreFooter() {
   return (
     <footer className="store-footer">
-      <nav aria-label="About Slop">
+      <nav aria-label="About SLAPorSLOP">
         <Link to="/legal">📜 Terms &amp; policies</Link>
         <Link to="/legal/content">🛡️ Content Policy &amp; reports</Link>
         <Link to="/verify">🔎 Check a file</Link>
@@ -209,7 +209,7 @@ export function StoreFooter() {
 }
 
 /**
- * A store page: the store bar on top, Slop's links at the bottom, and, on list pages, the
+ * A store page: the store bar on top, SLAPorSLOP's links at the bottom, and, on list pages, the
  * sidebar for browsing. The front page has no sidebar: it's all apps.
  */
 export function StoreFrame({ children, sidebar = false, active }: { children: ReactNode; sidebar?: boolean; active?: string }) {

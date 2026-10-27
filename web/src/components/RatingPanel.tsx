@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// 👍 Not Slop / 👎 Slop on an app's page: the rating (weighted by playtime, with the unweighted
+// 👍 Slaps / 👎 Slop on an app's page: the rating (weighted by playtime, with the unweighted
 // one beside it), the vote buttons, and the rating, votes and players over time
 // (crates/slop-api/src/votes.rs, pulse.rs; DESIGN §7, METRICS §2).
 
@@ -47,7 +47,7 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
   const bad = ratings.percent_weighted < 40;
   return (
     <div className="rating-summary">
-      <span className={`rating-big ${good ? "good" : bad ? "bad" : "mixed"}`}>{ratings.percent_weighted}% Not Slop</span>{" "}
+      <span className={`rating-big ${good ? "good" : bad ? "bad" : "mixed"}`}>{ratings.percent_weighted}% Slaps</span>{" "}
       <b>{ratings.label}</b>
       <div className="muted small">
         <Link to="/ratings">weighted by playtime</Link> · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()}{" "}
@@ -80,7 +80,7 @@ export function SinceNewWork({ s, min }: { s: NonNullable<Ratings["since_new_wor
         {s.percent_weighted !== null && s.percent_weighted !== undefined ? (
           <>
             <span className={`rating-mid ${s.percent_weighted >= 70 ? "good" : s.percent_weighted < 40 ? "bad" : "mixed"}`}>
-              {s.percent_weighted}% Not Slop
+              {s.percent_weighted}% Slaps
             </span>{" "}
             <span className="muted small">
               {s.label} · {total} vote{total === 1 ? "" : "s"} cast or changed since
@@ -121,7 +121,7 @@ function tone(percent: number): "good" | "bad" | "mixed" {
   return percent >= 70 ? "good" : percent < 40 ? "bad" : "mixed";
 }
 
-const VOTE_LABEL = { not_slop: "👍 Not Slop", slop: "👎 Slop" } as const;
+const VOTE_LABEL = { not_slop: "👍 Slaps", slop: "👎 Slop" } as const;
 
 /** Moves to the rating panel (id "rating") and puts focus there. */
 export function jumpToRating() {
@@ -153,9 +153,9 @@ export function rateStep(r: Ratings, isMine: boolean, signedIn: boolean): RateSt
 }
 
 /**
- * The rating at the top of an app's page: "96% Not Slop · Overwhelmingly Not Slop · 2,914 votes",
+ * The rating at the top of an app's page: "96% Slaps · Overwhelmingly Slaps · 2,914 votes",
  * and what the viewer can do about it, plainly: a Rate it button (jumping to the panel), or why
- * they can't yet with the step to take right there (sign in; play it from the Slop app, with
+ * they can't yet with the step to take right there (sign in; play it from the SLAPorSLOP app, with
  * `play`, the page's Play/Install control, in the desktop app; Interested while it's Coming soon).
  */
 export function RatingHeader({
@@ -178,7 +178,7 @@ export function RatingHeader({
   const loaded = useRatings(slug, signedIn);
   const r = loaded.data;
   const step = r ? rateStep(r, isMine, signedIn) : undefined;
-  // Back from playing it (the Slop app's window, or another tab): ask again whether they can rate.
+  // Back from playing it (the SLAPorSLOP app's window, or another tab): ask again whether they can rate.
   const waiting = step?.kind === "play";
   const reload = loaded.reload;
   useEffect(() => {
@@ -193,7 +193,7 @@ export function RatingHeader({
       <div className="rating-head-score">
         {r.percent_weighted !== null ? (
           <>
-            <span className={`rating-big ${tone(r.percent_weighted)}`}>{r.percent_weighted}% Not Slop</span>{" "}
+            <span className={`rating-big ${tone(r.percent_weighted)}`}>{r.percent_weighted}% Slaps</span>{" "}
             <span className="rating-head-label">
               {r.label && <b>{r.label}</b>}
               <span className="muted small">
@@ -248,7 +248,7 @@ function RateCallout({
       return (
         <div className="rate-callout" role="group" aria-label="Rate it">
           <p>
-            <b>Played {title}? Sign in to rate it.</b> Ratings come from players who played it from the Slop app.
+            <b>Played {title}? Sign in to rate it.</b> Ratings come from players who played it from the SLAPorSLOP app.
           </p>
           <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>
             Sign in to rate
@@ -259,7 +259,7 @@ function RateCallout({
       return (
         <div className="rate-callout" role="group" aria-label="Rate it">
           <p>
-            <b>Play it from the Slop app to rate it.</b> Only players who launched it through Slop can rate, which keeps
+            <b>Play it from the SLAPorSLOP app to rate it.</b> Only players who launched it through SLAPorSLOP can rate, which keeps
             ratings honest.{" "}
             {isDesktop
               ? play
@@ -271,7 +271,7 @@ function RateCallout({
             play
           ) : (
             <Link className="btn slime" to="/download">
-              ⬇ Get the Slop app
+              ⬇ Get the SLAPorSLOP app
             </Link>
           )}
         </div>
@@ -280,7 +280,7 @@ function RateCallout({
       return (
         <div className="rate-callout" role="group" aria-label="Rate it">
           <p>
-            <b>Makers can't rate their own app.</b> Players who play it from the Slop app rate it here.
+            <b>Makers can't rate their own app.</b> Players who play it from the SLAPorSLOP app rate it here.
           </p>
         </div>
       );
@@ -304,13 +304,13 @@ function RateCallout({
   }
 }
 
-/** The rating in a few words, for the library's header: "96% Not Slop", or nothing yet. */
+/** The rating in a few words, for the library's header: "96% Slaps", or nothing yet. */
 export function RatingBadge({ slug, signedIn }: { slug: string; signedIn: boolean }) {
   const r = useRatings(slug, signedIn).data;
   if (!r || r.percent_weighted === null) return null;
   return (
     <span className={`rating-badge ${tone(r.percent_weighted)}`} title={r.label ?? undefined}>
-      {r.percent_weighted}% Not Slop
+      {r.percent_weighted}% Slaps
     </span>
   );
 }
@@ -318,7 +318,7 @@ export function RatingBadge({ slug, signedIn }: { slug: string; signedIn: boolea
 /**
  * Steam's "would you recommend this?" for the library: once the player has played an app and
  * hasn't voted, ask; once they have, show their vote with Change, and their review. Before they
- * can, why not with the step to take (sign in; play it from the Slop app), as at the top of the
+ * can, why not with the step to take (sign in; play it from the SLAPorSLOP app), as at the top of the
  * store page.
  */
 export function RatePrompt({
@@ -374,7 +374,7 @@ export function RatePrompt({
     <section className={`panel panel-pad rate-prompt${asking ? " asking" : ""}`} aria-label={`Rate ${title}`}>
       {asking ? (
         <>
-          <h3>{mine.vote ? `Change your rating of ${title}` : `You've played ${title}: is it Slop or Not Slop?`}</h3>
+          <h3>{mine.vote ? `Change your rating of ${title}` : `You've played ${title}: does it slap, or is it slop?`}</h3>
           <div className="vote-row">
             <button
               type="button"
@@ -383,7 +383,7 @@ export function RatePrompt({
               disabled={busy}
               onClick={() => void vote("not_slop")}
             >
-              👍 Not Slop
+              👍 Slaps
             </button>
             <button
               type="button"
@@ -455,7 +455,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
 
   return (
     <section className="panel panel-pad rating-panel" aria-label="Ratings" id="rating" tabIndex={-1}>
-      <h2>Slop or Not Slop?</h2>
+      <h2>Slap or Slop?</h2>
       <RatingSummary ratings={r} />
       {r.since_new_work && <SinceNewWork s={r.since_new_work} min={r.min_votes} />}
 
@@ -465,7 +465,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
         <p className="muted small">Makers can't vote on their own apps.</p>
       ) : !signedIn ? (
         <p className="muted small">
-          <Link to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>Sign in</Link> and play it from the Slop app to
+          <Link to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>Sign in</Link> and play it from the SLAPorSLOP app to
           vote.
         </p>
       ) : mine?.can_vote ? (
@@ -477,7 +477,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
             disabled={busy}
             onClick={() => void vote(mine.vote === "not_slop" ? null : "not_slop")}
           >
-            👍 Not Slop
+            👍 Slaps
           </button>
           <button
             type="button"
@@ -523,8 +523,8 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
             </button>
           </div>
           <LineChart
-            title="% Not Slop by month"
-            summary={`% Not Slop at the end of each month from ${months[0]} to ${months[months.length - 1]}.`}
+            title="% Slaps by month"
+            summary={`% Slaps at the end of each month from ${months[0]} to ${months[months.length - 1]}.`}
             labels={months}
             max={100}
             unit="%"
@@ -541,11 +541,11 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
       {r.daily.length > 0 && (
         <UpDownBars
           title="Votes per day (90 days)"
-          summary={`Votes cast per day over the last 90 days: ${r.daily.reduce((n, d) => n + d.not_slop, 0)} Not Slop and ${r.daily.reduce((n, d) => n + d.slop, 0)} Slop.${(r.unusual_days ?? []).length > 0 ? ` ${(r.unusual_days ?? []).length} of those days had unusual voting.` : ""}`}
+          summary={`Votes cast per day over the last 90 days: ${r.daily.reduce((n, d) => n + d.not_slop, 0)} Slaps and ${r.daily.reduce((n, d) => n + d.slop, 0)} Slop.${(r.unusual_days ?? []).length > 0 ? ` ${(r.unusual_days ?? []).length} of those days had unusual voting.` : ""}`}
           labels={days}
           up={r.daily.map((d) => d.not_slop)}
           down={r.daily.map((d) => d.slop)}
-          upName="👍 Not Slop"
+          upName="👍 Slaps"
           downName="👎 Slop"
           marked={r.daily.map((d) => (r.unusual_days ?? []).includes(d.day))}
           markedName="Unusual voting"
@@ -554,7 +554,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
       {r.daily.some((d) => (r.unusual_days ?? []).includes(d.day)) && (
         <p className="muted small">
           Shaded days had unusual voting: a sudden wave of 👎, many votes from brand-new accounts, or many players changing
-          their vote at once. Slop's staff look into these; nothing is changed automatically.
+          their vote at once. SLAPorSLOP's staff look into these; nothing is changed automatically.
         </p>
       )}
       {peaks.length > 0 && (

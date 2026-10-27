@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Sandbox mode in the Slop app (DESIGN §6): an app runs in a box where it can use only its own
+// Sandbox mode in the SLAPorSLOP app (DESIGN §6): an app runs in a box where it can use only its own
 // files, mods and save folder, plus the screen, sound and controllers. Players turn it on per
-// app; Slop suggests it for apps that go online. It limits what a compromised app can reach;
+// app; SLAPorSLOP suggests it for apps that go online. It limits what a compromised app can reach;
 // it isn't a guarantee, so it's never called "safe".
 
 import { useEffect, useState } from "react";
@@ -13,7 +13,7 @@ import { desktop, isDesktop, type Launched, type SandboxStatus, type SaveSyncOut
 
 /** What the store knows about an app, for sandbox suggestions. */
 export interface SandboxHint {
-  /** It goes online on servers Slop can't check (or has networking code it doesn't declare). */
+  /** It goes online on servers SLAPorSLOP can't check (or has networking code it doesn't declare). */
   suggested: boolean;
   /** Its store page says it doesn't go online, so blocking the internet is offered. */
   offline: boolean;
@@ -41,7 +41,7 @@ export function SandboxPrompt({ title, onChoose }: { title: string; onChoose: (o
   return (
     <div className="notice sandbox-prompt" role="dialog" aria-label="Sandbox mode">
       <p>
-        <b>{title}</b> plays online, on servers Slop can't check. In <b>sandbox mode</b> it can only use its own files and
+        <b>{title}</b> plays online, on servers SLAPorSLOP can't check. In <b>sandbox mode</b> it can only use its own files and
         saves, not the rest of your computer. Your saves are the same in both modes. Some games don't work in it; you can
         change this any time.
       </p>
@@ -109,7 +109,7 @@ export function SandboxSwitch({
   );
 }
 
-/** What Slop did before starting the app. */
+/** What SLAPorSLOP did before starting the app. */
 export function LaunchNotices({ launched, slug, title }: { launched: Launched; slug: string; title: string }) {
   const unapproved = launched.unapproved_mods ?? [];
   return (
@@ -117,10 +117,10 @@ export function LaunchNotices({ launched, slug, title }: { launched: Launched; s
       <SaveSyncNotice slug={slug} title={title} result={launched.save_sync ?? null} />
       {unapproved.length > 0 && (
         <div className="notice small" role="status">
-          Slop moved {unapproved.length === 1 ? "something" : `${unapproved.length} things`} that{" "}
-          {unapproved.length === 1 ? "isn't a mod" : "aren't mods"} from Slop out of {title}'s mods folder (
+          SLAPorSLOP moved {unapproved.length === 1 ? "something" : `${unapproved.length} things`} that{" "}
+          {unapproved.length === 1 ? "isn't a mod" : "aren't mods"} from SLAPorSLOP out of {title}'s mods folder (
           {unapproved.slice(0, 3).join(", ")}
-          {unapproved.length > 3 && ", …"}). They're kept in Slop's quarantine folder. Only mods published on Slop can be
+          {unapproved.length > 3 && ", …"}). They're kept in SLAPorSLOP's quarantine folder. Only mods published on SLAPorSLOP can be
           used, offline or online: a mod has to be published and approved, and follow the{" "}
           <Link to="/publish/guide#online-play-and-mods">guidelines</Link>, so everyone you play with gets the same checked
           files. Made it yourself? <Link to={`/app/${slug}/branch?kind=addon`}>Publish it for {title}</Link>.
@@ -128,9 +128,9 @@ export function LaunchNotices({ launched, slug, title }: { launched: Launched; s
       )}
       {launched.quarantined.length > 0 && (
         <div className="notice small" role="status">
-          Before starting {title}, Slop moved {launched.quarantined.length === 1 ? "a program" : `${launched.quarantined.length} programs`}{" "}
+          Before starting {title}, SLAPorSLOP moved {launched.quarantined.length === 1 ? "a program" : `${launched.quarantined.length} programs`}{" "}
           out of its save folder ({launched.quarantined.slice(0, 3).join(", ")}
-          {launched.quarantined.length > 3 && ", …"}). Saves are for data only. They're kept in Slop's quarantine folder.
+          {launched.quarantined.length > 3 && ", …"}). Saves are for data only. They're kept in SLAPorSLOP's quarantine folder.
         </div>
       )}
       {launched.copy_skipped && (
@@ -190,7 +190,7 @@ export function SandboxFailedNotice({
           disabled={reported}
           onClick={() => void api.sandboxReport(slug, true).then(() => setReported(true), () => setReported(false))}
         >
-          {reported ? "Thanks, reported" : "Tell Slop it doesn't work in sandbox mode"}
+          {reported ? "Thanks, reported" : "Tell SLAPorSLOP it doesn't work in sandbox mode"}
         </button>
         <button className="btn small ghost" onClick={onClose}>
           Close
@@ -248,7 +248,7 @@ export function SaveSyncNotice({ slug, title, result }: { slug: string; title: s
   );
 }
 
-/** Save sync results after an app closes (in the Slop app). */
+/** Save sync results after an app closes (in the SLAPorSLOP app). */
 export function SaveSyncEvents() {
   const [last, setLast] = useState<{ slug: string; result: SaveSyncOutcome }>();
   useEffect(() => {

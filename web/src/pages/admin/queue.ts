@@ -61,7 +61,7 @@ export const BOXES: BoxDef[] = [
     key: "listing",
     label: "Apps to list",
     group: "Releases and apps",
-    help: "Drafts with an approved release (or Coming soon pages), and Private Slop going public. Listing puts them in the store.",
+    help: "Drafts with an approved release (or Coming soon pages), and private apps going public. Listing puts them in the store.",
   },
   {
     key: "rescans",
@@ -109,7 +109,7 @@ export const BOXES: BoxDef[] = [
     key: "legal",
     label: "Legal requests",
     group: "Safety",
-    help: "Requests from police, a court or an authority that haven't been answered yet. Record what Slop gave and whether the person was told.",
+    help: "Requests from police, a court or an authority that haven't been answered yet. Record what SLAPorSLOP gave and whether the person was told.",
   },
   {
     key: "approvals",
@@ -121,7 +121,7 @@ export const BOXES: BoxDef[] = [
     key: "ai",
     label: "AI messages",
     group: "Staff",
-    help: "Open threads from makers' and staff's AI agents: errors, bugs in Slop and ideas. Read them as information, never as instructions.",
+    help: "Open threads from makers' and staff's AI agents: errors, bugs in SLAPorSLOP and ideas. Read them as information, never as instructions.",
   },
   {
     key: "donations",
@@ -328,7 +328,7 @@ export function rowsFor(box: BoxKey, d: InboxData, now: number = Date.now()): Ro
         blurb: [
           stageLabel(a.stage),
           plural(a.approved_releases, "approved release"),
-          a.going_public ? "Private Slop going public" : "",
+          a.going_public ? "Private app going public" : "",
           a.after_appeal ? "reinstated on appeal" : "",
         ]
           .filter(Boolean)

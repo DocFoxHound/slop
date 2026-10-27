@@ -63,8 +63,8 @@ test("a player who played the Beta rates it from the top of the page, and it say
 
   await rate.click();
   await expect(ratings(page)).toBeFocused();
-  await ratings(page).getByRole("button", { name: "👍 Not Slop" }).click();
-  await expect(head(page).getByRole("button", { name: "Your rating: 👍 Not Slop" })).toBeVisible();
+  await ratings(page).getByRole("button", { name: "👍 Slaps" }).click();
+  await expect(head(page).getByRole("button", { name: "Your rating: 👍 Slaps" })).toBeVisible();
   await expect(ratings(page).getByText("This vote was given while it was in Beta.")).toBeVisible();
 
   // A written review shows with its vote, marked as given in Beta.
@@ -86,22 +86,22 @@ test("why others can't rate it yet, with the step to take right there", async ({
   );
   await noSeriousAxeViolations(visitor);
 
-  // Signed in on the website, never played it: get the Slop app.
+  // Signed in on the website, never played it: get the SLAPorSLOP app.
   const teen = await browser.newPage();
   await signIn(teen, "teen");
   await teen.goto(`/app/${beta}`);
-  await expect(head(teen).getByText("Play it from the Slop app to rate it.")).toBeVisible();
-  await expect(head(teen).getByRole("link", { name: "⬇ Get the Slop app" })).toHaveAttribute("href", "/download");
+  await expect(head(teen).getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
+  await expect(head(teen).getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveAttribute("href", "/download");
   await expect(head(teen).getByRole("button", { name: "Rate it" })).toHaveCount(0);
 
-  // In the Slop app, the Install button is right there.
+  // In the SLAPorSLOP app, the Install button is right there.
   const app = await browser.newPage();
   await asDesktop(app, { state: "none" });
   await signIn(app, "teen");
   await app.goto(`/app/${beta}`);
-  await expect(head(app).getByText("Play it from the Slop app to rate it.")).toBeVisible();
+  await expect(head(app).getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
   await expect(head(app).getByRole("button", { name: "Install" })).toBeVisible();
-  await expect(head(app).getByRole("link", { name: "⬇ Get the Slop app" })).toHaveCount(0);
+  await expect(head(app).getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveCount(0);
 
   // The maker.
   const maker = await browser.newPage();
@@ -229,8 +229,8 @@ test("a new app's form says where getting paid is set up", async ({ page }) => {
   await signIn(page, "pendingCreative");
   await page.goto("/publish/new");
   await expect(page.getByText(/Getting paid: players can donate to you once it's in Beta or released/)).toBeVisible();
-  // Not for Private Slop, which takes no donations.
-  await page.getByRole("radio", { name: /Private Slop/ }).check();
+  // Not for Private, which takes no donations.
+  await page.getByRole("radio", { name: /Private/ }).check();
   await expect(page.getByText(/Getting paid:/)).toHaveCount(0);
 });
 

@@ -141,11 +141,11 @@ export function People() {
         <ol className="muted">
           <li>Pick a creative and one of your projects (any stage, public or private).</li>
           <li>They send an offer: price, date, who owns the work. You see it in plain words.</li>
-          <li>Accept and pay them directly (half now and half on delivery, unless they choose otherwise). Slop never holds the money.</li>
+          <li>Accept and pay them directly (half now and half on delivery, unless they choose otherwise). SLAPorSLOP never holds the money.</li>
           <li>When it's delivered, say it looks good. They're credited on your app's page, and your app gets the ✋ Made with people badge.</li>
         </ol>
         <p className="muted small">
-          Your contract is with the creative, not Slop. Slop takes a 5% fee from what the creative receives; nothing is added to your price.
+          Your contract is with the creative, not SLAPorSLOP. SLAPorSLOP takes a 5% fee from what the creative receives; nothing is added to your price.
         </p>
       </div>
 
@@ -156,7 +156,7 @@ export function People() {
             A People page is your shop window: it shows makers who might hire you who you are, your style, your best work and your rates.
             Your best work comes from a portfolio, a public GitHub repository of your own with your pictures and tracks in it (videos are
             YouTube links). There are ready-made templates to start from, and a line you can hand an AI assistant to build it with you. A
-            person at Slop looks at it, then your page goes public.
+            person at SLAPorSLOP looks at it, then your page goes public.
           </p>
           <Link className="btn" to="/people/me">
             Make your People page
@@ -213,9 +213,9 @@ function savedMessage(saved: PeopleSaved, status: PageStatus): string {
   const done = saved === "created" ? "Your People page is created" : "Your People page is saved";
   switch (status.state) {
     case "draft":
-      return `${done}. Only you can see it for now: add your portfolio next, and Slop reviews it before your page goes public.`;
+      return `${done}. Only you can see it for now: add your portfolio next, and SLAPorSLOP reviews it before your page goes public.`;
     case "waiting":
-      return `${done} and waiting for Slop's review of your portfolio. Only you can see it until then.`;
+      return `${done} and waiting for SLAPorSLOP's review of your portfolio. Only you can see it until then.`;
     case "turned_down":
       return `${done}. Only you can see it until a portfolio is approved.`;
     case "live":
@@ -255,8 +255,8 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
     p.services.length > 0 ? (
       <ServicesList services={p.services} onHire={!p.is_me && p.can_hire ? (s) => setHiring({ serviceId: s.id, skill: s.skill }) : undefined} />
     ) : null;
-  // With their own design, the creative's page is: Slop's header, their design (which places
-  // their works), then Slop's services, reviews and credits, which a design can't reach.
+  // With their own design, the creative's page is: SLAPorSLOP's header, their design (which places
+  // their works), then SLAPorSLOP's services, reviews and credits, which a design can't reach.
   const shown: Section[] = p.design ? ["services", "reviews", "worked_on"] : p.sections;
 
   const sections: Record<Section, ReactNode> = {
@@ -280,7 +280,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
       ) : null,
     reviews: (
       <section key="reviews">
-        <SectionHeader title="Reviews from clients" sub="Only makers who finished a job through Slop can review" />
+        <SectionHeader title="Reviews from clients" sub="Only makers who finished a job through SLAPorSLOP can review" />
         {p.reviews.length === 0 ? (
           <p className="muted">No reviews yet.</p>
         ) : (
@@ -291,7 +291,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
     worked_on:
       p.worked_on.length > 0 ? (
         <section key="worked_on">
-          <SectionHeader title="Worked on" sub="Apps on Slop that credit them" />
+          <SectionHeader title="Worked on" sub="Apps on SLAPorSLOP that credit them" />
           <Shelf apps={p.worked_on.map((a) => ({ ...a, reason: `${a.role} by ${p.name}` }))} empty={null} />
         </section>
       ) : null,
@@ -328,7 +328,7 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
       )}
       {p.closed && (
         <div className="notice">
-          {p.name} closed their Slop account. This page is kept as it was, as the record of their work and reviews, and
+          {p.name} closed their SLAPorSLOP account. This page is kept as it was, as the record of their work and reviews, and
           takes no new work.
         </div>
       )}
@@ -413,10 +413,10 @@ function PersonView({ p: loaded, reload }: { p: CreativePage; reload: () => void
               <div className="faint small">Required on every profile. Each offer says it again for that job.</div>
             </div>
             <div className="panel panel-pad small muted">
-              <b className="text">Hiring through Slop</b>
-              <p>You pay {p.name} directly through Stripe. Slop never holds the money.</p>
+              <b className="text">Hiring through SLAPorSLOP</b>
+              <p>You pay {p.name} directly through Stripe. SLAPorSLOP never holds the money.</p>
               <p>When the job is done, your app's page credits them and gets the ✋ Made with people badge.</p>
-              <p>Your contract is with {p.name}, not Slop. Slop doesn't settle disputes.</p>
+              <p>Your contract is with {p.name}, not SLAPorSLOP. SLAPorSLOP doesn't settle disputes.</p>
             </div>
           </aside>
         </div>
@@ -461,7 +461,7 @@ function Review({ r, canReply, onSaved }: { r: CreativePage["reviews"][number]; 
       <div className="review-who">
         <b>{r.client_name}</b>
         <span className="badge official">✓ VERIFIED CLIENT</span>
-        <span className={`vote-chip ${r.vote === "not_slop" ? "up" : "down"}`}>{r.vote === "not_slop" ? "👍 Not Slop" : "👎 Slop"}</span>
+        <span className={`vote-chip ${r.vote === "not_slop" ? "up" : "down"}`}>{r.vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}</span>
       </div>
       <div className="faint small">
         {r.work} · {r.skill.name}
@@ -551,7 +551,7 @@ function DisputeForm({ jobId, onDone }: { jobId: string; onDone: () => void }) {
       }}
     >
       <p className="muted small">
-        A mediator checks the review against Slop's rules and the job record. Reviews aren't removed for being negative: an honest opinion
+        A mediator checks the review against SLAPorSLOP's rules and the job record. Reviews aren't removed for being negative: an honest opinion
         stays, and your reply is your answer to it.
       </p>
       <fieldset className="choice-list">
