@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // What the library's sidebar lists (DESIGN §6): every app once, in groups like Steam's
-// (installed, not installed, Private Slop, Interested), with a filter, a search and a short
+// (installed, not installed, Private, Interested), with a filter, a search and a short
 // status for each ("Update queued", "Downloading 40%", "Running"). Pure, so it's unit tested.
 
 import type { AppSummary, AppUpdate } from "../api";
@@ -14,7 +14,7 @@ export interface Entry {
   slug: string;
   title: string;
   group: Group;
-  /** What the store knows about it, when it does (not for an installed app Slop no longer lists). */
+  /** What the store knows about it, when it does (not for an installed app SLAPorSLOP no longer lists). */
   app?: AppSummary;
   installed?: InstalledApp;
   update?: AppUpdate;
@@ -22,7 +22,7 @@ export interface Entry {
   available: boolean;
   /** A community build installed beside its original: the original's title (DESIGN §9). */
   buildOf?: string;
-  /** Private Slop: "you", or who shared it. */
+  /** Private: "you", or who shared it. */
   owner?: string;
   inLibrary: boolean;
   /** Marked Interested (an upcoming app, or one released since). */
@@ -148,7 +148,7 @@ export function matchesSearch(e: Entry, query: string): boolean {
   return e.title.toLowerCase().includes(q) || e.slug.includes(q) || (e.app?.summary.toLowerCase().includes(q) ?? false);
 }
 
-/** The filters that make sense here: installing happens in the Slop app only. */
+/** The filters that make sense here: installing happens in the SLAPorSLOP app only. */
 export function filtersFor(desktop: boolean): Array<{ id: Filter; label: string }> {
   return [
     { id: "all", label: "All" },
@@ -158,7 +158,7 @@ export function filtersFor(desktop: boolean): Array<{ id: Filter; label: string 
           { id: "updates", label: "Updates" },
         ] as const)
       : []),
-    { id: "private", label: "Private Slop" },
+    { id: "private", label: "Private" },
     { id: "interested", label: "Interested" },
     { id: "community", label: "Community builds" },
   ];
@@ -171,7 +171,7 @@ export function groupLabel(group: Group, desktop: boolean): string {
     case "library":
       return desktop ? "Not installed" : "In your library";
     case "private":
-      return "Private Slop";
+      return "Private";
     case "interested":
       return "Interested";
   }

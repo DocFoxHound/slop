@@ -24,11 +24,11 @@ test("staff pause an app's donations, the maker asks for them back, and staff li
   const maker = await browser.newPage();
   await signIn(maker, "maker");
   await maker.goto("/publish/mias-first/manage");
-  await expect(maker.getByText("Donations to this app are paused while Slop reviews it.")).toBeVisible();
+  await expect(maker.getByText("Donations to this app are paused while SLAPorSLOP reviews it.")).toBeVisible();
   await expect(maker.getByText(/the music is someone else's/)).toBeVisible();
   await maker.getByRole("textbox", { name: /Fixed it\?/ }).fill("Swapped in CC0 music; licence file added.");
   await maker.getByRole("button", { name: "Ask for a review" }).click();
-  await expect(maker.getByText("Waiting for Slop's answer.")).toBeVisible();
+  await expect(maker.getByText("Waiting for SLAPorSLOP's answer.")).toBeVisible();
 
   // Staff see the request in the review queue, open it and lift the pause.
   await admin.goto("/admin");
@@ -68,7 +68,7 @@ test("staff freeze an app, make a front-page shelf, and fix profiles", async ({ 
   const maker = await browser.newPage();
   await signIn(maker, "maker");
   await maker.goto("/publish/mias-first/manage");
-  await expect(maker.getByRole("heading", { name: "Frozen by Slop" })).toBeVisible();
+  await expect(maker.getByRole("heading", { name: "Frozen by SLAPorSLOP" })).toBeVisible();
   await expect(maker.getByText(/Checking a report about the last build/)).toBeVisible();
   await admin.getByRole("button", { name: "Lift the freeze" }).click();
   await admin.getByRole("textbox", { name: "Lift the freeze: reason" }).fill("The report was wrong.");

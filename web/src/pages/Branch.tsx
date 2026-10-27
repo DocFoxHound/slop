@@ -2,7 +2,7 @@
 // Registering a branch of an app (DESIGN §9): a mod the game loads, or a modded version, fix,
 // translation or port built from your own fork. It's made for one original: the page starts from
 // the original's rating, labels and online answers, and asks everything creating an app asks, so
-// branches meet the same rules. It starts as a draft; you submit a release, Slop checks and
+// branches meet the same rules. It starts as a draft; you submit a release, SLAPorSLOP checks and
 // reviews it like any other, and it then shows in the Community area of the original's page.
 // /app/:slug/branch?kind=addon starts on "Mod".
 
@@ -130,8 +130,8 @@ function BranchForm({ parent: p }: { parent: AppDetail }) {
       {isMod ? (
         <p className="muted">
           A mod lives in <b>your own repository</b>. Each release is one <code>.zip</code> of the mod's files for every
-          platform, with nothing to start: the Slop app adds it to {p.title}, which loads it. It shows in the Community area
-          of {p.title}'s page, made by you, not {p.maker.display_name}. Games on Slop only load mods approved here; see{" "}
+          platform, with nothing to start: the SLAPorSLOP app adds it to {p.title}, which loads it. It shows in the Community area
+          of {p.title}'s page, made by you, not {p.maker.display_name}. Games on SLAPorSLOP only load mods approved here; see{" "}
           <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
         </p>
       ) : (
@@ -143,7 +143,7 @@ function BranchForm({ parent: p }: { parent: AppDetail }) {
       )}
       <div className="notice small" role="note">
         <b>The same rules as a new app.</b> Every release is checked like any other: the files are scanned, the source is
-        read (licence, anything for sale, code from outside Slop, networking, where saves go), and a person reviews it
+        read (licence, anything for sale, code from outside SLAPorSLOP, networking, where saves go), and a person reviews it
         before players see it. It can't be rated below {p.title}, and keeps its content labels.
       </div>
       <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>

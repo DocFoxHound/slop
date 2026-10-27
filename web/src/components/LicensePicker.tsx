@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The licence field on the Publish form: popular open-source licences, "Other" for any SPDX ID,
-// and detection from the linked repository (GitHub's licence API, via Slop).
+// and detection from the linked repository (GitHub's licence API, via SLAPorSLOP).
 
 import { useEffect, useRef, useState } from "react";
 

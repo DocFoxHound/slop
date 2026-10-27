@@ -41,11 +41,11 @@ const n = (id: number, category: string, title: string, created: string, read = 
 function seeded(): N[] {
   return [
     n(7, "chat", "New messages from Bo Builder", "2026-10-21T14:59:00Z", false, { count: 3, link: "/chat" }),
-    n(1, "friends", "Sue Support wants to be friends", "2026-10-21T14:50:00Z", false, { body: "Friends can message each other in the Slop app.", link: "/friends" }),
+    n(1, "friends", "Sue Support wants to be friends", "2026-10-21T14:50:00Z", false, { body: "Friends can message each other in the SLAPorSLOP app.", link: "/friends" }),
     n(3, "jobs", "Cleo paid for Pixel art", "2026-10-21T13:00:00Z", true),
     n(2, "apps", "Lantern Keep 1.1.0 was approved", "2026-10-21T12:00:00Z", false, { link: "/app/lantern-keep" }),
     n(4, "apps", "Pocket Golf 1.0.0 was received", "2026-10-20T09:00:00Z", true),
-    n(5, "moderation", "Slop made a decision about your review", "2026-10-18T09:00:00Z"),
+    n(5, "moderation", "SLAPorSLOP made a decision about your review", "2026-10-18T09:00:00Z"),
     n(6, "security", "A passkey was added to your account", "2026-10-01T09:00:00Z", true),
   ];
 }
@@ -132,7 +132,7 @@ test("the kinds down the side with what's unread in each, and the notifications 
   const sue = row(page, "Sue Support wants to be friends");
   await expect(sue).toHaveClass(/unread/);
   await expect(sue.locator(".n-title")).toHaveCSS("font-weight", "700");
-  await expect(sue.locator(".n-body")).toHaveText("Friends can message each other in the Slop app.");
+  await expect(sue.locator(".n-body")).toHaveText("Friends can message each other in the SLAPorSLOP app.");
   await expect(sue.locator("time")).toHaveText("10 min ago");
   await expect(sue.locator("time")).toHaveAttribute("title", /Wednesday, October 21, 2026/);
   await expect(sue.locator(".n-dot")).toBeVisible();
@@ -186,7 +186,7 @@ test("a kind is in the address and Back returns to it; Unread only; Mark all as 
   await expect(page.getByRole("heading", { name: "All notifications", level: 2 })).toBeVisible();
   // The others are as they were.
   await expect(row(page, "Sue Support")).toHaveClass(/unread/);
-  await expect(row(page, "Slop made a decision")).toHaveClass(/unread/);
+  await expect(row(page, "SLAPorSLOP made a decision")).toHaveClass(/unread/);
 });
 
 test("each kind says what shows up there when it's empty", async ({ page }) => {

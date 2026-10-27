@@ -33,7 +33,7 @@ test("turning donations on: the tax notice first, then the maker's Stripe accoun
   await page.goto(`/publish/${SLUG}/manage#donations`);
   const p = panel(page);
   await expect(p.getByRole("heading", { name: "Donations" })).toBeVisible();
-  await expect(p.getByText(/Slop takes a 5% platform fee/)).toBeVisible();
+  await expect(p.getByText(/SLAPorSLOP takes a 5% platform fee/)).toBeVisible();
   // Vera said she's 18 when she joined People, so she isn't asked again.
   await expect(p.getByRole("checkbox", { name: "I'm 18 or older." })).toHaveCount(0);
   const enable = p.getByRole("button", { name: "Enable donations with Stripe" });
@@ -211,7 +211,7 @@ test("the totals, the donors who shared their name, and refunding a mistake", as
   });
   await item.getByRole("button", { name: "Refund" }).click();
   await expect(refundable).toHaveCount(before);
-  // Stripe or Slop refusing shows why.
+  // Stripe or SLAPorSLOP refusing shows why.
   await page.route("**/v1/donations/*/refund", (route) =>
     route.fulfill(json(409, { error: { code: "conflict", message: "Stripe says this charge was already refunded" } })),
   );

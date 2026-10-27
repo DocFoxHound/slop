@@ -173,7 +173,7 @@ function fileItem(f: ReleaseFile, status: Release["status"], server: Server, now
   return { ...base, state: "done", status: "Hashed", detail: sentence([took, ...extra]) };
 }
 
-/** A link to the fixes Slop's checks found, ready to copy for an AI agent (Releases page). */
+/** A link to the fixes SLAPorSLOP's checks found, ready to copy for an AI agent (Releases page). */
 function FixesLink({ slug }: { slug?: string }) {
   if (!slug) return null;
   return (
@@ -185,7 +185,7 @@ function FixesLink({ slug }: { slug?: string }) {
   );
 }
 
-/** The files step while Slop checks them: which file, which step, and an honest estimate. */
+/** The files step while SLAPorSLOP checks them: which file, which step, and an honest estimate. */
 function checkingStep(latest: Release, server: Server, now: number): Step {
   const files = latest.files;
   const total = files.length;
@@ -201,7 +201,7 @@ function checkingStep(latest: Release, server: Server, now: number): Step {
       state: "active",
       stateLabel: "Waiting its turn",
       detail:
-        `Slop checks one release at a time. Then its ${fileWord} are downloaded and scanned, one at a time.`,
+        `SLAPorSLOP checks one release at a time. Then its ${fileWord} are downloaded and scanned, one at a time.`,
       more: per ? `Each file takes ${about(per)} here.` : undefined,
       items,
     };
@@ -292,7 +292,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
         state: "problem",
         detail: (
           <>
-            Slop couldn't check the files: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit the
+            SLAPorSLOP couldn't check the files: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit the
             release again.
             <FixesLink slug={app.slug} />
           </>
@@ -360,7 +360,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
           onHold[0].scan_detail?.replace(/\.$/, "") ?? "a scanner found something to look at"
         }.`,
         more:
-          "Scanners make mistakes, so a person at Slop looks before anything else happens. If it's a false positive, they clear it and tell you why. If the finding is real, fix the build and submit a new version.",
+          "Scanners make mistakes, so a person at SLAPorSLOP looks before anything else happens. If it's a false positive, they clear it and tell you why. If the finding is real, fix the build and submit a new version.",
       });
     } else {
       steps.push({
@@ -388,7 +388,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
       steps.push({
         title: "Source check",
         state: "active",
-        detail: "Slop is reading the source at this release's commit.",
+        detail: "SLAPorSLOP is reading the source at this release's commit.",
       });
     } else if (source.status === "not_checked") {
       steps.push({
@@ -400,7 +400,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
       steps.push({
         title: "Source check",
         state: "active",
-        detail: `Slop couldn't read the source (${source.detail}); it tries again within the hour.`,
+        detail: `SLAPorSLOP couldn't read the source (${source.detail}); it tries again within the hour.`,
       });
     } else if (notes > 0) {
       // Notes, not failures: once a person approves the release, they've looked at them.
@@ -429,7 +429,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
       steps.push({
         title: "Review by a person",
         state: "done",
-        detail: `Version ${r.version} ${r.auto_approved ? "approved automatically as an update" : "approved"} and signed by Slop.`,
+        detail: `Version ${r.version} ${r.auto_approved ? "approved automatically as an update" : "approved"} and signed by SLAPorSLOP.`,
       });
     } else if (waitingForPerson) {
       const why = latest.status_reason?.replace(/^Waiting for a person: /, "").replace(/\.$/, "");
@@ -439,12 +439,12 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
         stateLabel: "Waiting for a person",
         detail:
           onHold.length > 0
-            ? "Waiting for review by a person at Slop, who looks at the file on hold first."
-            : "Waiting for review by a person at Slop. It usually takes a day or two.",
+            ? "Waiting for review by a person at SLAPorSLOP, who looks at the file on hold first."
+            : "Waiting for review by a person at SLAPorSLOP. It usually takes a day or two.",
         more: (
           <>
             {why && <>Why a person: {why}. </>}
-            What happens next: they look at the checks above and the app itself. If it's approved, Slop signs it and players can
+            What happens next: they look at the checks above and the app itself. If it's approved, SLAPorSLOP signs it and players can
             get it; if something needs changing, you're told what. Either way you get a notification (under 🔔, and by email).
             Nothing to do meanwhile.
           </>
@@ -466,7 +466,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
       steps.push({
         title: "Review by a person",
         state: "problem",
-        detail: `Withdrawn by Slop: ${latest.status_reason ?? "no reason given"}.`,
+        detail: `Withdrawn by SLAPorSLOP: ${latest.status_reason ?? "no reason given"}.`,
       });
     } else {
       steps.push({
@@ -474,7 +474,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
         state: "waiting",
         detail: approved
           ? "Comes after the checks above. Your approved version stays live meanwhile."
-          : "Comes after the checks above: a person at Slop reviews each app's first release.",
+          : "Comes after the checks above: a person at SLAPorSLOP reviews each app's first release.",
       });
     }
   }
@@ -489,13 +489,13 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     steps.push({
       title: "In the store",
       state: "problem",
-      detail: "Taken out of the store by Slop staff.",
+      detail: "Taken out of the store by SLAPorSLOP staff.",
     });
   } else if (comingSoon || approved) {
     steps.push({
       title: "In the store",
       state: "active",
-      detail: "Ready: waiting for Slop staff to put it in the store.",
+      detail: "Ready: waiting for SLAPorSLOP staff to put it in the store.",
     });
   } else {
     steps.push({
@@ -518,7 +518,7 @@ export function currentStep(steps: Step[]): Step {
 }
 
 /** How often to look again: every 10 seconds while files are checked (each takes minutes, so
- *  that's plenty) and while Slop then reads the source (it starts once the files are in, so the
+ *  that's plenty) and while SLAPorSLOP then reads the source (it starts once the files are in, so the
  *  release is waiting for review before its source check shows), every minute while a person
  *  reviews it, otherwise not at all. */
 export function refreshEvery(releases: Release[] | undefined): number | null {

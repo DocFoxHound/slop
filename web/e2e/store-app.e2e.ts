@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // An app's store page, as players, its maker and visitors use it: voting, reviews and the
 // maker's replies, what it does and its accessibility, the library and Interested buttons,
-// drafts, Private Slop and its share panel, community builds, and what's shown around them.
+// drafts, Private and its share panel, community builds, and what's shown around them.
 // The apps changed here are the test's own (store-helpers.ts); the seeded ones are only read.
 import type { Page } from "@playwright/test";
 import { expect, ids, server, signIn, test } from "./fixtures";
@@ -11,7 +11,7 @@ import { call, delist, draftApp, failApi, listedApp, patchJson, path, played, re
 // else tests his apps); they leave the store again at the end.
 const rated = "rated-rafts";
 const soon = "soon-sails";
-// Bo's Private Slop: he's Pat's friend and in Night Owls (invite-only) and Open Crew (open).
+// Bo's Private: he's Pat's friend and in Night Owls (invite-only) and Open Crew (open).
 const secret = "secret-sloop";
 
 test.beforeAll(async () => {
@@ -35,11 +35,11 @@ test.afterAll(async () => {
 
 const ratings = (page: Page) => page.getByRole("region", { name: "Ratings" });
 
-test("a player votes Not Slop, switches to Slop, and takes the vote back", async ({ page }) => {
+test("a player votes Slaps, switches to Slop, and takes the vote back", async ({ page }) => {
   await tryCall("player", "POST", `/v1/apps/${rated}/vote`, { vote: null });
   await signIn(page, "player");
   await page.goto(`/app/${rated}`);
-  const up = ratings(page).getByRole("button", { name: "👍 Not Slop" });
+  const up = ratings(page).getByRole("button", { name: "👍 Slaps" });
   const down = ratings(page).getByRole("button", { name: "👎 Slop" });
   await expect(ratings(page).getByText("No votes yet")).toBeVisible();
   await expect(ratings(page).getByText(/Your vote counts \d+% \(more as you play\)/)).toBeVisible();
@@ -70,7 +70,7 @@ test("only players who played it can vote; makers, visitors and upcoming apps ca
   await signIn(teen, "teen");
   await teen.goto(`/app/${rated}`);
   await expect(ratings(teen).getByText("Launch it from the Slop app first: only players can vote.")).toBeVisible();
-  await expect(ratings(teen).getByRole("button", { name: "👍 Not Slop" })).toHaveCount(0);
+  await expect(ratings(teen).getByRole("button", { name: "👍 Slaps" })).toHaveCount(0);
 
   const maker = await browser.newPage();
   await signIn(maker, "pendingCreative");
@@ -79,7 +79,7 @@ test("only players who played it can vote; makers, visitors and upcoming apps ca
 
   const visitor = await browser.newPage();
   await visitor.goto(`/app/${rated}`);
-  await expect(ratings(visitor).getByText(/and play it from the Slop app to vote\./)).toBeVisible();
+  await expect(ratings(visitor).getByText(/and play it from the SLAPorSLOP app to vote\./)).toBeVisible();
   await expect(ratings(visitor).getByRole("link", { name: "Sign in" })).toHaveAttribute("href", `/signin?return_to=${encodeURIComponent(`/app/${rated}`)}`);
   await visitor.goto(`/app/${soon}`);
   await expect(ratings(visitor).getByText("Ratings open when it's playable: in Beta or released.")).toBeVisible();
@@ -98,8 +98,8 @@ test("the rating is at the top of the page: Rate it jumps to the vote, or it say
     expect(panel!.y).toBeLessThan(label!.y);
     await head(page).getByRole("button", { name: "Rate it" }).click();
     await expect(ratings(page)).toBeFocused();
-    await ratings(page).getByRole("button", { name: "👍 Not Slop" }).click();
-    await expect(head(page).getByRole("button", { name: "Your rating: 👍 Not Slop" })).toBeVisible();
+    await ratings(page).getByRole("button", { name: "👍 Slaps" }).click();
+    await expect(head(page).getByRole("button", { name: "Your rating: 👍 Slaps" })).toBeVisible();
     await expect(head(page).getByText("1 vote so far; a rating shows from")).toBeVisible();
   } finally {
     await tryCall("player", "POST", `/v1/apps/${rated}/vote`, { vote: null });
@@ -107,15 +107,15 @@ test("the rating is at the top of the page: Rate it jumps to the vote, or it say
 
   // A rated app: the rating, its label and the votes.
   await page.goto(`/app/${ids.listedApp}`);
-  await expect(head(page).locator(".rating-big")).toHaveText(/^\d+% Not Slop$/);
+  await expect(head(page).locator(".rating-big")).toHaveText(/^\d+% Slaps$/);
   await expect(head(page).getByText(/\d+ votes$/)).toBeVisible();
 
   // Why others can't.
   const teen = await browser.newPage();
   await signIn(teen, "teen");
   await teen.goto(`/app/${rated}`);
-  await expect(head(teen).getByText("Play it from the Slop app to rate it.")).toBeVisible();
-  await expect(head(teen).getByRole("link", { name: "⬇ Get the Slop app" })).toHaveAttribute("href", "/download");
+  await expect(head(teen).getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
+  await expect(head(teen).getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveAttribute("href", "/download");
   await expect(head(teen).getByRole("button")).toHaveCount(0);
   const maker = await browser.newPage();
   await signIn(maker, "pendingCreative");
@@ -155,7 +155,7 @@ test("a voter writes, edits and deletes their review", async ({ page }) => {
   await expect(ratings(page).getByRole("button", { name: "Add a written review" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Reviews" })).toHaveCount(0);
 
-  await ratings(page).getByRole("button", { name: "👍 Not Slop" }).click();
+  await ratings(page).getByRole("button", { name: "👍 Slaps" }).click();
   await ratings(page).getByRole("button", { name: "Add a written review" }).click();
   const box = ratings(page).getByRole("textbox", { name: "Your review" });
   await box.fill("Sturdy rafts, calm water. A lovely evening.");
@@ -174,7 +174,7 @@ test("a voter writes, edits and deletes their review", async ({ page }) => {
   // Deleting can fail; it says so and keeps the review.
   await failApi(page, path(`/v1/apps/${rated}/review`), { method: "DELETE" });
   await ratings(page).getByRole("button", { name: "Delete", exact: true }).click();
-  await expect(ratings(page).getByRole("alert")).toHaveText("Something broke on Slop's side.");
+  await expect(ratings(page).getByRole("alert")).toHaveText("Something broke on SLAPorSLOP's side.");
   await expect(ratings(page).getByText("Sturdy rafts. The storms in chapter two are hard.")).toBeVisible();
   await page.unrouteAll();
   await ratings(page).getByRole("button", { name: "Delete", exact: true }).click();
@@ -245,7 +245,7 @@ test("reviews filter by vote, hide private names, and page in more", async ({ pa
       if (!offset) return route.fulfill({ response: res, json: { ...body, next_offset: 3 } });
       if (!paged) {
         paged = true;
-        return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } });
+        return route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy. Try again soon." } } });
       }
       const older = { ...body.reviews[0], id: "00000000-0000-0000-0000-000000000001", body: "An older review, from the next page." };
       return route.fulfill({ json: { ...body, reviews: [older], next_offset: null } });
@@ -253,7 +253,7 @@ test("reviews filter by vote, hide private names, and page in more", async ({ pa
   );
   await page.reload();
   await reviews.getByRole("button", { name: "More reviews" }).click();
-  await expect(reviews.getByRole("alert")).toHaveText("Slop is busy. Try again soon.");
+  await expect(reviews.getByRole("alert")).toHaveText("SLAPorSLOP is busy. Try again soon.");
   await reviews.getByRole("button", { name: "More reviews" }).click();
   await expect(reviews.getByText("An older review, from the next page.")).toBeVisible();
   await expect(reviews.getByRole("button", { name: "More reviews" })).toHaveCount(0);
@@ -458,7 +458,7 @@ test("an app's page shows its age rating, content labels, tags and source", asyn
   // Report is for other people's apps.
   await expect(page.locator(".report-row").getByRole("button", { name: "⚑ Report" })).toBeVisible();
 
-  // A link in the description opens outside Slop, in a new tab.
+  // A link in the description opens outside SLAPorSLOP, in a new tab.
   await page.context().route("https://example.com/**", (r) => r.fulfill({ body: "<title>Raft guide</title>", contentType: "text/html" }));
   const [guide] = await Promise.all([page.context().waitForEvent("page"), page.locator(".prose").getByRole("link", { name: "raft guide" }).click()]);
   await expect(guide).toHaveURL("https://example.com/raft-guide");
@@ -494,10 +494,10 @@ test("a draft is only for its maker: others can't find it", async ({ browser }) 
 test("a page that fails to load offers to try again", async ({ page }) => {
   let fail = true;
   await page.route(path(`/v1/apps/${rated}`), (route) =>
-    fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } }) : route.fallback(),
+    fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy. Try again soon." } } }) : route.fallback(),
   );
   await page.goto(`/app/${rated}`);
-  await expect(page.getByRole("alert")).toContainText("Slop is busy. Try again soon.");
+  await expect(page.getByRole("alert")).toContainText("SLAPorSLOP is busy. Try again soon.");
   fail = false;
   await page.getByRole("button", { name: "Try again" }).click();
   await expect(page.getByRole("heading", { name: "Rated Rafts", level: 1 })).toBeVisible();
@@ -560,7 +560,7 @@ test("the Community area lists mods and builds, with publish links for everyone 
   // A mod's own page, on the website, says where it's added.
   await pat.goto(`/app/${ids.mod}`);
   await expect(pat.locator(".install-box")).toContainText(
-    "A mod for Lantern Keep. Add it to the game from your library in the Slop app, which checks it against Slop's signature first.",
+    "A mod for Lantern Keep. Add it to the game from your library in the SLAPorSLOP app, which checks it against SLAPorSLOP's signature first.",
   );
   await expect(pat.locator(".install-box").getByRole("link", { name: "Lantern Keep" })).toHaveAttribute("href", `/app/${ids.listedApp}`);
 
@@ -668,15 +668,15 @@ test("the store page's gallery steps with the arrow keys", async ({ page }) => {
   await expect(gallery.locator("iframe")).toHaveCount(0);
 });
 
-test("Private Slop: its owner shares it with friends, people and invite-only teams, and stops", async ({ browser }) => {
+test("Private: its owner shares it with friends, people and invite-only teams, and stops", async ({ browser }) => {
   const bo = await browser.newPage();
   await signIn(bo, "maker2");
   await bo.goto(`/app/${secret}`);
-  await expect(bo.getByText("PRIVATE SLOP")).toBeVisible();
+  await expect(bo.getByText("PRIVATE", { exact: true })).toBeVisible();
   await expect(bo.getByText("Only you and the people you share it with can see this. It's never in the store.")).toBeVisible();
   const panel = bo.locator(".share-panel");
   await expect(panel.getByText("Nobody yet.")).toBeVisible();
-  // Private Slop has no votes or reviews.
+  // Private has no votes or reviews.
   await expect(bo.getByRole("region", { name: "Ratings" })).toHaveCount(0);
 
   // A friend, from the list.
@@ -717,7 +717,7 @@ test("Private Slop: its owner shares it with friends, people and invite-only tea
   await expect(pat.getByText("Bo Builder shared this with you. Only the people it's shared with can see it.")).toBeVisible();
   await expect(pat.locator(".share-panel")).toHaveCount(0);
   await pat.goto("/library");
-  await expect(pat.getByRole("heading", { name: "Private Slop" })).toBeVisible();
+  await expect(pat.getByRole("heading", { name: /^Private \(/ })).toBeVisible();
   await pat.getByRole("navigation", { name: "Your apps" }).getByRole("link", { name: "Secret Sloop" }).click();
   const shared = pat.getByRole("region", { name: "Secret Sloop" });
   await expect(shared.getByText("PRIVATE", { exact: true })).toBeVisible();

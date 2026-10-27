@@ -1,8 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Adding mods to installed games (DESIGN §9). A mod is a .zip of files for its game to load;
-// the Slop app checks it against Slop's signed manifest like any build, keeps it beside the game,
+// the SLAPorSLOP app checks it against SLAPorSLOP's signed manifest like any build, keeps it beside the game,
 // and tells the game where its mods are when it starts (SLOP_MODS). Nothing in a mod is started
-// by Slop.
+// by SLAPorSLOP.
 
 import { useCallback, useEffect, useState } from "react";
 import { Link } from "react-router";
@@ -29,8 +29,8 @@ export function ModControls({ slug, game }: { slug: string; game: { slug: string
   if (!isDesktop) {
     return (
       <p className="muted">
-        A mod for <Link to={`/app/${game.slug}`}>{game.title}</Link>. Add it to the game from your library in the Slop
-        app, which checks it against Slop's signature first.
+        A mod for <Link to={`/app/${game.slug}`}>{game.title}</Link>. Add it to the game from your library in the SLAPorSLOP
+        app, which checks it against SLAPorSLOP's signature first.
       </p>
     );
   }
@@ -74,7 +74,7 @@ export function ModControls({ slug, game }: { slug: string; game: { slug: string
           <button className="btn big slime" disabled={busy} onClick={() => void act(() => desktop.installMod(slug))}>
             {busy ? "Adding…" : `Add to ${game.title}`}
           </button>
-          <p className="muted small">Checked against Slop's signature, then handed to the game when it starts.</p>
+          <p className="muted small">Checked against SLAPorSLOP's signature, then handed to the game when it starts.</p>
         </>
       )}
       {error && (
@@ -149,7 +149,7 @@ export function GameMods({
             {busy === r.slug && <span className="muted small"> {r.mod ? "Removing…" : "Adding…"}</span>}
             {r.mod?.revoked && (
               <div className="small">
-                <span className="badge bad">PULLED</span> Slop pulled this mod ({r.mod.revoked}), so the game no longer gets
+                <span className="badge bad">PULLED</span> SLAPorSLOP pulled this mod ({r.mod.revoked}), so the game no longer gets
                 it. Remove it.
               </div>
             )}
@@ -157,10 +157,10 @@ export function GameMods({
           </li>
         ))}
       </ul>
-      <p className="muted small">Ticked mods are handed to the game when it starts. Each was checked and reviewed by Slop.</p>
+      <p className="muted small">Ticked mods are handed to the game when it starts. Each was checked and reviewed by SLAPorSLOP.</p>
       {onlineAdded.length > 0 && (
         <p className="small">
-          {onlineAdded.map((r) => r.title).join(", ")} {onlineAdded.length === 1 ? "goes" : "go"} online, on servers Slop
+          {onlineAdded.map((r) => r.title).join(", ")} {onlineAdded.length === 1 ? "goes" : "go"} online, on servers SLAPorSLOP
           can't check, so sandbox mode is suggested for this game.
         </p>
       )}

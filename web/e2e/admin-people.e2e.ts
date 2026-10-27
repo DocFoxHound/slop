@@ -36,7 +36,7 @@ test("a People problem: the record read, an outcome suggested, then closed unres
   const cleo = await newPage(browser);
   await signIn(cleo, "client");
   await cleo.goto(`/jobs/${job}`);
-  await expect(cleo.getByText(/A Slop mediator suggests.*Deliver by Friday, or refund half\./)).toBeVisible();
+  await expect(cleo.getByText(/A SLAPorSLOP mediator suggests.*Deliver by Friday, or refund half\./)).toBeVisible();
 
   // They didn't agree: closed, with a note both read.
   await problem.getByRole("button", { name: "Close unresolved" }).click();

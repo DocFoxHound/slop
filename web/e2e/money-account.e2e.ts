@@ -9,13 +9,13 @@ import { expect, signIn, test } from "./fixtures";
 
 const json = (status: number, body: unknown) => ({ status, contentType: "application/json", body: JSON.stringify(body) });
 
-test("fee statements show Slop's fee by month, and the VAT in it where there is VAT", async ({ page }) => {
+test("fee statements show SLAPorSLOP's fee by month, and the VAT in it where there is VAT", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto("/account#fee-statements");
   const fees = page.locator("section#fee-statements");
   await expect(fees.getByRole("heading", { name: "Fee statements" })).toBeVisible();
   // Mia is in the US: no VAT, so no VAT column or number.
-  await expect(fees.getByText(/There's no VAT on Slop's fee where you are\./)).toBeVisible();
+  await expect(fees.getByText(/There's no VAT on SLAPorSLOP's fee where you are\./)).toBeVisible();
   const row = fees.getByRole("row").filter({ hasText: "Donations" }).first();
   await expect(row.getByRole("cell").nth(0)).toHaveText(/^\d{4}-\d{2}$/);
   await expect(row.getByRole("cell").nth(4)).toHaveText(/^\$\d+\.\d\d$/);
@@ -36,12 +36,12 @@ test("fee statements show Slop's fee by month, and the VAT in it where there is 
     });
   });
   await page.reload();
-  await expect(fees.getByText(/The fee includes 19% VAT, which Slop pays out of its 5%; it's never added on top\./)).toBeVisible();
-  await expect(fees.getByText(/Slop's VAT registration is still being set up\./)).toBeVisible();
+  await expect(fees.getByText(/The fee includes 19% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top\./)).toBeVisible();
+  await expect(fees.getByText(/SLAPorSLOP's VAT registration is still being set up\./)).toBeVisible();
   await expect(fees.getByRole("columnheader", { name: "VAT in the fee" })).toBeVisible();
   const vat = fees.getByRole("textbox", { name: /VAT number, if you're a VAT-registered business/ });
   await expect(vat).toHaveAttribute("placeholder", "DE123456789");
-  // Slop checks the number against the account's country (Mia's account is really in the US).
+  // SLAPorSLOP checks the number against the account's country (Mia's account is really in the US).
   await vat.fill("DE123456789");
   await fees.getByRole("button", { name: "Save" }).click();
   await expect(fees.getByRole("alert")).toHaveText("the VAT number has to be from the country on your account");
@@ -51,7 +51,7 @@ test("fee statements show Slop's fee by month, and the VAT in it where there is 
       json(200, {
         vat_number: "DE123456789",
         checked: false,
-        note: "Saved, but the EU's VIES service didn't answer. Slop will check it again later; until then VAT stays included in Slop's fee.",
+        note: "Saved, but the EU's VIES service didn't answer. SLAPorSLOP will check it again later; until then VAT stays included in SLAPorSLOP's fee.",
       }),
     ),
   );
@@ -62,7 +62,7 @@ test("fee statements show Slop's fee by month, and the VAT in it where there is 
   saved = "DE123456789";
   await page.reload();
   await expect(vat).toHaveValue("DE123456789");
-  await expect(fees.getByText("Not confirmed yet, so VAT is shown as included in Slop's fee.")).toBeVisible();
+  await expect(fees.getByText("Not confirmed yet, so VAT is shown as included in SLAPorSLOP's fee.")).toBeVisible();
 });
 
 test("switching or disconnecting the Stripe account asks first, needs a fresh sign-in, and can be cancelled", async ({ page }) => {
@@ -155,7 +155,7 @@ test("a maker with apps but no Stripe account is shown where to turn donations o
   const hint = page.getByRole("region", { name: "Want donations?" });
   await expect(hint).toContainText("Turn them on per app: Publish → your app → Manage → Donations.");
   await expect(hint).toContainText("Stripe's own sign-up (you need to be 18 or older)");
-  await expect(hint).toContainText("Slop's fee is 5%, and donations never unlock anything.");
+  await expect(hint).toContainText("SLAPorSLOP's fee is 5%, and donations never unlock anything.");
   await expect(hint.getByRole("listitem")).toHaveCount(1);
   await expect(page.locator("section#receiving")).toHaveCount(0);
   const link = hint.getByRole("link", { name: "Set up donations for Mia's First Game" });

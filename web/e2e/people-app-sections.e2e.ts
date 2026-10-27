@@ -74,7 +74,7 @@ test("bug reports: a player says 'me too' and takes it back; the maker answers a
   // How each release landed, from votes, reviews and reports.
   const feedback = mia.getByRole("region", { name: "How each release landed" }).or(mia.locator("section").filter({ hasText: "How each release landed" }));
   await expect(feedback.first()).toContainText("1.0.0");
-  await expect(feedback.first()).toContainText(/% Not Slop from 7 votes/);
+  await expect(feedback.first()).toContainText(/% Slaps from 7 votes/);
   await expect(feedback.first()).toContainText("bug report");
 });
 

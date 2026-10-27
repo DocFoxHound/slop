@@ -93,7 +93,7 @@ describe("PreviewBar", () => {
     bar(status("live"), pending);
     const region = screen.getByRole("region", { name: "Preview: only you can see this" });
     expect(region.textContent).toContain("Preview Only you can see this.");
-    expect(region.textContent).toContain("Your changes are waiting for Slop's review; everyone else sees your live page.");
+    expect(region.textContent).toContain("Your changes are waiting for SLAPorSLOP's review; everyone else sees your live page.");
     expect(region.textContent).toContain("Waiting for review since");
     expect(within(region).getByRole("link", { name: "View your live page" }).getAttribute("href")).toBe("/people/vera?view=live");
   });
@@ -109,7 +109,7 @@ describe("PreviewBar", () => {
   it("gives the reviewer's reason and what to do when it was turned down", () => {
     bar(status("live"), rejected);
     const region = screen.getByRole("region", { name: "Preview: only you can see this" });
-    expect(region.textContent).toContain("Slop turned these changes down; everyone else sees your live page.");
+    expect(region.textContent).toContain("SLAPorSLOP turned these changes down; everyone else sees your live page.");
     expect(region.textContent).toContain("The reviewer said: The dragon is someone else's art.");
     expect(region.textContent).toContain("Check my portfolio now");
     expect(within(region).getByRole("link", { name: "Fix your portfolio" }).getAttribute("href")).toBe("/people/me#portfolio");

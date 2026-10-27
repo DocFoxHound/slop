@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Typed client for the Slop API (crates/slop-api). Types mirror the Rust response structs.
+// Typed client for the SLAPorSLOP API (crates/slop-api). Types mirror the Rust response structs.
 
 import { isDesktop } from "./platform";
 
@@ -23,7 +23,7 @@ export interface Category {
   tags: TagRef[];
 }
 
-/** What an app connects to online: servers Slop can't check. */
+/** What an app connects to online: servers SLAPorSLOP can't check. */
 export type OnlineKind = "own_servers" | "player_servers" | "peer_to_peer" | "other_services";
 
 export type ContentLabel =
@@ -67,7 +67,7 @@ export interface AppUpdate {
     official: boolean;
     platforms: string[];
   }>;
-  /** Approved mods for the app, to add in the Slop app. */
+  /** Approved mods for the app, to add in the SLAPorSLOP app. */
   mods?: Array<{
     slug: string;
     title: string;
@@ -104,7 +104,7 @@ export interface AppSummary {
   icon_url: string | null;
   /** Current 👍/👎 votes. */
   vote_count: number;
-  /** Weighted % Not Slop; null below the minimum number of votes. */
+  /** Weighted % Slaps; null below the minimum number of votes. */
   not_slop_percent: number | null;
   /** Credits a completed, fully paid People job: the "Made with people" badge. */
   made_with_people: boolean;
@@ -119,7 +119,7 @@ export interface AppSummary {
 
 /** Donations (crates/slop-api/src/donations.rs). Amounts are in minor units (cents). */
 export interface DonationQuote {
-  /** What the donor chose for the maker, before Slop's fee. */
+  /** What the donor chose for the maker, before SLAPorSLOP's fee. */
   donation: number;
   /** What the donor pays: always shown first and largest. */
   total: number;
@@ -277,11 +277,11 @@ export interface FeeStatement {
   received_minor: number;
   slop_fee_minor: number;
   simulated: boolean;
-  /** The VAT included in Slop's fee; zero under the reverse charge. */
+  /** The VAT included in SLAPorSLOP's fee; zero under the reverse charge. */
   vat_minor: number;
 }
 
-/** How VAT applies to Slop's fee for this user (LEGAL §3.5): the 5% always includes it. */
+/** How VAT applies to SLAPorSLOP's fee for this user (LEGAL §3.5): the 5% always includes it. */
 export interface VatTreatment {
   kind: "none" | "included" | "reverse_charge";
   rate_bp: number | null;
@@ -325,7 +325,7 @@ export interface LinkedIdentity {
 
 /** The account's picture and the linked sign-ins it can come from (crates/slop-api/src/avatars.rs). */
 export interface MyPicture {
-  /** Slop's copy of the chosen picture; null: the letter. */
+  /** SLAPorSLOP's copy of the chosen picture; null: the letter. */
   avatar_url: string | null;
   provider: SignInProvider | null;
   subject: string | null;
@@ -334,7 +334,7 @@ export interface MyPicture {
     provider: SignInProvider;
     subject: string;
     login: string | null;
-    /** Slop can show this sign-in's picture now. */
+    /** SLAPorSLOP can show this sign-in's picture now. */
     available: boolean;
     /** How it's kept current: read daily, or updated when they sign in with it. */
     updates: "daily" | "sign_in" | "never";
@@ -640,11 +640,11 @@ export interface AppDetail extends AppSummary {
   credits: Credit[];
   is_mine: boolean;
   /** The viewer marked it Interested. */
-  /** Private Slop: only its owner and the people it's shared with see it. */
+  /** Private: only its owner and the people it's shared with see it. */
   private: boolean;
   /** The verified official team that publishes it. */
   official_team: { slug: string; name: string } | null;
-  /** What it connects to online (servers Slop can't check); empty: it doesn't. */
+  /** What it connects to online (servers SLAPorSLOP can't check); empty: it doesn't. */
   online: OnlineKind[];
   online_hosts: string[];
   /** The maker says it keeps local saves only in SLOP_SAVE_DIR and works in sandbox mode. */
@@ -657,7 +657,7 @@ export interface AppDetail extends AppSummary {
   demo: { url: string; ends_at: string } | null;
   /** ...but the check of its newest release found saves elsewhere: players aren't told it works. */
   sandbox_mismatch: boolean;
-  /** Sandbox mode is suggested: it goes online (servers Slop can't check). */
+  /** Sandbox mode is suggested: it goes online (servers SLAPorSLOP can't check). */
   sandbox_suggested: boolean;
   /** Enough players reported it doesn't work in sandbox mode. */
   sandbox_trouble: boolean;
@@ -718,11 +718,11 @@ export interface Me {
   has_passkey: boolean;
   /** This browser sent a Global Privacy Control signal. */
   gpc: boolean;
-  /** Their profile picture from a linked sign-in, served by Slop; null: the letter. */
+  /** Their profile picture from a linked sign-in, served by SLAPorSLOP; null: the letter. */
   avatar_url: string | null;
 }
 
-/** Slop's legal documents (crates/slop-api/src/legal.rs). */
+/** SLAPorSLOP's legal documents (crates/slop-api/src/legal.rs). */
 export type LegalKind =
   "terms" | "privacy" | "content" | "publisher" | "people";
 
@@ -908,7 +908,7 @@ export type QueuedAppeal = ModerationDecision & {
   link: string | null;
 };
 
-/** % Not Slop at one point (crates/slop-api/src/votes.rs). */
+/** % Slaps at one point (crates/slop-api/src/votes.rs). */
 export interface Tally {
   not_slop: number;
   slop: number;
@@ -942,7 +942,7 @@ export interface Ratings extends Tally {
     reason: string | null;
     /** They made it: no vote buttons for them anywhere. */
     maker?: boolean;
-    /** They launched it through Slop, which voting needs. */
+    /** They launched it through SLAPorSLOP, which voting needs. */
     played?: boolean;
     weight: number;
     /** Their written review; hidden when a moderation decision hid it. */
@@ -1130,7 +1130,7 @@ export interface PageStatus {
   /** live: a newer portfolio waits for review. */
   update_waiting: boolean;
   waiting_since: string | null;
-  /** What went wrong the last time Slop read the portfolio. */
+  /** What went wrong the last time SLAPorSLOP read the portfolio. */
   problem: string | null;
   suspended: boolean;
 }
@@ -1169,8 +1169,8 @@ export function workKey(w: PortfolioWork): string {
 }
 
 /**
- * One node of a creative's page design (people/design.rs): text, or an element Slop allows, or one
- * of Slop's own parts (`slop-works`, `slop-work`, `slop-video`, `slop-track`). A creative's
+ * One node of a creative's page design (people/design.rs): text, or an element SLAPorSLOP allows, or one
+ * of SLAPorSLOP's own parts (`slop-works`, `slop-work`, `slop-video`, `slop-track`). A creative's
  * services are never inside a design: their page shows them below it.
  */
 export type DesignNode = string | { tag: string; attrs?: Record<string, string>; children?: DesignNode[] };
@@ -1188,7 +1188,7 @@ export interface PortfolioDesign extends PageDesign {
   html: string;
   pictures: RepoPicture[];
   tracks: Array<{ path: string; url: string; format: string }>;
-  /** What Slop removed and why, and what the CSS hides. */
+  /** What SLAPorSLOP removed and why, and what the CSS hides. */
   warnings: string[];
 }
 
@@ -1526,9 +1526,9 @@ export interface ManageOverview {
   auto_approval_ready: boolean;
   auto_approval_note: string | null;
   changes: AppChange[];
-  /** Slop can't read the repository: no new releases until it can (SECURITY §12.2). */
+  /** SLAPorSLOP can't read the repository: no new releases until it can (SECURITY §12.2). */
   frozen: Frozen | null;
-  /** Private Slop waiting for a reviewer to make it public. */
+  /** A private app waiting for a reviewer to make it public. */
   public_requested: boolean;
   /** Community builds of Pulse games: null if not needed, else whether the handshake arrived. */
   pulse_required: boolean | null;
@@ -1779,7 +1779,7 @@ export interface AdminApp extends AdminAppRef {
   players: number;
   last_played_at: string | null;
   vote_count: number;
-  /** Weighted % Not Slop; null below the store's minimum number of votes. */
+  /** Weighted % Slaps; null below the store's minimum number of votes. */
   not_slop_percent: number | null;
 }
 
@@ -1894,7 +1894,7 @@ export interface AdminUserDetails {
   decisions: Array<{ id: string; reference: string; action: string; rule: string; about: string; at: number; reversed: boolean }>;
 }
 
-/** No new releases (frozen.rs): Slop lost the repository, or staff froze it by hand. */
+/** No new releases (frozen.rs): SLAPorSLOP lost the repository, or staff froze it by hand. */
 export interface Frozen {
   reason: string;
   since: string;
@@ -2036,13 +2036,13 @@ export interface ReleaseFile {
   scan_result:
     "passed" | "note" | "on_hold" | "rejected" | "blocked" | "skipped" | null;
   scan_detail: string | null;
-  /** Slop's scanner's report: engines, findings, notable capabilities. */
+  /** SLAPorSLOP's scanner's report: engines, findings, notable capabilities. */
   scan_report: ScanReport | null;
   /** Microsoft Defender's check (Windows builds), from Slop Build or Slop Check. */
   defender: DefenderCheck | null;
   /** A reviewer cleared a finding as a false positive, and why. */
   cleared_reason: string | null;
-  /** What Slop is doing with this file right now (crates/slop-api/src/release_progress.rs). */
+  /** What SLAPorSLOP is doing with this file right now (crates/slop-api/src/release_progress.rs). */
   check_stage?: FileCheckStage | null;
   check_started_at?: string | null;
   checked_at?: string | null;
@@ -2052,7 +2052,7 @@ export interface ReleaseFile {
 
 export type FileCheckStage = "downloading" | "signature" | "scanning";
 
-/** Where a release is in Slop's checks, file by file (crates/slop-api/src/release_progress.rs). */
+/** Where a release is in SLAPorSLOP's checks, file by file (crates/slop-api/src/release_progress.rs). */
 export interface ReleaseProgress {
   stage: "queued" | "checking_files" | "waiting_for_review" | "approved" | "rejected" | "failed" | "revoked" | "withdrawn";
   files_total: number;
@@ -2065,7 +2065,7 @@ export interface ReleaseProgress {
     step_label: string;
     started_at: string;
   };
-  /** When Slop started checking the first file. */
+  /** When SLAPorSLOP started checking the first file. */
   started_at: string | null;
   /** About how long one file takes on this server; null when there's nothing to go on. */
   seconds_per_file: number | null;
@@ -2104,7 +2104,7 @@ export interface SourceChecks {
   checked: boolean;
 }
 
-/** A pattern Slop's source check found: what, how often, and where (`path:line`). */
+/** A pattern SLAPorSLOP's source check found: what, how often, and where (`path:line`). */
 export interface SourceHit {
   rule: string;
   label: string;
@@ -2112,7 +2112,7 @@ export interface SourceHit {
   examples: string[];
 }
 
-/** Slop's own look at the source at the release commit (crates/slop-api/src/source_scan.rs). */
+/** SLAPorSLOP's own look at the source at the release commit (crates/slop-api/src/source_scan.rs). */
 export interface RepoScan {
   status: "checked" | "not_checked" | "failed";
   detail?: string;
@@ -2134,7 +2134,7 @@ export interface RepoScan {
   saves?: SourceHit[];
   /**
    * Where local saves go, as far as the source shows: SLOP_SAVE_DIR (`slop`), an engine folder
-   * the Slop app points into the save folder (`engine`, Godot's user://), fixed per-user folders
+   * the SLAPorSLOP app points into the save folder (`engine`, Godot's user://), fixed per-user folders
    * (`elsewhere`, see `saves`), or no local saves found (`none`).
    */
   save_folder?: "slop" | "engine" | "elsewhere" | "none";
@@ -2177,9 +2177,9 @@ export interface Release {
   status_reason?: string;
   commit_verified: boolean;
   created_at: string;
-  /** Who sent it: the maker, Slop Build, or Slop's GitHub release watcher. */
+  /** Who sent it: the maker, Slop Build, or SLAPorSLOP's GitHub release watcher. */
   source: "maker" | "slop_build" | "github_release";
-  /** Approved by Slop as an update, without waiting for a person. */
+  /** Approved by SLAPorSLOP as an update, without waiting for a person. */
   auto_approved: boolean;
   /** Its rating (AGE-7). */
   rating?: ReleaseRating | null;
@@ -2190,11 +2190,11 @@ export interface Release {
   files: ReleaseFile[];
   /** Slop Build's source checks. */
   source_checks: SourceChecks | null;
-  /** Slop's own source check: licence, monetization notes, packages (makers and reviewers). */
+  /** SLAPorSLOP's own source check: licence, monetization notes, packages (makers and reviewers). */
   repo_scan: RepoScan | null;
   /** Advisories for its packages, from the daily watch (makers and reviewers). */
   advisories: Advisory[];
-  /** Where it is in Slop's checks, file by file. */
+  /** Where it is in SLAPorSLOP's checks, file by file. */
   progress?: ReleaseProgress;
 }
 
@@ -2231,7 +2231,7 @@ export interface UpstreamOffer {
   answered_at: string | null;
 }
 
-/** A fix for a problem Slop's checks found (crates/slop-api/src/fixes.rs). */
+/** A fix for a problem SLAPorSLOP's checks found (crates/slop-api/src/fixes.rs). */
 export interface Fix {
   kind: string;
   /** `recommended`: never blocks anything (e.g. no icon yet). */
@@ -2249,7 +2249,7 @@ export interface GithubRelease {
   published_at: string | null;
   prerelease: boolean;
   html_url: string;
-  /** Already sent to Slop. */
+  /** Already sent to SLAPorSLOP. */
   submitted: boolean;
   assets: Array<{
     name: string;
@@ -2261,7 +2261,7 @@ export interface GithubRelease {
 }
 
 export interface UpdateSettings {
-  /** Slop's GitHub App on this repository; absent when Slop has no App set up. */
+  /** SLAPorSLOP's GitHub App on this repository; absent when SLAPorSLOP has no App set up. */
   github_app?: { installed: boolean; install_url: string } | null;
   watch_releases: boolean;
   auto_update: boolean;
@@ -2314,7 +2314,7 @@ export interface NewApp {
   content_labels?: ContentLabel[];
   tags: string[];
   platforms: AppPlatform[];
-  /** "private": Private Slop, only for you and the people you share it with. */
+  /** "private": a private app, only for you and the people you share it with. */
   visibility?: "public" | "private";
   /** A private repository outside GitHub: a read-only token for it. */
   repo_token?: RepoTokenInput;
@@ -2332,7 +2332,7 @@ export interface NewApp {
   bug_reports?: boolean;
 }
 
-/** Where a game reads mods from: Slop keeps only approved mods there (DESIGN §9). */
+/** Where a game reads mods from: SLAPorSLOP keeps only approved mods there (DESIGN §9). */
 export interface ModsFolder {
   /** Its installed files, or its save folder. */
   base: "game" | "saves";
@@ -2386,7 +2386,7 @@ export interface AppQuery {
   platform?: "windows" | "linux";
   /** Only upcoming (Coming soon and Beta) or only released. */
   upcoming?: boolean;
-  /** At least this weighted % Not Slop. */
+  /** At least this weighted % Slaps. */
   min_not_slop?: number;
   /** Community branches instead of apps. */
   community?: boolean;
@@ -2549,7 +2549,7 @@ async function desktopRequest(
     throw new ApiError(
       0,
       e.code ?? "network",
-      e.message ?? "Can't reach Slop. Check your connection and try again.",
+      e.message ?? "Can't reach SLAPorSLOP. Check your connection and try again.",
     );
   }
 }
@@ -2593,7 +2593,7 @@ async function request<T>(
     throw new ApiError(
       0,
       "network",
-      "Can't reach Slop. Check your connection and try again.",
+      "Can't reach SLAPorSLOP. Check your connection and try again.",
     );
   }
   if (res.status === 204) return undefined as T;
@@ -2630,7 +2630,7 @@ async function requestText(method: string, path: string): Promise<string> {
     throw new ApiError(
       0,
       "network",
-      "Can't reach Slop. Check your connection and try again.",
+      "Can't reach SLAPorSLOP. Check your connection and try again.",
     );
   });
   if (!res.ok)
@@ -2875,7 +2875,7 @@ export const api = {
       `/v1/apps/${encodeURIComponent(slug)}/changes/${encodeURIComponent(id)}/cancel`,
     ),
   library: () => request<LibraryEntry[]>("GET", "/v1/me/library"),
-  /** What Slop knows about a file, by its SHA-256 (docs/standard/file-verification.md). */
+  /** What SLAPorSLOP knows about a file, by its SHA-256 (docs/standard/file-verification.md). */
   verifyFile: async (sha256: string) => {
     const signed = await request<{ payload: string; signature: string; key_id: string }>(
       "GET",
@@ -2883,13 +2883,13 @@ export const api = {
     );
     return JSON.parse(signed.payload) as FileVerification;
   },
-  /** Where Slop's source code is, at the version running (the AGPL's offer). */
+  /** Where SLAPorSLOP's source code is, at the version running (the AGPL's offer). */
   source: () =>
     request<{ licence: string; url: string | null; commit: string | null; version_url: string | null }>(
       "GET",
       "/v1/source",
     ),
-  /** Slop's published contact address (contact page); null until the server sets one. */
+  /** SLAPorSLOP's published contact address (contact page); null until the server sets one. */
   contact: () => request<{ email: string | null }>("GET", "/v1/contact"),
   /** The yearly transparency report (counts only). */
   transparency: (year: number) => request<TransparencyReport>("GET", `/v1/transparency/${year}`),

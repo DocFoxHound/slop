@@ -33,7 +33,7 @@ export async function api<T = any>(who: Who | null, method: string, path: string
   return res.body;
 }
 
-/** Pays a (fake) Stripe Checkout link as its payer would: Slop gets the webhooks before this returns. */
+/** Pays a (fake) Stripe Checkout link as its payer would: SLAPorSLOP gets the webhooks before this returns. */
 export async function payCheckout(url: string): Promise<void> {
   const res = await fetch(`${url}/pay`, { method: "POST", redirect: "manual" });
   if (res.status >= 400) throw new Error(`paying ${url}: ${res.status} ${await res.text()}`);
@@ -43,7 +43,7 @@ async function exists(who: Who, slug: string): Promise<boolean> {
   return (await call(who, "GET", `/v1/apps/${slug}`)).status === 200;
 }
 
-/** Submits release 1.0.0 (the fake GitHub's zip), waits for Slop to fetch it, and has staff approve it. */
+/** Submits release 1.0.0 (the fake GitHub's zip), waits for SLAPorSLOP to fetch it, and has staff approve it. */
 async function approvedRelease(maker: Who, slug: string) {
   const releases = await api<Array<{ id: string; status: string }>>(maker, "GET", `/v1/apps/${slug}/releases`);
   if (releases.some((r) => r.status === "approved")) return;
@@ -93,7 +93,7 @@ export async function listedApp(
       slug,
       title,
       summary: `${title}, for the money tests.`,
-      description_md: `# ${title}\n\nMade for Slop's browser tests of donations and bounties.`,
+      description_md: `# ${title}\n\nMade for SLAPorSLOP's browser tests of donations and bounties.`,
       kind: "game",
       stage: "released",
       repo_url: `${server.fake}e2e/${slug}`,
@@ -155,7 +155,7 @@ export async function openBounty(who: Who, slug: string, title: string, body = "
   return b.id;
 }
 
-/** Answers Slop's proof-of-work check (challenge.rs) as the browser would. */
+/** Answers SLAPorSLOP's proof-of-work check (challenge.rs) as the browser would. */
 async function challenge(who: Who) {
   const c = await api<{ id: string; prefix: string; difficulty: number }>(who, "POST", "/v1/donations/challenge");
   for (let n = 0; ; n++) {

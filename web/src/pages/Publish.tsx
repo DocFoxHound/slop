@@ -42,9 +42,9 @@ function SignInFirst({ what }: { what: string }) {
   return (
     <div className="page narrow">
       <div className="panel panel-pad">
-        <h1>Publish on Slop</h1>
+        <h1>Publish on SLAPorSLOP</h1>
         <p>
-          Any open-source app or game made with AI can go on Slop. Listing is free; Slop's only fee is 5% of donations,
+          Any open-source app or game made with AI can go on SLAPorSLOP. Listing is free; SLAPorSLOP's only fee is 5% of donations,
           which go straight to the maker.
         </p>
         <p className="row-actions">
@@ -304,7 +304,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
   const isMod = existing?.branch?.kind === "addon";
   const [hostsText, setHostsText] = useState((existing?.online_hosts ?? []).join("\n"));
   const hosts = () => parseHosts(form.online ?? [], hostsText);
-  // Private Slop from a private repository outside GitHub: a read-only token (repo_tokens.rs).
+  // A private app from a private repository outside GitHub: a read-only token (repo_tokens.rs).
   const [token, setToken] = useState<RepoTokenInput>({ kind: "gitea", token: "" });
   const needsToken = !existing && form.visibility === "private" && /^https?:\/\/[^/]+\/.+/.test(form.repo_url.trim()) && !isGithub(form.repo_url);
   useEffect(() => setToken((t) => (t.token ? t : { ...t, kind: guessKind(form.repo_url) })), [form.repo_url]);
@@ -488,10 +488,10 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
             <label className="check">
               <input type="radio" name="visibility" checked={form.visibility === "private"} onChange={() => set("visibility", "private")} />
               <span>
-                <b>Private Slop</b>{" "}
+                <b>Private</b>{" "}
                 <span className="muted small">
                   — only you and people you share it with. Never in the store; no donations or voting. The repository can be
-                  private: on GitHub, install Slop's GitHub App on it; elsewhere, give Slop a read-only token.
+                  private: on GitHub, install SLAPorSLOP's GitHub App on it; elsewhere, give SLAPorSLOP a read-only token.
                 </span>
               </span>
             </label>
@@ -543,7 +543,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
         {needsToken && (
           <fieldset className="tag-picker">
             <legend>Private repository on another host</legend>
-            <p className="muted small">If the repository is private, Slop needs a read-only token to see it. Public repositories don't.</p>
+            <p className="muted small">If the repository is private, SLAPorSLOP needs a read-only token to see it. Public repositories don't.</p>
             <TokenFields value={token} onChange={setToken} />
             {error?.field === "repo_token" && (
               <span className="field-error" role="alert">
@@ -585,7 +585,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
         <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
         <label className="check">
           <input type="checkbox" checked={form.bug_reports ?? true} onChange={(e) => set("bug_reports", e.target.checked)} />{" "}
-          Take bug reports from players on Slop (you see them on the Manage page; turn off if you only use your own issue
+          Take bug reports from players on SLAPorSLOP (you see them on the Manage page; turn off if you only use your own issue
           tracker)
         </label>
         <fieldset>
@@ -652,7 +652,7 @@ function EditorForm({ existing, categories }: { existing?: AppDetail; categories
         {!existing && form.visibility !== "private" && (
           <p className="muted small new-app-donations">
             Getting paid: players can donate to you once it's in Beta or released. The draft's Edit store page has a{" "}
-            <b>Get paid</b> section at the top to set it up with Stripe (18 or older; Slop's fee is 5%).
+            <b>Get paid</b> section at the top to set it up with Stripe (18 or older; SLAPorSLOP's fee is 5%).
           </p>
         )}
       </form>
@@ -692,7 +692,7 @@ export function ContentLabelPicker({
     <fieldset className="tag-picker">
       <legend>Content labels</legend>
       <p className="muted small">
-        Tick any that apply, so players know what to expect. Sexually explicit content isn't allowed on Slop at all.
+        Tick any that apply, so players know what to expect. Sexually explicit content isn't allowed on SLAPorSLOP at all.
         {locked.length > 0 && " The original's labels stay on."}
       </p>
       <div className="chips">
@@ -740,7 +740,7 @@ export function OnlinePicker({
     <fieldset className="tag-picker">
       <legend>Online</legend>
       <p className="muted small">
-        Tick everything your app connects to. Slop checks your code but can't check servers, so players see this on your
+        Tick everything your app connects to. SLAPorSLOP checks your code but can't check servers, so players see this on your
         store page with a suggestion to use sandbox mode. Leave it empty if your app never goes online (Slop Pulse doesn't
         count). The source check notes networking code an app doesn't declare. See{" "}
         <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
@@ -793,14 +793,14 @@ export function SandboxReadyCheck({ checked, onChange }: { checked: boolean; onC
       <input type="checkbox" checked={checked} onChange={(e) => onChange(e.target.checked)} /> Works in sandbox mode
       <span className="hint">
         It keeps local saves, settings and logs only in SLOP_SAVE_DIR when that's set, and runs with no access to the rest of
-        the computer. Slop's source check looks for it in every release. See{" "}
+        the computer. SLAPorSLOP's source check looks for it in every release. See{" "}
         <Link to="/publish/guide#saves-and-sandbox-mode">Saves and sandbox mode</Link>.
       </span>
     </label>
   );
 }
 
-/** Where the game reads mods from (DESIGN §9). Slop keeps only mods approved on Slop there. */
+/** Where the game reads mods from (DESIGN §9). SLAPorSLOP keeps only mods approved on SLAPorSLOP there. */
 export function ModsFolderPicker({
   value,
   onChange,
@@ -817,8 +817,8 @@ export function ModsFolderPicker({
     <fieldset>
       <legend>Mods</legend>
       <p className="muted small">
-        If your game loads mods, say where it looks for them, and players' mods from Slop go there: Slop keeps only mods
-        approved on Slop in that folder, read-only in sandbox mode. Or read <code>SLOP_MODS</code> instead. See{" "}
+        If your game loads mods, say where it looks for them, and players' mods from SLAPorSLOP go there: SLAPorSLOP keeps only mods
+        approved on SLAPorSLOP in that folder, read-only in sandbox mode. Or read <code>SLOP_MODS</code> instead. See{" "}
         <Link to="/publish/guide#loading-mods-in-your-game">Loading mods in your game</Link>.
       </p>
       {(
@@ -896,7 +896,7 @@ export function PlatformPicker({
       <label className="check">
         <input type="checkbox" checked={has("linux")} onChange={(e) => toggle("linux", e.target.checked)} />
         <span>
-          <b>Linux</b> <span className="muted small">— a .tar.gz of the app's files, which the Slop app installs</span>
+          <b>Linux</b> <span className="muted small">— a .tar.gz of the app's files, which the SLAPorSLOP app installs</span>
         </span>
       </label>
       {has("linux") && (

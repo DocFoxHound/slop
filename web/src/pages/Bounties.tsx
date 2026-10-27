@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Fix bounties (crates/slop-api/src/bounties.rs): players pledge toward a fix; whoever delivers
-// it in an approved release is paid straight from each backer's saved card, less Slop's 5%.
+// it in an approved release is paid straight from each backer's saved card, less SLAPorSLOP's 5%.
 
 import { useEffect, useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
@@ -49,7 +49,7 @@ export function BountiesPage() {
       <h1 className="page-title">Fix bounties</h1>
       <p className="muted">
         Players pledge toward fixes and features they want. Whoever delivers one in an approved release, the app's
-        maker or anyone with a community build, is paid straight from the backers' cards, less Slop's 5%. Nothing is
+        maker or anyone with a community build, is paid straight from the backers' cards, less SLAPorSLOP's 5%. Nothing is
         charged until a delivery is confirmed.
       </p>
       {list.error && <ErrorState error={list.error} onRetry={list.reload} />}
@@ -251,7 +251,7 @@ export function BountyPage() {
             <label className="check">
               <input type="checkbox" checked={agreed} onChange={(e) => setAgreed(e.target.checked)} /> Save my card with
               Stripe and charge this amount only if a delivery is confirmed before {formatDate(b.expires_at)}. It's paid
-              to whoever delivers it, less Slop's 5%. I can withdraw until then.
+              to whoever delivers it, less SLAPorSLOP's 5%. I can withdraw until then.
             </label>
             <label className="check">
               <input type="checkbox" checked={adult} onChange={(e) => setAdult(e.target.checked)} /> I'm 18 or older

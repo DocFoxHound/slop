@@ -1,9 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The library (DESIGN §6), laid out like Steam's: a sidebar listing every app you have (installed,
-// not installed, Private Slop, Interested) with a search and a filter, and the selected app on the
+// not installed, Private, Interested) with a search and a filter, and the selected app on the
 // right: a wide banner, one big button (Play, Install, Update…), its activity (release notes and
 // your bug reports) and what friends thought of it. The address is /library/<app>. Installing
-// happens in the Slop app; the website shows the same library and offers the app.
+// happens in the SLAPorSLOP app; the website shows the same library and offers the app.
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
@@ -126,7 +126,7 @@ export function Library() {
         <div className="empty-state lib-empty">
           <p>
             <b>Nothing here yet.</b> Apps you add from the store show up here,
-            {isDesktop ? " ready to install and play." : " ready to install from the Slop app."}
+            {isDesktop ? " ready to install and play." : " ready to install from the SLAPorSLOP app."}
           </p>
           <Link className="btn slime" to="/">
             Find something in the store
@@ -277,7 +277,7 @@ export function Library() {
   );
 }
 
-/** Apps Slop started that are still running, checked every few seconds (the Slop app). */
+/** Apps SLAPorSLOP started that are still running, checked every few seconds (the SLAPorSLOP app). */
 function useRunning(): string[] {
   const [running, setRunning] = useState<string[]>([]);
   useEffect(() => {
@@ -365,7 +365,7 @@ function Details({
   const latest = releases.data?.find((r) => r.status === "approved");
   const waiting = entry.interested && !entry.installed && !entry.inLibrary && entry.app?.stage !== "released";
   const info = <AppInfo entry={entry} detail={d} latest={latest} />;
-  // Donate next to Play, as on the store page (not for Coming soon or Private Slop).
+  // Donate next to Play, as on the store page (not for Coming soon or Private).
   const donate = !isPrivate && !upcoming && (
     <DonateButton key={entry.slug} slug={entry.slug} title={entry.title} isMine={Boolean(d?.is_mine)} />
   );
@@ -496,7 +496,7 @@ function Details({
           {current === "bugs" && (
             <>
               {bugs.data && !bugs.data.can_report && !bugs.data.is_maker && (
-                <p className="muted small">You can report bugs once you've played it from the Slop app.</p>
+                <p className="muted small">You can report bugs once you've played it from the SLAPorSLOP app.</p>
               )}
               <BugReports slug={entry.slug} version={entry.installed?.version} />
             </>
@@ -717,7 +717,7 @@ function Activity({
             <b>Version {pending.version}</b> <span className="badge soon">BEING CHECKED</span>
           </div>
           <p className="muted small">
-            {pending.status === "fetching" ? "Slop is downloading and scanning it." : "Scanned, waiting for a person to review it."}{" "}
+            {pending.status === "fetching" ? "SLAPorSLOP is downloading and scanning it." : "Scanned, waiting for a person to review it."}{" "}
             It installs once it's approved.
           </p>
         </div>
@@ -756,7 +756,7 @@ interface FriendVotes {
 let friendCache: { user: string; at: number; data: Promise<FriendVotes> } | undefined;
 
 /**
- * What friends voted, from their public profiles: only what they chose to show everyone. Slop
+ * What friends voted, from their public profiles: only what they chose to show everyone. SLAPorSLOP
  * doesn't share friends' libraries or playtime, so this is all a friend sees. Kept a few minutes.
  */
 function friendVotes(user: string): Promise<FriendVotes> {
@@ -798,7 +798,7 @@ function FriendsWhoRated({ slug }: { slug: string }) {
               <li key={f.id}>
                 <Avatar name={f.name} url={f.avatar_url} />
                 <Link to={`/u/${f.id}`}>{f.name}</Link>
-                <span className="muted small">{f.vote === "not_slop" ? "👍 Not Slop" : "👎 Slop"}</span>
+                <span className="muted small">{f.vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}</span>
               </li>
             ))}
           </ul>
@@ -842,12 +842,12 @@ function CommunityTab({ entry, detail }: { entry: Entry; detail?: AppDetail }) {
           </ul>
         </>
       )}
-      {!isDesktop && <p className="muted small">Community builds and mods install in the Slop app, beside the original.</p>}
+      {!isDesktop && <p className="muted small">Community builds and mods install in the SLAPorSLOP app, beside the original.</p>}
     </div>
   );
 }
 
-/** "Update apps automatically", sandbox mode for every app, and save sync (the Slop app). */
+/** "Update apps automatically", sandbox mode for every app, and save sync (the SLAPorSLOP app). */
 function LibrarySettings({ onChanged }: { onChanged: () => void }) {
   const auto = useLoad(() => desktop.autoUpdateSetting(), []);
   const sandbox = useSandboxStatus();
@@ -903,7 +903,7 @@ function LibrarySettings({ onChanged }: { onChanged: () => void }) {
             Sync saves between my computers{" "}
             <span className="muted small">
               {saveSync.data.available ? (
-                "(end-to-end encrypted: Slop can't read them; up to 20 MB per app)"
+                "(end-to-end encrypted: SLAPorSLOP can't read them; up to 20 MB per app)"
               ) : (
                 <>
                   (uses your chat's encryption: <Link to="/chat">set up chat</Link> on this computer first)
@@ -1019,7 +1019,7 @@ function Saves({ slug }: { slug: string }) {
     <div className="lib-saves">
       <h3 className="lib-col-h">Saves</h3>
       <p className="muted small">
-        Kept in Slop's save folder for this app, the same in normal and sandbox mode, and kept when you uninstall. Slop copies
+        Kept in SLAPorSLOP's save folder for this app, the same in normal and sandbox mode, and kept when you uninstall. SLAPorSLOP copies
         them before each sandboxed session. Save sync is in the library's settings (the gear beside "Library").
       </p>
       {copies.data && copies.data.length === 0 && <p className="muted small">No copies yet.</p>}

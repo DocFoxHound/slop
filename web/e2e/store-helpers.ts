@@ -90,7 +90,7 @@ export async function released(slug: string, who: Who = "maker2"): Promise<void>
   if (!releases.some((r) => r.status === "approved")) await approvedRelease(slug, "1.0.0", who);
 }
 
-/** Submits a release from the fake GitHub, waits for Slop to fetch it, and has staff approve it. */
+/** Submits a release from the fake GitHub, waits for SLAPorSLOP to fetch it, and has staff approve it. */
 export async function approvedRelease(slug: string, version = "1.0.0", who: Who = "maker2"): Promise<string> {
   const release = await call<{ id: string }>(who, "POST", `/v1/apps/${slug}/releases`, {
     version,
@@ -142,7 +142,7 @@ export async function delist(...slugs: string[]) {
   }
 }
 
-/** `who` played it through Slop (needed to vote, review and confirm accessibility). */
+/** `who` played it through SLAPorSLOP (needed to vote, review and confirm accessibility). */
 export async function played(who: Who, slug: string) {
   await call(who, "POST", `/v1/apps/${slug}/launch?platform=windows`);
 }
@@ -156,7 +156,7 @@ export async function failApi(page: Page, url: Match, o: { status?: number; mess
     return route.fulfill({
       status: o.status ?? 500,
       contentType: "application/json",
-      body: JSON.stringify({ error: { code: o.code ?? "internal", message: o.message ?? "Something broke on Slop's side.", field: o.field } }),
+      body: JSON.stringify({ error: { code: o.code ?? "internal", message: o.message ?? "Something broke on SLAPorSLOP's side.", field: o.field } }),
     });
   });
 }

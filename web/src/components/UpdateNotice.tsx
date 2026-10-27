@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// "A new version of Slop is available": a dismissible notice in the desktop app. Updates are
+// "A new version of SLAPorSLOP is available": a dismissible notice in the desktop app. Updates are
 // never forced; the player chooses when to install (crates/slop-desktop, watch_for_updates).
 
 import { useEffect, useState } from "react";
@@ -37,7 +37,7 @@ export function UpdateNotice() {
   return (
     <div className="update-notice" role="status">
       <span>
-        <b>Slop {update.version} is available.</b>{" "}
+        <b>SLAPorSLOP {update.version} is available.</b>{" "}
         <span className="muted">
           You have {update.current_version}.
           {state === "installing" && " Downloading and checking the update…"}

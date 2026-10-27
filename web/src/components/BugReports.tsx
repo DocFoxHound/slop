@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Bug reports (crates/slop-api/src/bug_reports.rs): the crash prompt in the Slop app, the
+// Bug reports (crates/slop-api/src/bug_reports.rs): the crash prompt in the SLAPorSLOP app, the
 // player's form on an app's page, and the maker's list and feedback per release.
 
 import { useEffect, useState } from "react";
@@ -12,7 +12,7 @@ import { desktop, detectOs, isDesktop } from "../platform";
 
 type Crash = { slug: string; code: number | null; log: string };
 
-/** In the Slop app: an app closed with an error. Offers a bug report; sends nothing itself. */
+/** In the SLAPorSLOP app: an app closed with an error. Offers a bug report; sends nothing itself. */
 export function CrashPrompt() {
   const [crash, setCrash] = useState<Crash>();
   const navigate = useNavigate();
@@ -96,7 +96,7 @@ export function BugReports({ slug, version }: { slug: string; version?: string }
           Players' reports are on your <Link to={`/publish/${slug}/manage#bug-reports`}>Manage page</Link>.
         </p>
       ) : (
-        <p className="muted small">Something broken? Tell the maker. Only they and Slop staff see the details.</p>
+        <p className="muted small">Something broken? Tell the maker. Only they and SLAPorSLOP staff see the details.</p>
       )}
       {!l.is_maker && l.reports.length > 0 && (
         <ul className="offer-list">
@@ -177,13 +177,13 @@ export function BugReports({ slug, version }: { slug: string; version?: string }
   );
 }
 
-/** A GitHub "new issue" link with the report filled in: the maker files it; Slop writes nothing. */
+/** A GitHub "new issue" link with the report filled in: the maker files it; SLAPorSLOP writes nothing. */
 function issueLink(repoUrl: string, r: BugReport): string | null {
   if (!repoUrl.startsWith("https://github.com/")) return null;
   const log = r.log ? `\n\n<details><summary>Last output</summary>\n\n\`\`\`\n${r.log.slice(-1500)}\n\`\`\`\n</details>` : "";
   const body =
     `${r.body ?? ""}\n\nVersion: ${r.version ?? "?"} · Platform: ${r.platform ?? "?"} · ` +
-    `${r.me_too + 1} player${r.me_too ? "s" : ""} on Slop${log}`;
+    `${r.me_too + 1} player${r.me_too ? "s" : ""} on SLAPorSLOP${log}`;
   return `${repoUrl.replace(/\/$/, "")}/issues/new?title=${encodeURIComponent(r.title)}&body=${encodeURIComponent(body)}`;
 }
 
@@ -299,7 +299,7 @@ export function ReleaseFeedbackPanel({ slug }: { slug: string }) {
           <li key={f.version}>
             <b>{f.version}</b> <span className="faint small">approved {formatDate(f.approved_at)}</span>
             <div className="small">
-              {f.not_slop_percent !== null ? `${f.not_slop_percent}% Not Slop from ${f.votes} votes` : "No votes on it yet"} ·{" "}
+              {f.not_slop_percent !== null ? `${f.not_slop_percent}% Slaps from ${f.votes} votes` : "No votes on it yet"} ·{" "}
               {f.reviews_up} 👍 and {f.reviews_down} 👎 reviews · {f.bug_reports} bug report{f.bug_reports === 1 ? "" : "s"}
             </div>
             <div className="small">👍 say: {phrases(f.praised)}</div>

@@ -23,9 +23,9 @@ const DAYS: Array<[string, string]> = [
 ];
 
 const LABELS: Array<[string, string]> = [
-  ["95–100%", "Overwhelmingly Not Slop"],
-  ["80–94%", "Very Not Slop"],
-  ["70–79%", "Mostly Not Slop"],
+  ["95–100%", "Overwhelmingly Slaps"],
+  ["80–94%", "Really Slaps"],
+  ["70–79%", "Mostly Slaps"],
   ["40–69%", "Mixed"],
   ["20–39%", "Mostly Slop"],
   ["0–19%", "Overwhelmingly Slop"],
@@ -37,13 +37,13 @@ export function HowRatings() {
     <div className="page narrow prose">
       <h1>How ratings work</h1>
       <p className="lead">
-        Every app on Slop is rated 👍 <b>Not Slop</b> or 👎 <b>Slop</b> by the people who play it. A vote from someone who played
+        Every app on SLAPorSLOP is rated 👍 <b>Slaps</b> or 👎 <b>Slop</b> by the people who play it. A vote from someone who played
         for hours counts for more than one from someone who tried it for a minute.
       </p>
 
       <h2>Who can vote</h2>
       <ul>
-        <li>Anyone signed in who has launched the app through Slop. You can't rate what you haven't tried.</li>
+        <li>Anyone signed in who has launched the app through SLAPorSLOP. You can't rate what you haven't tried.</li>
         <li>
           Apps you can play: Beta and released apps. Coming soon apps have nothing to play yet, so they collect Interested marks
           instead. A vote given while the app was in Beta is marked <b>Rated in Beta</b>.
@@ -99,7 +99,7 @@ export function HowRatings() {
       <h2>What you see</h2>
       <ul>
         <li>
-          <b>% Not Slop, weighted:</b> the weighted share of 👍 votes. It's the number shown first.
+          <b>% Slaps, weighted:</b> the weighted share of 👍 votes. It's the number shown first.
         </li>
         <li>
           <b>Unweighted:</b> one account, one vote. It's shown beside the weighted one, so you can see if they disagree.
@@ -115,7 +115,7 @@ export function HowRatings() {
         <caption className="sr-only">Rating labels</caption>
         <thead>
           <tr>
-            <th scope="col">Weighted % Not Slop</th>
+            <th scope="col">Weighted % Slaps</th>
             <th scope="col">Label</th>
           </tr>
         </thead>
@@ -132,10 +132,10 @@ export function HowRatings() {
       <h2>The store's lists</h2>
       <ul>
         <li>
-          <b>Most Not Slop:</b> the best weighted rating overall, among apps with at least 5 votes.
+          <b>Most Slaps:</b> the best weighted rating overall, among apps with at least 5 votes.
         </li>
         <li>
-          <b>Most Not Slop right now:</b> the same, counting only votes cast or changed in the last 30 days.
+          <b>Most Slaps right now:</b> the same, counting only votes cast or changed in the last 30 days.
         </li>
         <li>
           <b>Fresh slop:</b> the most weighted 👎 votes in the last 30 days. It's for fun, so please be kind in reviews.
@@ -145,7 +145,7 @@ export function HowRatings() {
           changes every day, so every new app gets its turn.
         </li>
         <li>
-          <b>Glow-ups:</b> apps whose % Not Slop rose by 15 points or more since 60 days ago, showing before and after,
+          <b>Glow-ups:</b> apps whose % Slaps rose by 15 points or more since 60 days ago, showing before and after,
           so updates that fix things get noticed.
         </li>
       </ul>
@@ -165,7 +165,7 @@ export function HowRatings() {
         <li>Your current votes and reviews show on your profile, unless you make it private on your account page.</li>
         <li>The history of your changes is never shown to anyone else.</li>
         <li>Makers see totals, for example by version and platform, never who voted.</li>
-        <li>No one can buy votes or ratings: Slop sells nothing, and donations never affect them.</li>
+        <li>No one can buy votes or ratings: SLAPorSLOP sells nothing, and donations never affect them.</li>
       </ul>
       <p>
         <Link to="/">Back to the store</Link>

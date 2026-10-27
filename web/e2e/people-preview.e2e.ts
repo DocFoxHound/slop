@@ -52,7 +52,7 @@ test("the creative sees her portfolio waiting for review as a preview, and her l
   const bar = previewBar(page);
   await expect(bar).toBeVisible();
   await expect(bar).toContainText("Only you can see this.");
-  await expect(bar).toContainText("Your changes are waiting for Slop's review; everyone else sees your live page.");
+  await expect(bar).toContainText("Your changes are waiting for SLAPorSLOP's review; everyone else sees your live page.");
   await expect(bar).toContainText("Waiting for review since");
   // The previewed page: the newer works, in the newer design, outlined and labelled.
   await expect(design(page).getByRole("heading", { name: "Pip's new look", level: 2 })).toBeVisible();
@@ -73,7 +73,7 @@ test("the creative sees her portfolio waiting for review as a preview, and her l
   await bar.getByRole("link", { name: "View your live page" }).click();
   await expect(page).toHaveURL(`${pagePath()}?view=live`);
   await expect(liveBar(page)).toContainText("This is your live page, as everyone sees it.");
-  await expect(liveBar(page)).toContainText("Your newer portfolio is waiting for Slop's review");
+  await expect(liveBar(page)).toContainText("Your newer portfolio is waiting for SLAPorSLOP's review");
   await expectLive(page);
   await axe(page);
   await liveBar(page).getByRole("link", { name: "Back to your preview" }).click();

@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Money for staff: donation pauses and makers' requests to lift them (every staff member sees
-// these), and for finance staff the payments record and Slop's fees by month
+// these), and for finance staff the payments record and SLAPorSLOP's fees by month
 // (crates/slop-api/src/admin_console.rs).
 
 import { useState } from "react";
@@ -74,7 +74,7 @@ function Payments({ holds }: { holds: unknown }) {
                 <th>Kind</th>
                 <th>Payments</th>
                 <th>Amount</th>
-                <th>Slop's fees</th>
+                <th>SLAPorSLOP's fees</th>
               </tr>
             </thead>
             <tbody>

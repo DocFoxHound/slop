@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // A person's picture: the one they chose from a linked sign-in (crates/slop-api/src/avatars.rs,
-// served by Slop itself), or the first letter of their name on a coloured square. The size comes
+// served by SLAPorSLOP itself), or the first letter of their name on a coloured square. The size comes
 // from the class (`avatar` in its places in styles.css, `p-avatar` on People); it never shrinks.
 
 import { useEffect, useState } from "react";

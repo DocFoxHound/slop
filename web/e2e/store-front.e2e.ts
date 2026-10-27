@@ -116,7 +116,7 @@ test("staff feature apps; the carousel pages by buttons, dots and arrow keys, an
   const slide = carousel.getByRole("group");
   await expect(slide).toHaveAttribute("aria-label", "1 of 2: Lantern Keep");
   await expect(carousel.getByText("Lantern puzzles with real tension.")).toBeVisible();
-  await expect(carousel.getByText("86% Not Slop")).toBeVisible();
+  await expect(carousel.getByText("86% Slaps")).toBeVisible();
   // It never moves by itself.
   await page.clock.runFor(120_000);
   await expect(slide).toHaveAttribute("aria-label", "1 of 2: Lantern Keep");
@@ -208,7 +208,7 @@ test("staff hide an automatic shelf and it leaves the front page until shown aga
     await expect(popular).not.toBeChecked();
     const page = await browser.newPage();
     await page.goto("/");
-    await expect(section(page, "Most Not Slop right now")).toBeVisible();
+    await expect(section(page, "Most Slaps right now")).toBeVisible();
     await expect(section(page, "Popular this month")).toHaveCount(0);
 
     await popular.click();
@@ -291,31 +291,31 @@ test("Popular leaves out coming-soon and dead apps; Glow-ups show how far an app
   await expect(popular.locator(".tile").first()).toBeVisible();
   await expect(popular.getByText("Soon Skiff")).toHaveCount(0);
   await expect(popular.getByText("Dead Dory")).toHaveCount(0);
-  await expect(section(page, "Glow-ups")).toContainText("Updates turned these from Slop toward Not Slop");
-  await expect(shelfAfter(page, "Glow-ups").getByText("41% → 86% Not Slop")).toBeVisible();
+  await expect(section(page, "Glow-ups")).toContainText("Updates turned these from Slop toward Slaps");
+  await expect(shelfAfter(page, "Glow-ups").getByText("41% → 86% Slaps")).toBeVisible();
 });
 
 test("a shelf that fails to load offers Try again; empty shelves say so", async ({ page }) => {
   let fail = true;
   await page.route(
     (u) => u.pathname === "/v1/apps" && u.searchParams.get("sort") === "popular",
-    (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "Slop is busy. Try again soon." } } }) : route.fallback()),
+    (route) => (fail ? route.fulfill({ status: 503, json: { error: { code: "unavailable", message: "SLAPorSLOP is busy. Try again soon." } } }) : route.fallback()),
   );
   await page.goto("/");
   const popular = shelfAfter(page, "Popular this month");
   await expect(popular).toHaveAttribute("role", "alert");
-  await expect(popular).toContainText("Slop is busy. Try again soon.");
+  await expect(popular).toContainText("SLAPorSLOP is busy. Try again soon.");
   fail = false;
   await popular.getByRole("button", { name: "Try again" }).click();
   await expect(shelfAfter(page, "Popular this month").locator(".tile").first()).toBeVisible();
 
-  // A brand-new Slop: nothing anywhere.
+  // A brand-new SLAPorSLOP: nothing anywhere.
   await page.unrouteAll();
   await page.route(path("/v1/apps"), (route) => route.fulfill({ json: { apps: [], next_offset: null } }));
   await page.reload();
   await expect(shelfAfter(page, "Popular this month")).toHaveText("Nothing to play yet.");
   await expect(shelfAfter(page, "Coming soon & in beta")).toHaveText("Nothing upcoming right now.");
-  await expect(shelfAfter(page, "Most Not Slop right now")).toHaveText("Not enough recent votes yet.");
+  await expect(shelfAfter(page, "Most Slaps right now")).toHaveText("Not enough recent votes yet.");
   await expect(shelfAfter(page, "Community branches worth installing")).toHaveText("No community builds yet.");
   await expect(shelfAfter(page, "New & updated")).toHaveText("Nothing released yet. Be the first to publish.");
   await expect(shelfAfter(page, "New & updated").getByRole("link", { name: "Be the first to publish" })).toHaveAttribute("href", "/publish");

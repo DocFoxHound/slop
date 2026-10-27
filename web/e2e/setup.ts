@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Starts the throwaway Slop for the browser tests and stops it (dropping its database) after.
+// Starts the throwaway SLAPorSLOP for the browser tests and stops it (dropping its database) after.
 import { spawn } from "node:child_process";
 import { execFileSync } from "node:child_process";
 import { writeFileSync } from "node:fs";

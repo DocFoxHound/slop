@@ -32,9 +32,9 @@ export function PageStateBadge({ status }: { status: PageStatus }) {
 export function pageStateSummary(status: PageStatus): string {
   switch (status.state) {
     case "draft":
-      return "Only you can see it. Next: add your portfolio, which Slop reviews before your page goes public.";
+      return "Only you can see it. Next: add your portfolio, which SLAPorSLOP reviews before your page goes public.";
     case "waiting":
-      return "Your portfolio is waiting for Slop's review. Only you can see your page until it's approved.";
+      return "Your portfolio is waiting for SLAPorSLOP's review. Only you can see your page until it's approved.";
     case "turned_down":
       return "Your portfolio wasn't approved. Fix it and check it again; only you can see your page until one is approved.";
     case "live":
@@ -77,24 +77,24 @@ export function PageStatusDetails({
         <>
           Next, add your portfolio: your shop window, showing makers who might hire you your style and your best work. It lives in a
           public GitHub repository of your own. {inEditor ? "The Portfolio section below" : "Your page's editor"} shows how to set one up, with
-          ready-made templates and a line to hand an AI assistant. A person at Slop reviews every new portfolio, and your page goes public
+          ready-made templates and a line to hand an AI assistant. A person at SLAPorSLOP reviews every new portfolio, and your page goes public
           on People once it's approved. You'll get a notification either way.
         </>,
       );
       if (status.problem)
         lines.push(
           <>
-            The last time Slop read your portfolio, something was wrong:{" "}
+            The last time SLAPorSLOP read your portfolio, something was wrong:{" "}
             <span className="pre-line">{status.problem}</span>
           </>,
         );
       action = portfolio;
       break;
     case "waiting":
-      title = "Waiting for Slop's review";
+      title = "Waiting for SLAPorSLOP's review";
       lines.push(
         <>
-          A person at Slop is checking your portfolio{status.waiting_since ? ` (sent ${formatDate(status.waiting_since)})` : ""}. Only you
+          A person at SLAPorSLOP is checking your portfolio{status.waiting_since ? ` (sent ${formatDate(status.waiting_since)})` : ""}. Only you
           can see your page until it's approved; then everyone can find it on People.
         </>,
         <>You'll get a notification when it's approved or turned down. You can keep editing your page meanwhile.</>,
@@ -118,7 +118,7 @@ export function PageStatusDetails({
       title = "Live: everyone can see your page";
       if (status.update_waiting)
         lines.push(
-          <>Your new portfolio is waiting for Slop's review; everyone else sees the approved one until then. You'll get a notification.</>,
+          <>Your new portfolio is waiting for SLAPorSLOP's review; everyone else sees the approved one until then. You'll get a notification.</>,
         );
       else if (status.reason)
         lines.push(
@@ -135,7 +135,7 @@ export function PageStatusDetails({
         status.suspended ? (
           <>Your account is suspended, so your page is hidden.</>
         ) : (
-          <>Slop hid your page: {status.reason ?? "it broke Slop's rules"}.</>
+          <>SLAPorSLOP hid your page: {status.reason ?? "it broke SLAPorSLOP's rules"}.</>
         ),
         <>
           The decision says why and how to appeal: <Link to="/account#decisions">see it in your account</Link>.
@@ -195,8 +195,8 @@ export function PreviewBar({ handle, status, set }: { handle: string; status: Pa
     status.state === "hidden"
       ? others
       : set.status === "pending"
-        ? `Your changes are waiting for Slop's review; ${others}`
-        : `Slop turned these changes down; ${others}`;
+        ? `Your changes are waiting for SLAPorSLOP's review; ${others}`
+        : `SLAPorSLOP turned these changes down; ${others}`;
   return (
     <section className="own-view-bar preview" aria-label="Preview: only you can see this">
       <div className="own-view-text">
@@ -249,7 +249,7 @@ export function LiveBar({ handle, status, set }: { handle: string; status: PageS
         </p>
         <p>
           {set.status === "pending"
-            ? "Your newer portfolio is waiting for Slop's review; only you can see it, in the preview."
+            ? "Your newer portfolio is waiting for SLAPorSLOP's review; only you can see it, in the preview."
             : "Your newer portfolio was turned down; only you can see it, in the preview."}
         </p>
       </div>

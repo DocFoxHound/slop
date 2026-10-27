@@ -23,13 +23,13 @@ test("the bounties list shows each bounty's status, amount and backers, an empty
   await page.reload();
   await expect(page.getByText("No open bounties yet. Open one on any app's page.")).toBeVisible();
 
-  // Slop didn't answer: an error with a way to try again.
+  // SLAPorSLOP didn't answer: an error with a way to try again.
   await page.unroute("**/v1/bounties");
   let failed = false;
   await page.route("**/v1/bounties", (route) => {
     if (failed) return route.fallback();
     failed = true;
-    return route.fulfill(json(500, { error: { code: "internal", message: "Something went wrong on Slop's side." } }));
+    return route.fulfill(json(500, { error: { code: "internal", message: "Something went wrong on SLAPorSLOP's side." } }));
   });
   await page.reload();
   await expect(page.getByRole("alert")).toBeVisible();
@@ -37,7 +37,7 @@ test("the bounties list shows each bounty's status, amount and backers, an empty
   await expect(page.getByRole("link", { name: "Controller support" })).toBeVisible();
 });
 
-test("opening a bounty: only signed in, a currency, the server's refusals, and never on mods or Private Slop", async ({ browser }) => {
+test("opening a bounty: only signed in, a currency, the server's refusals, and never on mods or Private", async ({ browser }) => {
   const { original } = await moneyApps();
   // Signed out: the bounties are listed, but there's no button.
   const visitor = await browser.newPage();
@@ -49,7 +49,7 @@ test("opening a bounty: only signed in, a currency, the server's refusals, and n
   await expect(visitor.getByRole("heading", { name: "More Lanterns", level: 1 })).toBeVisible();
   await expect(visitor.locator("#bounties")).toHaveCount(0);
 
-  // Private Slop has none either (its owner's view).
+  // Private has none either (its owner's view).
   const vera = await browser.newPage();
   await signIn(vera, "creative");
   if ((await call("creative", "GET", "/v1/apps/vera-private-sketches")).status === 404) {
@@ -188,12 +188,12 @@ test("a failed browser check gives the Pledge button back (b63)", async ({ page 
     route.fulfill(json(409, { error: { code: "challenge_required", message: "one more step before trying again" } })),
   );
   await page.route("**/v1/donations/challenge", (route) =>
-    route.fulfill(json(500, { error: { code: "internal", message: "Slop couldn't start the check." } })),
+    route.fulfill(json(500, { error: { code: "internal", message: "SLAPorSLOP couldn't start the check." } })),
   );
   await page.goto(`/bounties/${bounty}`);
   await page.getByRole("checkbox", { name: /Save my card with Stripe/ }).check();
   await page.getByRole("button", { name: "Pledge" }).click();
-  await expect(page.getByRole("alert")).toHaveText("Slop couldn't start the check.");
+  await expect(page.getByRole("alert")).toHaveText("SLAPorSLOP couldn't start the check.");
   await expect(page.getByRole("button", { name: "Pledge" })).toBeEnabled();
   await expect(page.getByRole("button", { name: "One moment…" })).toHaveCount(0);
 });

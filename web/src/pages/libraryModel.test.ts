@@ -108,7 +108,7 @@ describe("the library's list", () => {
     expect(all.map((s) => [s.label, countLabel(s)])).toEqual([
       ["Installed", "(3)"],
       ["Not installed", "(2)"],
-      ["Private Slop", "(2)"],
+      ["Private", "(2)"],
       ["Interested", "(2)"],
     ]);
     const searched = sections(entries, "all", "  ZE ", true);

@@ -58,14 +58,14 @@ test("staff turn an app's donations off, keep it with an answer, then lift it", 
     route.fulfill({
       status: 409,
       contentType: "application/json",
-      body: JSON.stringify({ error: { code: "conflict", message: "you asked already: wait for Slop's answer" } }),
+      body: JSON.stringify({ error: { code: "conflict", message: "you asked already: wait for SLAPorSLOP's answer" } }),
     }),
   );
   await notice.getByRole("button", { name: "Ask for a review" }).click();
-  await expect(notice.getByRole("alert")).toHaveText("you asked already: wait for Slop's answer");
+  await expect(notice.getByRole("alert")).toHaveText("you asked already: wait for SLAPorSLOP's answer");
   await vera.unroute(`**/v1/apps/${SLUG}/donations/hold/request`);
   await notice.getByRole("button", { name: "Ask for a review" }).click();
-  await expect(notice.getByText("Waiting for Slop's answer.")).toBeVisible();
+  await expect(notice.getByText("Waiting for SLAPorSLOP's answer.")).toBeVisible();
   await expect(ask).toHaveCount(0);
 
   // Staff keep it, and say why.
@@ -82,7 +82,7 @@ test("staff turn an app's donations off, keep it with an answer, then lift it", 
 
   // The maker reads the answer, and can't ask again for a day.
   await vera.reload();
-  await expect(notice.getByText("Slop kept the pause: LICENSES.md doesn't list the gem pack yet.")).toBeVisible();
+  await expect(notice.getByText("SLAPorSLOP kept the pause: LICENSES.md doesn't list the gem pack yet.")).toBeVisible();
   await expect(notice.getByText(/^You can ask again after /)).toBeVisible();
   await expect(notice.getByRole("textbox", { name: /Fixed it\?/ })).toHaveCount(0);
 

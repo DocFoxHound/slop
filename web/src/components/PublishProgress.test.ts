@@ -131,7 +131,7 @@ describe("progressSteps", () => {
     ).toBe("active");
   });
 
-  it("counts code from outside Slop and undeclared online play as notes", () => {
+  it("counts code from outside SLAPorSLOP and undeclared online play as notes", () => {
     const repo_scan = {
       status: "checked" as const,
       licence: { declared: "MIT", files: [], headers: [], problems: [] },
@@ -172,7 +172,7 @@ describe("progressSteps", () => {
     );
     const files = failed.find((s) => s.title === "Files checked")!;
     expect(files.state).toBe("problem");
-    expect(textOf(files.detail)).toContain("Slop couldn't check the files: download failed: HTTP 404.");
+    expect(textOf(files.detail)).toContain("SLAPorSLOP couldn't check the files: download failed: HTTP 404.");
     expect(textOf(files.detail)).toContain("See what to fix");
     const rejected = progressSteps(
       app(),
@@ -243,7 +243,7 @@ describe("progressSteps", () => {
     });
   });
 
-  it("says why a release waits for a person, and when Slop approved it", () => {
+  it("says why a release waits for a person, and when SLAPorSLOP approved it", () => {
     const waiting = progressSteps(
       app(),
       [
@@ -256,7 +256,7 @@ describe("progressSteps", () => {
     );
     const review = waiting.find((s) => s.title === "Review by a person")!;
     expect(textOf(review.more)).toContain("Why a person: an app's first release is always reviewed by a person.");
-    expect(textOf(review.detail)).toBe("Waiting for review by a person at Slop. It usually takes a day or two.");
+    expect(textOf(review.detail)).toBe("Waiting for review by a person at SLAPorSLOP. It usually takes a day or two.");
     expect(textOf(review.more)).toContain("you get a notification");
     expect(review.stateLabel).toBe("Waiting for a person");
     const auto = progressSteps(
@@ -295,7 +295,7 @@ describe("progressSteps", () => {
       state: "done",
     });
   });
-  it("shows each file while Slop checks them, with an honest estimate", () => {
+  it("shows each file while SLAPorSLOP checks them, with an honest estimate", () => {
     const now = Date.parse("2026-10-25T12:00:00Z");
     const min = (n: number) => new Date(now - n * 60_000).toISOString();
     const checking = release({
@@ -349,7 +349,7 @@ describe("progressSteps", () => {
     });
     const files = progressSteps(app(), [queued], testServer).find((s) => s.title === "Files checked")!;
     expect(files.stateLabel).toBe("Waiting its turn");
-    expect(files.detail).toContain("Slop checks one release at a time.");
+    expect(files.detail).toContain("SLAPorSLOP checks one release at a time.");
     expect(files.detail).not.toContain("ahead");
     expect(files.more).toBe("Each file takes about 5 minutes here.");
   });
@@ -374,7 +374,7 @@ describe("progressSteps", () => {
     expect(items[1].detail).toContain('signed with your key "laptop"');
     const scan = steps.find((s) => s.title === "Scan")!;
     expect(scan).toMatchObject({ state: "problem", stateLabel: "On hold", detail: "Windows (.zip) is on hold: YARA: Packed_UPX." });
-    expect(textOf(scan.more)).toContain("a person at Slop looks");
+    expect(textOf(scan.more)).toContain("a person at SLAPorSLOP looks");
     expect(states(steps)["Maker signature"]).toBe("done");
     expect(textOf(steps.find((s) => s.title === "Review by a person")!.detail)).toContain("looks at the file on hold first");
   });
@@ -382,7 +382,7 @@ describe("progressSteps", () => {
   it("refreshes often while files are checked, now and then during review, and stops when done", () => {
     expect(refreshEvery([release({ status: "fetching" })])).toBe(10_000);
     expect(refreshEvery([release({ status: "awaiting_review" })])).toBe(60_000);
-    // Fetched, but Slop hasn't read the source yet: that shows within seconds.
+    // Fetched, but SLAPorSLOP hasn't read the source yet: that shows within seconds.
     expect(refreshEvery([release({ status: "awaiting_review", repo_scan: null })])).toBe(10_000);
     expect(refreshEvery([release({ status: "approved" })])).toBeNull();
     expect(refreshEvery([release({ status: "withdrawn" }), release({ status: "rejected" })])).toBeNull();

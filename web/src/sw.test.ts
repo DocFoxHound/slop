@@ -53,21 +53,21 @@ describe("public/sw.js", () => {
     const signedOut = load(vi.fn(async () => new Response("", { status: 401 })) as unknown as typeof fetch);
     await signedOut.fire("push");
     expect(signedOut.self.registration.showNotification).toHaveBeenCalledWith(
-      "Slop",
-      expect.objectContaining({ body: "You have something new on Slop.", data: { link: "/notifications" } }),
+      "SLAPorSLOP",
+      expect.objectContaining({ body: "You have something new on SLAPorSLOP.", data: { link: "/notifications" } }),
     );
     const offline = load(vi.fn(async () => Promise.reject(new TypeError("offline"))) as unknown as typeof fetch);
     await offline.fire("push");
-    expect(offline.self.registration.showNotification).toHaveBeenCalledWith("Slop", expect.anything());
+    expect(offline.self.registration.showNotification).toHaveBeenCalledWith("SLAPorSLOP", expect.anything());
   });
 
   it("with nothing unread, says something general", async () => {
     const { self, fire } = load(inbox([{ id: "n1", title: "Old", body: "", link: "/x", count: 1, read: true }]));
     await fire("push");
-    expect(self.registration.showNotification).toHaveBeenCalledWith("Slop", expect.objectContaining({ data: { link: "/notifications" } }));
+    expect(self.registration.showNotification).toHaveBeenCalledWith("SLAPorSLOP", expect.objectContaining({ data: { link: "/notifications" } }));
   });
 
-  it("a click opens the notification's page in Slop's open window", async () => {
+  it("a click opens the notification's page in SLAPorSLOP's open window", async () => {
     const win = { url: "https://slop.example/library", focus: vi.fn(async () => {}), navigate: vi.fn(async () => {}) };
     const other = { url: "https://elsewhere.example/", focus: vi.fn(async () => {}), navigate: vi.fn(async () => {}) };
     const { self, fire } = load(inbox([]), [other, win]);
@@ -80,7 +80,7 @@ describe("public/sw.js", () => {
     expect(self.clients.openWindow).not.toHaveBeenCalled();
   });
 
-  it("a click with no Slop window open opens one", async () => {
+  it("a click with no SLAPorSLOP window open opens one", async () => {
     const { self, fire } = load(inbox([]));
     await fire("notificationclick", { notification: { close: vi.fn(), data: {} } });
     expect(self.clients.openWindow).toHaveBeenCalledWith("https://slop.example/notifications");

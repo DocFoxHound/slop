@@ -23,13 +23,13 @@ test("a new Terms version: previewed, announced, accepted ahead of time, then wi
   await expect(terms.getByRole("heading", { name: /^Browser tests / })).toBeVisible();
   await terms.getByRole("tab", { name: "Edit" }).click();
   await expect(publish).toBeDisabled();
-  await terms.getByRole("textbox", { name: /What changed, in plain words/ }).fill("Adds a section about Slop's browser tests.");
+  await terms.getByRole("textbox", { name: /What changed, in plain words/ }).fill("Adds a section about SLAPorSLOP's browser tests.");
   await publish.click();
   const announced = terms.getByRole("status").filter({ hasText: "Announced:" });
-  await expect(announced).toContainText("Adds a section about Slop's browser tests.");
+  await expect(announced).toContainText("Adds a section about SLAPorSLOP's browser tests.");
   await expect(announced.getByText(/published from here by Ada Admin/)).toBeVisible();
   await terms.getByText(/The newest version as a file/).click();
-  await expect(terms.getByRole("textbox", { name: "Terms of Service as a file" })).toHaveValue(/summary: Adds a section about Slop's browser tests\.\n/);
+  await expect(terms.getByRole("textbox", { name: "Terms of Service as a file" })).toHaveValue(/summary: Adds a section about SLAPorSLOP's browser tests\.\n/);
   // One change at a time: there's nothing to write until this one is in effect or withdrawn.
   await expect(terms.getByRole("button", { name: "Write a new version" })).toHaveCount(0);
 
@@ -38,17 +38,17 @@ test("a new Terms version: previewed, announced, accepted ahead of time, then wi
   await signIn(mo, "moderator");
   await mo.goto("/");
   const notice = mo.getByRole("status").filter({ hasText: /The Terms of Service changes on/ });
-  await expect(notice).toContainText("Adds a section about Slop's browser tests.");
+  await expect(notice).toContainText("Adds a section about SLAPorSLOP's browser tests.");
   await expect(notice.getByRole("link", { name: "Review and accept" })).toHaveAttribute("href", /\/legal\/terms\?version=/);
   await notice.getByRole("button", { name: "Dismiss" }).click();
   await expect(notice).toHaveCount(0);
   await mo.goto("/account#agreements");
   const agreements = mo.locator("#agreements");
-  await expect(agreements.getByText(/changes .*: Adds a section about Slop's browser tests\./)).toBeVisible();
+  await expect(agreements.getByText(/changes .*: Adds a section about SLAPorSLOP's browser tests\./)).toBeVisible();
   await agreements.getByRole("button", { name: "Review and accept" }).click();
   const dialog = mo.getByRole("dialog", { name: "Terms of Service" });
   await expect(dialog.getByRole("heading", { name: "Before you continue: the Terms of Service" })).toBeVisible();
-  await expect(dialog.getByText(/takes effect on .* · What changed: Adds a section about Slop's browser tests\./)).toBeVisible();
+  await expect(dialog.getByText(/takes effect on .* · What changed: Adds a section about SLAPorSLOP's browser tests\./)).toBeVisible();
   const accept = dialog.getByRole("button", { name: "Accept and continue" });
   await expect(accept).toBeDisabled();
   await dialog.getByRole("checkbox", { name: "I've read and accept the Terms of Service." }).check();
@@ -57,7 +57,7 @@ test("a new Terms version: previewed, announced, accepted ahead of time, then wi
   await expect(agreements.getByText("You're up to date with everything you've agreed to.")).toBeVisible();
   // The public list says it's coming.
   await mo.goto("/legal");
-  await expect(mo.getByText(/Changes on .*: Adds a section about Slop's browser tests\./)).toBeVisible();
+  await expect(mo.getByText(/Changes on .*: Adds a section about SLAPorSLOP's browser tests\./)).toBeVisible();
 
   // Withdrawn before it takes effect: gone for everyone.
   await terms.getByRole("button", { name: "Withdraw it" }).click();
@@ -66,7 +66,7 @@ test("a new Terms version: previewed, announced, accepted ahead of time, then wi
   await expect(announced).toHaveCount(0);
   await expect(terms.getByRole("button", { name: "Write a new version" })).toBeVisible();
   await mo.goto("/legal");
-  await expect(mo.getByText(/Adds a section about Slop's browser tests/)).toHaveCount(0);
+  await expect(mo.getByText(/Adds a section about SLAPorSLOP's browser tests/)).toHaveCount(0);
   const player = await newPage(browser);
   await signIn(player, "player");
   await player.goto("/");
@@ -102,10 +102,10 @@ test("legal requests: logged with what the law asks for, then answered", async (
   await expect(logged.getByText("Criminal Procedure Rules, r. 47")).toBeVisible();
   await expect(logged.getByText("Olly Overdue")).toBeVisible();
 
-  // The answer: what Slop gave, and whether the person was told.
+  // The answer: what SLAPorSLOP gave, and whether the person was told.
   await logged.getByText("Record the answer").click();
   await logged.getByRole("combobox", { name: "Outcome" }).selectOption({ label: "Partly answered" });
-  await logged.getByRole("textbox", { name: /What Slop gave/ }).fill("Sign-in dates only; Slop keeps no addresses.");
+  await logged.getByRole("textbox", { name: /What SLAPorSLOP gave/ }).fill("Sign-in dates only; SLAPorSLOP keeps no addresses.");
   await expect(logged.getByRole("combobox", { name: "The person" })).toHaveValue("notified");
   await logged.getByRole("button", { name: "Save the answer" }).click();
   await expect(logged.getByText("PARTLY ANSWERED")).toBeVisible();

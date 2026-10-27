@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The in-game overlay (crates/slop-desktop/src/overlay.rs): Shift+Tab over a fullscreen game
-// started from Slop. A small panel with chats and friends over a dimmed game; Esc, Shift+Tab or a
+// started from SLAPorSLOP. A small panel with chats and friends over a dimmed game; Esc, Shift+Tab or a
 // click outside goes back to the game. Kept deliberately small.
 
 import { StrictMode, useEffect, useState } from "react";
@@ -37,10 +37,10 @@ function Overlay() {
         if (e.target === e.currentTarget) void desktop.overlayHide();
       }}
     >
-      <div className="overlay-panel" role="dialog" aria-label="Slop overlay">
+      <div className="overlay-panel" role="dialog" aria-label="SLAPorSLOP overlay">
         <header className="overlay-head">
           <span className="logo-text" aria-hidden="true">
-            SL<b>O</b>P
+            SLAPorSLOP
           </span>
           {game && <span className="muted small">Playing {game}</span>}
           <nav className="overlay-tabs" aria-label="Overlay">
@@ -70,12 +70,12 @@ function Overlay() {
   );
 }
 
-/** Links to other Slop pages: those open in the main window, not over the game. */
+/** Links to other SLAPorSLOP pages: those open in the main window, not over the game. */
 function Elsewhere() {
   const navigate = useNavigate();
   return (
     <div className="empty-state">
-      That page opens in Slop, not over your game.{" "}
+      That page opens in SLAPorSLOP, not over your game.{" "}
       <button className="link-btn" onClick={() => navigate("/chat")}>
         Back to chats
       </button>

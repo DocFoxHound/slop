@@ -30,8 +30,8 @@ test("AI reviewer tokens: made with a scope and an expiry, set up without the to
   // The setup makers get: a warning, the token once, then steps that only refer to it.
   const setup = page.getByRole("region", { name: `Set up “${name}” on your computer` });
   await expect(setup.getByText("Never paste this token into a chat with Claude, ChatGPT, Codex, Grok or any AI.")).toBeVisible();
-  await expect(setup.getByText(/It's a password for your Slop staff account/)).toBeVisible();
-  await expect(setup.getByText(/Copy it now: Slop won't show this token again\./)).toBeVisible();
+  await expect(setup.getByText(/It's a password for your SLAPorSLOP staff account/)).toBeVisible();
+  await expect(setup.getByText(/Copy it now: SLAPorSLOP won't show this token again\./)).toBeVisible();
   const secret = (await setup.locator("pre.copy-row-secret").innerText()).trim();
   expect(secret).toMatch(/^slopadm_/);
   // Only the token itself and the step that saves it have it.
@@ -132,7 +132,7 @@ test("AI reviewer tokens: expired ones say so, a refusal is shown, and only secu
   await security.goto("/admin?tab=ai");
   await security.getByRole("textbox", { name: "Name" }).fill(`Security's reader ${tag()}`);
   await security.getByRole("button", { name: "Make token" }).click();
-  await expect(security.getByText("Copy it now: Slop won't show this token again.")).toBeVisible();
+  await expect(security.getByText("Copy it now: SLAPorSLOP won't show this token again.")).toBeVisible();
   await security.getByRole("button", { name: "Done" }).click();
   await expect(security.getByText(/for Sec Security/).first()).toBeVisible();
 });
@@ -432,7 +432,7 @@ test("the queue shows server alerts and what the server isn't set up for", async
   // The test server scans nothing, needs no maker signatures and has no GitHub App or token.
   await expect(page.getByText("Scanning is off: files are not scanned.")).toBeVisible();
   await expect(page.getByText("Maker signatures aren't required on this server.")).toBeVisible();
-  await expect(page.getByText(/Slop's GitHub App isn't set up/)).toBeVisible();
+  await expect(page.getByText(/SLAPorSLOP's GitHub App isn't set up/)).toBeVisible();
   await expect(page.getByText(/No GITHUB_TOKEN either/)).toBeVisible();
   // It has a signing key, so approving works.
   await expect(page.getByText(/No signing key is set/)).toHaveCount(0);

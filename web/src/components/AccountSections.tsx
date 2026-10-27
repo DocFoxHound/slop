@@ -43,14 +43,14 @@ function ruleLink(title: string): string {
 /** What keeps a sign-in's picture current, or why there isn't one. */
 function pictureHint(c: MyPicture["choices"][number]): string {
   const label = PROVIDER_LABEL[c.provider] ?? c.provider;
-  if (c.updates === "never") return `${label} doesn't share a picture with Slop.`;
+  if (c.updates === "never") return `${label} doesn't share a picture with SLAPorSLOP.`;
   if (!c.available) {
     return c.can_refresh
-      ? `Slop gets this picture when you sign in with ${label}: press Refresh picture to fetch it now (a quick trip to ${label} and back).`
-      : `Slop gets this picture when you sign in with ${label}.`;
+      ? `SLAPorSLOP gets this picture when you sign in with ${label}: press Refresh picture to fetch it now (a quick trip to ${label} and back).`
+      : `SLAPorSLOP gets this picture when you sign in with ${label}.`;
   }
   return c.updates === "daily"
-    ? "Kept up to date: Slop checks it every day."
+    ? "Kept up to date: SLAPorSLOP checks it every day."
     : `Updated each time you sign in with ${label}.`;
 }
 
@@ -89,14 +89,14 @@ export function AccountPicture() {
         <div className="picture-current">
           <Avatar name={me.display_name} url={p ? p.avatar_url : me.avatar_url} />
           <p className="muted small">
-            Shown next to your name wherever people see it on Slop: your profile, friends lists, chats, teams and
+            Shown next to your name wherever people see it on SLAPorSLOP: your profile, friends lists, chats, teams and
             People.
           </p>
         </div>
         {loaded.error && <ErrorState error={loaded.error} onRetry={loaded.reload} />}
         {params.get("picture") === "refresh" && !params.get("error") && (
           <p className="notice" role="status">
-            Signed in again: Slop has your newest picture from there.
+            Signed in again: SLAPorSLOP has your newest picture from there.
           </p>
         )}
         <fieldset className="picture-choices" disabled={pending !== undefined || !p} aria-busy={pending !== undefined}>
@@ -152,7 +152,7 @@ export function AccountPicture() {
           </p>
         )}
         <p className="muted small">
-          Slop keeps its own small copy and shows that, so people who see your picture never contact GitHub, Google or
+          SLAPorSLOP keeps its own small copy and shows that, so people who see your picture never contact GitHub, Google or
           the others.
         </p>
       </div>
@@ -191,7 +191,7 @@ export function AccountModeration() {
       {reports.data && reports.data.length > 0 && <AccountReports reports={reports.data} />}
       {none && (
         <p className="empty-state account-empty">
-          Nothing here: Slop hasn't made any decisions about your content or account, and you haven't reported anything.
+          Nothing here: SLAPorSLOP hasn't made any decisions about your content or account, and you haven't reported anything.
           Use ⚑ Report on an app, review or profile that breaks the rules.
         </p>
       )}
@@ -339,7 +339,7 @@ function AppealForm({ d, onDone, onCancel }: { d: ModerationDecision; onDone: ()
             />
             <span>
               I consent to the jurisdiction of the US federal district court for my address (or, outside the US, any district
-              where Slop may be found), and will accept service from the person who reported it.
+              where SLAPorSLOP may be found), and will accept service from the person who reported it.
             </span>
           </label>
           {fieldError("counter_notice.statements")}
@@ -495,7 +495,7 @@ export function AccountData() {
             <h3>Close your account</h3>
             <p>This can't be undone. When you close your account:</p>
             <ul>
-              <li>You're signed out everywhere, and this sign-in can never be used on Slop again.</li>
+              <li>You're signed out everywhere, and this sign-in can never be used on SLAPorSLOP again.</li>
               <li>Your email and settings are removed, and your library and playtime deleted.</li>
               <li>Your votes still count in ratings, but aren't linked to you any more.</li>
               <li>Your apps leave the store. Players who installed them keep them.</li>
@@ -552,9 +552,9 @@ export function AccountNotifications() {
     <section id="notifications">
       <div className="panel panel-pad switch-list">
         <p className="muted small">
-          Everything shows under the 🔔 in Slop. Choose what's also emailed to you
+          Everything shows under the 🔔 in SLAPorSLOP. Choose what's also emailed to you
           {p.has_email ? "" : " (you don't have an email on your account, so nothing is emailed)"}
-          {p.email_on ? "" : ". This server doesn't send email yet"}. Slop never sends marketing.
+          {p.email_on ? "" : ". This server doesn't send email yet"}. SLAPorSLOP never sends marketing.
         </p>
         {!isDesktop && <PushSwitch />}
         {p.categories.map((c) => (
@@ -573,7 +573,7 @@ export function AccountNotifications() {
   );
 }
 
-/** Account → Money: donations given, where donations are received, and Slop's fee statements. */
+/** Account → Money: donations given, where donations are received, and SLAPorSLOP's fee statements. */
 export function AccountMoney() {
   const mine = useLoad(() => api.donations.mine(), []);
   const statements = useLoad(() => api.donations.feeStatements(), []);
@@ -687,7 +687,7 @@ export function AccountMoney() {
       )}
       {none && (
         <p className="empty-state account-empty">
-          No donations yet. Donations you give, and donations to your apps once you set them up, show here with Slop's fee
+          No donations yet. Donations you give, and donations to your apps once you set them up, show here with SLAPorSLOP's fee
           statements.
         </p>
       )}
@@ -717,7 +717,7 @@ function DonationsSetupHint() {
       <div className="panel panel-pad">
         <p>
           Turn them on per app: <b>Publish → your app → Manage → Donations</b>. That starts Stripe's own sign-up (you need to
-          be 18 or older), and donations then go straight to your Stripe account. Slop's fee is 5%, and donations never unlock
+          be 18 or older), and donations then go straight to your Stripe account. SLAPorSLOP's fee is 5%, and donations never unlock
           anything.
         </p>
         <ul className="plain donation-setup-list">
@@ -841,7 +841,7 @@ const money = (minor: number, currency: string) => {
   return `${symbol}${(minor / 100).toFixed(2)}`;
 };
 
-/** Slop's fee by month, with the VAT inside it (LEGAL §3.5). */
+/** SLAPorSLOP's fee by month, with the VAT inside it (LEGAL §3.5). */
 function FeeStatements({ statements, vat, onVat }: { statements: FeeStatement[]; vat: VatTreatment; onVat: () => void }) {
   const showVat = vat.kind !== "none";
   return (
@@ -850,13 +850,13 @@ function FeeStatements({ statements, vat, onVat }: { statements: FeeStatement[];
         Fee statements
       </h3>
       <p className="muted small">
-        Slop's 5% fee on the donations and People payments you received, by month.{" "}
-        {vat.kind === "none" && "There's no VAT on Slop's fee where you are."}
+        SLAPorSLOP's 5% fee on the donations and People payments you received, by month.{" "}
+        {vat.kind === "none" && "There's no VAT on SLAPorSLOP's fee where you are."}
         {vat.kind === "included" &&
-          `The fee includes ${(vat.rate_bp! / 100).toFixed(vat.rate_bp! % 100 ? 1 : 0)}% VAT, which Slop pays out of its 5%; it's never added on top.`}
+          `The fee includes ${(vat.rate_bp! / 100).toFixed(vat.rate_bp! % 100 ? 1 : 0)}% VAT, which SLAPorSLOP pays out of its 5%; it's never added on top.`}
         {vat.kind === "reverse_charge" &&
-          `Reverse charge: you account for the VAT on Slop's fee yourself (VAT number ${vat.vat_number}).`}{" "}
-        {showVat && (vat.slop_vat_id ? `Slop's VAT number: ${vat.slop_vat_id}.` : "Slop's VAT registration is still being set up.")}
+          `Reverse charge: you account for the VAT on SLAPorSLOP's fee yourself (VAT number ${vat.vat_number}).`}{" "}
+        {showVat && (vat.slop_vat_id ? `SLAPorSLOP's VAT number: ${vat.slop_vat_id}.` : "SLAPorSLOP's VAT registration is still being set up.")}
       </p>
       <table className="table small panel">
         <thead>
@@ -865,7 +865,7 @@ function FeeStatements({ statements, vat, onVat }: { statements: FeeStatement[];
             <th>For</th>
             <th>Payments</th>
             <th>Received</th>
-            <th>Slop fee</th>
+            <th>SLAPorSLOP fee</th>
             {showVat && <th>VAT in the fee</th>}
           </tr>
         </thead>
@@ -900,7 +900,7 @@ function VatNumber({ vat, onSaved }: { vat: VatTreatment; onSaved: () => void })
     setNote(undefined);
     try {
       const res = await api.donations.setVat(value.trim() || null);
-      setNote(res.note ?? (res.checked ? "Confirmed. Slop's fee is reverse-charged from now on." : "Removed."));
+      setNote(res.note ?? (res.checked ? "Confirmed. SLAPorSLOP's fee is reverse-charged from now on." : "Removed."));
       onSaved();
     } catch (err) {
       setError(err instanceof ApiError ? err.message : String(err));
@@ -914,7 +914,7 @@ function VatNumber({ vat, onSaved }: { vat: VatTreatment; onSaved: () => void })
       </label>
       <button className="btn small">Save</button>
       {vat.vat_number && !vat.vat_number_checked && !note && (
-        <p className="muted small">Not confirmed yet, so VAT is shown as included in Slop's fee.</p>
+        <p className="muted small">Not confirmed yet, so VAT is shown as included in SLAPorSLOP's fee.</p>
       )}
       {note && <p className="muted small">{note}</p>}
       {error && (
@@ -948,11 +948,11 @@ function PushSwitch() {
     <div className="push-switch">
       {state === "needs-home-screen" ? (
         <p className="muted small">
-          📱 To get notifications on this iPhone or iPad, add Slop to your Home Screen (Share → Add to Home Screen), open it
+          📱 To get notifications on this iPhone or iPad, add SLAPorSLOP to your Home Screen (Share → Add to Home Screen), open it
           from there, and come back here.
         </p>
       ) : state === "blocked" ? (
-        <p className="muted small">📱 Notifications are blocked for Slop in this browser's settings.</p>
+        <p className="muted small">📱 Notifications are blocked for SLAPorSLOP in this browser's settings.</p>
       ) : state === "unavailable" ? (
         <p className="muted small">📱 Notifications on phones aren't switched on on this server yet.</p>
       ) : (
@@ -961,7 +961,7 @@ function PushSwitch() {
           <span>
             <b>Notifications on this phone or browser</b>
             <span className="muted small" style={{ display: "block" }}>
-              Everything that shows under the 🔔. Slop's push says nothing until your device fetches it from Slop.
+              Everything that shows under the 🔔. SLAPorSLOP's push says nothing until your device fetches it from SLAPorSLOP.
             </span>
           </span>
         </label>

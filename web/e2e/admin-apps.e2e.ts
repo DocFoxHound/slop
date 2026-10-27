@@ -211,7 +211,7 @@ test("an app's record: fixing the store page, stage, out and back in, withdrawin
   await seeDecisions(MAKER);
 });
 
-test("freezes: an app Slop can't read is checked again on request; staff freeze and lift", async ({ page }) => {
+test("freezes: an app SLAPorSLOP can't read is checked again on request; staff freeze and lift", async ({ page }) => {
   const t = tag();
   const app = { slug: `adm-frz-${t}`, title: `Glacier ${t}` };
   // A github.com repository the (fake) GitHub doesn't have: checking it freezes the app.
@@ -221,7 +221,7 @@ test("freezes: an app Slop can't read is checked again on request; staff freeze 
   await signIn(page, "admin");
   await page.goto(`/admin?tab=apps&app=${app.slug}`);
   await expect(page.getByText("FROZEN", { exact: true })).toBeVisible();
-  await expect(page.getByText(/frozen since .* \(Slop lost access to its repository\)/)).toBeVisible();
+  await expect(page.getByText(/frozen since .* \(SLAPorSLOP lost access to its repository\)/)).toBeVisible();
   await expect(page.getByRole("button", { name: "Lift the freeze" })).toHaveCount(0);
   // Checking again: the repository still can't be read, so it stays frozen.
   await page.getByRole("button", { name: "Check the repository now" }).click();

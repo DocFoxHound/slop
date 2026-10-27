@@ -57,7 +57,7 @@ export function AgentSetup({
 
       <div className="agent-setup-token">
         <p className="small">
-          <b>Your token.</b> Copy it now: Slop won't show this token again. If you lose it, {kind.remove} it below and
+          <b>Your token.</b> Copy it now: SLAPorSLOP won't show this token again. If you lose it, {kind.remove} it below and
           make a new one.
         </p>
         <CopyRow text={token.secret} what="the token" secret />
@@ -205,7 +205,7 @@ function ConnectSteps({ tool, os, mcpUrl, kind }: { tool: SetupTool; os: SetupOs
             </dd>
           </dl>
           <p className="small">
-            Tools that call web APIs instead can use Slop's API with the same header (see {kind.apiGuide}).
+            Tools that call web APIs instead can use SLAPorSLOP's API with the same header (see {kind.apiGuide}).
           </p>
           <p className="small">
             <b>If a tool asks for the token in its chat, don't paste it there:</b> look for its MCP or connector settings

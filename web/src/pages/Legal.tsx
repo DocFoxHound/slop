@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Slop's legal documents (crates/slop-api/legal/): every version kept, changes announced 15 days
+// SLAPorSLOP's legal documents (crates/slop-api/legal/): every version kept, changes announced 15 days
 // ahead, and each user's acceptance recorded (crates/slop-api/src/legal.rs).
 
 import { useState } from "react";
@@ -22,7 +22,7 @@ export function LegalIndex() {
     <div className="page narrow">
       <h1 className="page-title">Terms and policies</h1>
       <p className="muted">
-        Changes are announced on Slop at least 15 days before they take effect. Every earlier version stays readable here.
+        Changes are announced on SLAPorSLOP at least 15 days before they take effect. Every earlier version stays readable here.
       </p>
       <ul className="legal-index panel">
         {index.data.map((d) => (
@@ -43,7 +43,7 @@ export function LegalIndex() {
         ))}
       </ul>
       <p className="small">
-        <Link to="/transparency">Transparency report</Link>: what authorities asked Slop for, and how Slop handled reports,
+        <Link to="/transparency">Transparency report</Link>: what authorities asked SLAPorSLOP for, and how SLAPorSLOP handled reports,
         each year.
       </p>
     </div>

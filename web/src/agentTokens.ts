@@ -60,7 +60,7 @@ export function replacementOf<T extends ExpiringToken>(t: T, all: T[], now: numb
 }
 
 /**
- * Made for a week or less: meant to be short, so it isn't flagged before it expires (and Slop
+ * Made for a week or less: meant to be short, so it isn't flagged before it expires (and SLAPorSLOP
  * sends no warnings for it).
  */
 export function isShortLived(t: Pick<AgentToken, "created_at" | "expires_at">): boolean {

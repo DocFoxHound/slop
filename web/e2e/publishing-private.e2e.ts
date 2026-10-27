@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Publishing, part 4: Private Slop. Bo makes a private app from a private repository on another
+// Publishing, part 4: Private. Bo makes a private app from a private repository on another
 // host (with a read-only token), manages the token, asks to make it public, moves the repository,
 // shares it with friends, a profile link and a team, and triages the bug reports players send.
 // Pat and Cleo play it while it's shared with them; at the end it's shared with nobody again.
@@ -10,7 +10,7 @@ test.describe.configure({ mode: "serial" });
 
 const slug = uniq("pub-den");
 const title = `Secret Den ${slug.slice(-4)}`;
-// This server answers any path, so Slop's checks of a "repository" on it pass: the token check
+// This server answers any path, so SLAPorSLOP's checks of a "repository" on it pass: the token check
 // (the host's API), and whether the source is public (Git's discovery request).
 const readable = `${server.url}/bo/${slug}`;
 const fake = fakeRepo("bo", slug);
@@ -20,13 +20,13 @@ test.afterAll(async () => {
   for (const who of ["maker2", "player", "client"] as const) await readNotices(who, slug);
 });
 
-test("Bo makes a Private Slop app from a private repository elsewhere, with a token", async ({ page }) => {
+test("Bo makes a Private app from a private repository elsewhere, with a token", async ({ page }) => {
   await signIn(page, "maker2");
   await page.goto("/publish/new");
   await page.getByLabel("Name", { exact: true }).fill(title);
   await page.getByRole("textbox", { name: /^Store address/ }).fill(slug);
   await page.getByLabel("One-line summary").fill("Only for friends, for now.");
-  await page.getByRole("radio", { name: /Private Slop/ }).check();
+  await page.getByRole("radio", { name: /Private/ }).check();
   await page.getByLabel("Stage").selectOption("released");
   await page.getByRole("textbox", { name: /Source repository/ }).fill(readable);
   await page.getByRole("combobox", { name: "Licence" }).selectOption("MIT");
@@ -36,7 +36,7 @@ test("Bo makes a Private Slop app from a private repository elsewhere, with a to
   await token.getByLabel("Read-only token").fill("den-token-1");
   await page.getByRole("button", { name: "Create draft" }).click();
   await expect(page).toHaveURL(new RegExp(`/app/${slug}$`));
-  await expect(page.getByText("PRIVATE SLOP")).toBeVisible();
+  await expect(page.getByText("PRIVATE", { exact: true })).toBeVisible();
   await expect(page.getByText("Only you and the people you share it with can see this. It's never in the store.")).toBeVisible();
   // Never in the store, not even for its owner.
   expect(JSON.stringify(await call("maker2", "GET", `/v1/apps?q=${encodeURIComponent(title)}`))).not.toContain(slug);
@@ -63,7 +63,7 @@ test("the repository token on Manage: replace, refuse, remove, save", async ({ p
   await expect(panel.getByRole("alert")).toHaveText("paste the token on its own");
 
   await panel.getByRole("button", { name: "Remove token" }).click();
-  await expect(panel).toContainText("Slop needs a read-only token to fetch releases from this private repository and share them.");
+  await expect(panel).toContainText("SLAPorSLOP needs a read-only token to fetch releases from this private repository and share them.");
   await expect(panel.getByRole("button", { name: "Remove token" })).toHaveCount(0);
   await panel.getByRole("combobox", { name: "Host" }).selectOption("gitea");
   await field.fill("den-token-3");
@@ -163,7 +163,7 @@ test("players it's shared with, once they've played it, report bugs; others say 
   await expect(cleo.getByRole("heading", { name: title, level: 1 })).toBeVisible();
   await expect(cleo.locator("#bug-reports")).toHaveCount(0);
 
-  // Pat plays it (the Slop app tells Slop on Play), then reports.
+  // Pat plays it (the SLAPorSLOP app tells SLAPorSLOP on Play), then reports.
   await call("player", "POST", `/v1/apps/${slug}/launch?platform=windows`);
   const pat = await browser.newPage();
   await signIn(pat, "player");
@@ -212,7 +212,7 @@ test("players it's shared with, once they've played it, report bugs; others say 
 test("after a crash, the report starts with the game's last output, which the player can edit or leave out", async ({ page }) => {
   await signIn(page, "player");
   await page.goto("/library");
-  // What the Slop app's crash prompt does on "Report it" (CrashPrompt in BugReports.tsx): open the
+  // What the SLAPorSLOP app's crash prompt does on "Report it" (CrashPrompt in BugReports.tsx): open the
   // app's page with the crash. The prompt itself is only in the desktop app.
   await page.evaluate((path) => {
     const crash = { slug: path.split("/")[2], code: 3, log: "panic: door.rs:12 index out of range\nC:/Users/~/den.log" };

@@ -45,8 +45,8 @@ describe("flagFact", () => {
     expect(text({ rescan_flags: 1 }, "rescan_flagged")).toEqual({ tone: "bad", text: "Re-scan found something in a live file" });
     expect(text({ rescan_flags: 3 }, "rescan_flagged").text).toBe("Re-scan found something in 3 live files");
     expect(text({ downloads_lost: 1 }, "download_lost").text).toBe("Its download changed or can't be reached");
-    expect(text({ frozen_reason: "Slop lost access to its repository" }, "frozen").text).toBe(
-      "Frozen: Slop lost access to its repository",
+    expect(text({ frozen_reason: "SLAPorSLOP lost access to its repository" }, "frozen").text).toBe(
+      "Frozen: SLAPorSLOP lost access to its repository",
     );
     expect(text({}, "frozen").text).toBe("Frozen");
     expect(text({ open_reports: 2 }, "reports").text).toBe("2 open reports");
@@ -71,7 +71,7 @@ describe("flagFact", () => {
     expect(text({ last_commit_at: daysAgo(200) }, "no_commits").text).toBe("Dead? No commits for 6 months");
     expect(text({ last_played_at: daysAgo(100) }, "no_players").text).toBe("Dead? Nobody has played it for 3 months");
     expect(text({}, "no_players").text).toBe("Dead? Nobody has played it yet");
-    expect(text({ not_slop_percent: 12, vote_count: 40 }, "low_rating").text).toBe("Rated 12% Not Slop (40 votes)");
+    expect(text({ not_slop_percent: 12, vote_count: 40 }, "low_rating").text).toBe("Rated 12% Slaps (40 votes)");
   });
 });
 
@@ -88,7 +88,7 @@ describe("rowFacts", () => {
   it("shows a healthy app's quiet line", () => {
     const healthy = app({ players: 12, last_played_at: daysAgo(2), not_slop_percent: 85 });
     expect(rowFacts(healthy, NOW)).toEqual({
-      shown: [{ tone: "quiet", text: "Players get 1.0.0 · 12 players · played 2 days ago · 85% Not Slop" }],
+      shown: [{ tone: "quiet", text: "Players get 1.0.0 · 12 players · played 2 days ago · 85% Slaps" }],
       more: [],
     });
   });
@@ -97,7 +97,7 @@ describe("rowFacts", () => {
     const sick = app({ flags: ["frozen", "reports", "low_rating"], open_reports: 1, not_slop_percent: 10, vote_count: 9 });
     const { shown, more } = rowFacts(sick, NOW);
     expect(shown.map((f) => f.text)).toEqual(["Frozen", "1 open report"]);
-    expect(more.map((f) => f.text)).toEqual(["Rated 10% Not Slop (9 votes)"]);
+    expect(more.map((f) => f.text)).toEqual(["Rated 10% Slaps (9 votes)"]);
   });
 });
 

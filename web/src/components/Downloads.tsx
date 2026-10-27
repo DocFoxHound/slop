@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Downloads in the Slop app (DESIGN §6), like Steam's "Downloads – 4 of 4 items complete": what
+// Downloads in the SLAPorSLOP app (DESIGN §6), like Steam's "Downloads – 4 of 4 items complete": what
 // is downloading now, the updates waiting to install, and what finished this session. A small
 // status button opens the list. It stands alone (it loads what it needs when not given it), so
 // it can sit in the library's sidebar or, later, in the bottom bar beside Friends & Chat.
@@ -46,7 +46,7 @@ function subscribe(listener: () => void) {
   return () => listeners.delete(listener);
 }
 
-/** Every download this session (the Slop app's install-progress events), oldest first. */
+/** Every download this session (the SLAPorSLOP app's install-progress events), oldest first. */
 export function useDownloads(): Download[] {
   return useSyncExternalStore(subscribe, () => current);
 }
@@ -148,7 +148,7 @@ export function DownloadsStatus({
                 <b>{a.installed.title}</b>{" "}
                 <span className="muted small">
                   {a.update?.pending?.version}{" "}
-                  {a.update?.pending?.status === "fetching" ? "is being downloaded and scanned by Slop" : "is waiting for a person to review it"}
+                  {a.update?.pending?.status === "fetching" ? "is being downloaded and scanned by SLAPorSLOP" : "is waiting for a person to review it"}
                 </span>
               </li>
             ))}

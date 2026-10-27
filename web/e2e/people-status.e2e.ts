@@ -74,11 +74,11 @@ test("a creative finds their own page again from People and from their account, 
   await expect(card).toContainText("Remy");
   await expect(card).toContainText(`/people/${ids.pendingCreativeHandle}`);
   await expect(card).toContainText("WAITING FOR REVIEW");
-  await expect(card).toContainText("Your portfolio is waiting for Slop's review.");
+  await expect(card).toContainText("Your portfolio is waiting for SLAPorSLOP's review.");
   await expect(remy.getByRole("link", { name: "Offer your services" })).toHaveCount(0);
   await card.getByRole("link", { name: "View your page" }).click();
   await expect(remy).toHaveURL(`/people/${ids.pendingCreativeHandle}`);
-  await expect(remy.getByRole("region", { name: "Your page's status" })).toContainText("Waiting for Slop's review");
+  await expect(remy.getByRole("region", { name: "Your page's status" })).toContainText("Waiting for SLAPorSLOP's review");
   await remy.goto("/people");
   await remy.getByRole("region", { name: "Your People page" }).getByRole("link", { name: "Edit", exact: true }).click();
   await expect(remy).toHaveURL("/people/me");
@@ -126,12 +126,12 @@ test("saving in the editor goes to the page, which says it's saved and where it 
   await page.goto("/people/me");
   await expect(page.getByRole("heading", { name: "Your People page", level: 1 })).toBeVisible();
   // The editor says where the page is, too.
-  await expect(page.getByRole("region", { name: "Your page's status" })).toContainText("Waiting for Slop's review");
+  await expect(page.getByRole("region", { name: "Your page's status" })).toContainText("Waiting for SLAPorSLOP's review");
   await page.getByRole("button", { name: "Save", exact: true }).click();
 
   await expect(page).toHaveURL(`/people/${ids.pendingCreativeHandle}`);
   const saved = page.getByRole("status").filter({ hasText: "Your People page is saved" });
-  await expect(saved).toHaveText("✓ Your People page is saved and waiting for Slop's review of your portfolio. Only you can see it until then.");
+  await expect(saved).toHaveText("✓ Your People page is saved and waiting for SLAPorSLOP's review of your portfolio. Only you can see it until then.");
   // Focus moves to the message, so keyboard and screen reader users start there.
   await expect(saved).toBeFocused();
   const status = page.getByRole("region", { name: "Your page's status" });
@@ -155,7 +155,7 @@ const STATES = {
   },
   waiting: {
     status: { state: "waiting", reason: null, update_waiting: false, waiting_since: "2026-10-20T10:00:00Z", problem: null, suspended: false },
-    title: "Waiting for Slop's review",
+    title: "Waiting for SLAPorSLOP's review",
     says: ["(sent ", "Only you can see your page until it's approved", "You'll get a notification when it's approved or turned down."],
     badge: "WAITING FOR REVIEW",
   },
@@ -169,7 +169,7 @@ const STATES = {
   live_update: {
     status: { state: "live", reason: null, update_waiting: true, waiting_since: "2026-10-20T10:00:00Z", problem: null, suspended: false },
     title: "Live: everyone can see your page",
-    says: ["Your new portfolio is waiting for Slop's review; everyone else sees the approved one until then."],
+    says: ["Your new portfolio is waiting for SLAPorSLOP's review; everyone else sees the approved one until then."],
     badge: "LIVE",
   },
   live_turned_down: {

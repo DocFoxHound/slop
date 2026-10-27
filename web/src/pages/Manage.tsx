@@ -100,7 +100,7 @@ export function Manage() {
   );
 }
 
-/** Slop can't read the repository (SECURITY §12.2): no new releases, and out after 14 days. */
+/** SLAPorSLOP can't read the repository (SECURITY §12.2): no new releases, and out after 14 days. */
 function Frozen({
   slug,
   frozen,
@@ -132,26 +132,26 @@ function Frozen({
   if (frozen.by_staff)
     return (
       <section className="panel panel-pad notice-panel" role="status">
-        <h2>Frozen by Slop</h2>
+        <h2>Frozen by SLAPorSLOP</h2>
         <p>
           Since {formatDate(frozen.since)}, this app takes no new releases: {frozen.reason}
         </p>
-        <p>It stays in the store and copies people installed keep working. Slop lifts the freeze once it's dealt with.</p>
+        <p>It stays in the store and copies people installed keep working. SLAPorSLOP lifts the freeze once it's dealt with.</p>
       </section>
     );
   const past = new Date(frozen.until).getTime() < Date.now();
   return (
     <section className="panel panel-pad notice-panel" role="status">
-      <h2>Frozen: Slop can't check the repository</h2>
+      <h2>Frozen: SLAPorSLOP can't check the repository</h2>
       <p>
-        Since {formatDate(frozen.since)}, {frozen.reason}. Until Slop can read it again, this app takes no new releases.
+        Since {formatDate(frozen.since)}, {frozen.reason}. Until SLAPorSLOP can read it again, this app takes no new releases.
         Copies people installed keep working.
       </p>
       <p>
         {past
           ? isPrivate
             ? "It's no longer shared, since it stayed frozen for 14 days."
-            : "It left the store, since it stayed frozen for 14 days. It comes back once Slop can read the repository."
+            : "It left the store, since it stayed frozen for 14 days. It comes back once SLAPorSLOP can read the repository."
           : isPrivate
             ? `If it's still frozen on ${formatDate(frozen.until)}, it stops being shared.`
             : `If it's still frozen on ${formatDate(frozen.until)}, it leaves the store.`}
@@ -160,7 +160,7 @@ function Frozen({
         <button type="button" className="btn" disabled={busy} onClick={() => void check()}>
           {busy ? "Checking…" : "Check now"}
         </button>
-        {still && <span className="muted small">Still can't read it. Check the repository's address and Slop's access.</span>}
+        {still && <span className="muted small">Still can't read it. Check the repository's address and SLAPorSLOP's access.</span>}
       </div>
       {error && (
         <p className="form-error" role="alert">
@@ -247,12 +247,12 @@ function PulseNeeded({ received }: { received: boolean }) {
     <section className="panel panel-pad">
       <h2>Slop Pulse</h2>
       {received ? (
-        <p>✓ Slop has had a Pulse handshake from this build, so it can be listed once a reviewer looks at it.</p>
+        <p>✓ SLAPorSLOP has had a Pulse handshake from this build, so it can be listed once a reviewer looks at it.</p>
       ) : (
         <p>
           The game this branches from counts players with Slop Pulse, so community builds of it must include it too, and a
           reviewer can't list this one before its first Pulse handshake. Keep the Pulse code from the original, then
-          install your approved build through Slop and launch it once. See the{" "}
+          install your approved build through SLAPorSLOP and launch it once. See the{" "}
           <Link to="/publish/guide#slop-pulse-player-counts">publishing guide</Link>.
         </p>
       )}
@@ -260,7 +260,7 @@ function PulseNeeded({ received }: { received: boolean }) {
   );
 }
 
-/** Private Slop going public (SECURITY §12.3): a public repository, then a fresh review. */
+/** A private app going public (SECURITY §12.3): a public repository, then a fresh review. */
 function GoPublic({ slug, requested, onChanged }: { slug: string; requested: boolean; onChanged: () => void }) {
   const { busy, error, submit } = useSubmit(onChanged);
   return (
@@ -499,7 +499,7 @@ function RepoMove({ slug, overview: m, onChanged }: { slug: string; overview: Ma
         <p className="muted small">
           Players already have this app, so a move is always checked by a person, and the first release from the new
           repository is reviewed by a person too. Players who installed it from the old repository will be asked to
-          reinstall before their Slop app takes updates from the new one.
+          reinstall before their SLAPorSLOP app takes updates from the new one.
         </p>
       )}
       {pending && <p className="notice">Waiting for review: move to {pending.repo_url}.</p>}

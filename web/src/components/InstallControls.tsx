@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Install, launch and library buttons for one app.
 //
-// Desktop: the Rust side downloads the maker's file, checks it against Slop's signed manifest,
+// Desktop: the Rust side downloads the maker's file, checks it against SLAPorSLOP's signed manifest,
 // and installs it into the library folder (docs/ARCHITECTURE.md §6.3). The website can only add
 // apps to the library; installing happens in the desktop app.
 
@@ -36,11 +36,11 @@ export interface BarInfo {
   /** An approved release newer than the installed one, and the version. */
   available?: boolean;
   latest?: string | null;
-  /** A newer release Slop is still checking. */
+  /** A newer release SLAPorSLOP is still checking. */
   pending?: { version: string; status: "fetching" | "awaiting_review" } | null;
   /** "Update apps automatically" is on, so an available update is queued. */
   autoUpdate?: boolean;
-  /** Slop started it and it's still running. */
+  /** SLAPorSLOP started it and it's still running. */
   running?: boolean;
   /** Icon buttons for the bar's right end (the library's info button). */
   extra?: ReactNode;
@@ -170,12 +170,12 @@ function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary
       <>
         <div className="lib-bar">
           <Link className="btn big slime lib-primary" to="/download">
-            ⬇ Get the Slop app to play
+            ⬇ Get the SLAPorSLOP app to play
           </Link>
           {donate}
           <div className="lib-bar-status">
             <span className="lib-bar-label">{added ? "In your library" : "Not in your library"}</span>
-            <span className="muted small">Install it with the Slop desktop app. It checks every file against Slop's signature first.</span>
+            <span className="muted small">Install it with the SLAPorSLOP desktop app. It checks every file against SLAPorSLOP's signature first.</span>
           </div>
           <div className="lib-bar-icons">
             {me ? (
@@ -213,7 +213,7 @@ function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary
         )}
         {donate}
       </div>
-      <p className="muted small">Install it with the Slop desktop app. It checks every file against Slop's signature first.</p>
+      <p className="muted small">Install it with the SLAPorSLOP desktop app. It checks every file against SLAPorSLOP's signature first.</p>
       {error && (
         <p className="form-error" role="alert">
           {error}
@@ -361,7 +361,7 @@ function DesktopControls({
   const needsNotice = needs && (
     <div className="notice small" role="dialog" aria-label="Runtimes needed">
       <p>
-        <b>{targetTitle}</b> needs {needs.map((n) => n.name).join(" and ")}, which this computer doesn't have yet. Slop
+        <b>{targetTitle}</b> needs {needs.map((n) => n.name).join(" and ")}, which this computer doesn't have yet. SLAPorSLOP
         downloads {needs.length === 1 ? "it" : "them"} from {[...new Set(needs.map((n) => n.vendor))].join(" and ")} and
         only runs {needs.length === 1 ? "it" : "them"} if Windows confirms the signature. Windows asks you to allow the
         install.
@@ -482,8 +482,8 @@ function DesktopControls({
   const installerConfirm = (
     <div className="notice">
       <p>
-        <b>{title}</b> runs its own installer, which may ask for admin rights. Slop checked that it's the exact file the maker
-        submitted and Slop approved.
+        <b>{title}</b> runs its own installer, which may ask for admin rights. SLAPorSLOP checked that it's the exact file the maker
+        submitted and SLAPorSLOP approved.
       </p>
       <div className="actions">
         <button className="btn ghost" onClick={() => setConfirmInstaller(false)}>
@@ -521,7 +521,7 @@ function DesktopControls({
       detail = downloading
         ? `${pct}% complete${bytes ? ` · ${bytes}` : ""}, from the maker's release page`
         : build.data
-          ? "Downloaded from the maker's release page and checked against Slop's signature."
+          ? "Downloaded from the maker's release page and checked against SLAPorSLOP's signature."
           : "No approved build yet.";
     } else if (downloading) {
       primary = (
@@ -575,7 +575,7 @@ function DesktopControls({
       label = bar.pending ? (bar.pending.status === "fetching" ? "Scanning update" : "Update in review") : "Installed";
       detail = bar.pending
         ? `Version ${installed.version}; ${bar.pending.version} is ${
-            bar.pending.status === "fetching" ? "being downloaded and scanned by Slop" : "waiting for a person to review it"
+            bar.pending.status === "fetching" ? "being downloaded and scanned by SLAPorSLOP" : "waiting for a person to review it"
           }`
         : `Version ${installed.version}`;
     }
@@ -730,7 +730,7 @@ function DesktopControls({
             </>
           )}
           {!installing && (
-            <p className="muted small">Downloaded from the maker's release page and checked against Slop's signature.</p>
+            <p className="muted small">Downloaded from the maker's release page and checked against SLAPorSLOP's signature.</p>
           )}
         </>
       ) : (

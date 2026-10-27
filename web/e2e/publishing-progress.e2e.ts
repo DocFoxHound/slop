@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Publishing progress, file by file (web/src/components/PublishProgress.tsx): which file Slop is
+// Publishing progress, file by file (web/src/components/PublishProgress.tsx): which file SLAPorSLOP is
 // checking and at which step, which are done or waiting, an estimate, then the wait for a person,
 // with the page refreshing itself until nothing is under way. This server checks files in a
 // moment, so the states in between are answered in the browser. Also the "Donations: off" pointer
@@ -89,7 +89,7 @@ const progress = (over: Record<string, unknown>) => ({
 const done = (platform: string, name: string, startedMinAgo: number) =>
   file(platform, name, "checked", { check_started_at: ago(startedMinAgo), checked_at: ago(startedMinAgo - 5) });
 
-/** The four builds of a Slop Build release, as Slop checks them one at a time. */
+/** The four builds of a Slop Build release, as SLAPorSLOP checks them one at a time. */
 const PHASES = [
   // File 2 is being scanned.
   release(
@@ -128,7 +128,7 @@ const PHASES = [
   release("approved", [done("linux", "game.tar.gz", 22), done("windows", "game.zip", 7)]),
 ];
 
-test("each file's check shows while Slop works through them, and the page refreshes itself until it's decided", async ({ page }) => {
+test("each file's check shows while SLAPorSLOP works through them, and the page refreshes itself until it's decided", async ({ page }) => {
   await page.clock.install({ time: NOW });
   await signIn(page, "maker");
   let phase = 0;
@@ -182,7 +182,7 @@ test("each file's check shows while Slop works through them, and the page refres
   await page.clock.fastForward(10_500);
   const review = box.locator("li.step").filter({ hasText: "Review by a person" });
   await expect(review).toContainText("Waiting for a person");
-  await expect(review).toContainText("Waiting for review by a person at Slop. It usually takes a day or two.");
+  await expect(review).toContainText("Waiting for review by a person at SLAPorSLOP. It usually takes a day or two.");
   await expect(review).toContainText("Why a person: an app's first release is always reviewed by a person.");
   await expect(review).toContainText("Either way you get a notification (under 🔔, and by email).");
   await expect(filesStep).toContainText("4 files downloaded and hashed.");
@@ -197,7 +197,7 @@ test("each file's check shows while Slop works through them, and the page refres
   phase = 3;
   await page.clock.fastForward(31_000);
   await expect.poll(() => loads).toBeGreaterThan(waiting);
-  await expect(review).toContainText("Version 1.0.0 approved and signed by Slop.");
+  await expect(review).toContainText("Version 1.0.0 approved and signed by SLAPorSLOP.");
   // Decided: no more refreshing.
   const decided = loads;
   await page.clock.fastForward(180_000);

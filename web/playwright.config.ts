@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Browser tests (web/e2e): the real website against a throwaway Slop (crates/slop-api/examples/
+// Browser tests (web/e2e): the real website against a throwaway SLAPorSLOP (crates/slop-api/examples/
 // e2e_server/), with GitHub and Stripe faked and everything seeded (e2e/fixtures.ts lists it).
 // `npm run e2e` (build the website first: `npm run build`).
 import { readdirSync } from "node:fs";

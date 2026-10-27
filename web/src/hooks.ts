@@ -41,7 +41,7 @@ export function useLoad<T>(load: () => Promise<T>, deps: unknown[]): Loaded<T> {
 
 export function useDocumentTitle(title: string | undefined) {
   useEffect(() => {
-    document.title = title ? `${title} · Slop` : "Slop";
+    document.title = title ? `${title} · SLAPorSLOP` : "SLAPorSLOP";
   }, [title]);
 }
 

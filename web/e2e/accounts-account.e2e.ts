@@ -46,12 +46,12 @@ test.describe("privacy", () => {
   });
 
   test("a switch that doesn't save says so and stays as it was", async ({ page }) => {
-    await fake(page, "PATCH", "/v1/me", { status: 503, body: apiError("unavailable", "Slop is busy: try again in a minute") });
+    await fake(page, "PATCH", "/v1/me", { status: 503, body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute") });
     await signIn(page, "support");
     await page.goto("/account#privacy");
     const box = page.getByRole("checkbox", { name: /Share my playtime/ });
     await box.click();
-    await expect(page.getByRole("alert")).toHaveText("Slop is busy: try again in a minute");
+    await expect(page.getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
     await expect(box).toBeChecked();
   });
 
@@ -104,7 +104,7 @@ test.describe("where you're signed in", () => {
     await openAccount(page, "security");
     const sessions = page.locator("ul.sessions").last();
     await expect(sessions.getByRole("listitem").filter({ hasText: "Claude on my laptop" })).toBeVisible();
-    await expect(sessions.getByRole("listitem").filter({ hasText: "Slop app" })).toBeVisible();
+    await expect(sessions.getByRole("listitem").filter({ hasText: "SLAPorSLOP app" })).toBeVisible();
     await expect(sessions.getByRole("listitem").filter({ hasText: "Safari on macOS" })).toBeVisible();
     await expect(sessions.getByRole("listitem").filter({ hasText: "THIS DEVICE" }).getByRole("button")).toHaveCount(0);
     // The made-up session isn't the server's: it refuses, and the page says so.
@@ -151,7 +151,7 @@ test.describe("sign-ins", () => {
     await signIn(page, "support");
     await page.goto("/account?linked=github#sign-ins");
     await expect(page.getByRole("status").filter({ hasText: "GitHub is linked" })).toContainText(
-      "you can sign in with it, and Slop knows the repositories it owns are yours.",
+      "you can sign in with it, and SLAPorSLOP knows the repositories it owns are yours.",
     );
     await page.goto("/account?linked=already#sign-ins");
     await expect(page.getByText("That account was already linked.")).toBeVisible();
@@ -290,7 +290,7 @@ test.describe("notifications", () => {
     await signIn(page, "support");
     await page.goto("/account#notifications");
     const section = page.locator("#notifications");
-    await expect(section).toContainText("Choose what's also emailed to you. Slop never sends marketing.");
+    await expect(section).toContainText("Choose what's also emailed to you. SLAPorSLOP never sends marketing.");
     await section.getByRole("checkbox", { name: /Email me about your teams/ }).click();
     await expect(section.getByRole("alert")).toHaveText("that isn't a kind of notification");
     await expect(section.getByRole("checkbox", { name: /Email me about your teams/ })).toBeChecked();
@@ -346,10 +346,10 @@ test.describe("notifications", () => {
     await page.addInitScript(() => Object.defineProperty(Notification, "permission", { get: () => "denied" }));
     await signIn(page, "support");
     await page.goto("/account#notifications");
-    await expect(page.getByText("Notifications are blocked for Slop in this browser's settings.")).toBeVisible();
+    await expect(page.getByText("Notifications are blocked for SLAPorSLOP in this browser's settings.")).toBeVisible();
   });
 
-  test("on an iPhone, Slop must be on the Home Screen first", async ({ browser }) => {
+  test("on an iPhone, SLAPorSLOP must be on the Home Screen first", async ({ browser }) => {
     const context = await browser.newContext({
       baseURL: server.url,
       userAgent: "Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) AppleWebKit/605.1.15 (KHTML, like Gecko) Version/17.0 Mobile/15E148 Safari/604.1",
@@ -357,7 +357,7 @@ test.describe("notifications", () => {
     const page = await context.newPage();
     await signIn(page, "support");
     await page.goto("/account#notifications");
-    await expect(page.getByText(/add Slop to your Home Screen/)).toBeVisible();
+    await expect(page.getByText(/add SLAPorSLOP to your Home Screen/)).toBeVisible();
     await context.close();
   });
 });
@@ -561,7 +561,7 @@ test.describe("sections", () => {
     await page.keyboard.press("Enter");
     await expect(page).toHaveURL(`${server.url}/account/data`);
     await expect(page.getByRole("heading", { name: "Your data", level: 2 })).toBeFocused();
-    await expect(page).toHaveTitle("Your data · Your account · Slop");
+    await expect(page).toHaveTitle("Your data · Your account · SLAPorSLOP");
     await expect(page.getByRole("button", { name: "Download my data" })).toBeVisible();
 
     await page.goBack();

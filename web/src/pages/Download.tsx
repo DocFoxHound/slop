@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Get the Slop desktop app: Windows, and Linux as .deb or .rpm. Reached from the "Download" button
+// Get the SLAPorSLOP desktop app: Windows, and Linux as .deb or .rpm. Reached from the "Download" button
 // in the website's top bar (not shown in the desktop app itself).
 
 import { Link } from "react-router";
@@ -32,7 +32,7 @@ const BUILDS = [
 ] as const;
 
 export function Download() {
-  useDocumentTitle("Download Slop");
+  useDocumentTitle("Download SLAPorSLOP");
   const os = detectOs();
   const builds = useLoad(
     () =>
@@ -49,12 +49,12 @@ export function Download() {
 
   return (
     <div className="page narrow download-page">
-      <h1 className="page-title">Get the Slop app</h1>
+      <h1 className="page-title">Get the SLAPorSLOP app</h1>
       <p className="muted">
-        Install, update and launch everything from the store in one place. Every download is checked against Slop's
+        Install, update and launch everything from the store in one place. Every download is checked against SLAPorSLOP's
         signature before it runs, and the app keeps itself up to date.
       </p>
-      {isDesktop && <p className="notice">You're already using the Slop app.</p>}
+      {isDesktop && <p className="notice">You're already using the SLAPorSLOP app.</p>}
       {!builds.data && <Loading />}
       <div className="download-grid">
         {builds.data?.map((b) => (
@@ -87,7 +87,7 @@ export function Download() {
       </p>
       <p className="muted small">
         What's inside: the <a href="/sbom.json">software bill of materials</a> (CycloneDX) lists every library in this build of
-        Slop, with its version.
+        SLAPorSLOP, with its version.
       </p>
     </div>
   );
