@@ -795,6 +795,23 @@ impl Config {
         })
     }
 
+    /// The site's address for a request that came in on `host`: the former address it names, if
+    /// it's one (SLOP_FORMER_URLS), otherwise the public one. Desktop apps built for a former
+    /// address only open pages on it (it redirects to the new one).
+    pub fn origin_for_host(&self, host: Option<&str>) -> &Url {
+        let authority = |u: &Url| match (u.host_str(), u.port()) {
+            (Some(h), Some(p)) => format!("{h}:{p}"),
+            (Some(h), None) => h.to_string(),
+            _ => String::new(),
+        };
+        host.and_then(|h| {
+            self.former_urls
+                .iter()
+                .find(|u| authority(u).eq_ignore_ascii_case(h))
+        })
+        .unwrap_or(&self.public_url)
+    }
+
     /// Cookies are `Secure` (and use the `__Host-` prefix) whenever the site is served over HTTPS.
     pub fn secure_cookies(&self) -> bool {
         self.public_url.scheme() == "https"

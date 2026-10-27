@@ -2085,6 +2085,47 @@ async fn desktop_sign_in_requests_are_rate_limited_per_client(db: PgPool) {
     );
 }
 
+/// After the site moves, desktop apps built for the former address still sign in: they only open
+/// a sign-in page on the address they were built for, which redirects to the new one.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn desktop_sign_in_stays_on_the_address_the_app_asked(db: PgPool) {
+    let app = test_app_with(db.clone(), |c| {
+        c.public_url = "https://new.example".parse().unwrap();
+        c.former_urls = vec!["http://localhost:8080".parse().unwrap()];
+    })
+    .await;
+    // Test requests come in on localhost:8080, the former address here.
+    let res = app
+        .send(
+            req(Method::POST, "/v1/auth/desktop/requests")
+                .json(desktop_request("state-state-state-1", "Old app")),
+        )
+        .await;
+    let created = body_json(res).await;
+    let url = created["approve_url"].as_str().unwrap();
+    assert!(
+        url.starts_with("http://localhost:8080/desktop-signin/"),
+        "{url}"
+    );
+    // Asked on the site's own address (or any other), the page is on the site's address.
+    let moved = test_app_with(db, |c| {
+        c.public_url = "https://new.example".parse().unwrap();
+    })
+    .await;
+    let res = moved
+        .send(
+            req(Method::POST, "/v1/auth/desktop/requests")
+                .json(desktop_request("state-state-state-2", "New app")),
+        )
+        .await;
+    let created = body_json(res).await;
+    let url = created["approve_url"].as_str().unwrap();
+    assert!(
+        url.starts_with("https://new.example/desktop-signin/"),
+        "{url}"
+    );
+}
+
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn the_approval_page_shows_only_pending_requests_to_signed_in_people(db: PgPool) {
     let app = test_app(db).await;
