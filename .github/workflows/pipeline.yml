@@ -189,8 +189,14 @@ jobs:
   build-windows:
     runs-on: windows-latest
     timeout-minutes: 60
+    permissions:
+      contents: read
+      # The signing allowance counts the pipeline's runs on main.
+      actions: read
     outputs:
       version: ${{ steps.version.outputs.version }}
+      # 1 when this build is to be signed (deploy/signing.conf: signing on, within the allowance).
+      sign: ${{ steps.allowance.outputs.sign }}
     defaults:
       run:
         shell: bash
@@ -207,6 +213,37 @@ jobs:
           version="0.1.$(git rev-list --count HEAD)"
           echo "VERSION=$version" >> "$GITHUB_ENV"
           echo "version=$version" >> "$GITHUB_OUTPUT"
+
+      # The month's code-signing allowance (deploy/signing.conf, docs/CODE-SIGNING.md): every run
+      # on main builds, and once signing is on signs, the Windows app. Over the allowance, or when
+      # it can't be counted, this release is built unsigned rather than signed past it (installed
+      # apps still update: the updater checks its own key).
+      - name: Signing allowance
+        id: allowance
+        if: github.ref == 'refs/heads/main'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          set +e
+          out=$(deploy/signing-allowance.sh --this-run)
+          code=$?
+          set -e
+          printf '%s\n' "$out" | grep -v '^[a-z_]*=' | tee -a "$GITHUB_STEP_SUMMARY"
+          on=$(printf '%s\n' "$out" | sed -n 's/^signing_on=//p')
+          line=$(printf '%s\n' "$out" | sed -n '2p' | sed 's/^ *//')
+          if [ "$on" != 1 ]; then
+            echo "::notice title=Signing allowance (not signing yet)::$line"
+            echo "sign=0" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 0 ]; then
+            echo "::notice title=Signing allowance::$line"
+            echo "sign=1" >> "$GITHUB_OUTPUT"
+          elif [ "$code" -eq 3 ]; then
+            echo "::warning title=Signing allowance used up::$line This release is built unsigned."
+            echo "sign=0" >> "$GITHUB_OUTPUT"
+          else
+            echo "::warning title=Signing allowance unknown::Couldn't count this month's signings, so this release is built unsigned. $line"
+            echo "sign=0" >> "$GITHUB_OUTPUT"
+          fi
 
       - uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:

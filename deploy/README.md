@@ -37,7 +37,10 @@ dev → main ──► (promote.sh: only once dev's run passed) GitHub's pipelin
    checks in the same container (`--e2e-only` for just the browser tests). Every night the
    **Order check** workflow also runs the browser tests reversed and shuffled, to catch tests that
    depend on what ran before them.
-2. **When dev is good, send it on:** from your own checkout, with your GitHub access,
+2. **When dev is good, send it on**, a few changes at a time rather than each one (urgent
+   fixes aside): every release costs an approval, a Windows build and, once the app is signed,
+   about three of the month's code signings (docs/CODE-SIGNING.md, "The signing allowance"). From
+   your own checkout, with your GitHub access,
 
    ```sh
    cd /srv/Development/Projects/slop
@@ -46,7 +49,9 @@ dev → main ──► (promote.sh: only once dev's run passed) GitHub's pipelin
 
    It refuses anything that isn't a fast-forward, so main only ever gets commits that are already
    on dev, and it refuses until dev's pipeline run for that exact commit has passed
-   (`--without-checks` skips that, for emergencies only). Don't merge dev into main on GitHub instead: GitHub's merge, squash and rebase buttons
+   (`--without-checks` skips that, for emergencies only). It also shows the month's signing
+   allowance and, once signing is on, refuses a release that would go over it
+   (`--over-allowance` sends it anyway, built unsigned). Don't merge dev into main on GitHub instead: GitHub's merge, squash and rebase buttons
    all make new commits, signed by GitHub rather than by you, and production refuses commits that
    aren't signed by a key in its `allowed_signers`.
 3. **GitHub runs the pipeline** on the push to main (https://github.com/DocFoxHound/slop/actions):
