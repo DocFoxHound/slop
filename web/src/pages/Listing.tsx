@@ -8,6 +8,7 @@ import { ACCESSIBILITY, api, ApiError, type AppQuery, type AppStage, type AppSum
 import { CONTENT_LABEL } from "../format";
 import { detectOs, OS_LABEL } from "../platform";
 import { StoreFrame } from "../components/StoreNav";
+import { CategoryIcon, StoreIcon } from "../components/StoreIcons";
 import { ErrorState, Loading, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 
@@ -186,7 +187,10 @@ export function MadeWithPeople() {
       <div className="crumbs">
         <Link to="/">Store</Link> › Made with people
       </div>
-      <h1 className="page-title">✋ Made with people</h1>
+      <h1 className="page-title with-icon">
+        <StoreIcon name="made" size={28} />
+        Made with people
+      </h1>
       <p className="muted">
         Apps whose makers hired artists, composers, writers and other creatives through <Link to="/people">People</Link>. Their pages
         credit who made what.
@@ -257,7 +261,11 @@ export function Browse() {
       {categories.data?.map((c) => (
         <div className="browse-group" key={c.slug}>
           <h3>
-            <Link to={`/browse/${c.slug}`}>{c.name}</Link> <span className="muted">{c.description}</span>
+            <Link to={`/browse/${c.slug}`}>
+              <CategoryIcon slug={c.slug} size={22} />
+              {c.name}
+            </Link>{" "}
+            <span className="muted">{c.description}</span>
           </h3>
           <TagCloud category={c} />
         </div>
@@ -303,7 +311,10 @@ export function CategoryPage() {
       <div className="crumbs">
         <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> › {category?.name}
       </div>
-      <h1 className="page-title">{category?.name ?? " "}</h1>
+      <h1 className="page-title with-icon">
+        {category && <CategoryIcon slug={category.slug} size={28} />}
+        {category?.name ?? " "}
+      </h1>
       <div className="muted">{category?.description}</div>
       {category && <AgeLimit category={category} />}
       {category && <TagCloud category={category} />}
