@@ -258,6 +258,49 @@ Not for you to collect: their name on SLAPorSLOP, rates and services, AI-use lab
 whether they're taking work are set by the person in the editor (`/people/me`), not in the
 repository. Offer to suggest wording for them if they'd like, but don't wait for them.
 
+## Hand the person one link for their People page
+
+You can fill in the person's People page for them and give them one link to open. They sign in if
+needed, see the editor filled in, check it, answer what only they can answer, and press **Create
+my page** (or **Save** if they already have a page). Nothing is saved until they do. If they
+already have a page, your link shows as changes they can review or undo.
+
+Build the link: `/people/me#fill=` on this site, followed by
+`encodeURIComponent(JSON.stringify(fields))`. Leave out anything you don't know. Fields that are
+wrong or unknown are left out, and the editor says which ones and why.
+
+| Field | Type | Rules |
+|---|---|---|
+| `name` | string | 1–60 characters, one line |
+| `handle` | string | the page address: 3–40 lowercase letters, numbers and single dashes |
+| `kind` | `"individual"` or `"studio"` | |
+| `team_size` | number | 2–500, for a studio |
+| `headline` | string | up to 140 characters, one line |
+| `skills` | list | from `/v1/people/skills`: `2d-art`, `pixel-art`, `3d`, `animation`, `ui-ux`, `music`, `sound`, `writing`, `voice`, `localization`, `playtesting` |
+| `ai_use` | `"none"`, `"assisted"` or `"heavy"` | |
+| `ai_note` | string | up to 300 characters, one line |
+| `location` | string | up to 60 characters |
+| `turnaround` | string | up to 40 characters, like `1–2 weeks` |
+| `taking_work` | true/false | |
+| `about_md` | string | up to 6,000 characters, Markdown |
+| `services` | list | up to 8 of `{"name": 1–60 characters, "description": up to 600, "price_minor": whole number from 1000 to 1000000 (cents or pence: 3500 is 35.00), "currency": "usd", "eur" or "gbp", "days": 1–365, "skill": one of the skills}` |
+| `accent` | string | `slime`, `ocean`, `grape`, `rose`, `ember`, `sun`, `forest` or `slate` |
+| `sections` | list | the order of `portfolio`, `services`, `reviews`, `worked_on`, `about`; any left out go at the end |
+| `links` | list | up to 5 of `{"label": up to 30 characters, "url": "https://…" up to 300}` |
+| `portfolio_repo` | string | the `https://` address of their portfolio repository, filled in under Portfolio once the page exists (they press **Check my portfolio now**) |
+
+Only the person can answer some things, so never put these in a link: whether they're 18 or
+older, the People Terms, and payments (they connect Stripe themselves). **Whether they offer
+services as a business** is their legal status: don't decide it. If you send `"trader"`, it's only
+shown as your suggestion, and they choose.
+
+Example (on slaporslop.games):
+`https://slaporslop.games/people/me#fill=%7B%22name%22%3A%22Sea%20Sounds%22%2C%22handle%22%3A%22sea-sounds%22%2C%22headline%22%3A%22Waves%2C%20gulls%20and%20foghorns%22%2C%22skills%22%3A%5B%22sound%22%5D%2C%22ai_use%22%3A%22none%22%2C%22services%22%3A%5B%7B%22name%22%3A%22Harbour%20pack%22%2C%22description%22%3A%2240%20sounds%2C%20WAV%2048%20kHz.%22%2C%22price_minor%22%3A3500%2C%22currency%22%3A%22eur%22%2C%22days%22%3A5%2C%22skill%22%3A%22sound%22%7D%5D%2C%22portfolio_repo%22%3A%22https%3A%2F%2Fgithub.com%2Fyou%2Fportfolio%22%7D`
+
+Tell the person: the editor opens filled in. They should check everything, especially their page
+address, services and prices, answer the business question (and tick 18+ if asked), then press
+**Create my page** themselves.
+
 ## Checklist for agents
 
 To help someone build their portfolio, in order. Steps marked **(person)** need the person
@@ -267,7 +310,8 @@ ask them for.
 1. Ask what they do, what kind of work they want to be hired for, and which works they're proudest
    of. Suggest a template: gallery (pictures), showreel (videos), tracklist (audio) or studio (a
    team or several skills).
-2. **(person)** Make sure they have a People page (`/people/me`) and that the GitHub account that
+2. **(person)** Make sure they have a People page (`/people/me`; you can
+   [hand them one link](#hand-the-person-one-link-for-their-people-page) that fills it in) and that the GitHub account that
    will own the repository is linked to their SLAPorSLOP account (the editor's Portfolio section shows
    it, or a **Link GitHub** button).
 3. Create or use a **public** GitHub repository they own, e.g. `portfolio`, and a `.slop/` folder
