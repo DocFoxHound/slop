@@ -1,23 +1,23 @@
 # Slop Build
 
-The shared build recipe makers use to ship on Slop (`docs/ARCHITECTURE.md` §6.2). A maker adds
-one small workflow file to their repository (Slop's **Add Slop Build** button fills it in; see
+The shared build recipe makers use to ship on SLAPorSLOP (`docs/ARCHITECTURE.md` §6.2). A maker adds
+one small workflow file to their repository (SLAPorSLOP's **Add Slop Build** button fills it in; see
 `examples/slop.yml`), and each push to their main branch or `v*` tag:
 
 1. builds the app for Windows and Linux on GitHub-hosted runners,
 2. packs each build (Windows: a `.zip`; Linux: a `.tar.gz` plus `.deb` and `.rpm` packages that
    install to `/opt/<app>` with `/usr/bin/<app>`) and signs every file with a GitHub artifact
-   attestation (Sigstore), which names the repository, the commit and this recipe ("Built by Slop
+   attestation (Sigstore), which names the repository, the commit and this recipe ("Built by SLAPorSLOP
    Build from source"),
    On Windows it first signs the program with the maker's free SignPath Foundation certificate
    (optional), then scans the build with Microsoft Defender and the day's definitions and records
    the result and the signer. A separate job runs gitleaks (secrets) and OSV-Scanner (vulnerable
-   dependencies) on the source; the results go to Slop for the maker and the reviewer.
-3. attaches the files to a release on the maker's repository (Slop stores no builds),
-4. sends the release to Slop with the run's GitHub OIDC token. Slop checks the token was issued
+   dependencies) on the source; the results go to SLAPorSLOP for the maker and the reviewer.
+3. attaches the files to a release on the maker's repository (SLAPorSLOP stores no builds),
+4. sends the release to SLAPorSLOP with the run's GitHub OIDC token. SLAPorSLOP checks the token was issued
    to this recipe, in the app's repository, at this commit; no secret is shared.
 
-Slop then fetches and hashes the files, verifies the attestations, and the release goes to review.
+SLAPorSLOP then fetches and hashes the files, verifies the attestations, and the release goes to review.
 
 ## Project types
 
@@ -36,7 +36,7 @@ Slop then fetches and hashes the files, verifies the attestations, and the relea
 
 An optional `slop.toml` (`[launch]` and `[launch.<platform>]`, with `exec` and `args`) sets the
 program and arguments, and a top-level `runtimes = [...]` names the shared runtimes the Windows
-build needs (Slop's `GET /v1/runtimes`). `publish: false` builds and checks without a release, which is how the
+build needs (SLAPorSLOP's `GET /v1/runtimes`). `publish: false` builds and checks without a release, which is how the
 types are tried on GitHub's runners (all built on Windows and Linux, 2026-10-20; Unity up to
 licence activation, as there's no test licence).
 
@@ -48,11 +48,11 @@ GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split
 
 | Input | Meaning |
 |---|---|
-| `app` | The app's store address on Slop (required) |
-| `slop-url` | The Slop site (required) |
+| `app` | The app's store address on SLAPorSLOP (required) |
+| `slop-url` | The SLAPorSLOP site (required) |
 | `project-type` | `rust`, `go`, `dotnet`, `godot`, `unity`, `python`, `electron`, `tauri`, `web` or `custom` (required) |
 | `platforms` | `windows,linux` by default |
-| `linux-packages` | `deb,rpm` by default; Slop keeps the ones the store page lists |
+| `linux-packages` | `deb,rpm` by default; SLAPorSLOP keeps the ones the store page lists |
 | `build-command`, `output-dir`, `exec` | `custom` only |
 | `sign` | `true` by default; `false` for private repositories without GitHub Enterprise |
 | `project-path` | Where the project is (default `.`) |
@@ -62,7 +62,7 @@ GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split
 | `python-version`, `python-entry`, `python-windowed` | `python` |
 | `node-version` | `electron`, `tauri`, `web` |
 | `linux-runtime` | `steam-sniper`: `rust`, `go` and `custom` compile Linux inside Valve's Steam Runtime 3 (sniper) SDK container, so the program needs only glibc 2.31 (tried with podman, 2026-10-21). The image is pinned to version 3.0.20260928.262393 by digest, so a change at Valve can't alter builds; moving it is a recipe change. Godot and Unity ship their engine's own prebuilt player (Godot 4.4 needs glibc 2.28), so they don't need it: the Pong example's 16 tests pass inside sniper |
-| `publish` | `false`: build and check only, no release, nothing sent to Slop |
+| `publish` | `false`: build and check only, no release, nothing sent to SLAPorSLOP |
 | `itch-target` | Optional: also push each build to itch.io (`user/game`) with butler 15.32.0, checked by hash; needs the `BUTLER_API_KEY` secret |
 | `flatpak-app-id` | Optional: attach a draft Flatpak manifest for the Linux build to each release (`io.github.you.Game`) |
 | `signpath-organization-id` | Optional: sign the Windows program with SignPath (needs the `SIGNPATH_API_TOKEN` secret) |
@@ -74,7 +74,7 @@ GitHub release files are limited to 2 GiB: a bigger `.zip` or `.tar.gz` is split
 `.github/workflows/check.yml` is for makers who build with their own CI (`examples/check.yml`).
 When they publish a release, it downloads the release's Windows files (`.zip`, `.exe`, `.msi`,
 `.msix`) on a Windows runner, scans them with Microsoft Defender, records each file's SHA-256 and
-signer, and posts the result to `/v1/slop-build/checks` with the run's OIDC token. Slop accepts it
+signer, and posts the result to `/v1/slop-build/checks` with the run's OIDC token. SLAPorSLOP accepts it
 only from this workflow (or the build recipe), in the app's own repository.
 
 ## Where this lives
@@ -89,7 +89,7 @@ This folder is the recipe's source, published as its own public repository
 
 ## Checking it
 
-GitHub Actions can't run locally. The recipe and the workflow Slop generates for makers are linted
+GitHub Actions can't run locally. The recipe and the workflow SLAPorSLOP generates for makers are linted
 with [actionlint](https://github.com/rhysd/actionlint), which also checks the inputs makers pass
 against the recipe's:
 

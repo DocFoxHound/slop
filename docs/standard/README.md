@@ -1,19 +1,19 @@
-# The Slop open standard
+# The SLAPorSLOP open standard
 
 **Version 1 · 2026-10-21 · Apache-2.0 OR MIT**
 
-How Slop says, in a way anyone can check, which files it scanned and approved, who built them,
+How SLAPorSLOP says, in a way anyone can check, which files it scanned and approved, who built them,
 and which it has withdrawn. Another store, a launcher, a package manager or a curious player can
-use these documents without trusting a Slop server: everything is signed, and the signatures are
+use these documents without trusting a SLAPorSLOP server: everything is signed, and the signatures are
 checked against keys you pin yourself.
 
 | Document | Says | Where | Purpose prefix | Spec |
 |---|---|---|---|---|
 | Release manifest | Every file of an approved release: where it is, its hash and size, how to start it, and the maker's own signature | `GET /v1/apps/{slug}/manifest` | `slop/release-manifest/v1` | [release-manifest.md](release-manifest.md) |
 | Revocation list | Releases that must no longer be installed or started | `GET /v1/revocations` | `slop/revocation-list/v1` | [revocation-list.md](revocation-list.md) |
-| File verification | What Slop knows about one file, by its SHA-256: its releases, scan results and whether they were revoked | `GET /v1/verify/{sha256}` | `slop/file-verification/v1` | [file-verification.md](file-verification.md) |
+| File verification | What SLAPorSLOP knows about one file, by its SHA-256: its releases, scan results and whether they were revoked | `GET /v1/verify/{sha256}` | `slop/file-verification/v1` | [file-verification.md](file-verification.md) |
 
-Paths are relative to a Slop site, such as `https://slop.example`. Each document has a JSON Schema
+Paths are relative to a SLAPorSLOP site, such as `https://slop.example`. Each document has a JSON Schema
 in [`schemas/`](schemas/), and [`vectors/`](vectors/) holds examples signed with a published test
 key.
 
@@ -56,7 +56,7 @@ The envelope's JSON Schema is [`schemas/signed.schema.json`](schemas/signed.sche
 
 `GET /v1/keys` lists the site's public keys as `[{"key_id": "...", "public_key": "base64 32
 bytes"}]`. Fetching keys from the site you're checking only proves the site said so; **pin the
-keys** you trust in your own code or configuration, as the Slop desktop app does at build time.
+keys** you trust in your own code or configuration, as the SLAPorSLOP desktop app does at build time.
 Keys may be added before an old one is retired, so accept any key on your pinned list.
 
 ## Checking a release before installing it
@@ -77,14 +77,14 @@ Keys may be added before an old one is retired, so accept any key on your pinned
 
 ## Versions
 
-Each document carries `"schema": 1`. Within a schema version Slop only **adds optional fields**
+Each document carries `"schema": 1`. Within a schema version SLAPorSLOP only **adds optional fields**
 (left out when empty). A reader that ignores unknown fields keeps working; a reader that rejects
-them (as Slop's own app does, to be strict) needs updating to read new fields. A change that
+them (as SLAPorSLOP's own app does, to be strict) needs updating to read new fields. A change that
 would break a reader gets a new schema number and a new purpose prefix.
 
-## Using "verified by Slop"
+## Using "verified by SLAPorSLOP"
 
-A store or launcher may say a file is **verified by Slop** when a fresh, correctly signed file
+A store or launcher may say a file is **verified by SLAPorSLOP** when a fresh, correctly signed file
 verification lists it with status `approved`. Say **revoked** when it's listed as `revoked`, and
-nothing at all when it isn't listed. Link to the match's `page_url`. Use Slop's name only for what
-the document says; don't suggest Slop endorses your store.
+nothing at all when it isn't listed. Link to the match's `page_url`. Use SLAPorSLOP's name only for what
+the document says; don't suggest SLAPorSLOP endorses your store.

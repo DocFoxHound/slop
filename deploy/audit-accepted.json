@@ -1,7 +1,7 @@
 {
   "about": "Advisories reviewed and accepted, with why. The deploy audit (update.sh) only reports crates actually built and packages actually shipped, and leaves these out of the admins' alert. All that's left is Tauri's Linux desktop stack (GTK3 and D-Bus); review when Tauri moves to GTK4 / zbus 6. Fixed 2026-10-20 instead of accepted: rsa (jsonwebtoken now uses aws-lc-rs), zip 4 (the updater no longer unpacks archives), libcrux-kem (never built).",
   "accepted": {
-    "RUSTSEC-2024-0429": "glib 0.18 (Tauri's GTK stack on Linux): unsound VariantStrIter, which Slop never uses. Reviewed 2026-10-20.",
+    "RUSTSEC-2024-0429": "glib 0.18 (Tauri's GTK stack on Linux): unsound VariantStrIter, which SLAPorSLOP never uses. Reviewed 2026-10-20.",
     "GHSA-wrw7-89jp-8q8g": "glib 0.18: as RUSTSEC-2024-0429. Reviewed 2026-10-20.",
     "RUSTSEC-2024-0370": "proc-macro-error 1 is unmaintained: a build-time macro in Tauri's GTK stack. Reviewed 2026-10-20.",
     "RUSTSEC-2026-0173": "proc-macro-error2 is unmaintained: build-time only. Reviewed 2026-10-20.",

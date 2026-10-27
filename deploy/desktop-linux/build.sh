@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# Builds Slop's Linux packages for a commit and publishes them for the desktop app's auto-updater
+# Builds SLAPorSLOP's Linux packages for a commit and publishes them for the desktop app's auto-updater
 # (deploy/README.md). Run by slop-desktop-linux.service after a deploy that changed the app.
 #
 #   build.sh <commit> [deb|rpm ...]
@@ -31,7 +31,7 @@ set -a
 set +a
 VERSION="0.1.$(git -C "$REPO" rev-list --count "$COMMIT")"
 SITE="${SLOP_PUBLIC_URL%/}"
-# A test site's app is "Slop Dev" (deploy/desktop-config.js), which installs beside "Slop", and
+# A test site's app is "Slop Dev" (deploy/desktop-config.js), which installs beside "SLAPorSLOP", and
 # accepts releases without GitHub attestations (private repositories can't make them,
 # docs/TESTING.md). Only a test site's: the same rule as crates/slop-desktop/build.rs, which
 # refuses to build an unsigned app for any other.

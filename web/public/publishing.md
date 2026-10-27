@@ -1,13 +1,13 @@
-# Publishing on Slop
+# Publishing on SLAPorSLOP
 
-Slop is a store for apps and games made with AI: open source, checked before they're listed,
+SLAPorSLOP is a store for apps and games made with AI: open source, checked before they're listed,
 free to download, and rated by the people who play them. This page covers everything needed to
-publish: what Slop asks of your project, how to set it up, and what happens after you submit.
+publish: what SLAPorSLOP asks of your project, how to set it up, and what happens after you submit.
 
 > **Using an AI coding assistant?** Tell it to read this page (the plain-text copy is at
 > `/publishing.md` on this site). It can work out what's required and what's optional, and set
-> your project up for publishing on Slop. For example: *"Read this page, tell me what's required
-> and what's optional for publishing on Slop, then set up my project so it's ready to deploy
+> your project up for publishing on SLAPorSLOP. For example: *"Read this page, tell me what's required
+> and what's optional for publishing on SLAPorSLOP, then set up my project so it's ready to deploy
 > there."*
 
 **Want your agent to do all of it, store page included?** Make it a token under **Account → AI
@@ -18,38 +18,38 @@ submits releases and follows the review itself. Without one it can only prepare 
 
 It's written so that a person or an AI agent can follow it from start to finish. Agents: the
 [checklist for agents](#checklist-for-agents) near the end lists every step in order, and
-[What Slop asks of your project](#what-slop-asks-of-your-project) says what's required and what's
+[What SLAPorSLOP asks of your project](#what-slaporslop-asks-of-your-project) says what's required and what's
 optional.
 
 > Each app's first release is reviewed by a person. Things marked *(coming)* below are planned
 > but not built yet.
 
-## Why publish on Slop
+## Why publish on SLAPorSLOP
 
-- **Free to list.** No fees to publish or to download. Slop never sells anything and takes no cut
+- **Free to list.** No fees to publish or to download. SLAPorSLOP never sells anything and takes no cut
   of sales, because there are none. Players can donate to you if you turn
-  [donations](#donations) on: paid straight to you, with a flat 5% Slop fee.
+  [donations](#donations) on: paid straight to you, with a flat 5% SLAPorSLOP fee.
 - **Players who are looking for AI-made software.** Store pages, categories, tags and search,
   with Coming soon, Beta and Released stages so players can follow a project from the start.
-- **Installs and updates handled for you.** The Slop desktop app (Windows, Ubuntu/Debian,
-  RHEL/Rocky/Alma 10) installs your app, checks every file against Slop's signature first, and
+- **Installs and updates handled for you.** The SLAPorSLOP desktop app (Windows, Ubuntu/Debian,
+  RHEL/Rocky/Alma 10) installs your app, checks every file against SLAPorSLOP's signature first, and
   updates it when you publish a new release.
 - **Trust.** Every app links its source code. Every build is tied to the exact commit it came from
   and checked before it's offered to players.
 - **Player counts.** Add a few lines of code ([Slop Pulse](#slop-pulse-player-counts)) and your
   store page shows how many people are playing now and the peak this month.
-- *(coming)* **Not Slop / Slop ratings** from people who actually launched your app.
+- *(coming)* **Slaps / Slop ratings** from people who actually launched your app.
 
-## What Slop asks of your project
+## What SLAPorSLOP asks of your project
 
 ### Required
 
 1. **Open source.** A public Git repository (GitHub, GitLab, Bitbucket or self-hosted) with an
-   [OSI-approved licence](https://opensource.org/licenses) in a `LICENSE` file. Slop detects the
+   [OSI-approved licence](https://opensource.org/licenses) in a `LICENSE` file. SLAPorSLOP detects the
    licence from your repository when you create your store page. The app can't depend on
    closed-source libraries (the source check notes NVIDIA's old Cg shader library, for example);
    the operating system's own libraries and graphics drivers are fine.
-2. **Builds on your own release page, for the platforms you choose.** Slop stores no builds. On
+2. **Builds on your own release page, for the platforms you choose.** SLAPorSLOP stores no builds. On
    your store page you tick what your app runs on, **Windows**, **Linux** or both, and every
    release must then include exactly these files, attached to a release in your repository:
 
@@ -60,9 +60,9 @@ optional.
    | &nbsp;&nbsp;Linux `.deb` | A **`.deb`** package (Debian, Ubuntu, Mint) |
    | &nbsp;&nbsp;Linux `.rpm` | An **`.rpm`** package (Fedora, RHEL, Rocky, Alma) |
 
-   Linux needs at least one package: `.deb`, `.rpm` or both. The Slop app installs the `.zip` or
+   Linux needs at least one package: `.deb`, `.rpm` or both. The SLAPorSLOP app installs the `.zip` or
    `.tar.gz` into the player's library folder and starts the program you name; keep its
-   executable permission in the `.tar.gz` (Slop also sets it). The `.deb`/`.rpm` are offered on
+   executable permission in the `.tar.gz` (SLAPorSLOP also sets it). The `.deb`/`.rpm` are offered on
    your store page for players who prefer a system package. macOS and Android aren't offered yet.
    Slop Build makes all of these files for you.
    - **Where the files must be:** on GitHub, under
@@ -71,26 +71,26 @@ optional.
 3. **The commit the build came from.** Every release names the full 40-character commit SHA. Tags
    can move; commits can't.
 4. **The rules.** No sexual content, no gambling or loot boxes, no pay-to-win, nothing for sale,
-   no malware, no hidden tracking, nothing stolen, and no code from outside Slop: an app only
-   runs code that came in its release or in a mod Slop approved, never code or mods a server
+   no malware, no hidden tracking, nothing stolen, and no code from outside SLAPorSLOP: an app only
+   runs code that came in its release or in a mod SLAPorSLOP approved, never code or mods a server
    sends. See [Online play and mods](#online-play-and-mods). Rate your app honestly (Everyone, 3+, 7+, 12+,
    16+ or 18+; 18+ apps are hidden from players in the UK's under-18 view).
-5. **Local saves in Slop's save folder.** If your app keeps saves, settings or logs on the
+5. **Local saves in SLAPorSLOP's save folder.** If your app keeps saves, settings or logs on the
    player's computer, keep them in the folder named by `SLOP_SAVE_DIR` when it's set. See
    [Saves and sandbox mode](#saves-and-sandbox-mode). Saves on your own server are fine too.
-   Slop's source check reports where each release saves.
+   SLAPorSLOP's source check reports where each release saves.
 6. **A maker signature** on each build: a GitHub artifact attestation, made by your GitHub Actions
    build (Slop Build does this for you). It proves the file came from your repository at that
-   commit, so someone who only stole your Slop password can't publish anything. *Test servers
+   commit, so someone who only stole your SLAPorSLOP password can't publish anything. *Test servers
    may not require it (`/v1/server` says); GitHub only makes attestations for private repositories
    on its Enterprise plan.*
 
 ### Recommended
 
-- **Slop Pulse** in games, so Slop can show player counts. See
+- **Slop Pulse** in games, so SLAPorSLOP can show player counts. See
   [Slop Pulse](#slop-pulse-player-counts).
 - **Slop Build**, so releases build, sign and submit themselves. See
-  [Option A](#option-a-slop-build-recommended).
+  [Option B](#option-b-slop-build).
 
 ## Release stages
 
@@ -108,11 +108,11 @@ takes the page out of the store until you reach the next stage; existing install
 
 ### 1. Sign in
 
-On the Slop website, choose **Sign in → Continue with GitHub**, then pick a display name and your
-country. Slop never sees your password.
+On the SLAPorSLOP website, choose **Sign in → Continue with GitHub**, then pick a display name and your
+country. SLAPorSLOP never sees your password.
 
 Optionally, **add a passkey** under Account → Sign-in & security: a quicker way to sign in that
-nobody can phish. Nothing on Slop requires one.
+nobody can phish. Nothing on SLAPorSLOP requires one.
 
 ### 2. Create the store page
 
@@ -134,7 +134,7 @@ Go to **Publish → New app** and fill in:
 
 It's saved as a draft that only you can see.
 
-**Tags** come from Slop's categories: Games, Kids & Family, Tools, Creative, Utilities, Learning,
+**Tags** come from SLAPorSLOP's categories: Games, Kids & Family, Tools, Creative, Utilities, Learning,
 Play style and Vibe. `GET /v1/categories` (`list_categories` for AI agents) lists each one with
 its tags. Pick the few that describe the app best: what it is (Puzzle, RPG, Tower Defense, Note-taking…),
 who it's for, how it plays (Co-op, Turn-based, Keyboard Only…) and how it feels (Cozy, Spooky…).
@@ -146,7 +146,7 @@ those tags still works, but it won't show there; the editor and `get_fixes` say 
 
 Optional, but pages with them get far more clicks, and every app should have an **icon**.
 
-Slop doesn't host pictures. They live **in your repository**, in a `.slop/` folder at the top
+SLAPorSLOP doesn't host pictures. They live **in your repository**, in a `.slop/` folder at the top
 level, listed in `.slop/media.json`:
 
 ```
@@ -187,7 +187,7 @@ Rules:
 - Paths are relative to `.slop/`, using letters, numbers, `.`, `_`, `-` and `/` (no spaces, no `..`).
 - Pictures are PNG, JPEG, WebP or GIF, up to 8 MB each, and at most 8192 pixels on a side. The
   icon can't be a GIF, and is up to 4 MB.
-- **No icon yet?** Your app still works and can go in the store: Slop shows a square crop from the
+- **No icon yet?** Your app still works and can go in the store: SLAPorSLOP shows a square crop from the
   middle of your thumbnail instead, or your app's first letter. **Edit store page** says "No icon
   yet" until you add one, and can make a square crop of one of your pictures for you to download
   and commit. To add an icon to an existing `media.json`, add the line `"icon": "icon.png",` and
@@ -196,48 +196,48 @@ Rules:
   maker's app is pointed out to the reviewer.
 - Each image or video can appear once.
 - The repository must be public on GitHub so players can see the pictures.
-- Slop reads `.slop/media.json` when you press **Check my repository now** (under **Edit store
+- SLAPorSLOP reads `.slop/media.json` when you press **Check my repository now** (under **Edit store
   page**), and again at every release's commit. It links to the files **at that commit**, so
-  later pushes don't change what players see until Slop reads them again.
+  later pushes don't change what players see until SLAPorSLOP reads them again.
 - **Every new set of pictures is reviewed** before it shows, and before your app first goes in the
   store. The previous set stays up meanwhile. No sexually explicit content, here or anywhere on
-  Slop.
+  SLAPorSLOP.
 - You choose the **order** players see the gallery in on **Edit store page**. That isn't reviewed,
   and pictures added later go at the end. The order in `media.json` is only the starting order.
 
 ### 3. Submit a release
 
-A release is one version of your app. On Slop it's a **GitHub release** on your repository with
+A release is one version of your app. On SLAPorSLOP it's a **GitHub release** on your repository with
 your builds attached. Open your app's **Releases** page (from **Publish**, choose **Releases &
 progress**) and use one of the options below.
 
 #### Option A: pick a GitHub release (simplest)
 
 1. On GitHub, open **Releases → Draft a new release**. Give it a tag such as `v1.0.0`, attach
-   the files your store page asks for (see the table above), and publish it. Don't mark it as a pre-release if you want Slop to pick up later ones by itself.
-2. On Slop's Releases page, under **Submit a release**, choose that release. Slop reads the
+   the files your store page asks for (see the table above), and publish it. Don't mark it as a pre-release if you want SLAPorSLOP to pick up later ones by itself.
+2. On SLAPorSLOP's Releases page, under **Submit a release**, choose that release. SLAPorSLOP reads the
    version from the tag (`v1.0.0` → `1.0.0`) and finds the commit the tag points at.
-3. Tick one file for each platform. Slop matches them by type (`.zip` → Windows, `.tar.gz` →
+3. Tick one file for each platform. SLAPorSLOP matches them by type (`.zip` → Windows, `.tar.gz` →
    Linux, `.deb`, `.rpm`) and tells you if one is missing. For the `.zip` and `.tar.gz`, enter
    the program to start, as its path inside the archive.
 4. Choose **Send version …**.
 
 **Later versions arrive by themselves.** With **Pick up new GitHub releases** on (the default, in
-the **Updates** box), Slop checks your repository every 10 minutes if you've released something
+the **Updates** box), SLAPorSLOP checks your repository every 10 minutes if you've released something
 in the last week, and less often (up to every two hours) for quieter apps. For pickup within a
-minute, install **Slop's GitHub App** on the repository (the link is in the **Updates** box): GitHub
-then tells Slop the moment you publish a release. The App only reads releases and code. When you publish a new
-release (not a draft or pre-release), Slop submits it using your previous release as the pattern:
+minute, install **SLAPorSLOP's GitHub App** on the repository (the link is in the **Updates** box): GitHub
+then tells SLAPorSLOP the moment you publish a release. The App only reads releases and code. When you publish a new
+release (not a draft or pre-release), SLAPorSLOP submits it using your previous release as the pattern:
 the same platforms and programs, with files whose names are the old ones with the new version in
 place of the old (`game-1.0.0-windows.zip` → `game-1.1.0-windows.zip`), or exactly the same
-names. If a file is missing, Slop waits up to two hours for it to be uploaded, then shows what it
+names. If a file is missing, SLAPorSLOP waits up to two hours for it to be uploaded, then shows what it
 couldn't find so you can pick the release by hand.
 
 #### Option B: Slop Build
 
 Slop Build is a shared GitHub Actions workflow. Add one file to your repository and every push to
 your main branch (or every `v*` tag) builds your app for Windows and Linux, packs it (a `.zip`
-for Windows; a `.tar.gz`, `.deb` and `.rpm` for Linux), signs every file, attaches them to a release on your repository, and sends the release to Slop. No keys
+for Windows; a `.tar.gz`, `.deb` and `.rpm` for Linux), signs every file, attaches them to a release on your repository, and sends the release to SLAPorSLOP. No keys
 or secrets.
 
 On the Releases page, choose **Add to my repository on GitHub**: it opens GitHub with the file
@@ -262,18 +262,18 @@ jobs:
     uses: DocFoxHound/slop-build/.github/workflows/build.yml@v1
     with:
       app: my-game                # your store address
-      slop-url: https://slop.example   # the Slop site
+      slop-url: https://slop.example   # the SLAPorSLOP site
       project-type: rust          # rust, go or custom
 ```
 
 | Input | Meaning |
 |---|---|
-| `app` | Your app's store address on Slop (required) |
-| `slop-url` | The Slop site (required) |
+| `app` | Your app's store address on SLAPorSLOP (required) |
+| `slop-url` | The SLAPorSLOP site (required) |
 | `project-type` | What to build (required): see **Project types** below |
 | `project-path` | Where the project is in the repository (default: the top) |
 | `platforms` | Comma-separated, from `windows,linux` (default: both). Match your store page. |
-| `linux-packages` | Comma-separated, from `deb,rpm` (default: both). Slop uses the ones your store page lists. Packages install the app in `/opt/<app>` with `/usr/bin/<app>` starting it. |
+| `linux-packages` | Comma-separated, from `deb,rpm` (default: both). SLAPorSLOP uses the ones your store page lists. Packages install the app in `/opt/<app>` with `/usr/bin/<app>` starting it. |
 | `build-command` | `custom`: the command that builds your app (run with bash). `web`, `electron`, `tauri`: an extra step before building, e.g. `npm run build` |
 | `output-dir` | `custom`: the folder the build produces; it's packed as-is. `web`: the folder with your built `index.html` |
 | `exec` | The program to start, relative to the build; `{ext}` becomes `.exe` on Windows. Needed for `custom`, worked out for every other type |
@@ -283,10 +283,10 @@ jobs:
 | `godot-preset-windows`, `godot-preset-linux` | `godot`: the export presets to use (default `Windows Desktop` and `Linux`) |
 | `python-version`, `python-entry`, `python-windowed` | `python`: Python version (default 3.12), the script that starts the app (default `main.py`), and `true` for apps with their own window, such as pygame games |
 | `node-version` | `electron`, `tauri`, `web`: Node.js version (default 22) |
-| `linux-runtime` | `steam-sniper` builds the Linux program inside Valve's Steam Runtime 3 (sniper), so it runs on older Linux systems too (anything with glibc 2.31, e.g. Ubuntu 20.04 or Debian 11). For `rust`, `go` and `custom`; Rust is installed in the container, following your `rust-toolchain.toml`. The container is a fixed version Slop tested, so builds don't change unexpectedly |
-| `publish` | `false` builds and checks only: no release, nothing sent to Slop, the files kept as the run's artifacts for a day. For trying it out |
+| `linux-runtime` | `steam-sniper` builds the Linux program inside Valve's Steam Runtime 3 (sniper), so it runs on older Linux systems too (anything with glibc 2.31, e.g. Ubuntu 20.04 or Debian 11). For `rust`, `go` and `custom`; Rust is installed in the container, following your `rust-toolchain.toml`. The container is a fixed version SLAPorSLOP tested, so builds don't change unexpectedly |
+| `publish` | `false` builds and checks only: no release, nothing sent to SLAPorSLOP, the files kept as the run's artifacts for a day. For trying it out |
 | `sign` | `true` by default; set `false` for private repositories without GitHub Enterprise |
-| `itch-target` | Optional: also publish each build to your itch.io page, as `user/game` (from `user.itch.io/game`). Windows and Linux go to the `windows` and `linux` channels with itch's own tool. Needs the `BUTLER_API_KEY` secret (itch.io → Settings → API keys). Slop stays your store page and checks; itch is extra reach |
+| `itch-target` | Optional: also publish each build to your itch.io page, as `user/game` (from `user.itch.io/game`). Windows and Linux go to the `windows` and `linux` channels with itch's own tool. Needs the `BUTLER_API_KEY` secret (itch.io → Settings → API keys). SLAPorSLOP stays your store page and checks; itch is extra reach |
 | `flatpak-app-id` | Optional: a Flatpak ID such as `io.github.you.Game`. Each release then carries a draft Flatpak manifest for the Linux build, for you to finish (permissions, metainfo, screenshots) and submit to Flathub |
 | `signpath-organization-id` | Optional: sign the Windows program for free with SignPath Foundation (see [Signing](#signing)). Needs the `SIGNPATH_API_TOKEN` secret |
 | `signpath-project-slug` | Your SignPath project (default: the app's store address) |
@@ -295,7 +295,7 @@ jobs:
 Every Slop Build also checks your Windows build with **Microsoft Defender** (today's definitions,
 on GitHub's Windows runner), looks for secrets committed to your source with
 [gitleaks](https://github.com/gitleaks/gitleaks), and lists dependencies with known
-vulnerabilities with [OSV-Scanner](https://github.com/google/osv-scanner). Only you and Slop's
+vulnerabilities with [OSV-Scanner](https://github.com/google/osv-scanner). Only you and SLAPorSLOP's
 reviewers see the source checks; they never stop a release.
 
 **Project types.** The **Add to my repository** button picks one by looking at your repository.
@@ -308,7 +308,7 @@ reviewers see the source checks; they never stop a release.
 | `unity` | Unity through [GameCI](https://game.ci): the editor version from `ProjectSettings/ProjectVersion.txt`, Windows and Linux players. Needs your Unity licence in your repository's secrets: see [Unity](#unity) |
 | `dotnet` | `dotnet publish`, self-contained (players don't need .NET), for console, MonoGame, Avalonia and similar apps. Finds the program project, or set `dotnet-project` |
 | `python` | PyInstaller, as a folder: installs `requirements.txt`, then builds `python-entry` |
-| `electron` | `npm ci`, then electron-builder as an unpacked folder (no installer: Slop installs and updates it) |
+| `electron` | `npm ci`, then electron-builder as an unpacked folder (no installer: SLAPorSLOP installs and updates it) |
 | `tauri` | `npm ci` if there's a `package.json`, then `tauri build --no-bundle`; ships the program |
 | `web` | An HTML5 game or web app: builds it (`build-command`), then puts `output-dir` in a small window of its own (a Tauri shell), so it runs like any other app. Linux packages depend on WebKitGTK |
 | `custom` | Any build: `build-command`, `output-dir` and `exec` |
@@ -330,7 +330,7 @@ its sandbox; most distributions have them on.
 ### Unity
 
 Slop Build builds Unity projects with [GameCI](https://game.ci) on your repository's own GitHub
-Actions, so your Unity licence stays in your repository: Slop never sees it.
+Actions, so your Unity licence stays in your repository: SLAPorSLOP never sees it.
 
 1. Get a licence file: follow [GameCI's activation guide](https://game.ci/docs/github/activation)
    (for Unity Personal, it gives you a `.ulf` file).
@@ -346,7 +346,7 @@ time; the `Library` folder is cached after that. Commit with Git LFS if your ass
 
 GitHub release files are limited to 2 GiB. Slop Build splits a bigger `.zip` or `.tar.gz` into
 numbered parts (`game.zip.001`, `game.zip.002`…, up to 64) and signs each one; players' desktop
-apps download them in order, check every part, and join them back into the file Slop checked.
+apps download them in order, check every part, and join them back into the file SLAPorSLOP checked.
 `.deb` and `.rpm` packages can't be split, so turn `linux-packages` off for a game that big.
 Releases picked from GitHub (Option A) or entered by hand don't take parts yet: use Slop Build.
 
@@ -364,7 +364,7 @@ args = ["--fullscreen", "--renderer=d3d12"]
 ```
 
 **Shared runtimes.** If your Windows build needs a runtime players may not have, name it and the
-Slop app installs it before the first start (once the player agrees), straight from Microsoft,
+SLAPorSLOP app installs it before the first start (once the player agrees), straight from Microsoft,
 after Windows confirms the download is signed by Microsoft. Don't ship these installers in your
 build. With Slop Build, list them in `slop.toml`; otherwise tick them on the release form.
 
@@ -408,7 +408,7 @@ Builds made by Slop Build are labelled **Built by Slop Build from source**.
    ```
 
 3. Attach the files to a release on your repository.
-4. On Slop's Releases page, pick the release (Option A), or open **Enter a release by hand** and
+4. On SLAPorSLOP's Releases page, pick the release (Option A), or open **Enter a release by hand** and
    fill in the version (e.g. `1.0.0`), the full commit SHA, and for each platform the file's URL
    on your release page, its type, and for zips the program to start (and optional arguments).
    Repositories that aren't on GitHub always use the form.
@@ -422,17 +422,17 @@ anything is under way, so there's no need to reload it:
 
 1. **Store page:** saved.
 2. **Release:** received.
-3. **Files checked:** Slop downloads each file once, records its size and SHA-256, and keeps
+3. **Files checked:** SLAPorSLOP downloads each file once, records its size and SHA-256, and keeps
    nothing else. If a file can't be downloaded, the release fails with the reason. Files are
    checked one at a time (and releases one at a time, oldest first), so the checklist shows each
    file: done (passed, a note, or on hold), being checked ("Checking file 2 of 4: Linux (.deb) —
-   Scanning for malware"), or waiting, with how long files take on Slop and about how long is
+   Scanning for malware"), or waiting, with how long files take on SLAPorSLOP and about how long is
    left. Scanning takes a few minutes per file, longer for big programs (up to 30 minutes), so a
    release with four builds can take 20 minutes or more. Your AI agent sees the same in
    `list_releases` (`progress.summary`).
 4. **Maker signature:** the attestation is checked: it must name the file's hash and come from
    your repository at the release's commit.
-5. **Scan:** Slop scans every file with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
+5. **Scan:** SLAPorSLOP scans every file with ClamAV, YARA (YARA-Forge's rules) and capa, unpacking
    archives first. Nothing is ever run. Windows builds also need a clean check from
    **Microsoft Defender** (Slop Build or [Slop Check](#slop-check)). If something is found, the
    release waits for a person: scanners make mistakes, and a reviewer can clear a false positive
@@ -440,28 +440,28 @@ anything is under way, so there's no need to reload it:
    also has a **Look up on VirusTotal** link for its hash, an optional second opinion: it's not
    required, and uploading a file there shares it with VirusTotal's subscribers, so don't for a
    private app.
-6. **Source check:** Slop reads your repository at the release's commit once (on GitHub, GitLab
+6. **Source check:** SLAPorSLOP reads your repository at the release's commit once (on GitHub, GitLab
    or Codeberg; a private repository outside GitHub needs a read-only token saved on the app) and
    notes three things for you and the reviewer: whether your licence file
    matches the store page's licence; anything that looks like selling in the app (payment
-   libraries, in-app purchase APIs, checkout links, loot boxes, premium currencies), which Slop
-   doesn't allow; code that loads code from outside Slop, updates itself, or uses an unsafe data
+   libraries, in-app purchase APIs, checkout links, loot boxes, premium currencies), which SLAPorSLOP
+   doesn't allow; code that loads code from outside SLAPorSLOP, updates itself, or uses an unsafe data
    format (see [Online play and mods](#online-play-and-mods)); and the packages in your lockfiles. Notes don't stop a release by themselves, but
-   an update with a new one waits for a person. After that, Slop checks those packages against
+   an update with a new one waits for a person. After that, SLAPorSLOP checks those packages against
    [OSV](https://osv.dev) every day and tells you when a new security advisory affects your live
    release.
-7. **Review by a person:** a person at Slop reviews your app's first release, usually within a
+7. **Review by a person:** a person at SLAPorSLOP reviews your app's first release, usually within a
    day or two. Approval signs it; a rejection comes with a reason, and **To fix** on the Releases
    page (or `get_fixes` for your AI agent) says what to change. Either way you get a notification
    (under 🔔, and by email).
-8. **In the store:** Slop staff put the app in the store.
+8. **In the store:** SLAPorSLOP staff put the app in the store.
 
 **Updates.** With **Approve updates automatically** on (the default), every later release that
-passes every check is approved and signed by Slop straight away, with no wait for a person.
+passes every check is approved and signed by SLAPorSLOP straight away, with no wait for a person.
 Combined with **Pick up new GitHub releases** (or Slop Build), publishing an update is just
 publishing a release on GitHub. Players' apps show a notice and update when the player chooses.
 A person looks again if a release fails a check, or if one of your releases was withdrawn (by
-Slop or by you) or rejected since the last one a person approved. Slop can withdraw a release that turns out to be
+SLAPorSLOP or by you) or rejected since the last one a person approved. SLAPorSLOP can withdraw a release that turns out to be
 harmful; it then stops launching for everyone.
 
 **Where things stand:** **Publish** lists each of your apps with the step it's waiting on or
@@ -471,7 +471,7 @@ stuck at. **Releases & progress** has the full checklist and every release's his
 
 Each app has a **Manage** page (Publish → **Manage**):
 
-- **Not reviewed yet.** Releases Slop is still checking or that wait for review. Slop tells you
+- **Not reviewed yet.** Releases SLAPorSLOP is still checking or that wait for review. SLAPorSLOP tells you
   about every release it receives; if you didn't send one, or sent it by mistake, **Withdraw** it
   there. It never reaches players, and your next release is reviewed by a person. If you didn't
   send it, also secure your accounts and repository.
@@ -482,7 +482,7 @@ Each app has a **Manage** page (Publish → **Manage**):
 - **Repository.** Before anyone has your app you can change it freely. Once players have it, a
   move to another repository is always checked by a person, and the first release from the new
   repository is reviewed by a person too. Players who installed from the old repository reinstall
-  before their Slop app takes updates from the new one.
+  before their SLAPorSLOP app takes updates from the new one.
 - **Updates.** The same **Pick up new GitHub releases** and **Approve updates automatically**
   settings as on Releases & progress.
 - **Requests.** Every change you asked for, with its decision and any reason. You can cancel
@@ -509,18 +509,18 @@ who did).
   app's page and in their library. While donations are off it's quiet and says why ("The maker
   hasn't turned on donations", say), so players know it isn't hidden.
 - **18 or older:** receiving donations is for adults; you confirm it when you sign up.
-- **Slop's fee is 5%** of each donation (VAT included where there is VAT). Donors pay the card
+- **SLAPorSLOP's fee is 5%** of each donation (VAT included where there is VAT). Donors pay the card
   processing on top, so you receive what they chose less 5%. Account → Money has your monthly fee
   statements.
-- Donations may be taxable income for you; Slop doesn't give tax advice.
+- Donations may be taxable income for you; SLAPorSLOP doesn't give tax advice.
 - **Your AI agent can't do this for you:** signing up with Stripe and changing where money goes
   are for you alone.
 
 ## Online play and mods
 
-Slop checks your app's code, but it can't check the servers your app talks to, and those can
+SLAPorSLOP checks your app's code, but it can't check the servers your app talks to, and those can
 change at any time. A game that runs whatever a server sends would let anyone who runs (or
-breaks into) a server take over players' computers. So these are rules, and Slop's source check
+breaks into) a server take over players' computers. So these are rules, and SLAPorSLOP's source check
 looks for code that breaks them. What it finds goes to a reviewer as a note: a note isn't a
 rejection, but a real break is.
 
@@ -533,39 +533,39 @@ similar) and follow it whenever you write networking, save files or mod support.
 |---|---|
 | Game data your code reads: positions, chat, match state, scores | Yes |
 | Content your code reads: maps, levels, skins, pictures, sounds, settings | Yes, read safely (below) |
-| Mods: anything that adds or changes code, scripts or rules | Only mods approved on Slop, which the player gets from Slop |
+| Mods: anything that adds or changes code, scripts or rules | Only mods approved on SLAPorSLOP, which the player gets from SLAPorSLOP |
 | Programs, libraries (`.dll`, `.so`), scripts, Godot `.pck` packs, Unity asset bundles with code | Never |
-| A new version of the game itself | Never: updates come through Slop |
+| A new version of the game itself | Never: updates come through SLAPorSLOP |
 
-Community servers can't hand players mods either. A server can **name** the Slop mods it
-needs, and the game asks the Slop app for them (see [Getting a server's mods](#getting-a-servers-mods)).
+Community servers can't hand players mods either. A server can **name** the SLAPorSLOP mods it
+needs, and the game asks the SLAPorSLOP app for them (see [Getting a server's mods](#getting-a-servers-mods)).
 
 ### Loading mods in your game
 
-Players add mods to your game in the Slop app, from your game's page in their library, or when
+Players add mods to your game in the SLAPorSLOP app, from your game's page in their library, or when
 your game asks for them. Mods **may contain code** your game loads: scripts, Godot `.pck` packs,
-.NET assemblies, Unreal `.pak` files. Every mod on Slop is published, scanned and reviewed like
+.NET assemblies, Unreal `.pak` files. Every mod on SLAPorSLOP is published, scanned and reviewed like
 an app, so this is the one place your game may load code that didn't come in its own release.
 Your game gets mods one of two ways; pick one under **Mods** on Edit store page.
 
 **1. Your game's own mods folder (use what your engine or mod loader expects).** Name the
 folder your game already reads mods from, in its files (`mods`, `Content/Paks/~mods`) or in its
 save folder, and how mods are laid out there: each in its own folder (named after the mod's
-Slop address), or all mods' files straight in the folder (for games that read `.pak` or `.zip`
-files there). Before every start, and when mods are added while the game runs, the Slop app
-makes that folder hold **exactly the mods the player added from Slop**:
+SLAPorSLOP address), or all mods' files straight in the folder (for games that read `.pak` or `.zip`
+files there). Before every start, and when mods are added while the game runs, the SLAPorSLOP app
+makes that folder hold **exactly the mods the player added from SLAPorSLOP**:
 
 - their files are copied in, and files that changed are put back;
-- anything else in the folder (a mod someone dropped in by hand) is moved to Slop's quarantine
-  folder, and the player is told that mods must be published on Slop;
+- anything else in the folder (a mod someone dropped in by hand) is moved to SLAPorSLOP's quarantine
+  folder, and the player is told that mods must be published on SLAPorSLOP;
 - in **sandbox mode** the folder is read-only, so the game can't put anything there itself.
 
 Your game loads whatever is in the folder, its usual way. Don't download into it or anywhere
 else.
 
-**2. `SLOP_MODS`.** When it starts your game, the Slop app sets `SLOP_MODS`: the folders of the
+**2. `SLOP_MODS`.** When it starts your game, the SLAPorSLOP app sets `SLOP_MODS`: the folders of the
 mods the player added, separated like `PATH` (`;` on Windows, `:` elsewhere), each holding one
-mod's files exactly as Slop checked them. If it isn't set, no mods were added.
+mod's files exactly as SLAPorSLOP checked them. If it isn't set, no mods were added.
 
 ```gdscript
 # Godot
@@ -580,7 +580,7 @@ for dir in mods.split(sep, false):
 Either way:
 
 - Load mods only from there. Never load mods, packs or scripts a server or another player sent,
-  or anything downloaded outside Slop.
+  or anything downloaded outside SLAPorSLOP.
 - **Your game loads its mods itself.** Injectors that patch the game from outside (BepInEx,
   MelonLoader, Doorstop) aren't allowed.
 - Read mod data as carefully as anything else (rules 3 to 5 below).
@@ -594,16 +594,16 @@ in the folder.
 
 ### Getting a server's mods
 
-When a server or lobby needs mods, your game asks the Slop app for them by Slop address (and
-version, if you like). The Slop app shows the player the list, with what each mod is, whether it
+When a server or lobby needs mods, your game asks the SLAPorSLOP app for them by SLAPorSLOP address (and
+version, if you like). The SLAPorSLOP app shows the player the list, with what each mod is, whether it
 contains code and whether it goes online, and the player says yes or no. On yes, it downloads
-each from Slop, checks it against Slop's signature, adds it to your game, and tells your game.
+each from SLAPorSLOP, checks it against SLAPorSLOP's signature, adds it to your game, and tells your game.
 Only approved mods for your game can be added; the player sees any that aren't.
 
-When it starts your game, the Slop app sets **`SLOP_LINK`**: a folder for this run of your game,
+When it starts your game, the SLAPorSLOP app sets **`SLOP_LINK`**: a folder for this run of your game,
 with `requests/` and `answers/` in it. It works the same in sandbox mode and offline.
 
-1. Write the request as `requests/<name>.json`. Write `<name>.tmp` first, then rename it, so Slop
+1. Write the request as `requests/<name>.json`. Write `<name>.tmp` first, then rename it, so SLAPorSLOP
    never reads half a file. `<name>` is letters, digits, `-` and `_`:
    `{"mods": [{"slug": "dragons", "version": "1.2.0"}], "for": "Castle Rock server"}`. `for` is
    shown to the player.
@@ -615,13 +615,13 @@ with `requests/` and `answers/` in it. It works the same in sandbox mode and off
    - `declined`: the player said no.
    - `failed`: `message` says why (a bad request, or one already waiting for the player).
 
-Then load the new mods (or ask the player to restart). Servers should list mods by Slop address
+Then load the new mods (or ask the player to restart). Servers should list mods by SLAPorSLOP address
 and version so every player has the same files. If `SLOP_LINK` isn't set, the game wasn't started
-from Slop: tell the player which mods to add in their Slop library.
+from SLAPorSLOP: tell the player which mods to add in their SLAPorSLOP library.
 
 ```gdscript
 # Godot: ask for a server's mods, then wait for the player
-var link := OS.get_environment("SLOP_LINK")   # empty when not started from Slop
+var link := OS.get_environment("SLOP_LINK")   # empty when not started from SLAPorSLOP
 
 func request_mods(names: Array, server: String) -> void:
     var name := "r%d" % Time.get_ticks_msec()
@@ -643,11 +643,11 @@ func request_mods(names: Array, server: String) -> void:
 
 ### Publishing a mod
 
-Anyone can publish a mod for any app on Slop: on the app's page, under **Community**, choose
+Anyone can publish a mod for any app on SLAPorSLOP: on the app's page, under **Community**, choose
 **Publish a mod**. A mod lives in your own repository, and each release is **one `.zip` of the
 mod's files for every platform**, with no program to start (platform `any` when submitting by
-hand). Slop checks and reviews it like an app, and lists it in the Community area of the app's
-page. Players add it to the installed game in the Slop app, which hands it to the game when it
+hand). SLAPorSLOP checks and reviews it like an app, and lists it in the Community area of the app's
+page. Players add it to the installed game in the SLAPorSLOP app, which hands it to the game when it
 starts (see [Loading mods in your game](#loading-mods-in-your-game)). Say in your mod's
 description which version of the game it's for.
 
@@ -660,7 +660,7 @@ no program to start, no code from a server, no updating itself, no loading other
 ### Publishing a community build
 
 A community build (a modded version, port, fix or translation) is built from **your own fork**
-of an app on Slop: on the app's page, under **Community**, choose **Register a branch from your
+of an app on SLAPorSLOP: on the app's page, under **Community**, choose **Register a branch from your
 fork**. It's held to the same rules as a new app. The form asks what creating an app asks: its
 licence, platforms, age rating and content labels, what it connects to online, and whether it
 works in sandbox mode. Every release is scanned, its source checked and a person reviews it.
@@ -674,13 +674,13 @@ across when they pick your build.
 
 ### Rules for the code
 
-1. **Never run code from the network or from downloaded files.** (Mods from Slop are the
+1. **Never run code from the network or from downloaded files.** (Mods from SLAPorSLOP are the
    exception: see [Loading mods in your game](#loading-mods-in-your-game).) No `eval`, `exec`,
    `loadstring`, `new Function`, `Assembly.Load` on downloaded bytes, Java class loaders,
    `dlopen`/`LoadLibrary` on downloaded files, Godot `load_resource_pack` or setting
    `GDScript.source_code`, or Unity `AssetBundle` loads from a server.
 2. **Never update yourself.** No Electron `autoUpdater`, Squirrel, Velopack, NetSparkle,
-   `self_update` or similar. Slop delivers updates.
+   `self_update` or similar. SLAPorSLOP delivers updates.
 3. **Use data formats that can't rebuild objects.** For anything from a server, another player,
    or a file a player could have been sent (saves, levels), use JSON, MessagePack, protobuf,
    FlatBuffers or your own plain format. Never use .NET `BinaryFormatter` (or `SoapFormatter`,
@@ -702,27 +702,27 @@ across when they pick your build.
    to (your servers or database, servers players host, direct connections between players,
    other online services) and name your servers. Slop Pulse doesn't count.
 
-### What Slop does
+### What SLAPorSLOP does
 
 - The **source check** reads your code at each release's commit and notes the patterns above
   (code loading, self-updaters, unsafe data formats). A reviewer looks at each. An update with a
   new note waits for a person.
-- Anyone can report an app that **runs code from outside Slop**; reports are reviewed within
+- Anyone can report an app that **runs code from outside SLAPorSLOP**; reports are reviewed within
   24 hours.
 - The source check also notes **networking code**. If your code goes online but your store
   page doesn't say so, that's a note, and an update waits for a person.
-- Store pages of apps that go online tell players that Slop can't check the servers, and
-  suggest running the app in **sandbox mode** in the Slop app; see
+- Store pages of apps that go online tell players that SLAPorSLOP can't check the servers, and
+  suggest running the app in **sandbox mode** in the SLAPorSLOP app; see
   [Saves and sandbox mode](#saves-and-sandbox-mode).
 
 ## Saves and sandbox mode
 
-Players can run any app in **sandbox mode** in the Slop app: the app can use only its own
-files, mods and **save folder**, plus the screen, sound, graphics card and controllers. Slop
+Players can run any app in **sandbox mode** in the SLAPorSLOP app: the app can use only its own
+files, mods and **save folder**, plus the screen, sound, graphics card and controllers. SLAPorSLOP
 suggests it for apps that go online. So players can switch between sandbox and normal mode
-without losing anything, **local saves must live in Slop's save folder**.
+without losing anything, **local saves must live in SLAPorSLOP's save folder**.
 
-When the Slop app starts your app, it sets **`SLOP_SAVE_DIR`**: a folder that belongs to your
+When the SLAPorSLOP app starts your app, it sets **`SLOP_SAVE_DIR`**: a folder that belongs to your
 app, the same in both modes, outside the installed files (updates never touch it), and kept when
 the player uninstalls.
 
@@ -740,19 +740,19 @@ it gets its own folder.
 
 1. **If your app keeps anything on the player's computer** (saves, settings, logs,
    screenshots), and `SLOP_SAVE_DIR` is set, keep it there and nowhere else. When it isn't set,
-   your app is running outside Slop: use your usual place.
+   your app is running outside SLAPorSLOP: use your usual place.
 2. **Saves on your own server are fine,** and often better. This rule only covers what's
    written on the player's computer.
 3. **Saves are data, never code.** Plain formats only (JSON, MessagePack, your own format), read
    carefully, as in rules 3 and 5 under [Rules for the code](#rules-for-the-code). Never put
-   programs, libraries, scripts or packs in the save folder. Slop moves programs and libraries
+   programs, libraries, scripts or packs in the save folder. SLAPorSLOP moves programs and libraries
    out of it before every start, and takes execute permission off its files.
 4. Don't write anywhere else: not the home folder, Documents, the desktop, or `%APPDATA%` by
    name. In sandbox mode those don't exist, and the app will fail or lose its saves.
 5. Keep caches out of the save folder. On Linux, `XDG_CACHE_HOME` points to a separate cache
    folder; elsewhere, a `cache` subfolder you're happy to lose is fine.
 
-**Engines that need no change:** the Slop app points the usual per-user folders inside the save
+**Engines that need no change:** the SLAPorSLOP app points the usual per-user folders inside the save
 folder, so Godot's `user://` works as it is on Linux and Windows, and so do most engines on Linux
 (they follow `XDG_DATA_HOME` and `XDG_CONFIG_HOME`). **Unity on Windows, .NET's
 `Environment.SpecialFolder`, Electron's `app.getPath` and anything that asks Windows for a
@@ -781,25 +781,25 @@ into the container, not the save folder, so read `SLOP_SAVE_DIR`; temporary file
 to a cache folder; and it can't log the player off or switch desktops. If your app follows the rules above, tick **Works in sandbox mode**
 on its store page.
 
-**What Slop checks.** Every release's source check says where it saves, on your Releases page
+**What SLAPorSLOP checks.** Every release's source check says where it saves, on your Releases page
 and to the reviewer:
 
 | The check shows | Means |
 |---|---|
-| Saves in Slop's save folder | The code reads `SLOP_SAVE_DIR`, or uses Godot's `user://` |
+| Saves in SLAPorSLOP's save folder | The code reads `SLOP_SAVE_DIR`, or uses Godot's `user://` |
 | No local saves found | Neither, and no writes to the player's folders: fine if it saves nothing locally or only on your server |
-| Saves outside Slop's save folder | It writes to fixed per-user folders (Documents, `%APPDATA%`, the home folder, Unity's `persistentDataPath`, Electron's `userData`…), listed with file and line |
+| Saves outside SLAPorSLOP's save folder | It writes to fixed per-user folders (Documents, `%APPDATA%`, the home folder, Unity's `persistentDataPath`, Electron's `userData`…), listed with file and line |
 
 Saving outside the folder is a note asking you to move them, not a rejection. But while your
 newest release does, players aren't told your app works in sandbox mode, even if you ticked it,
 and the reviewer asks you to fix it or untick it.
 
-## Slop in your code
+## SLAPorSLOP in your code
 
-Ready-made code for the three things a game does with Slop besides Pulse: **saves** in
+Ready-made code for the three things a game does with SLAPorSLOP besides Pulse: **saves** in
 `SLOP_SAVE_DIR`, **mods** from your own mods folder and `SLOP_MODS`, and **asking for a server's
-mods** through `SLOP_LINK`. Each works unchanged outside the Slop app (your own save folder, no
-mods, `no_link`). Slop's tests run every one of them against the real Slop app code, so copy
+mods** through `SLOP_LINK`. Each works unchanged outside the SLAPorSLOP app (your own save folder, no
+mods, `no_link`). SLAPorSLOP's tests run every one of them against the real SLAPorSLOP app code, so copy
 them as they are. For Godot, use the GDScript in [Loading mods in your game](#loading-mods-in-your-game)
 and [Getting a server's mods](#getting-a-servers-mods).
 
@@ -817,13 +817,13 @@ store page.
 **Python** (`slop.py`)
 
 ```python
-# Slop for Python games: saves, mods and asking the Slop app for a server's mods.
-# Standard library only. Outside the Slop app it falls back: your own save folder, no mods,
+# SLAPorSLOP for Python games: saves, mods and asking the SLAPorSLOP app for a server's mods.
+# Standard library only. Outside the SLAPorSLOP app it falls back: your own save folder, no mods,
 # and request_mods answers "no_link".
 import json, os, time
 
 def save_dir(fallback):
-    """Where saves, settings and logs go: Slop's save folder, else `fallback`."""
+    """Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`."""
     path = os.environ.get("SLOP_SAVE_DIR") or fallback
     os.makedirs(path, exist_ok=True)
     return path
@@ -849,7 +849,7 @@ def load_json(fallback, name):
 
 def mod_dirs(own_folder=None):
     """Every mod folder: your game's own mods folder (if you named one on your store page),
-    then SLOP_MODS. Each holds one mod from Slop."""
+    then SLOP_MODS. Each holds one mod from SLAPorSLOP."""
     found, seen = [], set()
     if own_folder and os.path.isdir(own_folder):
         for name in sorted(os.listdir(own_folder)):
@@ -864,7 +864,7 @@ def mod_dirs(own_folder=None):
     return found
 
 def request_mods(mods, for_whom, give_up_after=600):
-    """Asks the Slop app for mods by address, e.g. [{"slug": "dragons", "version": "1.2.0"}].
+    """Asks the SLAPorSLOP app for mods by address, e.g. [{"slug": "dragons", "version": "1.2.0"}].
     The player confirms. Returns the answer: "done" (with "mods" and "folders"), "declined",
     "failed" (with "message"), "no_link" or "timeout"."""
     link = os.environ.get("SLOP_LINK")
@@ -892,8 +892,8 @@ def request_mods(mods, for_whom, give_up_after=600):
 **Rust** (`slop.rs`)
 
 ```rust
-//! Slop for Rust games: saves, mods and asking the Slop app for a server's mods. Needs
-//! `serde_json`. Outside the Slop app it falls back: your own save folder, no mods, and
+//! SLAPorSLOP for Rust games: saves, mods and asking the SLAPorSLOP app for a server's mods. Needs
+//! `serde_json`. Outside the SLAPorSLOP app it falls back: your own save folder, no mods, and
 //! `request_mods` answers "no_link".
 use std::{
     env, fs, io,
@@ -901,7 +901,7 @@ use std::{
     time::{Duration, Instant},
 };
 
-/// Where saves, settings and logs go: Slop's save folder, else `fallback`.
+/// Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`.
 pub fn save_dir(fallback: &Path) -> PathBuf {
     env::var_os("SLOP_SAVE_DIR")
         .filter(|d| !d.is_empty())
@@ -924,7 +924,7 @@ pub fn load(fallback: &Path, name: &str) -> Option<Vec<u8>> {
 }
 
 /// Every mod folder: your game's own mods folder (if you named one on your store page), then
-/// `SLOP_MODS`. Each holds one mod from Slop.
+/// `SLOP_MODS`. Each holds one mod from SLAPorSLOP.
 pub fn mod_dirs(own_folder: Option<&Path>) -> Vec<PathBuf> {
     let mut found: Vec<PathBuf> = Vec::new();
     if let Some(own) = own_folder {
@@ -950,7 +950,7 @@ pub fn mod_dirs(own_folder: Option<&Path>) -> Vec<PathBuf> {
     found
 }
 
-/// Asks the Slop app for mods by address, e.g. `json!([{"slug": "dragons", "version": "1.2.0"}])`.
+/// Asks the SLAPorSLOP app for mods by address, e.g. `json!([{"slug": "dragons", "version": "1.2.0"}])`.
 /// The player confirms. Returns the answer: "done" (with "mods" and "folders"), "declined",
 /// "failed" (with "message"), "no_link" or "timeout". Blocks: call it off your main loop.
 pub fn request_mods(mods: serde_json::Value, for_whom: &str, give_up_after: Duration) -> serde_json::Value {
@@ -990,8 +990,8 @@ fn now_ns() -> u128 {
 **C#** (`Slop.cs`)
 
 ```csharp
-// Slop for C# games (Unity, .NET, Godot C#): saves, mods and asking the Slop app for a server's
-// mods. No packages needed. Outside the Slop app it falls back: your own save folder, no mods,
+// SLAPorSLOP for C# games (Unity, .NET, Godot C#): saves, mods and asking the SLAPorSLOP app for a server's
+// mods. No packages needed. Outside the SLAPorSLOP app it falls back: your own save folder, no mods,
 // and RequestMods answers "no_link".
 using System;
 using System.Collections.Generic;
@@ -1003,7 +1003,7 @@ using System.Threading.Tasks;
 
 public static class Slop
 {
-    /// Where saves, settings and logs go: Slop's save folder, else `fallback`
+    /// Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`
     /// (in Unity, Application.persistentDataPath).
     public static string SaveDir(string fallback)
     {
@@ -1030,7 +1030,7 @@ public static class Slop
     }
 
     /// Every mod folder: your game's own mods folder (if you named one on your store page), then
-    /// SLOP_MODS. Each holds one mod from Slop.
+    /// SLOP_MODS. Each holds one mod from SLAPorSLOP.
     public static List<string> ModDirs(string ownFolder = null)
     {
         var found = new List<string>();
@@ -1044,7 +1044,7 @@ public static class Slop
         return found;
     }
 
-    /// Asks the Slop app for mods by address (and version, or null). The player confirms.
+    /// Asks the SLAPorSLOP app for mods by address (and version, or null). The player confirms.
     /// Returns the answer's JSON; its "status" is "done", "declined", "failed", "no_link" or
     /// "timeout" (see Status). Await it; it doesn't block your game.
     public static async Task<string> RequestMods(IEnumerable<(string slug, string version)> mods, string forWhom,
@@ -1097,8 +1097,8 @@ public static class Slop
 **C++17** (`slop.hpp`): in Unreal, standard C++ works in game code as it is.
 
 ```cpp
-// Slop for C++ games (Unreal, or your own engine): saves, mods and asking the Slop app for a
-// server's mods. C++17, standard library only. Outside the Slop app it falls back: your own
+// SLAPorSLOP for C++ games (Unreal, or your own engine): saves, mods and asking the SLAPorSLOP app for a
+// server's mods. C++17, standard library only. Outside the SLAPorSLOP app it falls back: your own
 // save folder, no mods, and request_mods answers "no_link".
 #pragma once
 #include <algorithm>
@@ -1122,7 +1122,7 @@ inline std::string env(const char* name) {
     return v ? v : "";
 }
 
-// Where saves, settings and logs go: Slop's save folder, else `fallback`.
+// Where saves, settings and logs go: SLAPorSLOP's save folder, else `fallback`.
 inline fs::path save_dir(const fs::path& fallback) {
     std::string dir = env("SLOP_SAVE_DIR");
     fs::path path = dir.empty() ? fallback : fs::u8path(dir);
@@ -1156,7 +1156,7 @@ inline std::optional<std::string> load(const fs::path& fallback, const std::stri
 }
 
 // Every mod folder: your game's own mods folder (if you named one on your store page), then
-// SLOP_MODS. Each holds one mod from Slop.
+// SLOP_MODS. Each holds one mod from SLAPorSLOP.
 inline std::vector<fs::path> mod_dirs(const fs::path& own_folder = {}) {
     std::vector<fs::path> found;
     std::error_code ec;
@@ -1203,7 +1203,7 @@ inline std::string status(const std::string& answer) {
     return start == std::string::npos || end == std::string::npos ? "" : answer.substr(start + 1, end - start - 1);
 }
 
-// Asks the Slop app for mods by address and version ("" for any). The player confirms. Returns
+// Asks the SLAPorSLOP app for mods by address and version ("" for any). The player confirms. Returns
 // the answer's JSON (see status()). Blocks: call it on a worker thread.
 inline std::string request_mods(const std::vector<std::pair<std::string, std::string>>& mods,
                                 const std::string& for_whom, std::chrono::seconds give_up_after = std::chrono::seconds(600)) {
@@ -1242,10 +1242,10 @@ inline std::string request_mods(const std::vector<std::pair<std::string, std::st
 
 ## Browser demos for new games
 
-For a new game's first 14 days on Slop, players can try it in their browser from its store page,
+For a new game's first 14 days on SLAPorSLOP, players can try it in their browser from its store page,
 with nothing to install. Export a web build (Godot: the Web export; any engine whose build runs in
 a browser), zip it with `index.html` at the top, attach it to a release on your repository, and
-paste its address under **Browser demo** on your Manage page. Slop scans it and hosts it from a
+paste its address under **Browser demo** on your Manage page. SLAPorSLOP scans it and hosts it from a
 separate address until the 14 days are up, then deletes it.
 
 - Up to 100 MB zipped (250 MB unpacked).
@@ -1257,7 +1257,7 @@ separate address until the 14 days are up, then deletes it.
 ## Working with your AI agent
 
 Your own AI coding agent can do most of this for you, from your editor: write and create the
-store page, submit releases with notes, read Slop's checks of each release and fix what they find,
+store page, submit releases with notes, read SLAPorSLOP's checks of each release and fix what they find,
 register community builds and mods, and offer fixes to the apps you build on. Creatives can let it
 watch People jobs, send quotes and talk in job conversations.
 
@@ -1266,7 +1266,7 @@ watch People jobs, send quotes and talk in job conversations.
    that publishes needs the Publisher Agreement: the page shows it for you to accept when you
    make the token. If it changes later, your agent is told it's waiting, and the page shows it
    again.
-2. **Set it up on your computer, never in an AI chat.** The token is a password for your Slop
+2. **Set it up on your computer, never in an AI chat.** The token is a password for your SLAPorSLOP
    account: don't paste it into a chat with Claude, ChatGPT, Codex, Grok or any AI. The page
    walks you through it for Windows, macOS and Linux: save the token once in an environment
    variable, `SLOP_TOKEN`, in your own terminal window (not inside the AI chat, and not with
@@ -1275,40 +1275,40 @@ watch People jobs, send quotes and talk in job conversations.
    `claude mcp add --transport http --scope user slop <MCP address> --header 'Authorization: Bearer ${SLOP_TOKEN}'`
    (keep the single quotes); Codex: `codex mcp add slop --url <MCP address> --bearer-token-env-var SLOP_TOKEN`.
    Other tools: the MCP address the page shows, with the header
-   `Authorization: Bearer <your token>`, set in the tool's MCP or connector settings (or Slop's
+   `Authorization: Bearer <your token>`, set in the tool's MCP or connector settings (or SLAPorSLOP's
    API with the same header).
-3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on Slop",
-   "fix what Slop found in my last release", "offer this fix to the original". No token is
+3. **Ask it to read `maker_guide` first**, then give it the job: "publish this game on SLAPorSLOP",
+   "fix what SLAPorSLOP found in my last release", "offer this fix to the original". No token is
    needed in the chat.
 
-**When a token runs out:** the page shows how long each token has left. Slop tells you a week
+**When a token runs out:** the page shows how long each token has left. SLAPorSLOP tells you a week
 and a day before one expires (and when it has), and so does your agent. **Make a replacement**
 on the token fills in the same settings; set the new one up the same way (save it in
 `SLOP_TOKEN` again: the commands that connect your tools stay the same), then remove the old
 one. If a token ever ends up in a chat, remove it at once and make a new one.
 
-The agent works in your session and your repository; Slop runs no AI for it. It can't pay,
+The agent works in your session and your repository; SLAPorSLOP runs no AI for it. It can't pay,
 accept agreements or offers, change where money goes, or change your account: those stay with
 you. Releases it submits are checked and reviewed like any other. Remove a token any time
 (Account → AI agents, or sign it out like a device).
 
-**Fixes:** every problem Slop's checks find comes with exact instructions, on your Releases page
+**Fixes:** every problem SLAPorSLOP's checks find comes with exact instructions, on your Releases page
 ("Copy for your AI") and from the agent tool `get_fixes`.
 
 ## Keeping Windows from blocking your app
 
 Players shouldn't see "Windows protected your PC" or have Defender delete your game. Here's what
-Slop does, and the one optional step that helps most.
+SLAPorSLOP does, and the one optional step that helps most.
 
-**What Slop does for you:**
+**What SLAPorSLOP does for you:**
 
 - **No SmartScreen prompt.** Windows' "unrecognized app" prompt appears for files a browser
-  downloaded (they're marked as coming from the internet). Slop's app downloads, checks and
+  downloaded (they're marked as coming from the internet). SLAPorSLOP's app downloads, checks and
   unpacks your files itself, like Steam, so that mark isn't added.
 - **Defender checks your build before players get it.** Slop Build (or Slop Check) scans your
   Windows files with Microsoft Defender and today's definitions. If Defender flags them, the
   release waits for a person instead of reaching players and being quarantined there.
-- **Slop's own scans** (ClamAV, YARA, capa) on every file, and a person on the first release.
+- **SLAPorSLOP's own scans** (ClamAV, YARA, capa) on every file, and a person on the first release.
 
 **What helps most: sign your Windows program.** Defender and Windows' Smart App Control trust
 signed programs far more than unsigned ones. Open-source projects can sign for free, see
@@ -1321,7 +1321,7 @@ ones made with Python, AutoHotkey, or packers like UPX):
    choosing **Software developer** and **Incorrectly detected as malware**. Microsoft usually
    answers within a few days and updates its definitions for everyone. Only you can do this:
    Microsoft has no way for a store to submit for you.
-2. Build again (or re-run Slop Check) once they've answered. You can also ask Slop's reviewer to
+2. Build again (or re-run Slop Check) once they've answered. You can also ask SLAPorSLOP's reviewer to
    clear it as a false positive in the meantime.
 3. Don't pack your program with UPX or similar tools; that's the most common reason for false
    detections.
@@ -1355,7 +1355,7 @@ repository on GitHub's runners, so nobody can sign anything else in your name.
 
      Add a `<pe-file>` for each of your own `.exe` and `.dll` files. Don't sign other people's
      files (SignPath Foundation's rules); those keep their own signatures.
-3. **In your Slop Build file,** uncomment the SignPath lines (the file Slop gives you has them):
+3. **In your Slop Build file,** uncomment the SignPath lines (the file SLAPorSLOP gives you has them):
 
    ```yaml
    jobs:
@@ -1392,14 +1392,14 @@ Sign each file with an SSH key registered on your account instead:
    ssh-keygen -Y sign -f ~/.ssh/id_ed25519 -n slop-release my-game-1.0.0-windows.zip
    ```
 
-Slop checks the signature when it fetches the release, and the Slop app checks it again before
+SLAPorSLOP checks the signature when it fetches the release, and the SLAPorSLOP app checks it again before
 installing. Your Releases page shows **SIGNED BY YOUR KEY**.
 
 ### Slop Check
 
 For apps not built with Slop Build. When you publish a GitHub release, Slop Check downloads its
 Windows files on GitHub's Windows runner, scans them with Microsoft Defender, notes whether they're
-signed, and tells Slop. Add this file to your repository:
+signed, and tells SLAPorSLOP. Add this file to your repository:
 
 ```yaml
 # .github/workflows/slop-check.yml
@@ -1420,10 +1420,10 @@ jobs:
     with:
       tag: ${{ inputs.tag }}
       app: my-game                     # your store address
-      slop-url: https://slop.example   # the Slop site
+      slop-url: https://slop.example   # the SLAPorSLOP site
 ```
 
-Slop only accepts the check from your app's own repository. If you published before adding it,
+SLAPorSLOP only accepts the check from your app's own repository. If you published before adding it,
 run it by hand from the repository's **Actions** tab (**Run workflow**, with the release's tag).
 Repositories that aren't on GitHub can't run it yet: a reviewer checks those Windows builds by
 hand, so expect a longer wait.
@@ -1433,7 +1433,7 @@ hand, so expect a longer wait.
 Optional, recommended for games. With Pulse, your store page shows **N playing now** and the
 **peak this month**, and players' playtime makes their ratings count more.
 
-**How it works.** When a signed-in player starts your game from the Slop desktop app, the app sets
+**How it works.** When a signed-in player starts your game from the SLAPorSLOP desktop app, the app sets
 three environment variables for your game:
 
 | Variable | Meaning |
@@ -1451,7 +1451,7 @@ Your game sends the token, and nothing else, as JSON `{"token": "<SLOP_PULSE_TOK
 | `POST {SLOP_PULSE_URL}/end` | When the game quits (optional) |
 
 Every call answers `204 No Content`. `422` means the token is unknown, expired or ended: stop
-sending. If the variables aren't set (the game wasn't started from Slop, or the player turned off
+sending. If the variables aren't set (the game wasn't started from SLAPorSLOP, or the player turned off
 "Share my playtime"), do nothing. **Never send anything else**: no device IDs, no gameplay data.
 The token must be used within 15 minutes of launch, and a session ends after 10 minutes without a
 heartbeat. Each account counts once, however many copies it runs.
@@ -1628,7 +1628,7 @@ func _post(path: String) -> void:
 ```
 
 **Unreal Engine 5 (C++)**: add `"HTTP"` to your module's `Build.cs`, and call
-`FSlopPulse::Start()` once, from your GameInstance's `Init()`. (Slop's tests don't have Unreal,
+`FSlopPulse::Start()` once, from your GameInstance's `Init()`. (SLAPorSLOP's tests don't have Unreal,
 so this one isn't compiled by them; the C++ above is.)
 
 ```cpp
@@ -1669,7 +1669,7 @@ private:
 };
 ```
 
-**Testing it.** Launch your game from the Slop desktop app while signed in, then watch your store
+**Testing it.** Launch your game from the SLAPorSLOP desktop app while signed in, then watch your store
 page's "playing now", or check by hand:
 
 ```sh
@@ -1678,12 +1678,12 @@ curl -i -X POST "$SLOP_PULSE_URL/start" -H 'Content-Type: application/json' -d "
 
 ## Checklist for agents
 
-To prepare someone's project for Slop, in order. Steps marked **(person)** always need the
-project owner; steps marked **(token)** are yours if the owner gave you a Slop token, and theirs
+To prepare someone's project for SLAPorSLOP, in order. Steps marked **(person)** always need the
+project owner; steps marked **(token)** are yours if the owner gave you a SLAPorSLOP token, and theirs
 if not.
 
-0. **Ask for a token first** if you don't have Slop's tools (`maker_guide`, `create_store_page`…).
-   The owner signs in to Slop, opens **Account → AI agents → Make token** (`/account/agents`),
+0. **Ask for a token first** if you don't have SLAPorSLOP's tools (`maker_guide`, `create_store_page`…).
+   The owner signs in to SLAPorSLOP, opens **Account → AI agents → Make token** (`/account/agents`),
    chooses **Publish** and **All my apps** (a token for some apps can't create new ones),
    accepts the Publisher Agreement the page shows them, and follows the setup steps it shows, in
    their own terminal window: the token goes into the `SLOP_TOKEN` environment variable, and
@@ -1703,22 +1703,22 @@ if not.
 4. If the app keeps anything on the player's computer (saves, settings, logs): keep it in
    `SLOP_SAVE_DIR` when that's set, as in [Saves and sandbox mode](#saves-and-sandbox-mode), as
    plain data, and nowhere else. Read the variable; never hard-code the folder's path. Then the
-   owner can tick "Works in sandbox mode". Slop's source check looks for `SLOP_SAVE_DIR` (or
+   owner can tick "Works in sandbox mode". SLAPorSLOP's source check looks for `SLOP_SAVE_DIR` (or
    Godot's `user://`) in every release.
 5. Add Slop Pulse to games (optional but recommended): pick the snippet above for the project's
    language and call it once at startup. Send nothing but the token.
 6. Either publish a GitHub release with the files the store page's platforms need (Option A; archives need the
-   program path, which the owner enters on Slop), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
-   owner will use, `slop-url` set to the Slop site, and `project-type` set to `rust`, `go` or
+   program path, which the owner enters on SLAPorSLOP), or add `.github/workflows/slop.yml` (Option B) with `app` set to the store address the
+   owner will use, `slop-url` set to the SLAPorSLOP site, and `project-type` set to `rust`, `go` or
    `custom` (with `build-command`, `output-dir` and `exec`). For private repositories without
    GitHub Enterprise, add `sign: false`. Off GitHub, or for full control, set up Option C. For
    Option A, name files so the version is the only part that changes between releases
-   (e.g. `game-1.0.0-windows.zip`), so Slop can pick up later releases by itself.
+   (e.g. `game-1.0.0-windows.zip`), so SLAPorSLOP can pick up later releases by itself.
 7. **(token)** Create the store page (`create_store_page`, or **Publish → New app** on the
    website) with the same store address, the repository URL, licence, type, stage, age rating,
    tags, and **Online** if the project connects to anything (see step 3). Write the description
    from the repository. If a tool answers `terms_required` (the Publisher Agreement changed
-   since the owner accepted it), tell them it's waiting for them on Slop under **Account → AI
+   since the owner accepted it), tell them it's waiting for them on SLAPorSLOP under **Account → AI
    agents** (the website also shows it when they next publish), wait until they've accepted it,
    then carry on.
 8. Option A: **(token)** submit the GitHub release (`submit_github_release`, or on the website
@@ -1726,7 +1726,7 @@ if not.
    Option B: push to the main branch (or a `v*` tag) and check the run in the Actions tab.
 9. **(token)** Follow the first release (`list_releases`, `get_fixes`; on the website **Publish**
    or **Releases & progress**) until it's approved and the app is in the store, and fix what
-   Slop's checks find. A person reviews the first release; later ones are picked up and approved
+   SLAPorSLOP's checks find. A person reviews the first release; later ones are picked up and approved
    automatically if they pass every check.
 10. Optional but recommended, ideally before step 8: add `.slop/media.json` with a square icon
    (512×512 PNG, `"icon": "icon.png"`), a 920×430 thumbnail and some screenshots (see
@@ -1735,18 +1735,18 @@ if not.
    screenshots from the running app if the owner wants, and can make the icon from the app's own
    art: its logo, a character, or a square crop of a screenshot. Never invent an icon that shows
    something the app doesn't have, or that suggests another game or brand; if there's nothing
-   suitable, leave the icon out and tell the owner (Slop crops the thumbnail until there is one).
+   suitable, leave the icon out and tell the owner (SLAPorSLOP crops the thumbnail until there is one).
    `get_fixes` and `check_repository` list a missing icon under `recommendations`; it never
    blocks a release. Leave the gallery order to the owner; they set it on the website.
 
 Facts an agent may need:
 
-- Pictures live in the repository under `.slop/`, listed in `.slop/media.json`; Slop reads them
+- Pictures live in the repository under `.slop/`, listed in `.slop/media.json`; SLAPorSLOP reads them
   at one commit (`check_pictures`, and at each release) and a person reviews each new set. The
   icon: `"icon": "icon.png"`, square PNG/JPEG/WebP, 256×256 to 1024×1024 (512×512 is best), up to
   4 MB. The thumbnail: 920×430 is best (at least 460×215). Screenshots: at least 320×180. Up to 20
   gallery items, 8 MB each.
-- Store addresses: 3–60 lowercase letters, numbers and single dashes. Unique: if one is taken, Slop's answer
+- Store addresses: 3–60 lowercase letters, numbers and single dashes. Unique: if one is taken, SLAPorSLOP's answer
   names a free one (`that address is taken; my-game-2 is free`). The name itself needn't be unique.
 - Versions: up to 40 characters of letters, numbers, `.`, `_`, `+` and `-`, starting with a letter
   or number (e.g. `1.2.0`, `build.17`).
@@ -1763,12 +1763,12 @@ Facts an agent may need:
 
 ## Questions
 
-**Can my app be closed source?** No. Every app on Slop links its source.
+**Can my app be closed source?** No. Every app on SLAPorSLOP links its source.
 
-**Can I charge for my app or sell things in it?** No. Apps on Slop are free and sell nothing.
+**Can I charge for my app or sell things in it?** No. Apps on SLAPorSLOP are free and sell nothing.
 Players can donate to you if you turn donations on; donations unlock nothing.
 
-**Does Slop host my builds?** No. They stay on your release page; Slop records each file's hash
+**Does SLAPorSLOP host my builds?** No. They stay on your release page; SLAPorSLOP records each file's hash
 and players' apps download from you and check it.
 
 **What if I don't use GitHub?** Use Option B with your host's releases. Slop Build and maker

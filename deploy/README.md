@@ -1,6 +1,6 @@
 # The test server and production
 
-Slop runs in two places:
+SLAPorSLOP runs in two places:
 
 - **The test server**, **https://slop.188-68-41-241.sslip.io** (this machine), deploys every
   push to the `dev` branch by itself, within minutes. No GitHub involved.
@@ -16,9 +16,9 @@ push to dev ──► the test server: build → deploy → build "Slop Dev" for
                  and the Windows build on GitHub's runners, never production  ~30 min
 
 dev → main ──► (promote.sh: only once dev's run passed) GitHub's pipeline on main:
-               the checks pass at once (same commit), the Windows "Slop" app built
+               the checks pass at once (same commit), the Windows "SLAPorSLOP" app built
                → ⏸ Approve "production" (a GitHub environment with a required reviewer)
-               → production deploys → its Windows app is published → Slop apps update
+               → production deploys → its Windows app is published → SLAPorSLOP apps update
 ```
 
 1. **Work lands on `dev`.** Push signed commits there ("Signed commits", below). Within two
@@ -121,9 +121,10 @@ by default, `linux windows` here.
 
 There are two apps, and they install side by side:
 
-| | **Slop** | **Slop Dev** |
+| | **SLAPorSLOP** | **Slop Dev** |
 |---|---|---|
 | Talks to and updates from | slopai.games | this test server |
+| Product name (installers, packages), window title | `Slop`, SLAPorSLOP | `Slop Dev`, SLAPorSLOP Dev |
 | Identifier, program | `dev.ironpoint.slop`, `slop-desktop` | `dev.ironpoint.slopdev`, `slop-dev` |
 | Windows installer | built on GitHub's Windows runner by the pipeline, uploaded once the owner approved | cross-compiled here after each deploy that changed the app |
 | Linux `.deb`, `.rpm` | built on the production server after each deploy that changed the app | built here after each deploy that changed the app |
@@ -137,9 +138,17 @@ chat folders, its own sign-in and chat keys in the system keychain (named after 
 its own single-instance lock and its own entry in Programs and Features or the package manager.
 Sign-in opens the browser and polls the site, so there's no link scheme to share.
 
+The product names stay `Slop` and `Slop Dev` after the rename to SLAPorSLOP (2026-10-27), on
+purpose: Tauri's Windows installer names the install folder (`%LOCALAPPDATA%\Slop`), the
+Programs and Features entry, the registry key that remembers where it's installed and the Start
+menu shortcut after the product name, and the Linux packages are named after it. A new product
+name would make the next update install a second copy beside the old one instead of updating it.
+The windows, the tray and the app's own text say SLAPorSLOP; the Start menu entry, the
+installer's title, Programs and Features and the Linux menu entry still say Slop.
+
 Each server signs its builds for the app's updater with `SLOP_UPDATER_KEY` (only on the servers)
 when they're published. The app checks for updates shortly after it starts and every 3 hours, and
-shows a notice ("Slop 0.1.N is available: Update and restart / Later"); updates are never
+shows a notice ("SLAPorSLOP 0.1.N is available: Update and restart / Later"); updates are never
 installed without the player choosing to. The website's store page links the newest installers.
 
 **Uploads.** Production takes Windows builds only from `pipeline.yml` on main, from a job in the
@@ -237,8 +246,8 @@ has the browser demos' `play.slopai.games` commented out until it has a DNS reco
 
 ## GitHub App
 
-Slop's GitHub App lets GitHub tell Slop when a maker publishes a release (a webhook), and gives
-requests about each repository that has it installed their own API allowance. Without it Slop
+SLAPorSLOP's GitHub App lets GitHub tell SLAPorSLOP when a maker publishes a release (a webhook), and gives
+requests about each repository that has it installed their own API allowance. Without it SLAPorSLOP
 polls on the shared `GITHUB_TOKEN`, which runs out at around 800 watched apps.
 
 1. On GitHub: **Settings → Developer settings → GitHub Apps → New GitHub App**.
@@ -263,7 +272,7 @@ polls on the shared `GITHUB_TOKEN`, which runs out at around 800 watched apps.
    ```
 
    then `systemctl --user restart slop-api`. GitHub's **Advanced** tab on the App shows each
-   webhook delivery and Slop's answer (204 means handled).
+   webhook delivery and SLAPorSLOP's answer (204 means handled).
 
 Makers see an **Install on GitHub** link in their app's **Updates** box once it's configured.
 
@@ -276,12 +285,12 @@ simulates payments instead.
 Do this once in a Stripe **sandbox** (test keys, no real money) and again on the **live**
 account at launch. Stripe calls webhooks "event destinations"; the steps are the same for both.
 
-1. In Stripe: **Connect → Get started**. Slop is a platform whose sellers (makers, creatives) are
+1. In Stripe: **Connect → Get started**. SLAPorSLOP is a platform whose sellers (makers, creatives) are
    paid directly and sign up through Stripe's own onboarding; give them the **full Stripe
-   dashboard**, and **Stripe** covers losses (refunds, disputes). Slop creates the accounts the
+   dashboard**, and **Stripe** covers losses (refunds, disputes). SLAPorSLOP creates the accounts the
    v1 way (`v1/accounts` with `controller`), so the Accounts v2 notes don't apply.
 2. **Developers → Webhooks → Add destination**, scope **Connected accounts**, payload style
-   **Snapshot**, the default API version (Slop reads both the older and newer shapes), type
+   **Snapshot**, the default API version (SLAPorSLOP reads both the older and newer shapes), type
    **Webhook endpoint**, URL `https://<site>/v1/stripe/webhook`. Events:
    `checkout.session.completed`, `checkout.session.async_payment_succeeded`,
    `checkout.session.expired`, `charge.refunded`, `charge.dispute.created`, `account.updated`,
@@ -299,12 +308,12 @@ account at launch. Stripe calls webhooks "event destinations"; the steps are the
    ```
    Check: an app's `GET /v1/apps/{slug}/donate` no longer says donations aren't switched on.
 5. Before live keys: DAC7 and HMRC platform-reporting registration (LEGAL-GUIDANCE §16 checklist).
-6. Once Slop has its EU OSS / UK VAT registrations, put the numbers in `SLOP_VAT_ID` so fee
+6. Once SLAPorSLOP has its EU OSS / UK VAT registrations, put the numbers in `SLOP_VAT_ID` so fee
    statements show them (e.g. `SLOP_VAT_ID=EU372000000 · GB000000000`).
 
 ## Contact address
 
-The website's Contact page (`/contact`, the Terms' "contact page on Slop") publishes one address
+The website's Contact page (`/contact`, the Terms' "contact page on SLAPorSLOP") publishes one address
 for legal notices, authorities, copyright claims, security problems and everything else:
 ```
 SLOP_CONTACT_EMAIL=slop@example.com
@@ -313,11 +322,11 @@ SLOP_CONTACT_EMAIL=slop@example.com
 
 ## Email (notifications)
 
-Until SMTP is set, notifications only show under the 🔔 in Slop. To email them too (each user
+Until SMTP is set, notifications only show under the 🔔 in SLAPorSLOP. To email them too (each user
 chooses which kinds on their account page), add to `~/.config/slop/slop.env` and restart:
 ```
 SLOP_SMTP_URL=smtps://user:password@smtp.example.com:465
-SLOP_EMAIL_FROM=Slop <notifications@your-domain>
+SLOP_EMAIL_FROM=SLAPorSLOP <notifications@your-domain>
 ```
 Use a provider with a data processing agreement (PRIV-5), and set SPF/DKIM for the From domain.
 
@@ -523,7 +532,7 @@ a build rarely needs this.
 
 ## Log retention
 
-Slop's database keeps no IP addresses, Caddy has no access log, and the API doesn't log them.
+SLAPorSLOP's database keeps no IP addresses, Caddy has no access log, and the API doesn't log them.
 The system journal holds the services' own logs; keep it to 90 days at most (LEGAL-GUIDANCE §15)
 in `/etc/systemd/journald.conf`:
 

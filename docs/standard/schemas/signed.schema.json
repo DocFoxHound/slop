@@ -1,8 +1,8 @@
 {
   "$schema": "https://json-schema.org/draft/2020-12/schema",
   "$id": "https://slop.example/standard/v1/signed.schema.json",
-  "title": "Signed Slop document",
-  "description": "The envelope every Slop document travels in. Check the signature over payload's exact bytes before parsing it (README.md).",
+  "title": "Signed SLAPorSLOP document",
+  "description": "The envelope every SLAPorSLOP document travels in. Check the signature over payload's exact bytes before parsing it (README.md).",
   "type": "object",
   "additionalProperties": false,
   "required": [

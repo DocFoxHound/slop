@@ -1,11 +1,11 @@
 # Slop Check: Microsoft Defender's check of Windows builds made outside Slop Build
 # (docs/DESIGN.md §10, crates/slop-api/src/slop_build.rs).
 #
-# Slop runs ClamAV, YARA and capa on every build itself, but Defender only runs on Windows. Makers
-# who build with their own CI call this from a small workflow in their repository (Slop's
+# SLAPorSLOP runs ClamAV, YARA and capa on every build itself, but Defender only runs on Windows. Makers
+# who build with their own CI call this from a small workflow in their repository (SLAPorSLOP's
 # publishing guide has it), usually when a release is published. It runs on the maker's own
 # GitHub Actions minutes: downloads the release's Windows files, scans them with today's
-# definitions, and tells Slop with the run's GitHub OIDC token (no secret is shared). Slop attaches
+# definitions, and tells SLAPorSLOP with the run's GitHub OIDC token (no secret is shared). SLAPorSLOP attaches
 # the result to the release files with the same SHA-256.
 
 name: Slop Check
@@ -14,11 +14,11 @@ on:
   workflow_call:
     inputs:
       app:
-        description: The app's address on Slop (its slug).
+        description: The app's address on SLAPorSLOP (its slug).
         required: true
         type: string
       slop-url:
-        description: The Slop site, e.g. https://slop.example
+        description: The SLAPorSLOP site, e.g. https://slop.example
         required: true
         type: string
       tag:
@@ -92,12 +92,12 @@ jobs:
               detections = @($detections)
               signed_by = $signer
             }
-            foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($f.Name)::$($d.threat) in $($d.file). Slop holds the release for a person to look at. If it's a false positive, submit it at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer)." }
+            foreach ($d in $detections) { echo "::warning title=Microsoft Defender flags $($f.Name)::$($d.threat) in $($d.file). SLAPorSLOP holds the release for a person to look at. If it's a false positive, submit it at https://www.microsoft.com/en-us/wdsi/filesubmission (as a software developer)." }
           }
           if ($reports.Count -eq 0) { throw "the release has no Windows files (.zip, .exe, .msi)" }
           @{ app = $env:SLOP_APP; files = @($reports) } | ConvertTo-Json -Depth 5 | Set-Content body.json
 
-      - name: Tell Slop
+      - name: Tell SLAPorSLOP
         shell: bash
         env:
           SLOP_URL: ${{ inputs.slop-url }}
@@ -109,4 +109,4 @@ jobs:
           status=$(curl -sS -o response.json -w '%{http_code}' -X POST "$base/v1/slop-build/checks" \
             -H "Authorization: Bearer $token" -H "Content-Type: application/json" --data @body.json)
           cat response.json; echo
-          if [ "$status" -ge 300 ]; then echo "::error::Slop refused the check (HTTP $status)"; exit 1; fi
+          if [ "$status" -ge 300 ]; then echo "::error::SLAPorSLOP refused the check (HTTP $status)"; exit 1; fi

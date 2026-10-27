@@ -1,17 +1,17 @@
-# Your Slop portfolio
+# Your SLAPorSLOP portfolio
 
-Slop's **People** pages are where artists, animators, composers, sound designers, writers, voice
+SLAPorSLOP's **People** pages are where artists, animators, composers, sound designers, writers, voice
 actors and testers offer their services to the people making games. Your People page is your
 **shop window**: it shows makers who might hire you who you are, your style, your best work and
 your rates. The **portfolio** is the "best work" part, and your page can't go public without one.
 
-This page says how to build a portfolio, everything Slop checks, and how to send it for review.
+This page says how to build a portfolio, everything SLAPorSLOP checks, and how to send it for review.
 It's written so that a person or an AI assistant can follow it from start to finish.
 
 > **Using an AI assistant?** Give it this line: *"Read https://slopai.games/portfolio.md and help
-> me build my Slop portfolio."* (Use the address of the Slop site you're on; this page is
-> `/portfolio.md` on every Slop site.) Agents: **this page is everything you need.** Nothing on
-> the person's Slop screens is meant for you: no token, no code, no other line to paste, so don't
+> me build my SLAPorSLOP portfolio."* (Use the address of the SLAPorSLOP site you're on; this page is
+> `/portfolio.md` on every SLAPorSLOP site.) Agents: **this page is everything you need.** Nothing on
+> the person's SLAPorSLOP screens is meant for you: no token, no code, no other line to paste, so don't
 > ask for one. The [checklist](#checklist-for-agents) near the end lists every step in order, and
 > [what to ask the person](#what-to-ask-the-person).
 
@@ -25,7 +25,7 @@ It's written so that a person or an AI assistant can follow it from start to fin
 - Your pictures and tracks sit in the same `.slop/` folder. Videos stay on YouTube; you only
   link them.
 
-Slop doesn't copy or host your files. It reads `portfolio.json` once, checks every file, and
+SLAPorSLOP doesn't copy or host your files. It reads `portfolio.json` once, checks every file, and
 then shows your pictures and plays your tracks straight from your repository, **at the commit it
 read**. Pushing changes later doesn't change your page until you check again and the new
 portfolio is approved.
@@ -35,19 +35,19 @@ Your rates aren't in the portfolio: you set them as **services** on your page's 
 
 ## Before you start
 
-1. **A People page.** On Slop, go to **People → Offer your services** (`/people/me`), describe
+1. **A People page.** On SLAPorSLOP, go to **People → Offer your services** (`/people/me`), describe
    yourself, add your services and choose **Create my page**. People is for adults (18+). The
    **Portfolio** section appears in the same editor once the page exists.
-2. **A GitHub account linked to your Slop account.** The portfolio repository must belong to it.
+2. **A GitHub account linked to your SLAPorSLOP account.** The portfolio repository must belong to it.
    The editor's Portfolio section shows which GitHub account is linked, or a **Link GitHub**
    button if none is. (A repository owned by a GitHub organization works if you're one of the
-   organization's owners and Slop's GitHub App is installed on it.)
+   organization's owners and SLAPorSLOP's GitHub App is installed on it.)
 
 ## Step by step
 
 1. **Make a new public repository** on GitHub, e.g. `portfolio` (github.com/new). Public, because
    visitors' browsers load your pictures and tracks from it.
-2. **Start from a template** if one fits. Slop has four ready-made portfolio repositories that
+2. **Start from a template** if one fits. SLAPorSLOP has four ready-made portfolio repositories that
    already pass every check, with placeholder pictures to replace:
    [examples/portfolio-templates](https://github.com/DocFoxHound/slop/tree/main/examples/portfolio-templates)
    - **gallery**: illustration, concept art, pixel art (pictures)
@@ -61,14 +61,14 @@ Your rates aren't in the portfolio: you set them as **services** on your page's 
    to your videos. Fewer, better works beat many average ones; put your best first.
 4. **Doll it up.** A banner and an avatar make the page yours. Give every work a title, a one-line
    caption that says what it was for and what you did, and the skill it shows.
-5. **Commit and push** to the repository's default branch (`main`, usually). Slop reads the newest
+5. **Commit and push** to the repository's default branch (`main`, usually). SLAPorSLOP reads the newest
    commit there.
-6. **On Slop**, open your page's editor (`/people/me`), go to **Portfolio**, paste the
+6. **On SLAPorSLOP**, open your page's editor (`/people/me`), go to **Portfolio**, paste the
    repository's address (`https://github.com/you/portfolio`) and choose
    **Check my portfolio now**.
-   - If something needs fixing, Slop lists every problem, one per line, each naming the field or
+   - If something needs fixing, SLAPorSLOP lists every problem, one per line, each naming the field or
      the work (`work 3 "image": …`), what's wrong and the limit. Fix them, push, and check again.
-   - If it all passes, the portfolio **waits for review**. A person at Slop looks at every work,
+   - If it all passes, the portfolio **waits for review**. A person at SLAPorSLOP looks at every work,
      and you get a notification when it's approved or turned down (with the reason, so you can
      fix it and check again).
 7. **Approved:** your page goes public on People. Then set up payments under **Get paid** on the
@@ -82,12 +82,12 @@ reviewed.
 
 ## `.slop/portfolio.json`
 
-One JSON object, at most **64 KB**. Slop refuses any key it doesn't know, at the top level and in
+One JSON object, at most **64 KB**. SLAPorSLOP refuses any key it doesn't know, at the top level and in
 each work, so check the spelling.
 
 ```
 your-portfolio/
-  README.md            (anything you like; Slop doesn't read it)
+  README.md            (anything you like; SLAPorSLOP doesn't read it)
   .slop/
     portfolio.json
     avatar.png
@@ -124,7 +124,7 @@ Every work has **exactly one** of `image`, `youtube` or `audio`.
 | `skill` | Optional, one of the skills below |
 
 **Skills:** `2d-art`, `pixel-art`, `3d`, `animation`, `ui-ux`, `music`, `sound`, `writing`,
-`voice`, `localization`, `playtesting`. (A Slop site lists them at `/v1/people/skills`.)
+`voice`, `localization`, `playtesting`. (A SLAPorSLOP site lists them at `/v1/people/skills`.)
 
 ### Paths
 
@@ -170,11 +170,11 @@ must be public or unlisted for visitors to see it.
   in the caption when it was a team effort. Work you made for a client can usually be shown, but
   check your agreement.
 - **Your AI use** is set on your page (No AI, AI-assisted or Mostly AI-generated), not in the
-  portfolio. Every way of working is welcome on Slop; just say honestly how you work, and let the
+  portfolio. Every way of working is welcome on SLAPorSLOP; just say honestly how you work, and let the
   works match.
-- Slop's content rules apply: nothing sexually explicit and no advertising, and titles and
+- SLAPorSLOP's content rules apply: nothing sexually explicit and no advertising, and titles and
   captions count as content too. A person reviews every new portfolio.
-- Slop reads the repository's **default branch**, at its newest commit, when you press **Check
+- SLAPorSLOP reads the repository's **default branch**, at its newest commit, when you press **Check
   my portfolio now**.
 - Keep the repository public, and don't delete or rename files that are live: your page loads
   them from GitHub.
@@ -226,7 +226,7 @@ With the files at `.slop/avatar.png`, `.slop/banner.png`, `.slop/works/harbour.p
 
 Every problem names where it is and what to do. Some examples:
 
-| Slop says | What to do |
+| SLAPorSLOP says | What to do |
 |---|---|
 | `"avatar": me.png is 64×64; it needs to be at least 128×128` | Use a bigger picture |
 | `work 2 "image": .slop/works/knight.png isn't in the repository at that commit` | Check the path and its case, that the file is inside `.slop/`, and that it's pushed to the default branch |
@@ -244,7 +244,7 @@ Every problem names where it is and what to do. Some examples:
 
 Only what the repository needs:
 
-- **The GitHub account** that will own the repository (it must be the one linked to their Slop
+- **The GitHub account** that will own the repository (it must be the one linked to their SLAPorSLOP
   account), and whether to make a new repository or use one they have.
 - **What they do** and the work they want to be hired for, to pick a template and skills.
 - **Their works**: the pictures and tracks (files they give you or that are already in a
@@ -252,21 +252,21 @@ Only what the repository needs:
   they have them. An avatar and a banner if they want them.
 - **If you build a page design** (below): the look they want, in their own words.
 
-Not for you to collect: their name on Slop, rates and services, AI-use label, location and
+Not for you to collect: their name on SLAPorSLOP, rates and services, AI-use label, location and
 whether they're taking work are set by the person in the editor (`/people/me`), not in the
 repository. Offer to suggest wording for them if they'd like, but don't wait for them.
 
 ## Checklist for agents
 
 To help someone build their portfolio, in order. Steps marked **(person)** need the person
-themself: Slop's agent tokens can't check or send a portfolio, and there's no token or code to
+themself: SLAPorSLOP's agent tokens can't check or send a portfolio, and there's no token or code to
 ask them for.
 
 1. Ask what they do, what kind of work they want to be hired for, and which works they're proudest
    of. Suggest a template: gallery (pictures), showreel (videos), tracklist (audio) or studio (a
    team or several skills).
 2. **(person)** Make sure they have a People page (`/people/me`) and that the GitHub account that
-   will own the repository is linked to their Slop account (the editor's Portfolio section shows
+   will own the repository is linked to their SLAPorSLOP account (the editor's Portfolio section shows
    it, or a **Link GitHub** button).
 3. Create or use a **public** GitHub repository they own, e.g. `portfolio`, and a `.slop/` folder
    at its top level. Copy the chosen template's `.slop/` folder if they picked one.
@@ -285,7 +285,7 @@ ask them for.
    hired for. Ask them before writing anything about clients or projects.
 8. Commit and push to the default branch.
 9. **(person)** In the editor's **Portfolio** section, paste the repository address and choose
-   **Check my portfolio now**. If Slop lists problems, they can paste them to you: each line names
+   **Check my portfolio now**. If SLAPorSLOP lists problems, they can paste them to you: each line names
    the work and field. Fix, push, and check again.
 10. **(person)** Wait for review; set up **Get paid** meanwhile, so makers can hire them once the
     page is live.
@@ -293,7 +293,7 @@ ask them for.
 ## Your page's design
 
 Your People page can have a design of your own: your layout, colours, fonts and words, around
-your works. It's optional; without it your page uses Slop's standard layout.
+your works. It's optional; without it your page uses SLAPorSLOP's standard layout.
 
 **Where it goes.** Two files in the same repository as `.slop/portfolio.json`:
 
@@ -307,7 +307,7 @@ Both must be UTF-8 text. `style.css` without `index.html` is an error.
 **How it's checked.** "Check my portfolio now" reads both files at the same commit as your
 portfolio, and they're part of it: the design is reviewed and approved together with your works,
 and what was reviewed is what shows. Changing the design means a new portfolio to review; until
-it's approved your page keeps showing the approved one. Slop rebuilds both files from what's
+it's approved your page keeps showing the approved one. SLAPorSLOP rebuilds both files from what's
 allowed below and **removes everything else**, listing each removal as a warning (file, line,
 what and why) in your editor, above a preview of the result. CSS that hides something
 (`display: none`, `opacity: 0`, tiny or transparent text, moving it far out of the box) is kept
@@ -315,8 +315,8 @@ but noted too, so reviewers check what's hidden. Things that can't work (a pictu
 that isn't in the repository, a `<slop-work>` that isn't one of your works, a file over its
 limit) are errors: nothing is sent for review until they're fixed.
 
-**Where it shows.** Your page is, from the top: Slop's header (your name, avatar, AI-use badge,
-rating, Hire and Report), then your design in its own box, then Slop's Services (always: your
+**Where it shows.** Your page is, from the top: SLAPorSLOP's header (your name, avatar, AI-use badge,
+rating, Hire and Report), then your design in its own box, then SLAPorSLOP's Services (always: your
 services and their Hire buttons are never inside a design), Reviews and "Worked on". Your design
 can't change, cover or hide anything outside its box, and the page's CSS doesn't touch your
 design. It must work at phone width (about 360 pixels): use `max-width`, `flex-wrap`, grids with
@@ -330,7 +330,7 @@ Allowed tags: `section`, `div`, `header`, `footer`, `article`, `aside`, `h2`–`
 `ol`, `li`, `dl`, `dt`, `dd`, `blockquote`, `figure`, `figcaption`, `table`, `caption`, `thead`,
 `tbody`, `tfoot`, `tr`, `th`, `td`, `a`, `img`.
 
-- No `<h1>`: your name is the page's `<h1>`, in Slop's header. An `<h1>` becomes `<h2>`.
+- No `<h1>`: your name is the page's `<h1>`, in SLAPorSLOP's header. An `<h1>` becomes `<h2>`.
 - Other tags are taken out, keeping what's inside them (`<nav>`, `<main>`, `<form>`, `<font>`…).
   Scripts, styles, frames and objects, form fields and buttons (`<input>`, `<button>`,
   `<select>`, `<textarea>`…), `<svg>`, `<math>`, `<canvas>`, `<video>`, `<audio>`, `<picture>`,
@@ -341,7 +341,7 @@ Allowed tags: `section`, `div`, `header`, `footer`, `article`, `aside`, `h2`–`
   `start` and `reversed` on `ol`; `colspan` and `rowspan` (1–50) on `td`/`th`; `scope` on `th`.
   Nothing else: no `id`, `style`, `on…` handlers, `data-…`, `aria-…`, `role`, `tabindex`,
   `srcset`, `target` or `rel`. A picture's `width` and `height` come from the file itself.
-- Links are full `https://` or `mailto:` addresses. Slop opens them in a new tab with
+- Links are full `https://` or `mailto:` addresses. SLAPorSLOP opens them in a new tab with
   `rel="nofollow noopener noreferrer ugc"`. Other links are removed (the text stays).
 - Pictures (`<img src>`) come from your repository, at the same commit, with paths as a browser
   would read them from `.slop/page/`: `images/hero.png` is `.slop/page/images/hero.png`,
@@ -353,9 +353,9 @@ Allowed tags: `section`, `div`, `header`, `footer`, `article`, `aside`, `h2`–`
 - Invisible direction-changing and control characters are removed from text.
 - At most 2,000 elements, nested at most 32 deep.
 
-### Slop's parts
+### SLAPorSLOP's parts
 
-These tags are replaced by Slop's own components, which keep Slop's look, behaviour and
+These tags are replaced by SLAPorSLOP's own components, which keep SLAPorSLOP's look, behaviour and
 accessibility (your CSS can't restyle them). Write them with a closing tag, empty: HTML has no
 self-closing custom tags (anything inside one is moved after it, with a warning).
 
@@ -364,10 +364,10 @@ self-closing custom tags (anything inside one is moved after it, with a warning)
 | `<slop-works></slop-works>` | none | All your works as a grid, in the order you set in your editor; pictures open large |
 | `<slop-work ref="1"></slop-work>` | `ref`: the work's number in `portfolio.json`'s `works` list, counting from 1 | One work |
 | `<slop-video youtube="https://youtu.be/…" title="Showreel"></slop-video>` | `youtube`: a YouTube link or 11-character video ID; `title` (optional, up to 80 characters) | A YouTube video, played from youtube-nocookie.com when pressed |
-| `<slop-track src="tracks/theme.ogg" title="Main theme"></slop-track>` | `src`: an MP3, Ogg, WAV, FLAC or M4A file up to 15 MB, a path like an `<img>`'s; `title` (optional) | Slop's audio player |
+| `<slop-track src="tracks/theme.ogg" title="Main theme"></slop-track>` | `src`: an MP3, Ogg, WAV, FLAC or M4A file up to 15 MB, a path like an `<img>`'s; `title` (optional) | SLAPorSLOP's audio player |
 
-`<slop-works>` shows once. Slop's parts can't be inside a link. There's no part for your
-services: they always appear below your design, where Slop shows them (a `<slop-services>` tag
+`<slop-works>` shows once. SLAPorSLOP's parts can't be inside a link. There's no part for your
+services: they always appear below your design, where SLAPorSLOP shows them (a `<slop-services>` tag
 is removed, with a warning).
 To size or place one, wrap it: `<div class="feature"><slop-work ref="1"></slop-work></div>`.
 
@@ -387,7 +387,7 @@ one by one; anything not listed here is removed.
 - **Rules:** style rules, `@media` (with `screen`, `print`, `all`, `and`, `not`, `only`, `or` and
   features such as `(max-width: 600px)` or `(prefers-color-scheme: dark)`) and `@keyframes`. No
   `@import`, `@font-face` or any other at-rule. A query only about width (`(max-width: 600px)`,
-  `screen and (min-width: 900px)`) is about **your design's box**, not the whole screen (Slop
+  `screen and (min-width: 900px)`) is about **your design's box**, not the whole screen (SLAPorSLOP
   turns it into a container query): your design is never as wide as the screen, and this way the
   reviewers' phone-width preview shows what a phone shows.
 - **Properties:** text (`color`, `font-family`, `font-size`, `font-weight`, `font-style`,
@@ -420,11 +420,11 @@ one by one; anything not listed here is removed.
   pictures and no `content: url()`); browser-prefixed properties (`-webkit-…`); the `font`
   shorthand (use `font-family`, `font-size`, `font-weight`, `line-height`).
 - **Movement:** people whose system asks for reduced motion see no animations or transitions:
-  Slop turns them off, so don't hide anything behind one.
+  SLAPorSLOP turns them off, so don't hide anything behind one.
 
 ### Fonts
 
-`font-family` can name these, which Slop serves itself (no requests to other sites), and the
+`font-family` can name these, which SLAPorSLOP serves itself (no requests to other sites), and the
 generic `serif`, `sans-serif`, `monospace`, `cursive` and `system-ui`. Other names are removed.
 
 | Name | Style |
@@ -438,10 +438,10 @@ generic `serif`, `sans-serif`, `monospace`, `cursive` and `system-ui`. Other nam
 
 ### What reviewers look for
 
-Your design is turned down (with what to change) if it imitates Slop's own interface (fake Hire,
+Your design is turned down (with what to change) if it imitates SLAPorSLOP's own interface (fake Hire,
 Pay or Sign in buttons, ratings, reviews, badges or notices), links somewhere other than its text
 says, has sexually explicit or otherwise not-allowed content, is hard to read (small text, low
-contrast), flashes, hides Slop's parts you placed, or doesn't match your declared AI use. Taste
+contrast), flashes, hides SLAPorSLOP's parts you placed, or doesn't match your declared AI use. Taste
 is yours.
 
 ### Example

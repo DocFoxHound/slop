@@ -1,4 +1,4 @@
-# Slop's test deployment: copy to /etc/caddy/Caddyfile.d/ and reload Caddy
+# SLAPorSLOP's test deployment: copy to /etc/caddy/Caddyfile.d/ and reload Caddy
 # (`caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`).
 #
 # The server's own hostname is under happysrv.de, which shares Let's Encrypt's weekly certificate
@@ -16,7 +16,7 @@ sim.188-68-41-241.sslip.io {
 }
 
 # Browser demos of new games (demos.rs): a separate origin, so a game's code never runs where
-# Slop's sign-in cookies are. The API serves only demos here. Needs SLOP_PLAY_URL in slop.env.
+# SLAPorSLOP's sign-in cookies are. The API serves only demos here. Needs SLOP_PLAY_URL in slop.env.
 play.188-68-41-241.sslip.io {
 	encode zstd gzip
 	reverse_proxy 127.0.0.1:8090

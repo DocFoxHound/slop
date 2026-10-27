@@ -1,5 +1,5 @@
 #!/bin/sh
-# Scans one file with Slop's scanner container and prints the verdict as JSON (scan.rs runs this).
+# Scans one file with SLAPorSLOP's scanner container and prints the verdict as JSON (scan.rs runs this).
 # Usage: slop-scan <path> [file name]. No network, read-only root, no capabilities, limited
 # memory, processes, time and scratch space: the file is only read, never run. The file goes in on
 # stdin and the scanner runs as its own unprivileged user, which is an unmapped ID outside the

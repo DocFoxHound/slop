@@ -48,7 +48,7 @@ func saves() -> void:
 
 
 func mods() -> void:
-	# Two mods as the Slop app hands them over: <address>/files, listed in SLOP_MODS.
+	# Two mods as the SLAPorSLOP app hands them over: <address>/files, listed in SLOP_MODS.
 	var neon := scratch.path_join("mods/slop-pong-neon/files")
 	var rainbow := scratch.path_join("mods/slop-pong-rainbow-ball/files")
 	var bad := scratch.path_join("mods/broken/files")
@@ -74,10 +74,10 @@ func link() -> void:
 	DirAccess.make_dir_recursive_absolute(dir.path_join("answers"))
 	OS.set_environment("SLOP_LINK", "")
 	var none: Dictionary = await Slop.request_mods([{"slug": "x"}], "test")
-	check(none.get("status") == "no_link", "outside Slop there's no link")
+	check(none.get("status") == "no_link", "outside SLAPorSLOP there's no link")
 
 	OS.set_environment("SLOP_LINK", dir)
-	# Play the Slop app: answer the request once it shows up.
+	# Play the SLAPorSLOP app: answer the request once it shows up.
 	var slop_app := func():
 		for i in 40:
 			await get_tree().create_timer(0.1).timeout

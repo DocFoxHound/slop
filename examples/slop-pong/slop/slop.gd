@@ -1,9 +1,9 @@
-# Slop for Godot 4: saves, mods, mod requests (Slop Link) and player counts (Slop Pulse).
+# SLAPorSLOP for Godot 4: saves, mods, mod requests (Slop Link) and player counts (Slop Pulse).
 # Add this file as an autoload named "Slop" (Project → Project Settings → Globals). Copy it into
 # your own game as it is; nothing here is specific to Pong. See https://slop.example/publish/guide.
 #
-# Outside the Slop app none of the variables are set, and everything falls back: saves go to
-# user://, there are no mods from Slop, mod requests answer "no_link", and Pulse does nothing.
+# Outside the SLAPorSLOP app none of the variables are set, and everything falls back: saves go to
+# user://, there are no mods from SLAPorSLOP, mod requests answer "no_link", and Pulse does nothing.
 extends Node
 
 ## Mods loaded by load_mods(): one Dictionary per mod, as its mod.json says, plus "dir".
@@ -54,8 +54,8 @@ func _read_json(path: String) -> Dictionary:
 
 
 # ---------------------------------------------------------------------------------------------
-# Mods: only mods from Slop. The store page names "mods" next to the game as the mods folder
-# (each mod in its own folder); the Slop app keeps exactly the approved mods there. SLOP_MODS
+# Mods: only mods from SLAPorSLOP. The store page names "mods" next to the game as the mods folder
+# (each mod in its own folder); the SLAPorSLOP app keeps exactly the approved mods there. SLOP_MODS
 # lists the same folders, for games that don't name one.
 
 ## Every mod folder: the game's own mods folder, then SLOP_MODS. Each holds one mod.
@@ -66,7 +66,7 @@ func mod_dirs() -> PackedStringArray:
 		var own := OS.get_executable_path().get_base_dir().path_join("mods")
 		for sub in DirAccess.get_directories_at(own):
 			found.append(own.path_join(sub))
-	# The same mod is in both lists: <mods folder>/<address> and <Slop's copy>/<address>/files.
+	# The same mod is in both lists: <mods folder>/<address> and <SLAPorSLOP's copy>/<address>/files.
 	var seen := {}
 	for f in found:
 		seen[f.get_file()] = true
@@ -91,7 +91,7 @@ func load_mods() -> Array[Dictionary]:
 		info["dir"] = dir
 		var script_name = info.get("script")
 		if script_name is String and _plain_name(script_name):
-			# Mods may carry code: Slop reviewed it, and it only ever comes from Slop.
+			# Mods may carry code: SLAPorSLOP reviewed it, and it only ever comes from SLAPorSLOP.
 			var script = load(dir.path_join(script_name))
 			if script is GDScript:
 				info["instance"] = script.new()
@@ -104,13 +104,13 @@ func _plain_name(name: String) -> bool:
 
 
 # ---------------------------------------------------------------------------------------------
-# Slop Link: ask the Slop app for mods a server or lobby needs. The player confirms; Slop
+# Slop Link: ask the SLAPorSLOP app for mods a server or lobby needs. The player confirms; SLAPorSLOP
 # downloads and checks them and adds them to the game. Servers only name mods.
 
-## Asks for mods by Slop address and, optionally, version:
+## Asks for mods by SLAPorSLOP address and, optionally, version:
 ##   await Slop.request_mods([{"slug": "slop-pong-neon"}], "Test server")
 ## Returns the answer: "done" (with "mods" and "folders"), "declined", "failed" (with
-## "message"), "no_link" (not started from Slop) or "timeout".
+## "message"), "no_link" (not started from SLAPorSLOP) or "timeout".
 func request_mods(wanted: Array, for_whom: String, give_up_after := 600.0) -> Dictionary:
 	var link := OS.get_environment("SLOP_LINK")
 	if link.is_empty():

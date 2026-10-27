@@ -1,6 +1,6 @@
-# Postgres for Slop development and tests only (never production data). Production is slop-pg.
+# Postgres for SLAPorSLOP development and tests only (never production data). Production is slop-pg.
 [Unit]
-Description=Postgres for Slop development and tests
+Description=Postgres for SLAPorSLOP development and tests
 
 [Container]
 ContainerName=slop-pg-dev

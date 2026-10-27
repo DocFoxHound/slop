@@ -1,4 +1,4 @@
-# Builds Slop's .deb. Ubuntu 22.04 has the oldest glibc (2.35) of the systems it targets, so the
+# Builds SLAPorSLOP's .deb. Ubuntu 22.04 has the oldest glibc (2.35) of the systems it targets, so the
 # package runs on Ubuntu 22.04+ and Debian 12+.
 FROM docker.io/library/ubuntu:22.04@sha256:98510ac07bb4545e389be502a8918b385c018bfe4ceeb5ac7e0375c782268b04
 ENV DEBIAN_FRONTEND=noninteractive

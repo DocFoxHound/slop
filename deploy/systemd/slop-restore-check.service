@@ -1,5 +1,5 @@
 [Unit]
-Description=Check that Slop's newest backup restores
+Description=Check that SLAPorSLOP's newest backup restores
 After=slop-pg.service slop-backup.service
 
 [Service]

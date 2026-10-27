@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Writes a CycloneDX 1.5 software bill of materials for one Slop build (SECURITY §13).
+"""Writes a CycloneDX 1.5 software bill of materials for one SLAPorSLOP build (SECURITY §13).
 
 Usage: sbom.py <repo> <commit> > sbom.json
 
@@ -68,7 +68,7 @@ def rust(repo):
         if p.get("checksum"):
             c["hashes"] = [{"alg": "SHA-256", "content": p["checksum"]}]
         if "source" not in p:
-            # One of Slop's own crates.
+            # One of SLAPorSLOP's own crates.
             c["type"] = "application"
             del c["purl"]
         yield c

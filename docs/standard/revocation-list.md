@@ -2,7 +2,7 @@
 
 **Purpose prefix:** `slop/revocation-list/v1` · **Schema:** [`schemas/revocation-list.schema.json`](schemas/revocation-list.schema.json) · **Example:** [`vectors/revocation-list.json`](vectors/revocation-list.json)
 
-The kill switch: releases Slop withdrew after approving them, such as malware found by a re-scan.
+The kill switch: releases SLAPorSLOP withdrew after approving them, such as malware found by a re-scan.
 A conforming installer or launcher refuses to install or start a release on the list.
 
 `GET /v1/revocations` returns a freshly signed list in the
