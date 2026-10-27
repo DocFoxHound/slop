@@ -19,6 +19,7 @@ function token(name: string, madeDaysAgo: number, expiresInDays: number, id = na
     expires_at: at(expiresInDays),
     last_used_at: at(-1),
     expired: expiresInDays <= 0,
+    connected: null,
   };
 }
 

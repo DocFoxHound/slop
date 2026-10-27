@@ -10,6 +10,7 @@ import { RegisterBranch } from "./pages/Branch";
 import { Guide } from "./pages/Guide";
 import { Account } from "./pages/Account";
 import { CombineAccounts, DesktopApprove, SignIn, SignUp } from "./pages/Auth";
+import { ConnectAi } from "./pages/ConnectAi";
 import { LegalIndex, LegalPage } from "./pages/Legal";
 import { Library } from "./pages/Library";
 import { Notifications } from "./pages/Notifications";
@@ -62,6 +63,8 @@ const router = createBrowserRouter([
       { path: "/download", element: <Download /> },
       { path: "/admin", element: <Admin /> },
       { path: "/desktop-signin/:id", element: <DesktopApprove /> },
+      { path: "/connect-ai", element: <ConnectAi /> },
+      { path: "/connect-ai/:id", element: <ConnectAi /> },
       { path: "/signin", element: <SignIn /> },
       { path: "/signup", element: <SignUp /> },
       { path: "/account", element: <Account /> },

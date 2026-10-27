@@ -1,26 +1,186 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// After an AI agent token is made (AiAgents.tsx for makers, Admin → AI reviewers for staff): how
-// to set it up on your own computer, step by step, for people who've never used a terminal. The token goes into an environment variable
-// once, in the person's own terminal; every AI tool is then connected with a reference to that
-// variable (agentSetup.ts), so the token never goes into an AI chat or a command the AI sees.
+// Connecting an AI tool, step by step, for people who've never used a terminal (agentSetup.ts).
+// `EasyConnect` (Account → AI agents, first): give the tool SLAPorSLOP's address and approve it in
+// the browser; no token at all. `AgentSetup`: after a token is made (AiAgents.tsx for makers,
+// Admin → AI reviewers for staff), for tools that can't sign in that way. The token goes into an
+// environment variable once, in the person's own terminal; every AI tool is then connected with a
+// reference to that variable, so the token never goes into an AI chat or a command the AI sees.
 
 import { useId, useRef, useState, type KeyboardEvent, type ReactNode } from "react";
 
 import {
+  EASY_SERVER,
+  EASY_TOOLS,
   OSES,
   SETUPS,
   TOOLS,
   checkCommand,
+  cursorConfig,
+  easyCommand,
+  signInCommand,
   codexConfig,
   connectCommand,
   guessOs,
   openTerminal,
   profileFile,
   saveCommand,
+  type EasyTool,
   type SetupKind,
   type SetupOs,
   type SetupTool,
 } from "../agentSetup";
+import { ExternalLink } from "./ui";
+
+/**
+ * The easy way: add SLAPorSLOP's MCP address to the AI tool, and approve it in the browser when it
+ * asks. Nothing to copy but the address.
+ */
+export function EasyConnect({ mcpUrl }: { mcpUrl: string }) {
+  const [tool, setTool] = useState<EasyTool>("claude-code");
+  const id = useId();
+  return (
+    <div className="panel panel-pad agent-setup agent-connect" aria-labelledby={`${id}-title`} role="region">
+      <h4 className="agent-setup-title" id={`${id}-title`}>
+        Connect your AI tool: the easy way
+      </h4>
+      <p className="small">
+        Give your AI tool SLAPorSLOP's address. It opens SLAPorSLOP in your browser, you choose what it may do and approve it, and
+        you're done. There's no token to copy or keep safe.
+      </p>
+      <dl className="agent-setup-details small">
+        <dt>SLAPorSLOP's address for AI tools</dt>
+        <dd>
+          <CopyRow text={mcpUrl} what="SLAPorSLOP's address for AI tools" />
+        </dd>
+      </dl>
+      <Tabs label="Your AI tool" items={EASY_TOOLS} current={tool} onChange={setTool} idBase={`${id}-tool`}>
+        <EasySteps tool={tool} mcpUrl={mcpUrl} />
+      </Tabs>
+      <p className="small">
+        Once it's approved, ask it: <q>Read maker_guide, then publish my game on SLAPorSLOP.</q> It shows in the list below, where
+        you can remove it any time.
+      </p>
+    </div>
+  );
+}
+
+function EasySteps({ tool, mcpUrl }: { tool: EasyTool; mcpUrl: string }) {
+  const command = easyCommand(tool, mcpUrl);
+  const signIn = signInCommand(tool);
+  const approve = (
+    <p className="small">
+      Your browser opens SLAPorSLOP: sign in if you need to, choose what it may do, and choose <b>Approve</b>.
+    </p>
+  );
+  switch (tool) {
+    case "claude-code":
+      return (
+        <>
+          <p className="small">In a terminal (not in Claude's chat), run:</p>
+          <CopyRow text={command!} what="the command that adds SLAPorSLOP to Claude Code" />
+          <p className="small">
+            Then start Claude Code (type <code>claude</code>), type <code>/mcp</code>, choose <b>{EASY_SERVER}</b> and sign in. Or
+            run this in the terminal:
+          </p>
+          <CopyRow text={signIn!} what="the Claude Code sign-in command" />
+          {approve}
+        </>
+      );
+    case "claude":
+      return (
+        <>
+          <ol className="small">
+            <li>
+              In Claude (on <ExternalLink href="https://claude.ai/customize/connectors">claude.ai</ExternalLink>, or the desktop or
+              phone app), open <b>Customize</b> → <b>Connectors</b>.
+            </li>
+            <li>
+              Choose <b>Add custom connector</b>. Name it SLAPorSLOP and paste the address above as its URL. Leave the advanced
+              settings empty.
+            </li>
+            <li>
+              Choose <b>Add</b>, then <b>Connect</b>.
+            </li>
+          </ol>
+          {approve}
+          <p className="small muted">On a Team or Enterprise plan, an owner of your organization adds custom connectors.</p>
+        </>
+      );
+    case "chatgpt":
+      return (
+        <>
+          <ol className="small">
+            <li>
+              Go to <ExternalLink href="https://chatgpt.com/plugins">chatgpt.com/plugins</ExternalLink>, choose <b>+</b>, then{" "}
+              <b>Add custom MCP server</b>.
+            </li>
+            <li>Name it SLAPorSLOP, and paste the address above as the server URL.</li>
+            <li>
+              For authentication choose <b>OAuth</b>, read the warning, and choose <b>Create as a plugin</b>.
+            </li>
+          </ol>
+          {approve}
+          <p className="small muted">If you don't see the option, your plan or workspace doesn't allow custom MCP servers yet.</p>
+        </>
+      );
+    case "codex":
+      return (
+        <>
+          <p className="small">In a terminal, run:</p>
+          <CopyRow text={command!} what="the command that adds SLAPorSLOP to Codex" />
+          <p className="small">Then sign in:</p>
+          <CopyRow text={signIn!} what="the Codex sign-in command" />
+          {approve}
+        </>
+      );
+    case "cursor":
+      return (
+        <>
+          <p className="small">
+            Add this to Cursor's MCP settings file, <code>~/.cursor/mcp.json</code> (on Windows{" "}
+            <code>%USERPROFILE%\.cursor\mcp.json</code>), or under <b>Customize</b> → <b>MCPs</b>:
+          </p>
+          <CopyRow text={cursorConfig(mcpUrl)} what="the Cursor settings" />
+          <p className="small">Cursor then asks you to sign in to {EASY_SERVER}.</p>
+          {approve}
+        </>
+      );
+    case "gemini":
+      return (
+        <>
+          <p className="small">In a terminal, run:</p>
+          <CopyRow text={command!} what="the command that adds SLAPorSLOP to Gemini CLI" />
+          <p className="small">
+            Then start Gemini CLI (type <code>gemini</code>) and type:
+          </p>
+          <CopyRow text={signIn!} what="the Gemini CLI sign-in command" />
+          {approve}
+        </>
+      );
+    case "grok":
+      return (
+        <>
+          <p className="small">In a terminal, run:</p>
+          <CopyRow text={command!} what="the command that adds SLAPorSLOP to Grok Build" />
+          <p className="small">
+            Then start Grok Build (type <code>grok</code>). It asks you to sign in the first time it uses SLAPorSLOP (or type{" "}
+            <code>/mcps</code>, choose {EASY_SERVER} and press <kbd>i</kbd>).
+          </p>
+          {approve}
+        </>
+      );
+    case "other":
+      return (
+        <>
+          <p className="small">
+            Look in your tool's settings for <b>MCP servers</b>, <b>connectors</b> or <b>integrations</b>, and add a server with the
+            address above. Tools that can sign in to MCP servers (OAuth) open SLAPorSLOP in your browser to approve them.
+          </p>
+          <p className="small">If your tool asks for a token instead, use the other way below: make a token.</p>
+        </>
+      );
+  }
+}
 
 export interface MadeToken {
   secret: string;
