@@ -308,43 +308,54 @@ pub async fn refresh(
     result
 }
 
-async fn read_and_store(
+/// A portfolio at one commit, every file read and checked.
+pub(crate) struct Checked {
+    pub avatar: Option<Picture>,
+    pub banner: Option<Picture>,
+    pub works: Vec<Work>,
+    /// The page design and its fingerprint, if the repository has one.
+    pub design: Option<(Design, String)>,
+}
+
+/// Reads `.slop/portfolio.json` in `repo_path` (`owner/name`) at `commit`, with the page design,
+/// and checks every file, writing nothing: storing a new set is `read_and_store`'s, and the dry
+/// run (checks.rs) only reports, without the look-alike hashes only a stored set needs. None
+/// when there's no portfolio.json. Otherwise every problem, each naming where it is; the design
+/// is read once the works are fine.
+pub(crate) async fn read_and_check(
     state: &AppState,
-    creative_id: Uuid,
-    repo_url: &str,
-) -> Result<Outcome, Problem> {
-    let Some(repo_path) = slop_provenance::github_repo_path(repo_url) else {
-        problem!(
-            "portfolios come from public GitHub repositories, e.g. https://github.com/you/portfolio"
-        );
-    };
-    let commit = media::head_commit(state, &repo_path).await?;
+    repo_path: &str,
+    commit: &str,
+    dry_run: bool,
+) -> Result<Option<Checked>, Vec<String>> {
+    let one = |p: Problem| vec![p.0];
     let base = state
         .config
         .media
         .github_raw_base
-        .join(&format!("{repo_path}/{commit}/.slop/"))?;
-    let manifest =
-        match media::download(state, base.join("portfolio.json")?, MAX_MANIFEST_BYTES).await {
-            Ok(Some(bytes)) => bytes,
-            Ok(None) => return Ok(Outcome::NoManifest),
-            Err(e) => problem!("couldn't download {MANIFEST_PATH}: {e:#}"),
-        };
+        .join(&format!("{repo_path}/{commit}/.slop/"))
+        .map_err(|e| one(e.into()))?;
+    let manifest_url = base.join("portfolio.json").map_err(|e| one(e.into()))?;
+    let manifest = match media::download(state, manifest_url, MAX_MANIFEST_BYTES).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Ok(None),
+        Err(e) => return Err(vec![format!("couldn't download {MANIFEST_PATH}: {e:#}")]),
+    };
     let manifest: Manifest = serde_json::from_slice(&manifest).map_err(|e| {
-        Problem(format!(
+        vec![format!(
             "{MANIFEST_PATH} isn't valid: {e}. It's one JSON object with \"avatar\", \"banner\" and \"works\" (a list); each work has one of \"image\", \"youtube\" or \"audio\", and optionally \"poster\", \"title\", \"caption\" and \"skill\""
-        ))
+        )]
     })?;
     if manifest.works.is_empty() {
-        problem!(
+        return Err(vec![format!(
             "{MANIFEST_PATH} needs at least one work: add a \"works\" list, e.g. \"works\": [{{ \"image\": \"works/first.png\" }}]"
-        );
+        )]);
     }
     if manifest.works.len() > MAX_WORKS {
-        problem!(
+        return Err(vec![format!(
             "{MANIFEST_PATH} lists {} works; the most is {MAX_WORKS}",
             manifest.works.len()
-        );
+        )]);
     }
 
     // Every problem is listed, each naming where it is, so one check finds them all.
@@ -355,6 +366,9 @@ async fn read_and_store(
         }
     };
     let mut reader = Reader::new(state, base.clone());
+    if dry_run {
+        reader = reader.without_hashes();
+    }
     let mut avatar = None;
     if let Some(p) = &manifest.avatar {
         note(about("\"avatar\"", reader.picture(p, AVATAR_MIN).await).map(|p| avatar = Some(p)));
@@ -459,14 +473,47 @@ async fn read_and_store(
         }
     }
     if !problems.is_empty() {
-        let more = problems.len().saturating_sub(MAX_PROBLEMS);
-        problems.truncate(MAX_PROBLEMS);
-        if more > 0 {
-            problems.push(format!("…and {more} more"));
-        }
-        return Err(Problem(problems.join("\n")));
+        return Err(problems);
     }
-    let design = design::read(state, &base, &mut reader, &works).await?;
+    let design = design::read(state, &base, &mut reader, &works)
+        .await
+        .map_err(one)?;
+    Ok(Some(Checked {
+        avatar,
+        banner,
+        works,
+        design,
+    }))
+}
+
+async fn read_and_store(
+    state: &AppState,
+    creative_id: Uuid,
+    repo_url: &str,
+) -> Result<Outcome, Problem> {
+    let Some(repo_path) = slop_provenance::github_repo_path(repo_url) else {
+        problem!(
+            "portfolios come from public GitHub repositories, e.g. https://github.com/you/portfolio"
+        );
+    };
+    let commit = media::head_commit(state, &repo_path).await?;
+    let Checked {
+        avatar,
+        banner,
+        works,
+        design,
+    } = match read_and_check(state, &repo_path, &commit, false).await {
+        Ok(Some(checked)) => checked,
+        Ok(None) => return Ok(Outcome::NoManifest),
+        Err(mut problems) => {
+            let more = problems.len().saturating_sub(MAX_PROBLEMS);
+            problems.truncate(MAX_PROBLEMS);
+            if more > 0 {
+                problems.push(format!("…and {more} more"));
+            }
+            return Err(Problem(problems.join("\n")));
+        }
+    };
 
     let fingerprint = {
         let mut sorted: Vec<serde_json::Value> = works

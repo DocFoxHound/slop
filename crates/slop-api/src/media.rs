@@ -432,6 +432,9 @@ pub(crate) struct Reader<'a> {
     /// `<raw base><owner>/<repo>/<commit>/.slop/`
     base: Url,
     seen: HashMap<String, Picture>,
+    /// Whether pictures get their look-alike hash, which decodes them in full: only for what's
+    /// stored, not for a dry run (checks.rs).
+    hash: bool,
 }
 
 impl<'a> Reader<'a> {
@@ -440,7 +443,14 @@ impl<'a> Reader<'a> {
             state,
             base,
             seen: HashMap::new(),
+            hash: true,
         }
+    }
+
+    /// The same, without look-alike hashes: for a dry run, which stores nothing.
+    pub(crate) fn without_hashes(mut self) -> Self {
+        self.hash = false;
+        self
     }
 
     pub(crate) async fn picture(
@@ -495,9 +505,13 @@ impl<'a> Reader<'a> {
             width,
             height,
             format,
-            dhash: dhash_off_thread(bytes.to_vec())
-                .await
-                .map(|h| format!("{h:016x}")),
+            dhash: if self.hash {
+                dhash_off_thread(bytes.to_vec())
+                    .await
+                    .map(|h| format!("{h:016x}"))
+            } else {
+                None
+            },
         };
         self.seen.insert(path, picture.clone());
         Ok(picture)
@@ -589,6 +603,140 @@ pub async fn refresh(
     result
 }
 
+/// What `.slop/media.json` lists at one commit, each picture read and checked.
+pub(crate) struct Checked {
+    pub thumbnail: Option<Picture>,
+    pub icon: Option<Picture>,
+    pub gallery: Vec<Item>,
+}
+
+/// Reads `.slop/media.json` in `repo_path` (`owner/name`) at `commit` and checks every picture it
+/// lists, writing nothing: storing a new set is `read_and_store`'s. None when there's no
+/// media.json. Stops at the first problem, unless it's a `dry_run` (checks.rs): then it goes on
+/// and returns them all, in the same order, and skips the look-alike hashes only a stored set
+/// needs.
+pub(crate) async fn read_and_check(
+    state: &AppState,
+    repo_path: &str,
+    commit: &str,
+    dry_run: bool,
+) -> Result<Option<Checked>, Vec<Problem>> {
+    let one = |p: Problem| vec![p];
+    let base = state
+        .config
+        .media
+        .github_raw_base
+        .join(&format!("{repo_path}/{commit}/{MANIFEST_DIR}/"))
+        .map_err(|e| one(e.into()))?;
+    let manifest_url = base.join("media.json").map_err(|e| one(e.into()))?;
+    let manifest = match download(state, manifest_url, MAX_MANIFEST_BYTES).await {
+        Ok(Some(bytes)) => bytes,
+        Ok(None) => return Ok(None),
+        Err(e) => {
+            return Err(one(Problem(format!(
+                "couldn't download {MANIFEST_PATH}: {e:#}"
+            ))));
+        }
+    };
+    let manifest: Manifest = serde_json::from_slice(&manifest)
+        .map_err(|e| one(Problem(format!("{MANIFEST_PATH} isn't valid: {e}"))))?;
+    if manifest.gallery.len() > MAX_GALLERY {
+        return Err(one(Problem(format!(
+            "{MANIFEST_PATH} lists {} gallery items; the most is {MAX_GALLERY}",
+            manifest.gallery.len()
+        ))));
+    }
+
+    let mut problems = Vec::new();
+    // A problem ends the check, or in a dry run is noted and the check goes on.
+    macro_rules! checked {
+        ($result:expr) => {
+            match $result {
+                Ok(v) => Some(v),
+                Err(p) if !dry_run => return Err(vec![p]),
+                Err(p) => {
+                    problems.push(p);
+                    None
+                }
+            }
+        };
+    }
+    let mut reader = Reader {
+        state,
+        base,
+        seen: HashMap::new(),
+        hash: !dry_run,
+    };
+    // The icon first, so it's downloaded under its own size limit even if it's listed twice.
+    let icon = match &manifest.icon {
+        Some(path) => checked!(reader.icon(path).await),
+        None => None,
+    };
+    let thumbnail = match &manifest.thumbnail {
+        Some(path) => checked!(reader.picture(path, THUMB_MIN).await),
+        None => None,
+    };
+    let mut gallery = Vec::with_capacity(manifest.gallery.len());
+    for (i, item) in manifest.gallery.iter().enumerate() {
+        let n = i + 1;
+        let caption = checked!(clean_caption(item.caption.as_deref())).flatten();
+        match (&item.image, &item.youtube) {
+            (Some(path), None) => {
+                if item.poster.is_some() {
+                    checked!(Err::<(), _>(Problem(format!(
+                        "gallery item {n}: \"poster\" is only for videos"
+                    ))));
+                }
+                if let Some(picture) = checked!(reader.picture(path, SHOT_MIN).await) {
+                    gallery.push(Item::Image { picture, caption });
+                }
+            }
+            (None, Some(link)) => {
+                let Some(youtube_id) = youtube_id(link) else {
+                    checked!(Err::<(), _>(Problem(format!(
+                        "gallery item {n}: \"{link}\" isn't a YouTube video link"
+                    ))));
+                    continue;
+                };
+                let poster = match &item.poster {
+                    Some(path) => match checked!(reader.picture(path, SHOT_MIN).await) {
+                        Some(p) => Some(p),
+                        None => continue,
+                    },
+                    None => None,
+                };
+                gallery.push(Item::Video {
+                    youtube_id,
+                    poster,
+                    caption,
+                });
+            }
+            _ => {
+                checked!(Err::<(), _>(Problem(format!(
+                    "gallery item {n} needs either \"image\" or \"youtube\""
+                ))));
+            }
+        }
+    }
+
+    let mut keys: Vec<String> = gallery.iter().map(Item::key).collect();
+    keys.sort();
+    if let Some(dup) = keys.windows(2).find(|w| w[0] == w[1]) {
+        checked!(Err::<(), _>(Problem(format!(
+            "{MANIFEST_PATH} lists {} twice",
+            dup[0].split_once(':').map_or("", |(_, v)| v)
+        ))));
+    }
+    if !problems.is_empty() {
+        return Err(problems);
+    }
+    Ok(Some(Checked {
+        thumbnail,
+        icon,
+        gallery,
+    }))
+}
+
 async fn read_and_store(
     state: &AppState,
     app_id: Uuid,
@@ -603,79 +751,22 @@ async fn read_and_store(
         Some(c) => c.to_ascii_lowercase(),
         None => head_commit(state, &repo_path).await?,
     };
-    let base = state
-        .config
-        .media
-        .github_raw_base
-        .join(&format!("{repo_path}/{commit}/{MANIFEST_DIR}/"))?;
-    let manifest = match download(state, base.join("media.json")?, MAX_MANIFEST_BYTES).await {
-        Ok(Some(bytes)) => bytes,
-        Ok(None) => return Ok(Outcome::NoManifest),
-        Err(e) => problem!("couldn't download {MANIFEST_PATH}: {e:#}"),
+    let checked = read_and_check(state, &repo_path, &commit, false)
+        .await
+        .map_err(|problems| {
+            problems
+                .into_iter()
+                .next()
+                .unwrap_or(Problem(String::new()))
+        })?;
+    let Some(Checked {
+        thumbnail,
+        icon,
+        gallery,
+    }) = checked
+    else {
+        return Ok(Outcome::NoManifest);
     };
-    let manifest: Manifest = serde_json::from_slice(&manifest)
-        .map_err(|e| Problem(format!("{MANIFEST_PATH} isn't valid: {e}")))?;
-    if manifest.gallery.len() > MAX_GALLERY {
-        problem!(
-            "{MANIFEST_PATH} lists {} gallery items; the most is {MAX_GALLERY}",
-            manifest.gallery.len()
-        );
-    }
-
-    let mut reader = Reader {
-        state,
-        base,
-        seen: HashMap::new(),
-    };
-    // The icon first, so it's downloaded under its own size limit even if it's listed twice.
-    let icon = match &manifest.icon {
-        Some(path) => Some(reader.icon(path).await?),
-        None => None,
-    };
-    let thumbnail = match &manifest.thumbnail {
-        Some(path) => Some(reader.picture(path, THUMB_MIN).await?),
-        None => None,
-    };
-    let mut gallery = Vec::with_capacity(manifest.gallery.len());
-    for (i, item) in manifest.gallery.iter().enumerate() {
-        let n = i + 1;
-        let caption = clean_caption(item.caption.as_deref())?;
-        gallery.push(match (&item.image, &item.youtube) {
-            (Some(path), None) => {
-                if item.poster.is_some() {
-                    problem!("gallery item {n}: \"poster\" is only for videos");
-                }
-                Item::Image {
-                    picture: reader.picture(path, SHOT_MIN).await?,
-                    caption,
-                }
-            }
-            (None, Some(link)) => {
-                let Some(youtube_id) = youtube_id(link) else {
-                    problem!("gallery item {n}: \"{link}\" isn't a YouTube video link");
-                };
-                let poster = match &item.poster {
-                    Some(path) => Some(reader.picture(path, SHOT_MIN).await?),
-                    None => None,
-                };
-                Item::Video {
-                    youtube_id,
-                    poster,
-                    caption,
-                }
-            }
-            _ => problem!("gallery item {n} needs either \"image\" or \"youtube\""),
-        });
-    }
-
-    let mut keys: Vec<String> = gallery.iter().map(Item::key).collect();
-    keys.sort();
-    if let Some(dup) = keys.windows(2).find(|w| w[0] == w[1]) {
-        problem!(
-            "{MANIFEST_PATH} lists {} twice",
-            dup[0].split_once(':').map_or("", |(_, v)| v)
-        );
-    }
 
     let fingerprint = fingerprint(thumbnail.as_ref(), icon.as_ref(), &gallery);
     let mut tx = state.db.begin().await?;
