@@ -40,7 +40,7 @@ function Overlay() {
       <div className="overlay-panel" role="dialog" aria-label="SLAPorSLOP overlay">
         <header className="overlay-head">
           <span className="logo-text" aria-hidden="true">
-            SLAPorSLOP
+            SLAP<span className="wm-or">or</span><b>SLOP</b>
           </span>
           {game && <span className="muted small">Playing {game}</span>}
           <nav className="overlay-tabs" aria-label="Overlay">

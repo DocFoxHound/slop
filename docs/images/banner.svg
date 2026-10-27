@@ -41,7 +41,7 @@
   <!-- Wordmark -->
   <g font-family="'Segoe UI', Inter, 'Helvetica Neue', Arial, sans-serif">
     <use href="#logo" transform="translate(72 92) scale(3.4)"/>
-    <text x="196" y="170" font-size="64" font-weight="900" fill="#e7ecf2" letter-spacing="1">SLAP<tspan fill="#a3e635">or</tspan>SLOP</text>
+    <text x="196" y="170" font-size="64" font-weight="900" fill="#e7ecf2" letter-spacing="1">SLAP<tspan font-size="44" font-weight="600" fill-opacity="0.72">or</tspan><tspan fill="#a3e635">SLOP</tspan></text>
     <text x="76" y="250" font-size="34" font-weight="700" fill="#e7ecf2">The store for apps and games</text>
     <text x="76" y="292" font-size="34" font-weight="700" fill="#e7ecf2">made with <tspan fill="#a3e635">AI</tspan>.</text>
     <text x="76" y="340" font-size="20" fill="#8d99a8">Share what you made. The people who play it decide</text>

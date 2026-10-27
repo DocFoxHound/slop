@@ -72,6 +72,8 @@ code { font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; background:
 .nav { flex: none; display: flex; align-items: center; gap: 24px; padding: 0 20px; height: 58px; background: linear-gradient(#141920, #10141a); border-bottom: 1px solid var(--line); }
 .logo { display: flex; align-items: center; gap: 9px; font-weight: 900; font-size: 22px; letter-spacing: -0.03em; color: var(--text); text-decoration: none !important; }
 .logo b { color: var(--slime); }
+/* The wordmark (owner's pick 2026-10-27): SLAP in the text colour, a softer "or", SLOP in slime. */
+.wm-or { font-weight: 600; font-size: 0.68em; letter-spacing: 0; margin: 0 0.05em; opacity: 0.72; }
 .tabs { display: flex; gap: 4px; height: 100%; }
 .tabs a { display: flex; align-items: center; padding: 0 14px; color: var(--muted); font-weight: 700; letter-spacing: 0.06em; font-size: 13px; text-decoration: none; border-bottom: 3px solid transparent; margin-bottom: -1px; }
 .tabs a:hover { color: var(--text); }
