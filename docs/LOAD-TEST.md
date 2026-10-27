@@ -1,13 +1,13 @@
 # Load test
 
-How much one Slop server takes, measured 2026-10-21 with `crates/slop-api/examples/load_test.rs`
-(see its header to run it again). It starts a throwaway Slop on the test database, fills it with
+How much one SLAPorSLOP server takes, measured 2026-10-21 with `crates/slop-api/examples/load_test.rs`
+(see its header to run it again). It starts a throwaway SLAPorSLOP on the test database, fills it with
 the simulation (400 games, 1,500 players, 120 days of votes and play), and runs each kind of
 request with 1, 10, 50 and 100 clients at once for 8 seconds each. Never run it against a real
-Slop.
+SLAPorSLOP.
 
 **Machine:** the dev server: 12 cores, 31 GB, with Postgres (in a container) on the same machine
-and the live dev Slop running beside it. Release build, no proxy in front.
+and the live dev SLAPorSLOP running beside it. Release build, no proxy in front.
 
 ## Results
 
@@ -34,7 +34,7 @@ but nothing fails.
 | Load | One server handles about |
 |---|---|
 | Players in games (a Pulse heartbeat a minute each) | 400,000 at once |
-| Slop apps open (an update check every 30 minutes, 20 installed apps per check) | 150,000 at once |
+| SLAPorSLOP apps open (an update check every 30 minutes, 20 installed apps per check) | 150,000 at once |
 | People browsing the store (a page view every 10 seconds, about 3 requests each) | 3,000 at once |
 
 **What gives first:** the library update check, at about 90 a second. It runs several database

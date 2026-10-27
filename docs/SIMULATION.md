@@ -1,6 +1,6 @@
 # Simulation sandbox
 
-A made-up store, for testing **"For you"** recommendations, **ratings** (% Not Slop, weighted and
+A made-up store, for testing **"For you"** recommendations, **ratings** (% Slaps, weighted and
 unweighted, over time) and **player counts** against a truth we know. The code is
 `crates/slop-api/src/sim.rs`.
 
@@ -87,13 +87,13 @@ smaller simulation on every test run and checks the guarantees below.
 | `shown_dead`, `shown_in_library_or_played`, `shown_own_apps` | Never recommended | 0 |
 | `ratings_matching` / `monthly_matching_now` | Current rating and this month's rating equal a recount from raw vote events | All of `ratings_checked` |
 | `updates_moved_right_way` | After an update, the rating moved the way quality did | Most of `updates_checked` |
-| `rating_truth_correlation` | % Not Slop against true quality | Clearly positive |
+| `rating_truth_correlation` | % Slaps against true quality | Clearly positive |
 | `players_matching` | "Playing now" equals the live sessions made | All of `players_checked` |
-| `people.fees_not_5_percent` | Payments whose Slop fee isn't 5% | 0 |
+| `people.fees_not_5_percent` | Payments whose SLAPorSLOP fee isn't 5% | 0 |
 | `people.credit_rule_violations` | Jobs credited without being completed, fully paid and $10+, or the reverse | 0 |
 | `people.reviews_not_completed` / `reviews_not_by_client` | Reviews that shouldn't exist | 0 and 0 |
 | `people.overall_rating_untouched` | Badged apps whose rating is still every vote (HUM-13) | All of `badge_apps` |
-| `people.creative_rating_truth_correlation` | Creatives' % Not Slop against their true quality | Clearly positive; `no_ai_average_percent` above `heavy_ai_average_percent` |
+| `people.creative_rating_truth_correlation` | Creatives' % Slaps against their true quality | Clearly positive; `no_ai_average_percent` above `heavy_ai_average_percent` |
 | `people.conversations_failing_verification` | Copies rebuilt from the sandbox that don't match the fingerprints | 0 |
 | `people.final_files_before_payment` | Final files sent before the delivery payment | 0 |
 | `people.hidden_reviews_counted` | Creatives whose rating counts a removed review | 0 |

@@ -1,4 +1,4 @@
-# For Slop's own test suite (crates/slop-client/tests/client.rs): asks the real Slop Link for
+# For SLAPorSLOP's own test suite (crates/slop-client/tests/client.rs): asks the real Slop Link for
 # the test server's mod, prints the answer, and exits 0 when it's "done".
 extends Node
 

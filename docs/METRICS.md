@@ -1,4 +1,4 @@
-# Slop — Donation, Payment & Vote History (Metrics)
+# SLAPorSLOP — Donation, Payment & Vote History (Metrics)
 
 **Status:** Draft · companion to [`DESIGN.md`](DESIGN.md) §7 (ratings) and §12 (money)
 **Last updated:** 2026-10-17
@@ -6,20 +6,20 @@
 
 ---
 
-Slop keeps a detailed history of:
+SLAPorSLOP keeps a detailed history of:
 - **Money:** donations, server donations and People payments, plus their refunds. (Donations aren't purchases; see `LEGAL.md` §3.2.)
-- **Likes/dislikes:** 👍 Not Slop / 👎 Slop votes, including every time someone changes their vote.
+- **Likes/dislikes:** 👍 Slaps / 👎 Slop votes, including every time someone changes their vote.
 
 **Database: PostgreSQL only** (decided 2026-10-17). Gameplay data isn't collected. Slop Pulse stays as described in DESIGN §11.
 
 ## 1. What gets recorded
 
 ### 1.1 Payment history
-These records mirror Stripe (`PAYMENTS.md` §8). Slop holds no balances, so this is a history, not a bank ledger.
+These records mirror Stripe (`PAYMENTS.md` §8). SLAPorSLOP holds no balances, so this is a history, not a bank ledger.
 
 | Record | Fields |
 |---|---|
-| Donation | donor, app (or branch), amount the maker receives, total charged, Slop fee, card fee, currency, whether the donor shared their name with the maker (private), message, time |
+| Donation | donor, app (or branch), amount the maker receives, total charged, SLAPorSLOP fee, card fee, currency, whether the donor shared their name with the maker (private), message, time |
 | Server donation | the same, plus the recurring setup it belongs to, which charge in the series it is, and the cancellation time |
 | People payment | client, creative, job, milestone, amount, fee, status |
 | Refund / dispute | the original payment, amount, who started it (maker/creative, or a card dispute), time |
@@ -48,7 +48,7 @@ Library adds, installs and Interested. These feed "Popular this month", "For you
   - Votes with **under 2 minutes** of playtime count as 0.1.
   - The formula is published on the "How ratings work" page.
 - **Unweighted:** one account = one vote.
-- Store pages show **both**: "**84% Not Slop** (weighted by playtime) · 79% unweighted", with a toggle on the rating-over-time chart.
+- Store pages show **both**: "**84% Slaps** (weighted by playtime) · 79% unweighted", with a toggle on the rating-over-time chart.
 - Apps that aren't games (tools with no Pulse playtime) use launches instead: the number of separate days the user launched the app, with 10 days or more counting fully.
 
 **Built 2026-10-20:** the "How ratings work" page (`/ratings`) publishes the formula and the tables of weights.
@@ -60,7 +60,7 @@ Library adds, installs and Interested. These feed "Popular this month", "For you
 | **The user** | Their full history and receipts, exportable | Their full vote history |
 | **Other users** | Nothing. Donors are never shown publicly. | **Current votes and reviews are public on profiles by default** (decided). The user can make them private. The history of changes is never shown. |
 | **The maker** | Totals per day, version and country. Names and messages only from donors who chose to share them. Minimum group of 10 people before a breakdown is shown. | Weighted and unweighted totals over time, per version/branch/platform. Public reviews. |
-| **Slop staff** | Full detail by role, with access logged | Full detail for abuse checks, with access logged |
+| **SLAPorSLOP staff** | Full detail by role, with access logged | Full detail for abuse checks, with access logged |
 | **Public** | Nothing | Rating-over-time charts |
 
 **Built 2026-10-20 (votes):** the maker's Manage page shows each player's current vote grouped by the version and platform it was cast on (the desktop app reports the platform at launch), and "update impact" per version (👎 → 👍 and 👍 → 👎 changes, new votes). Branches are separate apps with their own ratings.
@@ -68,12 +68,12 @@ Library adds, installs and Interested. These feed "Popular this month", "For you
 ## 4. Architecture
 
 ```
-  Slop client / phone app / website                  Stripe (webhooks)
+  SLAPorSLOP client / phone app / website                  Stripe (webhooks)
                │                                            │
                └──────────── HTTPS ─────────────┬───────────┘
                                                 ▼
                    ┌──────────────────────────────────────────────┐
-                   │  Slop API (stateless, several copies behind  │
+                   │  SLAPorSLOP API (stateless, several copies behind  │
                    │  the cloud load balancer, autoscaled)        │
                    │  auth · validation · rate limits ·           │
                    │  idempotency keys                            │
@@ -102,7 +102,7 @@ CREATE TABLE vote_events (
   id          uuid PRIMARY KEY,          -- UUIDv7 (time-ordered)
   account_id  uuid NOT NULL,
   app_id      uuid NOT NULL,
-  vote        smallint NOT NULL,         -- 1 Not Slop, -1 Slop, 0 withdrawn
+  vote        smallint NOT NULL,         -- 1 Slaps, -1 Slop, 0 withdrawn
   prev_vote   smallint,
   release     text NOT NULL,
   branch_id   uuid,
@@ -156,4 +156,4 @@ Database permissions: the application's database role can only **insert** into `
 - Public votes by default are explained at sign-up (`LEGAL.md` §7).
 
 ## 7. The mockup and the simulation
-The real store page shows the weighted and unweighted % Not Slop and the rating over time (`web/src/components/RatingPanel.tsx`), from real votes. Invented data lives in two places only: the original mockup (`mockup/`, saved in your browser, and without the weighted figure) and the simulation sandbox (`docs/SIMULATION.md`), which checks these numbers against a known truth.
+The real store page shows the weighted and unweighted % Slaps and the rating over time (`web/src/components/RatingPanel.tsx`), from real votes. Invented data lives in two places only: the original mockup (`mockup/`, saved in your browser, and without the weighted figure) and the simulation sandbox (`docs/SIMULATION.md`), which checks these numbers against a known truth.

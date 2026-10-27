@@ -1,6 +1,6 @@
-# Developing Slop
+# Developing SLAPorSLOP
 
-How to run, build and test Slop, and what's built so far. What Slop is and why: the
+How to run, build and test SLAPorSLOP, and what's built so far. What SLAPorSLOP is and why: the
 [README](../README.md) and [`OVERVIEW.md`](OVERVIEW.md). The full plan: [`DESIGN.md`](DESIGN.md).
 
 Based on the mockup in `Mockup/mockups/slop`. A copy is kept in [`mockup/`](../mockup/) as the
@@ -34,7 +34,7 @@ don't copy it into real code.
 
 Work lands on the `dev` branch. The test server, **https://slop.188-68-41-241.sslip.io**,
 deploys every push to `dev` within minutes, without running the tests, and then builds the
-**Slop Dev** desktop app for Linux and Windows, which installs beside the real Slop and updates
+**Slop Dev** desktop app for Linux and Windows, which installs beside the real SLAPorSLOP and updates
 itself from the test server. Testing with private repositories: `docs/TESTING.md`.
 
 Production, **https://slopai.games**, runs only what reaches `main`: `deploy/promote.sh`
@@ -99,11 +99,11 @@ npm run desktop                  # dev window, hot reload
 npm run desktop:build            # installers in target/release/bundle/
 ```
 
-The desktop app is built for one Slop site and one set of signing keys:
+The desktop app is built for one SLAPorSLOP site and one set of signing keys:
 
-- `SLOP_API_URL`: the Slop site (default `http://localhost:5173/`, the dev website, which proxies
+- `SLOP_API_URL`: the SLAPorSLOP site (default `http://localhost:5173/`, the dev website, which proxies
   `/v1` to the API).
-- `SLOP_TRUSTED_KEYS`: Slop's public signing key(s), comma-separated. Without one, the app can
+- `SLOP_TRUSTED_KEYS`: SLAPorSLOP's public signing key(s), comma-separated. Without one, the app can
   browse but won't install anything.
 
 The page never talks to the API directly in the desktop app: requests go through Rust, which holds
@@ -126,7 +126,7 @@ to sign in each time it starts; it never falls back to a plain file.
 2. A maker builds their files in GitHub Actions and signs them with
    `actions/attest-build-provenance` (the Releases page shows the snippet), then submits a release
    on **Publish → their app → Releases**: a version, the commit, and a file URL per platform on
-   their own release page. Slop downloads each file once to record its size and SHA-256, stores
+   their own release page. SLAPorSLOP downloads each file once to record its size and SHA-256, stores
    nothing else, and looks up and verifies each file's attestation: it must be signed through
    Sigstore by GitHub Actions, name the file's hash, and come from the app's repository at the
    release's commit. Approval is refused for any file without one.
@@ -147,7 +147,7 @@ to sign in each time it starts; it never falls back to a plain file.
    revocation list and the program's hash at every launch.
 
 The desktop app checks the attestation again itself before downloading, and refuses an update
-whose source repository differs from the installed app's, so even a compromised Slop server can't
+whose source repository differs from the installed app's, so even a compromised SLAPorSLOP server can't
 push a build the maker didn't sign.
 
 For local testing with release files served over plain http and without attestations, set
@@ -165,7 +165,7 @@ cd web && npm run build && npm run e2e
 ```
 
 Integration tests create a fresh database per test on the server in `DATABASE_URL`. The browser
-tests (`web/e2e`, Playwright) start a throwaway Slop (`crates/slop-api/examples/e2e_server/`)
+tests (`web/e2e`, Playwright) start a throwaway SLAPorSLOP (`crates/slop-api/examples/e2e_server/`)
 on a new `slop_e2e_…_sim` database there, with GitHub faked, and drop it afterwards; they also
 check the main pages for accessibility problems (axe). Set `SLOP_TEST_GODOT` to a Godot 4 binary
 to run Slop Pong against the real Slop Link too.
@@ -192,7 +192,7 @@ to run Slop Pong against the real Slop Link too.
 | `GET /v1/apps/{slug}/releases`, `POST …` | anyone / maker | Approved releases (makers see all, with status); submit a release |
 | `GET /v1/apps/{slug}/manifest` | anyone | Newest approved release's signed manifest |
 | `GET /v1/revocations` | anyone | Signed revocation list (valid 6 hours) |
-| `GET /v1/keys` | anyone | Slop's public signing key |
+| `GET /v1/keys` | anyone | SLAPorSLOP's public signing key |
 | `GET /v1/verify/{sha256}` | anyone | Signed answer: the public releases with this file, their scans, and whether they were revoked (valid 24 hours) |
 | `GET /v1/source` | anyone | Where the source code is, and the commit running |
 | `GET /v1/server` | anyone | What this server checks (scanning, maker signatures) |
@@ -207,7 +207,7 @@ to run Slop Pong against the real Slop Link too.
 | `GET /v1/auth/desktop/requests/{id}`, `POST …/approve` | signed in (website) | Approve a desktop device |
 | `POST /v1/auth/desktop/token` | desktop app | Code or refresh token → access + refresh tokens |
 
-The signed documents are the [Slop open standard](standard/README.md); `slop-verify` checks them.
+The signed documents are the [SLAPorSLOP open standard](standard/README.md); `slop-verify` checks them.
 
 Errors are `{"error": {"code", "message", "field"?}}`. The desktop app authenticates with
 `Authorization: Bearer <access token>`; the website with its session cookie.

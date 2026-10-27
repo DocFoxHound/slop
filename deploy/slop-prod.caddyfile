@@ -1,4 +1,4 @@
-# Slop's production site: copy to /etc/caddy/Caddyfile.d/ on the production server and reload
+# SLAPorSLOP's production site: copy to /etc/caddy/Caddyfile.d/ on the production server and reload
 # Caddy (`caddy reload --config /etc/caddy/Caddyfile --adapter caddyfile`). Caddy gets the Let's
 # Encrypt certificates itself once the names point at the server (deploy/README.md, "Production").
 slopai.games {
@@ -12,7 +12,7 @@ www.slopai.games {
 }
 
 # Browser demos of new games (demos.rs): a separate origin, so a game's code never runs where
-# Slop's sign-in cookies are. The API serves only demos here. Off until set up: add a DNS record
+# SLAPorSLOP's sign-in cookies are. The API serves only demos here. Off until set up: add a DNS record
 # for play.slopai.games pointing at this server, uncomment this block, and set
 # SLOP_PLAY_URL=https://play.slopai.games (and SLOP_DEMO_DIR) in slop.env (deploy/README.md,
 # "Browser demos").

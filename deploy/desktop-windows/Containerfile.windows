@@ -1,9 +1,9 @@
-# Cross-compiles Slop's Windows installer on Linux (deploy/desktop-windows/build.sh), the way
+# Cross-compiles SLAPorSLOP's Windows installer on Linux (deploy/desktop-windows/build.sh), the way
 # Tauri documents it ("Build Windows apps on Linux and macOS"): the MSVC target, linked with
 # LLVM's lld, resources compiled with llvm-rc, the C parts (ring, aws-lc) built with clang-cl
 # through cargo-xwin, and the NSIS installer made with makensis. Only NSIS installers can be made
-# this way, which is what Slop ships for Windows. The Linux appindicator library is never built in:
-# Tauri's CLI, running on Linux, looks for it whenever the app uses a tray icon (Slop's Windows
+# this way, which is what SLAPorSLOP ships for Windows. The Linux appindicator library is never built in:
+# Tauri's CLI, running on Linux, looks for it whenever the app uses a tray icon (SLAPorSLOP's Windows
 # build does), even when making a Windows installer.
 #
 # cargo-xwin downloads Microsoft's CRT and Windows SDK headers and libraries into the build's

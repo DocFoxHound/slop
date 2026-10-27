@@ -1,15 +1,15 @@
 ## What it is
 
-**Slop** is a store app, like Steam, for software made with AI, from small tools to full games. It runs on Windows, macOS, Linux, iOS and Android.
+**SLAPorSLOP** is a store app, like Steam, for software made with AI, from small tools to full games. It runs on Windows, macOS, Linux, iOS and Android.
 
 ## What makes it different
 
-- **👍 Not Slop / 👎 Slop:** only people who've actually launched an app can vote, and ratings are tracked over time.
+- **👍 Slaps / 👎 Slop:** only people who've actually launched an app can vote, and ratings are tracked over time.
 - **Open source, always:** every app links its GitHub code, and anyone can make a branch to fix, mod or port it.
 - **Scanned before it's listed:** malware, stolen code, illegal content, loot boxes and scams are checked on every upload.
-- **Free to download:** makers get optional donations, paid straight to them. Slop charges a flat 5% platform fee and never holds the money.
+- **Free to download:** makers get optional donations, paid straight to them. SLAPorSLOP charges a flat 5% platform fee and never holds the money.
 - **Coming soon → Beta → Released:** players mark upcoming projects *Interested*. Projects that go quiet are labelled dead.
-- **Private Slop, Teams and People:** keep projects to yourself or share them with friends, join player or studio teams, and hire real artists and musicians.
+- **Private apps, Teams and People:** keep projects to yourself or share them with friends, join player or studio teams, and hire real artists and musicians.
 
 ## Who it's for
 

@@ -1,4 +1,4 @@
-# Slop's scanner (crates/slop-api/src/scan.rs, docs/SECURITY.md §5.2): ClamAV, YARA (YARA-Forge
+# SLAPorSLOP's scanner (crates/slop-api/src/scan.rs, docs/SECURITY.md §5.2): ClamAV, YARA (YARA-Forge
 # core rules) and Mandiant's capa, all free and open source. Static only: nothing in a build is
 # ever run. `slop-scan` runs it with no network, a read-only root and the file mounted read-only.
 FROM docker.io/library/debian:stable-slim@sha256:d405c1e1d9eecbf30022d23766a0eea235e7f499aa33e357dfd29271a839f82a

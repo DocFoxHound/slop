@@ -1,9 +1,9 @@
-# Slop: instructions for AI agents
+# SLAPorSLOP: instructions for AI agents
 
 Read `README.md` first. The design docs in `docs/` are the source of truth for behaviour;
 `docs/LEGAL-GUIDANCE.md` §1–2 lists rules that code must not break, and things that need the
 lawyer before anyone builds them.
-`docs/LEGAL.md` and `docs/LEGAL-GUIDANCE.md` are private: they live only in the checkout on Slop's
+`docs/LEGAL.md` and `docs/LEGAL-GUIDANCE.md` are private: they live only in the checkout on SLAPorSLOP's
 dev server (they're in `.gitignore`), never in the public repository. Where they aren't there, ask
 the owner before changing anything they cover (payments, moderation, age rules, wording, personal data).
 
@@ -15,7 +15,7 @@ the owner before changing anything they cover (payments, moderation, age rules, 
   never edit a migration that has been committed.
 - **UI:** `web/`, React 19 + TypeScript + Vite + React Router. One UI for the website and the
   desktop app. Check `isDesktop` (`web/src/platform.ts`) for the few differences; links that
-  leave Slop go through `openExternal` / `ExternalLink`, so the desktop app opens the system
+  leave SLAPorSLOP go through `openExternal` / `ExternalLink`, so the desktop app opens the system
   browser instead of navigating its own window.
 - **Signed documents:** `crates/slop-manifest` defines release manifests and revocation lists and
   how they're signed. The API and the client must both use it; never hand-roll a format.

@@ -19,7 +19,7 @@
     "windows": [
       {
         "label": "main",
-        "title": "Slop",
+        "title": "SLAPorSLOP",
         "visible": false,
         "center": true,
         "width": 1280,
