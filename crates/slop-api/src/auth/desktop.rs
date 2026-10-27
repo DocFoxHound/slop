@@ -67,6 +67,7 @@ struct CreatedRequest {
 
 async fn create_request(
     State(state): State<AppState>,
+    headers: axum::http::HeaderMap,
     Json(req): Json<NewRequest>,
 ) -> ApiResult<Json<CreatedRequest>> {
     if !is_b64url(&req.code_challenge, 43..=43) {
@@ -104,9 +105,13 @@ async fn create_request(
     .fetch_one(&state.db)
     .await?;
 
+    // On the address the app asked: an app built for a former address only opens pages there.
+    let host = headers
+        .get(axum::http::header::HOST)
+        .and_then(|h| h.to_str().ok());
     let approve_url = state
         .config
-        .public_url
+        .origin_for_host(host)
         .join(&format!("/desktop-signin/{id}"))
         .expect("valid public URL")
         .into();
