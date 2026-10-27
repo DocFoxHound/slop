@@ -648,6 +648,8 @@ impl Config {
                 auth_per_minute: int_var("SLOP_RATE_AUTH_PER_MIN", 20)?.max(1) as u32,
                 write_per_minute: int_var("SLOP_RATE_WRITE_PER_MIN", 60)?.max(1) as u32,
                 read_per_minute: int_var("SLOP_RATE_READ_PER_MIN", 600)?.max(1) as u32,
+                check_per_hour: int_var("SLOP_RATE_CHECK_PER_HOUR", 20)?.max(1) as u32,
+                check_github_per_hour: int_var("SLOP_CHECK_GITHUB_PER_HOUR", 40)?.max(0) as u32,
             },
             account_limit_scale: 1,
             demos: DemoConfig {

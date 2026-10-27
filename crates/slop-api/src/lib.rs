@@ -18,6 +18,7 @@ pub mod bug_reports;
 pub mod catalog;
 pub mod challenge;
 pub mod chat;
+pub mod checks;
 pub mod cleanup;
 pub mod config;
 pub mod demos;
@@ -132,6 +133,8 @@ pub struct AppState {
     pub chat_hub: chat::Hub,
     /// Rate limits per account (limits.rs).
     pub account_limiter: Arc<limits::AccountLimiter>,
+    /// The checks anyone can run: their share of GitHub and the reports kept (checks.rs).
+    pub checks: Arc<checks::Shared>,
 }
 
 /// Resolves names to public addresses only (see `AppState::new`).
@@ -198,6 +201,9 @@ impl AppState {
         let avatar_http = avatar_http.build()?;
         let rate_limiter = Arc::new(ratelimit::RateLimiter::new(config.rate_limits));
         let account_limiter = Arc::new(limits::AccountLimiter::new(config.account_limit_scale));
+        let checks = Arc::new(checks::Shared::new(
+            config.rate_limits.check_github_per_hour,
+        ));
         Ok(Self {
             db,
             config: Arc::new(config),
@@ -214,6 +220,7 @@ impl AppState {
             github_app_tokens: Arc::default(),
             chat_hub: chat::Hub::default(),
             account_limiter,
+            checks,
         })
     }
 }
@@ -233,6 +240,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(auth::routes())
         .merge(avatars::routes())
         .merge(catalog::routes())
+        .merge(checks::routes())
         .merge(releases::routes())
         .merge(library::routes())
         .merge(slop_build::routes())

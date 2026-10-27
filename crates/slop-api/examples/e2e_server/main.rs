@@ -377,6 +377,8 @@ async fn run(db: &PgPool) -> anyhow::Result<()> {
             auth_per_minute: 1_000_000,
             write_per_minute: 1_000_000,
             read_per_minute: 1_000_000,
+            check_per_hour: 1_000_000,
+            check_github_per_hour: 1_000_000,
         },
         // A handful of seeded accounts create the apps, offers, reports and reviews of every
         // test file in one run, more than a person would in a day. No browser test meets a real
