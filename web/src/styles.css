@@ -25,6 +25,9 @@
   --ai-assisted-soft: rgba(45, 212, 191, 0.16);
   --ai-heavy: #4ade80;
   --ai-heavy-soft: rgba(74, 222, 128, 0.16);
+  /* The store's icons (storeIcons.ts): lines are the text colour; slime and the goo style's shadow are these. */
+  --icon-accent: var(--slime);
+  --icon-tone: rgba(163, 230, 53, 0.3);
   --radius: 10px;
   color-scheme: dark;
 }
@@ -37,6 +40,8 @@
   --ai-assisted-soft: #ccfbf1;
   --ai-heavy: #166534;
   --ai-heavy-soft: #dcfce7;
+  --icon-accent: #65a30d;
+  --icon-tone: rgba(101, 163, 13, 0.3);
 }
 
 * { box-sizing: border-box; }
@@ -106,6 +111,7 @@ code { font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; background:
 .page { max-width: 1240px; margin: 0 auto; padding: 24px 24px 60px; }
 .page.narrow { max-width: 680px; }
 .page-title { font-size: 28px; margin-bottom: 8px; }
+.page-title.with-icon { display: flex; align-items: center; gap: 10px; }
 .section-title { font-size: 15px; text-transform: uppercase; letter-spacing: 0.08em; margin: 28px 0 12px; }
 .title-row { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .title-row.spread { justify-content: space-between; }
@@ -166,6 +172,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .sidebar a.on { color: var(--slime); }
 
 /* The store bar (components/StoreNav.tsx): the store's sections and its search, like Steam's. */
+/* SLAPorSLOP's own icons (components/StoreIcons.tsx): sized by their width and height, never squeezed. */
+.store-icon { flex: none; display: inline-block; overflow: visible; }
 .store-nav { display: flex; align-items: center; gap: 4px; margin: -8px 0 22px; padding: 6px; background: linear-gradient(90deg, var(--panel-2), var(--panel)); border: 1px solid var(--line); border-radius: var(--radius); }
 .store-nav-links { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .store-nav-links::-webkit-scrollbar { display: none; }
@@ -178,12 +186,12 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .store-more-menu[hidden] { display: none; }
 .more-group { display: flex; flex-direction: column; }
 .more-group h4 { font-size: 11px; letter-spacing: 0.1em; color: var(--faint); text-transform: uppercase; margin: 0 0 6px; }
-.more-group a { padding: 5px 8px; margin: 0 -8px; border-radius: 6px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
+.more-group a { display: flex; align-items: center; gap: 8px; padding: 5px 8px; margin: 0 -8px; border-radius: 6px; color: var(--text-2); font-size: 13px; white-space: nowrap; }
 .more-group a:hover { background: var(--panel-2); color: var(--text); text-decoration: none; }
 .store-search { margin-left: auto; flex: 0 1 300px; min-width: 160px; }
 .store-footer { margin-top: 48px; padding-top: 16px; border-top: 1px solid var(--line); }
 .store-footer nav { display: flex; flex-wrap: wrap; gap: 6px 20px; }
-.store-footer a { color: var(--muted); font-size: 13px; }
+.store-footer a { display: inline-flex; align-items: center; gap: 6px; color: var(--muted); font-size: 13px; }
 .store-footer a:hover { color: var(--text); }
 .signin-nudge { display: flex; gap: 16px; align-items: center; justify-content: space-between; flex-wrap: wrap; margin: 6px 0 4px; }
 .signin-nudge p { margin: 0; max-width: 60ch; }
@@ -224,10 +232,14 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .art .nm { position: absolute; left: 12px; bottom: 9px; right: 12px; font-weight: 900; font-size: 17px; text-shadow: 0 2px 10px rgba(0, 0, 0, 0.6); line-height: 1.1; }
 
 .cat-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 12px; }
-.cat { padding: 16px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); text-decoration: none !important; color: inherit; transition: border-color 0.12s; }
+.cat { display: flex; gap: 12px; align-items: flex-start; padding: 14px; border-radius: 10px; background: var(--panel); border: 1px solid var(--line); text-decoration: none !important; color: inherit; transition: border-color 0.12s; }
 .cat:hover { border-color: var(--slime); }
+/* The category's icon in a well that turns slime on hover. */
+.cat-icon { flex: none; display: grid; place-items: center; width: 42px; height: 42px; border-radius: 10px; background: var(--panel-2); color: var(--text); transition: background-color 0.12s, color 0.12s; }
+.cat:hover .cat-icon, .cat:focus-visible .cat-icon { background: var(--slime-soft); color: var(--slime); }
+.cat-text { min-width: 0; }
 .cat b { display: block; font-size: 15px; }
-.cat span { font-size: 12px; color: var(--muted); }
+.cat-text > span { font-size: 12px; color: var(--muted); }
 
 .filters { display: flex; gap: 14px; align-items: center; flex-wrap: wrap; margin: 14px 0 18px; font-size: 13px; }
 .filters select { background: var(--panel-2); border: 1px solid var(--line); border-radius: 8px; padding: 6px 10px; }
@@ -237,6 +249,7 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .browse-group { margin: 22px 0 28px; }
 .browse-group h3 { display: flex; align-items: baseline; gap: 10px; font-size: 18px; margin-bottom: 10px; }
 .browse-group h3 a { color: inherit; }
+.browse-group h3 .store-icon { vertical-align: -0.2em; margin-right: 8px; }
 .browse-group h3 .muted { font-size: 13px; font-weight: 400; }
 .tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
 .tag-cloud a { padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); color: var(--text); font-size: 13px; text-decoration: none; }
@@ -734,7 +747,7 @@ img.pixelated { image-rendering: pixelated; object-fit: contain !important; }
 .lightbox img { max-width: 100%; max-height: 82vh; min-width: min(320px, 90vw); object-fit: contain; }
 
 .credits { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
-.made-with-people { font-size: 11px; font-weight: 700; color: var(--slime); }
+.made-with-people { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--slime); }
 .since-work { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
 .rating-mid { font-size: 18px; font-weight: 900; }
 .rating-mid.good { color: var(--good); }

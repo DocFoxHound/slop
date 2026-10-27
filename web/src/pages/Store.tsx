@@ -5,6 +5,7 @@ import { Link, useLocation } from "react-router";
 import { api } from "../api";
 import { FeaturedCarousel } from "../components/Featured";
 import { StoreFrame } from "../components/StoreNav";
+import { CategoryIcon } from "../components/StoreIcons";
 import { ErrorState, Loading, SectionHeader, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
@@ -164,8 +165,13 @@ export function Store() {
       <div className="cat-grid">
         {categories.data?.map((c) => (
           <Link className="cat" key={c.slug} to={`/browse/${c.slug}`}>
-            <b>{c.name}</b>
-            <span>{c.description}</span>
+            <span className="cat-icon">
+              <CategoryIcon slug={c.slug} size={26} />
+            </span>
+            <span className="cat-text">
+              <b>{c.name}</b>
+              <span>{c.description}</span>
+            </span>
           </Link>
         ))}
       </div>
