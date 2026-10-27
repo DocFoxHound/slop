@@ -6,6 +6,7 @@ import { useEffect, useState, type FormEvent } from "react";
 import { Link, Navigate, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
 import { api, API_BASE, ApiError, PROVIDER_LABEL, type SignInProvider } from "../api";
+import { LinkSignIn } from "../components/LinkSignIn";
 import { createPasskey, passkeysSupported, signWithPasskey } from "../passkeys";
 import { Loading } from "../components/ui";
 import { formatDate } from "../format";
@@ -484,9 +485,9 @@ export function SignIns() {
         </p>
         <div className="row-actions">
           {available.map((p) => (
-            <a key={p} className="btn small" href={api.linkUrl(p)}>
+            <LinkSignIn key={p} provider={p} onReturn={identities.reload}>
               Link {PROVIDER_LABEL[p]}
-            </a>
+            </LinkSignIn>
           ))}
         </div>
         {error && (

@@ -308,7 +308,7 @@ function ProfileSection() {
 /** A creative's People page and where it stands; nothing for everyone else. */
 function PeoplePage() {
   const mine = useMyPeoplePage();
-  return mine.data ? <MyPeoplePageCard profile={mine.data} inAccount /> : null;
+  return mine.data ? <MyPeoplePageCard profile={mine.data} /> : null;
 }
 
 /** Sign-in & security: linked sign-ins, passkeys, and the sessions signed in now. */

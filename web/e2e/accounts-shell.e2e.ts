@@ -200,14 +200,15 @@ test.describe("search", () => {
     await box.fill("vera");
     await box.press("Enter");
     await expect(page).toHaveURL(/\/people\?q=vera$/);
-    await expect(page.getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+    const vera = page.locator(".people-grid").getByRole("link", { name: /Vera Okafor/ });
+    await expect(vera).toBeVisible();
     await box.fill("nobody-is-called-this");
-    await page.getByRole("search").getByRole("button", { name: "Search" }).click();
+    await box.press("Enter");
     await expect(page.getByText("Nobody matches “nobody-is-called-this” with those filters.")).toBeVisible();
     // Clearing the box shows everyone again.
     await box.fill("");
     await expect(page).toHaveURL(/\/people$/);
-    await expect(page.getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+    await expect(vera).toBeVisible();
   });
 });
 

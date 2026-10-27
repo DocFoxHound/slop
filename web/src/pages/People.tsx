@@ -6,13 +6,13 @@
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate, useParams, useSearchParams } from "react-router";
 
-import { api, ApiError, type AiUse, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
+import { api, ApiError, type AiUse, type CreativeCard, type CreativePage, type PageStatus, type PeopleQuery, type Section, type Work } from "../api";
 import { Avatar } from "../components/Avatar";
 import { AI_USE, AiBadge, Lightbox, PersonCard, RatingLine, ServicesList, WorkTile, accentStyle } from "../components/People";
 import { DesignArea, slopParts } from "../components/PeopleDesign";
 import {
   LiveBar,
-  MyPeoplePageCard,
+  PageStateBadge,
   PageStatusDetails,
   PreviewBar,
   ownPageView,
@@ -42,15 +42,39 @@ export function People() {
   const list = useLoad(() => api.people.list(q), [params.toString()]);
   // A signed-in creative's own page, so it's always easy to find again (with where it stands).
   const mine = useMyPeoplePage();
+  // The front page, before any skill, filter or search: the day's shelves above everyone.
+  const front = params.size === 0;
   const set = (key: string, value: string | null) => {
     const next = new URLSearchParams(params);
     if (value) next.set(key, value);
     else next.delete(key);
     setParams(next, { replace: true });
   };
+  const skillName = list.data?.skills.find((s) => s.slug === q.skill)?.name;
+  const order = q.sort === "rating" ? "Best rated first" : q.sort === "clients" ? "Most clients first" : "Shuffled daily, so nobody is buried";
 
   return (
     <div className="page">
+      <nav className="store-nav people-nav" aria-label="People">
+        <div className="store-nav-links" role="group" aria-label="Skill">
+          <button type="button" className={!q.skill ? "on" : ""} aria-pressed={!q.skill} onClick={() => set("skill", null)}>
+            Everyone
+          </button>
+          {list.data?.skills.map((s) => (
+            <button
+              type="button"
+              key={s.slug}
+              className={q.skill === s.slug ? "on" : ""}
+              aria-pressed={q.skill === s.slug}
+              onClick={() => set("skill", s.slug)}
+            >
+              {s.name} <span className="faint">{s.count}</span>
+            </button>
+          ))}
+        </div>
+        <PeopleSearch value={q.q ?? ""} onSearch={(text) => set("q", text.trim() || null)} />
+      </nav>
+
       <div className="people-hero">
         <div>
           <span className="badge neutral">SEPARATE FROM THE STORE</span>
@@ -64,7 +88,12 @@ export function People() {
           <Link className="btn" to="/people/jobs">
             Your jobs
           </Link>
-          {!mine.data && (
+          {mine.data ? (
+            <Link className="btn slime" to={`/people/${mine.data.handle}`}>
+              Your People page
+              {mine.data.status.state !== "live" && <PageStateBadge status={mine.data.status} />}
+            </Link>
+          ) : (
             <Link className="btn slime" to="/people/me">
               Offer your services
             </Link>
@@ -72,82 +101,57 @@ export function People() {
         </div>
       </div>
 
-      {mine.data && <MyPeoplePageCard profile={mine.data} />}
+      {front && <PeopleShelves />}
 
-      <PeopleSearch value={q.q ?? ""} onSearch={(text) => set("q", text.trim() || null)} />
-
-      <div className="seg wrap" role="group" aria-label="Skill">
-        <button type="button" className={!q.skill ? "on" : ""} aria-pressed={!q.skill} onClick={() => set("skill", null)}>
-          Everyone
-        </button>
-        {list.data?.skills.map((s) => (
-          <button
-            type="button"
-            key={s.slug}
-            className={q.skill === s.slug ? "on" : ""}
-            aria-pressed={q.skill === s.slug}
-            onClick={() => set("skill", s.slug)}
-          >
-            {s.name} <span className="faint">{s.count}</span>
-          </button>
-        ))}
-      </div>
-      <div className="filters">
-        <label>
-          Order{" "}
-          <select value={q.sort ?? "shuffle"} onChange={(e) => set("sort", e.target.value === "shuffle" ? null : e.target.value)}>
-            <option value="shuffle">Shuffled daily</option>
-            <option value="rating">Best rated</option>
-            <option value="clients">Most clients</option>
-          </select>
-        </label>
-        <label>
-          AI use{" "}
-          <select value={q.ai ?? ""} onChange={(e) => set("ai", e.target.value || null)}>
-            <option value="">Any</option>
-            {(Object.keys(AI_USE) as AiUse[]).map((k) => (
-              <option key={k} value={k}>
-                {AI_USE[k].short}
-              </option>
-            ))}
-          </select>
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={Boolean(q.taking_work)} onChange={(e) => set("taking", e.target.checked ? "1" : null)} /> Taking
-          work now
-        </label>
-        <label className="check">
-          <input type="checkbox" checked={Boolean(q.studios)} onChange={(e) => set("studios", e.target.checked ? "1" : null)} /> Studios
-          only
-        </label>
-      </div>
-
-      {list.error ? (
-        <ErrorState error={list.error} onRetry={list.reload} />
-      ) : !list.data ? (
-        <Loading />
-      ) : list.data.people.length === 0 ? (
-        <div className="empty-state">{q.q ? `Nobody matches “${q.q}” with those filters.` : "Nobody matches those filters yet."}</div>
-      ) : (
-        <div className="people-grid">
-          {list.data.people.map((c) => (
-            <PersonCard c={c} key={c.handle} />
-          ))}
+      <section aria-labelledby="people-all-title">
+        <div className="section-h">
+          <h2 id="people-all-title">{skillName ?? "Everyone"}</h2>
+          <span className="sub">{q.q ? `Matching “${q.q}” · ${order}` : order}</span>
         </div>
-      )}
+        <div className="filters">
+          <label>
+            Order{" "}
+            <select value={q.sort ?? "shuffle"} onChange={(e) => set("sort", e.target.value === "shuffle" ? null : e.target.value)}>
+              <option value="shuffle">Shuffled daily</option>
+              <option value="rating">Best rated</option>
+              <option value="clients">Most clients</option>
+            </select>
+          </label>
+          <label>
+            AI use{" "}
+            <select value={q.ai ?? ""} onChange={(e) => set("ai", e.target.value || null)}>
+              <option value="">Any</option>
+              {(Object.keys(AI_USE) as AiUse[]).map((k) => (
+                <option key={k} value={k}>
+                  {AI_USE[k].short}
+                </option>
+              ))}
+            </select>
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={Boolean(q.taking_work)} onChange={(e) => set("taking", e.target.checked ? "1" : null)} /> Taking
+            work now
+          </label>
+          <label className="check">
+            <input type="checkbox" checked={Boolean(q.studios)} onChange={(e) => set("studios", e.target.checked ? "1" : null)} /> Studios
+            only
+          </label>
+        </div>
 
-      <div className="panel panel-pad people-how">
-        <b>How hiring works</b>
-        <ol className="muted">
-          <li>Pick a creative and one of your projects (any stage, public or private).</li>
-          <li>They send an offer: price, date, who owns the work. You see it in plain words.</li>
-          <li>Accept and pay them directly (half now and half on delivery, unless they choose otherwise). SLAPorSLOP never holds the money.</li>
-          <li>When it's delivered, say it looks good. They're credited on your app's page, and your app gets the ✋ Made with people badge.</li>
-        </ol>
-        <p className="muted small">
-          Your contract is with the creative, not SLAPorSLOP. SLAPorSLOP takes a 5% fee from what the creative receives; nothing is added to your price.
-        </p>
-      </div>
+        {list.error ? (
+          <ErrorState error={list.error} onRetry={list.reload} />
+        ) : !list.data ? (
+          <Loading />
+        ) : list.data.people.length === 0 ? (
+          <div className="empty-state">{q.q ? `Nobody matches “${q.q}” with those filters.` : "Nobody matches those filters yet."}</div>
+        ) : (
+          <div className="people-grid">
+            {list.data.people.map((c) => (
+              <PersonCard c={c} key={c.handle} />
+            ))}
+          </div>
+        )}
+      </section>
 
       {!mine.data && (
         <div className="panel panel-pad people-how people-offer">
@@ -167,6 +171,48 @@ export function People() {
   );
 }
 
+/**
+ * The front page's shelves, like the store's: a different mix every day (people/discover.rs).
+ * None is ordered by ratings or clients (LEGAL-GUIDANCE HUM-10).
+ */
+function PeopleShelves() {
+  const shelves = useLoad(() => api.people.discover(), []);
+  if (shelves.error) return <ErrorState error={shelves.error} onRetry={shelves.reload} />;
+  const d = shelves.data;
+  if (!d) return null;
+  const shelf = (title: string, sub: string, people: CreativeCard[], all?: string) =>
+    people.length > 0 && (
+      <section className="people-shelf-section" aria-label={title}>
+        <SectionHeader title={title} sub={sub}>
+          {all && (
+            <Link to={all} className="sub">
+              See all →
+            </Link>
+          )}
+        </SectionHeader>
+        <div className="people-shelf">
+          {people.map((c) => (
+            <PersonCard c={c} key={c.handle} />
+          ))}
+        </div>
+      </section>
+    );
+  return (
+    <>
+      {shelf("Taking work now", "Open for new work and ready to be paid. A different mix every day.", d.taking_work, "/people?taking=1")}
+      {d.spotlight &&
+        shelf(
+          `Spotlight: ${d.spotlight.skill.name}`,
+          "A different skill every day",
+          d.spotlight.people,
+          `/people?skill=${encodeURIComponent(d.spotlight.skill.slug)}`,
+        )}
+      {shelf("New on People", "Pages that went live lately", d.new)}
+      {shelf("Studios", "Teams who take on bigger jobs together", d.studios, "/people?studios=1")}
+    </>
+  );
+}
+
 /** The People search: names, handles and headlines (/people?q=…). The store search is the store's. */
 function PeopleSearch({ value, onSearch }: { value: string; onSearch: (text: string) => void }) {
   const [text, setText] = useState(value);
@@ -176,7 +222,7 @@ function PeopleSearch({ value, onSearch }: { value: string; onSearch: (text: str
     onSearch(text);
   };
   return (
-    <form className="search people-search" role="search" onSubmit={submit}>
+    <form className="search store-search people-search" role="search" onSubmit={submit}>
       <input
         type="search"
         placeholder="Search people by name or what they do…"
@@ -189,7 +235,6 @@ function PeopleSearch({ value, onSearch }: { value: string; onSearch: (text: str
           if (!e.target.value && value) onSearch("");
         }}
       />
-      <button className="btn slime">Search</button>
     </form>
   );
 }

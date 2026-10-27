@@ -12,6 +12,7 @@
 //! HUM-10): the directory's default order is a daily shuffle.
 
 pub mod design;
+mod discover;
 pub mod jobs;
 pub mod mediation;
 pub mod portfolio;
@@ -87,6 +88,7 @@ pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/people", get(directory))
         .route("/people/skills", get(skills))
+        .route("/people/discover", get(discover::discover))
         .route("/people/{handle}", get(page))
         .route("/me/creative", get(my_profile).put(save_profile))
         .route("/me/creative/portfolio", get(portfolio::overview))

@@ -515,6 +515,112 @@ async fn the_directory_is_a_daily_shuffle_of_at_most_200(db: PgPool) {
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn the_front_pages_shelves_rotate_and_never_rank_on_performance(db: PgPool) {
+    let app = people_app(db).await;
+    // Everyone offers music only, so music is the spotlight whatever the day.
+    let with = |name: &str, extra: Value| {
+        let mut p = profile("x", true);
+        p["name"] = json!(name);
+        p["skills"] = json!(["music"]);
+        p["services"] = json!([]);
+        for (k, v) in extra.as_object().unwrap() {
+            p[k] = v.clone();
+        }
+        p
+    };
+    creative_with(&app, "vera", "US", with("Vera", json!({}))).await;
+    creative_with(&app, "olga", "US", with("Olga", json!({}))).await;
+    creative_with(
+        &app,
+        "booked",
+        "US",
+        with("Booked", json!({"taking_work": false})),
+    )
+    .await;
+    let studio = with(
+        "Forge",
+        json!({"kind": "studio", "team_size": 3, "taking_work": false}),
+    );
+    creative_with(&app, "forge", "US", studio).await;
+    // Olga went live 90 days ago; Vera's page went live after Booked's.
+    exec(
+        &app,
+        "update portfolio_sets p set reviewed_at = now() - interval '90 days' from creatives c
+         where c.user_id = p.creative_id and c.handle = 'olga'",
+    )
+    .await;
+    exec(
+        &app,
+        "update portfolio_sets p set reviewed_at = now() - interval '1 day' from creatives c
+         where c.user_id = p.creative_id and c.handle = 'vera'",
+    )
+    .await;
+    exec(
+        &app,
+        "update portfolio_sets p set reviewed_at = now() - interval '2 days' from creatives c
+         where c.user_id = p.creative_id and c.handle in ('booked', 'forge')",
+    )
+    .await;
+    // Payments not set up: listed, but not "taking work now".
+    exec(
+        &app,
+        "update creatives set stripe_status = 'pending' where handle = 'olga'",
+    )
+    .await;
+    let shelf = |v: &Value| -> Vec<String> {
+        v.as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["handle"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let (status, first) = call(&app, req(Method::GET, "/v1/people/discover")).await;
+    assert_eq!(status, StatusCode::OK, "{first}");
+    assert_eq!(shelf(&first["taking_work"]), ["vera"]);
+    assert_eq!(
+        shelf(&first["new"]),
+        ["vera", "booked", "forge"],
+        "new pages, newest first; Olga's is too old"
+    );
+    assert_eq!(first["spotlight"]["skill"]["slug"], "music");
+    assert_eq!(first["spotlight"]["skill"]["name"], "Music");
+    let mut spot = shelf(&first["spotlight"]["people"]);
+    spot.sort();
+    assert_eq!(spot, ["booked", "forge", "olga", "vera"]);
+    assert_eq!(shelf(&first["studios"]), ["forge"]);
+
+    // The day's shuffle: the same order all day, and nothing about ratings or clients.
+    let (_, second) = call(&app, req(Method::GET, "/v1/people/discover")).await;
+    assert_eq!(first, second);
+    let today = OffsetDateTime::now_utc().date().to_string();
+    let expected: Vec<String> = sqlx::query_scalar(
+        "select handle from creatives where 'music' = any(skills) order by md5(handle || $1)",
+    )
+    .bind(format!("{today}music"))
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(shelf(&first["spotlight"]["people"]), expected);
+
+    // Hidden pages are on no shelf.
+    exec(
+        &app,
+        "update creatives set hidden_reason = 'Stolen art' where handle = 'vera'",
+    )
+    .await;
+    let (_, after) = call(&app, req(Method::GET, "/v1/people/discover")).await;
+    assert!(shelf(&after["taking_work"]).is_empty());
+    assert_eq!(shelf(&after["new"]), ["booked", "forge"]);
+    assert!(!after.to_string().contains("\"vera\""));
+
+    // Nobody offering anything: no spotlight.
+    exec(&app, "update creatives set hidden_reason = 'x'").await;
+    let (_, empty) = call(&app, req(Method::GET, "/v1/people/discover")).await;
+    assert_eq!(empty["spotlight"], Value::Null);
+    assert!(shelf(&empty["new"]).is_empty());
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn skills_are_listed_in_the_directorys_order(db: PgPool) {
     let app = test_app(db).await;
     let (status, skills) = call(&app, req(Method::GET, "/v1/people/skills")).await;

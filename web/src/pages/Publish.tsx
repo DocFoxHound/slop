@@ -27,6 +27,7 @@ import {
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { DonationsPanel } from "../components/DonationsManage";
 import { LicensePicker } from "../components/LicensePicker";
+import { LinkSignIn } from "../components/LinkSignIn";
 import { TagPicker } from "../components/TagPicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
@@ -959,9 +960,13 @@ function RepoOwnership({ repoUrl, token }: { repoUrl: string; token?: RepoTokenI
     <div className="notice ownership small" role="status">
       <p>{result.message.charAt(0).toUpperCase() + result.message.slice(1)}</p>
       {result.link && (
-        <a className="btn small" href={api.linkUrl(result.link, window.location.pathname)}>
+        <LinkSignIn
+          provider={result.link}
+          returnTo={window.location.pathname}
+          onReturn={() => void api.repoOwnership(url, token).then(setResult, () => undefined)}
+        >
           Link {PROVIDER_LABEL[result.link]}
-        </a>
+        </LinkSignIn>
       )}
       {result.method === "code" && result.code && (
         <div className="row-actions">

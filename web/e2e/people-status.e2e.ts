@@ -69,19 +69,16 @@ test("a creative finds their own page again from People and from their account, 
   // Remy: his first portfolio waits for review.
   const remy = await browser.newPage();
   await signIn(remy, "pendingCreative");
+  // On People: a button in the header, saying where the page stands until it's live.
   await remy.goto("/people");
-  const card = remy.getByRole("region", { name: "Your People page" });
-  await expect(card).toContainText("Remy");
-  await expect(card).toContainText(`/people/${ids.pendingCreativeHandle}`);
-  await expect(card).toContainText("WAITING FOR REVIEW");
-  await expect(card).toContainText("Your portfolio is waiting for SLAPorSLOP's review.");
+  const button = remy.getByRole("link", { name: /^Your People page/ });
+  await expect(button).toContainText("WAITING FOR REVIEW");
+  await expect(button).toHaveAttribute("href", `/people/${ids.pendingCreativeHandle}`);
   await expect(remy.getByRole("link", { name: "Offer your services" })).toHaveCount(0);
-  await card.getByRole("link", { name: "View your page" }).click();
+  await expect(remy.getByRole("region", { name: "Your People page" })).toHaveCount(0);
+  await button.click();
   await expect(remy).toHaveURL(`/people/${ids.pendingCreativeHandle}`);
   await expect(remy.getByRole("region", { name: "Your page's status" })).toContainText("Waiting for SLAPorSLOP's review");
-  await remy.goto("/people");
-  await remy.getByRole("region", { name: "Your People page" }).getByRole("link", { name: "Edit", exact: true }).click();
-  await expect(remy).toHaveURL("/people/me");
 
   // On the account page, under Profile; old-style links to it work too.
   await remy.goto("/account");
@@ -98,6 +95,8 @@ test("a creative finds their own page again from People and from their account, 
   const vera = await veraContext.newPage();
   await signIn(vera, "creative");
   await vera.goto("/people");
+  await expect(vera.getByRole("link", { name: "Your People page", exact: true })).toHaveAttribute("href", `/people/${ids.creativeHandle}`);
+  await vera.goto("/account");
   await expect(vera.getByRole("region", { name: "Your People page" })).toContainText("LIVE");
   await expect(vera.getByRole("region", { name: "Your People page" })).toContainText("Everyone can see it on People.");
   const results = await new AxeBuilder({ page: vera }).include(".people-mine").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
@@ -109,7 +108,7 @@ test("a creative finds their own page again from People and from their account, 
   await signIn(pat, "player");
   await pat.goto("/people");
   await expect(pat.getByRole("link", { name: "Offer your services" })).toBeVisible();
-  await expect(pat.getByRole("region", { name: "Your People page" })).toHaveCount(0);
+  await expect(pat.getByRole("link", { name: /^Your People page/ })).toHaveCount(0);
   await pat.goto("/account");
   await expect(pat.getByRole("heading", { name: "Privacy" })).toBeVisible();
   await expect(pat.getByRole("region", { name: "Your People page" })).toHaveCount(0);
@@ -118,7 +117,7 @@ test("a creative finds their own page again from People and from their account, 
   const visitor = await browser.newPage();
   await visitor.goto("/people");
   await expect(visitor.getByRole("link", { name: "Offer your services" })).toBeVisible();
-  await expect(visitor.getByRole("region", { name: "Your People page" })).toHaveCount(0);
+  await expect(visitor.getByRole("link", { name: /^Your People page/ })).toHaveCount(0);
 });
 
 test("saving in the editor goes to the page, which says it's saved and where it stands", async ({ page }) => {
@@ -204,8 +203,12 @@ for (const [name, s] of Object.entries(STATES)) {
     await expect(status).toContainText(s.badge);
     for (const text of s.says) await expect(status).toContainText(text);
     if ("link" in s) await expect(status.getByRole("link", { name: s.link[0] })).toHaveAttribute("href", s.link[1]);
-    // The People card and the editor say the same.
+    // The People button (until it's live), the account and the editor say the same.
     await page.goto("/people");
+    const button = page.getByRole("link", { name: /^Your People page/ });
+    if (s.status.state === "live") await expect(button).toHaveText("Your People page");
+    else await expect(button).toContainText(s.badge);
+    await page.goto("/account");
     await expect(page.getByRole("region", { name: "Your People page" })).toContainText(s.badge);
     await page.goto("/people/me");
     await expect(page.getByRole("region", { name: "Your page's status" })).toContainText(s.title);

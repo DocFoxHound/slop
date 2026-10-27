@@ -277,37 +277,27 @@ export function useMyPeoplePage() {
   );
 }
 
-/** "Your People page": its address, status and the way to edit it (People directory, account). */
-export function MyPeoplePageCard({ profile, inAccount = false }: { profile: MyProfile; inAccount?: boolean }) {
-  const body = (
-    <>
-      <p className="people-mine-who small">
-        <b>{profile.name}</b> <span className="muted">/people/{profile.handle}</span> <PageStateBadge status={profile.status} />
-      </p>
-      <p className="small">{pageStateSummary(profile.status)}</p>
-      <div className="row-actions">
-        <Link className="btn small slime" to={`/people/${profile.handle}`}>
-          View your page
-        </Link>
-        <Link className="btn small" to="/people/me">
-          Edit
-        </Link>
-      </div>
-    </>
-  );
-  if (inAccount)
-    return (
-      <section id="people-page" className="account-panel" aria-labelledby="people-page-title">
-        <h3 className="account-panel-title" id="people-page-title">
-          Your People page
-        </h3>
-        <div className="panel panel-pad people-mine">{body}</div>
-      </section>
-    );
+/** Account → Profile → "Your People page": its address, status and the way to edit it. */
+export function MyPeoplePageCard({ profile }: { profile: MyProfile }) {
   return (
-    <section className="panel panel-pad people-mine" aria-labelledby="people-mine-title">
-      <h2 id="people-mine-title">Your People page</h2>
-      {body}
+    <section id="people-page" className="account-panel" aria-labelledby="people-page-title">
+      <h3 className="account-panel-title" id="people-page-title">
+        Your People page
+      </h3>
+      <div className="panel panel-pad people-mine">
+        <p className="people-mine-who small">
+          <b>{profile.name}</b> <span className="muted">/people/{profile.handle}</span> <PageStateBadge status={profile.status} />
+        </p>
+        <p className="small">{pageStateSummary(profile.status)}</p>
+        <div className="row-actions">
+          <Link className="btn small slime" to={`/people/${profile.handle}`}>
+            View your page
+          </Link>
+          <Link className="btn small" to="/people/me">
+            Edit
+          </Link>
+        </div>
+      </div>
     </section>
   );
 }
