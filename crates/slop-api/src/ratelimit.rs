@@ -158,6 +158,12 @@ fn classify(method: &Method, path: &str) -> Option<Class> {
     if path == "/v1/check/repository" || path == "/v1/check/portfolio" {
         return Some(Class::Check);
     }
+    // AI tools registering, and starting an approval (agent_oauth.rs). Their token requests
+    // count as writes: services such as Claude.ai refresh for all their users from a few
+    // addresses.
+    if path == "/v1/oauth/register" || path == "/v1/oauth/authorize" {
+        return Some(Class::Auth);
+    }
     if method == Method::GET || method == Method::HEAD || method == Method::OPTIONS {
         Some(Class::Read)
     } else {
@@ -167,7 +173,7 @@ fn classify(method: &Method, path: &str) -> Option<Class> {
 
 /// The client's IP: from the configured header when behind a load balancer that sets it, else
 /// the connection's peer address.
-fn client_ip(state: &AppState, req: &Request) -> Option<IpAddr> {
+pub(crate) fn client_ip(state: &AppState, req: &Request) -> Option<IpAddr> {
     if let Some(header) = &state.config.client_ip_header {
         return req
             .headers()

@@ -420,6 +420,14 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .agent-setup-details { margin: 6px 0; }
 .agent-setup-details dt { font-weight: 700; margin-top: 8px; }
 .agent-setup-details dd { margin: 2px 0 0; }
+.agent-way-title { margin: 22px 0 4px; font-size: 15px; color: var(--text); }
+.token-connected { margin-top: 2px; }
+/* Approving an AI tool (pages/ConnectAi.tsx): where the browser goes, prominently. */
+.connect-ai-where { border: 1px solid var(--line); border-radius: 8px; padding: 10px 14px; margin: 12px 0; }
+.connect-ai-where p { margin: 4px 0; }
+.connect-ai-where.warn { border-color: rgba(250, 204, 21, 0.55); background: rgba(250, 204, 21, 0.08); }
+.connect-ai-where.warn b { color: var(--warn); }
+.connect-ai-host { font-size: 1.15em; overflow-wrap: anywhere; }
 .copy-row { display: flex; gap: 8px; align-items: flex-start; }
 .copy-row .copy-row-text { flex: 1; min-width: 0; margin: 4px 0; }
 .copy-row .btn { flex: none; margin-top: 7px; }

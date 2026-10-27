@@ -1,7 +1,21 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import { OSES, SETUPS, TOOLS, checkCommand, codexConfig, connectCommand, guessOs, saveCommand } from "./agentSetup";
+import {
+  EASY_TOOLS,
+  OSES,
+  SETUPS,
+  TOOLS,
+  checkCommand,
+  codexConfig,
+  connectCommand,
+  cursorConfig,
+  easyCommand,
+  guessOs,
+  mcpAddress,
+  saveCommand,
+  signInCommand,
+} from "./agentSetup";
 
 const SECRET = "slopmk_abc123DEF-456_xyz";
 const URL = "https://slaporslop.games/v1/maker/mcp";
@@ -70,5 +84,41 @@ describe("setting up an AI tool without pasting the token anywhere", () => {
     expect(guessOs("Mozilla/5.0 (Windows NT 10.0; Win64; x64)")).toBe("windows");
     expect(guessOs("Mozilla/5.0 (Macintosh; Intel Mac OS X 14_5)")).toBe("macos");
     expect(guessOs("Mozilla/5.0 (X11; Linux x86_64)")).toBe("linux");
+  });
+});
+
+describe("the easy way: approving the tool in the browser, no token", () => {
+  const MCP = "https://slaporslop.games/mcp";
+
+  it("uses the short MCP address", () => {
+    expect(mcpAddress("https://slaporslop.games")).toBe(MCP);
+    expect(mcpAddress("https://slaporslop.games/")).toBe(MCP);
+    expect(mcpAddress("http://127.0.0.1:8080")).toBe("http://127.0.0.1:8080/mcp");
+  });
+
+  it("adds SLAPorSLOP to each tool with one command and no token or header", () => {
+    expect(easyCommand("claude-code", MCP)).toBe("claude mcp add --transport http --scope user slaporslop https://slaporslop.games/mcp");
+    expect(easyCommand("codex", MCP)).toBe("codex mcp add slaporslop --url https://slaporslop.games/mcp");
+    expect(easyCommand("gemini", MCP)).toBe("gemini mcp add --scope user --transport http slaporslop https://slaporslop.games/mcp");
+    expect(easyCommand("grok", MCP)).toBe("grok mcp add --transport http slaporslop https://slaporslop.games/mcp");
+    // Set up in the tool's own settings instead.
+    for (const tool of ["claude", "chatgpt", "cursor", "other"] as const) expect(easyCommand(tool, MCP)).toBeUndefined();
+    for (const { id } of EASY_TOOLS) {
+      const command = easyCommand(id, MCP) ?? "";
+      expect(command).not.toMatch(/slopmk_|SLOP_TOKEN|Authorization|--header|bearer/i);
+    }
+    expect(JSON.parse(cursorConfig(MCP))).toEqual({ mcpServers: { slaporslop: { url: MCP } } });
+  });
+
+  it("says how each tool starts the browser sign-in, where it has a command", () => {
+    expect(signInCommand("claude-code")).toBe("claude mcp login slaporslop");
+    expect(signInCommand("codex")).toBe("codex mcp login slaporslop");
+    expect(signInCommand("gemini")).toBe("/mcp auth slaporslop");
+    expect(signInCommand("claude")).toBeUndefined();
+    expect(signInCommand("chatgpt")).toBeUndefined();
+  });
+
+  it("lists the easy way's tools, with Claude Code first", () => {
+    expect(EASY_TOOLS.map((t) => t.id)).toEqual(["claude-code", "claude", "chatgpt", "codex", "cursor", "gemini", "grok", "other"]);
   });
 });

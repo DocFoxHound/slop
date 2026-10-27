@@ -33,6 +33,7 @@ mod checks_tests;
 mod icons_tests;
 mod messages_tests;
 mod money_tests;
+mod oauth_tests;
 mod people_tests;
 mod pictures_tests;
 mod publishing_tests;
