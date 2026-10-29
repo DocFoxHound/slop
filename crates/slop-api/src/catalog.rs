@@ -27,6 +27,7 @@ use crate::{
 pub fn routes() -> Router<AppState> {
     Router::new()
         .route("/categories", get(list_categories))
+        .route("/browse", get(browse))
         .route("/apps", get(list_apps).post(create_app))
         .route("/apps/{slug}", get(get_app).patch(update_app))
         .route("/apps/{slug}/similar", get(similar_apps))
@@ -492,6 +493,151 @@ async fn list_apps(
     let next_offset = (apps.len() as i64 > limit).then_some(offset + limit);
     apps.truncate(limit as usize);
     Ok(Json(AppPage { apps, next_offset }))
+}
+
+// ---------------------------------------------------------------------------------------------
+// Browse: the top of every category, or of every tag in one (DESIGN §5)
+
+#[derive(Deserialize)]
+struct BrowseQuery {
+    /// One reel per tag of this category. Without it, one reel per category.
+    category: Option<String>,
+}
+
+#[derive(Serialize)]
+struct BrowseReel {
+    /// The category's slug, or the tag's.
+    slug: String,
+    name: String,
+    /// Up to `REEL_APPS`; empty when nothing the viewer can see is there yet.
+    apps: Vec<AppSummary>,
+}
+
+#[derive(Serialize)]
+struct BrowsePage {
+    /// Every category (in the store's order), or every tag of the category (by name), each once.
+    reels: Vec<BrowseReel>,
+}
+
+#[derive(sqlx::FromRow)]
+struct ReelApp {
+    #[sqlx(flatten)]
+    app: AppSummary,
+    reel: String,
+}
+
+/// Apps in each reel.
+const REEL_APPS: i64 = 10;
+
+/// One request for a Browse page: a reel per category (`/browse`) or per tag of one category
+/// (`/browse/{category}`), each the top `REEL_APPS` most played this week. A quiet week, or a
+/// small catalog, fills the rest from Popular this month's ranking (most added to libraries,
+/// then most players this month), then the best rated. Apps are in the store as for
+/// `list_apps` (the viewer's age view, hidden and delisted apps, missed deadlines), each
+/// category's limits apply (Kids & Family, and its tags), and like the front page's popular
+/// shelf it leaves out Coming soon apps, dead projects and community branches.
+async fn browse(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Query(query): Query<BrowseQuery>,
+) -> ApiResult<Json<BrowsePage>> {
+    let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
+    let rules = state.config.catalog;
+
+    // The reels, in order, even the empty ones: the page lists every category or tag.
+    let groups: Vec<(String, String)> = match &query.category {
+        None => {
+            sqlx::query_as("select slug, name from categories order by position")
+                .fetch_all(&state.db)
+                .await?
+        }
+        Some(category) => {
+            let exists: bool =
+                sqlx::query_scalar("select exists (select 1 from categories where slug = $1)")
+                    .bind(category)
+                    .fetch_one(&state.db)
+                    .await?;
+            if !exists {
+                return Err(ApiError::NotFound);
+            }
+            sqlx::query_as(
+                "select t.slug, t.name from tags t join categories c on c.id = t.category_id
+                 where c.slug = $1 order by t.name",
+            )
+            .bind(category)
+            .fetch_all(&state.db)
+            .await?
+        }
+    };
+
+    // `v`: what may show, with what it's ranked by. `r`: each app's place in each reel it's in
+    // (a window over the reels), so the whole page is this one query.
+    let mut qb = QueryBuilder::new(
+        "with v as (select a.id, a.slug, a.updated_at, a.min_age, a.content_labels, ",
+    );
+    qb.push(PLAYERS_THIS_WEEK).push(
+        " as week,
+           (select count(*) from library_entries l
+            where l.app_id = a.id and l.added_at >= date_trunc('month', now())) as added,
+           (select coalesce(max(p.players), 0) from pulse_counts p
+            where p.app_id = a.id and p.bucket >= date_trunc('month', now())) as month_players,
+           (select case when count(*) >= ",
+    );
+    qb.push_bind(crate::votes::MIN_VOTES).push(
+        " then sum(vo.weight) filter (where vo.vote = 1) / nullif(sum(vo.weight), 0) end
+            from votes vo where vo.app_id = a.id) as rating,
+           (select count(*) from votes vo where vo.app_id = a.id) as votes
+         from apps a where ",
+    );
+    push_store_visible(&mut qb, rules, policy);
+    qb.push(
+        " and a.parent_app_id is null and a.stage <> 'coming_soon'
+          and not (a.stage <> 'released' and a.last_commit_at is not null
+                   and a.last_commit_at < now() - make_interval(days => ",
+    )
+    .push_bind(rules.dead_after_days)
+    .push(
+        "))),
+         r as (select m.reel, v.id, row_number() over (partition by m.reel order by v.week desc,
+                 v.added desc, v.month_players desc, v.rating desc nulls last, v.votes desc,
+                 v.updated_at desc, v.slug) as n
+               from (select distinct ",
+    )
+    .push(if query.category.is_some() {
+        "t.slug"
+    } else {
+        "c.slug"
+    })
+    .push(
+        " as reel, v.id from v join app_tags at on at.app_id = v.id join tags t on t.id = at.tag_id
+               join categories c on c.id = t.category_id
+               where not (v.min_age > coalesce(c.max_age, 18) or v.content_labels && c.excluded_labels)",
+    );
+    if let Some(category) = &query.category {
+        qb.push(" and c.slug = ").push_bind(category);
+    }
+    qb.push(") m join v on v.id = m.id) ");
+    push_summary_columns_with(&mut qb, &state.config, ", r.reel");
+    qb.push(" join r on r.id = a.id where r.n <= ")
+        .push_bind(REEL_APPS)
+        .push(" order by r.reel, r.n");
+    let rows: Vec<ReelApp> = qb.build_query_as().fetch_all(&state.db).await?;
+
+    let mut by_reel: std::collections::HashMap<String, Vec<AppSummary>> =
+        std::collections::HashMap::new();
+    for row in rows {
+        by_reel.entry(row.reel).or_default().push(row.app);
+    }
+    let reels = groups
+        .into_iter()
+        .map(|(slug, name)| BrowseReel {
+            apps: by_reel.remove(&slug).unwrap_or_default(),
+            slug,
+            name,
+        })
+        .collect();
+    Ok(Json(BrowsePage { reels }))
 }
 
 // ---------------------------------------------------------------------------------------------
