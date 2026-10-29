@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// List pages: search, a category, a tag, and upcoming apps. All share one filterable grid.
+// List pages: search, upcoming apps, a tag, and everything in a category share one filterable grid.
+// Browse and a category's page are reels instead: the top of each category, or of each sub-genre.
 
 import { useState } from "react";
 import { Link, useParams, useSearchParams } from "react-router";
@@ -7,9 +8,9 @@ import { Link, useParams, useSearchParams } from "react-router";
 import { ACCESSIBILITY, api, ApiError, type AppQuery, type AppStage, type AppSummary, type Category } from "../api";
 import { CONTENT_LABEL } from "../format";
 import { detectOs, OS_LABEL } from "../platform";
-import { StoreFrame } from "../components/StoreNav";
-import { CategoryIcon, StoreIcon } from "../components/StoreIcons";
-import { ErrorState, Loading, Shelf } from "../components/ui";
+import { CategorySidebar, CategoryTree, StoreFrame } from "../components/StoreNav";
+import { CategoryIcon, StoreIcon, TagIcon } from "../components/StoreIcons";
+import { ErrorState, Loading, Reel, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
 
 const PAGE = 24;
@@ -249,40 +250,44 @@ export function Upcoming() {
   );
 }
 
-export function Browse() {
-  useDocumentTitle("Categories");
-  const categories = useLoad(() => api.categories(), []);
-  return (
-    <StoreFrame sidebar>
-      <h1 className="page-title">All categories</h1>
-      <p className="muted">Broad categories on top, specific tags underneath. Apps have several tags, so they show up in more than one place.</p>
-      {categories.error && <ErrorState error={categories.error} onRetry={categories.reload} />}
-      {!categories.data && !categories.error && <Loading />}
-      {categories.data?.map((c) => (
-        <div className="browse-group" key={c.slug}>
-          <h3>
-            <Link to={`/browse/${c.slug}`}>
-              <CategoryIcon slug={c.slug} size={22} />
-              {c.name}
-            </Link>{" "}
-            <span className="muted">{c.description}</span>
-          </h3>
-          <TagCloud category={c} />
-        </div>
-      ))}
-    </StoreFrame>
-  );
-}
+/** What every Browse reel is, under the page's title. */
+const REEL_NOTE = "The most played this week, topped up in a quiet week with what's being added to libraries and rated best.";
 
-function TagCloud({ category }: { category: Category }) {
+/** Browse: the categories in a tree on the left, and the top of each, one reel apiece. */
+export function Browse() {
+  useDocumentTitle("Browse");
+  const categories = useLoad(() => api.categories(), []);
+  const top = useLoad(() => api.browse(), []);
   return (
-    <div className="tag-cloud">
-      {category.tags.map((t) => (
-        <Link key={t.slug} to={`/tag/${t.slug}`}>
-          {t.name}
-        </Link>
-      ))}
-    </div>
+    <StoreFrame sidebar={<CategoryTree categories={categories.data} />}>
+      <h1 className="page-title">All categories</h1>
+      <p className="muted">{REEL_NOTE} Open a category for its sub-genres.</p>
+      {categories.error && <ErrorState error={categories.error} onRetry={categories.reload} />}
+      {top.error && <ErrorState error={top.error} onRetry={top.reload} />}
+      {!categories.data && !categories.error && <Loading />}
+      {!top.error &&
+        categories.data?.map((c) => (
+          <section className="browse-section" key={c.slug} aria-labelledby={`browse-${c.slug}`}>
+            <div className="section-h browse-head">
+              <h2 id={`browse-${c.slug}`}>
+                <Link to={`/browse/${c.slug}`}>
+                  <CategoryIcon slug={c.slug} size={22} />
+                  {c.name}
+                </Link>
+              </h2>
+              <span className="sub">{c.description}</span>
+              <Link to={`/browse/${c.slug}`} className="sub">
+                Open<span className="sr-only"> {c.name}</span> →
+              </Link>
+            </div>
+            <Reel
+              apps={top.data?.reels.find((r) => r.slug === c.slug)?.apps}
+              empty="Nothing here yet."
+              label={`Top of ${c.name} this week`}
+            />
+          </section>
+        ))}
+    </StoreFrame>
   );
 }
 
@@ -300,14 +305,25 @@ function AgeLimit({ category }: { category: Category }) {
   );
 }
 
+/**
+ * A category (Games, Kids & Family…: what the store bar opens): its own sidebar of sub-genres, and
+ * the top of each sub-genre, one reel apiece. Sub-genres with nothing in them yet are listed after
+ * the reels. Everything in the category, with sort and filters, is its own page (`CategoryAll`),
+ * so this one stays one request and the filters never seem to apply to the reels.
+ */
 export function CategoryPage() {
   const { slug = "" } = useParams();
   const categories = useLoad(() => api.categories(), []);
   const category = categories.data?.find((c) => c.slug === slug);
+  const top = useLoad(() => api.browse(slug), [slug]);
   useDocumentTitle(category?.name);
   if (categories.data && !category) return <NotFound />;
+  // Not the last category's reels while the next one's load (the page stays mounted).
+  const reels = top.loading ? undefined : top.data?.reels;
+  const full = reels?.filter((r) => r.apps.length > 0);
+  const quiet = reels?.filter((r) => r.apps.length === 0);
   return (
-    <StoreFrame sidebar active={slug}>
+    <StoreFrame sidebar={<CategorySidebar category={category} on="" />}>
       <div className="crumbs">
         <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> › {category?.name}
       </div>
@@ -317,12 +333,81 @@ export function CategoryPage() {
       </h1>
       <div className="muted">{category?.description}</div>
       {category && <AgeLimit category={category} />}
-      {category && <TagCloud category={category} />}
+      {category && (
+        <p className="browse-all">
+          <Link to={`/browse/${category.slug}/all`} className="btn">
+            <StoreIcon name="everything" />
+            Everything in {category.name} →
+          </Link>
+          <span className="muted small">Every app in it, with sort and filters.</span>
+        </p>
+      )}
+      <p className="muted small">{REEL_NOTE}</p>
+      {top.error ? (
+        <ErrorState error={top.error} onRetry={top.reload} />
+      ) : !full || !category ? (
+        <Loading />
+      ) : full.length === 0 ? (
+        <div className="empty-state">Nothing in {category.name} yet.</div>
+      ) : (
+        full.map((r) => (
+          <section className="browse-section" key={r.slug} aria-labelledby={`browse-${r.slug}`}>
+            <div className="section-h browse-head">
+              <h2 id={`browse-${r.slug}`}>
+                <Link to={`/tag/${r.slug}`}>
+                  <TagIcon slug={r.slug} category={category.slug} size={20} />
+                  {r.name}
+                </Link>
+              </h2>
+              <Link to={`/tag/${r.slug}`} className="sub">
+                See all<span className="sr-only"> {r.name}</span> →
+              </Link>
+            </div>
+            <Reel apps={r.apps} empty="Nothing here yet." label={`Top of ${r.name} this week`} />
+          </section>
+        ))
+      )}
+      {category && quiet && quiet.length > 0 && (
+        <div className="browse-quiet">
+          <h2 className="section-title">Nothing here yet</h2>
+          <div className="chips">
+            {quiet.map((r) => (
+              <Link key={r.slug} to={`/tag/${r.slug}`} className="chip">
+                <TagIcon slug={r.slug} category={category.slug} size={14} />
+                {r.name}
+              </Link>
+            ))}
+          </div>
+        </div>
+      )}
+    </StoreFrame>
+  );
+}
+
+/** Everything in a category, with the sort and filters of every list page. */
+export function CategoryAll() {
+  const { slug = "" } = useParams();
+  const categories = useLoad(() => api.categories(), []);
+  const category = categories.data?.find((c) => c.slug === slug);
+  useDocumentTitle(category && `Everything in ${category.name}`);
+  if (categories.data && !category) return <NotFound />;
+  return (
+    <StoreFrame sidebar={<CategorySidebar category={category} on="all" />}>
+      <div className="crumbs">
+        <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> ›{" "}
+        {category && <Link to={`/browse/${category.slug}`}>{category.name}</Link>} › Everything
+      </div>
+      <h1 className="page-title with-icon">
+        {category && <CategoryIcon slug={category.slug} size={28} />}
+        {category ? `Everything in ${category.name}` : " "}
+      </h1>
+      {category && <AgeLimit category={category} />}
       <AppGrid base={{ category: slug }} />
     </StoreFrame>
   );
 }
 
+/** A sub-genre: its category's sidebar with it marked, and all of it, with sort and filters. */
 export function TagPage() {
   const { slug = "" } = useParams();
   const categories = useLoad(() => api.categories(), []);
@@ -331,12 +416,15 @@ export function TagPage() {
   useDocumentTitle(tag?.name);
   if (categories.data && !tag) return <NotFound />;
   return (
-    <StoreFrame sidebar active={category?.slug}>
+    <StoreFrame sidebar={<CategorySidebar category={category} on={slug} />}>
       <div className="crumbs">
         <Link to="/">Store</Link> › <Link to="/browse">Categories</Link> ›{" "}
         {category && <Link to={`/browse/${category.slug}`}>{category.name}</Link>} › {tag?.name}
       </div>
-      <h1 className="page-title"># {tag?.name ?? slug}</h1>
+      <h1 className="page-title with-icon">
+        {category && <TagIcon slug={slug} category={category.slug} size={28} />}
+        {tag?.name ?? " "}
+      </h1>
       {category && <AgeLimit category={category} />}
       <AppGrid base={{ tag: slug }} />
     </StoreFrame>

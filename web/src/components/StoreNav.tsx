@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The store's own navigation, along the top of store pages (like Steam's store bar): Browse,
 // Recommended, Games, Kids & Family, Utilities and More, with the store search. The front page under it is all
-// apps; categories and the rest live here, in More, and on the list pages' sidebar.
+// apps; categories and the rest live here, in More, and on the list pages' sidebars: Browse's tree of
+// every category, a category's own (its sub-genres), and the generic one on the other list pages.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useLocation, useNavigate } from "react-router";
@@ -9,7 +10,7 @@ import { Link, useLocation, useNavigate } from "react-router";
 import { api, type Category } from "../api";
 import { useLoad } from "../hooks";
 import type { StoreIconName } from "../storeIcons";
-import { CategoryIcon, StoreIcon } from "./StoreIcons";
+import { CategoryIcon, StoreIcon, TagIcon } from "./StoreIcons";
 
 /** Categories with their own place on the bar; the rest are under More. */
 const ON_BAR = ["games", "family", "utilities"];
@@ -21,7 +22,8 @@ export function storeSection(pathname: string, search: string, categories: Categ
   if (pathname === "/browse") return "browse";
   if (pathname === "/recommended") return "recommended";
   let category: string | undefined;
-  if (pathname.startsWith("/browse/")) category = decodeURIComponent(pathname.slice("/browse/".length));
+  // A category's page, or its full list (/browse/<slug>/all).
+  if (pathname.startsWith("/browse/")) category = decodeURIComponent(pathname.slice("/browse/".length).split("/")[0]);
   if (pathname.startsWith("/tag/")) {
     const tag = decodeURIComponent(pathname.slice("/tag/".length));
     category = categories?.find((c) => c.tags.some((t) => t.slug === tag))?.slug;
@@ -210,6 +212,114 @@ export function Sidebar({ active }: { active?: string }) {
   );
 }
 
+/**
+ * Browse's sidebar: every category, each opening to its sub-genres (`open` starts open). The
+ * category's name goes to its page; the arrow beside it shows its sub-genres here.
+ */
+export function CategoryTree({ categories, open }: { categories: Category[] | undefined; open?: string }) {
+  const [shown, setShown] = useState<ReadonlySet<string>>(() => new Set(open ? [open] : []));
+  const id = useId();
+  const toggle = (slug: string) =>
+    setShown((was) => {
+      const next = new Set(was);
+      if (next.has(slug)) next.delete(slug);
+      else next.add(slug);
+      return next;
+    });
+  return (
+    <nav className="sidebar browse-tree" aria-label="Categories">
+      <h4>Categories</h4>
+      <ul>
+        {categories?.map((c) => {
+          const expanded = shown.has(c.slug);
+          const list = `${id}-${c.slug}`;
+          return (
+            <li key={c.slug}>
+              <div className="tree-row">
+                <Link to={`/browse/${c.slug}`}>
+                  <CategoryIcon slug={c.slug} />
+                  {c.name}
+                </Link>
+                <button
+                  type="button"
+                  className="tree-toggle"
+                  aria-expanded={expanded}
+                  aria-controls={list}
+                  aria-label={`${c.name} sub-genres`}
+                  onClick={() => toggle(c.slug)}
+                >
+                  <span aria-hidden="true">▸</span>
+                </button>
+              </div>
+              <ul id={list} hidden={!expanded}>
+                {c.tags.map((t) => (
+                  <li key={t.slug}>
+                    <Link to={`/tag/${t.slug}`}>
+                      <TagIcon slug={t.slug} category={c.slug} />
+                      {t.name}
+                    </Link>
+                  </li>
+                ))}
+              </ul>
+            </li>
+          );
+        })}
+      </ul>
+    </nav>
+  );
+}
+
+/**
+ * A category's own sidebar, on its page, its full list and its sub-genres' pages: the way back to
+ * every category, then the category (its page, and everything in it) and each sub-genre. `on` is the page: "" for the category's,
+ * "all" for its full list, or a sub-genre's slug. On a phone it's a row that scrolls sideways.
+ */
+export function CategorySidebar({ category, on }: { category: Category | undefined; on: string }) {
+  // Holds the column while the categories load.
+  if (!category) return <div className="sidebar" />;
+  const item = (key: string, to: string, children: ReactNode, className = "") => (
+    <Link to={to} className={`${className} ${on === key ? "on" : ""}`.trim()} aria-current={on === key ? "page" : undefined}>
+      {children}
+    </Link>
+  );
+  return (
+    <nav className="sidebar category-side" aria-label={`${category.name} sub-genres`}>
+      <Link to="/browse" className="side-back">
+        <StoreIcon name="browse" />
+        All categories
+      </Link>
+      {item(
+        "",
+        `/browse/${category.slug}`,
+        <>
+          <CategoryIcon slug={category.slug} />
+          {category.name}
+        </>,
+        "side-title",
+      )}
+      {item(
+        "all",
+        `/browse/${category.slug}/all`,
+        <>
+          <StoreIcon name="everything" />
+          Everything in {category.name}
+        </>,
+      )}
+      <h4>Sub-genres</h4>
+      {category.tags.map((t) =>
+        item(
+          t.slug,
+          `/tag/${t.slug}`,
+          <>
+            <TagIcon slug={t.slug} category={category.slug} />
+            {t.name}
+          </>,
+        ),
+      )}
+    </nav>
+  );
+}
+
 /** SLAPorSLOP itself: the rules, checking a file, the code, and how to reach SLAPorSLOP. */
 export function StoreFooter() {
   return (
@@ -245,16 +355,17 @@ export function StoreFooter() {
 }
 
 /**
- * A store page: the store bar on top, SLAPorSLOP's links at the bottom, and, on list pages, the
- * sidebar for browsing. The front page has no sidebar: it's all apps.
+ * A store page: the store bar on top, SLAPorSLOP's links at the bottom, and, on list pages, a
+ * sidebar for browsing: `true` for the generic one, or a sidebar of the page's own (Browse's tree,
+ * a category's). The front page has no sidebar: it's all apps.
  */
-export function StoreFrame({ children, sidebar = false, active }: { children: ReactNode; sidebar?: boolean; active?: string }) {
+export function StoreFrame({ children, sidebar = false, active }: { children: ReactNode; sidebar?: boolean | ReactNode; active?: string }) {
   return (
     <div className="page">
       <StoreNav />
       {sidebar ? (
         <div className="store">
-          <Sidebar active={active} />
+          {sidebar === true ? <Sidebar active={active} /> : sidebar}
           <div>{children}</div>
         </div>
       ) : (

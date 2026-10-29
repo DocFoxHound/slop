@@ -1,5 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// The list pages: search and its filters, Show more, categories and tags, Coming soon & beta,
+// The list pages: search and its filters, Show more, categories and tags (more in
+// store-browse.e2e.ts), Coming soon & beta,
 // Community builds, Made with people, and How ratings work.
 import type { Page } from "@playwright/test";
 import { expect, test } from "./fixtures";
@@ -136,28 +137,32 @@ test("Show more adds the next page, says when it can't, and starts over when a f
   await expect(page.getByRole("button", { name: "Show more" })).toBeVisible();
 });
 
-test("categories and tags: each has its page, its tags and its apps; unknown ones aren't found", async ({ page }) => {
+test("categories and tags: each has its page, its sub-genres and its apps; unknown ones aren't found", async ({ page }) => {
   await page.goto("/browse");
   await expect(page.getByRole("heading", { name: "All categories", level: 1 })).toBeVisible();
-  const games = page.locator(".browse-group").filter({ has: page.getByRole("link", { name: "Games", exact: true }) });
+  const games = page.locator(".browse-section").filter({ has: page.getByRole("heading", { name: "Games", exact: true, level: 2 }) });
   await expect(games.getByText("Things you play")).toBeVisible();
-  await expect(games.getByRole("link", { name: "Puzzle" })).toHaveAttribute("href", "/tag/puzzle");
   await games.getByRole("link", { name: "Games", exact: true }).click();
 
   await expect(page).toHaveURL(/\/browse\/games$/);
   await expect(page.getByRole("heading", { name: "Games", level: 1 })).toBeVisible();
   await expect(page.locator(".crumbs").getByRole("link", { name: "Categories" })).toHaveAttribute("href", "/browse");
+  // Everything in it is a link away.
+  await page.getByRole("main").getByRole("link", { name: "Everything in Games →" }).click();
+  await expect(page).toHaveURL(/\/browse\/games\/all$/);
   await expect(tile(page, "lantern-keep")).toHaveCount(1);
-  await page.locator(".tag-cloud").getByRole("link", { name: "Puzzle" }).click();
+  await page.getByRole("navigation", { name: "Games sub-genres" }).getByRole("link", { name: "Puzzle", exact: true }).click();
 
   await expect(page).toHaveURL(/\/tag\/puzzle$/);
-  await expect(page.getByRole("heading", { name: "# Puzzle", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Puzzle", level: 1 })).toBeVisible();
   await shows(page, ["lantern-keep"], ["castle-rock", "pocket-golf"]);
   // The crumbs lead back up to the tag's category.
   await page.locator(".crumbs").getByRole("link", { name: "Games" }).click();
   await expect(page).toHaveURL(/\/browse\/games$/);
 
   await page.goto("/browse/no-such-category");
+  await expect(page.getByText("Page not found.")).toBeVisible();
+  await page.goto("/browse/no-such-category/all");
   await expect(page.getByText("Page not found.")).toBeVisible();
   await page.goto("/tag/no-such-tag");
   await expect(page.getByText("Page not found.")).toBeVisible();
@@ -217,6 +222,6 @@ test("a failed category list offers Try again", async ({ page }) => {
   await expect(page.getByRole("alert")).toContainText("SLAPorSLOP is busy. Try again soon.");
   await page.unrouteAll();
   await page.getByRole("button", { name: "Try again" }).click();
-  // The categories' own list (the store bar always has Games).
-  await expect(page.locator(".browse-group").getByRole("link", { name: "Games", exact: true })).toBeVisible();
+  // The categories' own sections (the store bar always has Games).
+  await expect(page.getByRole("heading", { name: "Games", exact: true, level: 2 })).toBeVisible();
 });

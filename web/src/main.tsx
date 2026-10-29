@@ -20,7 +20,7 @@ import { Manage } from "./pages/Manage";
 import { Download } from "./pages/Download";
 import { ChatPage } from "./pages/Chat";
 import { FriendsPage } from "./pages/Friends";
-import { Browse, CategoryPage, Community, MadeWithPeople, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
+import { Browse, CategoryAll, CategoryPage, Community, MadeWithPeople, NotFound, Search, TagPage, Upcoming } from "./pages/Listing";
 import { AppEditor, Publish } from "./pages/Publish";
 import { HowRatings } from "./pages/HowRatings";
 import { JobPage, MyJobs } from "./pages/Jobs";
@@ -50,6 +50,7 @@ const router = createBrowserRouter([
       { path: "/community", element: <Community /> },
       { path: "/browse", element: <Browse /> },
       { path: "/browse/:slug", element: <CategoryPage /> },
+      { path: "/browse/:slug/all", element: <CategoryAll /> },
       { path: "/tag/:slug", element: <TagPage /> },
       { path: "/app/:slug", element: <AppPage /> },
       { path: "/app/:slug/branch", element: <RegisterBranch /> },
