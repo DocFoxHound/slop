@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The store's own navigation, along the top of store pages (like Steam's store bar): Browse,
-// Recommended, Games, Kids & Family, Utilities and More, with the store search. The front page under it is all
+// Discover, Games, Kids & Family, Utilities and More, with the store search. The front page under it is all
 // apps; categories and the rest live here, in More, and on the list pages' sidebar.
 
 import { useEffect, useId, useRef, useState, type FormEvent, type ReactNode } from "react";
@@ -14,12 +14,12 @@ import { CategoryIcon, StoreIcon } from "./StoreIcons";
 /** Categories with their own place on the bar; the rest are under More. */
 const ON_BAR = ["games", "family", "utilities"];
 
-type Section = "browse" | "recommended" | "games" | "family" | "utilities" | "more" | null;
+type Section = "browse" | "discover" | "games" | "family" | "utilities" | "more" | null;
 
 /** Which part of the bar the page is in. */
 export function storeSection(pathname: string, search: string, categories: Category[] | undefined): Section {
   if (pathname === "/browse") return "browse";
-  if (pathname === "/recommended") return "recommended";
+  if (pathname === "/discover" || pathname === "/recommended") return "discover";
   let category: string | undefined;
   if (pathname.startsWith("/browse/")) category = decodeURIComponent(pathname.slice("/browse/".length));
   if (pathname.startsWith("/tag/")) {
@@ -49,7 +49,7 @@ export function StoreNav() {
     <nav className="store-nav" aria-label="Store">
       <div className="store-nav-links">
         {item("browse", "/browse", "Browse", "browse")}
-        {item("recommended", "/recommended", "Recommended", "recommended")}
+        {item("discover", "/discover", "Discover", "recommended")}
         {item("games", "/browse/games", "Games", "games")}
         {item("family", "/browse/family", "Kids & Family", "family")}
         {item("utilities", "/browse/utilities", "Utilities", "utilities")}

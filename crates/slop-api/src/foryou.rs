@@ -121,7 +121,7 @@ pub fn taste(signals: &Signals, tags_of: &HashMap<Uuid, Vec<String>>) -> HashMap
 }
 
 /// Deterministic 0..1 from a seed and an app, for shuffles that hold for a day.
-fn shuffle(seed: u64, id: Uuid) -> f64 {
+pub fn shuffle(seed: u64, id: Uuid) -> f64 {
     let mut x = seed ^ (id.as_u128() as u64) ^ ((id.as_u128() >> 64) as u64);
     // splitmix64
     x = x.wrapping_add(0x9E37_79B9_7F4A_7C15);
@@ -517,14 +517,26 @@ pub async fn for_user(
     let cands = candidates(db, config, policy).await?;
     let signals = signals(db, user_id).await?;
     let names = tag_names(db).await?;
-    let picks = recommend(&signals, &cands, &names, personal, seed, SLATE);
+    Ok(feed(&signals, &cands, &names, personal, seed))
+}
+
+/// The For you feed from what's already loaded: the slate, and what it's based on.
+pub fn feed(
+    signals: &Signals,
+    cands: &[Candidate],
+    names: &HashMap<String, String>,
+    personal: bool,
+    seed: u64,
+) -> ForYou {
+    let picks = recommend(signals, cands, names, personal, seed, SLATE);
     let based_on = if personal {
         let tags_of = cands.iter().map(|c| (c.id, c.app.tags.clone())).collect();
-        let mut w: Vec<(String, f64)> = taste(&signals, &tags_of)
+        let mut w: Vec<(String, f64)> = taste(signals, &tags_of)
             .into_iter()
             .filter(|(_, v)| *v > 0.0)
             .collect();
-        w.sort_by(|a, b| b.1.total_cmp(&a.1));
+        // Ties by tag, so the same activity always reads the same.
+        w.sort_by(|a, b| b.1.total_cmp(&a.1).then_with(|| a.0.cmp(&b.0)));
         w.into_iter()
             .take(3)
             .map(|(t, _)| names.get(&t).cloned().unwrap_or(t))
@@ -532,7 +544,7 @@ pub async fn for_user(
     } else {
         vec![]
     };
-    Ok(ForYou {
+    ForYou {
         personalized: personal && picks.iter().any(|p| p.kind != PickKind::Popular),
         based_on,
         items: picks
@@ -543,7 +555,7 @@ pub async fn for_user(
                 reason: p.reason,
             })
             .collect(),
-    })
+    }
 }
 
 async fn for_you(

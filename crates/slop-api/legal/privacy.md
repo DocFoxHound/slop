@@ -1,7 +1,7 @@
 ---
 title: Privacy Policy
-version: 2026-10-27
-summary: The platform is now called SLAPorSLOP. Nothing else changes.
+version: 2026-10-29
+summary: Recommendations ("For you" and the new Discover page) list everything they use, now including which apps you donated to.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
@@ -16,7 +16,7 @@ IronPoint Development LLC ("SLAPorSLOP") is the controller of the personal data 
 | Sessions and devices | Keeping you signed in; showing you where you're signed in | Contract |
 | Your library, installs and playtime (if you share it) | Your library, "playing now" numbers, and weighting votes | Contract; legitimate interest |
 | Votes | Ratings. Public on your profile by default; you can make them private | Contract; legitimate interest |
-| Recommendations | "For you", from your library, playtime and votes. Switch it off on your account page | Legitimate interest |
+| Recommendations | "For you" and Discover, from your library (including apps you installed while signed in), your Interested list, your playtime and launch days, your votes, and which apps you donated to (not how much). Your donations only shape your own page, never what anyone else sees. Switch it off on your account page; it's off by default in the UK under-18 view and when your browser sends Global Privacy Control | Legitimate interest |
 | People profiles, jobs, agreements, payments and reviews | Running the marketplace and keeping the job record | Contract; legal obligation (tax) |
 | Job conversations | Kept while open and 30 days after closing, then deleted; fingerprints kept to prove copies | Contract; legitimate interest |
 | Reports, moderation decisions and appeals | Acting on reports and keeping the records the law requires (6 years) | Legal obligation; legitimate interest |

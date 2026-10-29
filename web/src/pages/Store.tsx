@@ -1,14 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { useState } from "react";
-import { Link, useLocation } from "react-router";
+import { Link } from "react-router";
 
 import { api } from "../api";
 import { FeaturedCarousel } from "../components/Featured";
 import { StoreFrame } from "../components/StoreNav";
 import { CategoryIcon } from "../components/StoreIcons";
-import { ErrorState, Loading, SectionHeader, Shelf } from "../components/ui";
+import { ErrorState, SectionHeader, Shelf } from "../components/ui";
 import { useDocumentTitle, useLoad } from "../hooks";
-import { desktop, isDesktop } from "../platform";
+import { isDesktop } from "../platform";
 import { useSession } from "../session";
 
 /**
@@ -265,98 +265,6 @@ function ForYouShelf() {
         </Link>
       </SectionHeader>
       <Shelf apps={f?.items} empty="Nothing to recommend yet." />
-    </>
-  );
-}
-
-/**
- * Recommended (the store bar): the person's own picks, from what's in their library and what
- * they play (foryou.rs), with discovery mixed in. Visitors get popular picks and a way to sign in.
- */
-export function Recommended() {
-  useDocumentTitle("Recommended");
-  const { me } = useSession();
-  const location = useLocation();
-  return (
-    <StoreFrame>
-      <h1 className="page-title">Recommended</h1>
-      {me === undefined ? (
-        <Loading />
-      ) : me ? (
-        <RecommendedForYou />
-      ) : (
-        <>
-          <div className="panel panel-pad signin-nudge">
-            <p>
-              <b>Picks of your own.</b> Sign in and SLAPorSLOP recommends apps from what's in your library and what you play, with
-              something different mixed in. You can turn it off on your account page.
-            </p>
-            {isDesktop ? (
-              <button className="btn slime" onClick={() => void desktop.showLogin()}>
-                Sign in
-              </button>
-            ) : (
-              <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(location.pathname)}`}>
-                Sign in for your picks
-              </Link>
-            )}
-          </div>
-          <PopularPicks />
-        </>
-      )}
-    </StoreFrame>
-  );
-}
-
-function RecommendedForYou() {
-  const feed = useLoad(() => api.forYou(), []);
-  const upcoming = useLoad(() => api.interested.forYou().then((apps) => apps.slice(0, 8)), []);
-  if (feed.error) return <ErrorState error={feed.error} onRetry={feed.reload} />;
-  const f = feed.data;
-  const sub = !f
-    ? undefined
-    : f.personalized
-      ? `Based on ${f.based_on.join(", ")}, plus something different every fourth`
-      : "Popular, well rated and new. Add apps to your library and play them for picks of your own.";
-  return (
-    <>
-      <SectionHeader title="For you" sub={sub}>
-        <Link to="/account" className="sub">
-          Settings
-        </Link>
-      </SectionHeader>
-      <Shelf apps={f?.items} empty="Nothing to recommend yet." />
-      {upcoming.data && upcoming.data.length > 0 && (
-        <>
-          <SectionHeader title="Coming soon, for you" sub="Upcoming projects like the ones in your library and Interested list">
-            <Link to="/upcoming" className="sub">
-              See all →
-            </Link>
-          </SectionHeader>
-          <Shelf apps={upcoming.data} empty="" />
-        </>
-      )}
-    </>
-  );
-}
-
-/** What players add most this month: for visitors, until they have picks of their own. */
-function PopularPicks() {
-  const popular = useLoad(
-    () =>
-      api
-        .apps({ sort: "popular", limit: 24 })
-        .then((page) => page.apps.filter((a) => a.stage !== "coming_soon" && !a.is_dead).slice(0, 16)),
-    [],
-  );
-  return (
-    <>
-      <SectionHeader title="Popular picks" sub="Most added to libraries this month">
-        <Link to="/search?sort=popular" className="sub">
-          See all →
-        </Link>
-      </SectionHeader>
-      {popular.error ? <ErrorState error={popular.error} onRetry={popular.reload} /> : <Shelf apps={popular.data} empty="Nothing to play yet." />}
     </>
   );
 }
