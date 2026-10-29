@@ -194,12 +194,31 @@ async fn upcoming_for_you(
         all.iter().map(|c| (c.id, c.app.tags.clone())).collect();
     let taste = foryou::taste(&signals, &tags_of);
     let names = foryou::tag_names(&state.db).await?;
-    let mut scored: Vec<(f64, String, foryou::Candidate)> = candidates
+    Ok(Json(
+        upcoming_matches(&signals, &taste, &names, candidates)
+            .into_iter()
+            .take(12)
+            .map(|(c, reason, _)| Card { app: c.app, reason })
+            .collect(),
+    ))
+}
+
+/// The personal half of "Coming soon & in beta, for you" (also a reel on Discover, discover.rs):
+/// `candidates` (upcoming, not dead, not the viewer's) scored by how their tags fit `taste`, plus
+/// log(1 + Interested count), leaving out what's in the person's library or Interested list.
+/// Best first, each with its reason and whether it matched their taste at all.
+pub(crate) fn upcoming_matches(
+    signals: &foryou::Signals,
+    taste: &HashMap<String, f64>,
+    names: &HashMap<String, String>,
+    candidates: Vec<foryou::Candidate>,
+) -> Vec<(foryou::Candidate, String, bool)> {
+    let mut scored: Vec<(f64, String, bool, foryou::Candidate)> = candidates
         .into_iter()
         .filter(|c| {
             !signals.library.contains(&c.id)
                 && !signals.interested.contains(&c.id)
-                && c.maker_id != u.id
+                && signals.user_id != Some(c.maker_id)
         })
         .map(|c| {
             let mut matched: Vec<(&String, f64)> = c
@@ -227,15 +246,12 @@ async fn upcoming_for_you(
                     .collect();
                 format!("Because you like {}", liked.join(" & "))
             };
-            (score, reason, c)
+            (score, reason, !matched.is_empty(), c)
         })
         .collect();
-    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.2.app.slug.cmp(&b.2.app.slug)));
-    Ok(Json(
-        scored
-            .into_iter()
-            .take(12)
-            .map(|(_, reason, c)| Card { app: c.app, reason })
-            .collect(),
-    ))
+    scored.sort_by(|a, b| b.0.total_cmp(&a.0).then(a.3.app.slug.cmp(&b.3.app.slug)));
+    scored
+        .into_iter()
+        .map(|(_, reason, matched, c)| (c, reason, matched))
+        .collect()
 }

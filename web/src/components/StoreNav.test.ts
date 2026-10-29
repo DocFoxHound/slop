@@ -11,7 +11,9 @@ const categories = [cat("games", ["puzzle", "racing"]), cat("family", ["kids"]),
 describe("storeSection", () => {
   it("marks the bar's own sections", () => {
     expect(storeSection("/browse", "", categories)).toBe("browse");
-    expect(storeSection("/recommended", "", categories)).toBe("recommended");
+    expect(storeSection("/discover", "", categories)).toBe("discover");
+    // The tab's old address, on its way to the new one.
+    expect(storeSection("/recommended", "", categories)).toBe("discover");
     expect(storeSection("/browse/games", "", categories)).toBe("games");
     expect(storeSection("/browse/family", "", categories)).toBe("family");
     expect(storeSection("/browse/utilities", "", categories)).toBe("utilities");

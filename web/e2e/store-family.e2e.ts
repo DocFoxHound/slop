@@ -35,7 +35,7 @@ async function noSeriousAxeViolations(page: Page) {
 
 test("Kids & Family: after Games on the bar and the front page; lists only apps rated for it, and says so", async ({ page }) => {
   await page.goto("/");
-  await expect(bar(page).locator(".store-nav-links a")).toHaveText(["Browse", "Recommended", "Games", "Kids & Family", "Utilities"]);
+  await expect(bar(page).locator(".store-nav-links a")).toHaveText(["Browse", "Discover", "Games", "Kids & Family", "Utilities"]);
   const cats = page.locator(".cat-grid a.cat b");
   await expect(cats.nth(0)).toHaveText("Games");
   await expect(cats.nth(1)).toHaveText("Kids & Family");

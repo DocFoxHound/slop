@@ -39,7 +39,7 @@ Every vote action is stored as an **event**. A vote is never just overwritten.
 The current vote per account and app is kept as well. It's updated in the same database transaction.
 
 ### 1.3 Other activity
-Library adds, installs and Interested. These feed "Popular this month", "For you" and maker dashboards.
+Library adds, installs and Interested. These feed "Popular this month", "For you", Discover and maker dashboards. SLAPorSLOP keeps no per-account download count: a desktop install while signed in adds the app to the library, which is what Discover's "keep most in your library" reel reads.
 
 ## 2. Weighted and unweighted ratings (decided)
 
@@ -146,7 +146,7 @@ Database permissions: the application's database role can only **insert** into `
   - Bursts of votes from new accounts.
   - Coordinated changes of vote.
   - Card-testing patterns in donations (`PAYMENTS.md` §9).
-- "For you" recommendations, which can be switched off (`LEGAL.md` §7).
+- "For you" and Discover recommendations, which can be switched off (`LEGAL.md` §7). They read the person's own library, Interested list, playtime and launch days, votes and, since 2026-10-29 (Discover's "You've supported…" reel), which apps they paid a donation to (never amounts). Donations only shape the donor's own page; nobody else's recommendations or any ranking (DESIGN §5, `discover.rs`).
 - Maker dashboards and user history pages.
 
 ## 6. Privacy and retention
