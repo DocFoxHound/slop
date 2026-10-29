@@ -7,6 +7,7 @@ const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/", null],
   ["/search?q=castle", null],
   ["/browse/family", null],
+  ["/discover", "player"],
   ["/app/castle-rock", null],
   ["/app/neon-drift", "player"],
   ["/library", "player"],

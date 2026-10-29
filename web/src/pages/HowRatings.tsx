@@ -148,10 +148,19 @@ export function HowRatings() {
           <b>Glow-ups:</b> apps whose % Slaps rose by 15 points or more since 60 days ago, showing before and after,
           so updates that fix things get noticed.
         </li>
+        <li>
+          <b>Discover:</b> signed in with recommendations based on your activity on, it starts with your For you picks (from
+          your library, Interested list, playtime and votes), then rows for the genres you play most, like most (👍 votes and
+          Interested), keep most in your library and have donated to, leaving out what you already have. Mixed in for everyone:
+          all-time favourites (at least 70% Slaps, 5 or more votes), up-and-coming releases (from the last 60 days, most added and
+          played this week), and the most popular this week and this month. The rows' order changes once a day. Each row says
+          what it's based on. Signed out or switched off, it's the same for everyone.
+        </li>
       </ul>
       <p>
         <b>No paid placement.</b> Nobody can pay to rank higher, be featured or be recommended. Donations and hiring
-        creatives never change where an app appears (Content Policy, "No paid placement").
+        creatives never change where an app appears for anyone else (Content Policy, "No paid placement"). Your own donations
+        only shape your own Discover page, and only while recommendations based on your activity are on.
       </p>
 
       <h2>Apps that hired creatives</h2>

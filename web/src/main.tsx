@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { StrictMode } from "react";
 import { createRoot } from "react-dom/client";
-import { createBrowserRouter, RouterProvider } from "react-router";
+import { createBrowserRouter, Navigate, RouterProvider } from "react-router";
 
 import { Layout } from "./components/Layout";
 import { Admin } from "./pages/Admin";
@@ -32,7 +32,8 @@ import { Source } from "./pages/Source";
 import { Contact } from "./pages/Contact";
 import { Verify } from "./pages/Verify";
 import { BountiesPage, BountyPage } from "./pages/Bounties";
-import { Recommended, Store } from "./pages/Store";
+import { Discover } from "./pages/Discover";
+import { Store } from "./pages/Store";
 import { ShelfPage } from "./pages/ShelfPage";
 import { Team, Teams } from "./pages/Teams";
 import { SessionProvider } from "./session";
@@ -44,7 +45,9 @@ const router = createBrowserRouter([
     children: [
       { path: "/", element: <Store /> },
       { path: "/search", element: <Search /> },
-      { path: "/recommended", element: <Recommended /> },
+      { path: "/discover", element: <Discover /> },
+      // The tab's old name and address: old links keep working.
+      { path: "/recommended", element: <Navigate to="/discover" replace /> },
       { path: "/ratings", element: <HowRatings /> },
       { path: "/upcoming", element: <Upcoming /> },
       { path: "/community", element: <Community /> },

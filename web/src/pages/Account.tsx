@@ -283,8 +283,8 @@ function ProfileSection() {
             <span>
               <b>Recommendations based on my activity</b>
               <span className="muted small" style={{ display: "block" }}>
-                "For you" uses your library, what you've played and how you voted. Off: everyone sees the same popular,
-                well-rated and new apps.
+                "For you" and Discover use your library, your Interested list, what you've played, how you voted and the apps
+                you donated to. Off: everyone sees the same popular, well-rated and new apps.
               </span>
             </span>
           </label>

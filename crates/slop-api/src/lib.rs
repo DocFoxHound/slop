@@ -25,6 +25,7 @@ pub mod config;
 pub mod demos;
 pub mod dep_watch;
 pub mod desktop_updates;
+pub mod discover;
 pub mod donation_holds;
 pub mod donations;
 pub mod error;
@@ -280,6 +281,7 @@ pub fn router(state: AppState) -> anyhow::Result<Router> {
         .merge(featured::routes())
         .merge(shelves::routes())
         .merge(foryou::routes())
+        .merge(discover::routes())
         .merge(sim::routes())
         .merge(people::routes())
         .merge(legal::routes())

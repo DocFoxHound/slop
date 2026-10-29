@@ -1,11 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The store bar along the top of store pages (web/src/components/StoreNav.tsx): Browse,
-// Recommended, Games, Kids & Family, Utilities and More, the store search, and SLAPorSLOP's own links at the bottom.
+// Discover, Games, Kids & Family, Utilities and More, the store search, and SLAPorSLOP's own links at the bottom.
 // Read-only.
 import type { Page } from "@playwright/test";
 
 import { call } from "./accounts-helpers";
-import { expect, server, signIn, test } from "./fixtures";
+import { expect, server, test } from "./fixtures";
 
 const bar = (page: Page) => page.getByRole("navigation", { name: "Store" });
 
@@ -14,7 +14,7 @@ test("each section goes to its page and is marked while you're there", async ({ 
   await expect(bar(page).locator("[aria-current=page]")).toHaveCount(0);
   for (const [name, path, heading] of [
     ["Browse", "/browse", "All categories"],
-    ["Recommended", "/recommended", "Recommended"],
+    ["Discover", "/discover", "Discover"],
     ["Games", "/browse/games", "Games"],
     ["Kids & Family", "/browse/family", "Kids & Family"],
     ["Utilities", "/browse/utilities", "Utilities"],
@@ -76,7 +76,7 @@ test("More opens the rest of the store, closes with Escape, and is marked for it
 });
 
 test("the bar is on the store's pages and app pages, not elsewhere", async ({ page }) => {
-  for (const path of ["/", "/browse", "/search?q=castle", "/upcoming", "/community", "/made-with-people", "/recommended", "/app/castle-rock"]) {
+  for (const path of ["/", "/browse", "/search?q=castle", "/upcoming", "/community", "/made-with-people", "/discover", "/app/castle-rock"]) {
     await page.goto(path);
     await expect(bar(page), path).toBeVisible();
   }
@@ -101,24 +101,6 @@ test("the store front is all apps; SLAPorSLOP's own links are at the bottom", as
   ]) {
     await expect(footer.getByRole("link", { name })).toHaveAttribute("href", href);
   }
-});
-
-test("Recommended: picks of your own when signed in; popular picks and a way to sign in when not", async ({ browser }) => {
-  const visitor = await browser.newPage();
-  await visitor.goto("/recommended");
-  await expect(visitor.getByText("Picks of your own.")).toBeVisible();
-  await expect(visitor.getByRole("link", { name: "Sign in for your picks" })).toHaveAttribute("href", "/signin?return_to=%2Frecommended");
-  await expect(visitor.getByRole("heading", { name: "Popular picks" })).toBeVisible();
-  await expect(visitor.locator(".tile").first()).toBeVisible();
-  await expect(visitor.getByRole("heading", { name: "For you" })).toHaveCount(0);
-
-  const pat = await browser.newPage();
-  await signIn(pat, "player");
-  await pat.goto("/recommended");
-  await expect(pat.getByRole("heading", { name: "For you" })).toBeVisible();
-  await expect(pat.getByText(/^Based on .+, plus something different every fourth$/)).toBeVisible();
-  await expect(pat.locator(".tile").first()).toBeVisible();
-  await expect(pat.getByText("Picks of your own.")).toHaveCount(0);
 });
 
 test("on a phone the bar fits: sections scroll, search has its own row, More still opens", async ({ page }) => {
