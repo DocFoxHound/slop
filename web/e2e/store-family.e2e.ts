@@ -51,15 +51,22 @@ test("Kids & Family: after Games on the bar and the front page; lists only apps 
   );
   await expect(tile(page, young)).toHaveCount(1);
   await expect(tile(page, older)).toHaveCount(0);
-  // The sidebar has it second, and marks it.
-  const sidebar = page.getByRole("complementary", { name: "Browse" });
-  await expect(sidebar.getByRole("link", { name: "Kids & Family", exact: true })).toHaveClass(/on/);
+  // Its own sidebar marks it.
+  const sidebar = page.getByRole("navigation", { name: "Kids & Family sub-genres" });
+  await expect(sidebar.getByRole("link", { name: "Kids & Family", exact: true })).toHaveAttribute("aria-current", "page");
   await noSeriousAxeViolations(page);
 
+  // Everything in it keeps the limit too.
+  await sidebar.getByRole("link", { name: "Everything in Kids & Family" }).click();
+  await expect(page).toHaveURL(/\/browse\/family\/all$/);
+  await expect(page.locator(".age-limit")).toBeVisible();
+  await expect(tile(page, young)).toHaveCount(1);
+  await expect(tile(page, older)).toHaveCount(0);
+
   // Its tags' pages keep the limit; the crumbs lead back to it.
-  await page.locator(".tag-cloud").getByRole("link", { name: "Kids", exact: true }).click();
+  await sidebar.getByRole("link", { name: "Kids", exact: true }).click();
   await expect(page).toHaveURL(/\/tag\/kids$/);
-  await expect(page.getByRole("heading", { name: "# Kids", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Kids", exact: true, level: 1 })).toBeVisible();
   await expect(page.locator(".age-limit")).toBeVisible();
   await expect(tile(page, young)).toHaveCount(1);
   await expect(tile(page, older)).toHaveCount(0);

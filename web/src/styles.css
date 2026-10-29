@@ -255,14 +255,30 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .seg { display: inline-flex; gap: 2px; background: var(--panel); border: 1px solid var(--line); border-radius: 9px; padding: 3px; margin-top: 8px; }
 .seg button { padding: 6px 12px; border-radius: 7px; border: 0; background: none; color: var(--muted); font-size: 13px; font-weight: 600; cursor: pointer; }
 .seg button.on { background: var(--panel-3); color: var(--text); }
-.browse-group { margin: 22px 0 28px; }
-.browse-group h3 { display: flex; align-items: baseline; gap: 10px; font-size: 18px; margin-bottom: 10px; }
-.browse-group h3 a { color: inherit; }
-.browse-group h3 .store-icon { vertical-align: -0.2em; margin-right: 8px; }
-.browse-group h3 .muted { font-size: 13px; font-weight: 400; }
-.tag-cloud { display: flex; flex-wrap: wrap; gap: 8px; margin-top: 12px; }
-.tag-cloud a { padding: 8px 12px; border-radius: 8px; background: var(--panel); border: 1px solid var(--line); color: var(--text); font-size: 13px; text-decoration: none; }
-.tag-cloud a:hover { border-color: var(--slime); }
+/* Browse and a category's page (Listing.tsx): a section per category or sub-genre, each a reel. */
+.browse-head { align-items: center; margin-top: 26px; }
+.browse-head h2 { font-size: 18px; text-transform: none; letter-spacing: 0; }
+.browse-head h2 a { display: inline-flex; align-items: center; gap: 8px; color: inherit; }
+.browse-head h2 a:hover { color: var(--slime); }
+.browse-head span.sub { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
+.browse-head a.sub { flex: none; }
+.browse-all { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; margin: 14px 0 6px; }
+.browse-quiet .chips { gap: 8px; }
+.browse-section .empty-state { padding: 18px 20px; }
+/* Browse's tree of categories and a category's sidebar (StoreNav.tsx). Not sticky: they can be
+   taller than the window. */
+.browse-tree, .category-side { position: static; }
+.browse-tree ul { list-style: none; margin: 0; padding: 0; }
+.tree-row { display: flex; align-items: center; gap: 2px; }
+.tree-row a { flex: 1; min-width: 0; margin-right: 0; }
+.tree-toggle { flex: none; display: grid; place-items: center; width: 28px; height: 28px; border: 0; border-radius: 6px; background: none; color: var(--muted); font-size: 12px; cursor: pointer; }
+.tree-toggle:hover { background: var(--panel-2); color: var(--text); }
+.tree-toggle span { transition: transform 0.12s; }
+.tree-toggle[aria-expanded="true"] span { transform: rotate(90deg); }
+.browse-tree li ul { margin: 2px 0 8px 12px; padding-left: 8px; border-left: 1px solid var(--line); }
+.sidebar a.side-back { color: var(--muted); font-size: 12px; margin-bottom: 10px; }
+.sidebar a.side-title { color: var(--text); font-size: 15px; font-weight: 800; }
+.sidebar a.side-title.on { color: var(--slime); }
 .age-limit { margin: 6px 0 0; }
 
 /* ---- app page -------------------------------------------------------- */
@@ -364,6 +380,14 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
   .library-row { grid-template-columns: 120px minmax(0, 1fr); }
   .library-actions { grid-column: 1 / -1; }
   .sidebar { display: none; }
+  /* minmax: a reel's row of tiles scrolls inside the column instead of widening the page. */
+  .store { grid-template-columns: minmax(0, 1fr); }
+  /* A category's sidebar stays, as a row of its links that scrolls sideways. */
+  .sidebar.category-side { display: flex; gap: 6px; min-width: 0; overflow-x: auto; scrollbar-width: none; padding: 3px 3px 6px; mask-image: linear-gradient(90deg, #000 85%, transparent); }
+  .category-side::-webkit-scrollbar { display: none; }
+  .category-side h4 { display: none; }
+  .sidebar.category-side a { flex: none; margin: 0; padding: 6px 10px; border: 1px solid var(--line); background: var(--panel); white-space: nowrap; }
+  .sidebar.category-side a.on { border-color: var(--slime); }
   .nav { gap: 12px; padding: 0 12px; }
   .me .who { display: none; }
   .tabs a { padding: 0 8px; font-size: 12px; }

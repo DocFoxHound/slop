@@ -6,8 +6,10 @@ import { expect, signIn, test } from "./fixtures";
 const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/", null],
   ["/search?q=castle", null],
+  ["/browse", null],
   ["/browse/family", null],
   ["/discover", "player"],
+  ["/tag/puzzle", null],
   ["/app/castle-rock", null],
   ["/app/neon-drift", "player"],
   ["/library", "player"],
