@@ -118,6 +118,39 @@ export function Shelf({ apps, empty }: { apps: Array<AppSummary & { reason?: str
   );
 }
 
+/**
+ * A reel: one row of app tiles that scrolls sideways (Browse and Discover), where a shelf wraps
+ * into rows. `label` names the row for screen readers.
+ */
+export function Reel({
+  apps,
+  empty,
+  label,
+}: {
+  apps: Array<AppSummary & { reason?: string }> | undefined;
+  empty: ReactNode;
+  label: string;
+}) {
+  if (!apps)
+    return (
+      <div className="reel" aria-busy="true">
+        {[0, 1, 2, 3].map((i) => (
+          <div className="tile skeleton" key={i} />
+        ))}
+      </div>
+    );
+  if (apps.length === 0) return <div className="empty-state">{empty}</div>;
+  return (
+    <div className="reel" role="list" aria-label={label}>
+      {apps.map((a) => (
+        <div role="listitem" key={a.slug}>
+          <AppTile app={a} reason={a.reason} />
+        </div>
+      ))}
+    </div>
+  );
+}
+
 /** A link that leaves SLAPorSLOP. In the desktop app it opens the system browser. */
 export function ExternalLink({ href, children, className }: { href: string; children: ReactNode; className?: string }) {
   const onClick = (e: MouseEvent) => {
