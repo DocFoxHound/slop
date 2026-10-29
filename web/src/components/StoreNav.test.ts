@@ -17,11 +17,15 @@ describe("storeSection", () => {
     expect(storeSection("/browse/games", "", categories)).toBe("games");
     expect(storeSection("/browse/family", "", categories)).toBe("family");
     expect(storeSection("/browse/utilities", "", categories)).toBe("utilities");
+    // Everything in a category is still in its section.
+    expect(storeSection("/browse/games/all", "", categories)).toBe("games");
+    expect(storeSection("/browse/family/all", "", categories)).toBe("family");
   });
 
   it("puts the other categories and the rest of the store under More", () => {
     expect(storeSection("/browse/tools", "", categories)).toBe("more");
     expect(storeSection("/browse/learning", "", categories)).toBe("more");
+    expect(storeSection("/browse/tools/all", "", categories)).toBe("more");
     for (const p of ["/upcoming", "/made-with-people", "/community", "/teams"]) expect(storeSection(p, "", categories)).toBe("more");
     // "Everything" is search without words.
     expect(storeSection("/search", "", categories)).toBe("more");

@@ -5188,3 +5188,239 @@ async fn required_emails_skip_closed_accounts_and_need_smtp(db: PgPool) {
             >= 2
     );
 }
+
+// ---------------------------------------------------------------------------------------------
+// Browse (catalog.rs `browse`)
+
+/// Tags an app (by slug) directly.
+async fn tag_app(app: &TestApp, slug: &str, tags: &[&str]) {
+    sqlx::query(
+        "insert into app_tags (app_id, tag_id) select a.id, t.id from apps a, tags t
+         where a.slug = $1 and t.slug = any($2)",
+    )
+    .bind(slug)
+    .bind(tags.iter().map(|t| t.to_string()).collect::<Vec<_>>())
+    .execute(&app.db)
+    .await
+    .unwrap();
+}
+
+/// Each reel's slug and its apps' slugs, in order.
+async fn reels(app: &TestApp, r: Req) -> Vec<(String, Vec<String>)> {
+    let res = app.send(r).await;
+    assert_eq!(res.status(), StatusCode::OK);
+    body_json(res).await["reels"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|reel| {
+            (
+                reel["slug"].as_str().unwrap().to_string(),
+                reel["apps"]
+                    .as_array()
+                    .unwrap()
+                    .iter()
+                    .map(|a| a["slug"].as_str().unwrap().to_string())
+                    .collect(),
+            )
+        })
+        .collect()
+}
+
+fn reel<'a>(reels: &'a [(String, Vec<String>)], slug: &str) -> &'a [String] {
+    &reels.iter().find(|(s, _)| s == slug).unwrap().1
+}
+
+/// Browse is one request: a reel per category, or per tag of one category, in the store's order
+/// and with every one listed even when empty. Each is most played this week first, then (to fill
+/// a quiet week) most added this month, then the rest; only what the viewer may see, without
+/// Coming soon, dead projects or branches, and with Kids & Family's limits on it and its tags.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn browse_shows_the_top_of_each_category_and_each_tag(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker, _) = app.user("Maker", "US").await;
+    let (fan, _) = app.user("Fan", "US").await;
+    for (slug, stage, set, tags) in [
+        (
+            "hit",
+            "released",
+            "updated_at = now() - interval '9 days'",
+            vec!["puzzle"],
+        ),
+        (
+            "busy",
+            "beta",
+            "updated_at = now() - interval '8 days'",
+            vec!["puzzle", "rpg"],
+        ),
+        (
+            "liked",
+            "released",
+            "updated_at = now() - interval '7 days'",
+            vec!["puzzle"],
+        ),
+        (
+            "quiet-new",
+            "released",
+            "updated_at = now() - interval '1 day'",
+            vec!["puzzle"],
+        ),
+        (
+            "quiet-old",
+            "released",
+            "updated_at = now() - interval '5 days'",
+            vec!["puzzle"],
+        ),
+        ("soon", "coming_soon", "", vec!["puzzle"]),
+        (
+            "dead",
+            "beta",
+            "last_commit_at = now() - interval '400 days'",
+            vec!["puzzle"],
+        ),
+        (
+            "grown",
+            "released",
+            "min_age = 18, updated_at = now() - interval '30 days'",
+            vec!["puzzle"],
+        ),
+        ("gone", "released", "status = 'delisted'", vec!["puzzle"]),
+        (
+            "private",
+            "released",
+            "visibility = 'private'",
+            vec!["puzzle"],
+        ),
+        (
+            "kid-ok",
+            "released",
+            "min_age = 7, updated_at = now() - interval '40 days'",
+            vec!["kids"],
+        ),
+        (
+            "kid-old",
+            "released",
+            "min_age = 12, updated_at = now() - interval '41 days'",
+            vec!["kids", "puzzle"],
+        ),
+    ] {
+        listed_with(&app, maker, slug, stage, set).await;
+        tag_app(&app, slug, &tags).await;
+    }
+    // A community branch of hit, tagged too.
+    listed_with(&app, maker, "hit-fork", "released", "").await;
+    sqlx::query("update apps set parent_app_id = (select id from apps where slug = 'hit'), branch_kind = 'fix' where slug = 'hit-fork'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    tag_app(&app, "hit-fork", &["puzzle"]).await;
+    // Played this week: hit most, busy some, soon (still Coming soon) most of all.
+    for (slug, players) in [("hit", 50), ("busy", 10), ("soon", 900), ("dead", 400)] {
+        sqlx::query(
+            "insert into pulse_counts (app_id, bucket, players)
+             select id, now() - interval '1 hour', $2 from apps where slug = $1",
+        )
+        .bind(slug)
+        .bind(players)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    // Nobody played liked this week, but it was added to a library this month.
+    sqlx::query("insert into library_entries (user_id, app_id) select $1, id from apps where slug = 'liked'")
+        .bind(fan)
+        .execute(&app.db)
+        .await
+        .unwrap();
+
+    let adult = || req(Method::GET, "/v1/browse").header("x-country", "US");
+    let all = reels(&app, adult()).await;
+    let order: Vec<&str> = all.iter().map(|(s, _)| s.as_str()).collect();
+    assert_eq!(
+        order,
+        [
+            "games",
+            "family",
+            "tools",
+            "creative",
+            "utilities",
+            "learning",
+            "play-style",
+            "vibe"
+        ]
+    );
+    assert_eq!(
+        reel(&all, "games"),
+        [
+            "hit",
+            "busy",
+            "liked",
+            "quiet-new",
+            "quiet-old",
+            "grown",
+            "kid-old"
+        ]
+    );
+    // Kids & Family takes only apps rated for it, though kid-old is tagged Kids.
+    assert_eq!(reel(&all, "family"), ["kid-ok"]);
+    assert!(reel(&all, "tools").is_empty());
+
+    // The under-18 view (signed out, no country) leaves out the 18+ app.
+    let young = reels(&app, req(Method::GET, "/v1/browse")).await;
+    assert_eq!(
+        reel(&young, "games"),
+        ["hit", "busy", "liked", "quiet-new", "quiet-old", "kid-old"]
+    );
+
+    // One category: a reel per tag, by name, every tag listed.
+    let games = reels(
+        &app,
+        req(Method::GET, "/v1/browse?category=games").header("x-country", "US"),
+    )
+    .await;
+    let tags: Vec<String> = sqlx::query_scalar(
+        "select t.slug from tags t join categories c on c.id = t.category_id where c.slug = 'games' order by t.name",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        games.iter().map(|(s, _)| s.clone()).collect::<Vec<_>>(),
+        tags
+    );
+    assert_eq!(
+        reel(&games, "puzzle"),
+        [
+            "hit",
+            "busy",
+            "liked",
+            "quiet-new",
+            "quiet-old",
+            "grown",
+            "kid-old"
+        ]
+    );
+    assert_eq!(reel(&games, "rpg"), ["busy"]);
+    assert!(reel(&games, "roguelike").is_empty());
+    // Kids & Family's tags keep its limits.
+    let family = reels(
+        &app,
+        req(Method::GET, "/v1/browse?category=family").header("x-country", "US"),
+    )
+    .await;
+    assert_eq!(reel(&family, "kids"), ["kid-ok"]);
+    assert!(reel(&family, "all-ages").is_empty());
+
+    // No more than ten to a reel.
+    for i in 0..12 {
+        let slug = format!("cozy-{i:02}");
+        listed_with(&app, maker, &slug, "released", "").await;
+        tag_app(&app, &slug, &["cozy"]).await;
+    }
+    assert_eq!(reel(&reels(&app, adult()).await, "vibe").len(), 10);
+
+    let res = app
+        .send(req(Method::GET, "/v1/browse?category=no-such-thing"))
+        .await;
+    assert_eq!(res.status(), StatusCode::NOT_FOUND);
+}

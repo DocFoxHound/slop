@@ -695,6 +695,17 @@ export interface AppPage {
   next_offset: number | null;
 }
 
+/** A Browse page in one request (catalog.rs `browse`): a reel per category, or per tag of one. */
+export interface BrowsePage {
+  /** Every category in the store's order, or every tag of the category by name, even empty ones. */
+  reels: Array<{
+    slug: string;
+    name: string;
+    /** Up to 10: most played this week, then most added this month and best rated. */
+    apps: AppSummary[];
+  }>;
+}
+
 export interface Me {
   id: string;
   display_name: string;
@@ -2703,6 +2714,7 @@ async function requestText(method: string, path: string): Promise<string> {
 export const api = {
   categories: () => request<Category[]>("GET", "/v1/categories"),
   apps: (q: AppQuery = {}) => request<AppPage>("GET", `/v1/apps${query(q)}`),
+  browse: (category?: string) => request<BrowsePage>("GET", `/v1/browse${query({ category })}`),
   label: (slug: string) => request<AppLabel>("GET", `/v1/apps/${encodeURIComponent(slug)}/label`),
   reportAccessibility: (slug: string, feature: string, works: boolean | null) =>
     works === null

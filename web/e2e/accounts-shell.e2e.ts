@@ -379,17 +379,18 @@ test.describe("the store sidebar", () => {
     await expect(page.getByRole("complementary", { name: "Browse" })).toHaveCount(0);
   });
 
-  test("lists the categories on list pages, and marks the one you're in", async ({ page }) => {
+  test("lists the categories on list pages; a category has a sidebar of its own that marks it", async ({ page }) => {
     const categories = await call<Array<{ slug: string; name: string }>>(null, "GET", "/v1/categories");
-    await page.goto("/browse");
+    await page.goto("/search");
     const sidebar = page.getByRole("complementary", { name: "Browse" });
     for (const c of categories) {
       await expect(sidebar.getByRole("link", { name: c.name, exact: true })).toHaveAttribute("href", `/browse/${c.slug}`);
     }
     await sidebar.getByRole("link", { name: categories[0].name, exact: true }).click();
     await expect(page).toHaveURL(new RegExp(`/browse/${categories[0].slug}$`));
-    await expect(page.getByRole("complementary", { name: "Browse" }).getByRole("link", { name: categories[0].name, exact: true })).toHaveClass(/on/);
-    await expect(page.getByRole("complementary", { name: "Browse" }).getByRole("link", { name: categories[1].name, exact: true })).not.toHaveClass(/on/);
+    const own = page.getByRole("navigation", { name: `${categories[0].name} sub-genres` });
+    await expect(own.getByRole("link", { name: categories[0].name, exact: true })).toHaveAttribute("aria-current", "page");
+    await expect(own.getByRole("link", { name: categories[1].name, exact: true })).toHaveCount(0);
   });
 });
 
