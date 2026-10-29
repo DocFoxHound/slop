@@ -215,6 +215,10 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .intro b { display: block; color: var(--text); }
 
 .shelf { display: grid; grid-template-columns: repeat(auto-fill, minmax(210px, 1fr)); gap: 14px; }
+/* A reel (ui.tsx Reel): one row that scrolls sideways, about five tiles to a screen. */
+.reel { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(210px, calc((100% - 4 * 14px) / 5)); gap: 14px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; }
+.reel > * { scroll-snap-align: start; min-width: 0; }
+.reel > [role="listitem"] > .tile { height: 100%; }
 .tile { background: var(--panel); border: 1px solid var(--line); border-radius: 10px; overflow: hidden; transition: transform 0.12s, border-color 0.12s; text-decoration: none !important; color: inherit; display: flex; flex-direction: column; }
 .tile:hover { transform: translateY(-2px); border-color: #3b4654; }
 .tile.skeleton { min-height: 220px; background: linear-gradient(90deg, var(--panel), var(--panel-2), var(--panel)); background-size: 200% 100%; animation: shimmer 1.4s infinite; }

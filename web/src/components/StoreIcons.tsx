@@ -40,3 +40,12 @@ export function StoreIcon({
 export function CategoryIcon({ slug, size, className }: { slug: string; size?: number; className?: string }) {
   return <StoreIcon name={categoryIconName(slug)} size={size} className={className} />;
 }
+
+/**
+ * A tag's icon (a sub-genre: roguelike, cozy…), by its slug. Until tags have icons of their own,
+ * its category's (or a neutral one).
+ */
+export function TagIcon({ slug, category, size, className }: { slug: string; category?: string; size?: number; className?: string }) {
+  void slug;
+  return <CategoryIcon slug={category ?? "category"} size={size} className={className} />;
+}
