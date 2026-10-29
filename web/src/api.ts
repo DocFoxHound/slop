@@ -1475,6 +1475,26 @@ export interface ForYou {
   items: ForYouCard[];
 }
 
+/** One reel on Discover (discover.rs): a sideways row of apps, with what it's based on. */
+export interface DiscoverReel {
+  /** `for_you`, `genre:<play|like|library|donated>:<tag>`, `upcoming_for_you`, `all_time`, `rising`, `week`, `month`. */
+  key: string;
+  title: string;
+  /** What it's based on, in plain words. */
+  why: string;
+  apps: Array<AppSummary & { reason?: string }>;
+  /** A store page with more like it. */
+  see_all?: string;
+}
+
+export interface DiscoverPage {
+  /** Personal recommendations are on for this viewer. */
+  personalized: boolean;
+  /** Why there are no personal reels. */
+  off?: "signed_out" | "switched_off";
+  reels: DiscoverReel[];
+}
+
 export interface SimUser {
   id: string;
   display_name: string;
@@ -3323,6 +3343,7 @@ export const api = {
       vote,
     }),
   forYou: () => request<ForYou>("GET", "/v1/me/for-you"),
+  discover: () => request<DiscoverPage>("GET", "/v1/discover"),
   people: {
     list: (q: PeopleQuery = {}) =>
       request<{
