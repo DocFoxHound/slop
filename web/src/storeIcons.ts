@@ -1,7 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // SLAPorSLOP's own store icons: the categories and the store's navigation (StoreNav.tsx), drawn
 // by hand on a 24×24 grid. Plain data, no React, so the components (components/StoreIcons.tsx)
-// and anything else can draw the same shapes.
+// and anything else can draw the same shapes. The tags' icons (tagIcons.ts) are drawn with the
+// same pieces and helpers, and rendered the same way (iconPaths).
 //
 // One family, two styles drawn from the same shapes:
 //   "drip": fine round lines with one touch of slime per icon, usually a drip hanging off an edge.
@@ -24,7 +25,7 @@ export const STORE_ICON_STYLE: StoreIconStyle = "drip";
  * - accentLine: stroked in slime (the goo style strokes it in the text colour).
  * - drip: slime hanging off an edge, drawn before the lines so the edge covers its top (drip style only).
  */
-type Part =
+export type Part =
   | { as: "line"; d: string; body?: true }
   | { as: "dot" | "accent" | "accentLine" | "drip"; d: string };
 
@@ -39,12 +40,12 @@ export interface IconPath {
 const n = (v: number) => String(Math.round(v * 100) / 100);
 
 /** A circle as a path. */
-function circle(cx: number, cy: number, r: number): string {
+export function circle(cx: number, cy: number, r: number): string {
   return `M${n(cx - r)} ${n(cy)}a${n(r)} ${n(r)} 0 1 0 ${n(2 * r)} 0a${n(r)} ${n(r)} 0 1 0 ${n(-2 * r)} 0Z`;
 }
 
 /** A rounded rectangle as a path. */
-function rect(x: number, y: number, w: number, h: number, r: number): string {
+export function rect(x: number, y: number, w: number, h: number, r: number): string {
   return (
     `M${n(x + r)} ${n(y)}h${n(w - 2 * r)}a${n(r)} ${n(r)} 0 0 1 ${n(r)} ${n(r)}v${n(h - 2 * r)}` +
     `a${n(r)} ${n(r)} 0 0 1 ${n(-r)} ${n(r)}h${n(-(w - 2 * r))}a${n(r)} ${n(r)} 0 0 1 ${n(-r)} ${n(-r)}v${n(-(h - 2 * r))}` +
@@ -53,7 +54,7 @@ function rect(x: number, y: number, w: number, h: number, r: number): string {
 }
 
 /** A drop of slime hanging from (x, y), `h` long with a bulb of radius `r`: a pinched neck, then the drop. */
-function drip(x: number, y: number, h = 5, r = 1.65): string {
+export function drip(x: number, y: number, h = 5, r = 1.65): string {
   const top = y - 0.6; // starts inside the edge's stroke, so it grows out of it
   const cy = y + h - r;
   const neck = r * 0.72;
@@ -65,7 +66,7 @@ function drip(x: number, y: number, h = 5, r = 1.65): string {
 }
 
 /** A cog: `teeth` teeth between radius `inner` and `outer`, flat-topped. */
-function cog(cx: number, cy: number, outer: number, inner: number, teeth: number): string {
+export function cog(cx: number, cy: number, outer: number, inner: number, teeth: number): string {
   const step = (Math.PI * 2) / teeth;
   const top = step * 0.17; // half a tooth's top
   const foot = step * 0.29; // half a tooth's foot
@@ -79,12 +80,12 @@ function cog(cx: number, cy: number, outer: number, inner: number, teeth: number
   return d + "Z";
 }
 
-const line = (d: string): Part => ({ as: "line", d });
-const body = (d: string): Part => ({ as: "line", d, body: true });
-const dot = (d: string): Part => ({ as: "dot", d });
-const accent = (d: string): Part => ({ as: "accent", d });
-const accentLine = (d: string): Part => ({ as: "accentLine", d });
-const dripPart = (x: number, y: number, h?: number, r?: number): Part => ({ as: "drip", d: drip(x, y, h, r) });
+export const line = (d: string): Part => ({ as: "line", d });
+export const body = (d: string): Part => ({ as: "line", d, body: true });
+export const dot = (d: string): Part => ({ as: "dot", d });
+export const accent = (d: string): Part => ({ as: "accent", d });
+export const accentLine = (d: string): Part => ({ as: "accentLine", d });
+export const dripPart = (x: number, y: number, h?: number, r?: number): Part => ({ as: "drip", d: drip(x, y, h, r) });
 
 /** Every icon, by name. Category icons are named after their category's slug. */
 const SHAPES = {
@@ -272,7 +273,11 @@ const GOO_OFFSET = "translate(1.5 1.5)";
 
 /** The paths that draw `name` in `style`, back to front. */
 export function storeIconPaths(name: StoreIconName, style: StoreIconStyle = STORE_ICON_STYLE): IconPath[] {
-  const parts: Part[] = SHAPES[name];
+  return iconPaths(SHAPES[name], style);
+}
+
+/** The paths that draw an icon's parts in `style`, back to front: store icons and tag icons alike. */
+export function iconPaths(parts: readonly Part[], style: StoreIconStyle = STORE_ICON_STYLE): IconPath[] {
   if (style === "drip") {
     return parts.map((p) => {
       switch (p.as) {
@@ -308,7 +313,8 @@ export function storeIconPaths(name: StoreIconName, style: StoreIconStyle = STOR
 }
 
 /** Category slugs with an icon of their own; any other category gets `category`. */
-const CATEGORY_ICONS = new Set<string>(["games", "family", "tools", "creative", "utilities", "learning", "play-style", "vibe"]);
+export const CATEGORY_ICON_SLUGS: readonly StoreIconName[] = ["games", "family", "tools", "creative", "utilities", "learning", "play-style", "vibe"];
+const CATEGORY_ICONS = new Set<string>(CATEGORY_ICON_SLUGS);
 
 /** The icon for a category, by its slug. Categories come from the API, so an unknown one gets a neutral icon. */
 export function categoryIconName(slug: string): StoreIconName {
