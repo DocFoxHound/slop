@@ -11,6 +11,7 @@ import { AppTile, ErrorState, Loading, Shelf } from "../components/ui";
 import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { ConnectionButtons } from "./Friends";
+import { VoteLabel } from "../components/StoreIcons";
 
 export function Profile() {
   const { id = "" } = useParams();
@@ -67,7 +68,7 @@ export function Profile() {
               </div>
               <div className="profile-vote-text">
                 <span className={`vote-chip ${v.my_vote === "not_slop" ? "up" : "down"}`}>
-                  {v.my_vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}
+                  <VoteLabel vote={v.my_vote} />
                 </span>{" "}
                 <span className="faint small">{formatDate(v.voted_at)}</span>
                 {v.review && <p className="pre">{v.review}</p>}

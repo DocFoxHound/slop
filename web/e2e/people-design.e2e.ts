@@ -103,7 +103,7 @@ test("a creative's design: previewed in the editor, reviewed with the portfolio,
   expect(await design.evaluate((el) => getComputedStyle(el).contain)).toContain("paint");
   // No script ran, nothing is fixed over the page, and SLAPorSLOP's header still works.
   expect(await visitor.title()).not.toBe("not allowed");
-  const report = visitor.locator(".person-head").getByRole("button", { name: "⚑ Report" });
+  const report = visitor.locator(".person-head").getByRole("button", { name: "Report", exact: true });
   await expect(report).toBeVisible();
   const r = await box(report);
   expect(

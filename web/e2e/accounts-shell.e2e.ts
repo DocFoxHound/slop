@@ -146,7 +146,7 @@ test.describe("the app shell", () => {
 
   test("the website offers the desktop app", async ({ page }) => {
     await page.goto("/");
-    await page.getByRole("link", { name: "⬇ Download" }).click();
+    await page.getByRole("link", { name: "Download", exact: true }).click();
     await expect(page).toHaveURL(/\/download$/);
   });
 

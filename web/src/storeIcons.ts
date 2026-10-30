@@ -87,6 +87,19 @@ export const accent = (d: string): Part => ({ as: "accent", d });
 export const accentLine = (d: string): Part => ({ as: "accentLine", d });
 export const dripPart = (x: number, y: number, h?: number, r?: number): Part => ({ as: "drip", d: drip(x, y, h, r) });
 
+/** Shapes more than one icon draws. */
+const PENCIL: Part[] = [
+  accent("M16.97 3.77 20.23 7.03 18.23 9.03 14.97 5.77Z"),
+  body("M16.97 3.77 20.23 7.03 8.43 18.83 4 20 5.17 15.57Z"),
+  line("M14.97 5.77 18.23 9.03M5.17 15.57 8.43 18.83"),
+];
+const COG: Part[] = [accent(circle(12, 12, 2.6)), body(cog(12, 12, 9.4, 6.9, 8)), line(circle(12, 12, 2.6))];
+const BAG = "M5 8h14l-1 12.2a1.8 1.8 0 0 1-1.8 1.6H7.8A1.8 1.8 0 0 1 6 20.2Z";
+const BAG_HANDLE = "M9 10V6.5a3 3 0 0 1 6 0V10";
+const BELL = "M6 16.5V11a6 6 0 0 1 12 0v5.5l1.6 2H4.4Z";
+const STAR = "M12 3.3 14.47 9.4 21.03 9.86 15.99 14.1 17.58 20.49 12 17 6.42 20.49 8.01 14.1 2.97 9.86 9.53 9.4Z";
+const HEART = "M12 19.4C5.6 15.6 3 12.6 3 9.4 3 6.9 4.9 5 7.3 5c1.9 0 3.6 1 4.7 2.7C13.1 6 14.8 5 16.7 5 19.1 5 21 6.9 21 9.4c0 3.2-2.6 6.2-9 10Z";
+
 /** Every icon, by name. Category icons are named after their category's slug. */
 const SHAPES = {
   // ---- categories --------------------------------------------------------
@@ -110,7 +123,7 @@ const SHAPES = {
     body("M14.3 3.6a5 5 0 0 0-4.6 6.9l-6 6a2.1 2.1 0 0 0 3 3l6-6a5 5 0 0 0 6.9-4.6l-2.8 2.8-2.9-.5-.5-2.9Z"),
   ],
   /** Utilities: a cog with a slime hub. */
-  utilities: [accent(circle(12, 12, 2.6)), body(cog(12, 12, 9.4, 6.9, 8)), line(circle(12, 12, 2.6))],
+  utilities: COG,
   /** Creative: a paintbrush dipped in slime. */
   creative: [
     accent("M10.6 10.6 13.4 13.4c.3 3.6-2.6 6.6-8.9 7.3.6-6.2 3.5-9.3 6.1-10.1Z"),
@@ -258,16 +271,11 @@ const SHAPES = {
 
   // ---- People's AI-use marks (components/People.tsx) and Friends & Chat --------
   /** No AI: a pencil, its eraser slime. */
-  "no-ai": [
-    accent("M16.97 3.77 20.23 7.03 18.23 9.03 14.97 5.77Z"),
-    body("M16.97 3.77 20.23 7.03 8.43 18.83 4 20 5.17 15.57Z"),
-    line("M14.97 5.77 18.23 9.03M5.17 15.57 8.43 18.83"),
-  ],
+  "no-ai": PENCIL,
   /** AI-assisted: the pencil, with a slime sparkle beside it. */
   "ai-assisted": [
     accent("M7 3.4c.41 2.21 1.39 3.19 3.6 3.6-2.21.41-3.19 1.39-3.6 3.6-.41-2.21-1.39-3.19-3.6-3.6 2.21-.41 3.19-1.39 3.6-3.6Z"),
-    body("M16.97 3.77 20.23 7.03 8.43 18.83 4 20 5.17 15.57Z"),
-    line("M14.97 5.77 18.23 9.03M5.17 15.57 8.43 18.83"),
+    ...PENCIL.slice(1),
   ],
   /** Mostly AI-generated: a wand with a slime tip, and sparkles. */
   "ai-heavy": [
@@ -285,6 +293,84 @@ const SHAPES = {
     dot(circle(10, 9, 1)),
     dot(circle(13.5, 9, 1)),
   ],
+
+  // ---- the rest of the interface: in place of emoji ------------------------
+  /** Slaps: a thumb up, its cuff slime. */
+  up: [
+    accent(rect(3, 10.5, 4, 9.9, 1)),
+    body("M7 10.5 10.6 3.6c1.5 0 2.6 1.2 2.4 2.7L12.5 9.5h5.6a2.2 2.2 0 0 1 2.1 2.7l-1.6 6.5a2.2 2.2 0 0 1-2.1 1.7H7Z"),
+    line(rect(3, 10.5, 4, 9.9, 1)),
+  ],
+  /** Slop: a thumb down, its cuff slime. */
+  down: [
+    accent(rect(3, 3.6, 4, 9.9, 1)),
+    body("M7 13.5 10.6 20.4c1.5 0 2.6-1.2 2.4-2.7L12.5 14.5h5.6a2.2 2.2 0 0 0 2.1-2.7l-1.6-6.5a2.2 2.2 0 0 0-2.1-1.7H7Z"),
+    line(rect(3, 3.6, 4, 9.9, 1)),
+  ],
+  /** Notifications: a bell with a slime clapper. */
+  bell: [accent("M9.8 19.6a2.2 2.2 0 0 0 4.4 0Z"), body(BELL), line("M12 3.2V5")],
+  /** Muted: the bell, struck through. */
+  "bell-off": [accent("M9.8 19.6a2.2 2.2 0 0 0 4.4 0Z"), body(BELL), line("M12 3.2V5M3.5 3.5 20.5 20.5")],
+  /** Friends: two people, a slime heart between them. */
+  friends: [
+    accent("M12 6.4c-1.7-1-2.4-1.8-2.4-2.7 0-.7.5-1.2 1.2-1.2.5 0 .9.3 1.2.7.3-.4.7-.7 1.2-.7.7 0 1.2.5 1.2 1.2 0 .9-.7 1.7-2.4 2.7Z"),
+    line(circle(16, 9, 3)),
+    line("M15.5 14.5h1.3a4.7 4.7 0 0 1 4.7 4.7v.8"),
+    body(circle(8, 9, 3)),
+    body("M2.5 20v-.8A4.7 4.7 0 0 1 7.2 14.5h1.6a4.7 4.7 0 0 1 4.7 4.7v.8"),
+  ],
+  /** End-to-end encrypted: a padlock with a slime keyhole. */
+  lock: [accent(circle(12, 15, 1.5)), body(rect(5, 10.5, 14, 10, 2.2)), line("M8 10.5V7.5a4 4 0 0 1 8 0v3"), accentLine("M12 16.2v1.8")],
+  /** Attachments: a paperclip, its inner loop slime. */
+  attach: [
+    accentLine("M10.3 16.6a1.6 1.6 0 0 1-2.3-2.3l6.9-6.9"),
+    line("M20 11.5 12.4 19.1a4.8 4.8 0 0 1-6.8-6.8l7.8-7.8a3.2 3.2 0 0 1 4.5 4.5l-7.6 7.6"),
+  ],
+  /** On a phone: a phone, its home bar slime. */
+  phone: [accentLine("M10.5 18.5h3"), body(rect(6.5, 2.5, 11, 19, 2.4))],
+  /** Download: a slime arrow down into a tray. */
+  download: [accentLine("M12 3.8v10.7M7.6 10.1 12 14.5l4.4-4.4"), body("M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4")],
+  /** Edit: the pencil. */
+  edit: PENCIL,
+  /** Settings: the cog. */
+  settings: COG,
+  /** A warning: a triangle with a slime "!". */
+  warning: [
+    accentLine("M12 9.5v4.2"),
+    accent(circle(12, 16.9, 1.1)),
+    body("M10.3 4.2a2 2 0 0 1 3.4 0l7.6 13.2a2 2 0 0 1-1.7 3H4.4a2 2 0 0 1-1.7-3Z"),
+  ],
+  /** Report: a flag, a drop of slime off its edge. */
+  flag: [
+    dripPart(15.5, 14.4, 3.6, 1.3),
+    body("M5 4.5c2.5-1.4 4.8-1.4 7 0s4.5 1.4 7 0v9c-2.5 1.4-4.8 1.4-7 0s-4.5-1.4-7 0Z"),
+    line("M5 21V4"),
+  ],
+  /** Donate: a slime heart. */
+  heart: [accent(HEART), body(HEART)],
+  /** Not interested yet: a star, slime dripping off a point. */
+  star: [dripPart(6.6, 20.2, 3.2, 1.15), body(STAR)],
+  /** Interested: the star, filled with slime. */
+  "star-on": [accent(STAR), body(STAR)],
+  /** The store: a shopping bag with a slime handle. */
+  store: [accentLine(BAG_HANDLE), body(BAG)],
+  /** Nothing for sale: the bag, a slime heart on it. */
+  bag: [
+    accent("M12 17.6c-1.7-1-2.4-1.8-2.4-2.7 0-.7.5-1.2 1.2-1.2.5 0 .9.3 1.2.7.3-.4.7-.7 1.2-.7.7 0 1.2.5 1.2 1.2 0 .9-.7 1.7-2.4 2.7Z"),
+    body(BAG),
+    line(BAG_HANDLE),
+  ],
+  /** Library: books on a shelf, one slime. */
+  library: [
+    accent(rect(8.2, 3.5, 4, 16.5, 1)),
+    line(rect(3.5, 6, 4, 14, 1)),
+    body(rect(8.2, 3.5, 4, 16.5, 1)),
+    line("M13.6 6.8 17.4 5.8 20.9 18.9 17.1 19.9Z"),
+  ],
+  /** Account: a person, shoulders in slime. */
+  account: [accentLine("M4 20.5v-1a5.5 5.5 0 0 1 5.5-5.5h5a5.5 5.5 0 0 1 5.5 5.5v1"), body(circle(12, 8, 4))],
+  /** Emoji: a smiling face, the smile slime. */
+  smile: [accentLine("M8.4 14.2a4.4 4.4 0 0 0 7.2 0"), body(circle(12, 12, 9)), dot(circle(9, 9.8, 1.15)), dot(circle(15, 9.8, 1.15))],
 } satisfies Record<string, Part[]>;
 
 export type StoreIconName = keyof typeof SHAPES;

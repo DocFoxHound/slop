@@ -227,7 +227,7 @@ async fn discover_has_personal_reels_that_say_why(db: PgPool) {
         (
             "genre:like:cozy",
             "Because you like Cozy",
-            "From your 👍 Slaps votes and Interested list",
+            "From your Slaps votes and Interested list",
             "cozy-",
         ),
         (

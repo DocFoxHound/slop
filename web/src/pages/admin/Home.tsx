@@ -27,7 +27,7 @@ export function AdminHome({ waiting }: { waiting: Waiting }) {
           {waiting.total !== undefined && waiting.total > 0 && <span className="muted">({waiting.total} waiting)</span>}
         </h2>
         {todo.length === 0 && alerts === 0 ? (
-          <div className="empty-state">Nothing waiting. 🎉</div>
+          <div className="empty-state">Nothing waiting.</div>
         ) : (
           <ul className="admin-todo">
             {alerts > 0 && (

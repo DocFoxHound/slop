@@ -142,9 +142,9 @@ test("sharing: with a friend, a profile link and an invite-only team, not an ope
   await expect(panel.getByRole("alert")).toHaveText("Private apps are only shared with invite-only teams");
   await teams.selectOption({ label: "Night Owls" });
   await panel.getByRole("button", { name: "Share with the team" }).click();
-  await expect(panel.getByRole("link", { name: "👥 Night Owls" })).toHaveAttribute("href", `/teams/${ids.inviteTeam}`);
+  await expect(panel.getByRole("link", { name: "Night Owls", exact: true })).toHaveAttribute("href", `/teams/${ids.inviteTeam}`);
   await panel.getByRole("listitem").filter({ hasText: "Night Owls" }).getByRole("button", { name: "Stop sharing" }).click();
-  await expect(panel.getByRole("link", { name: "👥 Night Owls" })).toHaveCount(0);
+  await expect(panel.getByRole("link", { name: "Night Owls", exact: true })).toHaveCount(0);
   await expect(panel.getByRole("listitem")).toHaveCount(2);
 
   // Someone it isn't shared with can't see it at all.

@@ -16,6 +16,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { isDesktop, openExternal, saveFile } from "../platform";
 import { useSession } from "../session";
+import { InlineIcon, VoteLabel } from "../components/StoreIcons";
 
 const STATUS_LABEL: Record<Job["status"], string> = {
   requested: "Requested",
@@ -199,7 +200,13 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
         {isClient && can("review") && (
           <div className="row-actions">
             <button type="button" className={`btn ${j.review ? "" : "slime"}`} onClick={jumpToReview}>
-              {j.review ? `Your rating: ${j.review.vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}` : `Rate ${j.creative.name}`}
+              {j.review ? (
+                <>
+                  Your rating: <VoteLabel vote={j.review.vote} />
+                </>
+              ) : (
+                `Rate ${j.creative.name}`
+              )}
             </button>
           </div>
         )}
@@ -208,7 +215,7 @@ function JobView({ j, onChange }: { j: Job; onChange: (j: Job) => void }) {
         )}
         {j.credited && (
           <div className="small">
-            ✋ Credited on <Link to={`/app/${j.project.slug}`}>{j.project.title}</Link>'s page.
+            <InlineIcon name="made" /> Credited on <Link to={`/app/${j.project.slug}`}>{j.project.title}</Link>'s page.
           </div>
         )}
         {j.client_record && (
@@ -1177,10 +1184,10 @@ function ReviewForm({
       <p className="muted small">Judge it against the agreement: did you get exactly what it says?</p>
       <div className="vote-row">
         <button type="button" className={`btn vote ${vote === "not_slop" ? "on up" : ""}`} aria-pressed={vote === "not_slop"} onClick={() => setVote("not_slop")}>
-          👍 Slaps
+          <VoteLabel vote="not_slop" />
         </button>
         <button type="button" className={`btn vote ${vote === "slop" ? "on down" : ""}`} aria-pressed={vote === "slop"} onClick={() => setVote("slop")}>
-          👎 Slop
+          <VoteLabel vote="slop" />
         </button>
       </div>
       <label>

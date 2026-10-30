@@ -41,6 +41,7 @@ import {
   peopleFill,
   type PeopleFill,
 } from "../handoff";
+import { SkillIcon } from "../components/StoreIcons";
 
 /** The site the desktop app was built for (vite.config.ts, from SLOP_API_URL). */
 declare const __SLOP_SITE_URL__: string;
@@ -539,7 +540,7 @@ function WorkThumb({ w }: { w: PortfolioWork }) {
   const url = w.kind === "image" ? w.url : w.poster?.url;
   return (
     <span className="item-thumb" aria-hidden="true">
-      {url ? <img src={url} alt="" /> : w.kind === "audio" ? "♪" : "▶"}
+      {url ? <img src={url} alt="" /> : w.kind === "audio" ? <SkillIcon slug="music" /> : "▶"}
     </span>
   );
 }

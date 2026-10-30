@@ -24,7 +24,7 @@ test.describe("profiles", () => {
     await expect(page.getByText(/On SLAPorSLOP since \w+ \d{4}/)).toBeVisible();
     // (A tile's link is named by the app's summary, not its title: see the report.)
     const vote = page.locator(".profile-votes").getByRole("listitem").filter({ has: page.locator('a[href="/app/lantern-keep"]') });
-    await expect(vote).toContainText("👍 Slaps");
+    await expect(vote).toContainText("Slaps");
     await expect(vote).toContainText("The fog timer makes every level tense.");
     // Signed out: no friend buttons.
     await expect(page.getByRole("button", { name: /Add friend|Block/ })).toHaveCount(0);
@@ -70,7 +70,7 @@ test.describe("profiles", () => {
     await signIn(page, "player");
     await page.goto(`/u/${ids.maker2}`);
     await expect(page.getByText("✓ Friends")).toBeVisible();
-    await expect(page.getByRole("link", { name: "💬 Message in the app" })).toHaveAttribute("href", "/chat");
+    await expect(page.getByRole("link", { name: "Message in the app", exact: true })).toHaveAttribute("href", "/chat");
     await expect(page.getByRole("button", { name: "Block" })).toBeVisible();
   });
 
@@ -89,7 +89,7 @@ test.describe("profiles", () => {
       await sec.goto(profile(ids.support));
       await sec.getByRole("button", { name: "Accept friend request" }).click();
       await expect(sec.getByText("✓ Friends")).toBeVisible();
-      await expect(sec.getByRole("link", { name: "💬 Message in the app" })).toBeVisible();
+      await expect(sec.getByRole("link", { name: "Message in the app", exact: true })).toBeVisible();
 
       await sec.getByRole("button", { name: "Block" }).click();
       await expect(sec.getByText("✓ Friends")).toHaveCount(0);
@@ -140,7 +140,7 @@ test.describe("the friends page", () => {
       // Ask, then take it back.
       await link.fill(profile(ids.security));
       await ask.click();
-      await expect(sue.getByText("Request sent. They'll see it under their 🔔.")).toBeVisible();
+      await expect(sue.getByText("Request sent. They'll see it in their notifications.")).toBeVisible();
       await expect(link).toHaveValue("");
       const waiting = sue.getByRole("listitem").filter({ hasText: "Sec Security" });
       await expect(sue.getByRole("heading", { name: "Waiting for an answer" })).toBeVisible();
@@ -225,10 +225,10 @@ test.describe("the friends page", () => {
 test.describe("chat on the website", () => {
   test("points to the app for this computer, and to friends", async ({ page }) => {
     await page.goto("/chat");
-    await expect(page.getByRole("heading", { name: "💬 Chat" })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Chat", exact: true })).toBeVisible();
     await expect(page.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
     // The browser here says it's Chrome on Windows.
-    await expect(page.getByRole("link", { name: "⬇ Get SLAPorSLOP for Windows" })).toHaveAttribute("href", "/download");
+    await expect(page.getByRole("link", { name: "Get SLAPorSLOP for Windows", exact: true })).toHaveAttribute("href", "/download");
     await page.getByRole("link", { name: "Your friends" }).click();
     await expect(page).toHaveURL(/\/friends$/);
   });
@@ -337,11 +337,11 @@ test.describe("teams", () => {
     const page = await browser.newPage();
     await signIn(page, "support");
     await page.goto(`/teams/${slug}`);
-    await expect(page.getByRole("button", { name: "⚑ Report" })).toBeVisible();
+    await expect(page.getByRole("button", { name: "Report", exact: true })).toBeVisible();
     await expect(page.getByRole("button", { name: "Leave" })).toHaveCount(0);
     await page.getByRole("button", { name: "Join" }).click();
     await expect(page.getByText("Open player team · 2 members")).toBeVisible();
-    await expect(page.getByRole("button", { name: "⚑ Report" })).toHaveCount(0);
+    await expect(page.getByRole("button", { name: "Report", exact: true })).toHaveCount(0);
     await expect(page.getByRole("button", { name: "Join" })).toHaveCount(0);
     // Open teams have no team chat.
     await expect(page.getByRole("link", { name: /Team chat/ })).toHaveCount(0);
@@ -378,7 +378,7 @@ test.describe("teams", () => {
     await sue.goto(`/teams/${slug}`);
     await sue.getByRole("button", { name: "Accept the invitation" }).click();
     await expect(sue.getByText("Invite-only player team · 2 members")).toBeVisible();
-    await expect(sue.getByRole("link", { name: "💬 Team chat in the app" })).toHaveAttribute("href", "/chat");
+    await expect(sue.getByRole("link", { name: "Team chat in the app", exact: true })).toHaveAttribute("href", "/chat");
 
     // A plain member manages nothing, and the server refuses if asked.
     await expect(sue.getByRole("combobox", { name: /role/ })).toHaveCount(0);

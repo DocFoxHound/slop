@@ -153,7 +153,7 @@ test("public profiles show votes and reviews; private ones only to their owner",
   await expect(visitor.getByRole("heading", { name: "Pat Player", level: 1 })).toBeVisible();
   await expect(visitor.getByText(/^On SLAPorSLOP since /)).toBeVisible();
   const vote = visitor.locator(".profile-votes li").filter({ has: visitor.locator(`a[href="/app/${ids.listedApp}"]`) });
-  await expect(vote.getByText("👍 Slaps")).toBeVisible();
+  await expect(vote.getByText("Slaps", { exact: true })).toBeVisible();
   await expect(vote.getByText(/Forty hours in and still finding secrets/)).toBeVisible();
   await expect(visitor.getByText("This is how others see you.")).toHaveCount(0);
 
@@ -266,7 +266,7 @@ test("email choices save per kind of notification; phone notifications say what 
   }
 
   // This browser blocks notifications (headless Chromium does, until a site is allowed).
-  await expect(section.getByText("📱 Notifications are blocked for SLAPorSLOP in this browser's settings.")).toBeVisible();
+  await expect(section.getByText("Notifications are blocked for SLAPorSLOP in this browser's settings.")).toBeVisible();
 
   // A browser that hasn't been asked yet gets the switch; this server has no push set up, so
   // switching it on says so. (Headless Chromium always answers "denied": pretend it hasn't.)
@@ -277,5 +277,5 @@ test("email choices save per kind of notification; phone notifications say what 
   const push = phone.locator("#notifications").getByRole("checkbox", { name: /Notifications on this phone or browser/ });
   await expect(push).not.toBeChecked();
   await push.click();
-  await expect(phone.getByText("📱 Notifications on phones aren't switched on on this server yet.")).toBeVisible();
+  await expect(phone.getByText("Notifications on phones aren't switched on on this server yet.")).toBeVisible();
 });

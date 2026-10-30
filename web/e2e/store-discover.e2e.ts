@@ -37,7 +37,7 @@ test("signed in: Recommended for you first, then Pat's genres, each saying why",
   // Pat 👍 Lantern Keep, a puzzle game: a reel of puzzle games Pat doesn't have.
   const puzzle = reel(page, /^Because you (like|play a lot of) Puzzle$/);
   await expect(puzzle).toBeVisible();
-  await expect(puzzle.locator(".section-h .sub").first()).toHaveText(/(👍 Slaps votes|spent the most time)/);
+  await expect(puzzle.locator(".section-h .sub").first()).toHaveText(/(Slaps votes|spent the most time)/);
   await expect(puzzle.getByRole("link", { name: /^See all: Because you/ })).toHaveAttribute("href", "/tag/puzzle?sort=rating");
   for (const slug of puzzles) await expect(puzzle.locator(`a[href="/app/${slug}"]`)).toBeVisible();
   await expect(puzzle.locator('a[href="/app/lantern-keep"]')).toHaveCount(0);

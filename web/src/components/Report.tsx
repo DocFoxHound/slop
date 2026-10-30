@@ -9,6 +9,7 @@ import { Link } from "react-router";
 import { api, ApiError, type CopyrightNotice, type ReportKind, type ReportReason } from "../api";
 import { formatDate } from "../format";
 import { useSession } from "../session";
+import { InlineIcon } from "./StoreIcons";
 
 const EMPTY_COPYRIGHT: CopyrightNotice = {
   work: "",
@@ -43,7 +44,7 @@ export function ReportButton({
   return (
     <>
       <button type="button" className={className} onClick={() => setOpen(true)} aria-haspopup="dialog">
-        ⚑ Report
+        <InlineIcon name="flag" /> Report
       </button>
       <dialog ref={dialog} className="dialog" aria-label={`Report ${label}`} onClose={() => setOpen(false)}>
         {open && <ReportForm kind={kind} subject={subject} label={label} onClose={() => setOpen(false)} />}

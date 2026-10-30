@@ -39,6 +39,7 @@ import {
   type Group,
   type Live,
 } from "./libraryModel";
+import { VoteLabel } from "../components/StoreIcons";
 
 /** Below this width the sidebar and the app are separate screens (styles.css, "library"). */
 const PHONE = "(max-width: 760px)";
@@ -799,7 +800,7 @@ function FriendsWhoRated({ slug }: { slug: string }) {
               <li key={f.id}>
                 <Avatar name={f.name} url={f.avatar_url} />
                 <Link to={`/u/${f.id}`}>{f.name}</Link>
-                <span className="muted small">{f.vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}</span>
+                <span className="muted small"><VoteLabel vote={f.vote} /></span>
               </li>
             ))}
           </ul>

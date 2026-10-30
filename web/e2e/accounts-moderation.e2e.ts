@@ -165,7 +165,7 @@ test.describe("the Report dialog", () => {
   test("signed out: the server's complaints show by each field, and a copyright notice is sent whole", async ({ page }) => {
     // The last send is answered by a stand-in, so no report joins the admins' queue.
     await page.goto("/app/castle-rock");
-    await page.getByRole("button", { name: "⚑ Report" }).click();
+    await page.getByRole("button", { name: "Report", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Report this app" });
     await dialog.getByRole("radio", { name: /Copyright/ }).check();
     await dialog.getByRole("textbox", { name: /What did you see/ }).fill("The title screen is a copy of my game's.");
@@ -219,7 +219,7 @@ test.describe("the Report dialog", () => {
 
   test("a child abuse report doesn't need a name or email, and is urgent", async ({ page }) => {
     await page.goto("/app/castle-rock");
-    await page.getByRole("button", { name: "⚑ Report" }).click();
+    await page.getByRole("button", { name: "Report", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Report this app" });
     await dialog.getByRole("radio", { name: "Child sexual abuse material" }).check();
     await expect(dialog.getByText("We review reports like this within 24 hours.")).toBeVisible();
@@ -235,7 +235,7 @@ test.describe("the Report dialog", () => {
     const sent = await fake(page, "POST", "/v1/reports", { status: 201, body: { reference: "R-TEST-0002", due_at: "2026-10-30T12:00:00Z" } });
     await signIn(page, "support");
     await page.goto("/app/castle-rock");
-    await page.getByRole("button", { name: "⚑ Report" }).click();
+    await page.getByRole("button", { name: "Report", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Report this app" });
     await expect(dialog.getByRole("textbox", { name: /Your email/ })).toHaveCount(0);
     const send = dialog.getByRole("button", { name: "Send report" });
@@ -261,7 +261,7 @@ test.describe("the Report dialog", () => {
   test("reasons that won't load say so", async ({ page }) => {
     await fake(page, "GET", "/v1/reports/reasons", { status: 503, body: apiError("unavailable", "SLAPorSLOP is busy: try again in a minute") });
     await page.goto("/app/castle-rock");
-    await page.getByRole("button", { name: "⚑ Report" }).click();
+    await page.getByRole("button", { name: "Report", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Report this app" });
     await expect(dialog.getByRole("alert")).toHaveText("SLAPorSLOP is busy: try again in a minute");
     await expect(dialog.getByRole("radio")).toHaveCount(0);

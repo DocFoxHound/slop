@@ -155,7 +155,7 @@ test("the download page: a button per system when there's a build, and says when
       "Not available right now.",
     );
   }
-  await expect(page.getByRole("link", { name: "Download", exact: true })).toHaveCount(0);
+  await expect(page.locator("section.download-card").getByRole("link", { name: "Download", exact: true })).toHaveCount(0);
 
   await answer(page, "/v1/desktop/latest/windows", { version: "1.4.0", url: "https://downloads.example/slop-1.4.0-setup.exe" });
   await answer(page, "/v1/desktop/latest/linux-deb", { version: "1.4.0", url: "https://downloads.example/slop_1.4.0_amd64.deb" });

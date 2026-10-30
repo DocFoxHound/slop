@@ -124,7 +124,7 @@ test("on the website: get the SLAPorSLOP app to play, tabs, the info button, and
   await signIn(page, "player");
   await page.goto("/library/castle-rock");
   const castle = app(page, "Castle Rock");
-  await expect(castle.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" })).toHaveAttribute("href", "/download");
+  await expect(castle.getByRole("link", { name: "Get the SLAPorSLOP app to play", exact: true })).toHaveAttribute("href", "/download");
   await expect(castle.getByRole("button", { name: "✓ In your library" })).toBeVisible();
   await expect(castle.getByRole("button", { name: "Install" })).toHaveCount(0);
 
@@ -132,7 +132,7 @@ test("on the website: get the SLAPorSLOP app to play, tabs, the info button, and
   const friends = castle.locator(".lib-box").filter({ hasText: "Friends who rated it" });
   await expect(friends.getByText("1 friend rated it")).toBeVisible();
   await expect(friends.getByRole("link", { name: "Bo Builder" })).toHaveAttribute("href", `/u/${ids.maker2}`);
-  await expect(friends.getByText("👍 Slaps")).toBeVisible();
+  await expect(friends.getByText("Slaps", { exact: true })).toBeVisible();
   await page.goto("/library/neon-drift");
   await expect(app(page, "Neon Drift").getByText("None of your friends has rated it on their profile yet.")).toBeVisible();
 
@@ -178,14 +178,14 @@ test("after playing, the library asks: Slap or SLAPorSLOP? It keeps the vote, wh
   await page.goto(`/library/${larks}`);
   const prompt = app(page, "Loot Larks").getByRole("region", { name: "Rate Loot Larks" });
   await expect(prompt.getByRole("heading", { name: "You've played Loot Larks: does it slap, or is it slop?" })).toBeVisible();
-  await prompt.getByRole("button", { name: "👍 Slaps" }).click();
-  await expect(prompt.getByText("Your rating: 👍 Slaps")).toBeVisible();
+  await prompt.getByRole("button", { name: "Slaps", exact: true }).click();
+  await expect(prompt.getByText("Your rating: Slaps")).toBeVisible();
   expect((await call<{ mine: { vote: string } }>("player", "GET", `/v1/apps/${larks}/ratings`)).mine.vote).toBe("not_slop");
   // A written review goes with it.
   await expect(prompt.getByRole("button", { name: "Add a written review" })).toBeVisible();
   await prompt.getByRole("button", { name: "Change" }).click();
-  await prompt.getByRole("button", { name: "👎 Slop" }).click();
-  await expect(prompt.getByText("Your rating: 👎 Slop")).toBeVisible();
+  await prompt.getByRole("button", { name: "Slop", exact: true }).click();
+  await expect(prompt.getByText("Your rating: Slop")).toBeVisible();
   expect((await call<{ mine: { vote: string } }>("player", "GET", `/v1/apps/${larks}/ratings`)).mine.vote).toBe("slop");
 
   // Not played: no question yet, but why not and the step to take, right there.
@@ -194,7 +194,7 @@ test("after playing, the library asks: Slap or SLAPorSLOP? It keeps the vote, wh
   await expect(page.getByRole("region", { name: /^Rate / })).toHaveCount(0);
   const why = app(page, "Neon Drift").locator(".rate-prompt-callout").getByRole("group", { name: "Rate it" });
   await expect(why.getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
-  await expect(why.getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveCSS("background-color", SLIME);
+  await expect(why.getByRole("link", { name: "Get the SLAPorSLOP app", exact: true })).toHaveCSS("background-color", SLIME);
 });
 
 test("on the website: Donate beside the big button: green, quiet when off, grey once given, monthly with Cancel", async ({ page }) => {
@@ -209,7 +209,7 @@ test("on the website: Donate beside the big button: green, quiet when off, grey 
     await expect(off).toHaveAccessibleName("Donate");
     await expect(off).not.toHaveCSS("background-color", SLIME);
     await expect(castle.locator(".lib-bar").getByText("Donations off")).toBeVisible();
-    await expectSameRow(castle.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" }), off);
+    await expectSameRow(castle.getByRole("link", { name: "Get the SLAPorSLOP app to play", exact: true }), off);
 
     // Lantern Keep: Pat has donated, so it's grey, says what and when, and offers Donate again.
     await page.goto(`/library/${ids.listedApp}`);
@@ -217,7 +217,7 @@ test("on the website: Donate beside the big button: green, quiet when off, grey 
     const given = donateButton(lantern);
     await expect(given).toHaveAccessibleName("Donated");
     await expect(given).not.toHaveCSS("background-color", SLIME);
-    await expectSameRow(lantern.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" }), given);
+    await expectSameRow(lantern.getByRole("link", { name: "Get the SLAPorSLOP app to play", exact: true }), given);
     await given.click();
     await expect(donatePanel(lantern).getByText(/^You donated \$[\d.]+ on /)).toBeVisible();
     await donatePanel(lantern).getByRole("button", { name: "Donate again" }).click();
@@ -248,7 +248,7 @@ test("on the website: Donate beside the big button: green, quiet when off, grey 
     await expect(green).toHaveAccessibleName("Donate");
     await expect(green).toHaveCSS("background-color", SLIME);
     await expect(green).not.toHaveClass(/\bbig\b/);
-    await expectSameRow(loot.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" }), green);
+    await expectSameRow(loot.getByRole("link", { name: "Get the SLAPorSLOP app to play", exact: true }), green);
     await green.click();
     await expect(donatePanel(loot)).toBeFocused();
     await expect(donateForm(loot)).toBeVisible();
@@ -467,7 +467,7 @@ test("on a phone, the list and the app are two screens", async ({ page }) => {
   await expect(side(page)).toBeHidden();
   const castle = app(page, "Castle Rock");
   await expect(castle.getByRole("heading", { name: "Castle Rock", level: 2 })).toBeFocused();
-  await expect(castle.getByRole("link", { name: "⬇ Get the SLAPorSLOP app to play" })).toBeVisible();
+  await expect(castle.getByRole("link", { name: "Get the SLAPorSLOP app to play", exact: true })).toBeVisible();
   await axe(page);
   await castle.getByRole("link", { name: "← Library" }).click();
   await expect(page).toHaveURL(/\/library$/);

@@ -118,9 +118,9 @@ code { font: 12.5px ui-monospace, "Cascadia Code", Menlo, monospace; background:
 
 .bottom-tabs { display: none; flex: none; border-top: 1px solid var(--line); background: #0f1318; padding: 6px 4px calc(6px + env(safe-area-inset-bottom)); }
 .bottom-tabs a { flex: 1; display: flex; flex-direction: column; align-items: center; gap: 2px; font-size: 10px; color: var(--muted); text-decoration: none; font-weight: 600; }
-.bottom-tabs a span { font-size: 18px; filter: grayscale(1); opacity: 0.7; }
+.bottom-tabs a .store-icon { opacity: 0.75; }
 .bottom-tabs a.on { color: var(--slime); }
-.bottom-tabs a.on span { filter: none; opacity: 1; }
+.bottom-tabs a.on .store-icon { opacity: 1; }
 
 /* ---- generic --------------------------------------------------------- */
 .btn { display: inline-flex; align-items: center; justify-content: center; gap: 8px; padding: 8px 14px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); font-weight: 600; cursor: pointer; white-space: nowrap; text-decoration: none !important; transition: background 0.12s, border-color 0.12s; }
@@ -181,6 +181,12 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 /* The store bar (components/StoreNav.tsx): the store's sections and its search, like Steam's. */
 /* SLAPorSLOP's own icons (components/StoreIcons.tsx): sized by their width and height, never squeezed. */
 .store-icon { flex: none; display: inline-block; overflow: visible; }
+/* An icon in a line of text (InlineIcon), where an emoji used to be: the text's size, on its baseline. */
+.inline-icon { width: 1.2em; height: 1.2em; vertical-align: -0.22em; }
+/* On slime or a coloured chip, the slime touch is drawn in the text's colour. */
+.btn.slime .store-icon, .vote-chip .store-icon { --icon-accent: currentColor; }
+/* A text button with an icon: only the words are underlined. */
+.link-btn:has(> .inline-icon) { display: inline-flex; align-items: center; gap: 0.3em; }
 .store-nav { display: flex; align-items: center; gap: 4px; margin: -8px 0 22px; padding: 6px; background: linear-gradient(90deg, var(--panel-2), var(--panel)); border: 1px solid var(--line); border-radius: var(--radius); }
 .store-nav-links { display: flex; gap: 2px; min-width: 0; overflow-x: auto; scrollbar-width: none; }
 .store-nav-links::-webkit-scrollbar { display: none; }

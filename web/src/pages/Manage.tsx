@@ -179,7 +179,7 @@ function GroupTable({ caption, groups, name }: { caption: string; groups: Rating
           <th scope="col">{caption}</th>
           <th scope="col">Weighted</th>
           <th scope="col">Unweighted</th>
-          <th scope="col">👍 / 👎</th>
+          <th scope="col">Slaps / Slop</th>
         </tr>
       </thead>
       <tbody>
@@ -227,7 +227,7 @@ function RatingBreakdown({ slug }: { slug: string }) {
                   .filter((i) => i.to_not_slop + i.to_slop + i.new_votes > 0)
                   .map((i) => (
                     <li key={i.version}>
-                      On v{i.version}: {i.to_not_slop.toLocaleString()} changed 👎 → 👍, {i.to_slop.toLocaleString()} changed 👍 → 👎,{" "}
+                      On v{i.version}: {i.to_not_slop.toLocaleString()} changed Slop → Slaps, {i.to_slop.toLocaleString()} changed Slaps → Slop,{" "}
                       {i.new_votes.toLocaleString()} new votes.
                     </li>
                   ))}

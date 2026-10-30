@@ -5,6 +5,7 @@
 import { Link } from "react-router";
 
 import { useDocumentTitle } from "../hooks";
+import { InlineIcon } from "../components/StoreIcons";
 
 const PLAYTIME: Array<[string, string]> = [
   ["Under 2 minutes", "0.1"],
@@ -37,7 +38,7 @@ export function HowRatings() {
     <div className="page narrow prose">
       <h1>How ratings work</h1>
       <p className="lead">
-        Every app on SLAPorSLOP is rated 👍 <b>Slaps</b> or 👎 <b>Slop</b> by the people who play it. A vote from someone who played
+        Every app on SLAPorSLOP is rated <InlineIcon name="up" /> <b>Slaps</b> or <InlineIcon name="down" /> <b>Slop</b> by the people who play it. A vote from someone who played
         for hours counts for more than one from someone who tried it for a minute.
       </p>
 
@@ -99,7 +100,7 @@ export function HowRatings() {
       <h2>What you see</h2>
       <ul>
         <li>
-          <b>% Slaps, weighted:</b> the weighted share of 👍 votes. It's the number shown first.
+          <b>% Slaps, weighted:</b> the weighted share of Slaps votes. It's the number shown first.
         </li>
         <li>
           <b>Unweighted:</b> one account, one vote. It's shown beside the weighted one, so you can see if they disagree.
@@ -138,7 +139,7 @@ export function HowRatings() {
           <b>Most Slaps right now:</b> the same, counting only votes cast or changed in the last 30 days.
         </li>
         <li>
-          <b>Fresh slop:</b> the most weighted 👎 votes in the last 30 days. It's for fun, so please be kind in reviews.
+          <b>Fresh slop:</b> the most weighted Slop votes in the last 30 days. It's for fun, so please be kind in reviews.
         </li>
         <li>
           <b>New and barely seen:</b> apps released in the last 60 days that are in few libraries yet, in an order that
@@ -150,7 +151,7 @@ export function HowRatings() {
         </li>
         <li>
           <b>Discover:</b> signed in with recommendations based on your activity on, it starts with your For you picks (from
-          your library, Interested list, playtime and votes), then rows for the genres you play most, like most (👍 votes and
+          your library, Interested list, playtime and votes), then rows for the genres you play most, like most (Slaps votes and
           Interested), keep most in your library and have donated to, leaving out what you already have. Mixed in for everyone:
           all-time favourites (at least 70% Slaps, 5 or more votes), up-and-coming releases (from the last 60 days, most added and
           played this week), and the most popular this week and this month. The rows' order changes once a day. Each row says

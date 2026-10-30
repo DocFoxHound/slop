@@ -220,7 +220,7 @@ describe("DonateButton", () => {
     await waitFor(() => expect(read).toHaveBeenCalled());
     await new Promise((r) => setTimeout(r, 0));
     // Only the button itself and the panel's Close.
-    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent)).toEqual(["♥ Donate", "Close"]);
+    expect(screen.getAllByRole("button").map((b) => b.getAttribute("aria-label") ?? b.textContent?.trim())).toEqual(["Donate", "Close"]);
   });
 
   it("shows nothing at all for an app that isn't in the store", async () => {

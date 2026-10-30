@@ -27,6 +27,7 @@ import { ExternalLink } from "../../components/ui";
 import { formatDate, STAGE_LABEL } from "../../format";
 import { useLoad } from "../../hooks";
 import { ActionMessages, ReasonButton, RuleSelect, useAction } from "./shared";
+import { VoteLabel } from "../../components/StoreIcons";
 
 export const ABUSE_LABEL: Record<string, string> = {
   vote_burst: "VOTES FROM NEW ACCOUNTS",
@@ -349,7 +350,7 @@ export function DisputeCard({ d, onDone }: { d: Q["review_disputes"][number]; on
       <div className="title-row spread">
         <span>
           <b>{d.client}</b> on <Link to={`/people/${d.creative_handle}`}>{d.creative}</Link>:{" "}
-          {d.vote === "slop" ? "👎 Slop" : "👍 Slaps"}
+          <VoteLabel vote={d.vote === "slop" ? "slop" : "not_slop"} />
         </span>
         <span className="muted small">{formatDate(d.created_at)}</span>
       </div>

@@ -120,11 +120,11 @@ test("a job from request to review: offer, pay half, sign-off, preview, pay the 
   await expect(cleo.getByText("Credited on Cleo's Tavern's page.")).toBeVisible();
   const review = cleo.locator("form").filter({ has: cleo.getByRole("heading", { name: "Did Vera Okafor's work slap, or was it slop?" }) });
   await expect(review.getByRole("button", { name: "Post review" })).toBeDisabled();
-  await review.getByRole("button", { name: "👍 Slaps" }).click();
+  await review.getByRole("button", { name: "Slaps", exact: true }).click();
   await review.getByRole("textbox", { name: /A few words/ }).fill("Exactly the map we asked for, on time.");
   await review.getByRole("button", { name: "Post review" }).click();
   const mine = cleo.locator("form").filter({ has: cleo.getByRole("heading", { name: "Your review" }) });
-  await expect(mine.getByRole("button", { name: "👍 Slaps" })).toHaveAttribute("aria-pressed", "true");
+  await expect(mine.getByRole("button", { name: "Slaps", exact: true })).toHaveAttribute("aria-pressed", "true");
   await mine.getByRole("textbox", { name: /A few words/ }).fill("Exactly the map we asked for, two days early.");
   await mine.getByRole("button", { name: "Update review" }).click();
   await expect(mine.getByRole("button", { name: "Update review" })).toBeEnabled();

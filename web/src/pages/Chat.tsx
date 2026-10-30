@@ -41,6 +41,7 @@ import {
   OS_LABEL,
 } from "../platform";
 import { useSession } from "../session";
+import { InlineIcon } from "../components/StoreIcons";
 
 const QUICK_REACTIONS = ["👍", "😂", "❤️", "🔥", "😮", "😢", "🎉", "💀"];
 const EMOJI = ["😀", "😂", "🥲", "😍", "🤔", "😎", "😭", "😡", "👍", "👎", "🙏", "👀", "🔥", "💯", "🎉", "💀", "🤝", "🎮", "🕹️", "🏆", "🐛", "✨", "❤️", "💚"];
@@ -77,7 +78,9 @@ export function ChatPage() {
 function ChatOnWeb() {
   return (
     <div className="page narrow">
-      <h1 className="page-title">💬 Chat</h1>
+      <h1 className="page-title">
+        <InlineIcon name="chat" /> Chat
+      </h1>
       <ChatInAppNote />
     </div>
   );
@@ -86,7 +89,7 @@ function ChatOnWeb() {
 /** Why chat isn't on the website, and where to get the app. In the full page and the panel. */
 export function ChatInAppNote({ compact = false }: { compact?: boolean }) {
   const os = detectOs();
-  const get = `⬇ Get SLAPorSLOP for ${os === "mac" || os === "windows" || os === "linux" ? OS_LABEL[os] : "your computer"}`;
+  const getLabel = `Get SLAPorSLOP for ${os === "mac" || os === "windows" || os === "linux" ? OS_LABEL[os] : "your computer"}`;
   if (compact) {
     return (
       <div className="notice dock-note">
@@ -94,7 +97,7 @@ export function ChatInAppNote({ compact = false }: { compact?: boolean }) {
           <b>Chat is in the SLAPorSLOP app.</b> Messages are end-to-end encrypted on your devices, so SLAPorSLOP can't read them.
         </p>
         <Link className="btn small slime" to="/download">
-          {get}
+          <InlineIcon name="download" /> {getLabel}
         </Link>
       </div>
     );
@@ -111,7 +114,7 @@ export function ChatInAppNote({ compact = false }: { compact?: boolean }) {
       </p>
       <div className="row-actions">
         <Link className="btn slime" to="/download">
-          {get}
+          <InlineIcon name="download" /> {getLabel}
         </Link>
         <Link className="btn" to="/friends">
           Your friends
@@ -302,7 +305,7 @@ function Screen({ title, children }: { title: string; children: React.ReactNode 
 /** This device was removed from chat: setting it up again is one click, never automatic. */
 function SetUpAgain({ busy, error, onSetUp }: { busy: boolean; error?: string; onSetUp: () => void }) {
   return (
-    <Screen title="💬 Chat">
+    <Screen title="Chat">
       <div className="panel panel-pad">
         <p className="notice">This device was removed from chat. Set it up again to keep chatting here.</p>
         <p className="muted small">
@@ -535,7 +538,8 @@ function Chats({
                 ＋ New
               </button>
               <button className="btn small ghost" onClick={() => setPanel("devices")} aria-label="Devices and backups">
-                ⚙{status.pending.length > 0 && <span className="dot-badge">{status.pending.length}</span>}
+                <InlineIcon name="settings" />
+                {status.pending.length > 0 && <span className="dot-badge">{status.pending.length}</span>}
               </button>
             </div>
           </div>
@@ -577,7 +581,7 @@ function Chats({
                   >
                     {c.kind === "team" || c.kind === "group" ? (
                       <span className="avatar" aria-hidden="true">
-                        {c.kind === "team" ? "👥" : "#"}
+                        {c.kind === "team" ? <InlineIcon name="teams" /> : "#"}
                       </span>
                     ) : (
                       <Avatar name={c.title} url={c.members.find((m) => m.id !== me?.id)?.avatar_url} />
@@ -586,7 +590,11 @@ function Chats({
                       <b>{c.title}</b>
                       <span className="muted small">{c.ready ? (c.last ?? "No messages yet") : "Waiting to be added…"}</span>
                     </span>
-                    {c.muted && <span aria-label="Muted">🔕</span>}
+                    {c.muted && (
+                      <span role="img" aria-label="Muted">
+                        <InlineIcon name="bell-off" />
+                      </span>
+                    )}
                     {c.unread > 0 && (
                       <span className="unread-badge" aria-label={`${c.unread} unread`}>
                         {c.unread > 99 ? "99+" : c.unread}
@@ -599,7 +607,7 @@ function Chats({
           )}
           {!compact && (
             <p className="muted small chat-list-foot">
-              🔒 End-to-end encrypted. <Link to="/friends">Friends</Link>
+              <InlineIcon name="lock" /> End-to-end encrypted. <Link to="/friends">Friends</Link>
             </p>
           )}
         </aside>
@@ -864,7 +872,7 @@ function NewChat({ onStarted }: { onStarted: (id: string) => void }) {
             {teams?.map((t) => (
               <li key={t.slug}>
                 <button className="btn small" disabled={busy} onClick={() => void start({ action: "start_team", team: t.slug })}>
-                  👥 {t.name}
+                  <InlineIcon name="teams" /> {t.name}
                 </button>
               </li>
             ))}
@@ -988,7 +996,7 @@ function Conversation({
             ) : (
               other && <Link to={`/u/${other.id}`}>Profile</Link>
             )}{" "}
-            · 🔒 end-to-end encrypted
+            · <InlineIcon name="lock" /> end-to-end encrypted
           </p>
         </div>
         <div className="row-actions">
@@ -1168,7 +1176,7 @@ function MessageRow({
   if (m.notice) {
     return (
       <p className="chat-notice" role="note">
-        🔒 {m.text}
+        <InlineIcon name="lock" /> {m.text}
       </p>
     );
   }
@@ -1210,7 +1218,7 @@ function MessageRow({
       )}
       {m.warnings.map((w) => (
         <p key={w} className="notice small chat-warning" role="note">
-          ⚠ {w}
+          <InlineIcon name="warning" /> {w}
         </p>
       ))}
       {m.reactions.length > 0 && (
@@ -1262,7 +1270,7 @@ function MessageRow({
           )}
           {m.reportable && (
             <button className="link-btn small muted" onClick={onReport}>
-              ⚑ Report
+              <InlineIcon name="flag" /> Report
             </button>
           )}
         </div>
@@ -1309,7 +1317,9 @@ function Attachment({ conv, m, a, thumb = false }: { conv: ChatConversation; m: 
   useEffect(() => {
     if (media && !url) void fetchIt().then(setUrl);
   }, [media, url, fetchIt]);
-  if (error) return <p className="muted small">📎 {a.name}: {error}</p>;
+  if (error) return <p className="muted small">
+        <InlineIcon name="attach" /> {a.name}: {error}
+      </p>;
   if (!media) {
     const download = async () => {
       const u = url ?? (await fetchIt());
@@ -1321,7 +1331,7 @@ function Attachment({ conv, m, a, thumb = false }: { conv: ChatConversation; m: 
     };
     return (
       <button className="file-chip" onClick={() => void download()}>
-        📎 {a.name} <span className="muted small">{(a.size / 1024).toFixed(a.size < 102400 ? 1 : 0)} KB</span>
+        <InlineIcon name="attach" /> {a.name} <span className="muted small">{(a.size / 1024).toFixed(a.size < 102400 ? 1 : 0)} KB</span>
       </button>
     );
   }
@@ -1466,7 +1476,7 @@ function Composer({
     >
       {(replyTo || editing) && (
         <div className="composer-context small">
-          {editing ? "Editing your message" : `Replying to ${replyTo!.sender.name}: ${replyTo!.text.slice(0, 80) || "📎 Attachment"}`}
+          {editing ? "Editing your message" : `Replying to ${replyTo!.sender.name}: ${replyTo!.text.slice(0, 80) || "Attachment"}`}
           <button type="button" className="link-btn small" onClick={onCancel}>
             Cancel
           </button>
@@ -1476,7 +1486,7 @@ function Composer({
         <ul className="composer-files">
           {files.map((f, i) => (
             <li key={`${f.name}-${i}`} className="file-chip">
-              📎 {f.name}
+              <InlineIcon name="attach" /> {f.name}
               <button type="button" className="link-btn small" aria-label={`Remove ${f.name}`} onClick={() => setFiles(files.filter((_, j) => j !== i))}>
                 ✕
               </button>
@@ -1488,7 +1498,7 @@ function Composer({
         {!editing && (
           <>
             <button type="button" className="btn small ghost" aria-label="Attach pictures, GIFs, videos or files" onClick={() => fileInput.current?.click()}>
-              📎
+              <InlineIcon name="attach" />
             </button>
             <input
               ref={fileInput}
@@ -1503,7 +1513,7 @@ function Composer({
           </>
         )}
         <button type="button" className="btn small ghost" aria-label="Emoji" aria-expanded={emoji} onClick={() => setEmoji(!emoji)}>
-          😀
+          <InlineIcon name="smile" />
         </button>
         <textarea
           ref={input}
@@ -1705,7 +1715,7 @@ function ReportMessage({ conv, m, onClose }: { conv: ChatConversation; m: ChatMe
             SLAPorSLOP can't read chats. Reporting sends this one message to SLAPorSLOP's moderators, with a check that proves it's
             exactly what {m.sender.name} sent. Nothing else from the chat is shared.
           </p>
-          <blockquote className="quoted small">{m.text || "📎 Attachment"}</blockquote>
+          <blockquote className="quoted small">{m.text || "Attachment"}</blockquote>
           <label>
             What's wrong
             <select value={reason} onChange={(e) => setReason(e.target.value)} required>

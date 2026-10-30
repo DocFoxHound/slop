@@ -79,7 +79,7 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
     anticipated: "Most anticipated",
     rating: "Most Slaps",
     not_slop_now: "Most Slaps right now",
-    fresh_slop: "Fresh slop (most 👎 this month)",
+    fresh_slop: "Fresh slop (most Slop votes this month)",
     reviewed: "Most reviewed",
     recent: "Recently updated",
     title: "A–Z",

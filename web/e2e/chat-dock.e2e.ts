@@ -83,7 +83,7 @@ test.describe("on the website", () => {
     await expect(page.getByText("Chat is in the SLAPorSLOP app.")).toBeVisible();
     await expect(chatBar(page)).toHaveCount(0);
     await page.goto("/friends");
-    await expect(page.getByRole("heading", { name: "🤝 Friends", level: 1 })).toBeVisible();
+    await expect(page.getByRole("heading", { name: "Friends", exact: true, level: 1 })).toBeVisible();
     await expect(chatBar(page)).toBeVisible();
   });
 

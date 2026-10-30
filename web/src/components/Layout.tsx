@@ -18,12 +18,14 @@ import { UpdateNotice } from "./UpdateNotice";
 import { WindowControls } from "./WindowControls";
 import { useSession } from "../session";
 import { fragmentId } from "../browsing";
+import { StoreIcon } from "./StoreIcons";
+import type { StoreIconName } from "../storeIcons";
 
 const TABS = [
   {
     to: "/",
     label: "Store",
-    icon: "🛒",
+    icon: "store" as StoreIconName,
     end: true,
     match: (p: string) =>
       !["/publish", "/account", "/library", "/admin", "/people", "/jobs", "/chat", "/friends"].some((prefix) => p.startsWith(prefix)),
@@ -31,12 +33,12 @@ const TABS = [
   {
     to: "/people",
     label: "People",
-    icon: "🎨",
+    icon: "hire" as StoreIconName,
     end: false,
     match: (p: string) => p.startsWith("/people") || p.startsWith("/jobs"),
   },
-  { to: "/library", label: "Library", icon: "📚", end: false, match: (p: string) => p.startsWith("/library") },
-  { to: "/publish", label: "Publish", icon: "⬆️", end: false, match: (p: string) => p.startsWith("/publish") },
+  { to: "/library", label: "Library", icon: "library" as StoreIconName, end: false, match: (p: string) => p.startsWith("/library") },
+  { to: "/publish", label: "Publish", icon: "publish" as StoreIconName, end: false, match: (p: string) => p.startsWith("/publish") },
 ];
 
 /**
@@ -46,7 +48,7 @@ const TABS = [
 const CHAT_TAB = {
   to: "/chat",
   label: "Chat",
-  icon: "💬",
+  icon: "chat" as StoreIconName,
   end: false,
   match: (p: string) => p.startsWith("/chat") || p.startsWith("/friends"),
 };
@@ -146,7 +148,7 @@ export function Layout() {
         {/* The website offers the desktop app; the app itself doesn't need to. */}
         {!isDesktop && (
           <Link className="btn small download-btn" to="/download">
-            ⬇ Download
+            <StoreIcon name="download" size={14} /> Download
           </Link>
         )}
         <div className="tabs">
@@ -185,7 +187,7 @@ export function Layout() {
       <nav className="bottom-tabs" aria-label="Main">
         {BOTTOM_TABS.map((t) => (
           <NavLink key={t.to} to={t.to} end={t.end} className={() => (t.match(location.pathname) ? "on" : "")}>
-            <span aria-hidden="true">{t.icon}</span>
+            <StoreIcon name={t.icon} size={20} />
             {t.label}
             {t === CHAT_TAB && chatUnread > 0 && (
               <>
@@ -198,7 +200,8 @@ export function Layout() {
           </NavLink>
         ))}
         <NavLink to="/account" className={({ isActive }) => (isActive ? "on" : "")}>
-          <span aria-hidden="true">👤</span>Account
+          <StoreIcon name="account" size={20} />
+          Account
         </NavLink>
       </nav>
     </div>
@@ -267,7 +270,7 @@ function Bell() {
       aria-label={n > 0 ? `Notifications, ${n} unread` : "Notifications"}
       title="Notifications"
     >
-      <span aria-hidden="true">🔔</span>
+      <StoreIcon name="bell" size={20} />
       {n > 0 && (
         <span className="bell-count" aria-hidden="true">
           {n > 99 ? "99+" : n}

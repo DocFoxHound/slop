@@ -11,6 +11,7 @@ import { formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { isDesktop } from "../platform";
 import { LineChart, UpDownBars } from "./Charts";
+import { InlineIcon, VoteLabel } from "./StoreIcons";
 
 function shortDay(day: string) {
   return day.slice(5);
@@ -50,8 +51,7 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
       <span className={`rating-big ${good ? "good" : bad ? "bad" : "mixed"}`}>{ratings.percent_weighted}% Slaps</span>{" "}
       <b>{ratings.label}</b>
       <div className="muted small">
-        <Link to="/ratings">weighted by playtime</Link> · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()}{" "}
-        👍 / {ratings.slop.toLocaleString()} 👎)
+        <Link to="/ratings">weighted by playtime</Link> · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()} Slaps / {ratings.slop.toLocaleString()} Slop)
       </div>
       <BetaNote ratings={ratings} />
     </div>
@@ -65,7 +65,7 @@ export function SinceNewWork({ s, min }: { s: NonNullable<Ratings["since_new_wor
   if (!s.since) {
     return (
       <p className="since-work muted small">
-        ✋ New work by {who} is coming: a "since the new work" rating starts with the next release.
+        <InlineIcon name="made" /> New work by {who} is coming: a "since the new work" rating starts with the next release.
       </p>
     );
   }
@@ -120,8 +120,6 @@ function useRatings(slug: string, signedIn: boolean) {
 function tone(percent: number): "good" | "bad" | "mixed" {
   return percent >= 70 ? "good" : percent < 40 ? "bad" : "mixed";
 }
-
-const VOTE_LABEL = { not_slop: "👍 Slaps", slop: "👎 Slop" } as const;
 
 /** Moves to the rating panel (id "rating") and puts focus there. */
 export function jumpToRating() {
@@ -239,7 +237,13 @@ function RateCallout({
       return (
         <div className="rate-callout can-rate">
           <button type="button" className={`btn ${step.vote ? "" : "slime"}`} onClick={jumpToRating}>
-            {step.vote ? `Your rating: ${VOTE_LABEL[step.vote]}` : "Rate it"}
+            {step.vote ? (
+              <>
+                Your rating: <VoteLabel vote={step.vote} />
+              </>
+            ) : (
+              "Rate it"
+            )}
           </button>
           {step.beta && <span className="muted small">It's in Beta: your rating is marked Rated in Beta.</span>}
         </div>
@@ -271,7 +275,7 @@ function RateCallout({
             play
           ) : (
             <Link className="btn slime" to="/download">
-              ⬇ Get the SLAPorSLOP app
+              <InlineIcon name="download" /> Get the SLAPorSLOP app
             </Link>
           )}
         </div>
@@ -383,7 +387,7 @@ export function RatePrompt({
               disabled={busy}
               onClick={() => void vote("not_slop")}
             >
-              👍 Slaps
+              <VoteLabel vote="not_slop" />
             </button>
             <button
               type="button"
@@ -392,7 +396,7 @@ export function RatePrompt({
               disabled={busy}
               onClick={() => void vote("slop")}
             >
-              👎 Slop
+              <VoteLabel vote="slop" />
             </button>
             {changing && (
               <button type="button" className="btn small ghost" onClick={() => setChanging(false)}>
@@ -407,7 +411,9 @@ export function RatePrompt({
       ) : (
         <div className="rate-prompt-done">
           <span>
-            Your rating: <b>{VOTE_LABEL[mine.vote!]}</b>
+            Your rating: <b>
+              <VoteLabel vote={mine.vote!} />
+            </b>
           </span>
           <button type="button" className="btn small ghost" onClick={() => setChanging(true)}>
             Change
@@ -477,7 +483,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
             disabled={busy}
             onClick={() => void vote(mine.vote === "not_slop" ? null : "not_slop")}
           >
-            👍 Slaps
+            <VoteLabel vote="not_slop" />
           </button>
           <button
             type="button"
@@ -486,7 +492,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
             disabled={busy}
             onClick={() => void vote(mine.vote === "slop" ? null : "slop")}
           >
-            👎 Slop
+            <VoteLabel vote="slop" />
           </button>
           <span className="muted small">
             Your vote counts {Math.round(mine.weight * 100)}% (more as you play). Press again to take it back.
@@ -545,15 +551,15 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
           labels={days}
           up={r.daily.map((d) => d.not_slop)}
           down={r.daily.map((d) => d.slop)}
-          upName="👍 Slaps"
-          downName="👎 Slop"
+          upName="Slaps"
+          downName="Slop"
           marked={r.daily.map((d) => (r.unusual_days ?? []).includes(d.day))}
           markedName="Unusual voting"
         />
       )}
       {r.daily.some((d) => (r.unusual_days ?? []).includes(d.day)) && (
         <p className="muted small">
-          Shaded days had unusual voting: a sudden wave of 👎, many votes from brand-new accounts, or many players changing
+          Shaded days had unusual voting: a sudden wave of Slop votes, many votes from brand-new accounts, or many players changing
           their vote at once. SLAPorSLOP's staff look into these; nothing is changed automatically.
         </p>
       )}

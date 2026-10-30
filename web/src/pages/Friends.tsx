@@ -12,6 +12,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
 import { ensureChat } from "./Chat";
+import { InlineIcon } from "../components/StoreIcons";
 
 export function FriendsPage() {
   useDocumentTitle("Friends");
@@ -53,7 +54,7 @@ export function FriendsPage() {
     void run(async () => {
       const res = await api.friends.request(link.trim());
       setLink("");
-      setNote(res.status === "friends" ? "You're friends now." : "Request sent. They'll see it under their 🔔.");
+      setNote(res.status === "friends" ? "You're friends now." : "Request sent. They'll see it in their notifications.");
     });
   };
   const message = async (id: string) => {
@@ -66,7 +67,9 @@ export function FriendsPage() {
   const f = friends.data;
   return (
     <div className="page narrow">
-      <h1 className="page-title">🤝 Friends</h1>
+      <h1 className="page-title">
+        <InlineIcon name="friends" /> Friends
+      </h1>
       <p className="muted">
         Friends can message each other in the SLAPorSLOP app, along with teammates and the people you work with on People.{" "}
         {!isDesktop && <Link to="/chat">About chat</Link>}
@@ -190,7 +193,7 @@ export function FriendsList({
               <span className="row-actions">
                 {onMessage && (
                   <button className="btn small" onClick={() => onMessage(p.id)} aria-label={`Message ${p.name}`}>
-                    💬 Message
+                    <InlineIcon name="chat" /> Message
                   </button>
                 )}
                 {!compact && (
@@ -273,11 +276,11 @@ export function ConnectionButtons({ userId, name }: { userId: string; name: stri
                 className="btn small"
                 onClick={() => void run(async () => navigate(await startDirectChat(userId)))}
               >
-                💬 Message
+                <InlineIcon name="chat" /> Message
               </button>
             ) : (
               <Link className="btn small" to="/chat">
-                💬 Message in the app
+                <InlineIcon name="chat" /> Message in the app
               </Link>
             ))}
           <button className="btn small ghost" onClick={() => void run(() => api.friends.block(userId))}>

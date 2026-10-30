@@ -23,7 +23,7 @@ test("the job page: Rate the creative in green once it's done, your rating in gr
   // Her real review: grey, and it still takes her to the form to change it.
   const real = await page.context().newPage();
   await real.goto(`/jobs/${ids.completedJob}`);
-  const mine = real.locator(".next-step").getByRole("button", { name: /^Your rating: (👍 Slaps|👎 Slop)$/ });
+  const mine = real.locator(".next-step").getByRole("button", { name: /^Your rating: (Slaps|Slop)$/ });
   await expect(mine).toBeVisible();
   await expect(mine).not.toHaveCSS("background-color", SLIME);
   await mine.click();

@@ -121,7 +121,7 @@ describe("RatingHeader", () => {
     cleanup();
     await show({ ...base, stage: "beta", mine: { vote: null, can_vote: false, reason: "Launch it from the SLAPorSLOP app first: only players can vote.", played: false, weight: 0.1 } });
     expect(screen.getByText("Play it from the SLAPorSLOP app to rate it.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "⬇ Get the SLAPorSLOP app" }).getAttribute("href")).toBe("/download");
+    expect(screen.getByRole("link", { name: "Get the SLAPorSLOP app" }).getAttribute("href")).toBe("/download");
   });
 
   it("tells the maker, and offers Interested while it's Coming soon", async () => {
@@ -156,7 +156,7 @@ describe("RatePrompt (the library)", () => {
     expect(await screen.findByRole("heading", { name: "You've played Angry Herds: does it slap, or is it slop?" })).toBeTruthy();
     cleanup();
     show({ ...base, mine: { ...played, vote: "not_slop" } });
-    expect((await screen.findByText("👍 Slaps")).closest(".rate-prompt-done")?.textContent).toContain("Your rating: 👍 Slaps");
+    expect((await screen.findByText(/Slaps/)).closest(".rate-prompt-done")?.textContent).toMatch(/Your rating:\s+Slaps/);
     fireEvent.click(screen.getByRole("button", { name: "Change" }));
     expect(screen.getByRole("heading", { name: "Change your rating of Angry Herds" })).toBeTruthy();
   });
@@ -167,7 +167,7 @@ describe("RatePrompt (the library)", () => {
     cleanup();
     show({ ...base, mine: { vote: null, can_vote: false, reason: "Launch it from the SLAPorSLOP app first: only players can vote.", played: false, weight: 0.1 } });
     expect(await screen.findByText("Play it from the SLAPorSLOP app to rate it.")).toBeTruthy();
-    expect(screen.getByRole("link", { name: "⬇ Get the SLAPorSLOP app" }).className).toContain("slime");
+    expect(screen.getByRole("link", { name: "Get the SLAPorSLOP app" }).className).toContain("slime");
   });
 
   it("stays out of the way for the maker and before it's playable", async () => {

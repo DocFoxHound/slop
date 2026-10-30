@@ -19,7 +19,7 @@ test("a player reports a game, and it reaches staff", async ({ browser }) => {
   const player = await browser.newPage();
   await signIn(player, "player");
   await player.goto("/app/neon-drift");
-  await player.getByRole("button", { name: "⚑ Report" }).click();
+  await player.getByRole("button", { name: "Report", exact: true }).click();
   const dialog = player.getByRole("dialog", { name: "Report this app" });
   await dialog.getByRole("radio").first().check();
   await dialog.getByRole("textbox", { name: /What did you see/ }).fill("The browser tests saw something odd here.");
