@@ -105,7 +105,15 @@ test("the skills and the search are the page's header; the day's shelves show un
   // Vera is live, set up for payments and taking work; she makes pixel art and music.
   const taking = page.getByRole("region", { name: "Taking work now" });
   await expect(taking.getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
-  await expect(page.getByRole("region", { name: /^Spotlight: / })).toBeVisible();
+  // A reel per skill she offers, today's spotlight first; each skill in the bar is an icon with
+  // its name (and how many offer it) for screen readers and on hover.
+  await expect(page.getByRole("region", { name: "Pixel Art" }).getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Music" }).getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+  await expect(page.locator(".people-shelf-section .sub").filter({ hasText: "Today's spotlight" })).toHaveCount(1);
+  const pixel = header.getByRole("button", { name: /^Pixel Art, \d+ (person|people)$/ });
+  await expect(pixel).toHaveAttribute("data-tip", /^Pixel Art · \d+$/);
+  await expect(pixel.locator("svg[data-skill='pixel-art']")).toHaveCount(1);
+  await expect(page.getByText("Artists, composers, sound designers")).toHaveCount(0);
   await expect(page.getByRole("region", { name: "Everyone" }).getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
   await expect(page.getByText("How hiring works")).toHaveCount(0);
   const results = await new AxeBuilder({ page }).include(".people-nav").include(".people-shelf-section").withTags(["wcag2a", "wcag2aa", "wcag21aa", "wcag22aa"]).analyze();
@@ -119,6 +127,18 @@ test("the skills and the search are the page's header; the day's shelves show un
   await header.getByRole("button", { name: /^Music/ }).click();
   await expect(page.getByRole("heading", { name: "Music", level: 2 })).toBeVisible();
   await expect(page.locator(".people-grid").getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
+});
+
+test("Suggested for you: signed in, from the skills you hired for, saying so; never signed out", async ({ page }) => {
+  await page.goto("/people");
+  await expect(page.getByRole("region", { name: "Taking work now" })).toBeVisible();
+  await expect(page.getByRole("region", { name: "Suggested for you" })).toHaveCount(0);
+  // The seed's client hired Vera for pixel art.
+  await signIn(page, "client");
+  await page.goto("/people");
+  const suggested = page.getByRole("region", { name: "Suggested for you" });
+  await expect(suggested).toContainText("Because you've hired for Pixel Art");
+  await expect(suggested.getByRole("link", { name: /Vera Okafor/ })).toBeVisible();
 });
 
 test("someone without a page is told what a People page is for, with the way to make one", async ({ page }) => {

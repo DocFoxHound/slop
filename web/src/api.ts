@@ -1007,10 +1007,12 @@ export interface PeopleDiscover {
   taking_work: CreativeCard[];
   /** Went live in the last 60 days, newest first. */
   new: CreativeCard[];
-  /** Today's skill, in turn, with the day's shuffle of who offers it. */
-  spotlight: { skill: Skill; people: CreativeCard[] } | null;
   /** Studios, shuffled for the day. */
   studios: CreativeCard[];
+  /** A shelf per skill someone offers, the day's shuffle of who offers it, today's spotlight skill first. */
+  by_skill: Array<{ skill: Skill; people: CreativeCard[] }>;
+  /** For the signed-in viewer, with personal recommendations on: from the skills they hired for, or what they publish. */
+  suggested: { why: string; skills: Skill[]; people: CreativeCard[] } | null;
 }
 
 export interface CreativeCard {

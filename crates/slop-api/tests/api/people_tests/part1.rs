@@ -517,7 +517,8 @@ async fn the_directory_is_a_daily_shuffle_of_at_most_200(db: PgPool) {
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn the_front_pages_shelves_rotate_and_never_rank_on_performance(db: PgPool) {
     let app = people_app(db).await;
-    // Everyone offers music only, so music is the spotlight whatever the day.
+    // Everyone offers music only, so music is the only skill shelf (and the spotlight) whatever
+    // the day.
     let with = |name: &str, extra: Value| {
         let mut p = profile("x", true);
         p["name"] = json!(name);
@@ -582,9 +583,12 @@ async fn the_front_pages_shelves_rotate_and_never_rank_on_performance(db: PgPool
         ["vera", "booked", "forge"],
         "new pages, newest first; Olga's is too old"
     );
-    assert_eq!(first["spotlight"]["skill"]["slug"], "music");
-    assert_eq!(first["spotlight"]["skill"]["name"], "Music");
-    let mut spot = shelf(&first["spotlight"]["people"]);
+    assert_eq!(first["by_skill"].as_array().unwrap().len(), 1);
+    assert_eq!(first["by_skill"][0]["skill"]["slug"], "music");
+    assert_eq!(first["by_skill"][0]["skill"]["name"], "Music");
+    // Signed out: nothing personal.
+    assert_eq!(first["suggested"], Value::Null);
+    let mut spot = shelf(&first["by_skill"][0]["people"]);
     spot.sort();
     assert_eq!(spot, ["booked", "forge", "olga", "vera"]);
     assert_eq!(shelf(&first["studios"]), ["forge"]);
@@ -600,7 +604,7 @@ async fn the_front_pages_shelves_rotate_and_never_rank_on_performance(db: PgPool
     .fetch_all(&app.db)
     .await
     .unwrap();
-    assert_eq!(shelf(&first["spotlight"]["people"]), expected);
+    assert_eq!(shelf(&first["by_skill"][0]["people"]), expected);
 
     // Hidden pages are on no shelf.
     exec(
@@ -613,11 +617,83 @@ async fn the_front_pages_shelves_rotate_and_never_rank_on_performance(db: PgPool
     assert_eq!(shelf(&after["new"]), ["booked", "forge"]);
     assert!(!after.to_string().contains("\"vera\""));
 
-    // Nobody offering anything: no spotlight.
+    // Nobody offering anything: no skill shelves.
     exec(&app, "update creatives set hidden_reason = 'x'").await;
     let (_, empty) = call(&app, req(Method::GET, "/v1/people/discover")).await;
-    assert_eq!(empty["spotlight"], Value::Null);
+    assert_eq!(empty["by_skill"], json!([]));
     assert!(shelf(&empty["new"]).is_empty());
+}
+
+/// Suggested for you: the skills the viewer hired for, or else what fits what they publish; the
+/// hireable first; never their own page; nothing with personal recommendations off.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn suggested_for_you_follows_what_the_viewer_hires_for_or_makes(db: PgPool) {
+    let app = people_app(db).await;
+    let with = |skills: Value, taking: bool| {
+        let mut p = profile("x", true);
+        p["skills"] = skills;
+        p["services"] = json!([]);
+        p["taking_work"] = json!(taking);
+        p
+    };
+    creative_with(&app, "piper", "US", with(json!(["pixel-art"]), true)).await;
+    creative_with(&app, "moss", "US", with(json!(["music"]), false)).await;
+    let (ula, _) = creative_with(&app, "ula", "US", with(json!(["ui-ux"]), true)).await;
+    // The viewer offers UI / UX too, and makes a game.
+    let (maya, cookie) = creative_with(&app, "maya", "US", with(json!(["ui-ux"]), true)).await;
+    let game = Uuid::now_v7();
+    sqlx::query(
+        "insert into apps (id, slug, title, summary, kind, stage, maker_id, repo_url, license_spdx)
+         values ($1, 'mayas-game', 'Maya''s Game', 'A game', 'game', 'beta', $2, 'https://github.com/m/g', 'MIT')",
+    )
+    .bind(game)
+    .bind(maya)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let handles = |v: &Value| -> Vec<String> {
+        v["suggested"]["people"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .map(|p| p["handle"].as_str().unwrap().to_string())
+            .collect()
+    };
+    let discover = || req(Method::GET, "/v1/people/discover").cookie(&cookie);
+
+    // Before hiring anyone: what games are made with, the hireable first.
+    let (_, d) = call(&app, discover()).await;
+    assert_eq!(
+        d["suggested"]["why"],
+        "For the games you make: art, music, sound and playtesting"
+    );
+    assert_eq!(handles(&d), ["piper", "moss"]);
+
+    // After hiring for UI / UX: that skill, without their own page.
+    sqlx::query(
+        "insert into jobs (id, creative_id, client_id, app_id, skill, status, request_md)
+         values ($1, $2, $3, $4, 'ui-ux', 'completed', 'A menu')",
+    )
+    .bind(Uuid::now_v7())
+    .bind(ula)
+    .bind(maya)
+    .bind(game)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let (_, d) = call(&app, discover()).await;
+    assert_eq!(d["suggested"]["why"], "Because you've hired for UI / UX");
+    assert_eq!(d["suggested"]["skills"][0]["slug"], "ui-ux");
+    assert_eq!(handles(&d), ["ula"]);
+
+    // Personal recommendations off: nothing personal.
+    exec(
+        &app,
+        "update users set personalize = false where id in (select user_id from creatives where handle = 'maya')",
+    )
+    .await;
+    let (_, d) = call(&app, discover()).await;
+    assert_eq!(d["suggested"], Value::Null);
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]

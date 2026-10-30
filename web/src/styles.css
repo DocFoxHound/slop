@@ -202,12 +202,20 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .signin-nudge p { margin: 0; max-width: 60ch; }
 
 /* People: the skills and its own search along the top, like the store's bar; the day's shelves scroll sideways. */
-.people-nav .store-nav-links button .faint { font-weight: 600; }
-.people-search { flex-basis: 340px; }
+.people-search { flex-basis: 300px; }
+/* People's bar: a skill is its icon, its name on hover or focus. */
+.skill-icons { display: flex; flex-wrap: wrap; gap: 2px; min-width: 0; }
+.skill-btn { position: relative; display: grid; place-items: center; width: 40px; height: 38px; border: 0; border-radius: 8px; background: none; color: var(--text-2); cursor: pointer; }
+.skill-btn:hover { background: var(--panel-3); color: var(--text); }
+.skill-btn.on { background: var(--slime-soft); color: var(--slime); }
+.skill-btn::after { content: attr(data-tip); position: absolute; top: calc(100% + 6px); left: 50%; transform: translateX(-50%); z-index: 30; white-space: nowrap; padding: 4px 9px; border-radius: 6px; background: var(--panel-3); border: 1px solid var(--line); color: var(--text); font-size: 12px; font-weight: 700; pointer-events: none; opacity: 0; transition: opacity 0.12s; }
+.skill-btn:hover::after, .skill-btn:focus-visible::after { opacity: 1; }
+.people-nav-actions { display: flex; gap: 6px; flex: none; }
+.people-nav-actions .btn .badge { margin-left: 8px; }
+.section-h .section-icon { flex: none; align-self: center; color: var(--text-2); }
 .people-shelf-section { margin-bottom: 8px; }
 .people-shelf { display: grid; grid-auto-flow: column; grid-auto-columns: minmax(260px, calc((100% - 3 * 14px) / 4)); gap: 14px; overflow-x: auto; padding-bottom: 6px; scroll-snap-type: x proximity; }
 .people-shelf > * { scroll-snap-align: start; }
-.people-hero .btn .badge { margin-left: 8px; }
 
 .intro { padding: 26px 28px; background: radial-gradient(circle at 100% 0, rgba(163, 230, 53, 0.12), transparent 55%), var(--panel); }
 .intro h1 { font-size: 26px; letter-spacing: -0.02em; max-width: 26ch; margin-bottom: 14px; }
@@ -693,9 +701,6 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .shop-window ol { margin: 8px 0 0; padding-left: 22px; }
 .people-offer p { max-width: 760px; }
 
-.people-hero { display: flex; justify-content: space-between; align-items: flex-end; gap: 20px; flex-wrap: wrap; margin-bottom: 12px; }
-.people-hero h1 { font-size: 34px; margin: 6px 0; }
-.people-hero p { max-width: 640px; }
 .people-grid { display: grid; grid-template-columns: repeat(auto-fill, minmax(270px, 1fr)); gap: 14px; }
 .person-card { display: flex; flex-direction: column; gap: 10px; padding: 14px; color: var(--text); text-decoration: none !important; border-top: 3px solid var(--accent); transition: border-color 0.12s, transform 0.12s; }
 .person-card:hover { border-color: var(--accent); transform: translateY(-1px); }

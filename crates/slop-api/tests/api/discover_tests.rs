@@ -455,9 +455,12 @@ async fn discover_keeps_its_rules_on_the_simulated_store(db: PgPool) {
     )
     .await
     .unwrap();
+    // Donors first: IDs are random, so ordering by them alone left out every donor on some runs.
     let users: Vec<Uuid> = sqlx::query_scalar(
         "select id from users where exists (select 1 from library_entries l where l.user_id = users.id)
-         order by id limit 40",
+         order by exists (select 1 from donations d where d.donor_id = users.id
+                          and d.status in ('paid', 'partially_refunded')) desc, id
+         limit 40",
     )
     .fetch_all(&app.db)
     .await

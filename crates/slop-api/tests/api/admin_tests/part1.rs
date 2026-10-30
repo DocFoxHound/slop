@@ -3784,7 +3784,7 @@ async fn the_legal_index_splits_what_is_in_effect_from_what_is_announced(db: PgP
         assert!(d["current"]["version"].is_string(), "{d}");
     }
     let privacy = entry(&index, "privacy");
-    assert_eq!(privacy["current"]["version"], "2026-10-29");
+    assert_eq!(privacy["current"]["version"], "2026-10-30");
     assert_eq!(privacy["upcoming"]["version"], "2099-01-01");
     assert_eq!(privacy["upcoming"]["summary"], "Changes 2099-01-01");
     assert!(entry(&index, "terms")["upcoming"].is_null());
@@ -3792,7 +3792,7 @@ async fn the_legal_index_splits_what_is_in_effect_from_what_is_announced(db: PgP
     // One document: in effect now by default, or a named version from the past or the future.
     let doc = |q: &str| app.send(req(Method::GET, format!("/v1/legal/{q}")));
     let now = body_json(doc("privacy").await).await;
-    assert_eq!(now["version"], "2026-10-29");
+    assert_eq!(now["version"], "2026-10-30");
     assert_eq!(now["in_effect"], true);
     assert_eq!(now["title"], "Privacy Policy");
     let versions: Vec<&str> = now["versions"]
@@ -3801,7 +3801,7 @@ async fn the_legal_index_splits_what_is_in_effect_from_what_is_announced(db: PgP
         .iter()
         .map(|v| v["version"].as_str().unwrap())
         .collect();
-    assert_eq!(versions, ["2099-01-01", "2026-10-29", "2026-01-01"]);
+    assert_eq!(versions, ["2099-01-01", "2026-10-30", "2026-01-01"]);
     let future = body_json(doc("privacy?version=2099-01-01").await).await;
     assert_eq!(future["in_effect"], false);
     assert_eq!(future["body_md"], "Words of 2099-01-01");
@@ -4019,7 +4019,7 @@ async fn start_up_publishes_new_versions_and_never_changes_a_published_one(db: P
         privacy,
         [
             ("privacy".into(), "2026-01-01".into(), true, false),
-            ("privacy".into(), "2026-10-29".into(), false, true),
+            ("privacy".into(), "2026-10-30".into(), false, true),
         ]
     );
     // Nothing new: nothing changes.
@@ -4055,7 +4055,7 @@ async fn staff_publish_a_new_legal_version_with_notice(db: PgPool) {
     assert_eq!(docs.as_array().unwrap().len(), 5);
     let privacy = entry(&docs, "privacy");
     assert!(privacy["file_text"].is_null());
-    assert_eq!(privacy["latest_version"], "2026-10-29");
+    assert_eq!(privacy["latest_version"], "2026-10-30");
     assert_eq!(privacy["accepted"], false);
     assert!(privacy["versions"][0]["published_by"].is_null());
     assert!(!privacy["latest_body_md"].as_str().unwrap().is_empty());
