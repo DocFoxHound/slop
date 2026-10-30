@@ -6,9 +6,11 @@ import { useState, type CSSProperties } from "react";
 import { Link } from "react-router";
 
 import type { Accent, AiUse, CreativeCard, CreativePage, CreativeRating, Work } from "../api";
+import type { StoreIconName } from "../storeIcons";
 import { money } from "../format";
 import { isDesktop, openExternal } from "../platform";
 import { Avatar } from "./Avatar";
+import { StoreIcon } from "./StoreIcons";
 
 /** Accent colours a creative can pick; each keeps dark text readable on it (A11Y-1). */
 export const ACCENTS: Record<Accent, { name: string; color: string; ink: string }> = {
@@ -31,17 +33,17 @@ export function accentStyle(accent: Accent): CSSProperties {
  * How a creative uses AI. Every way of working is welcome on People, so each has its own neutral
  * colour and mark (blue, teal, green): none of them is styled as a warning (owner, 2026-10-25).
  */
-export const AI_USE: Record<AiUse, { label: string; short: string; hint: string; icon: string }> = {
-  none: { label: "No AI", short: "No AI", hint: "Everything is made by hand.", icon: "✋" },
-  assisted: { label: "AI-assisted", short: "AI-assisted", hint: "Uses AI for references or drafts, finished by hand.", icon: "🤝" },
-  heavy: { label: "Mostly AI-generated", short: "Mostly AI", hint: "Output is largely generated, then edited.", icon: "✨" },
+export const AI_USE: Record<AiUse, { label: string; short: string; hint: string; icon: StoreIconName }> = {
+  none: { label: "No AI", short: "No AI", hint: "Everything is made by hand.", icon: "no-ai" },
+  assisted: { label: "AI-assisted", short: "AI-assisted", hint: "Uses AI for references or drafts, finished by hand.", icon: "ai-assisted" },
+  heavy: { label: "Mostly AI-generated", short: "Mostly AI", hint: "Output is largely generated, then edited.", icon: "ai-heavy" },
 };
 
 export function AiBadge({ ai }: { ai: AiUse }) {
   const a = AI_USE[ai];
   return (
     <span className={`badge ai-${ai}`} title={a.hint}>
-      <span aria-hidden="true">{a.icon}</span> {a.label.toUpperCase()}
+      <StoreIcon name={a.icon} size={13} /> {a.label.toUpperCase()}
     </span>
   );
 }
