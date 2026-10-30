@@ -37,9 +37,12 @@ test("only the maker manages an app", async ({ browser }) => {
 test("what players get: hold them at a release, then follow the newest again", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto(manage);
-  await expect(page.getByRole("heading", { name: `Manage ${title}`, level: 1 })).toBeVisible();
-  await expect(page.getByRole("link", { name: "Edit store page" })).toHaveAttribute("href", `/publish/${slug}`);
-  await expect(page.getByRole("link", { name: "Releases & progress" })).toHaveAttribute("href", `/publish/${slug}/releases`);
+  await expect(page.getByRole("heading", { name: title, level: 1 })).toBeVisible();
+  // The maker's pages for the app are tabs.
+  const tabs = page.getByRole("navigation", { name: `${title}: maker pages` });
+  await expect(tabs.getByRole("link", { name: "Manage" })).toHaveAttribute("aria-current", "page");
+  await expect(tabs.getByRole("link", { name: "Edit store page" })).toHaveAttribute("href", `/publish/${slug}`);
+  await expect(tabs.getByRole("link", { name: "Releases" })).toHaveAttribute("href", `/publish/${slug}/releases`);
   const section = page.locator("section").filter({ has: page.getByRole("heading", { name: "What players get" }) });
   await expect(section).toContainText("Players get v1.1.0 NEWEST APPROVED");
   const choice = section.getByRole("radiogroup", { name: "Release players get" });
@@ -118,7 +121,7 @@ test("moving the repository: players have it, so a person checks the move first"
   await expect(row).toContainText("WAITING FOR REVIEW");
   await expect(row).toContainText("Your note: Moved to the studio's account.");
   // Still the old repository until a person approves.
-  await expect(page.getByRole("link", { name: "Edit store page" })).toBeVisible();
+  await expect(section.getByRole("link", { name: repo })).toBeVisible();
   await row.getByRole("button", { name: "Cancel request" }).click();
   await expect(row).toContainText("CANCELLED");
   await expect(section.getByText(/Waiting for review: move to/)).toBeHidden();
@@ -230,4 +233,44 @@ test("Lantern Keep's maker reads its ratings, how its release landed, and its bu
   await expect(bugs.getByText("None.")).toBeVisible();
   await bugs.getByLabel("Show").selectOption("all");
   await expect(bugs.getByRole("listitem").filter({ hasText: /Fog covers|Crash on level 3|Text too small/ })).toHaveCount(3);
+});
+
+test("the stage bar: Coming soon until a release is approved, then Beta and Released, only forward", async ({ page }) => {
+  const soon = uniq("pub-dawn");
+  const soonTitle = `Dawn Patrol ${soon.slice(-4)}`;
+  const soonRepo = fakeRepo("mia", soon);
+  await createApp("maker", soon, soonTitle, soonRepo, { stage: "coming_soon" });
+  await signIn(page, "maker");
+  await page.goto(`/publish/${soon}/manage`);
+  const bar = page.getByRole("region", { name: "Stage" });
+  await expect(bar.getByRole("listitem").filter({ hasText: "Coming soon" })).toHaveAttribute("aria-current", "step");
+  await expect(bar).toContainText("Must reach Beta by");
+  // Nothing to play yet: the way on is a release.
+  await expect(bar).toContainText("Move to Beta or Release it once a release is approved.");
+  await expect(bar.getByRole("link", { name: "Submit a release" })).toHaveAttribute("href", `/publish/${soon}/releases`);
+  await expect(bar.getByRole("button")).toHaveCount(0);
+
+  await approve(await submitRelease("maker", soon, soonRepo, "0.1.0"));
+  await page.reload();
+  await bar.getByRole("button", { name: "Move to Beta…" }).click();
+  const confirm = bar.getByRole("group", { name: "Move to Beta" });
+  await expect(confirm).toContainText("players can play it, rate it");
+  await expect(confirm).toContainText("Only forward");
+  // Changing their mind leaves it as it was.
+  await confirm.getByRole("button", { name: "Not yet" }).click();
+  await expect(confirm).toBeHidden();
+  await bar.getByRole("button", { name: "Move to Beta…" }).click();
+  await confirm.getByRole("button", { name: "Move to Beta" }).click();
+  await expect(bar.getByRole("listitem").filter({ hasText: "Beta" }).first()).toHaveAttribute("aria-current", "step");
+  await expect(page.locator(".maker-head")).toContainText("BETA");
+  await expect(bar).toContainText("Must be released by");
+  await expect(bar.getByRole("button", { name: "Move to Beta…" })).toHaveCount(0);
+
+  // The same bar on the other tabs; released from Releases.
+  await page.getByRole("navigation", { name: /maker pages/ }).getByRole("link", { name: "Releases" }).click();
+  await bar.getByRole("button", { name: "Release it…" }).click();
+  await bar.getByRole("group", { name: "Release it" }).getByRole("button", { name: "Release it" }).click();
+  await expect(bar).toContainText("Released: the last stage.");
+  await expect(bar.getByRole("button")).toHaveCount(0);
+  await expect(page.locator(".maker-head")).toContainText("RELEASED");
 });

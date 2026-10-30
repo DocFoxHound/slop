@@ -2616,6 +2616,124 @@ async fn stages_need_an_approved_release(db: PgPool) {
     assert_eq!(page["stage"], "beta");
 }
 
+/// Makers move their own app on (manage.rs `move_stage`): forward only, once a release is approved,
+/// and everyone Interested hears about it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn makers_move_their_app_forward(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "coming_soon").await;
+    let (fan_id, _) = app.user("Fan", "US").await;
+    let (_, stranger) = app.user("Stranger", "US").await;
+    let app_id: Uuid = sqlx::query_scalar("select id from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    sqlx::query("insert into interests (user_id, app_id) values ($1, $2)")
+        .bind(fan_id)
+        .bind(app_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    let move_to = |cookie: &str, stage: &str| {
+        req(Method::POST, "/v1/apps/game/stage")
+            .cookie(cookie)
+            .json(json!({ "stage": stage }))
+    };
+    async fn manage(app: &TestApp, cookie: String) -> Value {
+        body_json(
+            app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&cookie))
+                .await,
+        )
+        .await
+    }
+
+    // Not before a release is approved, and the Manage overview says so.
+    assert_eq!(manage(&app, maker.clone()).await["can_advance"], false);
+    let res = app.send(move_to(&maker, "beta")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("approved release")
+    );
+    let id = submit_and_fetch(&app, &maker, "0.1.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    assert_eq!(manage(&app, maker.clone()).await["can_advance"], true);
+
+    // Only the maker.
+    assert_eq!(
+        app.send(move_to(&stranger, "beta")).await.status(),
+        StatusCode::NOT_FOUND
+    );
+    // Into Beta: at once, the clock restarts, Interested players are told, and it's recorded.
+    assert_eq!(
+        app.send(move_to(&maker, "beta")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let (stage, fresh): (String, bool) = sqlx::query_as(
+        "select stage::text, stage_entered_at > now() - interval '1 minute' from apps where id = $1",
+    )
+    .bind(app_id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!((stage.as_str(), fresh), ("beta", true));
+    let told: Vec<String> = sqlx::query_scalar(
+        "select title from notifications where user_id = $1 and category = 'interested'",
+    )
+    .bind(fan_id)
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(told, ["Game is in beta: you can try it now"]);
+    let audited: i64 =
+        sqlx::query_scalar("select count(*) from audit_log where action = 'app.stage'")
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(audited, 1);
+    // The same stage again, or back, is refused.
+    assert_eq!(
+        app.send(move_to(&maker, "beta")).await.status(),
+        StatusCode::CONFLICT
+    );
+    let res = app.send(move_to(&maker, "coming_soon")).await;
+    assert_eq!(res.status(), StatusCode::CONFLICT);
+    assert!(
+        body_json(res).await["error"]["message"]
+            .as_str()
+            .unwrap()
+            .contains("only move forward")
+    );
+    // Released.
+    assert_eq!(
+        app.send(move_to(&maker, "released")).await.status(),
+        StatusCode::NO_CONTENT
+    );
+    let page = body_json(
+        app.send(req(Method::GET, "/v1/apps/game").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(page["stage"], "released");
+    // Nonsense is a bad request.
+    assert!(
+        app.send(move_to(&maker, "gold"))
+            .await
+            .status()
+            .is_client_error()
+    );
+}
+
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn library_add_list_remove(db: PgPool) {
     let app = test_app(db).await;

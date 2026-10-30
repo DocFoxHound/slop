@@ -904,7 +904,7 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .donate-off .donations-fix .form p { margin-bottom: 8px; }
 /* The editor's Get paid section, above the store page form. */
 .page.narrow > section#donations { margin-bottom: 16px; }
-.page.narrow > section#donations h2 { font-size: 17px; margin-bottom: 8px; }
+.page.narrow > section#donations h2, .maker section#donations h2 { font-size: 17px; margin-bottom: 8px; }
 .donations-state { margin-bottom: 10px; }
 .donate-presets { display: grid; grid-template-columns: repeat(2, 1fr); gap: 8px; }
 .donate-preset { display: flex; flex-direction: column; align-items: flex-start; gap: 2px; padding: 8px 10px; border-radius: 8px; border: 1px solid var(--line); background: var(--panel-2); color: var(--text); cursor: pointer; font: inherit; text-align: left; }
@@ -1680,3 +1680,50 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .downloads-dock .downloads-bar { border-radius: 10px 10px 0 0; padding: 9px 14px; }
 .downloads-dock .downloads-panel { left: auto; right: -1px; bottom: calc(100% + 1px); width: min(360px, calc(100vw - 24px - 240px - 12px - 24px)); max-height: min(60vh, 480px); }
 /* ---- end of the downloads dock ---- */
+
+/* The maker's workspace for one app (components/MakerFrame.tsx): Manage, Edit store page, Releases. */
+.maker-head { display: flex; align-items: center; gap: 16px; margin: 6px 0 14px; }
+.maker-name { flex: 1; min-width: 0; }
+.maker-name .page-title { margin-bottom: 4px; overflow-wrap: anywhere; }
+.stage-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 12px 28px; align-items: center; padding: 16px 18px; margin-bottom: 6px; }
+.stage-steps { list-style: none; margin: 0; padding: 0; display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 14px; }
+.stage-step { display: flex; gap: 10px; align-items: flex-start; min-width: 0; }
+.stage-dot { flex: none; width: 26px; height: 26px; border-radius: 50%; display: grid; place-items: center; font-size: 12px; font-weight: 800; border: 2px solid var(--line); color: var(--muted); }
+.stage-step.done .stage-dot { background: var(--slime-soft); border-color: var(--slime); color: var(--slime); }
+.stage-step.now .stage-dot { background: var(--slime); border-color: var(--slime); color: var(--slime-ink); }
+.stage-step.next b { color: var(--text-2); }
+.stage-means { display: block; margin-top: 2px; line-height: 1.4; }
+.stage-action { justify-self: end; text-align: right; max-width: 340px; }
+.stage-action p { margin: 0 0 6px; }
+.stage-action p:last-child { margin-bottom: 0; }
+.stage-action .row-actions { justify-content: flex-end; }
+.stage-confirm { grid-column: 1 / -1; border-top: 1px solid var(--line); padding-top: 12px; }
+.stage-confirm ul { margin: 6px 0 10px; padding-left: 18px; color: var(--text-2); }
+.maker-tabs { display: flex; gap: 4px; border-bottom: 1px solid var(--line); margin: 8px 0 18px; overflow-x: auto; }
+.maker-tabs a { padding: 10px 14px; color: var(--muted); font-weight: 700; font-size: 14px; border-bottom: 2px solid transparent; margin-bottom: -1px; white-space: nowrap; }
+.maker-tabs a:hover { color: var(--text); }
+.maker-tabs a.on { color: var(--text); border-bottom-color: var(--slime); }
+.maker > section.panel, .maker > .notice { margin-bottom: 16px; }
+.maker-cols { display: grid; grid-template-columns: minmax(0, 1fr) minmax(300px, 400px); gap: 16px; align-items: start; }
+.maker-cols + .maker-cols { margin-top: 16px; }
+.maker-main, .maker-side { display: grid; gap: 16px; min-width: 0; align-content: start; }
+.maker-main > *, .maker-side > * { margin: 0; }
+.maker-main > .section-title { margin-top: 8px; }
+.maker-form { display: block; }
+.maker-form .form h2 { font-size: 17px; }
+.save-bar { position: sticky; bottom: 0; z-index: 5; display: flex; align-items: center; gap: 16px; flex-wrap: wrap; margin: 16px 0; padding: 12px 18px; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 -10px 24px rgba(0, 0, 0, 0.35); }
+.save-bar .actions { justify-content: flex-start; }
+.save-bar .form-error { margin: 0; }
+.request-item { padding-top: 12px; border-top: 1px solid var(--line); }
+.maker-form label.check { flex-wrap: wrap; }
+.maker-form label.check > .hint { flex-basis: 100%; padding-left: 28px; }
+.rating-tables { display: flex; flex-wrap: wrap; gap: 8px 32px; align-items: flex-start; }
+@media (max-width: 960px) {
+  .maker-cols { grid-template-columns: minmax(0, 1fr); }
+  .stage-bar { grid-template-columns: minmax(0, 1fr); }
+  .stage-steps { grid-template-columns: minmax(0, 1fr); gap: 10px; }
+  .stage-action { justify-self: start; text-align: left; max-width: none; }
+  .stage-action .row-actions { justify-content: flex-start; }
+  .maker-head { flex-wrap: wrap; }
+  .maker-name { flex-basis: calc(100% - 72px); }
+}

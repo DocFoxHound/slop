@@ -23,6 +23,7 @@ import {
   type ReleaseRating,
   type UpdateSettings,
 } from "../api";
+import { MakerFrame } from "../components/MakerFrame";
 import { PublishProgress, refreshEvery } from "../components/PublishProgress";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
@@ -179,142 +180,140 @@ export function Releases() {
   };
 
   return (
-    <div className="page narrow">
-      <div className="crumbs">
-        <Link to="/publish">Your apps</Link> ›{" "}
-        <Link to={`/app/${slug}`}>{app.data.title}</Link> › Releases
-      </div>
-      <h1 className="page-title">Releases</h1>
-      <p className="muted">
-        A release is one version of your app: a GitHub release with your builds
-        attached. SLAPorSLOP downloads each file once to record its size and SHA-256,
-        checks it, and signs it. Players' apps then download from your release
-        page and refuse any file that doesn't match.
-      </p>
-
-      {releases.data && server.data && (
-        <PublishProgress
-          app={app.data}
-          releases={releases.data}
-          server={server.data}
-        />
-      )}
-
-      {app.data.platforms.length === 0 ? (
-        <section className="panel panel-pad">
-          <h2>Submit a release</h2>
-          <p className="notice">
-            First choose what your app runs on (Windows, Linux or both) on its
-            store page. <Link to={`/publish/${slug}`}>Edit store page</Link>
+    <MakerFrame app={app.data} tab="releases" onStageMoved={app.reload}>
+      <div className="maker-cols">
+        <div className="maker-main">
+          <p className="muted">
+            A release is one version of your app: a GitHub release with your builds
+            attached. SLAPorSLOP downloads each file once to record its size and SHA-256,
+            checks it, and signs it. Players' apps then download from your release
+            page and refuse any file that doesn't match.
           </p>
-        </section>
-      ) : isGithub ? (
-        <ReleasePicker
-          slug={slug}
-          platforms={app.data.platforms}
-          rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
-          lastRuntimes={lastRuntimes}
-          onSubmitted={onSubmitted}
-        />
-      ) : (
-        <ReleaseForm
-          repoUrl={app.data.repo_url}
-          slug={slug}
-          platforms={app.data.platforms}
-          rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
-          lastRuntimes={lastRuntimes}
-          onSubmitted={onSubmitted}
-        />
-      )}
 
-      <FixesPanel slug={slug} nonce={releases.data?.[0]?.status ?? ""} />
-
-      <UpdatesPanel key={settingsNonce} slug={slug} />
-
-      <SlopBuildSetup slug={slug} />
-      <SigningHelp />
-
-      {isGithub && app.data.platforms.length > 0 && (
-        <details className="panel panel-pad help">
-          <summary>
-            <b>Enter a release by hand</b>{" "}
-            <span className="muted">— if picking doesn't fit</span>
-          </summary>
-          <ReleaseForm
-            repoUrl={app.data.repo_url}
-            slug={slug}
-            platforms={app.data.platforms}
-            rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
-            lastRuntimes={lastRuntimes}
-            onSubmitted={onSubmitted}
-          />
-        </details>
-      )}
-
-      <h2 className="section-title">History</h2>
-      {releases.error && (
-        <ErrorState error={releases.error} onRetry={releases.reload} />
-      )}
-      {releases.data?.length === 0 && (
-        <div className="empty-state">No releases yet.</div>
-      )}
-      <ul className="release-list">
-        {releases.data?.map((r) => (
-          <li key={r.id} className="panel panel-pad">
-            <div className="title-row spread">
-              <div className="title-row">
-                <b>{r.version}</b>
-                {r.rating && (
-                  <span className="muted small">
-                    {r.rating.min_age === 0 ? "Everyone" : `${r.rating.min_age}+`}
-                    {r.rating.content_labels.length > 0 &&
-                      ` · ${r.rating.content_labels.map((l) => CONTENT_LABEL[l]).join(", ")}`}
-                  </span>
-                )}
-                <span className={`badge ${STATUS[r.status].badge}`}>
-                  {r.auto_approved && r.status === "approved"
-                    ? "APPROVED AUTOMATICALLY"
-                    : STATUS[r.status].label}
-                </span>
-                {r.source !== "maker" && (
-                  <span className="muted small">
-                    {r.source === "slop_build"
-                      ? "from Slop Build"
-                      : "picked up from GitHub"}
-                  </span>
-                )}
-              </div>
-              <span className="muted small">{formatDate(r.created_at)}</span>
-            </div>
-            <p className="muted small">{STATUS[r.status].help}</p>
-            {r.status_reason && <p className="notice">{r.status_reason}</p>}
-            {r.notes && (
-              <div className="release-notes doc" dangerouslySetInnerHTML={{ __html: renderMarkdown(r.notes) }} />
-            )}
-            <dl className="kv">
-              <dt>Commit</dt>
-              <dd>
-                <code>{r.commit_sha.slice(0, 12)}</code>{" "}
-                {r.commit_verified ? (
-                  <span className="muted">found in your repo</span>
-                ) : (
-                  <span className="muted">checked by the reviewer</span>
-                )}
-              </dd>
-              {r.files.map((f) => (
-                <FileDetail key={f.platform} file={f} />
-              ))}
-            </dl>
-            <SourceCheckList checks={r.source_checks} audience="maker" />
-            <RepoScanList
-              scan={r.repo_scan}
-              advisories={r.advisories}
-              audience="maker"
+          {app.data.platforms.length === 0 ? (
+            <section className="panel panel-pad">
+              <h2>Submit a release</h2>
+              <p className="notice">
+                First choose what your app runs on (Windows, Linux or both) on its
+                store page. <Link to={`/publish/${slug}`}>Edit store page</Link>
+              </p>
+            </section>
+          ) : isGithub ? (
+            <ReleasePicker
+              slug={slug}
+              platforms={app.data.platforms}
+              rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
+              lastRuntimes={lastRuntimes}
+              onSubmitted={onSubmitted}
             />
-          </li>
-        ))}
-      </ul>
-    </div>
+          ) : (
+            <ReleaseForm
+              repoUrl={app.data.repo_url}
+              slug={slug}
+              platforms={app.data.platforms}
+              rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
+              lastRuntimes={lastRuntimes}
+              onSubmitted={onSubmitted}
+            />
+          )}
+
+          {isGithub && app.data.platforms.length > 0 && (
+            <details className="panel panel-pad help">
+              <summary>
+                <b>Enter a release by hand</b>{" "}
+                <span className="muted">— if picking doesn't fit</span>
+              </summary>
+              <ReleaseForm
+                repoUrl={app.data.repo_url}
+                slug={slug}
+                platforms={app.data.platforms}
+                rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
+                lastRuntimes={lastRuntimes}
+                onSubmitted={onSubmitted}
+              />
+            </details>
+          )}
+
+          <FixesPanel slug={slug} nonce={releases.data?.[0]?.status ?? ""} />
+
+          <h2 className="section-title">History</h2>
+          {releases.error && (
+            <ErrorState error={releases.error} onRetry={releases.reload} />
+          )}
+          {releases.data?.length === 0 && (
+            <div className="empty-state">No releases yet.</div>
+          )}
+          <ul className="release-list">
+            {releases.data?.map((r) => (
+              <li key={r.id} className="panel panel-pad">
+                <div className="title-row spread">
+                  <div className="title-row">
+                    <b>{r.version}</b>
+                    {r.rating && (
+                      <span className="muted small">
+                        {r.rating.min_age === 0 ? "Everyone" : `${r.rating.min_age}+`}
+                        {r.rating.content_labels.length > 0 &&
+                          ` · ${r.rating.content_labels.map((l) => CONTENT_LABEL[l]).join(", ")}`}
+                      </span>
+                    )}
+                    <span className={`badge ${STATUS[r.status].badge}`}>
+                      {r.auto_approved && r.status === "approved"
+                        ? "APPROVED AUTOMATICALLY"
+                        : STATUS[r.status].label}
+                    </span>
+                    {r.source !== "maker" && (
+                      <span className="muted small">
+                        {r.source === "slop_build"
+                          ? "from Slop Build"
+                          : "picked up from GitHub"}
+                      </span>
+                    )}
+                  </div>
+                  <span className="muted small">{formatDate(r.created_at)}</span>
+                </div>
+                <p className="muted small">{STATUS[r.status].help}</p>
+                {r.status_reason && <p className="notice">{r.status_reason}</p>}
+                {r.notes && (
+                  <div className="release-notes doc" dangerouslySetInnerHTML={{ __html: renderMarkdown(r.notes) }} />
+                )}
+                <dl className="kv">
+                  <dt>Commit</dt>
+                  <dd>
+                    <code>{r.commit_sha.slice(0, 12)}</code>{" "}
+                    {r.commit_verified ? (
+                      <span className="muted">found in your repo</span>
+                    ) : (
+                      <span className="muted">checked by the reviewer</span>
+                    )}
+                  </dd>
+                  {r.files.map((f) => (
+                    <FileDetail key={f.platform} file={f} />
+                  ))}
+                </dl>
+                <SourceCheckList checks={r.source_checks} audience="maker" />
+                <RepoScanList
+                  scan={r.repo_scan}
+                  advisories={r.advisories}
+                  audience="maker"
+                />
+              </li>
+            ))}
+          </ul>
+        </div>
+        <div className="maker-side">
+          {releases.data && server.data && (
+            <PublishProgress
+              app={app.data}
+              releases={releases.data}
+              server={server.data}
+            />
+          )}
+          <UpdatesPanel key={settingsNonce} slug={slug} />
+          <SlopBuildSetup slug={slug} />
+          <SigningHelp />
+        </div>
+      </div>
+    </MakerFrame>
   );
 }
 

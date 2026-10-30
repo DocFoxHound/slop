@@ -12,7 +12,9 @@
 //!   a person, and the next release after a move is reviewed by a person too. Players' apps
 //!   still refuse an update from a different repository until the player agrees (slop-client).
 //!
-//! Everything else (the store page, platforms, update settings) the maker changes directly.
+//! Everything else (the store page, platforms, update settings) the maker changes directly,
+//! including moving the app on to its next stage (Coming soon → Beta → Released): only forward,
+//! and only once a release has been approved, since that build is what Beta and Released offer.
 
 use axum::{
     Json, Router,
@@ -29,7 +31,7 @@ use uuid::Uuid;
 use crate::{
     AppState, admin,
     auth::session::CurrentUser,
-    catalog::validate_repo_url_in,
+    catalog::{AppStage, validate_repo_url_in},
     error::{ApiError, ApiResult},
     releases::SERVING,
     updates::{self, AUTO_REVIEWER},
@@ -41,6 +43,64 @@ pub fn routes() -> Router<AppState> {
         .route("/apps/{slug}/changes", post(request_change))
         .route("/apps/{slug}/changes/{id}/cancel", post(cancel_change))
         .route("/apps/{slug}/repo-check", post(repo_check))
+        .route("/apps/{slug}/stage", post(move_stage))
+}
+
+/// Where a stage sits in Coming soon → Beta → Released.
+fn stage_rank(stage: AppStage) -> u8 {
+    match stage {
+        AppStage::ComingSoon => 0,
+        AppStage::Beta => 1,
+        AppStage::Released => 2,
+    }
+}
+
+#[derive(Deserialize)]
+struct StageMove {
+    stage: AppStage,
+}
+
+/// The maker moves their app on to Beta or Released (straight to Released from Coming soon is
+/// fine). Never back: going back would restart the stage's clock and put a released app in
+/// "Up-and-coming" again, so that's for SLAPorSLOP to do when there's a reason.
+async fn move_stage(
+    State(state): State<AppState>,
+    user: CurrentUser,
+    Path(slug): Path<String>,
+    Json(body): Json<StageMove>,
+) -> ApiResult<StatusCode> {
+    let (app_id, _) = updates::owned(&state, &slug, &user).await?;
+    let mut tx = state.db.begin().await?;
+    let from: AppStage = sqlx::query_scalar("select stage from apps where id = $1 for update")
+        .bind(app_id)
+        .fetch_one(&mut *tx)
+        .await?;
+    if from == body.stage {
+        return Err(ApiError::Conflict("it's already in that stage".into()));
+    }
+    if stage_rank(body.stage) < stage_rank(from) {
+        return Err(ApiError::Conflict(
+            "stages only move forward; to move it back, contact SLAPorSLOP".into(),
+        ));
+    }
+    if !admin::has_approved_release(&mut tx, app_id).await? {
+        return Err(ApiError::Conflict(
+            "Beta and Released need an approved release first: submit one on the Releases page"
+                .into(),
+        ));
+    }
+    admin::move_stage(
+        &mut tx,
+        app_id,
+        &slug,
+        from,
+        body.stage,
+        &user.id.to_string(),
+    )
+    .await
+    .map_err(ApiError::Internal)?;
+    tx.commit().await?;
+    Ok(StatusCode::NO_CONTENT)
 }
 
 /// "Check now" for a frozen app's repository (frozen.rs).
@@ -206,6 +266,8 @@ struct Overview {
     /// Community builds of games whose original counts players with Slop Pulse need a Pulse
     /// handshake before they're listed (DESIGN §9): none, waiting, or received.
     pulse_required: Option<bool>,
+    /// A release has been approved, so the maker can move the app on to Beta or Released.
+    can_advance: bool,
 }
 
 async fn overview(
@@ -254,7 +316,11 @@ async fn overview(
         true => Some(crate::branches::has_pulse(&mut conn, app_id).await?),
         false => None,
     };
+    let can_advance = admin::has_approved_release(&mut conn, app_id)
+        .await
+        .map_err(ApiError::Internal)?;
     Ok(Json(Overview {
+        can_advance,
         frozen: crate::frozen::status(&state.db, app_id).await?,
         public_requested,
         pulse_required,

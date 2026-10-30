@@ -100,6 +100,11 @@ optional.
 | **Beta** | Playable builds, still changing. Players can rate it (marked "Rated in Beta") and donate. | 12 months, then it must be released |
 | **Released** | Finished (and still updated) | none |
 
+**Moving on** is up to you: the stage bar at the top of your app's Manage, Edit store page and
+Releases tabs has **Move to Beta** and **Release it** (straight from Coming soon to Released is fine). It
+needs an approved release, since that's what players get; it happens at once, and everyone who
+marked the app Interested is told. Stages only move forward: to go back, contact SLAPorSLOP.
+
 A Coming soon or Beta project with **no commits for 90 days** is labelled a dead project. It stays
 visible but isn't recommended, and comes back with your next commit. Missing a stage deadline
 takes the page out of the store until you reach the next stage; existing installs keep working.
@@ -499,8 +504,8 @@ Players can donate to you. Donations are optional, and they never unlock anythin
 content, no perks, nothing in the app changes for someone who donated (and your app can't tell
 who did).
 
-- **Where to turn them on:** for each app, the **Get paid** section at the top of its **Edit store
-  page** (Publish → your app → Edit page; the same settings are under Manage → Donations), or right
+- **Where to turn them on:** for each app, the **Get paid** section of its **Edit store page** tab, beside
+  the pictures (Publish → your app → Edit page; the same settings are under Manage → Donations), or right
   on your app's store page, where the Donate button's panel shows you what's missing. The first
   time, that starts **Stripe's own sign-up**: you create (or connect) your Stripe account on
   Stripe's site, and donations go straight to it. Until you've set it up, Account → Money points there too, and

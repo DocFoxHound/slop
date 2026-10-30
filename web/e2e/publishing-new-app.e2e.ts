@@ -136,7 +136,7 @@ test("the new app form: the address follows the name, errors show where they bel
   await page.getByRole("textbox", { name: /Source repository/ }).fill("https://github.com/e2e/lantern-keep");
   await expect(page.getByRole("status").filter({ hasText: "already on SLAPorSLOP as Lantern Keep" })).toBeVisible();
   await create.click();
-  await expect(page.locator("form > p.form-error")).toHaveText(
+  await expect(page.locator(".save-bar > p.form-error")).toHaveText(
     "that repository is already on SLAPorSLOP as Lantern Keep. To build on it, fork it and register a branch",
   );
 
@@ -181,7 +181,7 @@ test("the agreement gate stops the draft until it's accepted, and keeps what was
   await dialog.getByRole("button", { name: "Not now" }).click();
   await expect(dialog).toBeHidden();
   // Declined, the form says what's missing (it used to show nothing).
-  await expect(page.locator("form > p.form-error")).toHaveText("accept the current Publisher Agreement first");
+  await expect(page.locator(".save-bar > p.form-error")).toHaveText("accept the current Publisher Agreement first");
   await expect(page.getByLabel("Name", { exact: true })).toHaveValue("Gate Keeper");
   expect(attempts).toBe(1);
 
@@ -339,7 +339,10 @@ test("editing the store page: the address is fixed, others can't open it, errors
   const mia = await browser.newPage();
   await signIn(mia, "maker");
   await mia.goto(`/publish/${slug}`);
-  await expect(mia.getByRole("heading", { name: "Edit store page", level: 1 })).toBeVisible();
+  await expect(mia.getByRole("navigation", { name: /maker pages/ }).getByRole("link", { name: "Edit store page" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(mia.getByRole("textbox", { name: /^Store address/ })).toBeDisabled();
   await expect(mia.getByText("The address can't change once created.")).toBeVisible();
   // Nobody has it yet, so the repository can still change here.
@@ -378,7 +381,7 @@ test("editing the store page: the address is fixed, others can't open it, errors
   await expect(bo.getByRole("alert").getByText("We couldn't find that.")).toBeVisible();
   // A mod's own page has no mods folder.
   await bo.goto(`/publish/${server.ids.mod}`);
-  await expect(bo.getByRole("heading", { name: "Edit store page", level: 1 })).toBeVisible();
+  await expect(bo.getByRole("heading", { name: "Basics" })).toBeVisible();
   await expect(bo.getByRole("group", { name: "Mods" })).toHaveCount(0);
 });
 

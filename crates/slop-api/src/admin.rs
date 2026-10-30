@@ -451,7 +451,10 @@ pub async fn revoke(
     Ok(())
 }
 
-async fn has_approved_release(tx: &mut sqlx::PgConnection, app_id: Uuid) -> anyhow::Result<bool> {
+pub(crate) async fn has_approved_release(
+    tx: &mut sqlx::PgConnection,
+    app_id: Uuid,
+) -> anyhow::Result<bool> {
     Ok(sqlx::query_scalar(
         "select exists (select 1 from releases where app_id = $1 and status = 'approved')",
     )
@@ -704,6 +707,21 @@ pub async fn set_stage(
             "approve a release first: Beta and Released apps need an approved release"
         );
     }
+    move_stage(&mut tx, id, slug, from, stage, reviewer).await?;
+    tx.commit().await?;
+    Ok(())
+}
+
+/// Moves an app (locked by the caller) from `from` to `stage`: restarts the stage's clock, tells
+/// everyone Interested, and records who did it. The caller checks the move is allowed.
+pub(crate) async fn move_stage(
+    tx: &mut sqlx::PgConnection,
+    id: Uuid,
+    slug: &str,
+    from: AppStage,
+    stage: AppStage,
+    actor: &str,
+) -> anyhow::Result<()> {
     sqlx::query(
         "update apps set stage = $2, stage_entered_at = now(), updated_at = now() where id = $1",
     )
@@ -711,16 +729,15 @@ pub async fn set_stage(
     .bind(stage)
     .execute(&mut *tx)
     .await?;
-    let told = crate::interested::stage_moved(&mut tx, id, stage).await?;
+    let told = crate::interested::stage_moved(&mut *tx, id, stage).await?;
     audit(
-        &mut tx,
-        reviewer,
+        &mut *tx,
+        actor,
         "app.stage",
         slug,
         json!({ "from": from, "to": stage, "interested_told": told }),
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 

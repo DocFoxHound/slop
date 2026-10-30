@@ -33,6 +33,7 @@ import { CopyLine, siteAddress, startPrompt } from "../components/CopyLine";
 import { TagPicker } from "../components/TagPicker";
 import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
+import { MakerFrame } from "../components/MakerFrame";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
 import { ErrorState, Loading } from "../components/ui";
 import { CONTENT_LABEL, ONLINE_LABEL } from "../format";
@@ -426,13 +427,9 @@ function EditorForm({
     </label>
   );
 
-  return (
-    <div className="page narrow">
+  const body = (
+    <>
       {terms.prompt}
-      <div className="crumbs">
-        <Link to="/publish">Your apps</Link> › {existing ? existing.title : "New app"}
-      </div>
-      <h1 className="page-title">{existing ? "Edit store page" : "New app"}</h1>
       {linkError && (
         <HandoffError error={linkError} then="The form is empty: fill it in yourself, or ask your assistant for a new link." />
       )}
@@ -446,264 +443,282 @@ function EditorForm({
           clearLabel="Clear the form"
         />
       )}
-      {/* Getting paid is part of the page (owner decision 2026-10-25): its state and every step
-          to set it up, right here. */}
-      {existing && !existing.private && (
-        <DonationsPanel
-          slug={existing.slug}
-          title="Get paid: donations"
-          returnTo={`/publish/${existing.slug}#donations`}
-          note={
-            existing.stage === "coming_soon"
-              ? "The Donate button shows on your store page from Beta on; you can set it up now."
-              : undefined
-          }
-        />
-      )}
-      <form className="panel panel-pad form" onSubmit={(e) => void submit(e)}>
-
-        {field(
-          "title",
-          "Name",
-          <input
-            value={form.title}
-            maxLength={80}
-            required
-            onChange={(e) => {
-              set("title", e.target.value);
-              if (!slugTouched) set("slug", slugify(e.target.value));
-            }}
-          />,
-        )}
-        {field(
-          "slug",
-          "Store address",
-          <div className="prefixed">
-            <span>slop/app/</span>
-            <input
-              value={form.slug}
-              maxLength={60}
-              required
-              disabled={Boolean(existing)}
-              pattern="[a-z0-9]+(-[a-z0-9]+)*"
-              onChange={(e) => {
-                setSlugTouched(true);
-                set("slug", e.target.value);
-              }}
-            />
-          </div>,
-          existing ? (
-            "The address can't change once created."
-          ) : (
-            <>
-              Lowercase letters, numbers and dashes. It can't change once created.{" "}
-              <span role="status">
-                {address?.slug === form.slug &&
-                  (address.available ? (
-                    <span className="good">✓ slop/app/{address.slug} is free.</span>
-                  ) : (
-                    <span className="bad">
-                      Taken.{" "}
-                      {address.suggestion && (
-                        <button
-                          type="button"
-                          className="link-btn"
-                          onClick={() => {
-                            setSlugTouched(true);
-                            set("slug", address.suggestion!);
-                          }}
-                        >
-                          Use {address.suggestion}
-                        </button>
-                      )}
+      <form className="maker-form" onSubmit={(e) => void submit(e)}>
+        <div className="maker-cols">
+          <div className="maker-main">
+            <section className="panel panel-pad form" aria-labelledby="basics-title">
+              <h2 id="basics-title">Basics</h2>
+              {field(
+                "title",
+                "Name",
+                <input
+                  value={form.title}
+                  maxLength={80}
+                  required
+                  onChange={(e) => {
+                    set("title", e.target.value);
+                    if (!slugTouched) set("slug", slugify(e.target.value));
+                  }}
+                />,
+              )}
+              {field(
+                "slug",
+                "Store address",
+                <div className="prefixed">
+                  <span>slop/app/</span>
+                  <input
+                    value={form.slug}
+                    maxLength={60}
+                    required
+                    disabled={Boolean(existing)}
+                    pattern="[a-z0-9]+(-[a-z0-9]+)*"
+                    onChange={(e) => {
+                      setSlugTouched(true);
+                      set("slug", e.target.value);
+                    }}
+                  />
+                </div>,
+                existing ? (
+                  "The address can't change once created."
+                ) : (
+                  <>
+                    Lowercase letters, numbers and dashes. It can't change once created.{" "}
+                    <span role="status">
+                      {address?.slug === form.slug &&
+                        (address.available ? (
+                          <span className="good">✓ slop/app/{address.slug} is free.</span>
+                        ) : (
+                          <span className="bad">
+                            Taken.{" "}
+                            {address.suggestion && (
+                              <button
+                                type="button"
+                                className="link-btn"
+                                onClick={() => {
+                                  setSlugTouched(true);
+                                  set("slug", address.suggestion!);
+                                }}
+                              >
+                                Use {address.suggestion}
+                              </button>
+                            )}
+                          </span>
+                        ))}
                     </span>
-                  ))}
-              </span>
-            </>
-          ),
-        )}
-        {field(
-          "summary",
-          "One-line summary",
-          <input value={form.summary} maxLength={200} required onChange={(e) => set("summary", e.target.value)} />,
-        )}
-        {field(
-          "description_md",
-          "Description",
-          <textarea
-            rows={8}
-            value={form.description_md}
-            maxLength={20000}
-            onChange={(e) => set("description_md", e.target.value)}
-          />,
-          "Markdown. HTML and images aren't allowed.",
-        )}
+                  </>
+                ),
+              )}
+              {field(
+                "summary",
+                "One-line summary",
+                <input value={form.summary} maxLength={200} required onChange={(e) => set("summary", e.target.value)} />,
+              )}
+              {field(
+                "description_md",
+                "Description",
+                <textarea
+                  rows={14}
+                  value={form.description_md}
+                  maxLength={20000}
+                  onChange={(e) => set("description_md", e.target.value)}
+                />,
+                "Markdown. HTML and images aren't allowed.",
+              )}
 
-        {!existing && (
-          <fieldset className="visibility-choice">
-            <legend>Who can see it?</legend>
-            <label className="check">
-              <input type="radio" name="visibility" checked={form.visibility !== "private"} onChange={() => set("visibility", "public")} />
-              <span>
-                <b>Everyone</b> <span className="muted small">— in the store, from a public open-source repository</span>
-              </span>
-            </label>
-            <label className="check">
-              <input type="radio" name="visibility" checked={form.visibility === "private"} onChange={() => set("visibility", "private")} />
-              <span>
-                <b>Private</b>{" "}
-                <span className="muted small">
-                  — only you and people you share it with. Never in the store; no donations or voting. The repository can be
-                  private: on GitHub, install SLAPorSLOP's GitHub App on it; elsewhere, give SLAPorSLOP a read-only token.
-                </span>
-              </span>
-            </label>
-          </fieldset>
-        )}
+              {!existing && (
+                <fieldset className="visibility-choice">
+                  <legend>Who can see it?</legend>
+                  <label className="check">
+                    <input type="radio" name="visibility" checked={form.visibility !== "private"} onChange={() => set("visibility", "public")} />
+                    <span>
+                      <b>Everyone</b> <span className="muted small">— in the store, from a public open-source repository</span>
+                    </span>
+                  </label>
+                  <label className="check">
+                    <input type="radio" name="visibility" checked={form.visibility === "private"} onChange={() => set("visibility", "private")} />
+                    <span>
+                      <b>Private</b>{" "}
+                      <span className="muted small">
+                        — only you and people you share it with. Never in the store; no donations or voting. The repository can be
+                        private: on GitHub, install SLAPorSLOP's GitHub App on it; elsewhere, give SLAPorSLOP a read-only token.
+                      </span>
+                    </span>
+                  </label>
+                </fieldset>
+              )}
 
-        {!existing && (
-          <div className="row-2">
-            {field(
-              "kind",
-              "Type",
-              <select value={form.kind} onChange={(e) => set("kind", e.target.value as AppKind)}>
-                <option value="game">Game</option>
-                <option value="app">App</option>
-              </select>,
-            )}
-            {field(
-              "stage",
-              "Stage",
-              <select value={form.stage} onChange={(e) => set("stage", e.target.value as AppStage)}>
-                <option value="coming_soon">Coming soon (no build yet)</option>
-                <option value="beta">Beta</option>
-                <option value="released">Released</option>
-              </select>,
+              {!existing && (
+                <div className="row-2">
+                  {field(
+                    "kind",
+                    "Type",
+                    <select value={form.kind} onChange={(e) => set("kind", e.target.value as AppKind)}>
+                      <option value="game">Game</option>
+                      <option value="app">App</option>
+                    </select>,
+                  )}
+                  {field(
+                    "stage",
+                    "Stage",
+                    <select value={form.stage} onChange={(e) => set("stage", e.target.value as AppStage)}>
+                      <option value="coming_soon">Coming soon (no build yet)</option>
+                      <option value="beta">Beta</option>
+                      <option value="released">Released</option>
+                    </select>,
+                    "You move it on yourself later, from the stage bar at the top of its pages.",
+                  )}
+                </div>
+              )}
+            </section>
+
+            <section className="panel panel-pad form" aria-labelledby="source-title">
+              <h2 id="source-title">Source and licence</h2>
+              {field(
+                "repo_url",
+                "Source repository",
+                <input
+                  type="url"
+                  value={form.repo_url}
+                  placeholder="https://github.com/you/your-app"
+                  required
+                  readOnly={repoLocked}
+                  onChange={(e) => set("repo_url", e.target.value)}
+                />,
+                repoLocked && existing ? (
+                  <>
+                    Players already have this app, so moving it is checked by a person first.{" "}
+                    <Link to={`/publish/${existing.slug}/manage`}>Request a move from Manage</Link>.
+                  </>
+                ) : (
+                  "Yours: owned by an account you've linked (GitHub, GitLab, Bitbucket), an organization you own, or proved with a code in its README on any other host. Collaborators can't publish someone else's repository."
+                ),
+              )}
+              {needsToken && (
+                <fieldset className="tag-picker">
+                  <legend>Private repository on another host</legend>
+                  <p className="muted small">If the repository is private, SLAPorSLOP needs a read-only token to see it. Public repositories don't.</p>
+                  <TokenFields value={token} onChange={setToken} />
+                  {error?.field === "repo_token" && (
+                    <span className="field-error" role="alert">
+                      {error.message}
+                    </span>
+                  )}
+                </fieldset>
+              )}
+              {(!existing || form.repo_url !== existing.repo_url) && !repoLocked && (
+                <RepoOwnership repoUrl={form.repo_url} token={needsToken && token.token.trim() ? token : undefined} />
+              )}
+              <LicensePicker
+                repoUrl={form.repo_url}
+                value={form.license_spdx}
+                onChange={(spdx) => set("license_spdx", spdx)}
+                error={error?.field === "license_spdx" ? error.message : undefined}
+              />
+            </section>
+
+            <section className="panel panel-pad form" aria-label="Tags">
+              <TagPicker
+                categories={categories}
+                value={form.tags}
+                onChange={(t) => set("tags", t)}
+                kind={form.kind}
+                minAge={form.min_age}
+                labels={form.content_labels ?? []}
+                error={error?.field === "tags" ? error.message : undefined}
+              />
+            </section>
+          </div>
+
+          <div className="maker-side">
+            <section className="panel panel-pad form" aria-labelledby="rating-title">
+              <h2 id="rating-title">Age and content</h2>
+              {field(
+                "min_age",
+                "Age rating",
+                <AgeSelect value={form.min_age} onChange={(a) => set("min_age", a)} />,
+                "18+ apps are hidden in the UK under-18 view.",
+              )}
+              <ContentLabelPicker
+                value={form.content_labels ?? []}
+                onChange={(v) => set("content_labels", v)}
+                error={error?.field === "content_labels" ? error.message : undefined}
+              />
+            </section>
+
+            <section className="panel panel-pad form" aria-label="Runs on">
+              <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
+            </section>
+
+            <section className="panel panel-pad form" aria-label="Online and sandbox mode">
+              <OnlinePicker
+                value={form.online ?? []}
+                onChange={(v) => set("online", v)}
+                hostsText={hostsText}
+                onHostsText={setHostsText}
+                error={error?.field === "online" || error?.field === "online_hosts" ? error : undefined}
+              />
+              <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
+            </section>
+
+            <section className="panel panel-pad form" aria-labelledby="players-title">
+              <h2 id="players-title">For players</h2>
+              <label className="check">
+                <input type="checkbox" checked={form.bug_reports ?? true} onChange={(e) => set("bug_reports", e.target.checked)} />{" "}
+                Take bug reports from players on SLAPorSLOP (you see them on the Manage page; turn off if you only use your own issue
+                tracker)
+              </label>
+              <fieldset>
+                <legend>Accessibility</legend>
+                <p className="hint">Only what it really has: players who play it confirm or dispute each one on its store page.</p>
+                {ACCESSIBILITY.map(([key, name]) => (
+                  <label className="check" key={key}>
+                    <input
+                      type="checkbox"
+                      checked={(form.accessibility ?? []).includes(key)}
+                      onChange={(e) =>
+                        set(
+                          "accessibility",
+                          e.target.checked
+                            ? [...(form.accessibility ?? []), key]
+                            : (form.accessibility ?? []).filter((k) => k !== key),
+                        )
+                      }
+                    />{" "}
+                    {name}
+                  </label>
+                ))}
+              </fieldset>
+            </section>
+
+            {!isMod && (
+              <section className="panel panel-pad form" aria-label="Mods">
+                <ModsFolderPicker
+                  value={form.mods_folder ?? null}
+                  onChange={(v) => set("mods_folder", v)}
+                  error={error?.field === "mods_folder" ? error.message : undefined}
+                />
+              </section>
             )}
           </div>
-        )}
-
-        {field(
-          "repo_url",
-          "Source repository",
-          <input
-            type="url"
-            value={form.repo_url}
-            placeholder="https://github.com/you/your-app"
-            required
-            readOnly={repoLocked}
-            onChange={(e) => set("repo_url", e.target.value)}
-          />,
-          repoLocked && existing ? (
-            <>
-              Players already have this app, so moving it is checked by a person first.{" "}
-              <Link to={`/publish/${existing.slug}/manage`}>Request a move from Manage</Link>.
-            </>
-          ) : (
-            "Yours: owned by an account you've linked (GitHub, GitLab, Bitbucket), an organization you own, or proved with a code in its README on any other host. Collaborators can't publish someone else's repository."
-          ),
-        )}
-        {needsToken && (
-          <fieldset className="tag-picker">
-            <legend>Private repository on another host</legend>
-            <p className="muted small">If the repository is private, SLAPorSLOP needs a read-only token to see it. Public repositories don't.</p>
-            <TokenFields value={token} onChange={setToken} />
-            {error?.field === "repo_token" && (
-              <span className="field-error" role="alert">
-                {error.message}
-              </span>
-            )}
-          </fieldset>
-        )}
-        {(!existing || form.repo_url !== existing.repo_url) && !repoLocked && (
-          <RepoOwnership repoUrl={form.repo_url} token={needsToken && token.token.trim() ? token : undefined} />
-        )}
-        <div className="row-2">
-          <LicensePicker
-            repoUrl={form.repo_url}
-            value={form.license_spdx}
-            onChange={(spdx) => set("license_spdx", spdx)}
-            error={error?.field === "license_spdx" ? error.message : undefined}
-          />
-          {field(
-            "min_age",
-            "Age rating",
-            <AgeSelect value={form.min_age} onChange={(a) => set("min_age", a)} />,
-            "18+ apps are hidden in the UK under-18 view.",
-          )}
         </div>
 
-        <ContentLabelPicker
-          value={form.content_labels ?? []}
-          onChange={(v) => set("content_labels", v)}
-          error={error?.field === "content_labels" ? error.message : undefined}
-        />
-        <OnlinePicker
-          value={form.online ?? []}
-          onChange={(v) => set("online", v)}
-          hostsText={hostsText}
-          onHostsText={setHostsText}
-          error={error?.field === "online" || error?.field === "online_hosts" ? error : undefined}
-        />
-        <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
-        <label className="check">
-          <input type="checkbox" checked={form.bug_reports ?? true} onChange={(e) => set("bug_reports", e.target.checked)} />{" "}
-          Take bug reports from players on SLAPorSLOP (you see them on the Manage page; turn off if you only use your own issue
-          tracker)
-        </label>
-        <fieldset>
-          <legend>Accessibility</legend>
-          <p className="hint">Only what it really has: players who play it confirm or dispute each one on its store page.</p>
-          {ACCESSIBILITY.map(([key, name]) => (
-            <label className="check" key={key}>
-              <input
-                type="checkbox"
-                checked={(form.accessibility ?? []).includes(key)}
-                onChange={(e) =>
-                  set(
-                    "accessibility",
-                    e.target.checked
-                      ? [...(form.accessibility ?? []), key]
-                      : (form.accessibility ?? []).filter((k) => k !== key),
-                  )
-                }
-              />{" "}
-              {name}
-            </label>
-          ))}
-        </fieldset>
-        {!isMod && (
-          <ModsFolderPicker
-            value={form.mods_folder ?? null}
-            onChange={(v) => set("mods_folder", v)}
-            error={error?.field === "mods_folder" ? error.message : undefined}
-          />
-        )}
-
-        <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
-
-        <TagPicker
-          categories={categories}
-          value={form.tags}
-          onChange={(t) => set("tags", t)}
-          kind={form.kind}
-          minAge={form.min_age}
-          labels={form.content_labels ?? []}
-          error={error?.field === "tags" ? error.message : undefined}
-        />
-
-        {error && !(error.field && inline.has(error.field)) && (
-          <p className="form-error" role="alert">
-            {error.message}
-          </p>
-        )}
-        <div className="actions">
-          <Link className="btn ghost" to={existing ? `/app/${existing.slug}` : "/publish"}>
-            Cancel
-          </Link>
-          <button className="btn slime" disabled={busy}>
-            {busy ? "Saving…" : existing ? "Save changes" : "Create draft"}
-          </button>
+        <div className="save-bar">
+          <div className="actions">
+            <button className="btn slime" disabled={busy}>
+              {busy ? "Saving…" : existing ? "Save changes" : "Create draft"}
+            </button>
+            <Link className="btn ghost" to={existing ? `/app/${existing.slug}` : "/publish"}>
+              Cancel
+            </Link>
+          </div>
+          {error && !(error.field && inline.has(error.field)) && (
+            <p className="form-error" role="alert">
+              {error.message}
+            </p>
+          )}
+          {error && error.field && inline.has(error.field) && (
+            <p className="form-error small">Something needs fixing above.</p>
+          )}
         </div>
         {!existing && (
           <p className="muted small new-app-pictures">
@@ -715,11 +730,50 @@ function EditorForm({
         {!existing && form.visibility !== "private" && (
           <p className="muted small new-app-donations">
             Getting paid: players can donate to you once it's in Beta or released. The draft's Edit store page has a{" "}
-            <b>Get paid</b> section at the top to set it up with Stripe (18 or older; SLAPorSLOP's fee is 5%).
+            <b>Get paid</b> section to set it up with Stripe (18 or older; SLAPorSLOP's fee is 5%).
           </p>
         )}
       </form>
-      {existing && <MediaEditor app={existing} />}
+      {existing && (
+        <div className="maker-cols">
+          <div className="maker-main">
+            <MediaEditor app={existing} />
+          </div>
+          <div className="maker-side">
+            {/* Getting paid is part of the page (owner decision 2026-10-25): its state and every
+                step to set it up, right here. */}
+            {!existing.private && (
+              <DonationsPanel
+                slug={existing.slug}
+                title="Get paid: donations"
+                returnTo={`/publish/${existing.slug}#donations`}
+                note={
+                  existing.stage === "coming_soon"
+                    ? "The Donate button shows on your store page from Beta on; you can set it up now."
+                    : undefined
+                }
+              />
+            )}
+          </div>
+        </div>
+      )}
+    </>
+  );
+
+  if (existing) {
+    return (
+      <MakerFrame app={existing} tab="page">
+        {body}
+      </MakerFrame>
+    );
+  }
+  return (
+    <div className="page maker">
+      <div className="crumbs">
+        <Link to="/publish">Your apps</Link> › New app
+      </div>
+      <h1 className="page-title">New app</h1>
+      {body}
     </div>
   );
 }
