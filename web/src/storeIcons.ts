@@ -255,6 +255,36 @@ const SHAPES = {
     body(rect(3, 5.4, 18, 13.2, 2.2)),
     line("M3.8 7.2 12 13.2l8.2-6"),
   ],
+
+  // ---- People's AI-use marks (components/People.tsx) and Friends & Chat --------
+  /** No AI: a pencil, its eraser slime. */
+  "no-ai": [
+    accent("M16.97 3.77 20.23 7.03 18.23 9.03 14.97 5.77Z"),
+    body("M16.97 3.77 20.23 7.03 8.43 18.83 4 20 5.17 15.57Z"),
+    line("M14.97 5.77 18.23 9.03M5.17 15.57 8.43 18.83"),
+  ],
+  /** AI-assisted: the pencil, with a slime sparkle beside it. */
+  "ai-assisted": [
+    accent("M7 3.4c.41 2.21 1.39 3.19 3.6 3.6-2.21.41-3.19 1.39-3.6 3.6-.41-2.21-1.39-3.19-3.6-3.6 2.21-.41 3.19-1.39 3.6-3.6Z"),
+    body("M16.97 3.77 20.23 7.03 8.43 18.83 4 20 5.17 15.57Z"),
+    line("M14.97 5.77 18.23 9.03M5.17 15.57 8.43 18.83"),
+  ],
+  /** Mostly AI-generated: a wand with a slime tip, and sparkles. */
+  "ai-heavy": [
+    accent("M12.58 9.58 14.42 11.42 13.15 12.69 11.31 10.85Z"),
+    body("M3.58 18.58 12.58 9.58 14.42 11.42 5.42 20.42Z"),
+    line("M17 2.8c.48 2.58 1.62 3.72 4.2 4.2-2.58.48-3.72 1.62-4.2 4.2-.48-2.58-1.62-3.72-4.2-4.2 2.58-.48 3.72-1.62 4.2-4.2Z"),
+    line("M6 3.6c.27 1.47.93 2.13 2.4 2.4-1.47.27-2.13.93-2.4 2.4-.27-1.47-.93-2.13-2.4-2.4 1.47-.27 2.13-.93 2.4-2.4Z"),
+    dot(circle(19.5, 16.5, 1.1)),
+  ],
+  /** Friends & Chat: a speech bubble, a slime one answering behind it. */
+  chat: [
+    accentLine("M17.5 9H19a2.5 2.5 0 0 1 2.5 2.5V16a2.5 2.5 0 0 1-2.5 2.5h-.5V21l-3-2.5H13a2.5 2.5 0 0 1-2.5-2.5v-2"),
+    body("M5 4h10a2.5 2.5 0 0 1 2.5 2.5v5A2.5 2.5 0 0 1 15 14H9l-3.5 3v-3H5a2.5 2.5 0 0 1-2.5-2.5v-5A2.5 2.5 0 0 1 5 4Z"),
+    dot(circle(6.5, 9, 1)),
+    dot(circle(10, 9, 1)),
+    dot(circle(13.5, 9, 1)),
+  ],
 } satisfies Record<string, Part[]>;
 
 export type StoreIconName = keyof typeof SHAPES;

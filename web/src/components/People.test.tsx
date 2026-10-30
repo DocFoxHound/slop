@@ -62,7 +62,7 @@ describe("AiBadge", () => {
       expect(badge.className).not.toMatch(/\b(warn|bad|official)\b/);
       // Words, not colour alone (A11Y-1); the mark is decoration.
       expect(badge.textContent).toContain(AI_USE[ai].label.toUpperCase());
-      expect(badge.querySelector('[aria-hidden="true"]')?.textContent).toBe(AI_USE[ai].icon);
+      expect(badge.querySelector('svg[aria-hidden="true"]')?.getAttribute("data-icon")).toBe(AI_USE[ai].icon);
       expect(badge.getAttribute("title")).toBe(AI_USE[ai].hint);
       cleanup();
     }

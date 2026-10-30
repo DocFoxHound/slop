@@ -14,6 +14,7 @@ import { ChatInAppNote, ChatView, ensureChat } from "../pages/Chat";
 import { FriendsList } from "../pages/Friends";
 import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
+import { StoreIcon } from "./StoreIcons";
 
 type Tab = "chats" | "friends";
 
@@ -124,7 +125,7 @@ export function ChatDock({ unread }: { unread: number }) {
         aria-label={label}
         onClick={() => (open ? close() : setOpen(true))}
       >
-        <span aria-hidden="true">💬</span>
+        <StoreIcon name="chat" size={18} />
         <span>Friends &amp; Chat</span>
         {unread > 0 && (
           <span className="unread-badge" aria-hidden="true">

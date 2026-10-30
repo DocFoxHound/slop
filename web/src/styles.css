@@ -153,6 +153,8 @@ button.chip:disabled { opacity: 0.4; cursor: not-allowed; }
 .badge.ai-none { background: var(--ai-none-soft); color: var(--ai-none); }
 .badge.ai-assisted { background: var(--ai-assisted-soft); color: var(--ai-assisted); }
 .badge.ai-heavy { background: var(--ai-heavy-soft); color: var(--ai-heavy); }
+/* The AI-use marks are drawn all in the badge's own colour, slime included. */
+.badge[class*=" ai-"] .store-icon { --icon-accent: currentColor; }
 .badge.soon { background: rgba(251, 191, 36, 0.16); color: var(--warn); }
 .badge.beta { background: rgba(168, 85, 247, 0.18); color: #c084fc; }
 .notice { background: rgba(96, 165, 250, 0.08); border: 1px solid rgba(96, 165, 250, 0.3); border-radius: 8px; padding: 10px 14px; margin-bottom: 16px; font-size: 13px; }
