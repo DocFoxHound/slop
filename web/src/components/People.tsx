@@ -10,7 +10,7 @@ import type { StoreIconName } from "../storeIcons";
 import { money } from "../format";
 import { isDesktop, openExternal } from "../platform";
 import { Avatar } from "./Avatar";
-import { StoreIcon } from "./StoreIcons";
+import { SkillIcon, StoreIcon } from "./StoreIcons";
 
 /** Accent colours a creative can pick; each keeps dark text readable on it (A11Y-1). */
 export const ACCENTS: Record<Accent, { name: string; color: string; ink: string }> = {
@@ -146,7 +146,9 @@ export function WorkTile({ w, onOpen }: { w: Work; onOpen?: (w: Work) => void })
         ))}
       {w.kind === "audio" && (
         <div className="work-audio">
-          {w.url ? <img src={w.url} alt="" loading="lazy" /> : <span className="audio-mark" aria-hidden="true">♪</span>}
+          {w.url ? <img src={w.url} alt="" loading="lazy" /> : <span className="audio-mark" aria-hidden="true">
+              <SkillIcon slug="music" size={40} />
+            </span>}
           {/* preload="none": nothing is fetched from GitHub until someone presses play. */}
           <audio controls preload="none" src={w.audio_url ?? undefined} aria-label={`Play: ${label}`} />
         </div>

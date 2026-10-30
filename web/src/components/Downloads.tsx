@@ -9,6 +9,7 @@ import { useEffect, useId, useRef, useState, useSyncExternalStore } from "react"
 import { useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { checkUpdates, installUpdates, LIBRARY_CHANGED, type InstalledWithUpdate } from "./AppUpdates";
+import { InlineIcon } from "./StoreIcons";
 
 export interface Download {
   slug: string;
@@ -185,7 +186,7 @@ export function DownloadsStatus({
         aria-controls={open ? panelId : undefined}
         onClick={() => setOpen((o) => !o)}
       >
-        <span aria-hidden="true">⬇</span> {label}
+        <InlineIcon name="download" /> {label}
       </button>
     </div>
   );

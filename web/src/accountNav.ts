@@ -48,7 +48,7 @@ export const ACCOUNT_SECTIONS: AccountSection[] = [
   {
     id: "notifications",
     label: "Notifications",
-    intro: "What reaches you besides the 🔔: email, and notifications on this phone or browser.",
+    intro: "What reaches you besides the notifications in SLAPorSLOP: email, and notifications on this phone or browser.",
     group: "Account",
     parts: ["notifications"],
   },

@@ -34,7 +34,7 @@ test("friends: a request by link, cancelled, sent again and accepted; removed; d
   // To Olly, then cancelled while it waits.
   await add.fill(link("overdue"));
   await sendReq.click();
-  await expect(mia.getByText("Request sent. They'll see it under their 🔔.")).toBeVisible();
+  await expect(mia.getByText("Request sent. They'll see it in their notifications.")).toBeVisible();
   await expect(add).toHaveValue("");
   const waiting = mia.locator("li").filter({ hasText: "Olly Overdue" });
   await expect(mia.getByRole("heading", { name: "Waiting for an answer" })).toBeVisible();
@@ -54,7 +54,7 @@ test("friends: a request by link, cancelled, sent again and accepted; removed; d
   // On Olly's profile Mia sees they're friends, and that chat is in the app.
   await mia.goto(`/u/${ids.overdue}`);
   await expect(mia.getByText("✓ Friends")).toBeVisible();
-  await expect(mia.getByRole("link", { name: "💬 Message in the app" })).toHaveAttribute("href", "/chat");
+  await expect(mia.getByRole("link", { name: "Message in the app", exact: true })).toHaveAttribute("href", "/chat");
 
   // Mia removes Olly.
   await mia.goto("/friends");
@@ -231,7 +231,7 @@ test("an open team anyone can join, and an official studio team's verification",
   // Listed for everyone; Olly can report it, join, and leave.
   const olly = await as(browser, "overdue", "/teams");
   await olly.getByRole("link", { name: /Open Lanterns/ }).click();
-  await expect(olly.getByRole("button", { name: "⚑ Report" })).toBeVisible();
+  await expect(olly.getByRole("button", { name: "Report", exact: true })).toBeVisible();
   await olly.getByRole("button", { name: "Join" }).click();
   await expect(olly.getByText(/Open player team · 2 members/)).toBeVisible();
   // An open team has no team chat.
@@ -270,7 +270,7 @@ test("the seed's teams: the invited player sees the invitation; members see the 
   await expect(tia.getByRole("button", { name: "Accept the invitation" })).toBeVisible();
   await expect(tia.getByRole("button", { name: "Decline" })).toBeVisible();
   const pat = await as(browser, "player", `/teams/${ids.inviteTeam}`);
-  await expect(pat.getByRole("link", { name: "💬 Team chat in the app" })).toHaveAttribute("href", "/chat");
+  await expect(pat.getByRole("link", { name: "Team chat in the app", exact: true })).toHaveAttribute("href", "/chat");
   const visitor = await browser.newPage();
   await visitor.goto("/teams");
   await expect(visitor.getByRole("button", { name: "Start a team" })).toHaveCount(0);

@@ -445,7 +445,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
           <>
             {why && <>Why a person: {why}. </>}
             What happens next: they look at the checks above and the app itself. If it's approved, SLAPorSLOP signs it and players can
-            get it; if something needs changing, you're told what. Either way you get a notification (under 🔔, and by email).
+            get it; if something needs changing, you're told what. Either way you get a notification, in SLAPorSLOP and by email.
             Nothing to do meanwhile.
           </>
         ),

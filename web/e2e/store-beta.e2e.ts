@@ -63,8 +63,8 @@ test("a player who played the Beta rates it from the top of the page, and it say
 
   await rate.click();
   await expect(ratings(page)).toBeFocused();
-  await ratings(page).getByRole("button", { name: "👍 Slaps" }).click();
-  await expect(head(page).getByRole("button", { name: "Your rating: 👍 Slaps" })).toBeVisible();
+  await ratings(page).getByRole("button", { name: "Slaps", exact: true }).click();
+  await expect(head(page).getByRole("button", { name: "Your rating: Slaps" })).toBeVisible();
   await expect(ratings(page).getByText("This vote was given while it was in Beta.")).toBeVisible();
 
   // A written review shows with its vote, marked as given in Beta.
@@ -91,7 +91,7 @@ test("why others can't rate it yet, with the step to take right there", async ({
   await signIn(teen, "teen");
   await teen.goto(`/app/${beta}`);
   await expect(head(teen).getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
-  await expect(head(teen).getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveAttribute("href", "/download");
+  await expect(head(teen).getByRole("link", { name: "Get the SLAPorSLOP app", exact: true })).toHaveAttribute("href", "/download");
   await expect(head(teen).getByRole("button", { name: "Rate it" })).toHaveCount(0);
 
   // In the SLAPorSLOP app, the Install button is right there.
@@ -101,7 +101,7 @@ test("why others can't rate it yet, with the step to take right there", async ({
   await app.goto(`/app/${beta}`);
   await expect(head(app).getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
   await expect(head(app).getByRole("button", { name: "Install" })).toBeVisible();
-  await expect(head(app).getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveCount(0);
+  await expect(head(app).getByRole("link", { name: "Get the SLAPorSLOP app", exact: true })).toHaveCount(0);
 
   // The maker.
   const maker = await browser.newPage();
@@ -121,7 +121,7 @@ test("Donate is always there on a Beta page, next to Get it: why donations are o
   await expect(visitor.locator(".install-box").getByText("Donations off")).toBeVisible();
   await openDonate(visitor);
   const box = donate(visitor);
-  await expect(box.getByRole("heading", { name: "♥ Donate" })).toBeVisible();
+  await expect(box.getByRole("heading", { name: "Donate", exact: true })).toBeVisible();
   await expect(box.getByText("Donations are off.")).toBeVisible();
   await expect(box).toContainText("The maker hasn't turned on donations.");
   await expect(box.getByRole("button")).toHaveAccessibleName("Close");

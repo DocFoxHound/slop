@@ -9,6 +9,7 @@ import { api, ApiError, type BugReport, type ReleaseFeedback } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { desktop, detectOs, isDesktop } from "../platform";
+import { InlineIcon } from "./StoreIcons";
 
 type Crash = { slug: string; code: number | null; log: string };
 
@@ -300,10 +301,12 @@ export function ReleaseFeedbackPanel({ slug }: { slug: string }) {
             <b>{f.version}</b> <span className="faint small">approved {formatDate(f.approved_at)}</span>
             <div className="small">
               {f.not_slop_percent !== null ? `${f.not_slop_percent}% Slaps from ${f.votes} votes` : "No votes on it yet"} ·{" "}
-              {f.reviews_up} 👍 and {f.reviews_down} 👎 reviews · {f.bug_reports} bug report{f.bug_reports === 1 ? "" : "s"}
+              {f.reviews_up} Slaps and {f.reviews_down} Slop reviews · {f.bug_reports} bug report{f.bug_reports === 1 ? "" : "s"}
             </div>
-            <div className="small">👍 say: {phrases(f.praised)}</div>
-            <div className="small">👎 say: {phrases(f.criticised)}</div>
+            <div className="small">
+              <InlineIcon name="up" /> Slaps say: {phrases(f.praised)}</div>
+            <div className="small">
+              <InlineIcon name="down" /> Slop says: {phrases(f.criticised)}</div>
           </li>
         ))}
       </ul>

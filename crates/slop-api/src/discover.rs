@@ -489,7 +489,7 @@ pub fn build(i: &Inputs) -> Vec<Reel> {
                 Because::Like => (
                     format!("Because you like {t}"),
                     format!(
-                        "From your 👍 Slaps votes and Interested list. More {t} you don't have yet, best rated and most played first."
+                        "From your Slaps votes and Interested list. More {t} you don't have yet, best rated and most played first."
                     ),
                 ),
                 Because::Library => (

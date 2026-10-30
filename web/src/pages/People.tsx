@@ -21,7 +21,7 @@ import {
 } from "../components/PeopleStatus";
 import { ReportButton } from "../components/Report";
 import { useTermsGate } from "../components/Terms";
-import { SkillIcon } from "../components/StoreIcons";
+import { SkillIcon, VoteLabel } from "../components/StoreIcons";
 import { ErrorState, ExternalLink, Loading, SectionHeader, Shelf } from "../components/ui";
 import { formatDate, money } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -513,7 +513,7 @@ function Review({ r, canReply, onSaved }: { r: CreativePage["reviews"][number]; 
       <div className="review-who">
         <b>{r.client_name}</b>
         <span className="badge official">✓ VERIFIED CLIENT</span>
-        <span className={`vote-chip ${r.vote === "not_slop" ? "up" : "down"}`}>{r.vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}</span>
+        <span className={`vote-chip ${r.vote === "not_slop" ? "up" : "down"}`}><VoteLabel vote={r.vote} /></span>
       </div>
       <div className="faint small">
         {r.work} · {r.skill.name}

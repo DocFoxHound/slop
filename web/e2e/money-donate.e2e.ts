@@ -43,7 +43,7 @@ test("signed out, on your own app, coming soon or with donations off, there's no
   await expect(donateButton(visitor)).toHaveAccessibleName("Donate");
   await expect(donateButton(visitor)).toHaveCSS("background-color", SLIME);
   const box = await openDonateForm(visitor);
-  await expect(box.getByRole("heading", { name: "♥ Donate" })).toBeVisible();
+  await expect(box.getByRole("heading", { name: "Donate", exact: true })).toBeVisible();
   await expect(box.getByRole("radiogroup", { name: "Amount" }).getByRole("radio")).not.toHaveCount(0);
   await expect(box.getByRole("link", { name: "Sign in to donate" })).toHaveAttribute(
     "href",
@@ -201,7 +201,7 @@ test("presets and your own amount show what you pay, what the maker gets and the
   const { original } = await moneyApps();
   await page.goto(`/app/${original}`);
   await openDonateForm(page);
-  await expect(donateBox(page).getByRole("heading", { name: "♥ Donate" })).toBeVisible();
+  await expect(donateBox(page).getByRole("heading", { name: "Donate", exact: true })).toBeVisible();
   await expect(donateBox(page).getByRole("tablist", { name: "How often" })).toHaveCount(0);
 });
 
@@ -241,7 +241,7 @@ test("a one-off donation goes through Stripe in a new tab, says thanks, and is o
   const q = await api<Quote>("support", "GET", `/v1/apps/${original}/donate/quote?amount_minor=400`);
   const stripe = await payInNewTab(page, `Donate ${amount(q.total, "usd")}`);
   // Stripe sends the new tab back to the app, which checks the payment and says thanks.
-  await expect(stripe.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+  await expect(stripe.getByRole("heading", { name: "Thank you", exact: true })).toBeVisible();
   await expect(stripe.getByText("Your donation goes straight to Mia Maker.")).toBeVisible();
   await expect(stripe).toHaveURL(new RegExp(`/app/${original}$`));
   // The button beside Add to library goes grey.
@@ -267,7 +267,7 @@ test("back from Stripe, the thanks show even when checking the payment fails", a
   );
   await page.goto(`/app/${ids.listedApp}?donated=${ids.donation}`);
   await expect(donateBox(page)).toHaveCount(0);
-  await expect(page.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Thank you", exact: true })).toBeVisible();
   await expect(page).toHaveURL(new RegExp(`/app/${ids.listedApp}$`));
   await page.getByRole("link", { name: "account page" }).click();
   await expect(page).toHaveURL(/\/account\/money#donations$/);
@@ -311,7 +311,7 @@ test("a monthly server donation states its terms, needs a fresh tick for each am
     await expect(donate).toBeDisabled();
     await consent.check();
     const stripe = await payInNewTab(page, /^Donate \$[\d.]+ a month$/);
-    await expect(stripe.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+    await expect(stripe.getByRole("heading", { name: "Thank you", exact: true })).toBeVisible();
 
     // Beside Add to library: the amount a month, grey, and Cancel. Two clicks; Keep it backs out.
     const monthly = stripe.locator(".install-box").getByRole("button", { name: /^\$[\d.]+\/month server donation$/ });
@@ -360,11 +360,11 @@ test("a donation to a community build is two payments: the original's share firs
   );
   const stripe = await payInNewTab(page, `Donate ${amount(share.total + rest.total, "usd")} in two payments`);
   // Back from the first payment: step 2.
-  await expect(stripe.getByRole("heading", { name: "♥ Step 2 of 2" })).toBeVisible();
+  await expect(stripe.getByRole("heading", { name: "Step 2 of 2", exact: true })).toBeVisible();
   await expect(stripe.getByText("Thank you: your share for Tip Jar Tycoon is paid. Now your donation of $5.00 to Bo Builder.")).toBeVisible();
   await expect(stripe).toHaveURL(new RegExp(`/app/${build}$`));
   const second = await payInNewTab(stripe, "Donate $5.00 to Bo Builder");
-  await expect(second.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+  await expect(second.getByRole("heading", { name: "Thank you", exact: true })).toBeVisible();
 
   await second.goto("/account#donations");
   for (const title of ["Tip Jar Tycoon", "Tip Jar Tycoon Plus"]) {
@@ -396,7 +396,7 @@ test("where payments are simulated, both payments of a shared donation happen at
   // Once it's done, the button reloads what Rae gave (through the stand-ins above).
   const reloaded = page.waitForResponse((r) => new URL(r.url()).pathname === `/v1/apps/${build}/donate` && r.request().method() === "GET");
   await box.getByRole("button", { name: /in two payments$/ }).click();
-  await expect(page.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Thank you", exact: true })).toBeVisible();
   await reloaded;
   expect(started.map((s) => new URL(s.url).pathname)).toEqual([`/v1/apps/${original}/donate`, `/v1/apps/${build}/donate`]);
   expect(started[0].body).toMatchObject({ amount_minor: 215, share_for: build, rest_minor: 500, monthly: false });
@@ -425,5 +425,5 @@ test("after a few unfinished checkouts the browser does a quick check first", as
   const challenged = page.waitForResponse((r) => r.url().endsWith("/v1/donations/challenge") && r.ok());
   const stripe = await payInNewTab(page, /^Donate \$/);
   await challenged;
-  await expect(stripe.getByRole("heading", { name: "♥ Thank you" })).toBeVisible();
+  await expect(stripe.getByRole("heading", { name: "Thank you", exact: true })).toBeVisible();
 });

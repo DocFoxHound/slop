@@ -59,17 +59,31 @@ export function CategoryIcon({ slug, size, className }: { slug: string; size?: n
   return <StoreIcon name={categoryIconName(slug)} size={size} className={className} />;
 }
 
-/**
- * A tag's icon (a sub-genre: roguelike, cozy…), by its slug (the shapes are in ../tagIcons.ts).
- * A tag without an icon of its own (a new one staff added) gets its category's, or the neutral one.
- */
 /** A People skill's icon (tagIcons.ts SKILL_SHAPES); "everyone" for the whole directory. */
 export function SkillIcon({ slug, size = 20, className }: { slug: string; size?: number; className?: string }) {
   return <IconSvg paths={skillIconPaths(slug)} size={size} className={className} style={STORE_ICON_STYLE} data={{ "data-skill": slug }} />;
 }
 
+/**
+ * A tag's icon (a sub-genre: roguelike, cozy…), by its slug (the shapes are in ../tagIcons.ts).
+ * A tag without an icon of its own (a new one staff added) gets its category's, or the neutral one.
+ */
 export function TagIcon({ slug, category, size = 16, className }: { slug: string; category?: string; size?: number; className?: string }) {
   const name = tagIconName(slug);
   if (!name) return <CategoryIcon slug={category ?? "category"} size={size} className={className} />;
   return <IconSvg paths={tagIconPaths(name)} size={size} className={className} style={STORE_ICON_STYLE} data={{ "data-tag": name }} />;
+}
+
+/** An icon in a line of text, sized and set on the text's baseline: where an emoji used to be. */
+export function InlineIcon({ name }: { name: StoreIconName }) {
+  return <StoreIcon name={name} className="inline-icon" />;
+}
+
+/** "Slaps" or "Slop" with its thumb, the way a vote is shown everywhere. */
+export function VoteLabel({ vote }: { vote: "not_slop" | "slop" }) {
+  return (
+    <>
+      <InlineIcon name={vote === "not_slop" ? "up" : "down"} /> {vote === "not_slop" ? "Slaps" : "Slop"}
+    </>
+  );
 }

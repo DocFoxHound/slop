@@ -227,7 +227,7 @@ test("Coming soon & beta: tabs for signed-in players, and only upcoming, living 
   const upcoming = shelfAfter(visitor, "Coming soon & in beta");
   await expect(visitor.getByRole("tablist", { name: "Upcoming apps" })).toHaveCount(0);
   await expect(upcoming.locator(".tile").filter({ hasText: "Harbour Lights" })).toBeVisible();
-  await expect(upcoming.getByText("★ 1 interested")).toBeVisible();
+  await expect(upcoming.getByText("1 interested")).toBeVisible();
   await expect(section(visitor, "Coming soon & in beta").getByRole("link", { name: "See all →" })).toHaveAttribute("href", "/upcoming");
 
   // Cleo is Interested in a puzzle game: For you starts there.

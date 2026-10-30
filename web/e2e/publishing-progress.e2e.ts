@@ -184,7 +184,7 @@ test("each file's check shows while SLAPorSLOP works through them, and the page 
   await expect(review).toContainText("Waiting for a person");
   await expect(review).toContainText("Waiting for review by a person at SLAPorSLOP. It usually takes a day or two.");
   await expect(review).toContainText("Why a person: an app's first release is always reviewed by a person.");
-  await expect(review).toContainText("Either way you get a notification (under 🔔, and by email).");
+  await expect(review).toContainText("Either way you get a notification, in SLAPorSLOP and by email.");
   await expect(filesStep).toContainText("4 files downloaded and hashed.");
   // Files that all passed fold away, and open on request.
   await filesStep.getByText("Each file").click();

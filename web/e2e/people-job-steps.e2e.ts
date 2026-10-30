@@ -142,7 +142,7 @@ test("the conversation: asked for, opened, recorded, kept on a failed send (b66)
   await cleo.reload();
   const theirs = conv(cleo).locator("ol.messages li").filter({ hasText: "Any favourite?" });
   await expect(theirs).toContainText("Vera Okafor");
-  await theirs.getByRole("button", { name: "⚑ Report" }).click();
+  await theirs.getByRole("button", { name: "Report", exact: true }).click();
   await expect(cleo.getByRole("dialog", { name: "Report this message" })).toBeVisible();
   await cleo.keyboard.press("Escape");
   await conv(cleo).getByRole("textbox", { name: "Message" }).fill("Blackletter, please.");

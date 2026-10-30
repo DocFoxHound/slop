@@ -239,7 +239,7 @@ export function Store() {
 
       {show("fresh_slop") && freshSlop.data && freshSlop.data.length > 0 && (
         <>
-          <SectionHeader title="Fresh slop" sub="The most 👎 Slop votes this month. For fun: be kind in reviews." />
+          <SectionHeader title="Fresh slop" sub="The most Slop votes this month. For fun: be kind in reviews." />
           <Shelf apps={freshSlop.data} empty="" />
         </>
       )}

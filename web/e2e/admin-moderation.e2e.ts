@@ -18,7 +18,7 @@ test("a copyright report acted on, a counter-notice appeal, and the decision kep
   const reporter = await newPage(browser);
   await signIn(reporter, "finance");
   await reporter.goto(`/teams/${team}`);
-  await reporter.getByRole("button", { name: "⚑ Report" }).click();
+  await reporter.getByRole("button", { name: "Report", exact: true }).click();
   const dialog = reporter.getByRole("dialog", { name: "Report this team" });
   await expect(dialog.getByRole("textbox", { name: /Your name/ })).toHaveCount(0);
   await expect(dialog.getByRole("textbox", { name: /Your email/ })).toHaveCount(0);
@@ -159,7 +159,7 @@ test("a bounty: its opener can't report it; staff can hide it", async ({ browser
   const olly = await newPage(browser);
   await signIn(olly, "overdue");
   await olly.goto(`/bounties/${bounty.id}`);
-  await olly.getByRole("button", { name: "⚑ Report" }).click();
+  await olly.getByRole("button", { name: "Report", exact: true }).click();
   const dialog = olly.getByRole("dialog", { name: "Report this bounty" });
   await dialog.getByRole("radio", { name: "Spam" }).check();
   await dialog.getByRole("textbox", { name: /What did you see/ }).fill("Testing.");
@@ -242,7 +242,7 @@ test("the report form: already reported, too many, and a signed-out reporter's d
   await signIn(page, "finance");
   await page.goto(`/teams/${team}`);
   const send = async () => {
-    await page.getByRole("button", { name: "⚑ Report" }).click();
+    await page.getByRole("button", { name: "Report", exact: true }).click();
     const dialog = page.getByRole("dialog", { name: "Report this team" });
     await dialog.getByRole("radio", { name: "Spam" }).check();
     await dialog.getByRole("textbox", { name: /What did you see/ }).fill("Links to a coin giveaway.");
@@ -275,7 +275,7 @@ test("the report form: already reported, too many, and a signed-out reporter's d
   // Signed out, SLAPorSLOP asks who's reporting.
   const visitor = await newPage(browser);
   await visitor.goto(`/teams/${team}`);
-  await visitor.getByRole("button", { name: "⚑ Report" }).click();
+  await visitor.getByRole("button", { name: "Report", exact: true }).click();
   const dialog = visitor.getByRole("dialog", { name: "Report this team" });
   await expect(dialog.getByRole("textbox", { name: /Your name/ })).toBeVisible();
   await expect(dialog.getByRole("textbox", { name: /Your email/ })).toBeVisible();

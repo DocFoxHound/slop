@@ -7,6 +7,7 @@ import { Link } from "react-router";
 
 import { api, ApiError, type AppSummary } from "../api";
 import { useSession } from "../session";
+import { InlineIcon } from "./StoreIcons";
 
 export function InterestedButton({
   app,
@@ -23,11 +24,13 @@ export function InterestedButton({
   const [error, setError] = useState<string>();
   if (app.stage === "released") return null;
   const label = `${count.toLocaleString()} ${count === 1 ? "person is" : "people are"} interested`;
-  if (isMine || me === undefined) return <p className="muted small interested-count">★ {label}</p>;
+  if (isMine || me === undefined) return <p className="muted small interested-count">
+        <InlineIcon name="star-on" /> {label}
+      </p>;
   if (!me) {
     return (
       <p className="small interested-count">
-        ★ {label} · <Link to={`/signin?return_to=${encodeURIComponent(`/app/${app.slug}`)}`}>Sign in</Link> to hear when
+        <InlineIcon name="star-on" /> {label} · <Link to={`/signin?return_to=${encodeURIComponent(`/app/${app.slug}`)}`}>Sign in</Link> to hear when
         it's out
       </p>
     );
@@ -46,7 +49,15 @@ export function InterestedButton({
   return (
     <div className="interested">
       <button type="button" className={`btn ${on ? "slime" : ""}`} aria-pressed={on} onClick={() => void toggle()}>
-        {on ? "★ Interested" : "☆ I'm interested"}
+        {on ? (
+          <>
+            <InlineIcon name="star-on" /> Interested
+          </>
+        ) : (
+          <>
+            <InlineIcon name="star" /> I'm interested
+          </>
+        )}
       </button>
       <p className="muted small">
         {label}.{" "}

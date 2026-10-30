@@ -63,7 +63,7 @@ test("a review dispute: the review removed, with a statement of reasons for its 
   await signIn(admin, "admin");
   await openItem(admin, "disputes", review);
   const dispute = admin.getByRole("listitem").filter({ hasText: review });
-  await expect(dispute.getByText(/Cleo Client on Vera Okafor: 👎 Slop/)).toBeVisible();
+  await expect(dispute.getByText(/Cleo Client on Vera Okafor:\s+Slop/)).toBeVisible();
   await expect(dispute.getByText(`The client wants free work for removing it (${t}).`)).toBeVisible();
   await dispute.getByRole("button", { name: "Read the job record (logged)" }).click();
   await expect(dispute.locator("pre.record")).toContainText(`A cellar door, 64×64 (${t}).`);

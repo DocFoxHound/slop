@@ -24,6 +24,7 @@ import { solve } from "../pow";
 import { useSession } from "../session";
 import { DonationsFix } from "./DonationsManage";
 import { ErrorState } from "./ui";
+import { InlineIcon } from "./StoreIcons";
 
 /** Always with cents: "$3.40". */
 export function amount(minor: number, currency: string): string {
@@ -125,15 +126,15 @@ export function DonateButton({ slug, title, isMine = false }: { slug: string; ti
 
   const label = monthly ? (
     <>
-      <span aria-hidden="true">♥</span> {amount(monthly.total_minor, monthly.currency)}/month
+      <InlineIcon name="heart" /> {amount(monthly.total_minor, monthly.currency)}/month
     </>
   ) : last && !quiet ? (
     <>
-      <span aria-hidden="true">♥</span> Donated
+      <InlineIcon name="heart" /> Donated
     </>
   ) : (
     <>
-      <span aria-hidden="true">♥</span> Donate
+      <InlineIcon name="heart" /> Donate
     </>
   );
   const tone = monthly ? "donate-btn given" : quiet ? "donate-btn quiet" : last ? "donate-btn given" : "donate-btn slime";
@@ -231,12 +232,16 @@ export function DonateButton({ slug, title, isMine = false }: { slug: string; ti
           </button>
           {info.error ? (
             <>
-              <h3>♥ Donate</h3>
+              <h3>
+                <InlineIcon name="heart" /> Donate
+              </h3>
               <ErrorState error={info.error} onRetry={info.reload} />
             </>
           ) : !d ? null : !d.on ? (
             <section className="donate-box donate-off" aria-label={`Donations to ${title} are off`}>
-              <h3>♥ Donate</h3>
+              <h3>
+                <InlineIcon name="heart" /> Donate
+              </h3>
               <p className="small">
                 <b>Donations are off.</b> {d.off_reason}
               </p>
@@ -250,7 +255,9 @@ export function DonateButton({ slug, title, isMine = false }: { slug: string; ti
             <DonateForm slug={slug} title={title} d={d} monthlyAllowed={!monthly} onDone={info.reload} />
           ) : (
             <div className="donate-box donate-given">
-              <h3>{monthly ? "♥ Your server donation" : "♥ You donated"}</h3>
+              <h3>
+                <InlineIcon name="heart" /> {monthly ? "Your server donation" : "You donated"}
+              </h3>
               {monthly && (
                 <p>
                   You give <b>{amount(monthly.total_minor, monthly.currency)} a month</b> for {title}'s servers
@@ -375,7 +382,9 @@ function DonateForm({
   if (thanks) {
     return (
       <div className="donate-box">
-        <h3>♥ Thank you</h3>
+        <h3>
+          <InlineIcon name="heart" /> Thank you
+        </h3>
         <p>Your donation goes straight to {d.maker}. Your receipt is on your <Link to="/account/money#donations">account page</Link>.</p>
       </div>
     );
@@ -475,7 +484,9 @@ function DonateForm({
   if (sharePaid) {
     return (
       <div className="donate-box">
-        <h3>♥ Step 2 of 2</h3>
+        <h3>
+          <InlineIcon name="heart" /> Step 2 of 2
+        </h3>
         <p>
           Thank you: your share for {d.shared?.title ?? "the original"} is paid. Now your donation of{" "}
           <b>{amount(sharePaid.rest, d.currency)}</b> to {d.maker}.
@@ -494,7 +505,9 @@ function DonateForm({
 
   return (
     <form className="donate-box form" onSubmit={(e) => void submit(e)} aria-label={`Donate to ${title}`}>
-      <h3>♥ Donate</h3>
+      <h3>
+        <InlineIcon name="heart" /> Donate
+      </h3>
       <p className="muted small">
         Goes straight to {d.maker} through Stripe. Donations give nothing back: {title} is the same for everyone.
       </p>

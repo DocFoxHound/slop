@@ -189,12 +189,12 @@ test("a creative's page shows services, portfolio, reviews and AI use; signed ou
   );
 
   // Anyone can report the profile or a review: the form says what's being reported.
-  await page.locator(".person-head-side").getByRole("button", { name: "⚑ Report" }).click();
+  await page.locator(".person-head-side").getByRole("button", { name: "Report", exact: true }).click();
   const dialog = page.getByRole("dialog", { name: "Report this profile" });
   await expect(dialog).toBeVisible();
   await page.keyboard.press("Escape");
   await expect(dialog).toBeHidden();
-  await review.getByRole("button", { name: "⚑ Report" }).click();
+  await review.getByRole("button", { name: "Report", exact: true }).click();
   await expect(page.getByRole("dialog", { name: "Report this review" })).toBeVisible();
 });
 
@@ -214,7 +214,7 @@ test("a page waiting for its first portfolio shows only to its creative", async 
   await expect(remy.getByRole("link", { name: "Edit your page" })).toHaveAttribute("href", "/people/me");
   // Your own page has no Hire or Report buttons, and can't be hired yet.
   await expect(remy.getByRole("button", { name: /^Hire/ })).toHaveCount(0);
-  await expect(remy.locator(".person-head-side").getByRole("button", { name: "⚑ Report" })).toHaveCount(0);
+  await expect(remy.locator(".person-head-side").getByRole("button", { name: "Report", exact: true })).toHaveCount(0);
 });
 
 test("a hidden page tells its creative why; a closed account's page takes no work", async ({ browser }) => {
@@ -236,7 +236,7 @@ test("a hidden page tells its creative why; a closed account's page takes no wor
   const review = vera.locator(`#review-${ids.completedJob}`);
   await expect(review.getByRole("button", { name: "Reply" })).toBeVisible();
   await expect(review.getByText("Dispute: waiting for a mediator")).toBeVisible();
-  await expect(review.getByRole("button", { name: "⚑ Report" })).toHaveCount(0);
+  await expect(review.getByRole("button", { name: "Report", exact: true })).toHaveCount(0);
 
   const visitor = await browser.newPage();
   await visitor.route(`**/v1/people/${ids.creativeHandle}`, async (route) => {

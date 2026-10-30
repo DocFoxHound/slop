@@ -39,8 +39,8 @@ test("a player votes Slaps, switches to Slop, and takes the vote back", async ({
   await tryCall("player", "POST", `/v1/apps/${rated}/vote`, { vote: null });
   await signIn(page, "player");
   await page.goto(`/app/${rated}`);
-  const up = ratings(page).getByRole("button", { name: "👍 Slaps" });
-  const down = ratings(page).getByRole("button", { name: "👎 Slop" });
+  const up = ratings(page).getByRole("button", { name: "Slaps", exact: true });
+  const down = ratings(page).getByRole("button", { name: "Slop", exact: true });
   await expect(ratings(page).getByText("No votes yet")).toBeVisible();
   await expect(ratings(page).getByText(/Your vote counts \d+% \(more as you play\)/)).toBeVisible();
 
@@ -70,7 +70,7 @@ test("only players who played it can vote; makers, visitors and upcoming apps ca
   await signIn(teen, "teen");
   await teen.goto(`/app/${rated}`);
   await expect(ratings(teen).getByText("Launch it from the SLAPorSLOP app first: only players can vote.")).toBeVisible();
-  await expect(ratings(teen).getByRole("button", { name: "👍 Slaps" })).toHaveCount(0);
+  await expect(ratings(teen).getByRole("button", { name: "Slaps", exact: true })).toHaveCount(0);
 
   const maker = await browser.newPage();
   await signIn(maker, "pendingCreative");
@@ -98,8 +98,8 @@ test("the rating is at the top of the page: Rate it jumps to the vote, or it say
     expect(panel!.y).toBeLessThan(label!.y);
     await head(page).getByRole("button", { name: "Rate it" }).click();
     await expect(ratings(page)).toBeFocused();
-    await ratings(page).getByRole("button", { name: "👍 Slaps" }).click();
-    await expect(head(page).getByRole("button", { name: "Your rating: 👍 Slaps" })).toBeVisible();
+    await ratings(page).getByRole("button", { name: "Slaps", exact: true }).click();
+    await expect(head(page).getByRole("button", { name: "Your rating: Slaps" })).toBeVisible();
     await expect(head(page).getByText("1 vote so far; a rating shows from")).toBeVisible();
   } finally {
     await tryCall("player", "POST", `/v1/apps/${rated}/vote`, { vote: null });
@@ -115,7 +115,7 @@ test("the rating is at the top of the page: Rate it jumps to the vote, or it say
   await signIn(teen, "teen");
   await teen.goto(`/app/${rated}`);
   await expect(head(teen).getByText("Play it from the SLAPorSLOP app to rate it.")).toBeVisible();
-  await expect(head(teen).getByRole("link", { name: "⬇ Get the SLAPorSLOP app" })).toHaveAttribute("href", "/download");
+  await expect(head(teen).getByRole("link", { name: "Get the SLAPorSLOP app", exact: true })).toHaveAttribute("href", "/download");
   await expect(head(teen).getByRole("button")).toHaveCount(0);
   const maker = await browser.newPage();
   await signIn(maker, "pendingCreative");
@@ -155,7 +155,7 @@ test("a voter writes, edits and deletes their review", async ({ page }) => {
   await expect(ratings(page).getByRole("button", { name: "Add a written review" })).toHaveCount(0);
   await expect(page.getByRole("heading", { name: "Reviews" })).toHaveCount(0);
 
-  await ratings(page).getByRole("button", { name: "👍 Slaps" }).click();
+  await ratings(page).getByRole("button", { name: "Slaps", exact: true }).click();
   await ratings(page).getByRole("button", { name: "Add a written review" }).click();
   const box = ratings(page).getByRole("textbox", { name: "Your review" });
   await box.fill("Sturdy rafts, calm water. A lovely evening.");
@@ -211,10 +211,10 @@ test("reviews filter by vote, hide private names, and page in more", async ({ pa
   const reviews = page.locator("#reviews");
   const all = reviews.getByRole("button", { name: `All ${counts.not_slop + counts.slop}` });
   await expect(all).toHaveAttribute("aria-pressed", "true");
-  await reviews.getByRole("button", { name: `👎 ${counts.slop}` }).click();
+  await reviews.getByRole("button", { name: `${counts.slop} Slop`, exact: true }).click();
   await expect(reviews.getByText("Crashed twice on level 3 and lost my save.")).toBeVisible();
   await expect(reviews.getByText(/Forty hours in/)).toHaveCount(0);
-  await reviews.getByRole("button", { name: `👍 ${counts.not_slop}` }).click();
+  await reviews.getByRole("button", { name: `${counts.not_slop} Slaps`, exact: true }).click();
   await expect(reviews.getByText(/Forty hours in/)).toBeVisible();
   await expect(reviews.getByText("Crashed twice on level 3 and lost my save.")).toHaveCount(0);
   await all.click();
@@ -227,8 +227,8 @@ test("reviews filter by vote, hide private names, and page in more", async ({ pa
   // Pat's own review can't be reported by Pat; the others can.
   const pats = reviews.locator("li").filter({ hasText: "Forty hours in" });
   await expect(pats.getByRole("link", { name: "Pat Player" })).toBeVisible();
-  await expect(pats.getByRole("button", { name: "⚑ Report" })).toHaveCount(0);
-  await expect(tias.getByRole("button", { name: "⚑ Report" })).toBeVisible();
+  await expect(pats.getByRole("button", { name: "Report", exact: true })).toHaveCount(0);
+  await expect(tias.getByRole("button", { name: "Report", exact: true })).toBeVisible();
   // The maker's reply shows under the review it answers.
   const crash = reviews.locator("li").filter({ hasText: "Crashed twice" });
   await expect(crash.getByText("The maker replied")).toBeVisible();
@@ -297,7 +297,7 @@ test("the maker replies to a review, changes and deletes the reply; the reviewer
   const mine = pat.locator("#reviews li").filter({ hasText: "Still sinks in 1.0." });
   await expect(mine.getByText(/to an earlier version of this review/)).toBeVisible();
   await expect(mine.getByRole("button", { name: "Reply", exact: true })).toHaveCount(0);
-  await mine.getByRole("button", { name: "⚑ Report" }).click();
+  await mine.getByRole("button", { name: "Report", exact: true }).click();
   await expect(pat.getByRole("dialog", { name: "Report the maker's reply" })).toBeVisible();
   await pat.keyboard.press("Escape");
 
@@ -396,9 +396,9 @@ test("Interested: players mark upcoming apps, the maker sees the count, visitors
   const pat = await browser.newPage();
   await signIn(pat, "player");
   await pat.goto(`/app/${soon}`);
-  const button = pat.getByRole("button", { name: "☆ I'm interested" });
+  const button = pat.getByRole("button", { name: "I'm interested", exact: true });
   await button.click();
-  const on = pat.getByRole("button", { name: "★ Interested" });
+  const on = pat.getByRole("button", { name: "Interested", exact: true });
   await expect(on).toHaveAttribute("aria-pressed", "true");
   await expect(pat.getByText(/1 person is interested\. It's in your library; we'll tell you when it reaches beta or is released\./)).toBeVisible();
   await pat.reload();
@@ -408,7 +408,7 @@ test("Interested: players mark upcoming apps, the maker sees the count, visitors
   const maker = await browser.newPage();
   await signIn(maker, "pendingCreative");
   await maker.goto(`/app/${soon}`);
-  await expect(maker.getByText("★ 1 person is interested")).toBeVisible();
+  await expect(maker.getByText("1 person is interested")).toBeVisible();
   await expect(maker.getByRole("button", { name: /interested/i })).toHaveCount(0);
 
   await on.click();
@@ -456,7 +456,7 @@ test("an app's page shows its age rating, content labels, tags and source", asyn
   await expect(page.locator(".crumbs").getByRole("link", { name: "Games" })).toHaveAttribute("href", "/browse/games");
   await expect(page.locator("dl.kv").getByText("MIT")).toBeVisible();
   // Report is for other people's apps.
-  await expect(page.locator(".report-row").getByRole("button", { name: "⚑ Report" })).toBeVisible();
+  await expect(page.locator(".report-row").getByRole("button", { name: "Report", exact: true })).toBeVisible();
 
   // A link in the description opens outside SLAPorSLOP, in a new tab.
   await page.context().route("https://example.com/**", (r) => r.fulfill({ body: "<title>Raft guide</title>", contentType: "text/html" }));
@@ -468,8 +468,8 @@ test("an app's page shows its age rating, content labels, tags and source", asyn
   const maker = await browser.newPage();
   await signIn(maker, "pendingCreative");
   await maker.goto(`/app/${rated}`);
-  await expect(maker.getByRole("link", { name: "✎ Edit store page & media" })).toHaveAttribute("href", `/publish/${rated}`);
-  await expect(maker.getByRole("link", { name: "⬆ Releases" })).toHaveAttribute("href", `/publish/${rated}/releases`);
+  await expect(maker.getByRole("link", { name: "Edit store page & media", exact: true })).toHaveAttribute("href", `/publish/${rated}`);
+  await expect(maker.getByRole("link", { name: "Releases", exact: true })).toHaveAttribute("href", `/publish/${rated}/releases`);
   await expect(maker.locator(".report-row")).toHaveCount(0);
 });
 
@@ -707,7 +707,7 @@ test("Private: its owner shares it with friends, people and invite-only teams, a
   await expect(panel.getByRole("alert")).toContainText("only shared with invite-only teams");
   await teams.selectOption({ label: "Night Owls" });
   await panel.getByRole("button", { name: "Share with the team" }).click();
-  await expect(panel.getByRole("link", { name: "👥 Night Owls" })).toBeVisible();
+  await expect(panel.getByRole("link", { name: "Night Owls", exact: true })).toBeVisible();
   await expect(teams.locator("option", { hasText: "Night Owls" })).toHaveCount(0);
 
   // Pat sees it, told who shared it, without the share panel; and in the library.
@@ -732,7 +732,7 @@ test("Private: its owner shares it with friends, people and invite-only teams, a
   await expect(teen.getByRole("alert").getByText("We couldn't find that.")).toBeVisible();
   // The team share goes the same way.
   await panel.locator("li").filter({ hasText: "Night Owls" }).getByRole("button", { name: "Stop sharing" }).click();
-  await expect(panel.getByRole("link", { name: "👥 Night Owls" })).toHaveCount(0);
+  await expect(panel.getByRole("link", { name: "Night Owls", exact: true })).toHaveCount(0);
   await expect(teams.locator("option", { hasText: "Night Owls" })).toHaveCount(1);
 
   // Bo's own library lists it as his.

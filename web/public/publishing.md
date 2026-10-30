@@ -458,7 +458,7 @@ anything is under way, so there's no need to reload it:
 7. **Review by a person:** a person at SLAPorSLOP reviews your app's first release, usually within a
    day or two. Approval signs it; a rejection comes with a reason, and **To fix** on the Releases
    page (or `get_fixes` for your AI agent) says what to change. Either way you get a notification
-   (under 🔔, and by email).
+   (under the bell, and by email).
 8. **In the store:** SLAPorSLOP staff put the app in the store.
 
 **Updates.** With **Approve updates automatically** on (the default), every later release that

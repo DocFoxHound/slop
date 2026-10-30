@@ -24,6 +24,7 @@ import {
   type SandboxHint,
 } from "./Sandbox";
 import { useSession } from "../session";
+import { InlineIcon } from "./StoreIcons";
 
 function formatBytes(n: number): string {
   if (n >= 1e9) return `${(n / 1e9).toFixed(1)} GB`;
@@ -170,7 +171,7 @@ function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary
       <>
         <div className="lib-bar">
           <Link className="btn big slime lib-primary" to="/download">
-            ⬇ Get the SLAPorSLOP app to play
+            <InlineIcon name="download" /> Get the SLAPorSLOP app to play
           </Link>
           {donate}
           <div className="lib-bar-status">

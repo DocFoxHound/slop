@@ -9,7 +9,7 @@ import { ApiError } from "../api";
 import { ageLabel, artFor, deadlineText } from "../format";
 import { openExternal } from "../platform";
 import { AppIcon, appIconProps } from "./AppIcon";
-import { StoreIcon } from "./StoreIcons";
+import { InlineIcon, StoreIcon } from "./StoreIcons";
 
 /** The maker's thumbnail, or a colour made from the app's address with its initial. */
 export function Art({
@@ -88,7 +88,9 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
           </div>
         )}
         {app.stage !== "released" && app.interested > 0 && (
-          <div className="tile-stat">★ {app.interested.toLocaleString()} interested</div>
+          <div className="tile-stat">
+            <InlineIcon name="star-on" /> {app.interested.toLocaleString()} interested
+          </div>
         )}
         {deadline && !app.is_dead && <div className="tile-stat">{deadline}</div>}
         <div className="tile-foot">

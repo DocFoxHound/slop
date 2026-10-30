@@ -30,6 +30,7 @@ import { Avatar } from "./Avatar";
 import { AcceptDocument, useTermsGate } from "./Terms";
 import { LinkSignIn } from "./LinkSignIn";
 import { ErrorState } from "./ui";
+import { InlineIcon } from "./StoreIcons";
 
 /** The Content Policy section a rule title points to (headings get ids from their text). */
 function ruleLink(title: string): string {
@@ -201,7 +202,7 @@ export function AccountModeration() {
       {none && (
         <p className="empty-state account-empty">
           Nothing here: SLAPorSLOP hasn't made any decisions about your content or account, and you haven't reported anything.
-          Use ⚑ Report on an app, review or profile that breaks the rules.
+          Use <InlineIcon name="flag" /> Report on an app, review or profile that breaks the rules.
         </p>
       )}
     </>
@@ -561,7 +562,7 @@ export function AccountNotifications() {
     <section id="notifications">
       <div className="panel panel-pad switch-list">
         <p className="muted small">
-          Everything shows under the 🔔 in SLAPorSLOP. Choose what's also emailed to you
+          Everything shows under the <InlineIcon name="bell" /> in SLAPorSLOP. Choose what's also emailed to you
           {p.has_email ? "" : " (you don't have an email on your account, so nothing is emailed)"}
           {p.email_on ? "" : ". This server doesn't send email yet"}. SLAPorSLOP never sends marketing.
         </p>
@@ -957,20 +958,24 @@ function PushSwitch() {
     <div className="push-switch">
       {state === "needs-home-screen" ? (
         <p className="muted small">
-          📱 To get notifications on this iPhone or iPad, add SLAPorSLOP to your Home Screen (Share → Add to Home Screen), open it
+          <InlineIcon name="phone" /> To get notifications on this iPhone or iPad, add SLAPorSLOP to your Home Screen (Share → Add to Home Screen), open it
           from there, and come back here.
         </p>
       ) : state === "blocked" ? (
-        <p className="muted small">📱 Notifications are blocked for SLAPorSLOP in this browser's settings.</p>
+        <p className="muted small">
+          <InlineIcon name="phone" /> Notifications are blocked for SLAPorSLOP in this browser's settings.
+        </p>
       ) : state === "unavailable" ? (
-        <p className="muted small">📱 Notifications on phones aren't switched on on this server yet.</p>
+        <p className="muted small">
+          <InlineIcon name="phone" /> Notifications on phones aren't switched on on this server yet.
+        </p>
       ) : (
         <label className="check">
           <input type="checkbox" checked={state === "on"} disabled={busy} onChange={(e) => void flip(e.target.checked)} />
           <span>
             <b>Notifications on this phone or browser</b>
             <span className="muted small" style={{ display: "block" }}>
-              Everything that shows under the 🔔. SLAPorSLOP's push says nothing until your device fetches it from SLAPorSLOP.
+              Everything that shows under the <InlineIcon name="bell" />. SLAPorSLOP's push says nothing until your device fetches it from SLAPorSLOP.
             </span>
           </span>
         </label>

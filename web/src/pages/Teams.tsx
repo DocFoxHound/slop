@@ -12,6 +12,7 @@ import { formatDate } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { desktop, isDesktop } from "../platform";
 import { useSession } from "../session";
+import { InlineIcon } from "../components/StoreIcons";
 
 function Card({ t }: { t: TeamCard }) {
   return (
@@ -258,11 +259,11 @@ export function Team() {
                 className="btn"
                 onClick={() => void run(async () => navigate(`/chat/${await desktop.chat<string>({ action: "start_team", team: slug })}`), () => undefined)}
               >
-                💬 Team chat
+                <InlineIcon name="chat" /> Team chat
               </button>
             ) : (
               <Link className="btn" to="/chat">
-                💬 Team chat in the app
+                <InlineIcon name="chat" /> Team chat in the app
               </Link>
             )
           )}

@@ -205,7 +205,7 @@ test("Lantern Keep's maker reads its ratings, how its release landed, and its bu
   await expect(ratings.getByRole("link", { name: "How ratings work" })).toHaveAttribute("href", "/ratings");
 
   const landed = page.getByRole("region", { name: "How each release landed" });
-  await expect(landed.getByRole("listitem").filter({ hasText: "1.0.0" })).toContainText(/\d+% Slaps from \d+ votes · \d+ 👍 and \d+ 👎 reviews · \d+ bug reports?/);
+  await expect(landed.getByRole("listitem").filter({ hasText: "1.0.0" })).toContainText(/\d+% Slaps from \d+ votes · \d+ Slaps and \d+ Slop reviews · \d+ bug reports?/);
 
   // Triage: open ones first, by status; each can go to GitHub as an issue, filled in.
   const bugs = page.getByRole("region", { name: "Bug reports" });

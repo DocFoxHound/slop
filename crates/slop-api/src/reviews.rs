@@ -196,7 +196,7 @@ async fn write(
     .await?;
     if !voted {
         return Err(ApiError::Conflict(
-            "vote 👍 or 👎 first: a review goes with your vote".into(),
+            "vote Slaps or Slop first: a review goes with your vote".into(),
         ));
     }
     // A review hidden by a moderation decision stays hidden; editing doesn't bring it back.

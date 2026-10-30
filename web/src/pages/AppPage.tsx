@@ -19,7 +19,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { InstallControls } from "../components/InstallControls";
 import { StoreNav } from "../components/StoreNav";
-import { StoreIcon } from "../components/StoreIcons";
+import { InlineIcon, StoreIcon } from "../components/StoreIcons";
 import { ModControls } from "../components/ModControls";
 import { DonateButton } from "../components/Donate";
 import { InterestedButton } from "../components/Interested";
@@ -233,10 +233,10 @@ function AppView({ app }: { app: AppDetail }) {
           {app.is_mine && (
             <div className="row-actions">
               <Link className="btn" to={`/publish/${app.slug}`}>
-                ✎ Edit store page &amp; media
+                <InlineIcon name="edit" /> Edit store page &amp; media
               </Link>
               <Link className="btn" to={`/publish/${app.slug}/releases`}>
-                ⬆ Releases
+                <InlineIcon name="publish" /> Releases
               </Link>
             </div>
           )}
@@ -309,7 +309,9 @@ function AppView({ app }: { app: AppDetail }) {
           <div className="panel panel-pad trust">
             {provenance && (
               <div className="trust-row">
-                <span className="ic">⇄</span>
+                <span className="ic">
+                  <StoreIcon name="signing" />
+                </span>
                 <span>
                   <b>{provenance.built_by_slop_build ? "Built by Slop Build from source" : "Built from source"}</b> · signed by{" "}
                   {provenance.run_url ? (
@@ -323,7 +325,9 @@ function AppView({ app }: { app: AppDetail }) {
             )}
             {(scannedWith || windowsFile) && (
               <div className="trust-row">
-                <span className="ic">⌕</span>
+                <span className="ic">
+                  <StoreIcon name="verify" />
+                </span>
                 <span>
                   <b>Scanned</b>
                   {scannedWith && ` with ${scannedWith}`}
@@ -333,13 +337,17 @@ function AppView({ app }: { app: AppDetail }) {
               </div>
             )}
             <div className="trust-row">
-              <span className="ic">{"{ }"}</span>
+              <span className="ic">
+                <StoreIcon name="source" />
+              </span>
               <span>
                 <b>Open source</b> · {app.license_spdx} · <ExternalLink href={app.repo_url}>view code</ExternalLink>
               </span>
             </div>
             <div className="trust-row">
-              <span className="ic">🛍</span>
+              <span className="ic">
+                <StoreIcon name="bag" />
+              </span>
               <span>
                 <b>Nothing for sale</b> · donations never unlock anything
               </span>
@@ -532,7 +540,9 @@ function SharePanel({ slug }: { slug: string }) {
         <ul className="plain">
           {shares.data.map((s) => (
             <li key={s.user_id ?? s.team ?? s.name}>
-              {s.user_id ? <Link to={`/u/${s.user_id}`}>{s.name}</Link> : <Link to={`/teams/${s.team}`}>👥 {s.name}</Link>}{" "}
+              {s.user_id ? <Link to={`/u/${s.user_id}`}>{s.name}</Link> : <Link to={`/teams/${s.team}`}>
+                  <InlineIcon name="teams" /> {s.name}
+                </Link>}{" "}
               <button
                 type="button"
                 className="link-btn small muted"

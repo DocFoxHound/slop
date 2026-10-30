@@ -8,6 +8,7 @@ import { Link } from "react-router";
 import { api, ApiError, type AppReview } from "../api";
 import { formatDate } from "../format";
 import { ReportButton } from "./Report";
+import { InlineIcon, VoteLabel } from "./StoreIcons";
 
 export function Reviews({ slug }: { slug: string }) {
   const [filter, setFilter] = useState<"" | "not_slop" | "slop">("");
@@ -55,8 +56,20 @@ export function Reviews({ slug }: { slug: string }) {
           {(
             [
               ["", `All ${counts.not_slop + counts.slop}`],
-              ["not_slop", `👍 ${counts.not_slop}`],
-              ["slop", `👎 ${counts.slop}`],
+              [
+                "not_slop",
+                <>
+                  <InlineIcon name="up" /> {counts.not_slop}
+                  <span className="sr-only"> Slaps</span>
+                </>,
+              ],
+              [
+                "slop",
+                <>
+                  <InlineIcon name="down" /> {counts.slop}
+                  <span className="sr-only"> Slop</span>
+                </>,
+              ],
             ] as const
           ).map(([key, label]) => (
             <button key={key} type="button" className={filter === key ? "on" : ""} aria-pressed={filter === key} onClick={() => setFilter(key)}>
@@ -70,7 +83,7 @@ export function Reviews({ slug }: { slug: string }) {
           <li key={r.id} id={`review-${r.id}`}>
             <div className="review-who">
               {r.author_id ? <Link to={`/u/${r.author_id}`}>{r.author}</Link> : <span className="muted">{r.author}</span>}
-              <span className={`vote-chip ${r.vote === "not_slop" ? "up" : "down"}`}>{r.vote === "not_slop" ? "👍 Slaps" : "👎 Slop"}</span>
+              <span className={`vote-chip ${r.vote === "not_slop" ? "up" : "down"}`}><VoteLabel vote={r.vote} /></span>
               {r.in_beta && (
                 <span className="badge neutral" title="This player's vote was given while the app was in Beta">
                   RATED IN BETA

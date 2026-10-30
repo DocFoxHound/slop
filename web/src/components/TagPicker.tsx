@@ -9,6 +9,7 @@ import { useState, type KeyboardEvent } from "react";
 
 import type { AppKind, Category, ContentLabel, TagRef } from "../api";
 import { CONTENT_LABEL } from "../format";
+import { InlineIcon } from "./StoreIcons";
 
 /** The API's limit (catalog.rs MAX_TAGS). */
 export const MAX_TAGS = 10;
@@ -155,7 +156,7 @@ export function TagPicker({
       <div role="status">
         {mismatches.map((m) => (
           <p key={m.category.slug} className="tag-warning small">
-            ⚠️ {m.category.name} lists only apps rated {m.category.max_age ?? 18}+ or under
+            <InlineIcon name="warning" /> {m.category.name} lists only apps rated {m.category.max_age ?? 18}+ or under
             {m.category.excluded_labels?.length ? `, without ${list(labelWords(m.category.excluded_labels), "or")}` : ""}.{" "}
             {m.tooOld ? `This one is rated ${minAge}+` : `This one is labelled ${list(labelWords(m.labels))}`}, so{" "}
             {list(m.tags.map((t) => t.name))} won't show it there. You can still save: check the age rating and labels,

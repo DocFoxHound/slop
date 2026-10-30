@@ -1344,7 +1344,7 @@ impl Chat {
                     } else if !m.text.is_empty() {
                         m.text.chars().take(80).collect()
                     } else if !m.attachments.is_empty() {
-                        "📎 Attachment".into()
+                        "Attachment".into()
                     } else {
                         String::new()
                     }
@@ -1557,7 +1557,7 @@ impl Chat {
                             text: if x.deleted {
                                 "Message deleted".into()
                             } else if x.text.is_empty() {
-                                "📎 Attachment".into()
+                                "Attachment".into()
                             } else {
                                 x.text.chars().take(140).collect()
                             },
