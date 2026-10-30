@@ -171,7 +171,157 @@ pub async fn sync(db: &PgPool) -> anyhow::Result<()> {
             "published a legal document"
         );
     }
+    announce(db).await
+}
+
+/// Tells everyone a published change concerns, once: one notification in the bell (and so an
+/// email, unless they switched those off) for everything that changed since last time, instead
+/// of a banner on every page. A document's first version isn't announced: people accept it, or
+/// can read it, when they need it. Changes in effect for over 30 days are old news.
+pub async fn announce(db: &PgPool) -> anyhow::Result<()> {
+    let mut tx = db.begin().await?;
+    let pending: Vec<Pending> = sqlx::query_as(
+        "select kind, version, summary, published_at, effective_at,
+                not exists (select 1 from legal_documents o
+                            where o.kind = d.kind
+                              and (o.effective_at, o.version) < (d.effective_at, d.version))
+         from legal_documents d where announced_at is null
+         order by published_at for update",
+    )
+    .fetch_all(&mut *tx)
+    .await?;
+    if pending.is_empty() {
+        return Ok(());
+    }
+    let now = OffsetDateTime::now_utc();
+    // Per person, what changed for them: each document once, its newest version.
+    let mut told: std::collections::BTreeMap<Uuid, Vec<usize>> = Default::default();
+    for (i, (kind, version, _, published_at, effective_at, first)) in pending.iter().enumerate() {
+        if *first || *effective_at < now - Duration::days(30) {
+            continue;
+        }
+        let users: Vec<Uuid> = if accepted_kind(kind) {
+            // Party to it (everyone is, to the Terms) and not accepted this version yet.
+            sqlx::query_scalar(
+                "select u.id from users u
+                 where u.closed_at is null and u.merged_into is null
+                   and ($1 = 'terms' or exists (select 1 from legal_acceptances a
+                                                where a.user_id = u.id and a.kind = $1))
+                   and not exists (select 1 from legal_acceptances a
+                                   where a.user_id = u.id and a.kind = $1 and a.version = $2)",
+            )
+            .bind(kind)
+            .bind(version)
+            .fetch_all(&mut *tx)
+            .await?
+        } else {
+            // Policies: everyone who joined before this version was published.
+            sqlx::query_scalar(
+                "select id from users
+                 where closed_at is null and merged_into is null and created_at < $1",
+            )
+            .bind(published_at)
+            .fetch_all(&mut *tx)
+            .await?
+        };
+        for user in users {
+            let list = told.entry(user).or_default();
+            list.retain(|&j| pending[j].0 != *kind);
+            list.push(i);
+        }
+    }
+    let (mut ids, mut users, mut titles, mut bodies, mut links) =
+        (Vec::new(), Vec::new(), Vec::new(), Vec::new(), Vec::new());
+    for (user, list) in told {
+        let (title, body, link) = announcement(&pending, &list, now);
+        ids.push(Uuid::now_v7());
+        users.push(user);
+        titles.push(title);
+        bodies.push(body);
+        links.push(link);
+    }
+    if !users.is_empty() {
+        sqlx::query(
+            "insert into notifications (id, user_id, category, title, body, link)
+             select id, user_id, 'policies', title, body, link
+             from unnest($1::uuid[], $2::uuid[], $3::text[], $4::text[], $5::text[])
+                  as n (id, user_id, title, body, link)",
+        )
+        .bind(&ids)
+        .bind(&users)
+        .bind(&titles)
+        .bind(&bodies)
+        .bind(&links)
+        .execute(&mut *tx)
+        .await?;
+    }
+    sqlx::query("update legal_documents set announced_at = now() where announced_at is null")
+        .execute(&mut *tx)
+        .await?;
+    tx.commit().await?;
+    tracing::info!(
+        versions = pending.len(),
+        people = users.len(),
+        "announced legal document changes"
+    );
     Ok(())
+}
+
+/// A version waiting to be announced: kind, version, summary, published, in effect from, and
+/// whether it's the document's first.
+type Pending = (String, String, String, OffsetDateTime, OffsetDateTime, bool);
+
+/// One person's notification about the changes at `list` (indexes into `pending`): its title,
+/// body and link.
+fn announcement(
+    pending: &[Pending],
+    list: &[usize],
+    now: OffsetDateTime,
+) -> (String, String, String) {
+    let when = |effective: OffsetDateTime, accept: bool| {
+        let d = effective.date();
+        let date = format!("{} {}, {}", d.month(), d.day(), d.year());
+        match (effective <= now, accept) {
+            (true, true) => format!("changed on {date}: review and accept it"),
+            (true, false) => format!("changed on {date}"),
+            (false, true) => format!("changes on {date}, and you'll be asked to accept it then"),
+            (false, false) => format!("changes on {date}"),
+        }
+    };
+    if let [i] = list {
+        let (kind, version, summary, _, effective, _) = &pending[*i];
+        let link = if *effective <= now {
+            format!("/legal/{kind}")
+        } else {
+            format!("/legal/{kind}?version={version}")
+        };
+        return (
+            format!(
+                "The {} {}",
+                title(kind),
+                when(*effective, accepted_kind(kind))
+            ),
+            summary.clone(),
+            link,
+        );
+    }
+    let body = list
+        .iter()
+        .map(|&i| {
+            let (kind, _, summary, _, effective, _) = &pending[i];
+            format!(
+                "The {} {}. {summary}",
+                title(kind),
+                when(*effective, accepted_kind(kind))
+            )
+        })
+        .collect::<Vec<_>>()
+        .join("\n");
+    (
+        "SLAPorSLOP's terms and policies changed".into(),
+        body,
+        "/legal".into(),
+    )
 }
 
 fn accepted_kind(kind: &str) -> bool {
@@ -728,6 +878,7 @@ pub(crate) async fn publish_stored(
     .await
     .map_err(ApiError::Internal)?;
     tx.commit().await?;
+    announce(&state.db).await.map_err(ApiError::Internal)?;
     Ok(serde_json::json!({ "version": version, "effective_at": effective.unix_timestamp() }))
 }
 
@@ -780,6 +931,11 @@ async fn admin_withdraw(
         .execute(&mut *tx)
         .await?
         .rows_affected();
+    // Its announcement, where it was the only change: the link would lead nowhere.
+    sqlx::query("delete from notifications where category = 'policies' and link = $1")
+        .bind(format!("/legal/{kind}?version={version}"))
+        .execute(&mut *tx)
+        .await?;
     sqlx::query("delete from legal_documents where kind = $1 and version = $2")
         .bind(kind)
         .bind(&version)

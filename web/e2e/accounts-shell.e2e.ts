@@ -298,54 +298,41 @@ test.describe("notices about your account", () => {
     await expect(page.getByRole("link", { name: "See what, why, and how to appeal" })).toHaveAttribute("href", "/account/moderation#decisions");
   });
 
-  test("changed agreements: upcoming ones can be dismissed for good, ones to accept now can't", async ({ page }) => {
+  test("only agreements waiting to be accepted get a notice: announced changes and policies go to the bell", async ({ page }) => {
     await fake(page, "GET", "/v1/me/legal", {
       status: 200,
       body: [
         { kind: "privacy", title: "Privacy Policy", version: "2026-11-15", summary: "Names the new backup provider.", effective_at: "2026-11-15T00:00:00Z", in_effect: false, first: false, action: "read" },
         { kind: "terms", title: "Terms of Service", version: "2026-10-01", summary: "Clearer refunds.", effective_at: "2026-10-01T00:00:00Z", in_effect: true, first: false, action: "accept" },
+        { kind: "publisher", title: "Publisher Agreement", version: "2026-11-20", summary: "New fee wording.", effective_at: "2026-11-20T00:00:00Z", in_effect: false, first: false, action: "accept" },
         { kind: "content", title: "Content Policy", version: "2026-10-10", summary: "", effective_at: "2026-10-10T00:00:00Z", in_effect: true, first: true, action: "read" },
       ],
     });
     await signIn(page, "player");
     await page.goto("/");
     const notices = page.locator(".account-notices");
-    const privacy = notices.locator(".account-notice").filter({ hasText: "Privacy Policy" });
-    await expect(privacy).toContainText("The Privacy Policy changes on Nov 15, 2026. Names the new backup provider.");
-    await expect(privacy.getByRole("link", { name: "Read it" })).toHaveAttribute("href", "/legal/privacy?version=2026-11-15");
-    const terms = notices.locator(".account-notice").filter({ hasText: "Terms of Service" });
-    await expect(terms).toContainText("The Terms of Service changed on Oct 1, 2026.");
-    await expect(terms.getByRole("link", { name: "Review and accept" })).toHaveAttribute("href", "/legal/terms");
-    await expect(terms.getByRole("button", { name: "Dismiss" })).toHaveCount(0);
-    await expect(notices.locator(".account-notice").filter({ hasText: "SLAPorSLOP has published its Content Policy." })).toBeVisible();
-
-    await privacy.getByRole("button", { name: "Dismiss" }).click();
-    await expect(privacy).toHaveCount(0);
-    await page.reload();
-    await expect(terms).toBeVisible();
-    await expect(privacy).toHaveCount(0);
+    await expect(notices.locator(".account-notice")).toHaveCount(1);
+    await expect(notices).toContainText("The Terms of Service changed on Oct 1, 2026. Clearer refunds.");
+    await expect(notices.getByRole("link", { name: "Review and accept" })).toHaveAttribute("href", "/legal/terms");
+    await expect(notices.getByRole("button", { name: "Dismiss" })).toHaveCount(0);
+    for (const other of ["Privacy Policy", "Publisher Agreement", "Content Policy"]) await expect(notices).not.toContainText(other);
   });
 
-  test("dismissing works for the page even where the browser keeps nothing", async ({ page }) => {
-    await page.addInitScript(() => {
-      Storage.prototype.getItem = () => {
-        throw new Error("storage is off");
-      };
-      Storage.prototype.setItem = () => {
-        throw new Error("storage is off");
-      };
-    });
+  test("several agreements to accept are one line", async ({ page }) => {
     await fake(page, "GET", "/v1/me/legal", {
       status: 200,
-      body: [{ kind: "privacy", title: "Privacy Policy", version: "2026-11-15", summary: "Names the new backup provider.", effective_at: "2026-11-15T00:00:00Z", in_effect: false, first: false, action: "read" }],
+      body: [
+        { kind: "terms", title: "Terms of Service", version: "2026-10-01", summary: "Clearer refunds.", effective_at: "2026-10-01T00:00:00Z", in_effect: true, first: false, action: "accept" },
+        { kind: "people", title: "People Terms", version: "2026-10-02", summary: "Shorter.", effective_at: "2026-10-02T00:00:00Z", in_effect: true, first: false, action: "accept" },
+      ],
     });
     await signIn(page, "player");
     await page.goto("/");
-    const privacy = page.locator(".account-notice").filter({ hasText: "Privacy Policy" });
-    await privacy.getByRole("button", { name: "Dismiss" }).click();
-    await expect(privacy).toHaveCount(0);
-    await page.reload();
-    await expect(privacy).toBeVisible();
+    const notice = page.locator(".account-notices .account-notice");
+    await expect(notice).toHaveCount(1);
+    await expect(notice).toContainText("New versions to review and accept: Terms of Service · People Terms");
+    await expect(notice.getByRole("link", { name: "Terms of Service" })).toHaveAttribute("href", "/legal/terms");
+    await expect(notice.getByRole("link", { name: "People Terms" })).toHaveAttribute("href", "/legal/people");
   });
 
   test("with nothing to say, there are no notices", async ({ page }) => {

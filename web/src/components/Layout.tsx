@@ -281,33 +281,17 @@ function Bell() {
 }
 
 /**
- * Things the signed-in user should know, on every page but never in the way: a suspension, new
- * moderation decisions, and agreements or policies that changed (crates/slop-api/src/legal.rs).
- * Announcements of later changes can be dismissed; ones in effect stay until accepted.
+ * Things the signed-in user has to act on, on every page but never in the way: a suspension, new
+ * moderation decisions, and agreements whose new version is in effect and waits to be accepted
+ * (crates/slop-api/src/legal.rs). Announced changes and policies go to the bell instead, once.
  */
 function AccountNotices() {
   const { me } = useSession();
   const location = useLocation();
   const notices = useLoad(() => (me ? api.legal.notices() : Promise.resolve([])), [me?.id, location.pathname.startsWith("/account")]);
-  const [dismissed, setDismissed] = useState<string[]>(() => {
-    try {
-      return JSON.parse(localStorage.getItem("slop.dismissed-notices") ?? "[]") as string[];
-    } catch {
-      return [];
-    }
-  });
   if (!me) return null;
-  const dismiss = (key: string) => {
-    const next = [...dismissed, key];
-    setDismissed(next);
-    try {
-      localStorage.setItem("slop.dismissed-notices", JSON.stringify(next));
-    } catch {
-      // Private windows: dismissed for this page view only.
-    }
-  };
-  const legal = (notices.data ?? []).filter((n) => !dismissed.includes(`${n.kind}:${n.version}`) || (n.in_effect && n.action === "accept"));
-  if (!me.suspended && me.new_decisions === 0 && legal.length === 0) return null;
+  const toAccept = (notices.data ?? []).filter((n) => n.in_effect && n.action === "accept");
+  if (!me.suspended && me.new_decisions === 0 && toAccept.length === 0) return null;
   return (
     <div className="account-notices" role="status">
       {me.suspended && (
@@ -322,24 +306,27 @@ function AccountNotices() {
           <Link to="/account/moderation#decisions">See what, why, and how to appeal</Link>
         </div>
       )}
-      {legal.map((n) => (
-        <div className="account-notice" key={`${n.kind}:${n.version}`}>
-          {n.first
-            ? `SLAPorSLOP has published its ${n.title}.`
-            : n.in_effect
-              ? `The ${n.title} changed on ${formatDate(n.effective_at)}.`
-              : `The ${n.title} changes on ${formatDate(n.effective_at)}.`}{" "}
-          {!n.first && <span className="muted">{n.summary}</span>}{" "}
-          <Link to={`/legal/${n.kind}${n.in_effect ? "" : `?version=${n.version}`}`}>
-            {n.action === "accept" ? "Review and accept" : "Read it"}
-          </Link>
-          {!(n.in_effect && n.action === "accept") && (
-            <button type="button" className="link-btn small muted" onClick={() => dismiss(`${n.kind}:${n.version}`)}>
-              Dismiss
-            </button>
-          )}
+      {toAccept.length === 1 ? (
+        <div className="account-notice">
+          {toAccept[0].first
+            ? `SLAPorSLOP has published its ${toAccept[0].title}.`
+            : `The ${toAccept[0].title} changed on ${formatDate(toAccept[0].effective_at)}.`}{" "}
+          {!toAccept[0].first && <span className="muted">{toAccept[0].summary}</span>}{" "}
+          <Link to={`/legal/${toAccept[0].kind}`}>Review and accept</Link>
         </div>
-      ))}
+      ) : (
+        toAccept.length > 1 && (
+          <div className="account-notice">
+            New versions to review and accept:{" "}
+            {toAccept.map((n, i) => (
+              <span key={n.kind}>
+                {i > 0 && " · "}
+                <Link to={`/legal/${n.kind}`}>{n.title}</Link>
+              </span>
+            ))}
+          </div>
+        )
+      )}
     </div>
   );
 }

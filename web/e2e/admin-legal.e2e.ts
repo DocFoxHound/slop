@@ -1,6 +1,6 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Terms and policies, and legal requests: staff announce a new Terms version (everyone is told,
-// people accept it ahead of time) and withdraw it again before it takes effect; staff log a
+// Terms and policies, and legal requests: staff announce a new Terms version (everyone is told in
+// the bell, people accept it ahead of time) and withdraw it again before it takes effect; staff log a
 // request from an authority, answer it, and act on a removal order within the hour.
 import { closePages, newPage, newTeam, seeDecisions, tag } from "./admin-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
@@ -33,15 +33,17 @@ test("a new Terms version: previewed, announced, accepted ahead of time, then wi
   // One change at a time: there's nothing to write until this one is in effect or withdrawn.
   await expect(terms.getByRole("button", { name: "Write a new version" })).toHaveCount(0);
 
-  // Everyone is told on every page; they can dismiss it, and accept it from their account.
+  // Everyone is told once, in the bell, not with a banner; they accept it from their account.
   const mo = await newPage(browser);
   await signIn(mo, "moderator");
   await mo.goto("/");
-  const notice = mo.getByRole("status").filter({ hasText: /The Terms of Service changes on/ });
-  await expect(notice).toContainText("Adds a section about SLAPorSLOP's browser tests.");
-  await expect(notice.getByRole("link", { name: "Review and accept" })).toHaveAttribute("href", /\/legal\/terms\?version=/);
-  await notice.getByRole("button", { name: "Dismiss" }).click();
-  await expect(notice).toHaveCount(0);
+  await expect(mo.getByText(/The Terms of Service changes on/)).toHaveCount(0);
+  await mo.goto("/notifications/policies");
+  const told = mo.getByRole("listitem").filter({ hasText: /The Terms of Service changes on .*, and you'll be asked to accept it then/ });
+  await expect(told).toContainText("Adds a section about SLAPorSLOP's browser tests.");
+  await expect(told).toHaveClass(/unread/);
+  await told.getByRole("button", { name: /The Terms of Service changes on/ }).click();
+  await expect(mo).toHaveURL(/\/legal\/terms\?version=/);
   await mo.goto("/account#agreements");
   const agreements = mo.locator("#agreements");
   await expect(agreements.getByText(/changes .*: Adds a section about SLAPorSLOP's browser tests\./)).toBeVisible();
@@ -67,9 +69,11 @@ test("a new Terms version: previewed, announced, accepted ahead of time, then wi
   await expect(terms.getByRole("button", { name: "Write a new version" })).toBeVisible();
   await mo.goto("/legal");
   await expect(mo.getByText(/Adds a section about SLAPorSLOP's browser tests/)).toHaveCount(0);
+  // Its notification goes too: it would lead nowhere.
   const player = await newPage(browser);
   await signIn(player, "player");
-  await player.goto("/");
+  await player.goto("/notifications/policies");
+  await expect(player.getByRole("heading", { name: "Terms and policies" })).toBeVisible();
   await expect(player.getByText(/The Terms of Service changes on/)).toHaveCount(0);
 });
 

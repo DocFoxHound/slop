@@ -3898,6 +3898,72 @@ async fn people_are_told_about_agreements_they_are_party_to_and_new_policies(db:
 }
 
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn changes_are_announced_once_in_the_bell(db: PgPool) {
+    let app = test_app(db).await;
+    let (old_id, _) = app.user("Olga Oldtimer", "US").await;
+    sqlx::query("update users set created_at = now() - interval '60 days' where id = $1")
+        .bind(old_id)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    // The repository's versions are all first versions: nothing to announce.
+    slop_api::legal::announce(&app.db).await.unwrap();
+    let told = |user: Uuid| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_as::<_, (String, String, String)>(
+                "select title, body, link from notifications where user_id = $1 and category = 'policies'",
+            )
+            .bind(user)
+            .fetch_all(&db)
+            .await
+            .unwrap()
+        }
+    };
+    assert_eq!(told(old_id).await, []);
+
+    legal_version(&app, "privacy", "2099-01-01", "-1 hour", "15 days", None).await;
+    let (new_id, _) = app.user("Nell Newcomer", "US").await;
+    legal_version(&app, "terms", "2099-01-02", "0 days", "15 days", None).await;
+    // In effect for over 30 days: old news.
+    legal_version(&app, "content", "2026-01-01", "-60 days", "-31 days", None).await;
+    slop_api::legal::announce(&app.db).await.unwrap();
+
+    // Olga joined before both changes: one notification about the two.
+    let olga = told(old_id).await;
+    assert_eq!(olga.len(), 1, "{olga:?}");
+    let (title, body, link) = &olga[0];
+    assert_eq!(title, "SLAPorSLOP's terms and policies changed");
+    assert_eq!(link, "/legal");
+    assert!(
+        body.contains("The Privacy Policy changes on ")
+            && body.contains("Changes 2099-01-01")
+            && body.contains("The Terms of Service changes on ")
+            && body.contains(", and you'll be asked to accept it then. Changes 2099-01-02")
+            && !body.contains("Content Policy"),
+        "{body}"
+    );
+    // Nell joined after the policy changed, but hasn't accepted the new Terms.
+    let nell = told(new_id).await;
+    assert_eq!(nell.len(), 1, "{nell:?}");
+    assert!(
+        nell[0].0.starts_with("The Terms of Service changes on ")
+            && nell[0]
+                .0
+                .ends_with(", and you'll be asked to accept it then"),
+        "{nell:?}"
+    );
+    assert_eq!(nell[0].1, "Changes 2099-01-02");
+    assert_eq!(nell[0].2, "/legal/terms?version=2099-01-02");
+
+    // Once only, also across restarts.
+    slop_api::legal::sync(&app.db).await.unwrap();
+    slop_api::legal::announce(&app.db).await.unwrap();
+    assert_eq!(told(old_id).await.len(), 1);
+    assert_eq!(told(new_id).await.len(), 1);
+}
+
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn actions_wait_for_the_agreement_in_effect(db: PgPool) {
     let app = test_app(db).await;
     let (user_id, cookie) = app.user("Cass Creative", "US").await;
