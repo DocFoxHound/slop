@@ -175,7 +175,7 @@ test("Donate is always there on a Beta page, next to Get it: why donations are o
   await maker.unrouteAll({ behavior: "wait" });
 });
 
-test("the Edit store page has a Get paid section at the top, with every step to set it up", async ({ page }) => {
+test("the Edit store page has a Get paid section beside the pictures, with every step to set it up", async ({ page }) => {
   await signIn(page, "pendingCreative");
   const section = page.getByRole("region", { name: "Get paid: donations" });
   const settings = path(`/v1/apps/${beta}/donations/settings`);
@@ -183,12 +183,12 @@ test("the Edit store page has a Get paid section at the top, with every step to 
   // Off on this server: it says so.
   await page.route(settings, settingsAs({ payments: "off" }));
   await page.goto(`/publish/${beta}`);
-  await expect(page.getByRole("heading", { name: "Edit store page", level: 1 })).toBeVisible();
+  await expect(page.getByRole("heading", { name: "Basics" })).toBeVisible();
   await expect(section.getByText("Payments aren't switched on on this server yet.")).toBeVisible();
-  // Above the store page form.
-  const top = await section.boundingBox();
-  const name = await page.getByLabel("Name", { exact: true }).boundingBox();
-  expect(top!.y).toBeLessThan(name!.y);
+  // Beside the pictures, after the store page form (on a wide screen).
+  const side = await section.boundingBox();
+  const pictures = await page.getByRole("heading", { name: "Pictures & videos" }).boundingBox();
+  expect(side!.x).toBeGreaterThan(pictures!.x);
 
   // Not set up: the tax notice, then Stripe's sign-up, coming back to this page.
   await page.unroute(settings);

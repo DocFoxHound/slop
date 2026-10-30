@@ -40,7 +40,10 @@ test("only the maker sees an app's releases", async ({ browser }) => {
 test("submitting by hand: each mistake shows by its field", async ({ page }) => {
   await signIn(page, "maker");
   await page.goto(page_);
-  await expect(page.getByRole("heading", { name: "Releases", level: 1 })).toBeVisible();
+  await expect(page.getByRole("navigation", { name: /maker pages/ }).getByRole("link", { name: "Releases" })).toHaveAttribute(
+    "aria-current",
+    "page",
+  );
   await expect(page.getByText("No releases yet.")).toBeVisible();
   // Nothing to fix before there's a release.
   await expect(page.getByRole("heading", { name: /^To fix in/ })).toHaveCount(0);
@@ -398,7 +401,7 @@ test("an app with no platforms is asked for them first", async ({ page }) => {
   });
   await page.goto(page_);
   await expect(page.getByText("First choose what your app runs on (Windows, Linux or both) on its store page.")).toBeVisible();
-  await expect(page.getByRole("link", { name: "Edit store page" })).toHaveAttribute("href", `/publish/${slug}`);
+  await expect(page.locator("p.notice").getByRole("link", { name: "Edit store page" })).toHaveAttribute("href", `/publish/${slug}`);
   await expect(page.getByRole("heading", { name: "New release" })).toHaveCount(0);
 });
 

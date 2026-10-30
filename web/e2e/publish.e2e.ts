@@ -43,5 +43,5 @@ test("a maker creates a store page, submits a release, and staff approve it", as
   await expect(releases.getByRole("listitem").filter({ hasText: "Pocket Golf" })).toHaveCount(1);
 
   await maker.reload();
-  await expect(maker.getByText("APPROVED").first()).toBeVisible();
+  await expect(maker.locator("ul.release-list .badge").getByText("APPROVED", { exact: true })).toBeVisible();
 });

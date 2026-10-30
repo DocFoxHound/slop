@@ -1575,6 +1575,8 @@ export interface ManageOverview {
   public_requested: boolean;
   /** Community builds of Pulse games: null if not needed, else whether the handshake arrived. */
   pulse_required: boolean | null;
+  /** A release has been approved, so the maker can move the app on to Beta or Released. */
+  can_advance: boolean;
 }
 
 export type ChangeRequest =
@@ -2929,6 +2931,9 @@ export const api = {
     ),
   makePublic: (slug: string) =>
     request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
+  /** Moves the maker's app on to Beta or Released (manage.rs `move_stage`): forward only. */
+  moveStage: (slug: string, stage: AppStage) =>
+    request<void>("POST", `/v1/apps/${encodeURIComponent(slug)}/stage`, { stage }),
   cancelMakePublic: (slug: string) =>
     request<void>("DELETE", `/v1/apps/${encodeURIComponent(slug)}/make-public`),
   requestChange: (slug: string, change: ChangeRequest) =>

@@ -1,7 +1,9 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Manage an app: which release players get, the repository, update settings and the requests
-// that change them (crates/slop-api/src/manage.rs). Anything that would have players download
-// something different is checked before it happens; everything else the maker changes directly.
+// that change them (crates/slop-api/src/manage.rs), with ratings and bug reports beside them, in
+// the maker's workspace (components/MakerFrame.tsx: the stage bar and the tabs). Anything that
+// would have players download something different is checked before it happens; everything else
+// the maker changes directly.
 
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
@@ -16,6 +18,7 @@ import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { DonationsPanel } from "../components/DonationsManage";
 import { RepoAccessPanel } from "../components/RepoToken";
+import { MakerFrame } from "../components/MakerFrame";
 import { UpdatesPanel } from "./Releases";
 
 /** The value of the "follow the newest" choice in the release list. */
@@ -61,42 +64,36 @@ export function Manage() {
   };
 
   return (
-    <div className="page narrow manage">
-      <div className="crumbs">
-        <Link to="/publish">Your apps</Link> › <Link to={`/app/${slug}`}>{app.data.title}</Link> › Manage
-      </div>
-      <div className="title-row spread">
-        <h1 className="page-title">Manage {app.data.title}</h1>
-        <div className="row-actions">
-          <Link className="btn small" to={`/publish/${slug}`}>
-            Edit store page
-          </Link>
-          <Link className="btn small" to={`/publish/${slug}/releases`}>
-            Releases &amp; progress
-          </Link>
-        </div>
-      </div>
-      <p className="muted">
-        Changes that would have players download something different, like switching the release they get or moving the
-        app to another repository, are checked before they happen. Everything else (the store page, platforms, update
-        settings) changes straight away.
-      </p>
-
+    <MakerFrame
+      app={app.data}
+      tab="manage"
+      overview={m}
+      onStageMoved={() => {
+        app.reload();
+        changed();
+      }}
+    >
       {m.frozen && <Frozen slug={slug} frozen={m.frozen} isPrivate={app.data.private} onChanged={changed} />}
       {m.pulse_required !== null && <PulseNeeded received={m.pulse_required} />}
       <WaitingReleases slug={slug} waiting={m.waiting} onChanged={changed} />
-      <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
-      <UpdatesPanel key={settingsNonce} slug={slug} onChanged={overview.reload} />
-      {!app.data.private && app.data.stage === "released" && <RatingBreakdown slug={slug} />}
-      {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
-      <RepoMove slug={slug} overview={m} onChanged={changed} />
-      {app.data.private && <RepoAccessPanel slug={slug} repoUrl={app.data.repo_url} />}
-      <DemoPanel slug={slug} />
-      <BugReportsPanel slug={slug} repoUrl={app.data.repo_url} accepting={app.data.bug_reports} />
-      {!app.data.private && <ReleaseFeedbackPanel slug={slug} />}
-      <OffersPanel slug={slug} originalSlug={app.data.branch_of} />
-      <Requests slug={slug} changes={m.changes} onChanged={changed} />
-    </div>
+      <div className="maker-cols">
+        <div className="maker-main">
+          <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
+          {!app.data.private && app.data.stage !== "coming_soon" && <RatingBreakdown slug={slug} />}
+          <BugReportsPanel slug={slug} repoUrl={app.data.repo_url} accepting={app.data.bug_reports} />
+          {!app.data.private && <ReleaseFeedbackPanel slug={slug} />}
+          <Requests slug={slug} changes={m.changes} onChanged={changed} />
+        </div>
+        <div className="maker-side">
+          <UpdatesPanel key={settingsNonce} slug={slug} onChanged={overview.reload} />
+          {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
+          <RepoMove slug={slug} overview={m} onChanged={changed} />
+          {app.data.private && <RepoAccessPanel slug={slug} repoUrl={app.data.repo_url} />}
+          <DemoPanel slug={slug} />
+          <OffersPanel slug={slug} originalSlug={app.data.branch_of} />
+        </div>
+      </div>
+    </MakerFrame>
   );
 }
 
@@ -215,11 +212,13 @@ function RatingBreakdown({ slug }: { slug: string }) {
       {b.data && b.data.by_version.length === 0 && <p className="muted">No votes yet.</p>}
       {b.data && b.data.by_version.length > 0 && (
         <>
+          <div className="rating-tables">
           <GroupTable caption="Version" groups={b.data.by_version} name={(k) => (k ? `v${k}` : "Before versions were recorded")} />
           <GroupTable caption="Platform" groups={b.data.by_platform} name={(k) => (k ? (PLATFORM_NAME[k] ?? k) : "Not recorded")} />
           {(b.data.by_stage ?? []).some((g) => g.key === "beta") && (
             <GroupTable caption="Stage" groups={b.data.by_stage ?? []} name={(k) => (k === "beta" ? "Rated in Beta" : "Rated after release")} />
           )}
+          </div>
           {b.data.impact.some((i) => i.to_not_slop + i.to_slop > 0) && (
             <>
               <h3>Update impact</h3>
@@ -547,13 +546,14 @@ export function describeChange(c: Pick<AppChange, "kind" | "release_id" | "relea
 function Requests({ slug, changes, onChanged }: { slug: string; changes: AppChange[]; onChanged: () => void }) {
   const { busy, error, submit } = useSubmit(onChanged);
   return (
-    <>
-      <h2 className="section-title">Requests</h2>
-      {changes.length === 0 && <div className="empty-state">No changes requested yet.</div>}
+    <section className="panel panel-pad" aria-labelledby="requests-title">
+      <h2 id="requests-title">Requests</h2>
+      <p className="muted small">Switching the release players get, or moving the repository, and what was decided.</p>
+      {changes.length === 0 && <p className="muted">No changes requested yet.</p>}
       {error && <p className="form-error">{error}</p>}
       <ul className="release-list">
         {changes.map((c) => (
-          <li key={c.id} className="panel panel-pad">
+          <li key={c.id} className="request-item">
             <div className="title-row spread">
               <div className="title-row">
                 <b>{describeChange(c)}</b>
@@ -575,6 +575,6 @@ function Requests({ slug, changes, onChanged }: { slug: string; changes: AppChan
           </li>
         ))}
       </ul>
-    </>
+    </section>
   );
 }

@@ -57,6 +57,11 @@ website also shows it when they next publish). Carry on once they've accepted it
 3. `get_fixes`: every problem SLAPorSLOP's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked.
 4. Fix, commit, push, and release again with a new version.
 
+Stages go Coming soon → Beta → Released, and the maker moves the app on when they decide to, once
+a release has been approved: on the website (the stage bar at the top of the app's Manage, Edit
+store page and Releases pages) or with `move_to_stage` when they ask you. Only forward; Coming soon has a
+year to reach Beta and Beta a year to be released, or the page leaves the store until it does.
+
 If an app is frozen because SLAPorSLOP can't read its repository, it takes no new releases. Restore
 SLAPorSLOP's access, then `check_repository`: it checks SLAPorSLOP can read the repository again and lifts
 the freeze (not one SLAPorSLOP's staff placed). It doesn't check the code.

@@ -3239,6 +3239,46 @@ async fn agents_use_github_releases_and_slop_build(db: PgPool) {
     assert_eq!(parsed(&text)[1]["submitted"], true);
 }
 
+/// move_to_stage moves the maker's own app on, with the same rules as the website.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn move_to_stage_moves_the_app_on(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "coming_soon").await;
+    let (publish, _) =
+        maker_token(&app, &maker, json!({ "name": "All", "scope": "publish" })).await;
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "move_to_stage",
+        json!({ "slug": "game", "stage": "released" }),
+    )
+    .await;
+    assert!(failed && text.contains("approved release"), "{text}");
+    let id = submit_and_fetch(&app, &maker, "1.0.0").await;
+    admin::approve(
+        &app.db,
+        Some(&app.signing_key),
+        lax(),
+        id.parse().unwrap(),
+        "rev",
+    )
+    .await
+    .unwrap();
+    let (failed, text) = maker_tool(
+        &app,
+        &publish,
+        "move_to_stage",
+        json!({ "slug": "game", "stage": "released" }),
+    )
+    .await;
+    assert!(!failed, "{text}");
+    let stage: String = sqlx::query_scalar("select stage::text from apps where slug = 'game'")
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(stage, "released");
+}
+
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn check_repository_checks_that_slop_can_still_read_the_repository(db: PgPool) {
     let app = test_app(db).await;

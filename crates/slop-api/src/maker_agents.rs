@@ -135,6 +135,7 @@ const ALLOWED: &[(&str, &str, bool, Slug)] = &[
     ("PATCH", "/apps/{slug}/releases/*", true, Slug::Own),
     ("POST", "/apps/{slug}/releases/*/withdraw", true, Slug::Own),
     ("POST", "/apps/{slug}/repo-check", true, Slug::Own),
+    ("POST", "/apps/{slug}/stage", true, Slug::Own),
     ("POST", "/apps/{slug}/media/check", true, Slug::Own),
     ("POST", "/apps/{slug}/offers", true, Slug::Own),
     ("PUT", "/apps/{slug}/reviews/*/reply", true, Slug::Own),
@@ -1165,6 +1166,19 @@ pub(crate) const TOOLS: &[Tool] = &[
             })
         },
         required: &["slug", "id"],
+    },
+    Tool {
+        name: "move_to_stage",
+        description: "Moves the app on to its next stage: `beta` (playable, still changing; players can rate it and donate) or `released` (finished). Straight from coming_soon to released is fine. Only forward, and only once a release has been approved; it happens at once and everyone who marked the app Interested is told. Only when your maker asks: it's their decision.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/stage",
+        properties: || {
+            json!({
+                "slug": s("The app's store address"),
+                "stage": s("beta or released"),
+            })
+        },
+        required: &["slug", "stage"],
     },
     Tool {
         name: "check_repository",
