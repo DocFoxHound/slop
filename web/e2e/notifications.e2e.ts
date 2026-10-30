@@ -120,7 +120,8 @@ test("the kinds down the side with what's unread in each, and the notifications 
   await expect(nav.getByRole("link", { name: "Moderation 1 unread" })).toBeVisible();
   await expect(nav.getByRole("link", { name: "Security", exact: true })).toBeVisible();
   // Every kind is there, with its friendly name.
-  await expect(nav.getByRole("listitem")).toHaveCount(12);
+  await expect(nav.getByRole("listitem")).toHaveCount(13);
+  await expect(nav.getByRole("link", { name: "Terms and policies", exact: true })).toHaveAttribute("href", "/notifications/policies");
   await expect(page.getByRole("heading", { name: "All notifications", level: 2 })).toBeVisible();
 
   await expect(page.locator(".nbox-list").getByRole("heading", { level: 3 })).toHaveText(["Today", "Yesterday", "This week", "Earlier"]);

@@ -7,8 +7,8 @@
 //! outbox. Signed-out reporters, who have no account, get their report's outcome through
 //! `email` straight into the outbox.
 //!
-//! Only product messages: job steps, Interested apps moving on, moderation decisions and report
-//! outcomes. Never marketing (LEGAL-GUIDANCE TERMS-3).
+//! Only product messages: job steps, Interested apps moving on, moderation decisions, report
+//! outcomes and changes to the terms and policies. Never marketing (LEGAL-GUIDANCE TERMS-3).
 
 use std::time::Duration as StdDuration;
 
@@ -68,6 +68,10 @@ pub const CATEGORIES: &[(&str, &str)] = &[
     (
         "agents",
         "Your AI agent tokens: a week and a day before one expires, and when it has",
+    ),
+    (
+        "policies",
+        "Changes to SLAPorSLOP's terms and policies, before they take effect",
     ),
 ];
 

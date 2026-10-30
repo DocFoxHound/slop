@@ -32,6 +32,12 @@ export const KINDS: Array<{ id: Kind; label: string; icon: string; about: string
   { id: "donations", label: "Donations", icon: "M8 13.3S2.5 10 2.5 6.2A2.8 2.8 0 0 1 8 5a2.8 2.8 0 0 1 5.5 1.2C13.5 10 8 13.3 8 13.3z", about: "Donation receipts, server donation reminders and changes to where yours are paid show up here." },
   { id: "moderation", label: "Moderation", icon: "M3.5 14V2.5 M3.5 3h8.5l-1.8 3 1.8 3H3.5", about: "Decisions about your content, answers to appeals and the outcome of your reports show up here." },
   { id: "agents", label: "AI agents", icon: "M3.5 5.5h9v7h-9z M8 5.5V3 M6.2 8.5v1.2 M9.8 8.5v1.2 M1.8 8v2.5 M14.2 8v2.5", about: "Your AI agent tokens show up here a week and a day before one expires, and when it has." },
+  {
+    id: "policies",
+    label: "Terms and policies",
+    icon: "M4 2.5h5.5L12 5v8.5H4z M9.5 2.5V5H12 M6 8h4 M6 10.5h4",
+    about: "Changes to SLAPorSLOP's terms and policies show up here, before they take effect.",
+  },
   { id: "security", label: "Security", icon: "M8 2l5 2v4c0 3-2.2 5-5 6-2.8-1-5-3-5-6V4z M6 8l1.5 1.5L10.2 7", about: "Passkeys added, sign-ins linked and accounts combined show up here." },
 ];
 const KIND = Object.fromEntries(KINDS.map((k) => [k.id, k])) as Record<Kind, (typeof KINDS)[number]>;

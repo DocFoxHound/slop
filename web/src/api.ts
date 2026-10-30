@@ -497,7 +497,8 @@ export interface Notification {
     | "chat"
     | "friends"
     | "security"
-    | "agents";
+    | "agents"
+    | "policies";
   title: string;
   body: string;
   link: string;
