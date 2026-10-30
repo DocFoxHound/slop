@@ -21,6 +21,7 @@ import {
 } from "../components/PeopleStatus";
 import { ReportButton } from "../components/Report";
 import { useTermsGate } from "../components/Terms";
+import { SkillIcon } from "../components/StoreIcons";
 import { ErrorState, ExternalLink, Loading, SectionHeader, Shelf } from "../components/ui";
 import { formatDate, money } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
@@ -55,51 +56,31 @@ export function People() {
 
   return (
     <div className="page">
+      <h1 className="sr-only">People</h1>
       <nav className="store-nav people-nav" aria-label="People">
-        <div className="store-nav-links" role="group" aria-label="Skill">
-          <button type="button" className={!q.skill ? "on" : ""} aria-pressed={!q.skill} onClick={() => set("skill", null)}>
-            Everyone
-          </button>
+        <div className="skill-icons" role="group" aria-label="Skill">
+          <SkillButton slug="" name="Everyone" on={!q.skill} onPick={() => set("skill", null)} />
           {list.data?.skills.map((s) => (
-            <button
-              type="button"
-              key={s.slug}
-              className={q.skill === s.slug ? "on" : ""}
-              aria-pressed={q.skill === s.slug}
-              onClick={() => set("skill", s.slug)}
-            >
-              {s.name} <span className="faint">{s.count}</span>
-            </button>
+            <SkillButton key={s.slug} slug={s.slug} name={s.name} count={s.count} on={q.skill === s.slug} onPick={() => set("skill", s.slug)} />
           ))}
         </div>
         <PeopleSearch value={q.q ?? ""} onSearch={(text) => set("q", text.trim() || null)} />
-      </nav>
-
-      <div className="people-hero">
-        <div>
-          <span className="badge neutral">SEPARATE FROM THE STORE</span>
-          <h1>People</h1>
-          <p className="muted">
-            Artists, composers, sound designers, writers, voice actors and testers you can hire to make the parts of your game that
-            shouldn't be slop. Rated only by makers who finished a job with them.
-          </p>
-        </div>
-        <div className="row-actions">
-          <Link className="btn" to="/people/jobs">
+        <div className="people-nav-actions">
+          <Link className="btn small" to="/people/jobs">
             Your jobs
           </Link>
           {mine.data ? (
-            <Link className="btn slime" to={`/people/${mine.data.handle}`}>
+            <Link className="btn small slime" to={`/people/${mine.data.handle}`}>
               Your People page
               {mine.data.status.state !== "live" && <PageStateBadge status={mine.data.status} />}
             </Link>
           ) : (
-            <Link className="btn slime" to="/people/me">
+            <Link className="btn small slime" to="/people/me">
               Offer your services
             </Link>
           )}
         </div>
-      </div>
+      </nav>
 
       {front && <PeopleShelves />}
 
@@ -171,8 +152,26 @@ export function People() {
   );
 }
 
+/** A skill in the People bar: its icon, with its name (and how many offer it) on hover or focus. */
+function SkillButton({ slug, name, count, on, onPick }: { slug: string; name: string; count?: number; on: boolean; onPick: () => void }) {
+  const tip = count === undefined ? name : `${name} · ${count.toLocaleString()}`;
+  return (
+    <button
+      type="button"
+      className={`skill-btn ${on ? "on" : ""}`}
+      aria-pressed={on}
+      aria-label={count === undefined ? name : `${name}, ${count.toLocaleString()} ${count === 1 ? "person" : "people"}`}
+      data-tip={tip}
+      onClick={onPick}
+    >
+      <SkillIcon slug={slug || "everyone"} size={22} />
+    </button>
+  );
+}
+
 /**
- * The front page's shelves, like the store's: a different mix every day (people/discover.rs).
+ * The front page's reels, like the store's: Suggested for you (from what the viewer hires for or
+ * makes, with why), then a different mix every day (people/discover.rs), then a reel per skill.
  * None is ordered by ratings or clients (LEGAL-GUIDANCE HUM-10).
  */
 function PeopleShelves() {
@@ -180,35 +179,43 @@ function PeopleShelves() {
   if (shelves.error) return <ErrorState error={shelves.error} onRetry={shelves.reload} />;
   const d = shelves.data;
   if (!d) return null;
-  const shelf = (title: string, sub: string, people: CreativeCard[], all?: string) =>
+  const shelf = (title: string, sub: string, people: CreativeCard[], all?: string, skill?: string) =>
     people.length > 0 && (
-      <section className="people-shelf-section" aria-label={title}>
-        <SectionHeader title={title} sub={sub}>
+      <section className="people-shelf-section" aria-label={title} key={title}>
+        <div className="section-h">
+          {skill && <SkillIcon slug={skill} size={20} className="section-icon" />}
+          <h2>{title}</h2>
+          <span className="sub">{sub}</span>
           {all && (
             <Link to={all} className="sub">
               See all →
             </Link>
           )}
-        </SectionHeader>
-        <div className="people-shelf">
+        </div>
+        <div className="people-shelf" role="list">
           {people.map((c) => (
-            <PersonCard c={c} key={c.handle} />
+            <div role="listitem" key={c.handle}>
+              <PersonCard c={c} />
+            </div>
           ))}
         </div>
       </section>
     );
   return (
     <>
+      {d.suggested && shelf("Suggested for you", d.suggested.why, d.suggested.people)}
       {shelf("Taking work now", "Open for new work and ready to be paid. A different mix every day.", d.taking_work, "/people?taking=1")}
-      {d.spotlight &&
-        shelf(
-          `Spotlight: ${d.spotlight.skill.name}`,
-          "A different skill every day",
-          d.spotlight.people,
-          `/people?skill=${encodeURIComponent(d.spotlight.skill.slug)}`,
-        )}
       {shelf("New on People", "Pages that went live lately", d.new)}
       {shelf("Studios", "Teams who take on bigger jobs together", d.studios, "/people?studios=1")}
+      {d.by_skill.map((s, i) =>
+        shelf(
+          s.skill.name,
+          i === 0 ? "Today's spotlight. Shuffled daily, so nobody is buried" : "Shuffled daily, so nobody is buried",
+          s.people,
+          `/people?skill=${encodeURIComponent(s.skill.slug)}`,
+          s.skill.slug,
+        ),
+      )}
     </>
   );
 }
@@ -225,7 +232,7 @@ function PeopleSearch({ value, onSearch }: { value: string; onSearch: (text: str
     <form className="search store-search people-search" role="search" onSubmit={submit}>
       <input
         type="search"
-        placeholder="Search people by name or what they do…"
+        placeholder="Search people…"
         aria-label="Search people"
         value={text}
         maxLength={100}

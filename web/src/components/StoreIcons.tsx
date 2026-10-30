@@ -4,7 +4,7 @@
 // Decorative: the words beside them say what they are, so screen readers skip them.
 
 import { categoryIconName, STORE_ICON_STYLE, STROKE, storeIconPaths, type IconPath, type StoreIconName, type StoreIconStyle } from "../storeIcons";
-import { tagIconName, tagIconPaths } from "../tagIcons";
+import { skillIconPaths, tagIconName, tagIconPaths } from "../tagIcons";
 
 /** The SVG every store and tag icon is drawn in. */
 function IconSvg({
@@ -18,7 +18,7 @@ function IconSvg({
   size: number;
   className?: string;
   style: StoreIconStyle;
-  data: { "data-icon"?: string; "data-tag"?: string };
+  data: { "data-icon"?: string; "data-tag"?: string; "data-skill"?: string };
 }) {
   return (
     <svg
@@ -63,6 +63,11 @@ export function CategoryIcon({ slug, size, className }: { slug: string; size?: n
  * A tag's icon (a sub-genre: roguelike, cozy…), by its slug (the shapes are in ../tagIcons.ts).
  * A tag without an icon of its own (a new one staff added) gets its category's, or the neutral one.
  */
+/** A People skill's icon (tagIcons.ts SKILL_SHAPES); "everyone" for the whole directory. */
+export function SkillIcon({ slug, size = 20, className }: { slug: string; size?: number; className?: string }) {
+  return <IconSvg paths={skillIconPaths(slug)} size={size} className={className} style={STORE_ICON_STYLE} data={{ "data-skill": slug }} />;
+}
+
 export function TagIcon({ slug, category, size = 16, className }: { slug: string; category?: string; size?: number; className?: string }) {
   const name = tagIconName(slug);
   if (!name) return <CategoryIcon slug={category ?? "category"} size={size} className={className} />;

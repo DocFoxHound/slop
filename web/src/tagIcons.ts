@@ -859,6 +859,78 @@ const TAG_SHAPES = {
   wholesome: [accent(circle(12, 12, 2.4)), body(flower(12, 12, 6, 4.6, 9.2))],
 } satisfies Record<string, Part[]>;
 
+/**
+ * People's skills (crates/slop-api/src/people/mod.rs SKILLS), plus "everyone". Skills that are
+ * also tags use the tag's drawing, so a skill looks the same wherever it shows.
+ */
+const SKILL_SHAPES = {
+  /** Everyone: two people, the one behind with a slime head. */
+  everyone: [
+    accent(circle(16.6, 7.4, 2.6)),
+    line(circle(16.6, 7.4, 2.6)),
+    line("M14.4 12.4h4.4a3.2 3.2 0 0 1 3.2 3.2V19"),
+    ...bust(9, 8.2, 3.2, 11.4, 20.6),
+  ],
+  /** 2D art: a palette with a dab of slime paint. */
+  "2d-art": [
+    accent(circle(16.9, 10.3, 1.6)),
+    body("M12 3.2c-5 0-9 3.7-9 8.4 0 4.8 3.9 8.4 8.6 8.4 1.4 0 2-.8 2-1.7 0-1.3-1.2-1.7-1.2-2.9 0-1 .8-1.7 1.9-1.7h2.4c2.9 0 5.3-2 5.3-4.8 0-3.6-4.4-5.7-10-5.7Z"),
+    dot(circle(7.3, 11.2, 1.3)),
+    dot(circle(9.2, 7.4, 1.3)),
+    dot(circle(13.6, 6.6, 1.3)),
+  ],
+  "pixel-art": TAG_SHAPES["pixel-art"],
+  "3d": TAG_SHAPES["3d"],
+  animation: TAG_SHAPES.animation,
+  /** UI / UX: a window with a slime button, and the pointer about to press it. */
+  "ui-ux": [
+    accent(rect(5.8, 11, 7.4, 3.4, 1.2)),
+    body(rect(2.8, 3.8, 18.4, 14.4, 2.2)),
+    line("M2.8 7.8h18.4"),
+    dot(circle(5.4, 5.8, 0.7)),
+    body("M14.6 12.6 20.8 16.4 17.9 17.2 19.4 20.4 17.9 21.1 16.4 17.9 14.6 19.8Z"),
+  ],
+  music: TAG_SHAPES.music,
+  /** Sound design: a speaker sending out slime waves. */
+  sound: [
+    accentLine(arc(12.2, 12, 4, -48, 48)),
+    line(arc(12.2, 12, 7.8, -52, 52)),
+    body("M2.8 9.2h3.8L11.6 5v14l-5-4.2H2.8Z"),
+  ],
+  writing: TAG_SHAPES.writing,
+  /** Voice acting: a microphone, its grille slime. */
+  voice: [
+    accent(rect(10.2, 4, 3.6, 5.4, 1.6)),
+    body(rect(8.6, 2.6, 6.8, 11.6, 3.4)),
+    line("M5.4 11.2a6.6 6.6 0 0 0 13.2 0M12 17.8v3.4M8.6 21.2h6.8"),
+  ],
+  /** Localization: two speech bubbles, an A in one and the other slime. */
+  localization: [
+    accent(rect(10.6, 10.2, 10.6, 7.8, 2.2)),
+    line(rect(10.6, 10.2, 10.6, 7.8, 2.2)),
+    line("M17.6 18v3l-3-3"),
+    body("M5 3.2h7.6a2.2 2.2 0 0 1 2.2 2.2v4.8H12.8a2.2 2.2 0 0 0-2.2 2.2v.4H8L5 15.4v-2.6a2.2 2.2 0 0 1-2.2-2.2V5.4A2.2 2.2 0 0 1 5 3.2Z"),
+    line("M6.4 10.4l2.4-5 2.4 5M7.2 8.8h3.2"),
+  ],
+  /** Playtesting: a gamepad with a slime tick. */
+  playtesting: [
+    accentLine("M13.6 12.2l1.7 1.7 3.1-3.3"),
+    body("M7.4 6.8h9.2a4.6 4.6 0 0 1 4.5 3.8l.9 5.2a2.4 2.4 0 0 1-4.1 2.1l-2.2-2.5H8.3l-2.2 2.5a2.4 2.4 0 0 1-4.1-2.1l.9-5.2a4.6 4.6 0 0 1 4.5-3.8Z"),
+    line("M7.4 9.8v3.6M5.6 11.6h3.6"),
+  ],
+} satisfies Record<string, Part[]>;
+
+export type SkillIconName = keyof typeof SKILL_SHAPES;
+
+/** A People skill's icon by its slug; "everyone" for the whole directory, or a skill without one. */
+export function skillIconPaths(slug: string, style: StoreIconStyle = STORE_ICON_STYLE): IconPath[] {
+  const name = (slug in SKILL_SHAPES ? slug : "everyone") as SkillIconName;
+  return iconPaths(SKILL_SHAPES[name], style);
+}
+
+/** Every People skill icon, for tests and previews. */
+export const SKILL_ICON_NAMES = Object.keys(SKILL_SHAPES) as SkillIconName[];
+
 export type TagIconName = keyof typeof TAG_SHAPES;
 
 /** Every tag that has an icon of its own, in the order above. */
