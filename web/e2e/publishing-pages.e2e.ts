@@ -150,7 +150,7 @@ test("the download page: a button per system when there's a build, and says when
   // This server has published no desktop builds.
   await page.goto("/download");
   await expect(page.getByRole("heading", { name: "Get the SLAPorSLOP app", level: 1 })).toBeVisible();
-  for (const name of ["Windows", "Ubuntu / Debian", "RHEL / Rocky / Alma 10"]) {
+  for (const name of ["Windows", "Ubuntu / Debian", "Fedora / RHEL / Rocky / Alma"]) {
     await expect(page.locator("section.download-card").filter({ has: page.getByRole("heading", { name }) })).toContainText(
       "Not available right now.",
     );
@@ -168,7 +168,7 @@ test("the download page: a button per system when there's a build, and says when
   const deb = page.locator("section.download-card").filter({ has: page.getByRole("heading", { name: "Ubuntu / Debian" }) });
   await expect(deb.getByRole("link", { name: "Download" })).toHaveAttribute("href", "https://downloads.example/slop_1.4.0_amd64.deb");
   await expect(deb.getByText("YOUR SYSTEM")).toHaveCount(0);
-  const rpm = page.locator("section.download-card").filter({ has: page.getByRole("heading", { name: "RHEL / Rocky / Alma 10" }) });
+  const rpm = page.locator("section.download-card").filter({ has: page.getByRole("heading", { name: "Fedora / RHEL / Rocky / Alma" }) });
   await expect(rpm).toContainText("Not available right now.");
   await expect(rpm.locator("code")).toHaveText("sudo dnf install epel-release && sudo dnf config-manager --set-enabled crb");
 });

@@ -1,5 +1,5 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-// Get the SLAPorSLOP desktop app: Windows, and Linux as .deb or .rpm. Reached from the "Download" button
+// Get the SLAPorSLOP desktop app: Windows, and Linux as .deb or .rpm (Fedora, or EL10 with EPEL). Reached from the "Download" button
 // in the website's top bar (not shown in the desktop app itself).
 
 import { Link } from "react-router";
@@ -25,8 +25,8 @@ const BUILDS = [
   {
     platform: "linux-rpm",
     os: "linux",
-    title: "RHEL / Rocky / Alma 10",
-    detail: "An .rpm package. Needs EPEL and CRB enabled first.",
+    title: "Fedora / RHEL / Rocky / Alma",
+    detail: "An .rpm package. On Fedora it installs as it is. On RHEL, Rocky and Alma 10, enable EPEL and CRB first:",
     note: "sudo dnf install epel-release && sudo dnf config-manager --set-enabled crb",
   },
 ] as const;
