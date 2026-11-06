@@ -296,7 +296,9 @@ test("the download page: a card per system, yours first in colour, and missing b
   const debian = cards.filter({ has: page.getByRole("heading", { name: "Ubuntu / Debian" }) });
   await expect(debian.getByText("Not available right now.")).toBeVisible();
   await expect(debian.getByText("YOUR SYSTEM")).toHaveCount(0);
-  const rhel = cards.filter({ has: page.getByRole("heading", { name: "RHEL / Rocky / Alma 10" }) });
+  const rhel = cards.filter({ has: page.getByRole("heading", { name: "Fedora / RHEL / Rocky / Alma" }) });
   await expect(rhel.getByRole("link", { name: "Download" })).toHaveAttribute("href", "https://downloads.example.com/slop-1.4.2-linux-rpm");
   await expect(rhel.getByText("sudo dnf install epel-release")).toBeVisible();
+  // Fedora installs it as it is: EPEL is only for RHEL and its rebuilds (it doesn't exist on Fedora).
+  await expect(rhel).toContainText("On Fedora it installs as it is. On RHEL, Rocky and Alma 10, enable EPEL and CRB first:");
 });

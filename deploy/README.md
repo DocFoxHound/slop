@@ -164,8 +164,8 @@ everything it offers was built here and published with `slop-api desktop publish
 
 **Linux packages** (`deploy/desktop-linux/build.sh`) are each built in a container of the oldest
 system they support: a `.deb` on Ubuntu 22.04 (for Ubuntu 22.04+ and Debian 12+) and an `.rpm`
-on Rocky Linux 10 (for RHEL/Rocky/Alma 10 with EPEL and CRB enabled; EL9 lacks WebKitGTK 4.1,
-which Tauri 2 needs).
+on Rocky Linux 10 (for Fedora as it is, and RHEL/Rocky/Alma 10 with EPEL and CRB enabled; EL9
+lacks WebKitGTK 4.1, which Tauri 2 needs).
 
 **The Windows installer** (`deploy/desktop-windows/build.sh`) is cross-compiled the way Tauri
 documents it ("Build Windows apps on Linux and macOS"): the MSVC target with `cargo-xwin`, LLVM's
