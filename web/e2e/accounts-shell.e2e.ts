@@ -153,7 +153,7 @@ test.describe("the app shell", () => {
   test("ADMIN shows only for staff", async ({ page }) => {
     const admin = page.getByRole("link", { name: "ADMIN" });
     await page.goto("/");
-    await expect(page.getByRole("link", { name: "STORE" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "STORE", exact: true })).toBeVisible();
     await expect(admin).toHaveCount(0);
     await signIn(page, "player");
     await page.reload();
@@ -236,7 +236,7 @@ test.describe("signing in from any page", () => {
 test.describe("the bell", () => {
   test("signed out there's no bell; signed in it counts what's unread", async ({ page }) => {
     await page.goto("/");
-    await expect(page.getByRole("link", { name: "STORE" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "STORE", exact: true })).toBeVisible();
     await expect(page.getByRole("link", { name: /^Notifications/ })).toHaveCount(0);
     await signIn(page, "maker2");
     const unread = (await call("maker2", "GET", "/v1/me")).unread_notifications as number;
@@ -354,7 +354,7 @@ test.describe("the simulation sandbox", () => {
 
   test("a real server has no banner", async ({ page }) => {
     await page.goto("/bounties");
-    await expect(page.getByRole("link", { name: "STORE" })).toBeVisible();
+    await expect(page.getByRole("link", { name: "STORE", exact: true })).toBeVisible();
     await expect(page.getByText("Simulation sandbox.")).toHaveCount(0);
   });
 });

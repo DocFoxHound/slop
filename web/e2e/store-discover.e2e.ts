@@ -39,7 +39,26 @@ test("signed in: Recommended for you first, then Pat's genres, each saying why",
   await expect(puzzle).toBeVisible();
   await expect(puzzle.locator(".section-h .sub").first()).toHaveText(/(Slaps votes|spent the most time)/);
   await expect(puzzle.getByRole("link", { name: /^See all: Because you/ })).toHaveAttribute("href", "/tag/puzzle?sort=rating");
-  for (const slug of puzzles) await expect(puzzle.locator(`a[href="/app/${slug}"]`)).toBeVisible();
+  // Vera's two are in it unless the page's rules (discover.rs) keep them out: at most 12 apps in
+  // a reel, an app in at most two reels, and at most four of a reel's apps repeating earlier
+  // reels. Puzzle games other files leave listed (the money tests') compete for those places, so
+  // which ones win depends on the day's shuffle; leaving one out for any other reason is a bug.
+  const reels = await page.locator("section.discover-reel").evaluateAll((sections) =>
+    sections.map((s) => ({
+      title: s.querySelector("h2")?.textContent ?? "",
+      slugs: [...new Set([...s.querySelectorAll('a[href^="/app/"]')].map((a) => a.getAttribute("href")!.slice("/app/".length)))],
+    })),
+  );
+  const at = reels.findIndex((r) => /^Because you (like|play a lot of) Puzzle$/.test(r.title));
+  const inPuzzle = reels[at].slugs;
+  const earlier = reels.slice(0, at).flatMap((r) => r.slugs);
+  const repeats = inPuzzle.filter((s) => earlier.includes(s)).length;
+  expect(repeats).toBeLessThanOrEqual(4);
+  for (const slug of puzzles) {
+    if (inPuzzle.includes(slug)) continue;
+    const times = earlier.filter((s) => s === slug).length;
+    expect(inPuzzle.length >= 12 || times >= 2 || (times >= 1 && repeats >= 4), `${slug} left out of ${JSON.stringify(reels)}`).toBe(true);
+  }
   await expect(puzzle.locator('a[href="/app/lantern-keep"]')).toHaveCount(0);
   // Never anything Pat already has.
   await expect(page.locator('section.discover-reel a[href="/app/lantern-keep"]')).toHaveCount(0);
