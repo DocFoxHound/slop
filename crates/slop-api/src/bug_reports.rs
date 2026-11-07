@@ -6,6 +6,8 @@
 //!   a crash (the SLAPorSLOP app offers them, with the home folder blanked out). They're private
 //!   between the player, the maker and staff; logs are deleted after 90 days (retention.rs).
 //!   Players with the same problem add "me too" to an open report instead of filing another.
+//!   A browser game's reports always say browser, on the version Play opens unless the player
+//!   names one, and carry no output: nothing of it runs in the SLAPorSLOP app.
 //!   Makers mark reports fixed, won't fix or duplicate, and the player is told. Makers can turn
 //!   reports off on the store page.
 //! - **Issues stay the maker's:** SLAPorSLOP doesn't write to repositories. The website offers a
@@ -197,10 +199,16 @@ async fn file(
 ) -> ApiResult<(StatusCode, Json<Report>)> {
     crate::limits::check(&state, user.id, crate::limits::Action::BugReport)?;
     let (app_id, maker, accepting, app_title) = app_of(&state, &slug).await?;
+    // A browser game is played on its maker's site: it's always reported as played in the
+    // browser, on the version Play opens unless the player says otherwise. None of it runs in
+    // the SLAPorSLOP app, so there's no game output to send either.
+    let in_browser = crate::catalog::plays_in_browser(&state.db, app_id).await?;
     if !has_played(&state, user.id, app_id).await? {
-        return Err(ApiError::Conflict(
-            "play it through SLAPorSLOP first, so the maker knows which build you ran".into(),
-        ));
+        return Err(ApiError::Conflict(if in_browser {
+            "play it from SLAPorSLOP first, so the maker knows which version you played".into()
+        } else {
+            "play it through SLAPorSLOP first, so the maker knows which build you ran".into()
+        }));
     }
     if !accepting {
         return Err(ApiError::Conflict(
@@ -215,19 +223,33 @@ async fn file(
     if body.is_empty() || body.chars().count() > 4000 {
         return Err(ApiError::invalid("body", "1 to 4,000 characters"));
     }
-    let version = b
+    let mut version = b
         .version
         .map(|v| v.trim().chars().take(40).collect::<String>())
         .filter(|v| !v.is_empty());
-    if let Some(p) = &b.platform
-        && !["windows", "linux", "mac", "android"].contains(&p.as_str())
-    {
-        return Err(ApiError::invalid(
-            "platform",
-            "windows, linux, mac or android",
-        ));
-    }
-    let log = b.log.map(|l| {
+    let platform = if in_browser {
+        if version.is_none() {
+            version = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "select r.version from apps a join releases r on r.id = {} where a.id = $1",
+                crate::catalog::PLAY_RELEASE
+            )))
+            .bind(app_id)
+            .fetch_optional(&state.db)
+            .await?;
+        }
+        Some("browser".to_string())
+    } else {
+        if let Some(p) = &b.platform
+            && !["windows", "linux", "mac", "android"].contains(&p.as_str())
+        {
+            return Err(ApiError::invalid(
+                "platform",
+                "windows, linux, mac or android",
+            ));
+        }
+        b.platform
+    };
+    let log = b.log.filter(|_| !in_browser).map(|l| {
         // Keep the end: that's where a crash is.
         let chars: Vec<char> = l.chars().collect();
         chars[chars.len().saturating_sub(16_000)..]
@@ -256,7 +278,7 @@ async fn file(
     .bind(app_id)
     .bind(user.id)
     .bind(&version)
-    .bind(&b.platform)
+    .bind(&platform)
     .bind(title)
     .bind(body)
     .bind(log.filter(|l| !l.trim().is_empty()))

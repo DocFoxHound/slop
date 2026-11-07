@@ -118,9 +118,23 @@ async fn updates(
         else {
             continue;
         };
+        // A browser game is never installed: nothing to install or queue, no builds to switch
+        // to, no mods, no sandbox mode. Play opens its address (the store page has it).
+        if catalog::plays_in_browser(&state.db, app_id).await? {
+            out.push(AppUpdate {
+                slug: slug.to_string(),
+                latest: None,
+                pending: None,
+                builds: Vec::new(),
+                mods: Vec::new(),
+                sandbox: catalog::sandbox_info(&state.db, app_id).await?,
+            });
+            continue;
+        }
+        // Something to install: only releases with a signed manifest.
         let latest: Option<Serving> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
             "select r.id as release_id, r.version {} limit 1",
-            crate::releases::SERVING
+            crate::releases::SERVING_SIGNED
         )))
         .bind(app_id)
         .fetch_optional(&state.db)
@@ -198,7 +212,9 @@ struct Row {
 }
 
 /// The library, newest first. Apps that have left the store stay listed, so people can still
-/// launch what they installed (DESIGN §8: existing installs keep working).
+/// launch what they installed (DESIGN §8: existing installs keep working). A browser game says so
+/// (`plays_in_browser`), but never where it plays: Play reads that from its store page
+/// (`AppDetail.play_address`), which gives it only to who may play it now.
 async fn list(State(state): State<AppState>, user: CurrentUser) -> ApiResult<Json<Vec<Entry>>> {
     let mut qb = QueryBuilder::new("");
     catalog::push_summary_columns_with(&mut qb, &state.config, ", l.added_at");

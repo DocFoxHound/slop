@@ -1,7 +1,7 @@
 ---
 title: Privacy Policy
-version: 2026-10-30
-summary: Recommendations ("For you", the new Discover page and People's new "Suggested for you") list everything they use, now including which apps you donated to and the skills you hired people for.
+version: 2026-11-07
+summary: Games that play in your browser: Play opens the maker's own website, where the maker's privacy policy applies; SLAPorSLOP records the launch, as for any other app.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
@@ -14,7 +14,7 @@ IronPoint Development LLC ("SLAPorSLOP") is the controller of the personal data 
 | Your display name, email (from your sign-in provider) and country | Your account, product emails, and choosing the rules for your country | Contract |
 | Your sign-in provider's account ID | Signing you in. After you close your account, we keep it only to block the sign-in | Contract; legitimate interest (stopping closed or banned accounts returning) |
 | Sessions and devices | Keeping you signed in; showing you where you're signed in | Contract |
-| Your library, installs and playtime (if you share it) | Your library, "playing now" numbers, and weighting votes | Contract; legitimate interest |
+| Your library, installs, launches and playtime (if you share it) | Your library, "playing now" numbers, and weighting votes. For a game that plays in your browser, pressing Play records a launch that day, like any other app's | Contract; legitimate interest |
 | Votes | Ratings. Public on your profile by default; you can make them private | Contract; legitimate interest |
 | Recommendations | "For you" and Discover, from your library (including apps you installed while signed in), your Interested list, your playtime and launch days, your votes, and which apps you donated to (not how much). Your donations only shape your own page, never what anyone else sees. On People, "Suggested for you" uses the skills you hired people for, or, before you've hired anyone, whether the apps you publish are games or apps; it never uses how well anyone is rated. Switch it off on your account page; it's off by default in the UK under-18 view and when your browser sends Global Privacy Control | Legitimate interest |
 | People profiles, jobs, agreements, payments and reviews | Running the marketplace and keeping the job record | Contract; legal obligation (tax) |
@@ -26,6 +26,8 @@ We never sell your data, and we don't use it to train AI models.
 
 ## Who receives it
 Our hosting provider, GitHub (sign-in, apps' repositories), and Stripe (payments, as an independent controller). Makers never learn who donated unless the donor chooses to tell them.
+
+**Browser games:** Play opens the game on its maker's own website. That site is run by the maker, not SLAPorSLOP, and its own privacy policy applies to what you do there. SLAPorSLOP doesn't send it your account or any data about you.
 
 ## Transfers
 SLAPorSLOP is a US company. Transfers from the EU and UK rely on the EU-US Data Privacy Framework (and its UK Extension), with standard contractual clauses as a fallback.

@@ -147,6 +147,9 @@ pub(crate) struct AppRef {
     status: AppStatus,
     repo_url: String,
     maker: String,
+    /// What it runs on: windows, linux, linux-deb, linux-rpm; any for a mod; or browser alone, a
+    /// browser game whose releases are play addresses.
+    platforms: Vec<String>,
 }
 
 #[derive(Serialize)]
@@ -246,7 +249,8 @@ struct Queue {
     checks: ServerChecks,
 }
 
-const APP_COLUMNS: &str = "a.slug, a.title, a.stage, a.status, a.repo_url, u.display_name as maker";
+const APP_COLUMNS: &str =
+    "a.slug, a.title, a.stage, a.status, a.repo_url, u.display_name as maker, a.platforms";
 
 async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Json<Queue>> {
     let rows: Vec<(Uuid, String)> = sqlx::query_as(
@@ -360,6 +364,9 @@ struct ApprovedRelease {
     version: String,
     #[serde(with = "time::serde::rfc3339::option")]
     reviewed_at: Option<OffsetDateTime>,
+    /// A browser game's release: its play address.
+    #[serde(default)]
+    play_address: Option<String>,
 }
 
 /// The newest release the maker submitted, whatever became of it.
@@ -418,6 +425,7 @@ struct AppFacts {
     status: AppStatus,
     repo_url: String,
     maker: String,
+    platforms: Vec<String>,
     visibility: String,
     icon_url: Option<String>,
     thumbnail_url: Option<String>,
@@ -430,6 +438,7 @@ struct AppFacts {
     newest_status: Option<String>,
     newest_reason: Option<String>,
     serving_version: Option<String>,
+    serving_play_address: Option<String>,
     pending_releases: i64,
     rescan_flags: i64,
     downloads_lost: i64,
@@ -468,8 +477,11 @@ struct ModeratedApp {
     #[serde(with = "time::serde::rfc3339")]
     updated_at: OffsetDateTime,
     newest_release: Option<NewestRelease>,
-    /// The version players get (releases::SERVING), if any.
+    /// The version players get (releases::SERVING), if any. For a browser game, the one whose
+    /// address Play opens (`catalog::PLAY_RELEASE`): none after that address was withdrawn.
     serving_version: Option<String>,
+    /// A browser game's address Play opens now, if any.
+    play_address: Option<String>,
     /// Live release files a re-scan flagged, and ones whose download changed or went away.
     rescan_flags: i64,
     downloads_lost: i64,
@@ -502,6 +514,7 @@ impl From<AppFacts> for ModeratedApp {
                 status: f.status,
                 repo_url: f.repo_url,
                 maker: f.maker,
+                platforms: f.platforms,
             },
             releases: f.releases.0,
             pending_releases: f.pending_releases,
@@ -516,6 +529,7 @@ impl From<AppFacts> for ModeratedApp {
             updated_at: f.updated_at,
             newest_release,
             serving_version: f.serving_version,
+            play_address: f.serving_play_address,
             rescan_flags: f.rescan_flags,
             downloads_lost: f.downloads_lost,
             open_reports: f.open_reports,
@@ -590,7 +604,7 @@ async fn apps(
         "with base as (
              select a.id, a.slug, a.title, a.stage, a.status, a.repo_url, u.display_name as maker,
                     a.visibility, a.frozen_at, a.frozen_reason, a.last_commit_at, a.created_at,
-                    a.updated_at, a.media_set_id, a.pinned_release_id,
+                    a.updated_at, a.media_set_id, a.pinned_release_id, a.platforms,
                     case a.stage
                         when 'coming_soon' then a.stage_entered_at + make_interval(days => ",
     );
@@ -628,7 +642,7 @@ async fn apps(
         ") as dead_after,
                 ms.icon->>'url' as icon_url, ms.thumbnail->>'url' as thumbnail_url,
                 nr.version as newest_version, nr.status::text as newest_status, nr.status_reason as newest_reason,
-                sv.version as serving_version,
+                sv.version as serving_version, sv.play_address as serving_play_address,
                 (select count(*) from releases r
                  where r.app_id = b.id and r.status in ('fetching', 'awaiting_review')) as pending_releases,
                 fl.rescan_flags, fl.downloads_lost,
@@ -636,17 +650,26 @@ async fn apps(
                  where p.subject_kind = 'app' and p.subject_id = b.id and p.status = 'open') as open_reports,
                 exists (select 1 from donation_holds h where h.app_id = b.id and h.lifted_at is null) as donations_paused,
                 pl.players, pl.last_played_at, vt.vote_count, vt.not_slop_percent,
-                coalesce((select json_agg(json_build_object('id', r.id, 'version', r.version, 'reviewed_at', r.reviewed_at)
+                coalesce((select json_agg(json_build_object('id', r.id, 'version', r.version, 'reviewed_at', r.reviewed_at,
+                                                            'play_address', r.play_address)
                                           order by r.reviewed_at desc)
-                          from (select id, version, reviewed_at from releases r
+                          from (select id, version, reviewed_at, play_address from releases r
                                 where r.app_id = b.id and r.status = 'approved'
                                 order by reviewed_at desc limit 10) r), '[]') as releases
              from base b
              left join media_sets ms on ms.id = b.media_set_id
              left join lateral (select version, status, status_reason from releases r
                                 where r.app_id = b.id order by created_at desc limit 1) nr on true
-             left join lateral (select r.id, r.version from releases r
-                                where r.app_id = b.id and r.status = 'approved' and r.signed_manifest is not null
+             left join lateral (select ",
+    )
+    // A browser game's is the release whose address Play opens, never an older one.
+    .push(crate::catalog::PLAY_RELEASE)
+    .push(
+        " as id from apps a where a.id = b.id) pr on true
+             left join lateral (select r.id, r.version, r.play_address from releases r
+                                where r.app_id = b.id and r.status = 'approved'
+                                  and (r.signed_manifest is not null or r.play_address is not null)
+                                  and (not 'browser' = any(b.platforms) or r.id = pr.id)
                                 order by coalesce(r.id = b.pinned_release_id, false) desc, r.reviewed_at desc
                                 limit 1) sv on true
              left join lateral (select count(*) filter (where f.rescan_flagged_at is not null) as rescan_flags,

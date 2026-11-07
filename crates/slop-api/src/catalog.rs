@@ -180,6 +180,7 @@ pub(crate) fn push_summary_columns_with(
                 exists (select 1 from jobs j where j.app_id = a.id and j.credited_at is not null) as made_with_people,
                 (select count(*) from interests i where i.app_id = a.id) as interested,
                 (select p.slug from apps p where p.id = a.parent_app_id) as branch_of,
+                'browser' = any(a.platforms) as plays_in_browser,
                 (a.stage <> 'released' and a.last_commit_at is not null
                  and a.last_commit_at < now() - make_interval(days => ",
     )
@@ -227,6 +228,9 @@ pub struct AppSummary {
     pub interested: i64,
     /// A community branch of this app (DESIGN §9).
     pub branch_of: Option<String>,
+    /// A browser game: it plays on its maker's website, with nothing to download. Where Play
+    /// goes is only in the store page (`AppDetail.play_address`), for who may play it.
+    pub plays_in_browser: bool,
     /// No commits for a while in Coming soon or Beta. Shown, but never recommended.
     pub is_dead: bool,
     /// When a Coming soon or Beta app must reach its next stage. `None` once released.
@@ -281,7 +285,7 @@ struct ListQuery {
     #[serde(default)]
     community: bool,
     /// Runs on this platform ("windows" or "linux"), directly or through a community build
-    /// that adds it (DESIGN §5).
+    /// that adds it (DESIGN §5), or plays in the browser ("browser": browser games only).
     platform: Option<String>,
     /// Only Coming soon and Beta (`true`) or only released (`false`).
     upcoming: Option<bool>,
@@ -308,6 +312,33 @@ const BARELY_SEEN_LIBRARIES: i64 = 25;
 /// Most players at once over the last 7 days (Slop Pulse). `a` is `apps`.
 pub(crate) const PLAYERS_THIS_WEEK: &str = "(select coalesce(max(p.players), 0) from pulse_counts p
      where p.app_id = a.id and p.bucket > now() - interval '7 days')";
+
+/// The newest reviewed of browser game `a`'s approved addresses, withdrawn since or not.
+macro_rules! newest_address_release {
+    () => {
+        "(select p.id from releases p
+          where p.app_id = a.id and p.play_address is not null and p.status in ('approved', 'revoked')
+          order by p.reviewed_at desc nulls last, p.created_at desc limit 1)"
+    };
+}
+
+/// The release whose address Play opens for browser game `a` (`apps`), or null: its newest
+/// reviewed release with an address that was approved. If that one has been withdrawn since,
+/// none: a withdrawn address stops Play until a person approves a new one, never falling back to
+/// an older address (often the same site). Holds don't apply (manage.rs), and pending, rejected
+/// and older addresses are never it. The one definition of where Play goes.
+pub(crate) const PLAY_RELEASE: &str = concat!(
+    "(select q.id from releases q where q.status = 'approved' and q.id = ",
+    newest_address_release!(),
+    ")"
+);
+
+/// `PLAY_RELEASE`'s address: where Play goes for browser game `a` (`apps`), or null.
+pub(crate) const PLAY_ADDRESS: &str = concat!(
+    "(select q.play_address from releases q where q.status = 'approved' and q.id = ",
+    newest_address_release!(),
+    ")"
+);
 
 async fn list_apps(
     State(state): State<AppState>,
@@ -365,10 +396,15 @@ async fn list_apps(
         qb.push(" and a.kind = ").push_bind(kind);
     }
     if let Some(platform) = query.platform.as_deref() {
-        if !["windows", "linux"].contains(&platform) {
-            return Err(ApiError::invalid("platform", "use windows or linux"));
+        if !["windows", "linux", "browser"].contains(&platform) {
+            return Err(ApiError::invalid(
+                "platform",
+                "use windows, linux or browser",
+            ));
         }
         // The app itself, or one of its community builds this viewer could see in the store.
+        // A browser game is ['browser'] alone and has no community builds, so it only ever
+        // matches "browser".
         qb.push(" and (")
             .push_bind(platform)
             .push(" = any(a.platforms) or exists (select 1 from apps b where b.parent_app_id = a.id and ")
@@ -751,8 +787,13 @@ struct AppDetail {
     description_md: String,
     repo_url: String,
     license_spdx: String,
-    /// The builds every release must include: windows, linux, linux-deb, linux-rpm.
+    /// The builds every release must include: windows, linux, linux-deb, linux-rpm. Or browser
+    /// alone: it plays on its maker's website, and each release is a play address.
     platforms: Vec<String>,
+    /// A browser game's address Play opens (`PLAY_ADDRESS`), for a viewer who may play it: in
+    /// Beta or Released (Coming soon: only its maker). Null otherwise, and before a person
+    /// approves one. Pending and older addresses are never here.
+    play_address: Option<String>,
     maker: Maker,
     #[serde(with = "time::serde::rfc3339")]
     stage_entered_at: OffsetDateTime,
@@ -808,6 +849,7 @@ struct AppExtra {
     repo_url: String,
     license_spdx: String,
     platforms: Vec<String>,
+    play_address: Option<String>,
     maker_name: String,
     stage_entered_at: OffsetDateTime,
     last_commit_at: Option<OffsetDateTime>,
@@ -870,6 +912,19 @@ pub async fn is_private<'c>(db: impl sqlx::PgExecutor<'c>, app_id: Uuid) -> sqlx
         .await
 }
 
+/// A browser game (platforms = ['browser']): it plays on its maker's website, its releases are
+/// play addresses, and nothing of it is installed, built by Slop Build, watched, held, demoed,
+/// modded or synced.
+pub async fn plays_in_browser<'c>(
+    db: impl sqlx::PgExecutor<'c>,
+    app_id: Uuid,
+) -> sqlx::Result<bool> {
+    sqlx::query_scalar("select 'browser' = any(platforms) from apps where id = $1")
+        .bind(app_id)
+        .fetch_one(db)
+        .await
+}
+
 /// Loads an app's store page. Makers always see their own apps; everyone else only sees apps
 /// that are in the store for them.
 async fn load_detail(
@@ -881,8 +936,9 @@ async fn load_detail(
     let rules = state.config.catalog;
     let mut qb = QueryBuilder::new(
         "select a.id, a.maker_id, a.description_md, a.repo_url, a.license_spdx, a.platforms, u.display_name as maker_name,
-                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, a.mods_folder, a.accessibility, a.bug_reports, (",
+                a.stage_entered_at, a.last_commit_at, a.online, a.online_hosts, a.mods_folder, a.accessibility, a.bug_reports, ",
     );
+    qb.push(PLAY_ADDRESS).push(" as play_address, (");
     push_store_visible(&mut qb, rules, policy);
     qb.push(") or ");
     push_shared_with(&mut qb, user.map(|u| u.id));
@@ -911,12 +967,18 @@ async fn load_detail(
     .await?;
 
     let community = crate::branches::community(state, extra.id, &extra.platforms, policy).await?;
+    // A Coming soon game isn't playable yet, except by its maker (as there's no Install either).
+    let play_address = extra
+        .play_address
+        .filter(|_| is_mine || summary.stage != AppStage::ComingSoon);
+    let in_browser = summary.plays_in_browser;
     Ok(AppDetail {
         summary,
         description_md: extra.description_md,
         repo_url: extra.repo_url,
         license_spdx: extra.license_spdx,
         platforms: extra.platforms,
+        play_address,
         maker: Maker {
             display_name: extra.maker_name,
         },
@@ -932,7 +994,8 @@ async fn load_detail(
         mods_folder: extra.mods_folder,
         accessibility: extra.accessibility,
         bug_reports: extra.bug_reports,
-        demo: match crate::demos::play_link(state, slug) {
+        // A browser game is already played in the browser: it never has a demo (demos.rs).
+        demo: match crate::demos::play_link(state, slug).filter(|_| !in_browser) {
             Some(url) => sqlx::query_scalar::<_, OffsetDateTime>(
                 "select ends_at from demos where app_id = $1 and status = 'live' and ends_at > now()",
             )
@@ -997,6 +1060,8 @@ pub(crate) struct SandboxInfo {
     pub sandbox_trouble: bool,
 }
 
+/// Sandbox mode is for what the SLAPorSLOP app installs and runs: a browser game, which runs on
+/// its maker's website, has none of it (all false).
 pub(crate) async fn sandbox_info(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<SandboxInfo> {
     sqlx::query_as(
         "with newest as (
@@ -1004,15 +1069,18 @@ pub(crate) async fn sandbox_info(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Resul
              where r.app_id = $1 and r.status = 'approved' and r.signed_manifest is not null
              order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
              limit 1)
-         select a.sandbox_ready,
-                a.sandbox_ready and coalesce((select repo_scan ->> 'save_folder' = 'elsewhere' from newest), false)
+         select a.sandbox_ready and not b.browser as sandbox_ready,
+                a.sandbox_ready and not b.browser
+                    and coalesce((select repo_scan ->> 'save_folder' = 'elsewhere' from newest), false)
                     as sandbox_mismatch,
-                cardinality(a.online) > 0
-                    or coalesce((select (repo_scan ->> 'online_undeclared')::boolean from newest), false)
-                    or coalesce((select (repo_scan ->> 'mod_online')::boolean from newest), false)
+                not b.browser
+                    and (cardinality(a.online) > 0
+                         or coalesce((select (repo_scan ->> 'online_undeclared')::boolean from newest), false)
+                         or coalesce((select (repo_scan ->> 'mod_online')::boolean from newest), false))
                     as sandbox_suggested,
-                (select count(*) from sandbox_reports s where s.app_id = a.id) >= $2 as sandbox_trouble
-         from apps a where a.id = $1",
+                not b.browser
+                    and (select count(*) from sandbox_reports s where s.app_id = a.id) >= $2 as sandbox_trouble
+         from apps a, lateral (select 'browser' = any(a.platforms) as browser) b where a.id = $1",
     )
     .bind(app_id)
     .bind(SANDBOX_TROUBLE_REPORTS)
@@ -1029,6 +1097,11 @@ async fn report_sandbox(
 ) -> ApiResult<StatusCode> {
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
     let (app_id, _) = visible_app(&state, &slug, Some(&user), policy).await?;
+    if plays_in_browser(&state.db, app_id).await? {
+        return Err(ApiError::Conflict(
+            "a browser game has no sandbox mode: it runs on its maker's website".into(),
+        ));
+    }
     // Only players who've started it: a few new accounts shouldn't be able to put a warning on
     // any store page (security review, 2026-10-22).
     let played: bool = sqlx::query_scalar(
@@ -1574,16 +1647,25 @@ pub(crate) fn validate_license(value: &str) -> ApiResult<String> {
     Ok(value.to_string())
 }
 
-/// Windows and/or Linux; Linux comes as a .tar.gz plus at least one package format.
+/// Windows and/or Linux; Linux comes as a .tar.gz plus at least one package format. Or the
+/// browser alone: a game that plays on its maker's website, with nothing to download.
 pub(crate) fn validate_platforms(value: &[String]) -> ApiResult<Vec<String>> {
     let invalid = |msg: &str| ApiError::invalid("platforms", msg.to_string());
+    if value.iter().any(|p| p == "browser") {
+        if value.iter().all(|p| p == "browser") {
+            return Ok(vec!["browser".to_string()]);
+        }
+        return Err(invalid(
+            "a browser game plays only in the browser: choose In the browser, or Windows/Linux",
+        ));
+    }
     const ORDER: [&str; 4] = ["windows", "linux", "linux-deb", "linux-rpm"];
     if let Some(bad) = value.iter().find(|p| !ORDER.contains(&p.as_str())) {
         return Err(invalid(&format!("unknown platform: {bad}")));
     }
     let has = |p: &str| value.iter().any(|v| v == p);
     if !has("windows") && !has("linux") {
-        return Err(invalid("choose Windows, Linux or both"));
+        return Err(invalid("choose Windows, Linux or both, or In the browser"));
     }
     if has("linux") && !has("linux-deb") && !has("linux-rpm") {
         return Err(invalid("Linux apps need a .deb or .rpm package, or both"));
@@ -1596,6 +1678,43 @@ pub(crate) fn validate_platforms(value: &[String]) -> ApiResult<Vec<String>> {
         .filter(|p| has(p))
         .map(|p| p.to_string())
         .collect())
+}
+
+/// What a browser game can't be (DESIGN §8). Only games play in the browser for now. Its address
+/// is public on the web, so it can't be private (refused on `private_field`). Sandbox mode and a
+/// mods folder are for what the SLAPorSLOP app installs.
+fn browser_game_rules(
+    kind: AppKind,
+    private: bool,
+    private_field: &'static str,
+    sandbox_ready: bool,
+    mods_folder: bool,
+) -> ApiResult<()> {
+    if kind != AppKind::Game {
+        return Err(ApiError::invalid(
+            "platforms",
+            "only games can play in the browser for now",
+        ));
+    }
+    if private {
+        return Err(ApiError::invalid(
+            private_field,
+            "a browser game's address is public on the web, so it can't be private",
+        ));
+    }
+    if sandbox_ready {
+        return Err(ApiError::invalid(
+            "sandbox_ready",
+            "sandbox mode is for what the SLAPorSLOP app installs: a browser game runs on its maker's website",
+        ));
+    }
+    if mods_folder {
+        return Err(ApiError::invalid(
+            "mods_folder",
+            "a browser game isn't installed, so it has no folder to read mods from",
+        ));
+    }
+    Ok(())
 }
 
 pub(crate) fn validate_min_age(value: i16) -> ApiResult<i16> {
@@ -1741,6 +1860,16 @@ async fn create_app(
     let online = validate_online(&req.online)?;
     let online_hosts = validate_online_hosts(&req.online_hosts)?;
     let mods_folder = validate_mods_folder(req.mods_folder.clone())?;
+    let in_browser = platforms == ["browser"];
+    if in_browser {
+        browser_game_rules(
+            req.kind,
+            req.visibility.as_deref() == Some("private"),
+            "visibility",
+            req.sandbox_ready,
+            mods_folder.is_some(),
+        )?;
+    }
     let tag_ids = resolve_tags(&state.db, &req.tags).await?;
     crate::legal::require(&state.db, user.id, "publisher").await?;
     if let Some(t) = &req.repo_token {
@@ -1757,11 +1886,12 @@ async fn create_app(
 
     let app_id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
+    // A browser game has no GitHub release files to watch for (updates.rs).
     let inserted = sqlx::query(
         "insert into apps (id, slug, title, summary, description_md, kind, stage, maker_id, repo_url, license_spdx, min_age,
                            platforms, visibility, content_labels, online, online_hosts, sandbox_ready, mods_folder,
-                           accessibility, bug_reports)
-         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20)",
+                           accessibility, bug_reports, watch_releases)
+         values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21)",
     )
     .bind(app_id)
     .bind(&req.slug)
@@ -1783,6 +1913,7 @@ async fn create_app(
     .bind(&mods_folder)
     .bind(crate::label::validate_accessibility(&req.accessibility)?)
     .bind(req.bug_reports)
+    .bind(!in_browser)
     .execute(&mut *tx)
     .await;
     match inserted {
@@ -1816,17 +1947,32 @@ async fn update_app(
     Path(slug): Path<String>,
     Json(changes): Json<AppChanges>,
 ) -> ApiResult<Json<AppDetail>> {
+    #[derive(sqlx::FromRow)]
+    struct Current {
+        id: Uuid,
+        maker_id: Uuid,
+        repo_url: String,
+        kind: AppKind,
+        private: bool,
+        in_browser: bool,
+        /// A community build or mod (DESIGN §9).
+        is_branch: bool,
+    }
     let mut tx = state.db.begin().await?;
-    let owner: Option<(Uuid, Uuid, String)> =
-        sqlx::query_as("select id, maker_id, repo_url from apps where slug = $1 for update")
-            .bind(&slug)
-            .fetch_optional(&mut *tx)
-            .await?;
+    let current: Option<Current> = sqlx::query_as(
+        "select id, maker_id, repo_url, kind, visibility = 'private' as private,
+                'browser' = any(platforms) as in_browser, parent_app_id is not null as is_branch
+         from apps where slug = $1 for update",
+    )
+    .bind(&slug)
+    .fetch_optional(&mut *tx)
+    .await?;
     // Someone else's app looks the same as a missing one, so drafts can't be discovered.
-    let (app_id, current_repo) = match owner {
-        Some((id, maker_id, repo)) if maker_id == user.id => (id, repo),
+    let current = match current {
+        Some(c) if c.maker_id == user.id => c,
         _ => return Err(ApiError::NotFound),
     };
+    let (app_id, current_repo) = (current.id, current.repo_url.clone());
 
     let mut qb: QueryBuilder<Postgres> = QueryBuilder::new("update apps set updated_at = now()");
     if let Some(title) = &changes.title {
@@ -1923,8 +2069,70 @@ async fn update_app(
                 "a mod is one .zip for every platform",
             ));
         }
-        qb.push(", platforms = ")
-            .push_bind(validate_platforms(platforms)?);
+        let platforms = validate_platforms(platforms)?;
+        let to_browser = platforms == ["browser"];
+        if to_browser != current.in_browser {
+            // Its releases are files or addresses, never both: players' apps would be offered
+            // an address to install, or Play a build (DESIGN §8).
+            let has_releases: bool =
+                sqlx::query_scalar("select exists (select 1 from releases where app_id = $1)")
+                    .bind(app_id)
+                    .fetch_one(&mut *tx)
+                    .await?;
+            if has_releases {
+                return Err(ApiError::Conflict(
+                    "a browser game can't become a download, or the reverse, once it has \
+                     releases: make a new store page"
+                        .into(),
+                ));
+            }
+            if to_browser {
+                // No community builds of browser games, or browser community builds, yet.
+                if current.is_branch {
+                    return Err(ApiError::invalid(
+                        "platforms",
+                        "a community build can't play in the browser yet: choose Windows, Linux or both",
+                    ));
+                }
+                let has_branches: bool = sqlx::query_scalar(
+                    "select exists (select 1 from apps where parent_app_id = $1)",
+                )
+                .bind(app_id)
+                .fetch_one(&mut *tx)
+                .await?;
+                if has_branches {
+                    return Err(ApiError::Conflict(
+                        "it has community builds or mods, which need a download to build on, so \
+                         it can't become a browser game"
+                            .into(),
+                    ));
+                }
+                // What only downloads have goes: sandbox mode, a mods folder, release watching.
+                if changes.sandbox_ready.is_none() {
+                    qb.push(", sandbox_ready = false");
+                }
+                if changes.mods_folder.is_none() {
+                    qb.push(", mods_folder = null");
+                }
+                qb.push(", watch_releases = false");
+            } else {
+                qb.push(", watch_releases = true");
+            }
+        }
+        qb.push(", platforms = ").push_bind(platforms);
+    }
+    let in_browser = changes
+        .platforms
+        .as_ref()
+        .map_or(current.in_browser, |p| p.iter().any(|p| p == "browser"));
+    if in_browser {
+        browser_game_rules(
+            current.kind,
+            current.private,
+            "platforms",
+            changes.sandbox_ready == Some(true),
+            matches!(changes.mods_folder, Some(Some(_))),
+        )?;
     }
     if let Some(online) = &changes.online {
         qb.push(", online = ").push_bind(validate_online(online)?);
@@ -1981,6 +2189,52 @@ mod tests {
         assert!(v(&["linux"]).is_err(), "Linux needs a package");
         assert!(v(&["windows", "linux-deb"]).is_err(), "packages need Linux");
         assert!(v(&["mac"]).is_err());
+        assert!(
+            v(&["any"]).is_err(),
+            "only mods are 'any', and branches.rs sets it"
+        );
+
+        // A browser game plays only in the browser.
+        assert_eq!(v(&["browser"]).unwrap(), ["browser"]);
+        assert_eq!(v(&["browser", "browser"]).unwrap(), ["browser"]);
+        for mixed in [
+            &["browser", "windows"][..],
+            &["linux", "linux-deb", "browser"],
+            &["browser", "any"],
+        ] {
+            let Err(ApiError::Invalid { field, message }) = v(mixed) else {
+                panic!("{mixed:?} is refused");
+            };
+            assert_eq!(field, "platforms");
+            assert!(message.contains("plays only in the browser"), "{message}");
+        }
+        let Err(ApiError::Invalid { message, .. }) = v(&[]) else {
+            panic!("nothing chosen is refused");
+        };
+        assert_eq!(message, "choose Windows, Linux or both, or In the browser");
+    }
+
+    #[test]
+    fn browser_games_are_public_games_without_sandbox_mode_or_mods() {
+        let rules = |kind, private, sandbox, mods| {
+            browser_game_rules(kind, private, "visibility", sandbox, mods)
+                .err()
+                .map(|e| match e {
+                    ApiError::Invalid { field, .. } => field,
+                    other => panic!("{other}"),
+                })
+        };
+        assert_eq!(rules(AppKind::Game, false, false, false), None);
+        assert_eq!(rules(AppKind::App, false, false, false), Some("platforms"));
+        assert_eq!(rules(AppKind::Game, true, false, false), Some("visibility"));
+        assert_eq!(
+            rules(AppKind::Game, false, true, false),
+            Some("sandbox_ready")
+        );
+        assert_eq!(
+            rules(AppKind::Game, false, false, true),
+            Some("mods_folder")
+        );
     }
 
     #[test]

@@ -837,11 +837,11 @@ fn store_page_fields() -> Value {
         "min_age": { "type": "integer", "description": "Minimum age: 0, 7, 12, 16 or 18" },
         "content_labels": { "type": "array", "items": { "type": "string" }, "description": "Any of romance, suggestive, violence, horror, strong_language, gambling_themes" },
         "tags": { "type": "array", "items": { "type": "string" }, "description": "Up to 10 tag slugs from list_categories. A category with max_age (Kids & Family) lists only apps rated at most that and without its excluded_labels: don't tag an older app with it" },
-        "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux: every release must include exactly these" },
+        "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux: every release must include exactly these. Or [\"browser\"] alone, for a game that plays on your own website: nothing to download, and each release is its play address (submit_play_address). Can't change between the two once it has releases" },
         "online": { "type": "array", "items": { "type": "string" }, "description": "How it goes online, if it does (see the guide section \"Online play and mods\")" },
         "online_hosts": { "type": "array", "items": { "type": "string" }, "description": "The hosts it connects to" },
-        "sandbox_ready": { "type": "boolean", "description": "Works in sandbox mode: local saves only in SLOP_SAVE_DIR" },
-        "mods_folder": { "type": ["object", "null"], "description": "Where it reads mods from: {base: game|saves, path, layout: folder|flat}; null if it reads SLOP_MODS or has no mods" },
+        "sandbox_ready": { "type": "boolean", "description": "Works in sandbox mode: local saves only in SLOP_SAVE_DIR. Not for browser games" },
+        "mods_folder": { "type": ["object", "null"], "description": "Where it reads mods from: {base: game|saves, path, layout: folder|flat}; null if it reads SLOP_MODS or has no mods. Not for browser games" },
         "bug_reports": { "type": "boolean", "description": "Take bug reports from players on SLAPorSLOP (on by default)" },
         "accessibility": { "type": "array", "items": { "type": "string" }, "description": "Accessibility features it really has (players confirm or dispute them): remap_controls, colorblind, subtitles, text_size, one_handed, difficulty, no_flashing, screen_reader, controller. Check the code before claiming one" },
     })
@@ -854,13 +854,28 @@ fn new_app_fields() -> Value {
         "slug".into(),
         s("The store address: lowercase letters, digits and dashes, e.g. pixel-dungeon"),
     );
-    m.insert("kind".into(), s("game or app"));
+    m.insert(
+        "kind".into(),
+        s("game or app; only a game can play in the browser"),
+    );
     m.insert("stage".into(), s("coming_soon, beta or released"));
     fields
 }
 
 fn slug_only() -> Value {
     json!({ "slug": s("The app's store address") })
+}
+
+/// A browser game's release: its play address instead of files.
+fn play_address_fields() -> Value {
+    json!({
+        "slug": s("The browser game's store address"),
+        "play_address": s("The https:// address the game plays at on your own website, e.g. https://you.github.io/game/. It must load as a web page, on a public site"),
+        "version": s("The version, e.g. 1.2.0: a new one for each address you give"),
+        "commit_sha": s("The full 40-character commit SHA your site is built from; leave out on GitHub to use the default branch's newest"),
+        "notes": s("What changed, for players: Markdown, up to 5,000 characters"),
+        "rating": { "type": "object", "description": "This release's age rating, when it differs from the store page's: {min_age: 0, 3, 7, 12, 16 or 18, content_labels: [...]}" },
+    })
 }
 
 fn release_fields() -> Value {
@@ -933,7 +948,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "list_releases",
-        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds.",
+        description: "An app's releases, newest first, each with its status (fetching, awaiting_review, approved, rejected, failed, revoked, withdrawn) and the reason, its files and SLAPorSLOP's checks: the source check (licence, saves, online, code loading, purchases), Slop Build's checks (secrets, vulnerable packages) and file scans. `progress` says where it is, file by file: `summary` is a sentence to pass on (\"Checking file 2 of 4: Linux (.deb), scanning for malware… about 13 minutes left\"), with `current` (the file being checked and its step), `files_checked` of `files_total`, `remaining_seconds`, and each file's `check` (waiting, checking, checked). Files take minutes each to scan, so check back every few minutes, not every few seconds. A browser game's release has no files: `play_address`, and `address_checks` (https, public_host, bad_links, status, final_address, redirects, content_type, ok, problem); its `progress.stage` is checking_address while SLAPorSLOP checks it, which takes seconds.",
         method: Method::GET,
         path: "/v1/apps/{slug}/releases",
         properties: slug_only,
@@ -941,7 +956,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "get_fixes",
-        description: "Every problem SLAPorSLOP's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release. `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
+        description: "Every problem SLAPorSLOP's checks found in the app's newest release, each with why it matters and exact instructions to fix it in the repository. Fix them, push, and submit a new release (a browser game: give its play address again). `recommendations` lists what's worth adding that never blocks a release (e.g. the app has no icon yet), with the same kind of instructions.",
         method: Method::GET,
         path: "/v1/apps/{slug}/fixes",
         properties: slug_only,
@@ -1001,7 +1016,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "browser_demo",
-        description: "Whether the app can have a browser demo now (new releases only, for a few days), and the demo's state: fetching, live (with its address and plays), failed (why) or ended.",
+        description: "Whether the app can have a browser demo now (new releases only, for a few days), and the demo's state: fetching, live (with its address and plays), failed (why) or ended. Not for browser games: they already play in the browser.",
         method: Method::GET,
         path: "/v1/apps/{slug}/demo",
         properties: slug_only,
@@ -1009,7 +1024,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "host_browser_demo",
-        description: "Hosts a browser demo of a newly released game: give the address of a web build (a .zip with index.html at its top, e.g. Godot's Web export) attached to a release on the app's repository. SLAPorSLOP scans and hosts it for its first days, with no network access. Check browser_demo afterwards.",
+        description: "Hosts a browser demo of a newly released game: give the address of a web build (a .zip with index.html at its top, e.g. Godot's Web export) attached to a release on the app's repository. SLAPorSLOP scans and hosts it for its first days, with no network access. Check browser_demo afterwards. Not for browser games: they already play in the browser, on their own site.",
         method: Method::POST,
         path: "/v1/apps/{slug}/demo",
         properties: || json!({ "slug": s("The app's store address"), "url": s("The web build's address on the release page") }),
@@ -1071,7 +1086,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "slop_build_setup",
-        description: "How to add Slop Build to the app's repository: the workflow file to commit, with the detected project type. With it, every push builds, signs and submits a release by itself.",
+        description: "How to add Slop Build to the app's repository: the workflow file to commit, with the detected project type. With it, every push builds, signs and submits a release by itself. Not for browser games: Slop Build makes downloads (give a browser game's address with submit_play_address).",
         method: Method::GET,
         path: "/v1/apps/{slug}/slop-build",
         properties: slug_only,
@@ -1079,7 +1094,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "github_releases",
-        description: "The releases on the app's GitHub repository that can be submitted with submit_github_release.",
+        description: "The releases on the app's GitHub repository that can be submitted with submit_github_release. Not for browser games.",
         method: Method::GET,
         path: "/v1/apps/{slug}/github-releases",
         properties: slug_only,
@@ -1087,7 +1102,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "create_store_page",
-        description: "Creates a draft store page. Write the description yourself from the repository (README, gameplay, controls). Needs a publish token for all your apps.",
+        description: "Creates a draft store page. Write the description yourself from the repository (README, gameplay, controls). Needs a publish token for all your apps. For a game that plays on your own website, platforms [\"browser\"] (a public game: no sandbox_ready or mods_folder), then give its address with submit_play_address.",
         method: Method::POST,
         path: "/v1/apps",
         properties: new_app_fields,
@@ -1119,15 +1134,23 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "submit_release",
-        description: "Submits a release whose files are attached to a release on the app's repository. SLAPorSLOP downloads, hashes and scans them, then a person reviews it. Check its progress with list_releases.",
+        description: "Submits a release of a Windows or Linux app whose files are attached to a release on the app's repository. SLAPorSLOP downloads, hashes and scans them, then a person reviews it. Check its progress with list_releases. A browser game uses submit_play_address instead.",
         method: Method::POST,
         path: "/v1/apps/{slug}/releases",
         properties: release_fields,
         required: &["slug", "version", "commit_sha", "files"],
     },
     Tool {
+        name: "submit_play_address",
+        description: "Submits a browser game's release: the https address it plays at on your own website (its store page's platforms are [\"browser\"]). SLAPorSLOP checks the address (https, a public site, the bad-link lists, and that the page loads as a web page), in seconds, then a person opens it and plays it: every new address waits for a person, and only the same address as the one Play opens now can be approved automatically. SLAPorSLOP checks the address, not what the site serves: never say it's scanned. Check it with list_releases.",
+        method: Method::POST,
+        path: "/v1/apps/{slug}/releases",
+        properties: play_address_fields,
+        required: &["slug", "play_address", "version"],
+    },
+    Tool {
         name: "submit_github_release",
-        description: "Submits a release from the app's GitHub releases by its tag; its notes default to the GitHub release's text.",
+        description: "Submits a release from the app's GitHub releases by its tag; its notes default to the GitHub release's text. Not for browser games.",
         method: Method::POST,
         path: "/v1/apps/{slug}/releases/from-github",
         properties: || {
@@ -1169,7 +1192,7 @@ pub(crate) const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "move_to_stage",
-        description: "Moves the app on to its next stage: `beta` (playable, still changing; players can rate it and donate) or `released` (finished). Straight from coming_soon to released is fine. Only forward, and only once a release has been approved; it happens at once and everyone who marked the app Interested is told. Only when your maker asks: it's their decision.",
+        description: "Moves the app on to its next stage: `beta` (playable, still changing; players can rate it and donate) or `released` (finished). Straight from coming_soon to released is fine. Only forward, and only once a release (a browser game: its play address) has been approved; it happens at once and everyone who marked the app Interested is told. Only when your maker asks: it's their decision.",
         method: Method::POST,
         path: "/v1/apps/{slug}/stage",
         properties: || {
@@ -1211,7 +1234,7 @@ pub(crate) const TOOLS: &[Tool] = &[
                 "license_spdx": s("Its licence, as an SPDX ID (a fork keeps the original's terms)"),
                 "kind": s("addon (a mod), mod (a modded version), fix, translation, port or other"),
                 "note": s("What it changes from the original, for players: up to 500 characters"),
-                "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux; leave out for a mod" },
+                "platforms": { "type": "array", "items": { "type": "string" }, "description": "windows and/or linux; leave out for a mod. A community build can't play in the browser, and a browser game can't have community builds or mods, yet" },
                 "description_md": s("Its store page text, Markdown; the note when empty"),
                 "min_age": { "type": "integer", "description": "At least the original's; the original's when left out" },
                 "content_labels": { "type": "array", "items": { "type": "string" } },

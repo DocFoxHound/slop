@@ -113,6 +113,9 @@ pub struct AppState {
     /// For profile pictures (avatars.rs): short timeout, public addresses only, and no redirects
     /// of its own (avatars.rs follows them itself, checking each host).
     pub avatar_http: reqwest::Client,
+    /// For browser games' play pages (releases.rs `check_play_address`): the same, with a little
+    /// longer to load, and the check follows redirects itself, checking and counting each one.
+    pub page_http: reqwest::Client,
     /// Wakes the release fetcher when a release is submitted.
     pub fetch_wakeup: Arc<tokio::sync::Notify>,
     /// Wakes the bounty charger when a delivery is confirmed (bounties.rs).
@@ -204,6 +207,15 @@ impl AppState {
             avatar_http = avatar_http.dns_resolver(Arc::new(PublicOnly));
         }
         let avatar_http = avatar_http.build()?;
+        let mut page_http = reqwest::Client::builder()
+            .connect_timeout(Duration::from_secs(10))
+            .timeout(Duration::from_secs(20))
+            .redirect(reqwest::redirect::Policy::none())
+            .https_only(!config.releases.allow_http_downloads);
+        if !config.releases.allow_http_downloads {
+            page_http = page_http.dns_resolver(Arc::new(PublicOnly));
+        }
+        let page_http = page_http.build()?;
         let rate_limiter = Arc::new(ratelimit::RateLimiter::new(config.rate_limits));
         let account_limiter = Arc::new(limits::AccountLimiter::new(config.account_limit_scale));
         let checks = Arc::new(checks::Shared::new(
@@ -215,6 +227,7 @@ impl AppState {
             http,
             fetch_http,
             avatar_http,
+            page_http,
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
             bounty_wakeup: Arc::new(tokio::sync::Notify::new()),
             watch_wakeup: Arc::new(tokio::sync::Notify::new()),

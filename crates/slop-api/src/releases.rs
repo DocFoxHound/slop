@@ -5,6 +5,11 @@
 //! Builds stay on the maker's release page. SLAPorSLOP downloads each file once to hash it, keeps
 //! nothing but the hash and size, and the client later downloads from the same URL and checks
 //! the hash against SLAPorSLOP's signed manifest.
+//!
+//! A browser game's release is a play address instead of files (DESIGN §8): SLAPorSLOP checks it
+//! (https, a public site, the bad-link lists, and that the page loads), a person approves it, and
+//! nothing is signed. Play then opens it (`catalog::PLAY_ADDRESS`). SLAPorSLOP checks the
+//! address, not what the site serves.
 
 use std::time::Duration as StdDuration;
 
@@ -87,8 +92,16 @@ pub const MAX_PARTS: usize = 64;
 #[serde(deny_unknown_fields)]
 struct NewRelease {
     version: String,
-    commit_sha: String,
+    /// The commit it's built from. A browser game on GitHub may leave it out: its site is built
+    /// from the repository, and SLAPorSLOP takes the default branch's newest commit.
+    #[serde(default)]
+    commit_sha: Option<String>,
+    /// One build per platform on the store page; none for a browser game.
+    #[serde(default)]
     files: Vec<NewFile>,
+    /// A browser game's release: the https address it plays at, instead of files.
+    #[serde(default)]
+    play_address: Option<String>,
     /// This release's rating (AGE-7); the store page's when left out.
     #[serde(default)]
     rating: Option<Rating>,
@@ -214,6 +227,137 @@ pub(crate) fn validate_file_url(
     }
     let file_name = file_name.into_owned();
     Ok((url.into(), file_name))
+}
+
+/// The longest play address (the database checks the same).
+const MAX_PLAY_ADDRESS: usize = 2000;
+
+/// SLAPorSLOP's own sites, as (host, port): its address and former addresses, the trusted
+/// origins and the demos' origin. A play address is never one of them or under one: Play would
+/// open it with SLAPorSLOP's cookies.
+pub(crate) fn own_sites(config: &crate::config::Config) -> Vec<(String, u16)> {
+    let mut urls = vec![config.public_url.clone()];
+    urls.extend(config.former_urls.iter().cloned());
+    urls.extend(
+        config
+            .trusted_origins
+            .iter()
+            .filter_map(|o| Url::parse(o).ok()),
+    );
+    urls.extend(config.demos.play_url.iter().cloned());
+    urls.iter()
+        .filter_map(|u| {
+            Some((
+                u.host_str()?.trim_end_matches('.').to_ascii_lowercase(),
+                u.port_or_known_default()?,
+            ))
+        })
+        .collect()
+}
+
+/// Whether `url` is on one of `own` sites, or under one. On test setups (`allow_http`) every
+/// site runs on this machine, so the port tells them apart; otherwise the name alone does, as
+/// cookies don't care about ports.
+fn is_own_site(url: &Url, own: &[(String, u16)], allow_http: bool) -> bool {
+    let Some(host) = url.host_str() else {
+        return false;
+    };
+    let host = host.trim_end_matches('.').to_ascii_lowercase();
+    let port = url.port_or_known_default();
+    own.iter().any(|(h, p)| {
+        (host == *h || host.ends_with(&format!(".{h}"))) && (!allow_http || port == Some(*p))
+    })
+}
+
+/// A browser game's play address (DESIGN §8): the plain https address of a public website that
+/// isn't SLAPorSLOP's own, without a user name or password. Checked without the network; the
+/// site's name is then checked to lead to public addresses (`repo_owner::public_host`) and
+/// against the bad-link lists, and the fetcher loads the page (`check_play_address`). Plain
+/// http, IP addresses and this machine pass only on test setups (`allow_http`). Returns the
+/// address as it's kept.
+pub(crate) fn validate_play_address(
+    value: &str,
+    allow_http: bool,
+    own: &[(String, u16)],
+) -> ApiResult<String> {
+    let invalid = |msg: &str| ApiError::invalid("play_address", msg.to_string());
+    let value = value.trim();
+    if value.is_empty() {
+        return Err(invalid("give the https:// address your game plays at"));
+    }
+    let too_long = || invalid("use an address of up to 2,000 characters");
+    if value.chars().count() > MAX_PLAY_ADDRESS {
+        return Err(too_long());
+    }
+    let url =
+        Url::parse(value).map_err(|_| invalid("use the https:// address your game plays at"))?;
+    if !(url.scheme() == "https" || (allow_http && url.scheme() == "http")) {
+        return Err(invalid(
+            "use an https:// address: it's what players' browsers open",
+        ));
+    }
+    if !url.username().is_empty() || url.password().is_some() {
+        return Err(invalid(
+            "leave the user name and password out of the address",
+        ));
+    }
+    let Some(host) = url.host() else {
+        return Err(invalid("use the https:// address your game plays at"));
+    };
+    if !allow_http {
+        let ip: Option<std::net::IpAddr> = match host {
+            url::Host::Ipv4(ip) => Some(ip.into()),
+            url::Host::Ipv6(ip) => Some(ip.into()),
+            url::Host::Domain(_) => None,
+        };
+        if let Some(ip) = ip {
+            return Err(invalid(if crate::repo_owner::private_ip(ip) {
+                "that address is on a private network"
+            } else {
+                "use the site's name, not its IP address"
+            }));
+        }
+        let name = url
+            .host_str()
+            .unwrap_or("")
+            .trim_end_matches('.')
+            .to_ascii_lowercase();
+        if name == "localhost" || name.ends_with(".localhost") {
+            return Err(invalid("that address is on a private network"));
+        }
+        if !name.contains('.') {
+            return Err(invalid("use the site's full name, like mygame.example.com"));
+        }
+    }
+    if is_own_site(&url, own, allow_http) {
+        return Err(invalid(
+            "that's SLAPorSLOP's own site: give the address of the site your game plays on",
+        ));
+    }
+    let address = url.to_string();
+    if address.chars().count() > MAX_PLAY_ADDRESS {
+        return Err(too_long());
+    }
+    Ok(address)
+}
+
+/// `validate_play_address` with this server's rules.
+pub(crate) fn play_address_in(state: &AppState, value: &str) -> ApiResult<String> {
+    validate_play_address(
+        value,
+        state.config.releases.allow_http_downloads,
+        &own_sites(&state.config),
+    )
+}
+
+/// Whether two play addresses are the same, as the bad-link lists compare them (case, `www.`, a
+/// trailing slash and the fragment don't count; the scheme does).
+pub(crate) fn same_address(a: &str, b: &str) -> bool {
+    let key = |s: &str| {
+        let scheme = Url::parse(s.trim()).ok()?.scheme().to_string();
+        Some((scheme, crate::bad_links::normalize(s)?.0))
+    };
+    matches!((key(a), key(b)), (Some(x), Some(y)) if x == y)
 }
 
 /// What each build must be, by platform (migrations/0012_platforms.sql).
@@ -453,6 +597,12 @@ pub(crate) struct ReleaseInfo {
     /// What changed, for players (Markdown).
     notes: Option<String>,
     files: Vec<ReleaseFileInfo>,
+    /// A browser game's release: the address it plays at, instead of files. Everyone but the
+    /// maker sees only the address Play opens (`list_releases`).
+    play_address: Option<String>,
+    /// What SLAPorSLOP's automatic checks of the address found (`AddressChecks`); null until
+    /// they've run.
+    address_checks: Option<serde_json::Value>,
     /// Slop Build's source checks: possible secrets and vulnerable dependencies.
     source_checks: Option<serde_json::Value>,
     /// SLAPorSLOP's own source check (source_scan.rs): licence, monetization notes, package count.
@@ -502,17 +652,22 @@ async fn submit_release(
     if let Some(notes) = &req.notes {
         check_notes(notes)?;
     }
+    let commit = match req.commit_sha {
+        Some(commit) => commit,
+        None => site_commit(&state, app_id, &repo_url).await?,
+    };
     let release = create_release(
         &state,
         app_id,
         &repo_url,
         user.id,
         &req.version,
-        &req.commit_sha,
+        &commit,
         req.files,
         "maker",
         req.rating,
         req.runtimes,
+        req.play_address,
     )
     .await?;
     let release = match req.notes {
@@ -523,6 +678,33 @@ async fn submit_release(
         None => release,
     };
     Ok((StatusCode::CREATED, Json(release)))
+}
+
+/// The commit for a release that didn't name one. Only a browser game may leave it out: nothing
+/// is downloaded that says which commit its site is built from, so SLAPorSLOP takes the newest
+/// on the default branch, from GitHub.
+async fn site_commit(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiResult<String> {
+    if !catalog::plays_in_browser(&state.db, app_id).await? {
+        return Err(ApiError::invalid(
+            "commit_sha",
+            "use the full 40-character commit SHA, in lowercase",
+        ));
+    }
+    let Some(repo) = slop_provenance::github_repo_path(repo_url) else {
+        return Err(ApiError::invalid(
+            "commit_sha",
+            "give the commit your site is built from: SLAPorSLOP can only look up the newest one on GitHub",
+        ));
+    };
+    crate::media::head_commit(state, &repo).await.map_err(|p| {
+        ApiError::invalid(
+            "commit_sha",
+            format!(
+                "give the commit your site is built from: SLAPorSLOP couldn't look up the newest one ({})",
+                p.0
+            ),
+        )
+    })
 }
 
 /// Up to this many characters of release notes.
@@ -625,7 +807,8 @@ async fn withdraw_release(
 
 /// Checks and records a new release for fetching and review. Shared by makers' own submissions,
 /// Slop Build's (slop_build.rs) and the GitHub release watcher (updates.rs), so all go through
-/// the same checks. `source` is maker, slop_build or github_release.
+/// the same checks. `source` is maker, slop_build or github_release. A browser game's release
+/// brings `play_address` and no files, and only from its maker.
 #[allow(clippy::too_many_arguments)]
 pub(crate) async fn create_release(
     state: &AppState,
@@ -638,9 +821,50 @@ pub(crate) async fn create_release(
     source: &str,
     rating: Option<Rating>,
     runtimes: Option<Vec<String>>,
+    play_address: Option<String>,
 ) -> ApiResult<ReleaseInfo> {
     validate_version(version)?;
     validate_commit(commit_sha)?;
+    let required: Vec<String> = sqlx::query_scalar("select platforms from apps where id = $1")
+        .bind(app_id)
+        .fetch_one(&state.db)
+        .await?;
+    // A browser game's release is its play address; everything else brings files.
+    let in_browser = required.iter().any(|p| p == "browser");
+    let play_address = if in_browser {
+        if !files.is_empty() {
+            return Err(ApiError::invalid(
+                "files",
+                "a browser game has no files: give its play address",
+            ));
+        }
+        if source != "maker" {
+            return Err(ApiError::Conflict(
+                "a browser game's releases are play addresses, given on its Releases page".into(),
+            ));
+        }
+        if runtimes.as_ref().is_some_and(|r| !r.is_empty()) {
+            return Err(ApiError::invalid(
+                "runtimes",
+                "a browser game needs no runtimes: it runs in the player's browser",
+            ));
+        }
+        let given = play_address.ok_or_else(|| {
+            ApiError::invalid(
+                "play_address",
+                "give the https:// address your game plays at",
+            )
+        })?;
+        Some(play_address_in(state, &given)?)
+    } else {
+        if play_address.is_some() {
+            return Err(ApiError::invalid(
+                "play_address",
+                "only games that play in the browser have a play address",
+            ));
+        }
+        None
+    };
     // The store page's rating unless the release says otherwise; never below a branch's
     // original (branches.rs).
     let rating = match rating {
@@ -661,6 +885,7 @@ pub(crate) async fn create_release(
         }
     };
     let runtimes = match runtimes {
+        _ if in_browser => Vec::new(),
         Some(list) => {
             let mut out: Vec<String> = Vec::new();
             for id in list {
@@ -710,16 +935,16 @@ pub(crate) async fn create_release(
             },
         ));
     }
-    let required: Vec<String> = sqlx::query_scalar("select platforms from apps where id = $1")
-        .bind(app_id)
-        .fetch_one(&state.db)
-        .await?;
-    let files = validate_files(
-        repo_url,
-        files,
-        state.config.releases.allow_http_downloads,
-        &required,
-    )?;
+    let files = if in_browser {
+        Vec::new()
+    } else {
+        validate_files(
+            repo_url,
+            files,
+            state.config.releases.allow_http_downloads,
+            &required,
+        )?
+    };
 
     let pending: i64 = sqlx::query_scalar(
         "select count(*) from releases where app_id = $1 and status in ('fetching', 'awaiting_review')",
@@ -733,9 +958,36 @@ pub(crate) async fn create_release(
         ));
     }
 
+    // The address leads to a public site (not on test setups), and no bad-link list names it.
+    // Refusing a new address that's listed takes nothing away from anyone (SECURITY §11).
+    if let Some(address) = &play_address {
+        let url = Url::parse(address).map_err(|e| ApiError::Internal(e.into()))?;
+        crate::repo_owner::public_host(state, &url)
+            .await
+            .map_err(|e| {
+                ApiError::invalid(
+                    "play_address",
+                    match e.downcast_ref::<std::io::Error>() {
+                        Some(lookup) => format!("SLAPorSLOP can't find that site ({lookup})"),
+                        None => format!("{e:#}"),
+                    },
+                )
+            })?;
+        if let Some((_, list)) = crate::bad_links::find(&state.db, std::slice::from_ref(address))
+            .await?
+            .into_iter()
+            .next()
+        {
+            return Err(ApiError::invalid(
+                "play_address",
+                format!("this address is on {list}, a list of known-bad links"),
+            ));
+        }
+    }
+
     let id = Uuid::now_v7();
     let mut tx = state.db.begin().await?;
-    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by, source, min_age, content_labels, runtimes) values ($1, $2, $3, $4, $5, $6, $7, $8, $9)")
+    sqlx::query("insert into releases (id, app_id, version, commit_sha, submitted_by, source, min_age, content_labels, runtimes, play_address) values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10)")
         .bind(id)
         .bind(app_id)
         .bind(version)
@@ -745,6 +997,7 @@ pub(crate) async fn create_release(
         .bind(rating.min_age)
         .bind(&rating.content_labels)
         .bind(&runtimes)
+        .bind(&play_address)
         .execute(&mut *tx)
         .await
         .map_err(|err| {
@@ -802,13 +1055,14 @@ pub async fn tell_maker(
     release_id: Uuid,
     event: ReleaseEvent<'_>,
 ) -> sqlx::Result<()> {
-    let row: Option<(Uuid, String, String, String)> = sqlx::query_as(
-        "select a.maker_id, a.slug, a.title, r.version from releases r join apps a on a.id = r.app_id where r.id = $1",
+    let row: Option<(Uuid, String, String, String, bool)> = sqlx::query_as(
+        "select a.maker_id, a.slug, a.title, r.version, r.play_address is not null
+         from releases r join apps a on a.id = r.app_id where r.id = $1",
     )
     .bind(release_id)
     .fetch_optional(&mut *conn)
     .await?;
-    let Some((maker, slug, title, version)) = row else {
+    let Some((maker, slug, title, version, address)) = row else {
         return Ok(());
     };
     // Where to act on it: an unexpected release is withdrawn from the app's Manage page.
@@ -820,21 +1074,25 @@ pub async fn tell_maker(
         ReleaseEvent::Received { source } => (
             format!("{title} {version} was submitted"),
             format!(
-                "{}. SLAPorSLOP is checking it now. If you didn't publish this, withdraw it on the app's Manage page and secure your accounts and repository.",
+                "{}. SLAPorSLOP is checking {} now. If you didn't publish this, withdraw it on the app's Manage page and secure your accounts and repository.",
                 match source {
                     "slop_build" => "Slop Build sent it from your repository",
                     "github_release" => "SLAPorSLOP picked it up from a GitHub release",
                     _ => "It was submitted from your account",
-                }
+                },
+                if address { "its play address" } else { "it" }
             ),
         ),
         ReleaseEvent::Approved { automatically } => (
             format!("{title} {version} is approved"),
-            if automatically {
-                "It passed every check and was approved automatically. Players get it as an update."
-                    .into()
-            } else {
-                "A reviewer approved it. Players get it as an update.".into()
+            match (address, automatically) {
+                (true, true) => "A person approved its play address before, and it passed every \
+                                 check, so it was approved automatically. Play opens it now."
+                    .into(),
+                (true, false) => "A reviewer approved its play address. Play opens it now.".into(),
+                (false, true) => "It passed every check and was approved automatically. Players get it as an update."
+                    .into(),
+                (false, false) => "A reviewer approved it. Players get it as an update.".into(),
             },
         ),
         ReleaseEvent::Rejected { reason } => (
@@ -847,7 +1105,11 @@ pub async fn tell_maker(
         ),
         ReleaseEvent::Withdrawn { reason } => (
             format!("{title} {version} was withdrawn"),
-            format!("It no longer launches for anyone. Why: {reason}"),
+            if address {
+                format!("Play no longer opens this address. Why: {reason}")
+            } else {
+                format!("It no longer launches for anyone. Why: {reason}")
+            },
         ),
         ReleaseEvent::WithdrawnByMaker => (
             format!("{title} {version} was withdrawn"),
@@ -885,12 +1147,19 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         content_labels: Option<Vec<String>>,
         runtimes: Vec<String>,
         notes: Option<String>,
+        play_address: Option<String>,
+        address_checks: Option<serde_json::Value>,
+        /// The address Play opens now (`catalog::PLAY_RELEASE`).
+        plays_now: bool,
     }
-    let row: Row = sqlx::query_as(
-        "select id, version, commit_sha, status::text as status, status_reason, commit_verified, created_at, source,
-                coalesce(reviewed_by = 'slop', false) as auto_approved, min_age, content_labels, runtimes, notes
-         from releases where id = $1",
-    )
+    let row: Row = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select r.id, r.version, r.commit_sha, r.status::text as status, r.status_reason, r.commit_verified,
+                r.created_at, r.source, coalesce(r.reviewed_by = 'slop', false) as auto_approved, r.min_age,
+                r.content_labels, r.runtimes, r.notes, r.play_address, r.address_checks,
+                r.play_address is not null and r.id is not distinct from {} as plays_now
+         from releases r join apps a on a.id = r.app_id where r.id = $1",
+        catalog::PLAY_RELEASE
+    )))
     .bind(id)
     .fetch_one(&state.db)
     .await?;
@@ -908,6 +1177,11 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         state,
         (&row.status, row.status_reason.as_deref(), row.auto_approved),
         &mut files,
+        row.play_address
+            .as_ref()
+            .map(|_| crate::release_progress::Address {
+                plays_now: row.plays_now,
+            }),
     )
     .await?;
     let (source_checks, repo_scan): (Option<serde_json::Value>, Option<serde_json::Value>) =
@@ -942,19 +1216,22 @@ pub(crate) async fn load_release(state: &AppState, id: Uuid) -> ApiResult<Releas
         }),
         runtimes: row.runtimes,
         files,
+        play_address: row.play_address,
+        address_checks: row.address_checks,
         progress,
     })
 }
 
 /// Each file's check state, and the release's progress (release_progress.rs). The estimate is
-/// looked up only while its files are being checked.
+/// looked up only while its files are being checked (a play address has none).
 async fn release_progress(
     state: &AppState,
     (status, status_reason, auto_approved): (&str, Option<&str>, bool),
     files: &mut [ReleaseFileInfo],
+    address: Option<crate::release_progress::Address>,
 ) -> ApiResult<crate::release_progress::ReleaseProgress> {
     use crate::release_progress as rp;
-    let seconds_per_file = if status == "fetching" {
+    let seconds_per_file = if status == "fetching" && address.is_none() {
         rp::seconds_per_file(&state.db, state.config.releases.scanner.is_on()).await?
     } else {
         None
@@ -980,6 +1257,7 @@ async fn release_progress(
         files: &states,
         now: OffsetDateTime::now_utc(),
         seconds_per_file,
+        address,
     });
     for (f, check) in files.iter_mut().zip(checks) {
         f.check = check;
@@ -1003,6 +1281,21 @@ async fn list_releases(
     .bind(is_mine)
     .fetch_all(&state.db)
     .await?;
+    // A browser game's address shows only where Play opens it: the one release Play opens now,
+    // once the game is playable (Coming soon isn't). An older address may be a lapsed or sold
+    // site, and only its maker sees addresses that aren't approved.
+    let plays_now: Option<Uuid> = if is_mine {
+        None
+    } else {
+        sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+            "select {} from apps a where a.id = $1 and a.stage <> 'coming_soon'",
+            catalog::PLAY_RELEASE
+        )))
+        .bind(app_id)
+        .fetch_optional(&state.db)
+        .await?
+        .flatten()
+    };
     let mut out = Vec::with_capacity(ids.len());
     for id in ids {
         let mut release = load_release(&state, id).await?;
@@ -1018,19 +1311,33 @@ async fn list_releases(
                     report.retain(|k, _| k == "engines");
                 }
             }
+            if plays_now != Some(release.id) {
+                release.play_address = None;
+                release.address_checks = None;
+            }
         }
         out.push(release);
     }
     Ok(Json(out))
 }
 
-/// The newest approved release's signed manifest, for installing.
 /// The approved releases players can get, the one they do get first: the release the maker
-/// holds the app at, otherwise the newest approved. Bind the app's ID as $1.
+/// holds the app at, otherwise the newest approved. A browser game's approved addresses count
+/// (they have no manifest); where Play goes is `catalog::PLAY_ADDRESS`, and what needs files to
+/// install uses `SERVING_SIGNED`. Bind the app's ID as $1.
 pub const SERVING: &str = "from releases r join apps a on a.id = r.app_id
+     where r.app_id = $1 and r.status = 'approved'
+       and (r.signed_manifest is not null or r.play_address is not null)
+     order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc";
+
+/// `SERVING`, for what's installed: releases with a signed manifest only, so a browser game
+/// never has one.
+pub const SERVING_SIGNED: &str = "from releases r join apps a on a.id = r.app_id
      where r.app_id = $1 and r.status = 'approved' and r.signed_manifest is not null
      order by coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc";
 
+/// The signed manifest of the release players get, for installing. A browser game has none
+/// (404): there's nothing to install.
 async fn latest_manifest(
     State(state): State<AppState>,
     MaybeUser(user): MaybeUser,
@@ -1040,7 +1347,7 @@ async fn latest_manifest(
     let policy = ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
     let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
     let manifest: Option<sqlx::types::Json<Signed>> = sqlx::query_scalar(sqlx::AssertSqlSafe(
-        format!("select r.signed_manifest {SERVING} limit 1"),
+        format!("select r.signed_manifest {SERVING_SIGNED} limit 1"),
     ))
     .bind(app_id)
     .fetch_optional(&state.db)
@@ -1200,7 +1507,9 @@ async fn file_download_link(
     Ok(Json(DownloadLink { url }))
 }
 
-/// The current revocation list, freshly signed (SECURITY §5.5).
+/// The current revocation list, freshly signed (SECURITY §5.5). Only releases SLAPorSLOP signed
+/// are on it: a withdrawn play address was never installed, so there's nothing for a client to
+/// stop.
 async fn revocations(State(state): State<AppState>) -> ApiResult<Json<Signed>> {
     let key = state
         .config
@@ -1210,7 +1519,7 @@ async fn revocations(State(state): State<AppState>) -> ApiResult<Json<Signed>> {
         .ok_or(ApiError::Unavailable("release signing isn't set up"))?;
     let rows: Vec<(Uuid, String, Option<String>, OffsetDateTime)> = sqlx::query_as(
         "select r.id, a.slug, r.status_reason, r.revoked_at from releases r join apps a on a.id = r.app_id
-         where r.status = 'revoked' order by r.revoked_at",
+         where r.status = 'revoked' and r.signed_manifest is not null order by r.revoked_at",
     )
     .fetch_all(&state.db)
     .await?;
@@ -1419,21 +1728,22 @@ pub async fn run_fetcher(state: AppState) {
     }
 }
 
-/// Fetches one release, if one is waiting. Returns whether it did any work.
+/// Fetches one release, if one is waiting. Returns whether it did any work. Play addresses go
+/// first: their checks take seconds, and shouldn't wait behind files that take minutes each.
 pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
-    let claimed: Option<(Uuid, Uuid, String, String)> = sqlx::query_as(
+    let claimed: Option<(Uuid, Uuid, String, String, Option<String>)> = sqlx::query_as(
         "update releases r set fetch_started_at = now()
          from apps a
          where a.id = r.app_id and r.id = (
              select id from releases
              where status = 'fetching' and (fetch_started_at is null or fetch_started_at < now() - $1)
-             order by created_at limit 1 for update skip locked)
-         returning r.id, r.app_id, r.commit_sha, a.repo_url",
+             order by (play_address is null), created_at limit 1 for update skip locked)
+         returning r.id, r.app_id, r.commit_sha, a.repo_url, r.play_address",
     )
     .bind(FETCH_LEASE)
     .fetch_optional(&state.db)
     .await?;
-    let Some((id, app_id, commit, repo_url)) = claimed else {
+    let Some((id, app_id, commit, repo_url, play_address)) = claimed else {
         return Ok(false);
     };
     // A fetch that died part-way starts over: every file is checked again.
@@ -1445,7 +1755,11 @@ pub async fn fetch_next(state: &AppState) -> anyhow::Result<bool> {
     .execute(&state.db)
     .await?;
 
-    match fetch_release(state, id, &commit, &repo_url).await {
+    let checked = match &play_address {
+        Some(address) => check_address_release(state, id, &commit, &repo_url, address).await,
+        None => fetch_release(state, id, &commit, &repo_url).await,
+    };
+    match checked {
         Ok(commit_verified) => {
             let updated = sqlx::query(
                 "update releases set status = 'awaiting_review', commit_verified = $2
@@ -1673,6 +1987,291 @@ async fn fetch_release(
         .await?;
     }
     Ok(commit_verified)
+}
+
+/// A browser game's release: its commit, then its play address (`check_play_address`). What the
+/// checks found is kept for the maker and the reviewer, passed or not.
+async fn check_address_release(
+    state: &AppState,
+    id: Uuid,
+    commit: &str,
+    repo_url: &str,
+    address: &str,
+) -> anyhow::Result<bool> {
+    let commit_verified = check_commit(state, repo_url, commit).await?;
+    let checks = check_play_address(state, address).await?;
+    sqlx::query("update releases set address_checks = $2 where id = $1")
+        .bind(id)
+        .bind(sqlx::types::Json(&checks))
+        .execute(&state.db)
+        .await?;
+    if !checks.ok {
+        bail!(
+            "{}",
+            checks
+                .problem
+                .as_deref()
+                .unwrap_or("the play address didn't pass its checks")
+        );
+    }
+    Ok(commit_verified)
+}
+
+/// Redirects a play page may take before it loads.
+const MAX_PAGE_REDIRECTS: u32 = 5;
+/// How much of a play page is read to know it loads. None of it is kept.
+const MAX_PAGE_BYTES: usize = 2 * 1024 * 1024;
+
+/// What SLAPorSLOP's automatic checks of a play address found (`releases.address_checks`), for
+/// the maker, the reviewer, and approval (admin.rs needs `ok`). It says what was checked, never
+/// that the site is safe: what the site serves isn't checked.
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct AddressChecks {
+    /// The address, and every address it redirected to, is https.
+    pub https: bool,
+    /// Its site, and every one it redirected to, has only public addresses. Null where that isn't
+    /// checked: test setups, which serve their pages from this machine.
+    pub public_host: Option<bool>,
+    pub bad_links: BadLinkCheck,
+    /// The HTTP status of the page it ended at; null when nothing answered.
+    pub status: Option<u16>,
+    /// Where it ended up, after redirects; null when nothing answered.
+    pub final_address: Option<String>,
+    /// How many redirects it took.
+    pub redirects: u32,
+    /// The kind of page it ended at (text/html), as the site said.
+    pub content_type: Option<String>,
+    #[serde(with = "time::serde::rfc3339")]
+    pub checked_at: OffsetDateTime,
+    /// Every check passed.
+    pub ok: bool,
+    /// What didn't pass, in words for the maker; null when `ok`.
+    pub problem: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub(crate) struct BadLinkCheck {
+    /// The list that names the address, or one it redirected to.
+    pub listed_by: Option<String>,
+    /// Whether this server has any bad-link list loaded (bad_links.rs). Without one, nothing can
+    /// be said about the lists: "no bad-link lists are loaded on this server", never "not on any
+    /// list".
+    pub lists_loaded: bool,
+}
+
+/// Checks a play address the way Play will open it: the page must load (HTTP 2xx) as a web page
+/// (text/html or application/xhtml+xml), not a download, over https, on public sites only, not
+/// SLAPorSLOP's own, and neither it nor anywhere it redirects to may be on a bad-link list. The
+/// page itself isn't kept. Problems with the page are in the result; errors are SLAPorSLOP's.
+pub(crate) async fn check_play_address(
+    state: &AppState,
+    address: &str,
+) -> anyhow::Result<AddressChecks> {
+    let allow_http = state.config.releases.allow_http_downloads;
+    let mut checks = AddressChecks {
+        https: true,
+        public_host: (!allow_http).then_some(true),
+        bad_links: BadLinkCheck {
+            listed_by: None,
+            lists_loaded: false,
+        },
+        status: None,
+        final_address: None,
+        redirects: 0,
+        content_type: None,
+        checked_at: OffsetDateTime::now_utc().replace_nanosecond(0)?,
+        ok: false,
+        problem: None,
+    };
+    let mut visited = vec![address.to_string()];
+    let page = load_page(state, address, &mut checks, &mut visited).await;
+    let lists_loaded: bool = sqlx::query_scalar("select exists (select 1 from bad_links)")
+        .fetch_one(&state.db)
+        .await?;
+    let listed = crate::bad_links::find(&state.db, &visited).await?;
+    let listed_problem = listed.first().map(|(on, list)| {
+        format!(
+            "{} is on {list}, a list of known-bad links",
+            if on == address {
+                "this address".to_string()
+            } else {
+                format!("the address it leads to ({on})")
+            }
+        )
+    });
+    checks.bad_links = BadLinkCheck {
+        listed_by: listed.into_iter().next().map(|(_, list)| list),
+        lists_loaded,
+    };
+    checks.problem = listed_problem.or(page.err());
+    checks.ok = checks.problem.is_none();
+    Ok(checks)
+}
+
+/// Loads the page at `address`, following redirects itself (so each one is checked and counted:
+/// https, not a private address, not SLAPorSLOP's own site), and reads a little of it. Records
+/// what it found in `checks` and every address on the way in `visited`; says what's wrong.
+async fn load_page(
+    state: &AppState,
+    address: &str,
+    checks: &mut AddressChecks,
+    visited: &mut Vec<String>,
+) -> Result<(), String> {
+    use reqwest::header;
+    let allow_http = state.config.releases.allow_http_downloads;
+    let own = own_sites(&state.config);
+    let mut url = Url::parse(address).map_err(|_| "the address isn't valid".to_string())?;
+    loop {
+        // Where it's got to, and (once it answers) what that page said.
+        checks.final_address = Some(url.to_string());
+        checks.status = None;
+        if url.scheme() != "https" {
+            checks.https = false;
+            if !allow_http {
+                return Err("it leads to a page that isn't https".into());
+            }
+        }
+        if is_own_site(&url, &own, allow_http) {
+            return Err("it leads to SLAPorSLOP's own site".into());
+        }
+        if !allow_http {
+            let private = match url.host() {
+                Some(url::Host::Ipv4(ip)) => crate::repo_owner::private_ip(ip.into()),
+                Some(url::Host::Ipv6(ip)) => crate::repo_owner::private_ip(ip.into()),
+                _ => false,
+            };
+            if private {
+                checks.public_host = Some(false);
+                return Err("it leads to a private network".into());
+            }
+            if let Err(e) = crate::repo_owner::public_host(state, &url).await {
+                return Err(match e.downcast_ref::<std::io::Error>() {
+                    Some(lookup) => {
+                        checks.public_host = None;
+                        format!(
+                            "SLAPorSLOP can't find the site {} ({lookup})",
+                            url.host_str().unwrap_or("")
+                        )
+                    }
+                    None => {
+                        checks.public_host = Some(false);
+                        format!("it leads to a private network ({e:#})")
+                    }
+                });
+            }
+        }
+        // The page is the maker's: it's read as text, nothing of it is run or kept.
+        let sent = state
+            .page_http
+            .get(url.clone())
+            .header(header::USER_AGENT, "slop-api")
+            .header(header::ACCEPT, "text/html,application/xhtml+xml")
+            .send()
+            .await;
+        let mut res = sent.map_err(|e| page_error(&e))?;
+        let status = res.status();
+        checks.status = Some(status.as_u16());
+        if status.is_redirection() {
+            if checks.redirects >= MAX_PAGE_REDIRECTS {
+                return Err(format!("it redirects more than {MAX_PAGE_REDIRECTS} times"));
+            }
+            let to = res
+                .headers()
+                .get(header::LOCATION)
+                .and_then(|v| v.to_str().ok())
+                .ok_or("the site redirects without saying where")?;
+            url = url
+                .join(to)
+                .map_err(|_| "the site redirects to an address that isn't valid".to_string())?;
+            checks.redirects += 1;
+            visited.push(url.to_string());
+            continue;
+        }
+        if !status.is_success() {
+            return Err(format!(
+                "the page didn't load: the site answered HTTP {}",
+                status.as_u16()
+            ));
+        }
+        let text = |name: header::HeaderName| {
+            res.headers()
+                .get(name)
+                .and_then(|v| v.to_str().ok())
+                .map(|v| v.trim().to_ascii_lowercase())
+        };
+        let media = text(header::CONTENT_TYPE).map(|t| {
+            t.split(';')
+                .next()
+                .unwrap_or("")
+                .trim()
+                .chars()
+                .take(100)
+                .collect::<String>()
+        });
+        let attachment =
+            text(header::CONTENT_DISPOSITION).is_some_and(|d| d.starts_with("attachment"));
+        checks.content_type = media.clone();
+        if attachment {
+            return Err("it downloads a file instead of opening a page".into());
+        }
+        match media.as_deref() {
+            Some("text/html" | "application/xhtml+xml") => {}
+            Some(other) => {
+                return Err(format!(
+                    "it doesn't open a web page: the site sends {other}"
+                ));
+            }
+            None => {
+                return Err(
+                    "it doesn't open a web page: the site doesn't say what it sends".into(),
+                );
+            }
+        }
+        // A little of the page, to know it loads.
+        let mut read = 0;
+        while let Some(chunk) = res.chunk().await.map_err(|e| page_error(&e))? {
+            read += chunk.len();
+            if read >= MAX_PAGE_BYTES {
+                break;
+            }
+        }
+        return Ok(());
+    }
+}
+
+/// Why a play page didn't load, in words for the maker.
+fn page_error(e: &reqwest::Error) -> String {
+    if e.is_timeout() {
+        return "the page didn't load in time".into();
+    }
+    let mut why = String::new();
+    let mut source = std::error::Error::source(e);
+    while let Some(s) = source {
+        why = s.to_string();
+        source = s.source();
+    }
+    if why.is_empty() {
+        "the page didn't load".into()
+    } else {
+        format!("the page didn't load: {why}")
+    }
+}
+
+/// Whether a browser game's release brings another address than the one Play opens now (or
+/// Play opens none yet). A new address always waits for a person (updates.rs).
+pub(crate) async fn new_play_address(db: &sqlx::PgPool, release_id: Uuid) -> sqlx::Result<bool> {
+    let row: Option<(Option<String>, Option<String>)> =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select r.play_address, {} from releases r join apps a on a.id = r.app_id where r.id = $1",
+            catalog::PLAY_ADDRESS
+        )))
+        .bind(release_id)
+        .fetch_optional(db)
+        .await?;
+    Ok(match row {
+        Some((Some(this), now)) => !now.is_some_and(|now| same_address(&this, &now)),
+        _ => false,
+    })
 }
 
 /// Records what SLAPorSLOP is doing with one file now, for its maker's progress view
@@ -2130,6 +2729,101 @@ mod tests {
             github_release_file("https://github.com/octo/game/releases/download/v1/x.zip/extra"),
             None
         );
+    }
+
+    #[test]
+    fn play_addresses_are_plain_https_addresses_of_public_sites() {
+        let own = vec![
+            ("slop.example".to_string(), 443),
+            ("play.slop.example".to_string(), 443),
+            ("localhost".to_string(), 8080),
+        ];
+        let ok = |a: &str| validate_play_address(a, false, &own).unwrap();
+        assert_eq!(
+            ok(" https://Games.Example.com "),
+            "https://games.example.com/"
+        );
+        assert_eq!(
+            ok("https://octo.github.io/game/?level=2#start"),
+            "https://octo.github.io/game/?level=2#start"
+        );
+        assert_eq!(
+            ok("https://bücher.example/spiel"),
+            "https://xn--bcher-kva.example/spiel"
+        );
+        let refused = |a: &str| match validate_play_address(a, false, &own) {
+            Err(ApiError::Invalid { field, message }) => {
+                assert_eq!(field, "play_address", "{a}");
+                message
+            }
+            other => panic!("{a} isn't refused: {other:?}"),
+        };
+        for (address, why) in [
+            ("", "give the https"),
+            ("games.example.com", "https://"),
+            ("http://games.example.com/", "https://"),
+            ("ftp://games.example.com/", "https://"),
+            ("javascript:alert(1)", "https://"),
+            ("data:text/html,hi", "https://"),
+            ("https://", "https://"),
+            (
+                "https://me:secret@games.example.com/",
+                "user name and password",
+            ),
+            ("https://me@games.example.com/", "user name and password"),
+            ("https://127.0.0.1/", "private network"),
+            ("https://10.1.2.3/game", "private network"),
+            ("https://169.254.169.254/", "private network"),
+            ("https://[::1]/", "private network"),
+            ("https://[::ffff:192.168.0.1]/", "private network"),
+            ("https://0x7f.1/", "private network"),
+            ("https://8.8.8.8/", "not its IP address"),
+            ("https://localhost/", "private network"),
+            ("https://game.localhost/", "private network"),
+            ("https://intranet/", "full name"),
+            ("https://slop.example/play", "SLAPorSLOP's own site"),
+            ("https://SLOP.example./", "SLAPorSLOP's own site"),
+            ("https://demo.play.slop.example/x/", "SLAPorSLOP's own site"),
+            ("https://slop.example:8443/", "SLAPorSLOP's own site"),
+        ] {
+            let message = refused(address);
+            assert!(message.contains(why), "{address}: {message}");
+        }
+        let long = format!("https://games.example.com/{}", "a".repeat(2000));
+        assert!(refused(&long).contains("2,000"));
+        assert!(validate_play_address("https://slop.example.games.com/", false, &own).is_ok());
+
+        // Test setups serve pages over http from this machine, told apart by port.
+        let test = |a: &str| validate_play_address(a, true, &own);
+        assert_eq!(
+            test("http://127.0.0.1:4000/octo/game/play/").unwrap(),
+            "http://127.0.0.1:4000/octo/game/play/"
+        );
+        assert!(test("http://localhost:4000/").is_ok());
+        assert!(test("http://localhost:8080/").is_err(), "the site itself");
+        assert!(test("ftp://127.0.0.1/").is_err());
+        assert!(test("http://u:p@127.0.0.1:4000/").is_err());
+    }
+
+    #[test]
+    fn the_same_play_address_is_compared_as_the_lists_do() {
+        assert!(same_address(
+            "https://games.example.com/play/",
+            "https://WWW.games.example.com/play#top"
+        ));
+        assert!(!same_address(
+            "https://games.example.com/play/",
+            "https://games.example.com/play/2"
+        ));
+        assert!(!same_address(
+            "https://games.example.com/",
+            "http://games.example.com/"
+        ));
+        assert!(!same_address(
+            "https://games.example.com/",
+            "https://evil.example/"
+        ));
+        assert!(!same_address("not an address", "not an address"));
     }
 
     #[test]

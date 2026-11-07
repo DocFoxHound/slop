@@ -92,19 +92,22 @@ struct DemoStatus {
     days: i64,
 }
 
-/// The app's release date and whether it's public and listed.
+/// The app's release date and whether it's public and listed. A browser game is never eligible:
+/// the whole game already plays in the browser, on its maker's website.
 async fn eligibility(state: &AppState, app_id: Uuid) -> ApiResult<Option<OffsetDateTime>> {
-    let row: (String, String, String, OffsetDateTime) = sqlx::query_as(
-        "select stage::text, status::text, visibility, stage_entered_at from apps where id = $1",
+    let row: (String, String, String, OffsetDateTime, bool) = sqlx::query_as(
+        "select stage::text, status::text, visibility, stage_entered_at, 'browser' = any(platforms)
+         from apps where id = $1",
     )
     .bind(app_id)
     .fetch_one(&state.db)
     .await?;
-    let (stage, status, visibility, released_at) = row;
+    let (stage, status, visibility, released_at, in_browser) = row;
     let until = released_at + time::Duration::days(state.config.demos.days);
     Ok((stage == "released"
         && status == "listed"
         && visibility == "public"
+        && !in_browser
         && until > OffsetDateTime::now_utc())
     .then_some(until))
 }
@@ -161,6 +164,12 @@ async fn start(
         ));
     }
     let (app_id, repo_url) = crate::updates::owned(&state, &slug, &user).await?;
+    if crate::catalog::plays_in_browser(&state.db, app_id).await? {
+        return Err(ApiError::Conflict(
+            "it already plays in the browser: Play opens its own website, so it needs no demo"
+                .into(),
+        ));
+    }
     let Some(until) = eligibility(&state, app_id).await? else {
         return Err(ApiError::Conflict(format!(
             "demos are for the first {} days after a public app's release",

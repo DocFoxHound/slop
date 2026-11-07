@@ -5,10 +5,13 @@
 //!   typing a version, commit and file links. SLAPorSLOP resolves the tag to its commit.
 //! - **Watching:** SLAPorSLOP checks each app's repository for a new published GitHub release and
 //!   submits it, using the previous release's files as the pattern (same file names with the
-//!   version swapped, same program to start). Apps built by Slop Build are left to it.
+//!   version swapped, same program to start). Apps built by Slop Build are left to it, and
+//!   browser games (their releases are play addresses) have neither picking nor watching.
 //! - **Automatic approval:** once a person has approved one release of an app, later releases
 //!   that pass every check are approved and signed without waiting for a person. A withdrawal or
-//!   rejection since that approval sends the next release back to a person.
+//!   rejection since that approval sends the next release back to a person. A browser game's
+//!   release goes through on its own only with the address Play opens now: a new address
+//!   always waits for a person.
 
 use std::time::Duration as StdDuration;
 
@@ -102,6 +105,11 @@ pub async fn try_auto_approve(state: &AppState, release_id: Uuid) -> anyhow::Res
         .fetch_one(&state.db)
         .await?;
     let why_not = match auto_approval(&state.db, app_id).await? {
+        // A browser game's update goes through on its own only with the address a person
+        // approved before (the one Play opens): what a new site serves hasn't been looked at.
+        Ok(()) if crate::releases::new_play_address(&state.db, release_id).await? => {
+            "Waiting for a person: a new play address is always checked by a person".to_string()
+        }
         Ok(())
             if let Some(why) = crate::source_scan::new_concerns(&state.db, release_id).await? =>
         {
@@ -122,7 +130,7 @@ pub async fn try_auto_approve(state: &AppState, release_id: Uuid) -> anyhow::Res
             )
             .await
             {
-                Ok(()) => {
+                Ok(_) => {
                     tracing::info!(release = %release_id, "release approved automatically");
                     return Ok(());
                 }
@@ -246,6 +254,17 @@ fn github_path(repo_url: &str) -> ApiResult<String> {
     })
 }
 
+/// A browser game's releases are play addresses, with no GitHub release files to pick or watch.
+async fn not_a_browser_game(state: &AppState, app_id: Uuid) -> ApiResult<()> {
+    if crate::catalog::plays_in_browser(&state.db, app_id).await? {
+        return Err(ApiError::Conflict(
+            "a browser game has no release files: give its play address on the Releases page"
+                .into(),
+        ));
+    }
+    Ok(())
+}
+
 pub(crate) async fn gh_json<T: serde::de::DeserializeOwned>(
     state: &AppState,
     path: &str,
@@ -329,6 +348,7 @@ async fn github_releases(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Vec<PickableRelease>>> {
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    not_a_browser_game(&state, app_id).await?;
     let repo_path = github_path(&repo_url)?;
     let found: Vec<GhRelease> = gh_json(&state, &format!("repos/{repo_path}/releases?per_page=20"))
         .await
@@ -411,6 +431,7 @@ async fn submit_from_github(
 ) -> ApiResult<(StatusCode, Json<ReleaseInfo>)> {
     crate::limits::check(&state, user.id, crate::limits::Action::Release)?;
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    not_a_browser_game(&state, app_id).await?;
     let repo_path = github_path(&repo_url)?;
     if req.tag.is_empty() || req.tag.len() > 100 || req.tag.chars().any(char::is_control) {
         return Err(ApiError::invalid("tag", "pick a release"));
@@ -433,6 +454,7 @@ async fn submit_from_github(
         "maker",
         req.rating,
         req.runtimes,
+        None,
     )
     .await?;
     // The notes given, or else the GitHub release's own text (best effort).
@@ -512,7 +534,13 @@ async fn load_settings(state: &AppState, app_id: Uuid, repo_url: &str) -> ApiRes
     .bind(app_id)
     .fetch_optional(&state.db)
     .await?;
-    let watch_note = if slop_provenance::github_repo_path(repo_url).is_none() {
+    let watch_note = if crate::catalog::plays_in_browser(&state.db, app_id).await? {
+        Some(
+            "A browser game is updated by giving a new play address on the Releases page, so \
+             there's nothing to watch."
+                .into(),
+        )
+    } else if slop_provenance::github_repo_path(repo_url).is_none() {
         Some("Only GitHub repositories can be watched so far.".into())
     } else {
         match newest_source.as_deref() {
@@ -570,6 +598,9 @@ async fn put_settings(
     Json(change): Json<SettingsChange>,
 ) -> ApiResult<Json<Settings>> {
     let (app_id, repo_url) = owned(&state, &slug, &user).await?;
+    if change.watch_releases == Some(true) {
+        not_a_browser_game(&state, app_id).await?;
+    }
     sqlx::query(
         "update apps set watch_releases = coalesce($2, watch_releases),
                          auto_update = coalesce($3, auto_update)
@@ -605,13 +636,14 @@ pub async fn watch_once(state: &AppState) -> anyhow::Result<usize> {
     // Apps with a release to use as the pattern, whose newest release wasn't sent by Slop Build.
     // Each app is due by how active it is: apps with the GitHub App installed are woken by its
     // webhook and only checked now and then as a safety net; recently updated apps often; quiet
-    // ones less. One still waiting for a release's files is checked every pass.
+    // ones less. One still waiting for a release's files is checked every pass. Never a browser
+    // game: its releases are play addresses, with no files to follow.
     let apps: Vec<Watched> = sqlx::query_as(
         "select a.id as app_id, a.maker_id, a.repo_url, a.watch_last_tag as last_tag,
                 a.watch_etag as etag
          from apps a
          left join lateral (select max(created_at) as at from releases r where r.app_id = a.id) newest on true
-         where a.watch_releases and a.status <> 'delisted'
+         where a.watch_releases and a.status <> 'delisted' and not ('browser' = any(a.platforms))
            and (select r.source from releases r where r.app_id = a.id order by r.created_at desc limit 1)
                in ('maker', 'github_release')
            and (a.watch_checked_at is null
@@ -815,6 +847,7 @@ async fn watch_app(
         &commit,
         files,
         "github_release",
+        None,
         None,
         None,
     )

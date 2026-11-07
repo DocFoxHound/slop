@@ -7,7 +7,8 @@
 //!   back a bad update, or to wait before sending a new one out) or go back to following the
 //!   newest. This follows the same rule as new releases (updates.rs): approved automatically once
 //!   a person has approved one of the app's releases, otherwise a person looks. Every release
-//!   offered has already passed its checks.
+//!   offered has already passed its checks. A browser game isn't held: Play always opens its
+//!   newest approved address (`catalog::PLAY_ADDRESS`).
 //! - **The repository.** Moving an app that players have to another repository always waits for
 //!   a person, and the next release after a move is reviewed by a person too. Players' apps
 //!   still refuse an update from a different repository until the player agrees (slop-client).
@@ -85,8 +86,12 @@ async fn move_stage(
     }
     if !admin::has_approved_release(&mut tx, app_id).await? {
         return Err(ApiError::Conflict(
-            "Beta and Released need an approved release first: submit one on the Releases page"
-                .into(),
+            if crate::catalog::plays_in_browser(&mut *tx, app_id).await? {
+                "Beta and Released need an approved play address first: give it on the Releases page"
+            } else {
+                "Beta and Released need an approved release first: submit one on the Releases page"
+            }
+            .into(),
         ));
     }
     admin::move_stage(
@@ -195,10 +200,13 @@ pub(crate) struct ApprovedRelease {
     #[serde(with = "time::serde::rfc3339::option")]
     pub reviewed_at: Option<OffsetDateTime>,
     pub automatic: bool,
+    /// A browser game's release: the address it plays at.
+    pub play_address: Option<String>,
 }
 
 const APPROVED_COLUMNS: &str =
-    "r.id, r.version, r.reviewed_at, coalesce(r.reviewed_by = 'slop', false) as automatic";
+    "r.id, r.version, r.reviewed_at, coalesce(r.reviewed_by = 'slop', false) as automatic,
+     r.play_address";
 
 /// A release not reviewed yet, which its maker may withdraw (releases.rs).
 #[derive(Serialize, sqlx::FromRow)]
@@ -213,17 +221,25 @@ struct WaitingRelease {
     created_at: OffsetDateTime,
 }
 
-/// The release players get now.
+/// The release players get now. For a browser game, the one whose address Play opens, if any
+/// (`catalog::PLAY_RELEASE`: holds don't apply, and a withdrawn address leaves none).
 pub(crate) async fn serving(
     conn: &mut PgConnection,
     app_id: Uuid,
 ) -> sqlx::Result<Option<ApprovedRelease>> {
-    sqlx::query_as(sqlx::AssertSqlSafe(format!(
-        "select {APPROVED_COLUMNS} {SERVING} limit 1"
-    )))
-    .bind(app_id)
-    .fetch_optional(conn)
-    .await
+    let query = if crate::catalog::plays_in_browser(&mut *conn, app_id).await? {
+        format!(
+            "select {APPROVED_COLUMNS} from releases r join apps a on a.id = r.app_id
+             where a.id = $1 and r.id = {}",
+            crate::catalog::PLAY_RELEASE
+        )
+    } else {
+        format!("select {APPROVED_COLUMNS} {SERVING} limit 1")
+    };
+    sqlx::query_as(sqlx::AssertSqlSafe(query))
+        .bind(app_id)
+        .fetch_optional(conn)
+        .await
 }
 
 /// The newest approved release, which players get when the app isn't held at one.
@@ -286,7 +302,8 @@ async fn overview(
             .await?;
     let approved = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select {APPROVED_COLUMNS} from releases r
-         where r.app_id = $1 and r.status = 'approved' and r.signed_manifest is not null
+         where r.app_id = $1 and r.status = 'approved'
+           and (r.signed_manifest is not null or r.play_address is not null)
          order by r.reviewed_at desc limit 50"
     )))
     .bind(app_id)
@@ -388,6 +405,15 @@ async fn request_change(
 
     let (kind, release_id, repo_url, note, decision) = match req {
         ChangeRequest::Release { release_id, note } => {
+            // Holding at an older address would send players to a site without a person
+            // looking again (the address may have lapsed or changed hands).
+            if crate::catalog::plays_in_browser(&mut *tx, app_id).await? {
+                return Err(ApiError::Conflict(
+                    "a browser game always opens its newest approved address, so it can't be held \
+                     at another: submit the address you want on the Releases page"
+                        .into(),
+                ));
+            }
             let note = clean_note(note)?;
             if let Some(id) = release_id {
                 let ok: bool = sqlx::query_scalar(

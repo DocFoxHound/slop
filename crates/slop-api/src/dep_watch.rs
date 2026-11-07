@@ -239,7 +239,7 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
         "with serving as (
              select distinct on (r.app_id) r.id
              from releases r join apps a on a.id = r.app_id
-             where r.status = 'approved' and r.signed_manifest is not null
+             where r.status = 'approved' and (r.signed_manifest is not null or r.play_address is not null)
              order by r.app_id, coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
          )
          select r.id as release_id, a.id as app_id, a.maker_id, a.slug, a.title, r.version,

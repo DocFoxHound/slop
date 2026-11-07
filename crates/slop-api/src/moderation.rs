@@ -235,6 +235,16 @@ pub const REASONS: &[Reason] = &[
     },
 ];
 
+/// For a browser game, which has no build and runs on its maker's site: the reasons whose
+/// download wording doesn't fit, as players reporting one would put them.
+const BROWSER_LABELS: &[(&str, &str)] = &[
+    (
+        "source_mismatch",
+        "The game on its site isn't the one in its repository",
+    ),
+    ("broken", "Its site doesn't load, or the game doesn't work"),
+];
+
 /// Content Policy sections. Each title is a heading in `legal/content.md`.
 pub const RULES: &[(&str, &str)] = &[
     ("malware", "Malware and data theft"),
@@ -344,6 +354,8 @@ pub fn routes() -> Router<AppState> {
 #[derive(Deserialize)]
 struct ReasonsQuery {
     kind: String,
+    /// The app being reported, for its own wording (a browser game's); optional.
+    app: Option<String>,
 }
 
 #[derive(Serialize)]
@@ -353,18 +365,40 @@ struct ReasonView {
     urgent: bool,
 }
 
-async fn reasons(Query(q): Query<ReasonsQuery>) -> Json<Vec<ReasonView>> {
-    Json(
+async fn reasons(
+    State(state): State<AppState>,
+    MaybeUser(user): MaybeUser,
+    headers: HeaderMap,
+    Query(q): Query<ReasonsQuery>,
+) -> ApiResult<Json<Vec<ReasonView>>> {
+    // Only an app the viewer can see says what it is: anything else gets the usual words, so
+    // this tells nobody about a draft.
+    let in_browser = match q.app.as_deref().filter(|_| q.kind == "app") {
+        Some(slug) => {
+            let policy =
+                ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
+            match catalog::visible_app(&state, slug, user.as_ref(), policy).await {
+                Ok((id, _)) => catalog::plays_in_browser(&state.db, id).await?,
+                Err(ApiError::NotFound) => false,
+                Err(e) => return Err(e),
+            }
+        }
+        None => false,
+    };
+    Ok(Json(
         REASONS
             .iter()
             .filter(|r| r.kinds.contains(&q.kind.as_str()))
             .map(|r| ReasonView {
                 code: r.code,
-                label: r.label,
+                label: BROWSER_LABELS
+                    .iter()
+                    .find(|(code, _)| in_browser && *code == r.code)
+                    .map_or(r.label, |(_, label)| label),
                 urgent: r.priority < 2,
             })
             .collect(),
-    )
+    ))
 }
 
 /// What a copyright notice must contain (17 U.S.C. §512(c)(3)).
@@ -763,8 +797,13 @@ async fn report(
             err.into()
         }
     })?;
-    // A report that the app is malicious, or isn't its source, re-scans its live release now.
-    if body.kind == "app" && matches!(reason.code, "malware" | "source_mismatch") {
+    // A report that the app is malicious, or isn't its source, re-scans its live release now. A
+    // browser game has no files to re-scan (the request would never be taken up): a person
+    // looks at the report.
+    if body.kind == "app"
+        && matches!(reason.code, "malware" | "source_mismatch")
+        && !crate::catalog::plays_in_browser(&state.db, subject.id).await?
+    {
         crate::rescan::request(&state.db, subject.id, reason.code).await?;
     }
     Ok(Json(Acknowledgement { reference, due_at }))

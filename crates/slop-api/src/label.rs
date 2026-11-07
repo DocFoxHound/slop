@@ -5,6 +5,8 @@
 //!   purchases, mods, its own installer, shared runtimes, licence and scans, each marked as
 //!   found by SLAPorSLOP's checks or said by the maker. Built from the store page and the newest
 //!   approved release's checks; SLAPorSLOP calls no AI. Says "checked" or "scanned", never "safe".
+//!   A browser game's label says it runs on its maker's website, where SLAPorSLOP checked the
+//!   address, not what the site serves: nothing is claimed about what the site does.
 //! - **Accessibility:** the features the maker says it has, and players who launched it
 //!   confirming or disputing each (`PUT`/`DELETE /v1/apps/{slug}/accessibility/{feature}`).
 //! - **Glow-ups** (`GET /v1/shelves/glow-ups`): apps whose % Slaps rose clearly since 60 days
@@ -110,6 +112,8 @@ struct Label {
 /// What the label needs from the store page.
 pub struct AppFacts {
     pub kind_is_mod: bool,
+    /// A browser game (platforms ['browser']): it runs on its maker's website.
+    pub in_browser: bool,
     pub online: Vec<String>,
     pub online_hosts: Vec<String>,
     pub sandbox_ready: bool,
@@ -149,13 +153,30 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
     let scan = release
         .map(|r| &r.repo_scan)
         .filter(|s| s["status"] == "checked");
+    // What the source check says the program does on players' computers. A browser game runs
+    // what its maker's site serves, which SLAPorSLOP doesn't check: its source says nothing for
+    // sure about whether it works offline, where it saves, what code it loads or what it sells,
+    // so none of that is claimed for it.
+    let runs_here = scan.filter(|_| !app.in_browser);
+
+    if app.in_browser {
+        push(
+            "browser",
+            "Runs on the maker's website".into(),
+            Some("SLAPorSLOP checked the address, not what the site serves.".into()),
+            false,
+            "note",
+        );
+    }
 
     // Online.
     if !app.online.is_empty() {
         push(
             "online",
             "Goes online".into(),
-            Some(if app.online_hosts.is_empty() {
+            Some(if app.online_hosts.is_empty() && app.in_browser {
+                "To servers SLAPorSLOP can't check.".into()
+            } else if app.online_hosts.is_empty() {
                 "To servers SLAPorSLOP can't check. Sandbox mode is suggested.".into()
             } else {
                 format!(
@@ -166,7 +187,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
             false,
             "note",
         );
-    } else if let Some(s) = scan {
+    } else if let Some(s) = runs_here {
         if s["online_undeclared"] == true || s["mod_online"] == true {
             push(
                 "online",
@@ -187,7 +208,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
     }
 
     // Saves and sandbox mode.
-    if let Some(s) = scan {
+    if let Some(s) = runs_here {
         let (title, detail, tone) = match s["save_folder"].as_str() {
             Some("slop" | "engine") => (
                 "Saves in SLAPorSLOP's save folder",
@@ -208,7 +229,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
         push("saves", title.into(), Some(detail.into()), true, tone);
     }
     let mismatch = scan.is_some_and(|s| s["save_folder"] == "elsewhere");
-    if app.sandbox_ready && !mismatch {
+    if app.sandbox_ready && !mismatch && !app.in_browser {
         push(
             "sandbox",
             "Works in sandbox mode".into(),
@@ -219,7 +240,7 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
     }
 
     // Outside code, purchases.
-    if let Some(s) = scan {
+    if let Some(s) = runs_here {
         let code = labels(&s["code_loading"]);
         if code.is_empty() {
             push(
@@ -250,6 +271,9 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
                 "good",
             );
         }
+    }
+    // What a person checked in its source, which holds for a browser game's repository too.
+    if let Some(s) = scan {
         let design = labels(&s["design"]);
         if !design.is_empty() {
             push(
@@ -280,8 +304,8 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
         );
     }
 
-    // Installing.
-    if let Some(r) = release {
+    // Installing: a browser game has nothing to install or scan.
+    if let Some(r) = release.filter(|_| !app.in_browser) {
         if r.has_installer {
             push(
                 "installer",
@@ -354,6 +378,7 @@ async fn label(
     let (app_id, _) = catalog::visible_app(&state, &slug, user.as_ref(), policy).await?;
     type AppRow = (
         bool,
+        bool,
         Vec<String>,
         Vec<String>,
         bool,
@@ -361,29 +386,42 @@ async fn label(
         String,
         Vec<String>,
     );
-    let (kind_is_mod, online, online_hosts, sandbox_ready, takes_mods, license, declared): AppRow = sqlx::query_as(
-        "select branch_kind is not distinct from 'addon', online, online_hosts, sandbox_ready, mods_folder is not null,
-                license_spdx, accessibility
+    let (kind_is_mod, in_browser, online, online_hosts, sandbox_ready, takes_mods, license, declared): AppRow = sqlx::query_as(
+        "select branch_kind is not distinct from 'addon', 'browser' = any(platforms), online, online_hosts, sandbox_ready,
+                mods_folder is not null, license_spdx, accessibility
          from apps where id = $1",
     )
     .bind(app_id)
     .fetch_one(&state.db)
     .await?;
+    // The release players get: for a browser game, the one whose address Play opens.
     let release: Option<(Uuid, String, Option<Value>, Vec<String>)> =
-        sqlx::query_as(sqlx::AssertSqlSafe(format!(
-            "select r.id, r.version, r.repo_scan, r.runtimes {} limit 1",
-            crate::releases::SERVING
-        )))
+        sqlx::query_as(sqlx::AssertSqlSafe(if in_browser {
+            format!(
+                "select r.id, r.version, r.repo_scan, r.runtimes from apps a join releases r on r.id = {}
+                 where a.id = $1",
+                catalog::PLAY_RELEASE
+            )
+        } else {
+            format!(
+                "select r.id, r.version, r.repo_scan, r.runtimes {} limit 1",
+                crate::releases::SERVING
+            )
+        }))
         .bind(app_id)
         .fetch_optional(&state.db)
         .await?;
     let (version, release) = match release {
         Some((id, version, scan, runtimes)) => {
-            let files: Vec<(String, Option<String>)> =
+            // A browser game's release is an address: it has no files.
+            let files: Vec<(String, Option<String>)> = if in_browser {
+                Vec::new()
+            } else {
                 sqlx::query_as("select kind, scan_result from release_files where release_id = $1")
                     .bind(id)
                     .fetch_all(&state.db)
-                    .await?;
+                    .await?
+            };
             (
                 Some(version),
                 Some(ReleaseFacts {
@@ -398,6 +436,7 @@ async fn label(
     };
     let facts = AppFacts {
         kind_is_mod,
+        in_browser,
         online,
         online_hosts,
         sandbox_ready,
@@ -586,6 +625,7 @@ mod tests {
     fn app() -> AppFacts {
         AppFacts {
             kind_is_mod: false,
+            in_browser: false,
             online: vec![],
             online_hosts: vec![],
             sandbox_ready: true,
@@ -652,6 +692,70 @@ mod tests {
         assert_eq!(get("outside_code").unwrap().tone, "note");
         assert!(get("installer").is_some());
         assert_eq!(get("scanned").unwrap().title, "Files not scanned");
+    }
+
+    /// A browser game's label says where it runs and what SLAPorSLOP checked (the address), and
+    /// claims nothing about what the site does: not offline, saves, sandbox mode, outside code,
+    /// purchases, an installer, runtimes or scans, whatever its source check found.
+    #[test]
+    fn a_browser_game_claims_nothing_about_its_site() {
+        let mut a = app();
+        a.in_browser = true;
+        let release = ReleaseFacts {
+            repo_scan: json!({ "status": "checked", "save_folder": "elsewhere", "online_undeclared": true,
+                "network": [{ "label": "WebSockets", "examples": [] }],
+                "code_loading": [{ "label": "Runs code from text", "examples": [] }], "monetization": [],
+                "design": [{ "label": "Premium currencies", "examples": [] }] }),
+            runtimes: vec!["vcredist-x64".into()],
+            has_installer: true,
+            scans: vec![Some("passed".into())],
+        };
+        for scanning in [true, false] {
+            let all = items(&a, Some(&release), scanning);
+            let keys: Vec<&str> = all.iter().map(|i| i.key).collect();
+            assert_eq!(
+                keys,
+                ["browser", "design", "licence"],
+                "scanning: {scanning}"
+            );
+            assert_eq!(all[0].title, "Runs on the maker's website");
+            assert_eq!(
+                all[0].detail.as_deref(),
+                Some("SLAPorSLOP checked the address, not what the site serves.")
+            );
+            assert!(!all[0].checked, "said, not a check of the site");
+            assert_eq!(all[0].tone, "note");
+        }
+        let clean = ReleaseFacts {
+            repo_scan: json!({ "status": "checked", "save_folder": "slop", "code_loading": [], "monetization": [], "network": [] }),
+            runtimes: vec![],
+            has_installer: false,
+            scans: vec![],
+        };
+        let keys: Vec<&str> = items(&a, Some(&clean), true)
+            .iter()
+            .map(|i| i.key)
+            .collect();
+        assert_eq!(
+            keys,
+            ["browser", "licence"],
+            "no Works offline or Sells nothing"
+        );
+
+        // What the maker says about going online stays, with no sandbox mode to suggest.
+        a.online = vec!["own_servers".into()];
+        let all = items(&a, None, true);
+        let keys: Vec<&str> = all.iter().map(|i| i.key).collect();
+        assert_eq!(keys, ["browser", "online", "licence"]);
+        assert_eq!(
+            all[1].detail.as_deref(),
+            Some("To servers SLAPorSLOP can't check.")
+        );
+        assert!(!all[1].checked);
+        assert!(all.iter().all(|i| {
+            let title = i.title.to_lowercase();
+            !title.contains("safe") && !title.contains("scanned")
+        }));
     }
 
     #[test]

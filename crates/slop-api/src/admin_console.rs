@@ -79,6 +79,10 @@ struct ReleaseRow {
     created_at: OffsetDateTime,
     #[serde(with = "time::serde::rfc3339::option")]
     reviewed_at: Option<OffsetDateTime>,
+    /// A browser game's release: its play address, and what the automatic checks found
+    /// (releases.rs `AddressChecks`).
+    play_address: Option<String>,
+    address_checks: Option<Value>,
 }
 
 #[derive(Serialize, sqlx::FromRow)]
@@ -161,8 +165,8 @@ async fn record(
     .await?
     .ok_or(ApiError::NotFound)?;
     let releases = sqlx::query_as(
-        "select id, version, status::text as status, created_at, reviewed_at from releases
-         where app_id = $1 order by created_at desc limit 30",
+        "select id, version, status::text as status, created_at, reviewed_at, play_address, address_checks
+         from releases where app_id = $1 order by created_at desc limit 30",
     )
     .bind(app.id)
     .fetch_all(db)

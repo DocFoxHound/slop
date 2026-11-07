@@ -29,6 +29,7 @@ use uuid::Uuid;
 mod accounts_tests;
 mod admin_tests;
 mod agents_tests;
+mod browser_games_tests;
 mod checks_tests;
 mod discover_tests;
 mod icons_tests;
@@ -96,6 +97,9 @@ fn source_archive(files: &[(&str, &str)]) -> Vec<u8> {
 /// The bytes the fake release page serves for every build.
 const BUILD_BYTES: &[u8] = b"pretend this is a zip of a game";
 
+/// A browser game's page, as the fake host serves it at /octo/game/play/.
+const PLAY_PAGE: &str = "<!doctype html><title>Game</title><canvas id=game></canvas>";
+
 /// A fake GitHub: any code except "bad-code" gives a token for user 42.
 async fn fake_github() -> String {
     async fn token(body: String) -> axum::Json<Value> {
@@ -143,6 +147,18 @@ async fn fake_github() -> String {
                 BUILD_BYTES.into_response()
             }),
         )
+        // Browser games' play pages (releases.rs check_play_address): two pages, one reached by
+        // a redirect, a download, a file that isn't a page, and a redirect to SLAPorSLOP's own
+        // site. Any other address is a 404.
+        .route("/octo/game/play/", get(|| async { ([("content-type", "text/html; charset=utf-8")], PLAY_PAGE) }))
+        .route("/octo/game/play-v2/", get(|| async { ([("content-type", "application/xhtml+xml")], PLAY_PAGE) }))
+        .route("/octo/game/play-moved/", get(|| async { axum::response::Redirect::temporary("/octo/game/play/") }))
+        .route(
+            "/octo/game/play-file/",
+            get(|| async { ([("content-type", "text/html"), ("content-disposition", "attachment; filename=game.html")], PLAY_PAGE) }),
+        )
+        .route("/octo/game/play-binary/", get(|| async { ([("content-type", "application/octet-stream")], BUILD_BYTES) }))
+        .route("/octo/game/play-home/", get(|| async { axum::response::Redirect::temporary("http://localhost:8080/") }))
         // GitHub Actions' OIDC signing keys (a test key), and a repository for Slop Build setup.
         .route(
             "/.well-known/jwks",
@@ -2019,6 +2035,72 @@ async fn maker_with_app(app: &TestApp, stage: &str) -> (Uuid, String) {
     .await
     .unwrap();
     (maker_id, cookie)
+}
+
+/// `maker_with_app`, as a browser game (platforms ['browser']), saved as the store page form
+/// saves one (no release watching). Returns (maker ID, cookie).
+async fn maker_with_browser_app(app: &TestApp, stage: &str) -> (Uuid, String) {
+    let (maker_id, cookie) = maker_with_app(app, stage).await;
+    sqlx::query(
+        "update apps set platforms = '{browser}', watch_releases = false where slug = 'game'",
+    )
+    .execute(&app.db)
+    .await
+    .unwrap();
+    (maker_id, cookie)
+}
+
+/// A play page on the fake host (`play`, `play-moved`… in `fake_github`; anything else is a 404).
+fn play_page(app: &TestApp, page: &str) -> String {
+    format!("{}octo/game/{page}/", app.fake_base)
+}
+
+fn play_body(version: &str, address: &str) -> Value {
+    json!({ "version": version, "commit_sha": "a".repeat(40), "play_address": address })
+}
+
+/// Submits a play address for the browser game `game` and runs its checks (releases.rs
+/// `fetch_next`). Returns the release's ID.
+async fn submit_play_and_check(
+    app: &TestApp,
+    cookie: &str,
+    version: &str,
+    address: &str,
+) -> String {
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(cookie)
+                .json(play_body(version, address)),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let release = body_json(res).await;
+    assert_eq!(release["status"], "fetching");
+    assert_eq!(release["play_address"], address);
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    release["id"].as_str().unwrap().to_string()
+}
+
+/// An approved play address for browser game `slug`, inserted as a person's approval after its
+/// checks leaves it, for store and visibility tests. Returns the release's ID.
+async fn approved_play_address(app: &TestApp, slug: &str, version: &str, address: &str) -> Uuid {
+    let id = Uuid::now_v7();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, reviewed_at, reviewed_by,
+                               commit_verified, play_address, address_checks)
+         select $1, a.id, $2, repeat('a', 40), 'approved', a.maker_id, clock_timestamp(), 'rev', true, $3,
+                jsonb_build_object('ok', true, 'final_address', $3::text, 'status', 200)
+         from apps a where a.slug = $4",
+    )
+    .bind(id)
+    .bind(version)
+    .bind(address)
+    .bind(slug)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    id
 }
 
 fn release_body(app: &TestApp, version: &str, file: &str) -> Value {

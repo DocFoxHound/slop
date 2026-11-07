@@ -601,7 +601,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "review_queue",
-        description: "Everything waiting for a review decision, each with the app's store page, its checks (scans, Microsoft Defender, signatures), pictures, earlier notes and the exact requests that decide it.",
+        description: "Everything waiting for a review decision, each with the app's store page, its checks (scans, Microsoft Defender, signatures; for a browser game, its play address, what SLAPorSLOP's checks of the address found and the address Play opens now), pictures, earlier notes and the exact requests that decide it.",
         method: Method::GET,
         path: "/v1/admin/review",
         properties: || json!({ "kind": s("Only this kind: release, change, media, listing, portfolio, problem or review_dispute") }),
@@ -625,7 +625,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "approve_release",
-        description: "Approve and sign a release that's awaiting review. Needs a review or moderate token.",
+        description: "Approve and sign a release that's awaiting review. For a browser game it approves the play address: nothing is signed, and Play opens it from then on, so open it and play it first. Needs a review or moderate token.",
         method: Method::POST,
         path: "/v1/admin/releases/{id}/approve",
         properties: || json!({ "id": s("The release ID") }),
@@ -641,7 +641,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "withdraw_release",
-        description: "Withdraw an approved release (the kill switch): it stops launching for everyone. Needs a moderate token.",
+        description: "Withdraw an approved release (the kill switch): it stops launching for everyone. For a browser game, Play stops opening its address (anyone who saved the address can still visit the site). Needs a moderate token.",
         method: Method::POST,
         path: "/v1/admin/releases/{id}/revoke",
         properties: || json!({ "id": s("The release ID"), "reason": s("Shown to the maker and players") }),

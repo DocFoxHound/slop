@@ -35,6 +35,9 @@ pub fn routes() -> Router<AppState> {
 
 /// The longest source checks a submission may carry (gitleaks and OSV findings).
 const MAX_SOURCE_CHECKS: usize = 256 * 1024;
+/// Why a browser game's run is refused: Slop Build makes downloads.
+const BROWSER_GAME: &str = "Slop Build makes downloads, and this game plays in the browser: give \
+                            its play address on the Releases page instead";
 /// The largest submission: its source checks, files and Defender checks.
 pub const MAX_SUBMISSION_BYTES: usize = 1024 * 1024;
 
@@ -267,6 +270,9 @@ async fn submit_from_ci(
         return Err(ApiError::Forbidden);
     }
     same_repository(&state, app_id, &claims).await?;
+    if platforms.iter().any(|p| p == "browser") {
+        return Err(ApiError::Conflict(BROWSER_GAME.into()));
+    }
 
     let tag_ok = (1..=100).contains(&req.tag.len())
         && req
@@ -334,6 +340,7 @@ async fn submit_from_ci(
         "slop_build",
         None,
         req.runtimes.clone(),
+        None,
     )
     .await?;
     if let Some(checks) = &req.source_checks {
@@ -538,8 +545,10 @@ fn workflow_yaml(
              godot-version: \"4.3\"\n"
         }
         "web" => {
-            "\n      # Your site goes in a small window of its own (a Tauri shell). How it's built, and\n      \
-             # the folder with its index.html. For a plain site, remove build-command and use \".\".\n      \
+            "\n      # Slop Build packs your site into a desktop window of its own (a Tauri shell) that\n      \
+             # players download. A game played on your own website chooses \"In the browser\" on\n      \
+             # its store page instead, with no Slop Build. How it's built, and the folder with its\n      \
+             # index.html. For a plain site, remove build-command and use \".\".\n      \
              build-command: \"npm run build\"\n      \
              output-dir: \"dist\"\n"
         }
@@ -660,13 +669,14 @@ async fn setup(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Setup>> {
     let recipe = recipe(&state)?.to_string();
-    let row: Option<(Uuid, String)> =
-        sqlx::query_as("select maker_id, repo_url from apps where slug = $1")
-            .bind(&slug)
-            .fetch_optional(&state.db)
-            .await?;
-    let repo_url = match row {
-        Some((maker, repo)) if maker == user.id => repo,
+    let row: Option<(Uuid, String, bool)> = sqlx::query_as(
+        "select maker_id, repo_url, 'browser' = any(platforms) from apps where slug = $1",
+    )
+    .bind(&slug)
+    .fetch_optional(&state.db)
+    .await?;
+    let (repo_url, in_browser) = match row {
+        Some((maker, repo, in_browser)) if maker == user.id => (repo, in_browser),
         _ => return Err(ApiError::NotFound),
     };
     let site = state
@@ -677,22 +687,29 @@ async fn setup(
         .to_string();
     let version = &state.config.releases.slop_build_version;
 
-    let Some(repo_path) = slop_provenance::github_repo_path(&repo_url) else {
-        return Ok(Json(Setup {
-            supported: false,
-            project_type: "custom".into(),
-            detected: None,
-            note: Some(
-                "Slop Build runs on GitHub Actions, so it needs a GitHub repository.".into(),
-            ),
-            file_path: WORKFLOW_PATH,
-            workflow: workflow_yaml(&recipe, version, &slug, &site, "custom", "main"),
-            create_url: None,
-            check_file_path: CHECK_PATH,
-            check_workflow: check_yaml(&recipe, version, &slug, &site),
-            check_create_url: None,
-            build_now_url: None,
-        }));
+    let repo_path = match slop_provenance::github_repo_path(&repo_url) {
+        Some(path) if !in_browser => path,
+        _ => {
+            return Ok(Json(Setup {
+                supported: false,
+                project_type: "custom".into(),
+                detected: None,
+                note: Some(if in_browser {
+                    "Slop Build makes downloads that players install. This game plays in the browser, \
+                 on your own website: give its play address on the Releases page instead."
+                    .into()
+                } else {
+                    "Slop Build runs on GitHub Actions, so it needs a GitHub repository.".into()
+                }),
+                file_path: WORKFLOW_PATH,
+                workflow: workflow_yaml(&recipe, version, &slug, &site, "custom", "main"),
+                create_url: None,
+                check_file_path: CHECK_PATH,
+                check_workflow: check_yaml(&recipe, version, &slug, &site),
+                check_create_url: None,
+                build_now_url: None,
+            }));
+        }
     };
 
     #[derive(Deserialize)]
@@ -737,8 +754,10 @@ async fn setup(
     };
     let (project_type, detected) = detect(&names, electron);
     let note = detected.map(|kind| match kind {
-        "web" => "This looks like a website: check build-command and output-dir in the workflow \
-                  match how your site is built and where its index.html ends up."
+        "web" => "This looks like a website: Slop Build packs it into a desktop window of its \
+                  own, which players download. Check build-command and output-dir in the workflow \
+                  match how your site is built and where its index.html ends up. A game played on \
+                  your own website should choose In the browser on its store page instead."
             .to_string(),
         "python" => "This looks like a Python app: check python-entry names the script that \
                      starts it."

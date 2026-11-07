@@ -302,21 +302,32 @@ async fn main() -> anyhow::Result<()> {
                             },
                             r.repo_url
                         );
+                        // A browser game: open the address and play it before approving.
+                        if let Some(address) = &r.play_address {
+                            println!(
+                                "    plays at {address} (SLAPorSLOP checked the address, not what the site serves)"
+                            );
+                        }
                     }
                 }
                 ReviewCommand::Approve {
                     release_id,
                     reviewer,
                 } => {
-                    admin::approve(
+                    match admin::approve(
                         &db,
                         config.releases.signing_key.as_ref(),
                         admin::ReviewRules::from_config(&config),
                         release_id,
                         &reviewer,
                     )
-                    .await?;
-                    println!("Approved and signed {release_id}.");
+                    .await?
+                    {
+                        admin::Approval::Signed => println!("Approved and signed {release_id}."),
+                        admin::Approval::PlayAddress => {
+                            println!("Approved {release_id}: Play opens its address now.")
+                        }
+                    }
                 }
                 ReviewCommand::Reject {
                     release_id,

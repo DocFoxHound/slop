@@ -54,18 +54,22 @@ pub fn routes() -> Router<AppState> {
 #[derive(Serialize)]
 struct Launched {
     /// Hand this to the game as SLOP_PULSE_TOKEN. Absent when the player turned off "Share my
-    /// playtime".
+    /// playtime", and for a browser game, which has nowhere to receive it.
     token: Option<String>,
     /// Hand this to the game as SLOP_PULSE_URL.
     pulse_url: String,
     heartbeat_seconds: i64,
+    /// A browser game's address to open (`catalog::PLAY_ADDRESS`); null for everything else.
+    play_address: Option<String>,
 }
 
-/// Called by the desktop app when a signed-in player launches an app: records the launch day
-/// and issues a one-time Pulse token.
+/// Called when a signed-in player launches an app (the desktop app) or plays a browser game (the
+/// website and the desktop app, as Play opens its address): records the launch day and issues a
+/// one-time Pulse token.
 #[derive(Deserialize)]
 struct LaunchQuery {
-    /// windows or linux: the maker's rating breakdown per platform (METRICS §3).
+    /// windows or linux: the maker's rating breakdown per platform (METRICS §3). A browser game
+    /// is always recorded as browser, whatever this says, and nothing else ever is.
     platform: Option<String>,
 }
 
@@ -76,13 +80,33 @@ async fn launch(
     Path(slug): Path<String>,
     Query(query): Query<LaunchQuery>,
 ) -> ApiResult<Json<Launched>> {
-    let platform = query.platform.filter(|p| p == "windows" || p == "linux");
     let policy = ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers).await?;
-    let (app_id, _) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
+    let (app_id, is_mine) = catalog::visible_app(&state, &slug, Some(&user), policy).await?;
     let pulse_url = format!(
         "{}/v1/pulse",
         state.config.public_url.as_str().trim_end_matches('/')
     );
+    // A browser game is played at the address a person approved. With none (yet, or since it
+    // was withdrawn), or while it's Coming soon for anyone but its maker, there's nothing to play
+    // and nothing is recorded (as on its store page, catalog.rs).
+    let (in_browser, play_address, stage): (bool, Option<String>, catalog::AppStage) =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select 'browser' = any(a.platforms), {}, a.stage from apps a where a.id = $1",
+            catalog::PLAY_ADDRESS
+        )))
+        .bind(app_id)
+        .fetch_one(&state.db)
+        .await?;
+    let play_address = match play_address {
+        _ if !in_browser => None,
+        Some(address) if is_mine || stage != catalog::AppStage::ComingSoon => Some(address),
+        _ => return Err(ApiError::Conflict("nothing to play yet".into())),
+    };
+    let platform = if in_browser {
+        Some("browser".to_string())
+    } else {
+        query.platform.filter(|p| p == "windows" || p == "linux")
+    };
 
     let share: bool = sqlx::query_scalar("select share_playtime from users where id = $1")
         .bind(user.id)
@@ -92,8 +116,10 @@ async fn launch(
     let mut tx = state.db.begin().await?;
     // Without "Share my playtime" there's no Pulse token (so no playtime), but the launch is
     // still recorded: it's what lets a player vote, review and report (votes.rs), and their
-    // votes are then weighted by launch days only.
-    let token = if share {
+    // votes are then weighted by launch days only. A browser game never gets one: its page
+    // can't be handed it, and a token must never go in an address the maker's site sees, so its
+    // votes are weighted by the days it was played.
+    let token = if share && !in_browser {
         let token = new_token();
         sqlx::query(
             "insert into pulse_sessions (id, token_hash, app_id, user_id) values ($1, $2, $3, $4)",
@@ -128,6 +154,7 @@ async fn launch(
         token,
         pulse_url,
         heartbeat_seconds: HEARTBEAT_SECONDS,
+        play_address,
     }))
 }
 
