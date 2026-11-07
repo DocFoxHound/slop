@@ -141,7 +141,7 @@ async fn status(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<J
             appeals: count(db, "select count(*) from moderation_decisions where appeal_status = 'pending'").await.unwrap_or(0),
             live_releases_flagged_by_rescan: count(db, "select count(*) from release_files f join releases r on r.id = f.release_id where f.rescan_flagged_at is not null and r.status = 'approved'").await?,
             abuse_signals: count(db, "select count(*) from abuse_signals where status = 'open'").await?,
-            apps_ready_to_list: count(db, "select count(*) from apps a where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal)) and a.visibility = 'public' and exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved')").await?,
+            apps_ready_to_list: sqlx::query_scalar(sqlx::AssertSqlSafe(format!("select count(*) from apps a where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal)) and a.visibility = 'public' and {}", crate::admin::playable_sql()))).fetch_one(db).await?,
         },
         last_backup: ops.backup_dir.as_ref().and_then(|d| crate::ops::stamp_in(&d.join("last-success"))),
         last_restore_check: ops.backup_dir.as_ref().and_then(|d| crate::ops::stamp_in(&d.join("last-restore-check"))),
@@ -601,7 +601,7 @@ const TOOLS: &[Tool] = &[
     },
     Tool {
         name: "review_queue",
-        description: "Everything waiting for a review decision, each with the app's store page, its checks (scans, Microsoft Defender, signatures; for a browser game, its play address, what SLAPorSLOP's checks of the address found and the address Play opens now), pictures, earlier notes and the exact requests that decide it.",
+        description: "Everything waiting for a review decision, each with the app's store page, its checks (scans, Microsoft Defender, signatures; for a browser game, its play address, what SLAPorSLOP's checks of the address found, the address Play opens now, one withdrawn and a newer approved one), pictures, earlier notes and the exact requests that decide it.",
         method: Method::GET,
         path: "/v1/admin/review",
         properties: || json!({ "kind": s("Only this kind: release, change, media, listing, portfolio, problem or review_dispute") }),

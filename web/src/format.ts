@@ -100,6 +100,15 @@ export function playsInBrowser(app: { plays_in_browser?: boolean; platforms?: re
   return Boolean(app?.plays_in_browser || app?.platforms?.includes("browser"));
 }
 
+/**
+ * A dedicated server: an app in the Servers category (tagged Dedicated Server, migration 0093).
+ * The Content Policy's rule on code from outside SLAPorSLOP doesn't cover it (catalog.rs
+ * `is_dedicated_server`), so its code loading is a note, never a policy problem.
+ */
+export function isDedicatedServer(app: { tags?: readonly string[] } | null | undefined): boolean {
+  return Boolean(app?.tags?.includes("dedicated-server"));
+}
+
 /** The site a play address is on, as players read it ("play.example.com"); "" when it isn't an address. */
 export function addressHost(address: string | null | undefined): string {
   if (!address) return "";

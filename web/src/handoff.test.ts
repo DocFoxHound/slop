@@ -200,6 +200,25 @@ describe("a new app's fill", () => {
     expect(extras.left.map((l) => l.why)).toEqual(["a browser game has no sandbox mode", "a browser game has no mods folder"]);
   });
 
+  it("leaves In the browser out, saying why, for an app or a Private page", () => {
+    const app = appFill({ platforms: ["browser"], kind: "app", play_address: "https://games.example.com/play/" });
+    expect(app.values).toEqual({ kind: "app" });
+    expect(app.left).toEqual([
+      { field: "platforms", why: "only games can play in the browser for now" },
+      { field: "play_address", why: "only games can play in the browser for now" },
+    ]);
+    const hidden = appFill({ platforms: ["browser"], kind: "game", visibility: "private", play_address: "https://games.example.com/play/" });
+    expect(hidden.values).toEqual({ kind: "game", visibility: "private" });
+    expect(hidden.left).toEqual([
+      { field: "platforms", why: "a browser game's address is public on the web, so it can't be private" },
+      { field: "play_address", why: "a browser game's address is public on the web, so it can't be private" },
+    ]);
+    // Its sandbox mode then stays, as for any download.
+    expect(appFill({ platforms: ["browser"], kind: "app", sandbox_ready: true }).values).toEqual({ kind: "app", sandbox_ready: true });
+    // A public game keeps it.
+    expect(appFill({ platforms: ["browser"], kind: "game", visibility: "public" }).values.platforms).toEqual(["browser"]);
+  });
+
   it("takes a play address only as https, with no user name or password, up to 2,000 characters", () => {
     const address = (play_address: string) => appFill({ platforms: ["browser"], play_address }).values.play_address;
     expect(address("http://games.example.com/")).toBeUndefined();

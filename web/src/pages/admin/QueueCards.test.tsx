@@ -101,15 +101,39 @@ describe("a browser game's release in the review queue", () => {
     expect(approve).toHaveBeenCalledWith("rel1");
   });
 
-  it("the same site isn't a new one; a first address has nothing to compare; checks still running can't be approved", () => {
+  it("another address on the same host isn't called the same site; nothing approved before has nothing to compare; checks still running can't be approved", () => {
     show(address({ current_play_address: "https://new.example.net/old/" }));
     expect(screen.queryByText("NEW SITE")).toBeNull();
-    expect(screen.getByText("(the same site)")).toBeTruthy();
+    expect(screen.getByText("(the same host, another address: check it's still this game)")).toBeTruthy();
+    expect(screen.queryByText(/same site/)).toBeNull();
+    cleanup();
+    show(address({ current_play_address: "https://new.example.net/tap/" }));
+    expect(screen.getByText("(the same address)")).toBeTruthy();
     cleanup();
     show(address({ current_play_address: null, status: "fetching", address_checks: null }));
-    expect(screen.getByText("Nothing yet: this is its first address.")).toBeTruthy();
+    expect(screen.getByText("Nothing yet: no address of this game has been approved before.")).toBeTruthy();
     expect(screen.getByText("CHECKING")).toBeTruthy();
     expect((screen.getByRole("button", { name: "Approve address" }) as HTMLButtonElement).disabled).toBe(true);
+  });
+
+  it("after a withdrawal, says Play opens nothing and compares the address with the withdrawn one; never a first address", () => {
+    show(address({ current_play_address: null, withdrawn_play_address: "https://new.example.net/tap/" }));
+    const card = screen.getAllByRole("listitem")[0];
+    expect(card.textContent).toContain("Nothing: SLAPorSLOP withdrew https://new.example.net/tap/");
+    expect(within(card).getByText("THE WITHDRAWN ADDRESS")).toBeTruthy();
+    expect(card.textContent).not.toMatch(/first address|approved before/);
+    cleanup();
+    show(address({ current_play_address: null, withdrawn_play_address: "https://new.example.net/other/" }));
+    expect(screen.getByText("SAME HOST AS THE WITHDRAWN ONE")).toBeTruthy();
+    cleanup();
+    show(address({ current_play_address: null, withdrawn_play_address: "https://games.example.com/play/" }));
+    expect(screen.getByText("(a different site)")).toBeTruthy();
+  });
+
+  it("says when approving it moves Play back from a newer approved address", () => {
+    const note = "Version 1.2.0 (https://games.example.com/v2/) is approved and newer: approving this makes Play open this older address";
+    show(address({ newer_approved: { version: "1.2.0", play_address: "https://games.example.com/v2/", note } }));
+    expect(screen.getByText(`${note}.`)).toBeTruthy();
   });
 
   it("a download's release keeps its own card", () => {

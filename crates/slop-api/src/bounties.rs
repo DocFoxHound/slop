@@ -740,15 +740,27 @@ async fn claim(
             "the bounty's app, or a community build of it",
         ));
     }
-    let release: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select r.id {} limit 1",
-        crate::releases::SERVING
-    )))
-    .bind(app_id)
-    .fetch_optional(&state.db)
-    .await?;
+    // The release players get: for a browser game, the one whose address Play opens, never an
+    // older address SERVING would fall back to once that one is withdrawn.
+    let in_browser = crate::catalog::plays_in_browser(&state.db, app_id).await?;
+    let sql = if in_browser {
+        format!(
+            "select r.id from apps a join releases r on r.id = {} where a.id = $1",
+            crate::catalog::PLAY_RELEASE
+        )
+    } else {
+        format!("select r.id {} limit 1", crate::releases::SERVING)
+    };
+    let release: Option<Uuid> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(app_id)
+        .fetch_optional(&state.db)
+        .await?;
     let release = release.ok_or_else(|| {
-        ApiError::Conflict("release it first: a delivery is an approved release".into())
+        ApiError::Conflict(if in_browser {
+            "nothing to play yet: a delivery is the address Play opens, approved".into()
+        } else {
+            "release it first: a delivery is an approved release".into()
+        })
     })?;
     let account: Option<String> = sqlx::query_scalar(
         "select stripe_account_id from donation_accounts where user_id = $1 and stripe_status = 'active'",

@@ -7,16 +7,18 @@
 //
 // Sam's seeded Orbit Tap (ids.browserApp) stays unplayed and in nobody's library: where Pat
 // presses Play on it, the launch is answered here (page.route), and he takes it out of his library
-// again. A real recorded play is on Remy's Comet Hop, made for this file and delisted after.
+// again. A real recorded play is on Remy's Comet Hop, made for this file under a new address each
+// run (a retry too), so Pat has never played it when the file starts, and delisted after.
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
 import { asDesktop, desktopCalls, openedUrls } from "./desktop-helpers";
 import { expect, ids, signIn, test } from "./fixtures";
-import { call, delist, listedApp, playAddress, tryCall } from "./store-helpers";
+import { uniq } from "./publishing-helpers";
+import { call, delist, listedApp, patchJson, path, playAddress, tryCall } from "./store-helpers";
 
 const game = ids.browserApp;
-const own = "comet-hop";
+const own = uniq("comet-hop");
 const ownTitle = "Comet Hop";
 
 test.beforeAll(async () => {
@@ -137,11 +139,9 @@ test("Play on the store page opens the game in a new tab and records the play; t
   await expect(add).toHaveAttribute("aria-pressed", "false");
 
   // Pressing Play is the step to rate it, right at the top, on the website too.
-  const before = (await call<{ mine: { played: boolean } }>("player", "GET", `/v1/apps/${own}/ratings`)).mine.played;
-  if (!before) {
-    await expect(head(page).getByText("Press Play to rate it.")).toBeVisible();
-    await expect(head(page).getByRole("link", { name: "Play" })).toHaveAttribute("href", playAddress(own));
-  }
+  expect((await call<{ mine: { played: boolean } }>("player", "GET", `/v1/apps/${own}/ratings`)).mine.played).toBe(false);
+  await expect(head(page).getByText("Press Play to rate it.")).toBeVisible();
+  await expect(head(page).getByRole("link", { name: "Play" })).toHaveAttribute("href", playAddress(own));
   await expect(head(page).getByRole("link", { name: "Get the SLAPorSLOP app" })).toHaveCount(0);
 
   const launch = page.waitForRequest((r) => r.method() === "POST" && isLaunch(own)(new URL(r.url())));
@@ -155,7 +155,8 @@ test("Play on the store page opens the game in a new tab and records the play; t
   await expect(head(page).getByRole("button", { name: /^(Rate it|Your rating: .*)$/ })).toBeVisible();
   const ratings = page.getByRole("region", { name: "Ratings" });
   const slaps = ratings.getByRole("button", { name: "Slaps", exact: true });
-  if ((await slaps.getAttribute("aria-pressed")) !== "true") await slaps.click();
+  await expect(slaps).toHaveAttribute("aria-pressed", "false");
+  await slaps.click();
   await expect(slaps).toHaveAttribute("aria-pressed", "true");
   expect((await call<{ mine: { vote: string } }>("player", "GET", `/v1/apps/${own}/ratings`)).mine.vote).toBe("not_slop");
 
@@ -204,6 +205,24 @@ test("in the SLAPorSLOP app, the store page's Play records the play first, then 
   } finally {
     await tryCall("player", "DELETE", `/v1/me/library/${game}`);
   }
+});
+
+test("in the SLAPorSLOP app, Play opens nothing when the address SLAPorSLOP answers with isn't https", async ({ page }) => {
+  await asDesktop(page, { state: "none" });
+  await signIn(page, "player");
+  // The store page's address is https here; the launch answers with plain http, and that's what
+  // the app would open, so it opens nothing.
+  const store = "https://orbit-tap.example/play/";
+  await patchJson(page, path(`/v1/apps/${game}`), (body) => ({ ...body, play_address: store }));
+  const sent = await answerLaunches(page, game, "http://orbit-tap.example/play/");
+  await page.goto(`/app/${game}`);
+  const play = box(page).getByRole("link", { name: "Play" });
+  await expect(play).toHaveAttribute("href", store);
+  await play.click();
+  await expect(box(page).getByRole("alert")).toHaveText("Not opened: the SLAPorSLOP app opens only https addresses.");
+  expect(sent).toHaveLength(1);
+  expect(await openedUrls(page)).toEqual([]);
+  expect((await desktopCalls(page)).filter((c) => c.cmd === "plugin:opener|open_url")).toEqual([]);
 });
 
 test("on the website, the library has browser games in their own group, with Play and nothing to install", async ({ page }) => {

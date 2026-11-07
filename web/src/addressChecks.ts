@@ -55,8 +55,13 @@ export function addressCheckItems(checks: AddressChecks | null | undefined, stat
     });
   } else items.push({ key: "https", label: LABEL.https, state: "problem", status: "No" });
 
+  // Null says nothing by itself: the server says why (`public_host_skipped`). Older checks don't;
+  // one that passed then was a test setup's, since a name that can't be looked up fails.
+  const skipped = checks.public_host_skipped ?? (checks.ok ? "test_setup" : null);
   if (checks.public_host === true) items.push({ key: "public", label: LABEL.public, state: "done", status: "Yes" });
-  else if (checks.public_host === null) {
+  else if (checks.public_host === null && skipped === "lookup_failed") {
+    items.push({ key: "public", label: LABEL.public, state: "problem", status: "No: the site's name couldn't be looked up" });
+  } else if (checks.public_host === null && skipped === "test_setup") {
     items.push({
       key: "public",
       label: LABEL.public,
@@ -64,6 +69,8 @@ export function addressCheckItems(checks: AddressChecks | null | undefined, stat
       status: "Not checked",
       detail: "A test setup of SLAPorSLOP doesn't look up where a site is.",
     });
+  } else if (checks.public_host === null) {
+    items.push({ key: "public", label: LABEL.public, state: "skipped", status: "Not known" });
   } else items.push({ key: "public", label: LABEL.public, state: "problem", status: "No: it's on a private network" });
 
   const lists = checks.bad_links;
@@ -111,8 +118,31 @@ export function addressChecksLine(items: AddressCheckItem[]): string {
 /** Marks beside each line (always with its words: the mark alone means nothing). */
 export const CHECK_MARK: Record<CheckState, string> = { done: "✓", active: "…", problem: "!", skipped: "–" };
 
-/** A reviewer's question: is this address on a different site from the one Play opens now? */
-export function isNewSite(address: string | null | undefined, current: string | null | undefined): boolean {
-  if (!address || !current) return false;
-  return addressHost(address) !== addressHost(current);
+/**
+ * How an address compares with another (where Play goes now, or the one SLAPorSLOP withdrew), for
+ * a reviewer: the same address; another address on the same host, which on a host many people
+ * share (itch.zone, a CDN, a page builder) can be someone else's game, so it's never called the
+ * same site; or a new site. Null when there's nothing to compare. Hosts compare as the server
+ * stores them, with any dot at the end dropped; addresses compare whole, query and fragment too
+ * (releases.rs `same_address`).
+ */
+export type AddressComparison = "same_address" | "same_host" | "new_site";
+
+export function compareAddress(address: string | null | undefined, other: string | null | undefined): AddressComparison | null {
+  const a = parsed(address);
+  const b = parsed(other);
+  if (!a || !b) return null;
+  if (a.host !== b.host) return "new_site";
+  return a.href === b.href ? "same_address" : "same_host";
+}
+
+function parsed(address: string | null | undefined): { host: string; href: string } | null {
+  if (!address) return null;
+  try {
+    const url = new URL(address);
+    url.hostname = url.hostname.replace(/\.+$/, "");
+    return { host: url.host || addressHost(address), href: url.href };
+  } catch {
+    return null;
+  }
 }

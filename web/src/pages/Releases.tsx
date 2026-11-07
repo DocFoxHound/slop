@@ -31,7 +31,7 @@ import { MakerFrame } from "../components/MakerFrame";
 import { PublishProgress, refreshEvery } from "../components/PublishProgress";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
-import { CONTENT_LABEL, formatDate, playsInBrowser } from "../format";
+import { CONTENT_LABEL, formatDate, isDedicatedServer, playsInBrowser } from "../format";
 import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { useSession } from "../session";
@@ -110,9 +110,26 @@ const ADDRESS_STATUS: typeof STATUS = {
   withdrawn: STATUS.withdrawn,
 };
 
-/** A release's status in words: a download's, or a browser game's play address. Exported for tests. */
-export function statusText(status: Release["status"], browser: boolean): { label: string; badge: string; help: string } {
+/** A release's status in words: a download's, or a browser game's play address (which, Coming
+ *  soon, Play opens only once the game is in Beta). Exported for tests. */
+export function statusText(
+  status: Release["status"],
+  browser: boolean,
+  comingSoon = false,
+): { label: string; badge: string; help: string } {
+  if (browser && comingSoon && status === "approved") {
+    return { ...ADDRESS_STATUS.approved, help: "Approved: Play opens this address once the game is in Beta." };
+  }
   return (browser ? ADDRESS_STATUS : STATUS)[status];
+}
+
+/** The Updates panel's line about the next release, with automatic approval on. A browser game's
+ *  is approved automatically only at the address Play opens now. Exported for tests. */
+export function autoApprovalStatus(s: Pick<UpdateSettings, "auto_approval_ready" | "auto_approval_note">, browser: boolean): string {
+  if (!s.auto_approval_ready) return `Your next release waits for a person: ${s.auto_approval_note}.`;
+  return browser
+    ? "Your next release will be approved automatically if it keeps the address Play opens now and passes every check; a new address always waits for a person."
+    : "Your next release will be approved automatically if it passes every check.";
 }
 
 /**
@@ -254,7 +271,7 @@ export function Releases() {
     // Sent now: a reload doesn't bring back the first address's problem.
     if (first) navigate(location.pathname, { replace: true, state: null });
   };
-  const status = (r: Release) => statusText(r.status, browser);
+  const status = (r: Release) => statusText(r.status, browser, app.data?.stage === "coming_soon");
 
   return (
     <MakerFrame app={app.data} tab="releases" onStageMoved={app.reload}>
@@ -376,7 +393,7 @@ export function Releases() {
                 </div>
                 <p className="muted small">
                   {/* An approved address that isn't the one Play opens any more says so (the server knows). */}
-                  {browser && r.status === "approved" && r.progress?.summary.includes("no longer the address Play opens")
+                  {browser && r.status === "approved" && r.plays_now === false && r.progress
                     ? r.progress.summary
                     : status(r).help}
                 </p>
@@ -413,6 +430,7 @@ export function Releases() {
                   advisories={r.advisories}
                   audience="maker"
                   browser={browser}
+                  server={isDedicatedServer(app.data)}
                 />
               </li>
             ))}
@@ -1379,13 +1397,7 @@ export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: strin
           </span>
         </span>
       </label>
-      {s.auto_update && (
-        <p className="muted small updates-status">
-          {s.auto_approval_ready
-            ? "Your next release will be approved automatically if it passes every check."
-            : `Your next release waits for a person: ${s.auto_approval_note}.`}
-        </p>
-      )}
+      {s.auto_update && <p className="muted small updates-status">{autoApprovalStatus(s, browser)}</p>}
       {error && <p className="form-error">{error}</p>}
     </section>
   );

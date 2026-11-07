@@ -267,15 +267,17 @@ website. There's nothing to build, sign, store or install, so none of §6.2 to �
       public name, not SLAPorSLOP's own site, not on a bad-link list (else 422)
                                                          │
  Fetcher (releases.rs check_play_address) ◄──────────────┘ loads the page once (page_http: public addresses
-      only, 20 s, ≤ 5 redirects each checked, ≤ 2 MB read, nothing kept) ─► releases.address_checks
+      only, 20 s a request and 45 s in all, ≤ 5 redirects each checked, ≤ 2 MB read, nothing kept)
+      ─► releases.address_checks
                                                          │
  Source check of the repository at the commit ─► waits for a person ─► approved (no manifest, nothing signed)
                                                          │
  Store page play_address (catalog::PLAY_ADDRESS) ─► Play: launch recorded, the player's browser opens it
 ```
 
-- `releases.play_address` and `releases.address_checks` (JSON: https, public host, bad-link list and
-  whether any lists are loaded, status, final address, redirects, content type, when, ok, problem);
+- `releases.play_address` and `releases.address_checks` (JSON: https, public host and why it wasn't
+  checked, bad-link list and whether any lists are loaded, status, final address, redirects, every
+  address on the way, content type, when, ok, problem);
   `release_files` stays empty, and `slop_manifest::Platform` never includes browser. A database
   check refuses a signed manifest on an address release.
 - `releases::SERVING` includes approved address releases, so votes, bounties, the label, the
@@ -283,12 +285,15 @@ website. There's nothing to build, sign, store or install, so none of §6.2 to �
   updates, sandbox info, re-scans, the revocation list) still takes only releases with a signed
   manifest (`releases::SERVING_SIGNED`, or the same condition written out).
 - Where Play goes is `catalog::PLAY_ADDRESS` (and `PLAY_RELEASE`): the newest reviewed approved
-  address, or none once that one is withdrawn. Holds, Slop Build, the GitHub picker and watcher,
+  address, or none once that one is withdrawn. The maker's releases say which one it is
+  (`plays_now`), so their progress never claims Play opens an address it doesn't. Holds, Slop Build, the GitHub picker and watcher,
   demos, mods, branches, sandbox reports and save sync refuse browser games.
-- Automatic approval (`updates::try_auto_approve`) applies only to a release with the address Play
-  opens now; a new address waits for a person.
-- The hourly abuse checks (`abuse.rs`) look for current and pending addresses, and where they
-  led, on the bad-link lists.
+- Automatic approval (`updates::try_auto_approve`) applies only to a release with exactly the
+  address Play opens now (`releases::same_address`); a new address waits for a person.
+- The fetcher checks addresses ahead of files, but never two in a row while a file release waits,
+  with one 45-second deadline per address and a 3-minute lease (files: 40).
+- The hourly abuse checks (`abuse.rs`) look for current and pending addresses, and every address
+  they went through, on the bad-link lists.
 
 ## 7. Running it
 - **Separate environments:** production, staging and development, with separate keys. Staging uses Stripe's test mode.

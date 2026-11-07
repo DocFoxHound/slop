@@ -84,7 +84,7 @@ async fn move_stage(
             "stages only move forward; to move it back, contact SLAPorSLOP".into(),
         ));
     }
-    if !admin::has_approved_release(&mut tx, app_id).await? {
+    if !admin::has_playable_release(&mut tx, app_id).await? {
         return Err(ApiError::Conflict(
             if crate::catalog::plays_in_browser(&mut *tx, app_id).await? {
                 "Beta and Released need an approved play address first: give it on the Releases page"
@@ -333,7 +333,7 @@ async fn overview(
         true => Some(crate::branches::has_pulse(&mut conn, app_id).await?),
         false => None,
     };
-    let can_advance = admin::has_approved_release(&mut conn, app_id)
+    let can_advance = admin::has_playable_release(&mut conn, app_id)
         .await
         .map_err(ApiError::Internal)?;
     Ok(Json(Overview {

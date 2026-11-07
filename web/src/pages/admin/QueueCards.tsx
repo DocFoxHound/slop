@@ -6,7 +6,7 @@
 // address: the card gives the address to open and play (never in a frame here), what the
 // automatic checks found, and where Play goes now, with nothing about files, scans or signing.
 
-import { useState } from "react";
+import { useState, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import {
@@ -22,7 +22,7 @@ import {
   type ScanReport,
   type StaffActions,
 } from "../../api";
-import { isNewSite } from "../../addressChecks";
+import { compareAddress, type AddressComparison } from "../../addressChecks";
 import { AddressCheckList, FileChecks, RepoScanList, ScanFindings, SourceCheckList } from "../../components/Checks";
 import { ItemThumb } from "../../components/MediaEditor";
 import { DesignPreview, portfolioWork } from "../../components/PeopleDesign";
@@ -114,15 +114,32 @@ export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: (
   );
 }
 
+/** How the address under review compares with where Play goes now: never "the same site" for
+ *  another address on the same host, which on a shared host can be someone else's game. */
+const VS_CURRENT: Record<AddressComparison, ReactNode> = {
+  same_address: <span className="muted small">(the same address)</span>,
+  same_host: <span className="muted small">(the same host, another address: check it's still this game)</span>,
+  new_site: <span className="badge warn">NEW SITE</span>,
+};
+
+/** And with the address SLAPorSLOP withdrew, when that's why Play opens nothing now. */
+const VS_WITHDRAWN: Record<AddressComparison, ReactNode> = {
+  same_address: <span className="badge bad">THE WITHDRAWN ADDRESS</span>,
+  same_host: <span className="badge warn">SAME HOST AS THE WITHDRAWN ONE</span>,
+  new_site: <span className="muted small">(a different site)</span>,
+};
+
 /**
  * A browser game's release: its play address. The reviewer opens it in a new tab (with no
  * referrer; never in a frame on this page) and plays it. Nothing is signed: approving it makes it
- * the address Play opens.
+ * the address Play opens. Where Play goes now is beside it: the current address, or the one
+ * SLAPorSLOP withdrew, so a resubmitted address is never taken for a first one.
  */
 function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address: string; onDone: () => void }) {
   const { busy, error, notice, run } = useAction(onDone);
   const [copied, setCopied] = useState(false);
   const current = r.current_play_address ?? null;
+  const withdrawn = r.withdrawn_play_address ?? null;
   const copy = () =>
     void navigator.clipboard?.writeText(address).then(
       () => setCopied(true),
@@ -146,6 +163,7 @@ function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address
         <span className="muted small">{formatDate(r.created_at)}</span>
       </div>
       {r.status_reason && <p className="notice">{r.status_reason}</p>}
+      {r.newer_approved && <p className="notice">{r.newer_approved.note}.</p>}
       <dl className="kv">
         <dt>Play address</dt>
         <dd>
@@ -170,15 +188,14 @@ function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address
         <dd>
           {current ? (
             <>
-              <code>{current}</code>{" "}
-              {isNewSite(address, current) ? (
-                <span className="badge warn">NEW SITE</span>
-              ) : (
-                <span className="muted small">(the same site)</span>
-              )}
+              <code>{current}</code> {VS_CURRENT[compareAddress(address, current) ?? "new_site"]}
+            </>
+          ) : withdrawn ? (
+            <>
+              Nothing: SLAPorSLOP withdrew <code>{withdrawn}</code> {VS_WITHDRAWN[compareAddress(address, withdrawn) ?? "new_site"]}
             </>
           ) : (
-            <span className="muted">Nothing yet: this is its first address.</span>
+            <span className="muted">Nothing yet: no address of this game has been approved before.</span>
           )}
         </dd>
         <dt>Repository</dt>
@@ -548,7 +565,8 @@ export function ReadyCard({ a, onDone }: { a: Q["ready_to_list"][number]; onDone
               in the store.
             </>
           ) : (
-            "Plays in the browser: no play address is approved yet."
+            // Only a Coming soon page is listed with nothing to play (admin.rs `not_listable`).
+            "Plays in the browser: Play opens no address now, which a Coming soon page doesn't need."
           )}
         </p>
       )}

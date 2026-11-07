@@ -4,7 +4,7 @@
 // pages. Featured, shelves and hidden shelves are put back as they were (none) by each test.
 import type { Page } from "@playwright/test";
 import { expect, ids, signIn, test } from "./fixtures";
-import { call, delist, failApi, listedApp, path, tryCall } from "./store-helpers";
+import { call, delist, failApi, listedApp, patchJson, path, tryCall } from "./store-helpers";
 
 // Vera's: a coming-soon game players are Interested in, and one rated 18+.
 const soon = "harbour-lights";
@@ -36,14 +36,29 @@ test("visitors get the intro and the test-server note; signed-in players get For
   const visitor = await browser.newPage();
   await visitor.goto("/");
   await expect(visitor.getByRole("heading", { name: /Apps and games made with AI\./, level: 1 })).toBeVisible();
-  // This server doesn't scan, so it says a person checks every build instead.
+  // This server doesn't scan, so it says a person checks every build instead; a game that plays
+  // in the browser (the seed's Orbit Tap is listed) has an address checked, not a build.
+  const claims = visitor.locator(".intro li");
   await expect(visitor.getByText("Reviewed before it's listed.")).toBeVisible();
-  await expect(visitor.getByText("Every build is checked by a person.")).toBeVisible();
+  await expect(claims.nth(1)).toHaveText(
+    "Reviewed before it's listed. Every build is checked by a person. Games that play in your browser have their address checked and are opened by a person.",
+  );
+  await expect(claims.nth(2)).toHaveText("Free to download or play. Makers can take donations. Nothing is ever for sale.");
   await expect(visitor.getByRole("note").filter({ hasText: "Test server." })).toContainText("uploads are not scanned");
   await expect(visitor.getByRole("heading", { name: "For you" })).toHaveCount(0);
   // The categories, each to its page.
   await expect(visitor.locator(".cat-grid").getByRole("link", { name: /Games/ })).toHaveAttribute("href", "/browse/games");
   await expect(section(visitor, "New and barely seen")).toBeVisible();
+
+  // Where SLAPorSLOP scans, only downloads are said to be scanned.
+  const scanned = await browser.newPage();
+  await patchJson(scanned, path("/v1/server"), (body) => ({ ...body, scanning: true }));
+  await scanned.goto("/");
+  await expect(scanned.locator(".intro li").nth(1)).toHaveText(
+    "Downloads are scanned before they're listed. Malware, stolen code and scams are checked on every upload. Games that play in your browser have their address checked and are opened by a person; what their site serves isn't scanned.",
+  );
+  await expect(scanned.getByText("Scanned before it's listed.")).toHaveCount(0);
+  await scanned.close();
 
   const pat = await browser.newPage();
   await signIn(pat, "player");

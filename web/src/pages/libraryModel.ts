@@ -17,7 +17,8 @@ export interface Entry {
   slug: string;
   title: string;
   group: Group;
-  /** What the store knows about it, when it does (not for an installed app SLAPorSLOP no longer lists). */
+  /** What the store knows about it, when it does: not for an installed app SLAPorSLOP no longer
+   *  lists, nor while an installed app the account library doesn't have is still being looked up. */
   app?: AppSummary;
   installed?: InstalledApp;
   update?: AppUpdate;
@@ -38,6 +39,16 @@ export interface Sources {
   interested: AppSummary[];
   privateMine: AppSummary[];
   privateShared: Array<AppSummary & { owner: string }>;
+  /** The store's data for installed apps none of the lists above has (installed signed out, or
+   *  taken out of the library on the website): `unknownInstalled` says which to look up. */
+  store?: AppSummary[];
+}
+
+/** Installed apps none of the account's lists knows: their store data is looked up on its own,
+ *  so they're in their categories too. */
+export function unknownInstalled(s: Omit<Sources, "store">): string[] {
+  const known = new Set([...s.library, ...s.interested, ...s.privateMine, ...s.privateShared].map((a) => a.slug));
+  return s.installed.map((i) => i.installed.slug).filter((slug) => !known.has(slug));
 }
 
 const byTitle = (a: { title: string }, b: { title: string }) =>
@@ -56,7 +67,8 @@ export function buildEntries(s: Sources): Entry[] {
   const known = (slug: string): AppSummary | undefined =>
     s.library.find((a) => a.slug === slug) ??
     privates.find((a) => a.slug === slug) ??
-    s.interested.find((a) => a.slug === slug);
+    s.interested.find((a) => a.slug === slug) ??
+    s.store?.find((a) => a.slug === slug);
 
   const all = s.installed;
   const originalOf = (app: InstalledApp) => all.find((o) => o.installed.slug === app.build_of)?.installed;
@@ -136,11 +148,16 @@ function isCategoryFilter(filter: Filter): filter is CategoryFilter {
   return filter.startsWith("category:");
 }
 
-/** In a store category: one of the entry's app's tags is one of the category's. An entry without
- *  store data (an installed app SLAPorSLOP no longer lists) is in none. */
-export function inCategory(e: Entry, category: Pick<Category, "tags">): boolean {
-  const tags = e.app?.tags ?? [];
-  return category.tags.some((t) => tags.includes(t.slug));
+/** In a store category: one of the entry's app's tags is one of the category's, and the category
+ *  takes it as the store does (catalog.rs `push_category_limits`: Kids & Family lists only apps
+ *  rated at most its age, without its excluded labels). An entry without store data (an installed
+ *  app SLAPorSLOP no longer lists) is in none. */
+export function inCategory(e: Entry, category: Pick<Category, "tags" | "max_age" | "excluded_labels">): boolean {
+  const app = e.app;
+  if (!app) return false;
+  if ((app.min_age ?? 0) > (category.max_age ?? 18)) return false;
+  if ((app.content_labels ?? []).some((l) => (category.excluded_labels ?? []).includes(l))) return false;
+  return category.tags.some((t) => app.tags.includes(t.slug));
 }
 
 /** Whether the entry is shown under `filter`; a category's needs the store's categories

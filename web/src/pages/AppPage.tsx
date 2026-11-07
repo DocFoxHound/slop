@@ -11,6 +11,7 @@ import { AppLabel, LabelNotes } from "../components/AppLabel";
 import { AppBounties } from "./Bounties";
 import { DemoButton } from "../components/Demo";
 import { BugReports } from "../components/BugReports";
+import { usePlayStopped } from "../components/AppUpdates";
 import { Reviews } from "../components/Reviews";
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
@@ -31,6 +32,8 @@ export function AppPage() {
   const { slug = "" } = useParams();
   const app = useLoad(() => api.app(slug), [slug]);
   useDocumentTitle(app.data?.title);
+  // Play found the address withdrawn since this page loaded: load it again, so Play goes away.
+  usePlayStopped(slug, app.reload);
 
   if (app.error) {
     return (

@@ -243,6 +243,7 @@ export function RepoScanList({
   advisories,
   audience,
   browser = false,
+  server,
 }: {
   scan: RepoScan | null | undefined;
   advisories: Advisory[] | undefined;
@@ -253,6 +254,12 @@ export function RepoScanList({
    * The source is still read for its licence, selling and pay-to-win design.
    */
   browser?: boolean;
+  /**
+   * A dedicated server (in the Servers category): the Content Policy's rule on code from outside
+   * SLAPorSLOP doesn't cover it, so its code loading is a note. Left out, what the scan recorded
+   * when it was checked (`dedicated_server`).
+   */
+  server?: boolean;
 }) {
   if (!scan) {
     return (
@@ -272,6 +279,8 @@ export function RepoScanList({
   const licence = scan.licence;
   const money = scan.monetization ?? [];
   const code = browser ? [] : (scan.code_loading ?? []);
+  const isServer = !browser && (server ?? scan.dedicated_server === true);
+  const unsafeFormat = code.some((h) => h.rule === "unsafe_format");
   const network = browser ? [] : (scan.network ?? []);
   const found = advisories ?? [];
   const malicious = found.filter((a) => a.malicious);
@@ -328,7 +337,30 @@ export function RepoScanList({
           </span>
         </div>
       )}
-      {browser ? null : code.length > 0 ? (
+      {browser ? null : code.length > 0 && isServer ? (
+        <div>
+          <span className="badge neutral">
+            LOADS CODE FROM OUTSIDE SLAPorSLOP ({code.length})
+          </span>{" "}
+          <span className="muted">
+            {audience === "maker"
+              ? "A note, not a problem: dedicated servers may load mods, maps and plugins from other places, and the Content Policy's rule on outside code doesn't cover them. SLAPorSLOP checks only what's in the release, so say in your description what the server loads and from where."
+              : "A note, not a Content Policy problem: dedicated servers may load mods, maps and plugins from other places. Check it really is a dedicated server (a server or headless program people run so others can play the game its description names); anything else tagged Dedicated Server is reviewed as an ordinary download."}
+            {unsafeFormat &&
+              (audience === "maker"
+                ? " A data format that can rebuild objects is still worth replacing for anything players or other servers send."
+                : " An unsafe format reading what players or other servers send is a note asking the maker to replace it, not a rejection on its own.")}
+          </span>
+          <ul>
+            {code.map((h) => (
+              <li key={h.rule}>
+                {h.label} ({h.count}):{" "}
+                <span className="muted">{h.examples.join(", ")}</span>
+              </li>
+            ))}
+          </ul>
+        </div>
+      ) : code.length > 0 ? (
         <div>
           <span className="badge warn">
             CODE FROM OUTSIDE SLAPorSLOP? ({code.length})

@@ -325,6 +325,25 @@ async fn a_store_page_switches_to_or_from_the_browser_only_before_its_first_rele
         (StatusCode::UNPROCESSABLE_ENTITY, "platforms")
     );
     assert!(message.contains("only games"), "{message}");
+    // Never a private one: a browser game's address is public on the web.
+    listed_with(
+        &app,
+        maker_id,
+        "secret",
+        "beta",
+        "status = 'draft', visibility = 'private', platforms = '{windows}'",
+    )
+    .await;
+    let (status, field, message) = refusal(
+        app.send(patch("secret", json!({ "platforms": ["browser"] })))
+            .await,
+    )
+    .await;
+    assert_eq!(
+        (status, field.as_str()),
+        (StatusCode::UNPROCESSABLE_ENTITY, "platforms")
+    );
+    assert!(message.contains("can't be private"), "{message}");
     listed_with(
         &app,
         maker_id,
@@ -704,6 +723,101 @@ async fn a_browser_games_release_is_a_play_address(db: PgPool) {
     assert!(message.contains("three releases"), "{message}");
 }
 
+/// A play address is never one of SLAPorSLOP's own sites, or under one: not its address, a
+/// former address, a trusted origin or the demos' origin (Play would open it with SLAPorSLOP's
+/// cookies). Each is refused on its own.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn play_addresses_are_never_slaporslops_own_sites(db: PgPool) {
+    let app = test_app_with(db, |c| {
+        c.releases.allow_http_downloads = false;
+        c.former_urls = vec!["https://slopai.example".parse().unwrap()];
+        c.trusted_origins = vec!["https://app.example.net".into()];
+        c.demos.play_url = Some("https://play.example.org".parse().unwrap());
+    })
+    .await;
+    let (_, maker) = maker_with_browser_app(&app, "beta").await;
+    for address in [
+        "https://slopai.example/game/",
+        "https://app.example.net/g",
+        "https://foo.play.example.org/",
+    ] {
+        let (status, field, message) = refusal(
+            app.send(
+                req(Method::POST, "/v1/apps/game/releases")
+                    .cookie(&maker)
+                    .json(play_body("1.0.0", address)),
+            )
+            .await,
+        )
+        .await;
+        assert_eq!(
+            (status, field.as_str()),
+            (StatusCode::UNPROCESSABLE_ENTITY, "play_address"),
+            "{address}"
+        );
+        assert!(
+            message.contains("SLAPorSLOP's own site"),
+            "{address}: {message}"
+        );
+    }
+}
+
+/// A store page switching between a download and a browser game while a release is being sent
+/// gets no release of the wrong kind: the release is made with the store page locked, and its
+/// platforms checked again then.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_release_isnt_made_for_a_store_page_that_switched_meanwhile(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    // As the store page's own save does (catalog.rs update_app): lock it, then switch it.
+    let mut switch = app.db.begin().await.unwrap();
+    sqlx::query("select 1 from apps where slug = 'game' for update")
+        .execute(&mut *switch)
+        .await
+        .unwrap();
+    let submit = app.send(
+        req(Method::POST, "/v1/apps/game/releases")
+            .cookie(&maker)
+            .json(release_body(&app, "1.0.0", "game-windows.zip")),
+    );
+    let switched = async {
+        // Once the submission waits for the lock, the switch is saved.
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(20);
+        loop {
+            let waiting: i64 = sqlx::query_scalar(
+                "select count(*) from pg_stat_activity
+                 where datname = current_database() and wait_event_type = 'Lock'",
+            )
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+            if waiting > 0 {
+                break;
+            }
+            assert!(
+                std::time::Instant::now() < deadline,
+                "the submission never waited"
+            );
+            tokio::time::sleep(std::time::Duration::from_millis(20)).await;
+        }
+        sqlx::query(
+            "update apps set platforms = '{browser}', watch_releases = false where slug = 'game'",
+        )
+        .execute(&mut *switch)
+        .await
+        .unwrap();
+        switch.commit().await.unwrap();
+    };
+    let (res, ()) = tokio::join!(submit, switched);
+    let (status, _, message) = refusal(res).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert_eq!(
+        message,
+        "the store page's platforms changed while this release was sent: send it again"
+    );
+    assert_eq!(count(&app, "select count(*) from releases").await, 0);
+}
+
 /// A browser game on GitHub may leave the commit out: SLAPorSLOP takes the default branch's
 /// newest. Elsewhere it has to be given.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
@@ -803,8 +917,56 @@ async fn play_addresses_must_be_https_on_public_sites(db: PgPool) {
     assert_eq!(status, "failed");
     assert!(reason.unwrap().contains("private network"));
     assert_eq!(checks["public_host"], false);
+    assert!(checks["public_host_skipped"].is_null());
     assert_eq!(checks["https"], true);
     assert_eq!(checks["ok"], false);
+
+    // Every hop is checked as the address was when it was given: a public IP address isn't a
+    // site's name. A name that can't be looked up fails too, and the checks say why they don't
+    // know whether the site is public.
+    for (version, address, why, public_host, skipped) in [
+        (
+            "1.0.1",
+            "https://203.0.113.10/play/",
+            "it leads to an IP address instead of a site's name",
+            json!(true),
+            Value::Null,
+        ),
+        (
+            "1.0.2",
+            "https://no-such-site.invalid/play/",
+            "SLAPorSLOP can't find the site no-such-site.invalid",
+            Value::Null,
+            json!("lookup_failed"),
+        ),
+    ] {
+        let id = Uuid::now_v7();
+        sqlx::query(
+            "insert into releases (id, app_id, version, commit_sha, submitted_by, play_address)
+             values ($1, (select id from apps where slug = 'game'), $2, repeat('a', 40), $3, $4)",
+        )
+        .bind(id)
+        .bind(version)
+        .bind(maker_id)
+        .bind(address)
+        .execute(&app.db)
+        .await
+        .unwrap();
+        assert!(releases::fetch_next(&app.state).await.unwrap());
+        let (status, reason, checks): (String, Option<String>, Value) = sqlx::query_as(
+            "select status::text, status_reason, address_checks from releases where id = $1",
+        )
+        .bind(id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+        assert_eq!(status, "failed", "{address}");
+        let reason = reason.unwrap();
+        assert!(reason.starts_with(why), "{address}: {reason}");
+        assert_eq!(checks["public_host"], public_host, "{address}");
+        assert_eq!(checks["public_host_skipped"], skipped, "{address}");
+        assert_eq!(checks["hops"], json!([address]), "{address}");
+    }
 }
 
 /// The fetcher loads a play page the way Play will open it, following redirects itself, and
@@ -849,6 +1011,8 @@ async fn the_fetcher_checks_that_a_play_page_loads(db: PgPool) {
         checks["public_host"].is_null(),
         "not checked on a test setup"
     );
+    assert_eq!(checks["public_host_skipped"], "test_setup");
+    assert_eq!(checks["hops"], json!([page]));
     assert_eq!(
         checks["bad_links"],
         json!({ "listed_by": null, "lists_loaded": false }),
@@ -870,6 +1034,11 @@ async fn the_fetcher_checks_that_a_play_page_loads(db: PgPool) {
     assert_eq!(status, "awaiting_review");
     assert_eq!(checks["redirects"], 1);
     assert_eq!(checks["final_address"], page);
+    assert_eq!(
+        checks["hops"],
+        json!([play_page(&app, "play-moved"), page]),
+        "every address on the way"
+    );
     assert_eq!(checks["content_type"], "text/html");
     for id in [&ok, &moved] {
         admin::reject(&app.db, id.parse().unwrap(), "rev", "Just testing.")
@@ -960,10 +1129,11 @@ async fn the_fetcher_checks_that_a_play_page_loads(db: PgPool) {
     );
 }
 
-/// Play addresses are checked before files that have waited longer: their checks take seconds,
-/// a file's scan minutes.
+/// Play addresses are checked before files that have waited longer (their checks take seconds,
+/// a file's scan minutes), but never two in a row while a file release waits, so a run of
+/// addresses can't hold files up.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
-async fn play_addresses_are_checked_before_files_waiting_longer(db: PgPool) {
+async fn play_addresses_go_first_but_never_twice_while_files_wait(db: PgPool) {
     let app = test_app(db).await;
     let (maker_id, maker) = maker_with_app(&app, "beta").await;
     let res = app
@@ -984,32 +1154,134 @@ async fn play_addresses_are_checked_before_files_waiting_longer(db: PgPool) {
     .execute(&app.db)
     .await
     .unwrap();
-    let res = app
-        .send(
-            req(Method::POST, "/v1/apps/orbit/releases")
-                .cookie(&maker)
-                .json(play_body("1.0.0", &play_page(&app, "play"))),
-        )
-        .await;
-    assert_eq!(res.status(), StatusCode::CREATED);
+    for version in ["1.0.0", "1.0.1"] {
+        let res = app
+            .send(
+                req(Method::POST, "/v1/apps/orbit/releases")
+                    .cookie(&maker)
+                    .json(play_body(version, &play_page(&app, "play"))),
+            )
+            .await;
+        assert_eq!(res.status(), StatusCode::CREATED);
+    }
     let statuses = || async {
-        sqlx::query_as::<_, (String, String)>(
-            "select a.slug, r.status::text from releases r join apps a on a.id = r.app_id order by a.slug",
+        sqlx::query_as::<_, (String, String, String)>(
+            "select a.slug, r.version, r.status::text from releases r join apps a on a.id = r.app_id
+             order by a.slug, r.version",
         )
         .fetch_all(&app.db)
         .await
         .unwrap()
+        .into_iter()
+        .map(|(slug, version, status)| format!("{slug} {version} {status}"))
+        .collect::<Vec<_>>()
     };
+    // The first address, then the file release, then the next address.
     assert!(releases::fetch_next(&app.state).await.unwrap());
     assert_eq!(
         statuses().await,
         [
-            ("game".to_string(), "fetching".to_string()),
-            ("orbit".to_string(), "awaiting_review".to_string())
+            "game 1.0.0 fetching",
+            "orbit 1.0.0 awaiting_review",
+            "orbit 1.0.1 fetching"
         ]
     );
     assert!(releases::fetch_next(&app.state).await.unwrap());
-    assert_eq!(statuses().await[0].1, "awaiting_review");
+    assert_eq!(
+        statuses().await,
+        [
+            "game 1.0.0 awaiting_review",
+            "orbit 1.0.0 awaiting_review",
+            "orbit 1.0.1 fetching"
+        ]
+    );
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    assert_eq!(statuses().await[2], "orbit 1.0.1 awaiting_review");
+    assert!(!releases::fetch_next(&app.state).await.unwrap());
+}
+
+/// One deadline covers a play address's whole check, every redirect and name lookup, so one slow
+/// site can't hold the fetcher up: past it, the check fails as the page not loading in time.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_play_address_check_has_one_deadline(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_browser_app(&app, "beta").await;
+    let res = app
+        .send(
+            req(Method::POST, "/v1/apps/game/releases")
+                .cookie(&maker)
+                .json(play_body("1.0.0", &play_page(&app, "play-slow"))),
+        )
+        .await;
+    assert_eq!(res.status(), StatusCode::CREATED);
+    let id = body_json(res).await["id"].as_str().unwrap().to_string();
+    // Each redirect takes 0.3 s, so six (more than are allowed) would take longer than this.
+    let mut state = app.state.clone();
+    state.page_check_deadline = std::time::Duration::from_secs(1);
+    assert!(releases::fetch_next(&state).await.unwrap());
+    let (status, reason, checks): (String, Option<String>, Value) = sqlx::query_as(
+        "select status::text, status_reason, address_checks from releases where id = $1::uuid",
+    )
+    .bind(&id)
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(status, "failed");
+    assert_eq!(reason.as_deref(), Some("the page didn't load in time"));
+    assert_eq!(checks["problem"], "the page didn't load in time");
+    assert_eq!(checks["ok"], false);
+    let redirects = checks["redirects"].as_u64().unwrap();
+    assert!((1..5).contains(&redirects), "{checks}");
+}
+
+/// A play address check that died with the server is taken again after a few minutes, not the
+/// 40 a file release's fetch is given (its scans take that long).
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_address_check_that_died_is_taken_again_within_minutes(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _) = maker_with_browser_app(&app, "beta").await;
+    listed_with(&app, maker_id, "castle", "beta", "platforms = '{windows}'").await;
+    let started = |slug: &str, address: Option<String>, ago: &str| {
+        sqlx::query(sqlx::AssertSqlSafe(format!(
+            "insert into releases (id, app_id, version, commit_sha, submitted_by, play_address, fetch_started_at)
+             select $1, id, '1.0.0', repeat('a', 40), maker_id, $2, now() - interval '{ago}'
+             from apps where slug = $3"
+        )))
+        .bind(Uuid::now_v7())
+        .bind(address)
+        .bind(slug.to_string())
+        .execute(&app.db)
+    };
+    started("game", Some(play_page(&app, "play")), "1 minute")
+        .await
+        .unwrap();
+    started("castle", None, "4 minutes").await.unwrap();
+    assert!(
+        !releases::fetch_next(&app.state).await.unwrap(),
+        "both still being checked"
+    );
+    sqlx::query("update releases set fetch_started_at = now() - interval '4 minutes'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert!(releases::fetch_next(&app.state).await.unwrap());
+    let statuses: Vec<(String, String)> = sqlx::query_as(
+        "select a.slug, r.status::text from releases r join apps a on a.id = r.app_id order by a.slug",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        statuses,
+        [
+            ("castle".to_string(), "fetching".to_string()),
+            ("game".to_string(), "awaiting_review".to_string())
+        ]
+    );
+    assert!(
+        !releases::fetch_next(&app.state).await.unwrap(),
+        "a file release keeps its 40 minutes"
+    );
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -1042,12 +1314,21 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
         "not checked yet"
     );
     assert!(releases::fetch_next(&app.state).await.unwrap());
+    // Nothing to install, ever: SLAPorSLOP apps from before browser games, which offer to install
+    // every game, are told where it plays instead of "not found".
     let manifest = || async {
-        app.send(req(Method::GET, "/v1/apps/game/manifest").cookie(&maker))
-            .await
-            .status()
+        let (status, _, message) = refusal(
+            app.send(req(Method::GET, "/v1/apps/game/manifest").cookie(&maker))
+                .await,
+        )
+        .await;
+        assert_eq!(
+            message,
+            "this game plays in your browser: open its store page on the website and press Play, or update the SLAPorSLOP app"
+        );
+        status
     };
-    assert_eq!(manifest().await, StatusCode::NOT_FOUND);
+    assert_eq!(manifest().await, StatusCode::CONFLICT);
 
     // Not when its checks didn't pass, or once a list names it.
     sqlx::query(
@@ -1124,8 +1405,8 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
         "Approved by a person at SLAPorSLOP: Play opens this address."
     );
 
-    // Still nothing to install: a 404, never an error.
-    assert_eq!(manifest().await, StatusCode::NOT_FOUND);
+    // Still nothing to install, and never a server error.
+    assert_eq!(manifest().await, StatusCode::CONFLICT);
     assert_eq!(page_for(&app, Some(&maker)).await["play_address"], address);
     admin::list_app(&app.db, "game", "rev").await.unwrap();
     assert_eq!(page_for(&app, None).await["play_address"], address);
@@ -1139,12 +1420,89 @@ async fn a_play_address_is_approved_with_nothing_signed(db: PgPool) {
     assert_eq!(updates[0]["sandbox_suggested"], false);
 }
 
+/// Approving checks the bad-link lists again for every address the check went through, since
+/// days may have passed: an address it redirected through, or where it ended up, listed since
+/// is reason enough to refuse, on its own.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn approving_checks_every_address_on_the_way_against_the_lists_again(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_browser_app(&app, "beta").await;
+    let (address, hop, page) = (
+        play_page(&app, "play-moved-twice"),
+        play_page(&app, "play-moved"),
+        play_page(&app, "play"),
+    );
+    let id = submit_play_and_check(&app, &maker, "1.0.0", &address).await;
+    let release_id: Uuid = id.parse().unwrap();
+    let checks: Value = sqlx::query_scalar("select address_checks from releases where id = $1")
+        .bind(release_id)
+        .fetch_one(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(checks["hops"], json!([address, hop, page]), "{checks}");
+    assert_eq!(checks["final_address"], page);
+    let listed = |url: String, source: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query("delete from bad_links")
+                .execute(&db)
+                .await
+                .unwrap();
+            sqlx::query(
+                "insert into bad_links (url, host, source) values ($1, 'unrelated.example', $2)",
+            )
+            .bind(url)
+            .bind(source)
+            .execute(&db)
+            .await
+            .unwrap();
+        }
+    };
+    let refused = || async {
+        let err = admin::approve(&app.db, None, lax(), release_id, "rev")
+            .await
+            .unwrap_err();
+        format!("{err:#}")
+    };
+    // Listed by its exact address, not its site (which the address and the page share).
+    let fake = url::Url::parse(&app.fake_base).unwrap();
+    let site = format!("{}:{}", fake.host_str().unwrap(), fake.port().unwrap());
+
+    // The address it redirected through, alone.
+    listed(format!("{site}/octo/game/play-moved"), "PhishTank").await;
+    assert_eq!(
+        refused().await,
+        format!("{hop} is on PhishTank, a list of known-bad links, since it was checked")
+    );
+    // Where it ended up, alone (as if it had led elsewhere).
+    sqlx::query(
+        "update releases set address_checks = jsonb_set(address_checks, '{final_address}', '\"https://landing.example/x\"')
+         where id = $1",
+    )
+    .bind(release_id)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    listed("landing.example/x".into(), "OpenPhish").await;
+    assert_eq!(
+        refused().await,
+        "https://landing.example/x is on OpenPhish, a list of known-bad links, since it was checked"
+    );
+    assert_eq!(release_status(&app, &id).await.0, "awaiting_review");
+
+    sqlx::query("delete from bad_links")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(approve(&app, &id).await, admin::Approval::PlayAddress);
+}
+
 /// A browser game moves to Beta once a person approved its address. Until then, and while it's
 /// Coming soon, nobody but its maker gets the address.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn a_browser_game_moves_on_once_its_address_is_approved(db: PgPool) {
     let app = test_app(db).await;
-    let (_, maker) = maker_with_browser_app(&app, "coming_soon").await;
+    let (maker_id, maker) = maker_with_browser_app(&app, "coming_soon").await;
     let (_, stranger) = app.user("Stranger", "US").await;
     admin::list_app(&app.db, "game", "rev").await.unwrap();
     let address = play_page(&app, "play");
@@ -1179,7 +1537,17 @@ async fn a_browser_game_moves_on_once_its_address_is_approved(db: PgPool) {
     }
 
     approve(&app, &id).await;
-    // Coming soon: only its maker plays it yet.
+    // Coming soon: only its maker plays it yet, and the maker is told Play waits for Beta.
+    assert_eq!(
+        notice(&app, maker_id, "Game 0.1.0 is approved").await,
+        "A reviewer approved its play address. Play opens it once the game is in Beta."
+    );
+    let mine = releases_for(&app, Some(&maker)).await;
+    assert_eq!(
+        mine[0]["progress"]["summary"],
+        "Approved by a person at SLAPorSLOP: Play opens this address once the game is in Beta."
+    );
+    assert_eq!(mine[0]["plays_now"], true);
     assert!(page_for(&app, None).await["play_address"].is_null());
     assert!(page_for(&app, Some(&stranger)).await["play_address"].is_null());
     assert_eq!(page_for(&app, Some(&maker)).await["play_address"], address);
@@ -1201,6 +1569,78 @@ async fn a_browser_game_moves_on_once_its_address_is_approved(db: PgPool) {
     let public = releases_for(&app, None).await;
     assert_eq!(public[0]["play_address"], address);
     assert_eq!(public[0]["address_checks"]["ok"], true);
+}
+
+/// With its newest address withdrawn, a browser game has nothing to play, even with older ones
+/// approved: it can't be listed in Beta or Released, moved on, or offered as ready to list, until
+/// a person approves an address again. A Coming soon page can still be listed without one.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_browser_game_with_its_address_withdrawn_cant_be_listed_or_moved_on(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_browser_app(&app, "beta").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    approved_play_address(&app, "game", "1.0.0", "https://old-site.example/play/").await;
+    let newest =
+        approved_play_address(&app, "game", "1.1.0", "https://games.example.com/play/").await;
+    admin::revoke(&app.db, newest, "rev", "The site asks for passwords")
+        .await
+        .unwrap();
+
+    let err = admin::list_app(&app.db, "game", "rev").await.unwrap_err();
+    assert!(
+        format!("{err:#}").contains("approve its play address before listing a Beta browser game"),
+        "{err:#}"
+    );
+    let err = admin::set_stage(
+        &app.db,
+        "game",
+        slop_api::catalog::AppStage::Released,
+        "rev",
+    )
+    .await
+    .unwrap_err();
+    assert!(
+        format!("{err:#}").contains("approve a play address first"),
+        "{err:#}"
+    );
+    let (status, _, message) = refusal(
+        app.send(
+            req(Method::POST, "/v1/apps/game/stage")
+                .cookie(&maker)
+                .json(json!({ "stage": "released" })),
+        )
+        .await,
+    )
+    .await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(message.contains("approved play address"), "{message}");
+    let overview = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(overview["can_advance"], false);
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
+            .await,
+    )
+    .await;
+    assert!(
+        !queue["ready_to_list"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .any(|a| a["slug"] == "game"),
+        "{}",
+        queue["ready_to_list"]
+    );
+
+    // Coming soon needs nothing to play.
+    sqlx::query("update apps set stage = 'coming_soon' where slug = 'game'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    admin::list_app(&app.db, "game", "rev").await.unwrap();
 }
 
 /// Only the address Play opens is shown to anyone but the maker: never an older, waiting or
@@ -1321,6 +1761,17 @@ async fn a_new_play_address_always_waits_for_a_person(db: PgPool) {
             .unwrap()
             .contains("new play address")
     );
+    // The same page with another fragment is another address too: on a shared host, the
+    // fragment can choose someone else's game.
+    let fragment = submit_play_and_check(&app, &maker, "1.4.0", &format!("{b}#level-2")).await;
+    assert_eq!(
+        release_status(&app, &fragment).await,
+        (
+            "awaiting_review".into(),
+            Some("Waiting for a person: a new play address is always checked by a person".into()),
+            None
+        )
+    );
 }
 
 /// Withdrawing the address Play opens stops Play: it doesn't fall back to an older address,
@@ -1371,6 +1822,16 @@ async fn withdrawing_the_address_play_opens_stops_play(db: PgPool) {
         mine[0]["progress"]["summary"],
         "Withdrawn by SLAPorSLOP: The site now asks for passwords. Play no longer opens this address."
     );
+    // The maker's progress can tell Play opens nothing: neither address is the one it opens,
+    // though the older one is still approved.
+    assert_eq!(
+        mine.as_array()
+            .unwrap()
+            .iter()
+            .map(|r| (r["version"].as_str().unwrap(), r["plays_now"].clone()))
+            .collect::<Vec<_>>(),
+        [("1.1.0", json!(false)), ("1.0.0", json!(false))]
+    );
     let signed: slop_manifest::Signed = serde_json::from_value(
         body_json(app.send(req(Method::GET, "/v1/revocations")).await).await,
     )
@@ -1389,6 +1850,91 @@ async fn withdrawing_the_address_play_opens_stops_play(db: PgPool) {
     assert!(reason.unwrap().contains("withdrawn"));
     approve(&app, &again).await;
     assert_eq!(page_for(&app, None).await["play_address"], a);
+}
+
+/// Withdrawing an older address leaves Play on the one it opens now: a withdrawal keeps the
+/// release's review time, so the newest reviewed address is still the current one.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn withdrawing_an_older_address_keeps_play_on_the_current_one(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker, older) =
+        listed_browser_game(&app, "released", "https://old-site.example/play/").await;
+    let current = "https://games.example.com/play/";
+    approved_play_address(&app, "game", "1.1.0", current).await;
+    let reviewed_at = || async {
+        sqlx::query_scalar::<_, OffsetDateTime>("select reviewed_at from releases where id = $1")
+            .bind(older)
+            .fetch_one(&app.db)
+            .await
+            .unwrap()
+    };
+    let before = reviewed_at().await;
+
+    admin::revoke(&app.db, older, "rev", "The old site was taken over")
+        .await
+        .unwrap();
+    assert_eq!(reviewed_at().await, before, "the review time stays");
+    assert_eq!(page_for(&app, None).await["play_address"], current);
+    let (_, player) = app.user("Pat Player", "US").await;
+    let res = launch(&app, &player, "game", "?platform=browser").await;
+    assert_eq!(res.status(), StatusCode::OK);
+    assert_eq!(body_json(res).await["play_address"], current);
+    let overview = body_json(
+        app.send(req(Method::GET, "/v1/apps/game/manage").cookie(&maker))
+            .await,
+    )
+    .await;
+    assert_eq!(overview["serving"]["play_address"], current, "{overview}");
+    let label = body_json(app.send(req(Method::GET, "/v1/apps/game/label")).await).await;
+    assert_eq!(label["version"], "1.1.0");
+    // The maker's releases say which one Play opens; nobody else's carry it.
+    let mine = releases_for(&app, Some(&maker)).await;
+    let plays: Vec<_> = mine
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|r| (r["version"].as_str().unwrap(), r["plays_now"].clone()))
+        .collect();
+    assert_eq!(plays, [("1.1.0", json!(true)), ("1.0.0", json!(false))]);
+    let public = releases_for(&app, Some(&player)).await;
+    assert!(public[0].get("plays_now").is_none(), "{public}");
+}
+
+/// A frozen browser game's maker hears that Play keeps opening its address while it's in the
+/// store, and that players can't open it once it has left: nothing of it is installed anywhere.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn a_frozen_browser_games_maker_hears_what_play_does(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _, _) = listed_browser_game(&app, "released", &play_page(&app, "play")).await;
+    sqlx::query("update apps set repo_url = $1, repo_checked_at = null")
+        .bind(format!("{}octo/gone", app.fake_base))
+        .execute(&app.db)
+        .await
+        .unwrap();
+    slop_api::frozen::run_once(&app.state).await.unwrap();
+    let frozen = notice(
+        &app,
+        maker_id,
+        "Game is frozen: SLAPorSLOP can't check its repository",
+    )
+    .await;
+    assert!(
+        frozen.contains("Game takes no new releases; Play keeps opening its address until then."),
+        "{frozen}"
+    );
+    assert!(!frozen.contains("installed"), "{frozen}");
+
+    sqlx::query("update apps set frozen_at = now() - interval '15 days'")
+        .execute(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(slop_api::frozen::end_grace(&app.state).await.unwrap(), 1);
+    let gone = notice(&app, maker_id, "Game left the store").await;
+    assert!(
+        gone.contains("Players can't open it from SLAPorSLOP until it's back."),
+        "{gone}"
+    );
+    assert!(!gone.contains("keep working"), "{gone}");
 }
 
 /// Staff are alerted when a release is withdrawn: for a play address, that Play stops opening it
@@ -1637,8 +2183,8 @@ async fn what_only_downloads_have_is_refused_for_browser_games(db: PgPool) {
 }
 
 /// The hourly abuse checks match a browser game's play addresses (the one Play opens, ones
-/// waiting, and where each was found to lead) against the bad-link lists, once each; an older
-/// address Play no longer opens isn't.
+/// waiting, every address each redirected through and where it was found to lead) against the
+/// bad-link lists, once each; an older address Play no longer opens isn't.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn listed_play_addresses_are_pointed_out(db: PgPool) {
     let app = test_app(db).await;
@@ -1657,7 +2203,9 @@ async fn listed_play_addresses_are_pointed_out(db: PgPool) {
     )
     .await;
     sqlx::query(
-        "update releases set address_checks = jsonb_build_object('ok', true, 'final_address', 'https://landing.example/x')
+        "update releases set address_checks = jsonb_build_object(
+             'ok', true, 'final_address', 'https://landing.example/x',
+             'hops', jsonb_build_array('https://new-site.example/play/', 'https://hop.example/r', 'https://landing.example/x'))
          where id = $1",
     )
     .bind(pending)
@@ -1668,6 +2216,7 @@ async fn listed_play_addresses_are_pointed_out(db: PgPool) {
         "insert into bad_links (url, host, source) values
              ('games.example.com/elsewhere', 'games.example.com', 'URLhaus'),
              ('landing.example/x', 'unrelated.example', 'OpenPhish'),
+             ('hop.example/r', 'unrelated.example', 'PhishTank'),
              ('old-site.example', 'old-site.example', 'URLhaus')",
     )
     .execute(&app.db)
@@ -1691,6 +2240,12 @@ async fn listed_play_addresses_are_pointed_out(db: PgPool) {
                 "URLhaus".to_string(),
                 "1.0.0".to_string(),
                 true
+            ),
+            (
+                "https://hop.example/r".to_string(),
+                "PhishTank".to_string(),
+                "1.1.0".to_string(),
+                false
             ),
             (
                 "https://landing.example/x".to_string(),
@@ -1990,6 +2545,94 @@ async fn votes_on_a_browser_game_carry_the_version_play_opens(db: PgPool) {
         [Some("1.1.0".to_string()), None],
         "not 1.0.0, which Play doesn't open"
     );
+}
+
+/// A bounty's delivery in a browser game, and the dependency watch's "live" release, are the
+/// release whose address Play opens: once that's withdrawn, never an older address, which Play
+/// doesn't open.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn bounties_and_the_dependency_watch_follow_the_address_play_opens(db: PgPool) {
+    let app = test_app_with(db, |c| c.payments.simulated = true).await;
+    let (maker_id, maker, older) =
+        listed_browser_game(&app, "released", "https://old-site.example/play/").await;
+    let newest =
+        approved_play_address(&app, "game", "1.1.0", "https://games.example.com/play/").await;
+    for release in [older, newest] {
+        sqlx::query(
+            "insert into release_packages (release_id, ecosystem, name, version) values ($1, 'npm', 'lodash', '4.17.20')",
+        )
+        .bind(release)
+        .execute(&app.db)
+        .await
+        .unwrap();
+    }
+    admin::revoke(&app.db, newest, "rev", "The site asks for passwords")
+        .await
+        .unwrap();
+    let (backer, _) = app.user("Bea Backer", "US").await;
+    let bounty = Uuid::now_v7();
+    sqlx::query(
+        "insert into bounties (id, app_id, created_by, title, body, currency, status)
+         select $1, id, $2, 'Fix the level select', 'Wanted.', 'usd', 'open' from apps where slug = 'game'",
+    )
+    .bind(bounty)
+    .bind(backer)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    let claim = || {
+        app.send(
+            req(Method::POST, format!("/v1/bounties/{bounty}/claims"))
+                .cookie(&maker)
+                .json(json!({ "app_slug": "game", "note": "The level select works now." })),
+        )
+    };
+    let advisories_for = |version: &'static str| {
+        let db = app.db.clone();
+        async move {
+            sqlx::query_scalar::<_, i64>(
+                "select count(*) from notifications where user_id = $1 and title = $2",
+            )
+            .bind(maker_id)
+            .bind(format!("New security advisories for Game {version}"))
+            .fetch_one(&db)
+            .await
+            .unwrap()
+        }
+    };
+
+    // Play opens nothing: nothing to deliver in, and nothing live to warn about.
+    let (status, _, message) = refusal(claim().await).await;
+    assert_eq!(status, StatusCode::CONFLICT);
+    assert!(message.starts_with("nothing to play yet"), "{message}");
+    assert_eq!(
+        slop_api::dep_watch::run_once(&app.state).await.unwrap(),
+        0,
+        "neither address is what players get"
+    );
+    assert_eq!(advisories_for("1.0.0").await, 0);
+
+    // A person approves an address again: that's what's delivered in, and what's live.
+    let current =
+        approved_play_address(&app, "game", "1.2.0", "https://games.example.com/play/v2/").await;
+    sqlx::query(
+        "insert into release_packages (release_id, ecosystem, name, version) values ($1, 'npm', 'lodash', '4.17.20')",
+    )
+    .bind(current)
+    .execute(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(claim().await.status(), StatusCode::NO_CONTENT);
+    let delivered: Uuid =
+        sqlx::query_scalar("select release_id from bounty_claims where bounty_id = $1")
+            .bind(bounty)
+            .fetch_one(&app.db)
+            .await
+            .unwrap();
+    assert_eq!(delivered, current);
+    assert_eq!(slop_api::dep_watch::run_once(&app.state).await.unwrap(), 1);
+    assert_eq!(advisories_for("1.2.0").await, 1);
+    assert_eq!(advisories_for("1.0.0").await, 0);
 }
 
 /// A bug report on a browser game says it was played in the browser, whatever was sent, on the
@@ -2342,6 +2985,84 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     assert!(apps[0]["serving_version"].is_null());
 }
 
+/// A reviewer is never told a resubmitted address is a game's first: after a withdrawal, the
+/// queue and the review feed name the address withdrawn. And when an address sent later is
+/// already approved, they say that approving this older one moves Play back to it.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn reviewers_see_a_withdrawn_address_and_a_newer_approved_one(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_browser_app(&app, "beta").await;
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (first, second) = (play_page(&app, "play"), play_page(&app, "play-v2"));
+    let withdrawn = submit_play_and_check(&app, &maker, "1.0.0", &first).await;
+    approve(&app, &withdrawn).await;
+    admin::revoke(
+        &app.db,
+        withdrawn.parse().unwrap(),
+        "rev",
+        "The site asks for passwords",
+    )
+    .await
+    .unwrap();
+    let older = submit_play_and_check(&app, &maker, "1.1.0", &second).await;
+    let newer = submit_play_and_check(&app, &maker, "1.2.0", &first).await;
+    let queued = |version: &'static str| {
+        let app = &app;
+        let owner = owner.clone();
+        async move {
+            let res = app
+                .send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
+                .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let queue = body_json(res).await;
+            let found = queue["releases"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|r| r["version"] == version)
+                .cloned();
+            let res = app
+                .send(req(Method::GET, "/v1/admin/review?kind=release").cookie(&owner))
+                .await;
+            assert_eq!(res.status(), StatusCode::OK);
+            let feed = body_json(res).await;
+            let item = feed["items"]
+                .as_array()
+                .unwrap()
+                .iter()
+                .find(|i| i["detail"]["version"] == version)
+                .map(|i| i["detail"].clone());
+            (found, item)
+        }
+    };
+    for version in ["1.1.0", "1.2.0"] {
+        let (queued, detail) = queued(version).await;
+        for (what, r) in [("queue", queued.unwrap()), ("feed", detail.unwrap())] {
+            assert!(r["current_play_address"].is_null(), "{what} {version}: {r}");
+            assert_eq!(r["withdrawn_play_address"], first, "{what} {version}");
+            assert!(r["newer_approved"].is_null(), "{what} {version}");
+        }
+    }
+
+    // The newer one is approved first: approving the older one would move Play back to it.
+    approve(&app, &newer).await;
+    let (queued_older, detail) = queued("1.1.0").await;
+    let note = format!(
+        "Version 1.2.0 ({first}) is approved and newer: approving this makes Play open this older address"
+    );
+    for (what, r) in [("queue", queued_older.unwrap()), ("feed", detail.unwrap())] {
+        assert_eq!(r["current_play_address"], first, "{what}");
+        assert!(r["withdrawn_play_address"].is_null(), "{what}");
+        assert_eq!(
+            r["newer_approved"],
+            json!({ "version": "1.2.0", "play_address": first, "note": note }),
+            "{what}"
+        );
+    }
+    approve(&app, &older).await;
+    assert_eq!(page_for(&app, Some(&maker)).await["play_address"], second);
+}
+
 /// Reports on a browser game are offered in its own words where a download's don't fit, and
 /// without "Runs code or mods from outside SLAPorSLOP" (a rule that doesn't cover it), but only
 /// to who can see it: anyone else gets the usual words, so they learn nothing about a draft.
@@ -2426,6 +3147,54 @@ async fn browser_games_are_reported_in_their_own_words(db: PgPool) {
     assert_eq!(
         labels("kind=review&app=game", None).await,
         labels("kind=review", None).await
+    );
+
+    // Staff get the report in the same words, pointing to the rule that covers browser games
+    // ("Browser games and dedicated servers"), not the one on builds, which doesn't.
+    let (_, owner) = make_admin(&app, "Olive Owner").await;
+    let (_, pat) = app.user("Pat Player", "US").await;
+    for subject in ["game", "castle"] {
+        let res = app
+            .send(req(Method::POST, "/v1/reports").cookie(&pat).json(json!({
+                "kind": "app", "subject": subject, "reason": "source_mismatch",
+                "details": "It isn't the game in the repository.", "good_faith": true
+            })))
+            .await;
+        assert_eq!(res.status(), StatusCode::OK, "{subject}");
+    }
+    let queue = body_json(
+        app.send(req(Method::GET, "/v1/admin/queue").cookie(&owner))
+            .await,
+    )
+    .await;
+    let reported = |label: &str| {
+        queue["reports"]
+            .as_array()
+            .unwrap()
+            .iter()
+            .find(|r| r["subject_label"].as_str().unwrap().contains(label))
+            .cloned()
+            .unwrap_or_else(|| panic!("no report about {label}: {}", queue["reports"]))
+    };
+    let browser = reported("Game");
+    assert_eq!(browser["suggested_rule"], "browser_server");
+    assert_eq!(
+        browser["reason_label"],
+        "The game on its site isn't the one in its repository"
+    );
+    let rules = queue["rules"].as_array().unwrap();
+    assert!(
+        rules.contains(&json!([
+            "browser_server",
+            "Browser games and dedicated servers"
+        ])),
+        "{rules:?}"
+    );
+    let download = reported("castle");
+    assert_eq!(download["suggested_rule"], "source_mismatch");
+    assert_eq!(
+        download["reason_label"],
+        "The build doesn't match its source"
     );
 }
 

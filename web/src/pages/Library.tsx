@@ -13,7 +13,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { api, type AppDetail, type BugReport, type Release } from "../api";
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Avatar } from "../components/Avatar";
-import { checkUpdates, LIBRARY_CHANGED, useLaunched } from "../components/AppUpdates";
+import { checkUpdates, LIBRARY_CHANGED, useLaunched, usePlayStopped } from "../components/AppUpdates";
 import { BugReports } from "../components/BugReports";
 import { DonateButton } from "../components/Donate";
 import { downloading, DownloadsStatus, useDownloads } from "../components/Downloads";
@@ -38,6 +38,7 @@ import {
   matchesFilter,
   sections,
   statusOf,
+  unknownInstalled,
   type Entry,
   type Filter,
   type Group,
@@ -78,17 +79,29 @@ export function Library() {
   const heading = useRef<HTMLHeadingElement>(null);
   const lastSlug = useRef<string | undefined>(undefined);
 
-  const entries = useMemo(
-    () =>
-      buildEntries({
-        library: library.data ?? [],
-        installed: installed.data ?? [],
-        interested: interested.data ?? [],
-        privateMine: privateSlop.data?.mine ?? [],
-        privateShared: privateSlop.data?.shared ?? [],
-      }),
+  const lists = useMemo(
+    () => ({
+      library: library.data ?? [],
+      installed: installed.data ?? [],
+      interested: interested.data ?? [],
+      privateMine: privateSlop.data?.mine ?? [],
+      privateShared: privateSlop.data?.shared ?? [],
+    }),
     [library.data, installed.data, interested.data, privateSlop.data],
   );
+  // Installed apps the account's lists don't have (installed signed out, or taken out of the
+  // library on the website): the store's data for each, so they're in their categories too. One
+  // the store no longer shows stays without.
+  const listsLoaded = Boolean(library.data && privateSlop.data && (interested.data || interested.error));
+  const unknown = listsLoaded ? unknownInstalled(lists).join("\n") : "";
+  const store = useLoad(
+    () =>
+      Promise.all(unknown ? unknown.split("\n").map((s) => api.app(s).catch(() => null)) : []).then((apps) =>
+        apps.filter((a): a is NonNullable<typeof a> => a !== null),
+      ),
+    [unknown],
+  );
+  const entries = useMemo(() => buildEntries({ ...lists, store: store.data }), [lists, store.data]);
   const live: Live = { downloading: downloading(downloads), running, autoUpdate: autoUpdate.data ?? false };
   // On a wide screen the library opens on the first app; on a phone, on the list.
   const selected = slug ? entries.find((e) => e.slug === slug) : entries[0];
@@ -337,6 +350,8 @@ function Details({
   onInterestRemoved: () => void;
 }) {
   const detail = useLoad(() => api.app(entry.slug).catch(() => null), [entry.slug]);
+  // Play found the address withdrawn since this loaded: load it again, so Play goes away.
+  usePlayStopped(entry.slug, detail.reload);
   const upcoming = entry.app?.stage === "coming_soon";
   const releases = useLoad(
     () => (upcoming ? Promise.resolve([] as Release[]) : api.releases(entry.slug).catch(() => [] as Release[])),
@@ -637,7 +652,7 @@ function AppInfo({ entry, detail, latest, inBrowser }: { entry: Entry; detail?: 
         {inBrowser && detail && (
           <>
             <dt>Plays at</dt>
-            <dd>{addressHost(detail.play_address) || "Not playable yet"}</dd>
+            <dd>{addressHost(detail.play_address) || "Not playable right now"}</dd>
           </>
         )}
         {detail?.license_spdx && (

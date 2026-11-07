@@ -748,7 +748,7 @@ function EditorForm({
                     {existing.play_address ? (
                       <ExternalLink href={existing.play_address}>{existing.play_address}</ExternalLink>
                     ) : (
-                      <span className="muted">none approved yet</span>
+                      <span className="muted">none Play opens right now</span>
                     )}{" "}
                     · <Link to={`/publish/${existing.slug}/releases`}>change it on Releases</Link>
                   </p>

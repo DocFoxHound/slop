@@ -1,10 +1,12 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Admin → Apps in words: what each flag the API sets means for staff (crates/slop-api/src/admin_web.rs,
-// FLAGS), the quiet line a healthy app gets, why an app can't go in the store yet, and the list's
-// filters as they are in the address. Pure, so it's tested on its own (appFacts.test.ts).
+// FLAGS), the quiet line a healthy app gets, why an app can't go in the store yet, what withdrawing
+// a release does, and the list's filters as they are in the address. A browser game's releases are
+// play addresses: its words are about where Play goes, never about installed copies. Pure, so it's
+// tested on its own (appFacts.test.ts).
 
 import type { AdminApp, AdminAppFlag, AdminAppsQuery, AppStage, AppStatus } from "../../api";
-import { daysSince, daysUntil, timeAgo } from "../../format";
+import { addressHost, daysSince, daysUntil, playsInBrowser, timeAgo } from "../../format";
 
 /** One fact on an app's line: a problem (bad), something to keep an eye on (warn), or neither. */
 export interface Fact {
@@ -80,24 +82,87 @@ export function flagFact(app: AdminApp, flag: AdminAppFlag, now: number = Date.n
   }
 }
 
-/** Why it can't go in the store yet, or null when it can (or already is). */
+/** A browser game's address was withdrawn, and nothing newer approved: Play opens nothing. */
+const addressWithdrawn = (app: AdminApp) =>
+  !app.serving_version && (app.releases.length > 0 || app.newest_release?.status === "revoked");
+
+/** Why it can't go in the store yet, or null when it can (or already is). A browser game needs the
+ *  address Play opens (admin.rs `not_listable`), not just an approved release. */
 export function cantListReason(app: AdminApp): string | null {
-  if (app.status === "listed" || app.stage === "coming_soon" || app.releases.length > 0) return null;
+  if (app.status === "listed" || app.stage === "coming_soon") return null;
+  if (playsInBrowser(app)) {
+    if (app.serving_version) return null;
+    if (app.pending_releases > 0) return "Can't list yet: approve its play address under Review queue → New releases first.";
+    return addressWithdrawn(app)
+      ? "Can't list yet: its play address was withdrawn, so Play opens nothing. The maker sends a new one on Releases & progress."
+      : "Can't list yet: the maker hasn't given a play address. Set the stage to Coming soon to list the page without one.";
+  }
+  if (app.releases.length > 0) return null;
   return app.pending_releases > 0
     ? "Can't list yet: approve its release under Review queue → New releases first."
     : "Can't list yet: the maker hasn't submitted a release. Set the stage to Coming soon to list the page without one.";
 }
 
-/** The line a healthy app gets: what players get and how it's doing. */
+/** The line a healthy app gets: what players get (a browser game: where Play goes) and how it's doing. */
 export function quietLine(app: AdminApp, now: number = Date.now()): string {
   const parts: string[] = [];
-  if (app.serving_version) parts.push(`Players get ${app.serving_version}`);
+  const browser = playsInBrowser(app);
+  const host = addressHost(app.play_address);
+  if (browser && app.serving_version) parts.push(`Play opens ${app.serving_version}${host ? ` on ${host}` : ""}`);
+  else if (browser && addressWithdrawn(app)) parts.push("Play opens nothing: its address was withdrawn");
+  else if (browser && (app.stage === "coming_soon" || !app.newest_release)) parts.push("No play address yet");
+  else if (app.serving_version) parts.push(`Players get ${app.serving_version}`);
   else if (app.stage === "coming_soon") parts.push("No release yet");
   else parts.push(app.newest_release ? `${app.newest_release.version} ${app.newest_release.status.replace(/_/g, " ")}` : "No release yet");
   if (app.players > 0) parts.push(plural(app.players, "player"));
   if (app.last_played_at) parts.push(`played ${timeAgo(app.last_played_at, now)}`);
   if (app.not_slop_percent !== null) parts.push(`${app.not_slop_percent}% Slaps`);
   return parts.join(" · ");
+}
+
+/**
+ * What withdrawing `version` does, for the "Are you sure?" and its reason's placeholder. A
+ * download stops launching for everyone, and the reason is on the public revocation list. A
+ * browser game's release is a play address: withdrawing the one Play opens (`playsNow`) stops Play
+ * for everyone until a person approves a new one, though anyone who saved the address can still
+ * visit the site; an older one changes nothing for players. Its reason goes to the maker.
+ */
+export function withdrawWords(
+  title: string,
+  version: string,
+  browser: boolean,
+  playsNow: boolean,
+): { what: string; placeholder: string } {
+  if (!browser) {
+    return {
+      what: `Withdraw ${version} of “${title}”: it stops launching for everyone who has it.`,
+      placeholder: "Reason, shown to players (stops it launching)",
+    };
+  }
+  return playsNow
+    ? {
+        what: `Withdraw ${version} of “${title}”: Play stops opening its address for everyone, and opens nothing until a person approves a new one. Anyone who saved the address can still visit the site.`,
+        placeholder: "Reason, shown to the maker (Play stops opening it)",
+      }
+    : {
+        what: `Withdraw ${version} of “${title}”: Play doesn't open this address now, so nothing changes for players.`,
+        placeholder: "Reason, shown to the maker",
+      };
+}
+
+/**
+ * The release whose address Play opens, among an app record's releases (catalog.rs
+ * `PLAY_RELEASE`): the newest reviewed release with an address that was approved, if it still is.
+ * Null after it was withdrawn: Play never falls back to an older address.
+ */
+export function playReleaseId(
+  releases: Array<{ id: string; status: string; created_at: string; reviewed_at: string | null; play_address?: string | null }>,
+): string | null {
+  const when = (t: string | null) => (t ? Date.parse(t) : -Infinity);
+  const newest = releases
+    .filter((r) => r.play_address && (r.status === "approved" || r.status === "revoked"))
+    .sort((a, b) => when(b.reviewed_at) - when(a.reviewed_at) || when(b.created_at) - when(a.created_at))[0];
+  return newest?.status === "approved" ? newest.id : null;
 }
 
 /** The facts an app's line shows: its first two flags, or the quiet line; and how many more. */

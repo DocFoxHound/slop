@@ -2,8 +2,9 @@
 // Publishing a game that plays in the browser (DESIGN A9): the new app form's Runs on choice and
 // play address, the first address sent with the page and checked on Releases, an address that
 // doesn't go through waiting there to be fixed, and Sam's seeded Orbit Tap's Releases tab and
-// Manage page. Mia's games are her own, made here; what Sam sends to Orbit Tap is withdrawn after,
-// so the address Play opens stays the seeded one.
+// Manage page. Mia's games are her own, made here; what she and Sam send is withdrawn after (in
+// afterAll too, so a failed test leaves nothing waiting in the shared review queue), and the
+// address Play opens on Orbit Tap stays the seeded one.
 import AxeBuilder from "@axe-core/playwright";
 import type { Page } from "@playwright/test";
 
@@ -41,6 +42,16 @@ const playPage = (repo: string) => `${server.fake}e2e/${repo}/play/`;
 
 const lamp = uniq("pub-web");
 const lampTitle = `Lantern Run ${lamp.slice(-4)}`;
+const kite = uniq("pub-web2");
+
+// Whatever a test that failed half way left: nothing of Mia's waits for review, and her notices
+// about it are read. Each app may never have been made.
+test.afterAll(async () => {
+  for (const slug of [lamp, kite]) {
+    await withdrawWaiting("maker", slug).catch(() => {});
+    await readNotices("maker", slug).catch(() => {});
+  }
+});
 
 test("a new game that plays in the browser: Runs on is one choice, and its play address goes to Releases", async ({ page }) => {
   await signIn(page, "maker");
@@ -160,7 +171,7 @@ test("its store page and Manage: where Play goes, and the choice kept once it ha
   await expect(runsOn.getByText(/It has releases, so it can't switch between a download and a browser game/)).toBeVisible();
   // The address isn't edited here.
   await expect(page.getByRole("textbox", { name: /^Play address/ })).toHaveCount(0);
-  await expect(page.locator(".play-address-line")).toHaveText("Play address: none approved yet · change it on Releases");
+  await expect(page.locator(".play-address-line")).toHaveText("Play address: none Play opens right now · change it on Releases");
   await expect(page.locator(".play-address-line").getByRole("link", { name: "change it on Releases" })).toHaveAttribute(
     "href",
     `/publish/${lamp}/releases`,
@@ -191,7 +202,7 @@ test("its store page and Manage: where Play goes, and the choice kept once it ha
 });
 
 test("an address that doesn't go through with the new page waits on Releases, filled in, to fix", async ({ page }) => {
-  const slug = uniq("pub-web2");
+  const slug = kite;
   await signIn(page, "maker");
   await page.goto("/publish/new");
   await page.getByLabel("Name", { exact: true }).fill(`Kite Hill ${slug.slice(-4)}`);

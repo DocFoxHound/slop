@@ -1687,15 +1687,18 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
 /// Checks one release's source now and stores the result. Called when a release's files are
 /// fetched, before automatic approval, and by the background round for the rest.
 pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
-    type Row = (Uuid, String, String, String, bool, bool, bool, bool);
-    let (app_id, repo_url, commit, declared, public, online, sandbox_ready, is_mod): Row = sqlx::query_as(
-        "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public',
-                cardinality(a.online) > 0, a.sandbox_ready, a.branch_kind is not distinct from 'addon'
-         from releases r join apps a on a.id = r.app_id where r.id = $1",
-    )
-    .bind(id)
-    .fetch_one(&state.db)
-    .await?;
+    type Row = (Uuid, String, String, String, bool, bool, bool, bool, bool);
+    let (app_id, repo_url, commit, declared, public, online, sandbox_ready, is_mod, server): Row =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select a.id, a.repo_url, r.commit_sha, a.license_spdx, a.visibility = 'public',
+                    cardinality(a.online) > 0, a.sandbox_ready, a.branch_kind is not distinct from 'addon',
+                    {}
+             from releases r join apps a on a.id = r.app_id where r.id = $1",
+            crate::catalog::IS_DEDICATED_SERVER
+        )))
+        .bind(id)
+        .fetch_one(&state.db)
+        .await?;
     {
         let (mut report, packages) =
             scan_release(state, app_id, &repo_url, &commit, &declared, public).await;
@@ -1727,6 +1730,10 @@ pub async fn check_release(state: &AppState, id: Uuid) -> anyhow::Result<()> {
         if sandbox_ready && report["save_folder"] == "elsewhere" {
             report["sandbox_mismatch"] = json!(true);
         }
+        // Whether it was a dedicated server when it was checked: the rule on code from outside
+        // SLAPorSLOP doesn't cover servers, and the maker chooses the tag, so an app that becomes
+        // one waits for a person (`new_concerns`).
+        report["dedicated_server"] = json!(server);
         let mut tx = state.db.begin().await?;
         sqlx::query("update releases set repo_scan = $2, repo_scanned_at = now() where id = $1")
             .bind(id)
@@ -1794,9 +1801,37 @@ fn concerns(scan: &Value) -> Option<BTreeSet<String>> {
     Some(out)
 }
 
+/// The kinds of concern in `new` (keys from `concerns`), in words. Every prefix `concerns`
+/// makes is named here; one it doesn't know still reads as something new, never a panic (this
+/// runs inside the fetcher).
+fn new_kinds(new: &[String]) -> String {
+    let kinds: Vec<&str> = [
+        ("monetization:", "possible purchases or loot boxes"),
+        ("code:", "code loading from outside SLAPorSLOP"),
+        ("online:", "online play the store page doesn't mention"),
+        ("licence:", "licence problems"),
+        (
+            "saves:",
+            "saves outside the save folder while it's marked as working in sandbox mode",
+        ),
+        ("mod:", "code or networking in a mod"),
+    ]
+    .into_iter()
+    .filter(|(prefix, _)| new.iter().any(|k| k.starts_with(prefix)))
+    .map(|(_, what)| what)
+    .collect();
+    match kinds.as_slice() {
+        [] => "something new".into(),
+        [one] => one.to_string(),
+        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
+    }
+}
+
 /// Why an update needs a person after all: its source check found something the app's last
-/// approved release didn't have (a new monetization pattern or licence problem), or the source
-/// couldn't be read. None when there's nothing new.
+/// approved release didn't have (a new monetization pattern or licence problem), the source
+/// couldn't be read, or it's a dedicated server now and wasn't when that release was checked (a
+/// person checks it really is one, since the rule on code from outside SLAPorSLOP doesn't cover
+/// servers). None when there's nothing new.
 pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result<Option<String>> {
     let (this, before): (Option<Value>, Option<Value>) = sqlx::query_as(
         "select r.repo_scan,
@@ -1808,6 +1843,10 @@ pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result
     .bind(release_id)
     .fetch_one(db)
     .await?;
+    let is_server = |scan: Option<&Value>| scan.is_some_and(|s| s["dedicated_server"] == true);
+    let became_server = is_server(this.as_ref()) && !is_server(before.as_ref());
+    let server =
+        "it's now in the Servers category, so a person checks it really is a dedicated server";
     let Some(now) = concerns(this.as_ref().unwrap_or(&Value::Null)) else {
         return Ok(Some(
             "SLAPorSLOP couldn't read this release's source, so a person checks it".into(),
@@ -1816,26 +1855,17 @@ pub async fn new_concerns(db: &sqlx::PgPool, release_id: Uuid) -> anyhow::Result
     let before = before.as_ref().and_then(concerns).unwrap_or_default();
     let new: Vec<String> = now.difference(&before).cloned().collect();
     if new.is_empty() {
-        return Ok(None);
+        return Ok(became_server.then(|| server.to_string()));
     }
-    let kinds: Vec<&str> = [
-        ("monetization:", "possible purchases or loot boxes"),
-        ("code:", "code loading from outside SLAPorSLOP"),
-        ("online:", "online play the store page doesn't mention"),
-        ("licence:", "licence problems"),
-    ]
-    .into_iter()
-    .filter(|(prefix, _)| new.iter().any(|k| k.starts_with(prefix)))
-    .map(|(_, what)| what)
-    .collect();
-    let what = match kinds.as_slice() {
-        [one] => one.to_string(),
-        [rest @ .., last] => format!("{} and {last}", rest.join(", ")),
-        [] => unreachable!("new is not empty"),
-    };
-    Ok(Some(format!(
-        "the source check found {what} the last approved release didn't have"
-    )))
+    let found = format!(
+        "the source check found {} the last approved release didn't have",
+        new_kinds(&new)
+    );
+    Ok(Some(if became_server {
+        format!("{server}, and {found}")
+    } else {
+        found
+    }))
 }
 
 pub async fn run(state: AppState) {
@@ -1851,6 +1881,40 @@ pub async fn run(state: AppState) {
 #[cfg(test)]
 mod tests {
     use super::*;
+
+    #[test]
+    fn every_new_concern_is_put_in_words() {
+        let words =
+            |keys: &[&str]| new_kinds(&keys.iter().map(|k| k.to_string()).collect::<Vec<_>>());
+        // Every key `concerns` can make is named, so none falls through to the fallback.
+        let scan = json!({
+            "status": "checked",
+            "licence": { "kinds": ["missing"] },
+            "online_undeclared": true,
+            "sandbox_mismatch": true,
+            "mod_code": true,
+            "mod_online": true,
+            "monetization": [{ "rule": "iap" }],
+            "code_loading": [{ "rule": "eval" }],
+        });
+        for key in concerns(&scan).unwrap() {
+            assert_ne!(words(&[&key]), "something new", "{key} has no words");
+        }
+        // These used to panic inside the fetcher.
+        assert_eq!(
+            words(&["saves:sandbox_mismatch"]),
+            "saves outside the save folder while it's marked as working in sandbox mode"
+        );
+        assert_eq!(
+            words(&["mod:mod_code", "mod:mod_online"]),
+            "code or networking in a mod"
+        );
+        assert_eq!(
+            words(&["licence:missing", "code:eval", "monetization:iap"]),
+            "possible purchases or loot boxes, code loading from outside SLAPorSLOP and licence problems"
+        );
+        assert_eq!(words(&["future:thing"]), "something new");
+    }
 
     #[test]
     fn archives_come_from_each_hosts_own_address() {

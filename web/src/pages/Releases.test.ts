@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { GithubRelease } from "../api";
-import { fitsPlatform, nextVersion, pickRows, statusText } from "./Releases";
+import { autoApprovalStatus, fitsPlatform, nextVersion, pickRows, statusText } from "./Releases";
 
 const release = (names: string[]): GithubRelease => ({
   tag: "v0.1.0",
@@ -75,5 +75,24 @@ describe("a browser game's releases", () => {
     // Downloads keep theirs.
     expect(statusText("fetching", false).label).toBe("CHECKING FILES");
     expect(statusText("approved", false).help).toContain("Signed by SLAPorSLOP");
+  });
+
+  it("Coming soon, an approved address opens once the game is in Beta", () => {
+    expect(statusText("approved", true, true)).toMatchObject({
+      label: "APPROVED",
+      help: "Approved: Play opens this address once the game is in Beta.",
+    });
+    expect(statusText("approved", false, true).help).toContain("Signed by SLAPorSLOP");
+  });
+
+  it("never promises a new address is approved automatically", () => {
+    const ready = { auto_approval_ready: true, auto_approval_note: null };
+    expect(autoApprovalStatus(ready, true)).toBe(
+      "Your next release will be approved automatically if it keeps the address Play opens now and passes every check; a new address always waits for a person.",
+    );
+    expect(autoApprovalStatus(ready, false)).toBe("Your next release will be approved automatically if it passes every check.");
+    expect(autoApprovalStatus({ auto_approval_ready: false, auto_approval_note: "automatic updates are off" }, true)).toBe(
+      "Your next release waits for a person: automatic updates are off.",
+    );
   });
 });

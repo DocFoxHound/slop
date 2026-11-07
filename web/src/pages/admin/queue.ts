@@ -3,7 +3,7 @@
 // line each item gets (what it is, a short blurb, its status and how long it has waited). Kept
 // free of React so it can be tested on its own (queue.test.ts).
 
-import { isNewSite } from "../../addressChecks";
+import { compareAddress } from "../../addressChecks";
 import type {
   AdminDonationHold,
   AdminQueue,
@@ -247,8 +247,9 @@ export function releaseBlurb(r: AdminQueue["releases"][number]): string {
   return parts.join(" · ");
 }
 
-/** A browser game's release, a play address: where it is, what the checks found, and whether it's
- *  a new site (a different one from where Play goes now). Never "signed" or "scanned". */
+/** A browser game's release, a play address: where it is, what the checks found, and how it
+ *  compares with where Play goes now (or the address SLAPorSLOP withdrew, when Play opens none):
+ *  another address on the same host is never "the same site". Never "signed" or "scanned". */
 function addressBlurb(r: AdminQueue["releases"][number]): string {
   const parts = ["Plays in the browser", addressHost(r.play_address) || (r.play_address ?? "")];
   const checks = r.address_checks;
@@ -256,8 +257,20 @@ function addressBlurb(r: AdminQueue["releases"][number]): string {
   else if (checks.bad_links.listed_by) parts.push(`on ${checks.bad_links.listed_by}`);
   else if (checks.ok) parts.push("address checks passed");
   else parts.push("address checks failed");
-  if (r.current_play_address) parts.push(isNewSite(r.play_address, r.current_play_address) ? "new site" : "same site");
-  else parts.push("first address");
+  const now = r.current_play_address;
+  const gone = r.withdrawn_play_address;
+  if (now) {
+    parts.push({ same_address: "same address", same_host: "same host", new_site: "new site" }[compareAddress(r.play_address, now) ?? "new_site"]);
+  } else if (gone) {
+    parts.push(
+      {
+        same_address: "the withdrawn address again",
+        same_host: "same host as a withdrawn address",
+        new_site: "new site after a withdrawal",
+      }[compareAddress(r.play_address, gone) ?? "new_site"],
+    );
+  } else parts.push("no address approved before");
+  if (r.newer_approved) parts.push(`older than approved ${r.newer_approved.version}`);
   if (r.notes.length > 0) parts.push(plural(r.notes.length, "note"));
   return parts.join(" · ");
 }

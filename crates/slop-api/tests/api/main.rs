@@ -149,8 +149,9 @@ async fn fake_github() -> String {
             }),
         )
         // Browser games' play pages (releases.rs check_play_address): two pages, one reached by
-        // a redirect, a download, a file that isn't a page, and a redirect to SLAPorSLOP's own
-        // site. Any other address is a 404.
+        // a redirect and one by two, a download, a file that isn't a page, a redirect to
+        // SLAPorSLOP's own site, and one that redirects to itself after a while (for the check's
+        // deadline). Any other address is a 404.
         .route("/octo/game/play/", get(|| async { ([("content-type", "text/html; charset=utf-8")], PLAY_PAGE) }))
         .route("/octo/game/play-v2/", get(|| async { ([("content-type", "application/xhtml+xml")], PLAY_PAGE) }))
         .route("/octo/game/play-moved/", get(|| async { axum::response::Redirect::temporary("/octo/game/play/") }))
@@ -160,6 +161,14 @@ async fn fake_github() -> String {
         )
         .route("/octo/game/play-binary/", get(|| async { ([("content-type", "application/octet-stream")], BUILD_BYTES) }))
         .route("/octo/game/play-home/", get(|| async { axum::response::Redirect::temporary("http://localhost:8080/") }))
+        .route("/octo/game/play-moved-twice/", get(|| async { axum::response::Redirect::temporary("/octo/game/play-moved/") }))
+        .route(
+            "/octo/game/play-slow/",
+            get(|| async {
+                tokio::time::sleep(std::time::Duration::from_millis(300)).await;
+                axum::response::Redirect::temporary("/octo/game/play-slow/")
+            }),
+        )
         // GitHub Actions' OIDC signing keys (a test key), and a repository for Slop Build setup.
         .route(
             "/.well-known/jwks",

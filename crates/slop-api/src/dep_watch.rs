@@ -235,11 +235,14 @@ pub fn describe(found: &[&Found]) -> String {
 
 /// One round. Returns how many releases were checked.
 pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
-    let due: Vec<Due> = sqlx::query_as(
+    // What players get (releases.rs SERVING), app by app: for a browser game, only the release
+    // whose address Play opens, never an older one once that's withdrawn.
+    let due: Vec<Due> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "with serving as (
              select distinct on (r.app_id) r.id
              from releases r join apps a on a.id = r.app_id
              where r.status = 'approved' and (r.signed_manifest is not null or r.play_address is not null)
+               and (not ('browser' = any(a.platforms)) or r.id is not distinct from {play})
              order by r.app_id, coalesce(r.id = a.pinned_release_id, false) desc, r.reviewed_at desc
          )
          select r.id as release_id, a.id as app_id, a.maker_id, a.slug, a.title, r.version,
@@ -250,7 +253,8 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
            and coalesce(r.deps_checked_at, '-infinity') < now() - interval '24 hours'
          order by r.deps_checked_at nulls first
          limit $1",
-    )
+        play = crate::catalog::PLAY_RELEASE
+    )))
     .bind(PER_ROUND)
     .fetch_all(&state.db)
     .await?;

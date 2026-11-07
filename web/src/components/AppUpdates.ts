@@ -17,20 +17,41 @@ export const LIBRARY_CHANGED = "slop-library-changed";
  */
 export const APP_LAUNCHED = "slop-app-launched";
 
+/**
+ * Fired on window (a CustomEvent, detail: the app's address) when SLAPorSLOP answered Play on a
+ * browser game with nothing to open: its address was withdrawn since the page loaded. The page
+ * loads the game's store data again, so Play goes away.
+ */
+export const PLAY_STOPPED = "slop-play-stopped";
+
 /** Tells the page that Play on browser game `slug` was recorded. */
 export function announceLaunch(slug: string) {
   window.dispatchEvent(new CustomEvent(APP_LAUNCHED, { detail: slug }));
 }
 
-/** Calls `then` (keep it stable, e.g. useLoad's reload) each time Play on `slug` is recorded. */
-export function useLaunched(slug: string, then: () => void) {
+/** Tells the page that SLAPorSLOP no longer opens browser game `slug`. */
+export function announcePlayStopped(slug: string) {
+  window.dispatchEvent(new CustomEvent(PLAY_STOPPED, { detail: slug }));
+}
+
+function useAppEvent(event: string, slug: string, then: () => void) {
   useEffect(() => {
     const on = (e: Event) => {
       if ((e as CustomEvent<string>).detail === slug) then();
     };
-    window.addEventListener(APP_LAUNCHED, on);
-    return () => window.removeEventListener(APP_LAUNCHED, on);
-  }, [slug, then]);
+    window.addEventListener(event, on);
+    return () => window.removeEventListener(event, on);
+  }, [event, slug, then]);
+}
+
+/** Calls `then` (keep it stable, e.g. useLoad's reload) each time Play on `slug` is recorded. */
+export function useLaunched(slug: string, then: () => void) {
+  useAppEvent(APP_LAUNCHED, slug, then);
+}
+
+/** Calls `then` (keep it stable) when SLAPorSLOP says it no longer opens browser game `slug`. */
+export function usePlayStopped(slug: string, then: () => void) {
+  useAppEvent(PLAY_STOPPED, slug, then);
 }
 
 export interface InstalledWithUpdate {

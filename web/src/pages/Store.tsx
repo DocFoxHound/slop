@@ -85,7 +85,9 @@ export function Store() {
           <b>Test server.</b> Automatic scanning isn't running here yet, so uploads are not scanned.
         </p>
       )}
-      {/* What SLAPorSLOP is: for visitors who haven't signed in, and never in the desktop app. */}
+      {/* What SLAPorSLOP is: for visitors who haven't signed in, and never in the desktop app. A game
+          that plays in the browser has nothing to download, so nothing of it is scanned: its claims
+          say so (DESIGN A6). */}
       {me === null && !isDesktop && (
       <section className="intro panel">
         <h1>
@@ -97,18 +99,21 @@ export function Store() {
           </li>
           {server.data?.scanning ? (
             <li>
-              <b>Scanned before it's listed.</b> Malware, stolen code and scams are checked on every upload.
+              <b>Downloads are scanned before they're listed.</b> Malware, stolen code and scams are checked on every upload.
+              Games that play in your browser have their address checked and are opened by a person; what their site serves
+              isn't scanned.
             </li>
           ) : (
             <li>
               <b>Reviewed before it's listed.</b>{" "}
               {server.data?.maker_signatures_required
                 ? "Every build is signed by its maker and checked by a person."
-                : "Every build is checked by a person."}
+                : "Every build is checked by a person."}{" "}
+              Games that play in your browser have their address checked and are opened by a person.
             </li>
           )}
           <li>
-            <b>Free to download.</b> Makers can take donations. Nothing is ever for sale.
+            <b>Free to download or play.</b> Makers can take donations. Nothing is ever for sale.
           </li>
         </ul>
       </section>

@@ -10,6 +10,7 @@ import { Link } from "react-router";
 
 import { addressCheckItems } from "../addressChecks";
 import type { AppSummary, FileCheckStage, Release, ReleaseFile } from "../api";
+import { isDedicatedServer } from "../format";
 import { useNow } from "../hooks";
 
 type State = "done" | "active" | "problem" | "waiting" | "skipped";
@@ -62,7 +63,20 @@ const STAGE_LABEL: Record<FileCheckStage, string> = {
 const LONGEST_SCAN_MINUTES = 30;
 
 type Server = { scanning: boolean; maker_signatures_required: boolean };
-type ProgressApp = Pick<AppSummary, "stage" | "status"> & { slug?: string; plays_in_browser?: boolean };
+type ProgressApp = Pick<AppSummary, "stage" | "status"> & { slug?: string; plays_in_browser?: boolean; tags?: string[] };
+
+/**
+ * A browser game's release whose address Play opens (`plays`), and, when Play opens none because
+ * SLAPorSLOP withdrew it, that one (`withdrawn`). The maker's releases say which plays
+ * (`plays_now`). From a server that doesn't, the newest approved or withdrawn one decides (Play
+ * never falls back to an older address). Exported for tests.
+ */
+export function wherePlayGoes(releases: Release[]): { plays?: Release; withdrawn?: Release } {
+  const told = releases.some((r) => r.plays_now !== undefined);
+  const decided = releases.find((r) => r.status === "approved" || r.status === "revoked");
+  const plays = told ? releases.find((r) => r.plays_now) : decided?.status === "approved" ? decided : undefined;
+  return { plays, withdrawn: plays ? undefined : releases.find((r) => r.status === "revoked") };
+}
 
 /** "Windows (.zip)", "Linux (.deb)": the platform and the kind of file (as the API says it). */
 export function fileLabel(f: Pick<ReleaseFile, "platform" | "file_name">): string {
@@ -405,15 +419,19 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
         detail: `SLAPorSLOP couldn't read the source (${source.detail}); it tries again within the hour.`,
       });
     } else if (notes > 0) {
-      // Notes, not failures: once a person approves the release, they've looked at them.
+      // Notes, not failures: once a person approves the release, they've looked at them. A
+      // dedicated server's code loading is one too: the rule on outside code doesn't cover it.
+      const server = (isDedicatedServer(app) || source.dedicated_server) && (source.code_loading?.length ?? 0) > 0;
       steps.push({
         title: "Source check",
         state: waitingForPerson ? "problem" : "done",
         stateLabel: waitingForPerson ? "Notes for you and the reviewer" : undefined,
         detail: (
           <>
-            {notes} note{notes === 1 ? "" : "s"} about the licence or selling in the app, for you and the reviewer: see the release
-            below.
+            {notes} note{notes === 1 ? "" : "s"} about the licence{server ? ", selling or code loading" : " or selling"} in the app,
+            for you and the reviewer: see the release below.
+            {server &&
+              " A dedicated server may load mods, maps and plugins from other places: the Content Policy's rule on outside code doesn't cover it, so that's a note, not a problem."}
             {waitingForPerson && <FixesLink slug={app.slug} />}
           </>
         ),
@@ -481,7 +499,18 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     }
   }
 
-  if (listed) {
+  // Listed, but SLAPorSLOP withdrew the address Play opened: players find it, and can't play it.
+  const play = app.plays_in_browser ? wherePlayGoes(releases) : undefined;
+  if (listed && play && !comingSoon && !play.plays) {
+    steps.push({
+      title: "In the store",
+      state: "problem",
+      stateLabel: "Play opens nothing",
+      detail: `Players can find it, but Play opens nothing until a person at SLAPorSLOP approves ${
+        play.withdrawn ? "a new" : "its"
+      } play address.`,
+    });
+  } else if (listed) {
     steps.push({
       title: "In the store",
       state: "done",
@@ -524,18 +553,27 @@ function sourceNotes(source: Release["repo_scan"], browser: boolean): number {
  *  what SLAPorSLOP can't check, the source check and a person's review. */
 function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
   const latest = releases[0];
-  const approved = releases.find((r) => r.status === "approved");
+  const { plays, withdrawn } = wherePlayGoes(releases);
   if (!latest) {
     return [
       app.stage === "coming_soon"
         ? {
             title: "Play address",
             state: "skipped",
-            detail: "Coming soon pages go in the store without a play address. Add it when you move to Beta.",
+            detail:
+              "Coming soon pages go in the store without a play address. Add it, and have it approved, before you move to Beta.",
           }
         : { title: "Play address", state: "waiting", detail: "Add your game's play address on the Releases page." },
     ];
   }
+  // Said wherever a new address is under way after SLAPorSLOP withdrew the one Play opened.
+  const opensNothing = withdrawn && (
+    <>
+      {" "}
+      Play opens nothing meanwhile: SLAPorSLOP withdrew version {withdrawn.version}
+      {withdrawn.status_reason ? ` (${withdrawn.status_reason.replace(/\.$/, "")})` : ""}.
+    </>
+  );
   const steps: Step[] = [
     {
       title: "Play address",
@@ -625,8 +663,8 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
     });
   }
 
-  if (latest.status === "approved" || (approved && !waitingForPerson && !fetching)) {
-    const r = latest.status === "approved" ? latest : (approved ?? latest);
+  if (plays && (latest.status === "approved" || (!waitingForPerson && !fetching))) {
+    const r = latest.status === "approved" ? latest : plays;
     steps.push({
       title: "Review by a person",
       state: "done",
@@ -645,8 +683,9 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
       more: (
         <>
           {why && <>Why a person: {why}. </>}
-          What happens next: if it's approved, Play opens this address; if something needs changing, you're told what. Either way you
-          get a notification, in SLAPorSLOP and by email. Nothing to do meanwhile.
+          What happens next: if it's approved, Play opens this address{app.stage === "coming_soon" ? " once the game is in Beta" : ""}; if
+          something needs changing, you're told what. Either way you get a notification, in SLAPorSLOP and by email. Nothing to do
+          meanwhile.{opensNothing}
         </>
       ),
     });
@@ -658,10 +697,20 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
       detail: (
         <>
           Not approved: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit the address again with a new
-          version.
+          version.{opensNothing}
           <FixesLink slug={app.slug} />
         </>
       ),
+    });
+  } else if (withdrawn) {
+    // The address Play opened was withdrawn, and nothing newer is approved: nothing to play.
+    steps.push({
+      title: "Review by a person",
+      state: "problem",
+      stateLabel: "Withdrawn",
+      detail: `${withdrawn === latest ? "Withdrawn" : `Version ${withdrawn.version} was withdrawn`} by SLAPorSLOP: ${
+        withdrawn.status_reason?.replace(/\.$/, "") ?? "no reason given"
+      }. Play opens nothing until a person approves a new address: submit one on the Releases page.`,
     });
   } else if (latest.status === "revoked") {
     steps.push({
@@ -673,7 +722,7 @@ function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
     steps.push({
       title: "Review by a person",
       state: "waiting",
-      detail: approved
+      detail: plays
         ? "Comes after the checks above. Play keeps opening your approved address meanwhile."
         : "Comes after the checks above: a person at SLAPorSLOP opens and plays every new address.",
     });
@@ -735,8 +784,9 @@ export function PublishProgress(props: { app: ProgressApp; releases: Release[]; 
       <ol className="steps">
         {steps.map((s) => {
           const items = s.items ?? [];
-          // Files that all went fine fold away; anything under way or wrong shows.
-          const open = items.some((i) => i.state !== "done" && i.state !== "skipped");
+          // Files that all went fine fold away; anything under way, wrong or not checked shows. An
+          // address check a test setup doesn't make ("Not checked") isn't wrong, so it folds too.
+          const open = items.some((i) => i.state !== "done" && (s.itemName !== "check" || i.state !== "skipped"));
           const each = s.itemName === "check" ? "each check" : "each file";
           return (
             <li key={s.title} className={`step ${s.state}`}>
