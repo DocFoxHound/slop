@@ -6,11 +6,14 @@ import { useState } from "react";
 
 import { api, ApiError, type AppLabel as Label } from "../api";
 import { useLoad } from "../hooks";
+import { useLaunched } from "./AppUpdates";
 
 const TONE: Record<Label["items"][number]["tone"], string> = { good: "✓", info: "ℹ", note: "!" };
 
 export function AppLabel({ slug }: { slug: string }) {
   const label = useLoad(() => api.label(slug), [slug]);
+  // Played just now (Play on a browser game): players who played may confirm accessibility features.
+  useLaunched(slug, label.reload);
   const [error, setError] = useState<string>();
   if (!label.data) return null;
   const l = label.data;
@@ -80,8 +83,9 @@ export function AppLabel({ slug }: { slug: string }) {
   );
 }
 
-/** The label's notes, for the install box: what to know before installing. */
-export function LabelNotes({ slug }: { slug: string }) {
+/** The label's notes, for the install box: what to know before installing (or, for a game that
+ * plays in the browser, before playing). */
+export function LabelNotes({ slug, browser = false }: { slug: string; browser?: boolean }) {
   const label = useLoad(() => api.label(slug), [slug]);
   const notes = label.data?.items.filter((i) => i.tone === "note") ?? [];
   if (!label.data) return null;
@@ -89,7 +93,7 @@ export function LabelNotes({ slug }: { slug: string }) {
     <div className="small label-notes">
       {notes.length > 0 && (
         <>
-          <b>Before you install:</b>
+          <b>{browser ? "Before you play:" : "Before you install:"}</b>
           <ul>
             {notes.map((n) => (
               <li key={n.key}>{n.title}</li>

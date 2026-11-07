@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { Credit } from "../api";
-import { creditsByRole } from "./AppPage";
+import { creditsByRole, runsOn } from "./AppPage";
 
 const c = (handle: string, role: string): Credit => ({ handle, name: handle, role, skill: { slug: "x", name: "x" }, work: "w" });
 
@@ -13,5 +13,13 @@ describe("creditsByRole", () => {
       ["Art", ["a", "b"]],
       ["Music", ["m"]],
     ]);
+  });
+});
+
+describe("runsOn", () => {
+  it("names the systems a download runs on, and the browser for a browser game", () => {
+    expect(runsOn(["windows", "linux", "linux-deb"])).toBe("Windows · Linux (also as .deb)");
+    expect(runsOn(["linux", "linux-deb", "linux-rpm"])).toBe("Linux (also as .deb and .rpm)");
+    expect(runsOn(["browser"])).toBe("Your browser");
   });
 });

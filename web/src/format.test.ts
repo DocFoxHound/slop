@@ -2,7 +2,8 @@
 import { describe, expect, it } from "vitest";
 
 import { query } from "./api";
-import { accountId, artFor, dayGroup, deadlineText, money, timeAgo, toMinor } from "./format";
+import { accountId, addressHost, artFor, dayGroup, deadlineText, money, playsInBrowser, timeAgo, toMinor } from "./format";
+import { canOpenPlayAddress } from "./platform";
 
 const now = Date.parse("2026-10-18T12:00:00Z");
 
@@ -97,5 +98,30 @@ describe("dayGroup", () => {
     expect(dayGroup(iso(local(12, 0)), noon)).toBe("This week");
     expect(dayGroup(iso(local(11, 23)), noon)).toBe("Earlier");
     expect(dayGroup("2025-01-01T00:00:00Z", noon)).toBe("Earlier");
+  });
+});
+
+describe("games that play in the browser", () => {
+  it("are told apart by the summary's flag or the store page's platforms", () => {
+    expect(playsInBrowser({ plays_in_browser: true })).toBe(true);
+    expect(playsInBrowser({ plays_in_browser: false, platforms: ["browser"] })).toBe(true);
+    expect(playsInBrowser({ plays_in_browser: false, platforms: ["windows", "linux"] })).toBe(false);
+    expect(playsInBrowser(undefined)).toBe(false);
+  });
+
+  it("name the site Play opens, and nothing for what isn't an address", () => {
+    expect(addressHost("https://play.example.com/orbit/?level=2#top")).toBe("play.example.com");
+    expect(addressHost("http://127.0.0.1:4000/e2e/orbit-tap/play/")).toBe("127.0.0.1:4000");
+    expect(addressHost("not an address")).toBe("");
+    expect(addressHost(null)).toBe("");
+  });
+
+  it("open only web addresses: https in the SLAPorSLOP app, http too on the website (test servers)", () => {
+    expect(canOpenPlayAddress("https://play.example.com/", true)).toBe(true);
+    expect(canOpenPlayAddress("https://play.example.com/", false)).toBe(true);
+    expect(canOpenPlayAddress("http://127.0.0.1:4000/play/", false)).toBe(true);
+    expect(canOpenPlayAddress("http://127.0.0.1:4000/play/", true)).toBe(false);
+    for (const bad of ["javascript:alert(1)", "file:///etc/passwd", "data:text/html,hi", "ftp://example.com/", "play.example.com", "", null])
+      for (const desktop of [true, false]) expect(canOpenPlayAddress(bad, desktop), `${bad} ${desktop}`).toBe(false);
   });
 });

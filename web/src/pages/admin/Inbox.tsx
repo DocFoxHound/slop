@@ -280,7 +280,12 @@ function quicksFor(box: BoxKey, key: string, d: InboxData): Quicks {
         approve: {
           label: "Approve",
           done: "Approved and signed",
-          unavailable: r.status !== "awaiting_review" ? "Only a release waiting for review can be approved." : undefined,
+          // A browser game's address is approved only after someone opened it and played it: from its card.
+          unavailable: r.play_address
+            ? "Open it and play it first: a play address is approved from its card."
+            : r.status !== "awaiting_review"
+              ? "Only a release waiting for review can be approved."
+              : undefined,
           run: () => api.admin.approve(r.id),
         },
         deny: {

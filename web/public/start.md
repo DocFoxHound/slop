@@ -16,7 +16,9 @@ Ask once, if it isn't clear already:
 1. **Publish an app or game they made.** Read [the publishing guide](/publishing.md) and follow
    its [checklist for agents](/publishing.md#checklist-for-agents). Their project's code must be in
    a public repository (GitHub is easiest); if it isn't yet, see
-   [Starting from nothing](#starting-from-nothing-no-github-yet) below first.
+   [Starting from nothing](#starting-from-nothing-no-github-yet) below first. A game that plays on
+   their own website can be published with nothing to download (its code is still in a public
+   repository): see [Browser games](/publishing.md#browser-games).
 2. **Offer their services on People**, alone or as a studio. Read [the portfolio guide](/portfolio.md)
    and follow its checklist. Their portfolio is a public GitHub repository too; if they have no
    GitHub account, see [Starting from nothing](#starting-from-nothing-no-github-yet).
@@ -43,8 +45,10 @@ here happens in the person's own browser or their own terminal.
 ## Starting from nothing (no GitHub yet)
 
 A **repository** is a folder online that holds the project's code and its history. SLAPorSLOP reads
-the code from there, players can see it (that's what open source means), and SLAPorSLOP builds and
-checks each version from it. GitHub is the easiest place to keep one, and it's free.
+the code from there, and players can see it (that's what open source means). Downloads are built
+and checked from it. A game that plays on its maker's own website should be built from it too;
+SLAPorSLOP checks that game's address, and a person plays it. GitHub is the easiest place to keep
+one, and it's free.
 
 ### 1. A GitHub account (the person)
 

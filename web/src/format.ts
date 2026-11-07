@@ -95,6 +95,21 @@ export function ageLabel(minAge: number): string | null {
   return minAge > 0 ? `${minAge}+` : null;
 }
 
+/** A game that plays in the browser, on its maker's website: the one check every page uses. */
+export function playsInBrowser(app: { plays_in_browser?: boolean; platforms?: readonly string[] } | null | undefined): boolean {
+  return Boolean(app?.plays_in_browser || app?.platforms?.includes("browser"));
+}
+
+/** The site a play address is on, as players read it ("play.example.com"); "" when it isn't an address. */
+export function addressHost(address: string | null | undefined): string {
+  if (!address) return "";
+  try {
+    return new URL(address).host;
+  } catch {
+    return "";
+  }
+}
+
 const SYMBOL: Record<string, string> = { usd: "$", eur: "€", gbp: "£" };
 
 /** "$120", "$120.01", "£12,345" — the same as the server's job texts. */

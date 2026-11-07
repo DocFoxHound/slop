@@ -9,6 +9,7 @@ import { api, ApiError, type BugReport, type ReleaseFeedback } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { desktop, detectOs, isDesktop } from "../platform";
+import { useLaunched } from "./AppUpdates";
 import { InlineIcon } from "./StoreIcons";
 
 type Crash = { slug: string; code: number | null; log: string };
@@ -56,13 +57,18 @@ const STATUS: Record<BugReport["status"], string> = {
   duplicate: "DUPLICATE",
 };
 
-/** On an app's page, for players who played it: open reports ("me too") and a form. */
-export function BugReports({ slug, version }: { slug: string; version?: string }) {
+/**
+ * On an app's page, for players who played it: open reports ("me too") and a form. For a game
+ * that plays in the browser (`browser`), the report says so, and SLAPorSLOP fills in the version
+ * Play opens; it appears as soon as Play is recorded.
+ */
+export function BugReports({ slug, version, browser = false }: { slug: string; version?: string; browser?: boolean }) {
   const location = useLocation();
   const crash = (location.state as { crash?: Crash } | null)?.crash;
   // "all": the open ones (to say "me too") and the player's own whatever their status, so the
   // maker's answer shows on a report they closed (the API leaves out others' closed ones).
   const list = useLoad(() => api.bugReports.list(slug, "all").catch(() => null), [slug]);
+  useLaunched(slug, list.reload);
   const [open, setOpen] = useState(Boolean(crash));
   const [title, setTitle] = useState("");
   const [body, setBody] = useState("");
@@ -78,8 +84,8 @@ export function BugReports({ slug, version }: { slug: string; version?: string }
       await api.bugReports.file(slug, {
         title,
         body,
-        version,
-        platform: ["windows", "linux", "mac"].includes(detectOs()) ? detectOs() : undefined,
+        version: browser ? undefined : version,
+        platform: browser ? "browser" : ["windows", "linux", "mac"].includes(detectOs()) ? detectOs() : undefined,
         log: sendLog && log.trim() ? log : undefined,
       });
       setSent(true);

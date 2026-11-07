@@ -47,10 +47,11 @@ async function axe(page: Page) {
 
 test("the sidebar: groups with counts, search, filter, arrow keys, and the app in the address", async ({ page }) => {
   await signIn(page, "player");
-  const library = await call<Array<{ slug: string }>>("player", "GET", "/v1/me/library");
+  const library = await call<Array<{ slug: string; plays_in_browser: boolean }>>("player", "GET", "/v1/me/library");
   const priv = await call<{ mine: Array<{ slug: string }>; shared: Array<{ slug: string }> }>("player", "GET", "/v1/me/private");
   const privates = new Set([...priv.mine, ...priv.shared].map((a) => a.slug));
-  const inLibrary = library.filter((a) => !privates.has(a.slug)).length;
+  // Games that play in the browser have a group of their own (browser-games.e2e.ts).
+  const inLibrary = library.filter((a) => !privates.has(a.slug) && !a.plays_in_browser).length;
 
   await page.goto("/library");
   await expect(page.getByRole("heading", { name: "Library", level: 1 })).toBeVisible();

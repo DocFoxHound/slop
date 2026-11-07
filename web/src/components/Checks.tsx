@@ -6,9 +6,12 @@
 
 import { Link } from "react-router";
 
+import { addressCheckItems, CHECK_MARK } from "../addressChecks";
 import type {
+  AddressChecks,
   Advisory,
   DefenderCheck,
+  Release,
   ReleaseFile,
   RepoScan,
   ScanReport,
@@ -239,10 +242,17 @@ export function RepoScanList({
   scan,
   advisories,
   audience,
+  browser = false,
 }: {
   scan: RepoScan | null | undefined;
   advisories: Advisory[] | undefined;
   audience: "maker" | "reviewer";
+  /**
+   * A browser game: what's about a download is left out (code from outside SLAPorSLOP, which the
+   * Content Policy's rule doesn't cover for a site; going online; the save folder; Pulse; mods).
+   * The source is still read for its licence, selling and pay-to-win design.
+   */
+  browser?: boolean;
 }) {
   if (!scan) {
     return (
@@ -261,8 +271,8 @@ export function RepoScanList({
   }
   const licence = scan.licence;
   const money = scan.monetization ?? [];
-  const code = scan.code_loading ?? [];
-  const network = scan.network ?? [];
+  const code = browser ? [] : (scan.code_loading ?? []);
+  const network = browser ? [] : (scan.network ?? []);
   const found = advisories ?? [];
   const malicious = found.filter((a) => a.malicious);
   const since = found.filter((a) => !a.malicious && !a.known_at_build);
@@ -318,7 +328,7 @@ export function RepoScanList({
           </span>
         </div>
       )}
-      {code.length > 0 ? (
+      {browser ? null : code.length > 0 ? (
         <div>
           <span className="badge warn">
             CODE FROM OUTSIDE SLAPorSLOP? ({code.length})
@@ -371,7 +381,7 @@ export function RepoScanList({
           </ul>
         </div>
       )}
-      <SaveFolderCheck scan={scan} audience={audience} />
+      {!browser && <SaveFolderCheck scan={scan} audience={audience} />}
       {(scan.design ?? []).length > 0 && (
         <div>
           <span className="badge warn">PAY-TO-WIN DESIGN? ({scan.design!.length})</span>{" "}
@@ -389,7 +399,7 @@ export function RepoScanList({
           </ul>
         </div>
       )}
-      {scan.pulse_missing ? (
+      {browser ? null : scan.pulse_missing ? (
         <div>
           <span className="badge warn">NO SLOP PULSE</span>{" "}
           <span className="muted">
@@ -409,7 +419,7 @@ export function RepoScanList({
           </div>
         )
       )}
-      {(scan.mod_code || scan.mod_online) && (
+      {!browser && (scan.mod_code || scan.mod_online) && (
         <div>
           {scan.mod_code && <span className="badge warn">MOD WITH CODE</span>}{" "}
           {scan.mod_online && <span className="badge warn">MOD GOES ONLINE</span>}{" "}
@@ -599,6 +609,47 @@ function SaveFolderCheck({ scan, audience }: { scan: RepoScan; audience: "maker"
           </li>
         ))}
       </ul>
+    </div>
+  );
+}
+
+/**
+ * What SLAPorSLOP's automatic checks found on a browser game's play address, one line each in
+ * words (addressChecks.ts). They're about the address only, never what the site serves.
+ */
+export function AddressCheckList({
+  checks,
+  status,
+  audience,
+}: {
+  checks: AddressChecks | null | undefined;
+  status: Release["status"];
+  audience: "maker" | "reviewer";
+}) {
+  const items = addressCheckItems(checks, status);
+  return (
+    <div className="address-checks small">
+      <ul className="step-files" aria-label="SLAPorSLOP's checks of the address">
+        {items.map((i) => (
+          <li key={i.key} className={`step-file ${i.state}`}>
+            <span className="step-icon" aria-hidden="true">
+              {CHECK_MARK[i.state]}
+            </span>
+            <div>
+              <b>{i.label}:</b> <span className="step-state">{i.status}</span>
+              {i.detail && <div className="muted small">{i.detail}</div>}
+            </div>
+          </li>
+        ))}
+      </ul>
+      {checks?.checked_at && status !== "fetching" && (
+        <p className="muted small">
+          Checked {formatDate(checks.checked_at)}.{" "}
+          {audience === "reviewer"
+            ? "These checks are about the address only: open the game to see what the site serves."
+            : "These checks are about the address only, not what your site serves."}
+        </p>
+      )}
     </div>
   );
 }

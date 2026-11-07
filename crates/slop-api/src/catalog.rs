@@ -925,6 +925,28 @@ pub async fn plays_in_browser<'c>(
         .await
 }
 
+/// Whether app `a` (`apps`) is a dedicated server: one of its tags is in the Servers category
+/// (today that's Dedicated Server, migration 0093). The Content Policy's rule on code from
+/// outside SLAPorSLOP doesn't cover dedicated servers, which may load mods, maps and plugins from
+/// other places ("Browser games and dedicated servers"); every other rule does. The one
+/// definition of what a dedicated server is.
+pub(crate) const IS_DEDICATED_SERVER: &str = "exists (select 1 from app_tags st
+     join tags t on t.id = st.tag_id join categories c on c.id = t.category_id
+     where st.app_id = a.id and c.slug = 'servers')";
+
+/// `IS_DEDICATED_SERVER` for one app.
+pub async fn is_dedicated_server<'c>(
+    db: impl sqlx::PgExecutor<'c>,
+    app_id: Uuid,
+) -> sqlx::Result<bool> {
+    sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {IS_DEDICATED_SERVER} from apps a where a.id = $1"
+    )))
+    .bind(app_id)
+    .fetch_one(db)
+    .await
+}
+
 /// Loads an app's store page. Makers always see their own apps; everyone else only sees apps
 /// that are in the store for them.
 async fn load_detail(

@@ -400,7 +400,7 @@ test("an app with no platforms is asked for them first", async ({ page }) => {
     await route.fulfill({ response: res, json: { ...(await res.json()), platforms: [] } });
   });
   await page.goto(page_);
-  await expect(page.getByText("First choose what your app runs on (Windows, Linux or both) on its store page.")).toBeVisible();
+  await expect(page.getByText("First choose what your app runs on (Windows, Linux or both, or In the browser) on its store page.")).toBeVisible();
   await expect(page.locator("p.notice").getByRole("link", { name: "Edit store page" })).toHaveAttribute("href", `/publish/${slug}`);
   await expect(page.getByRole("heading", { name: "New release" })).toHaveCount(0);
 });

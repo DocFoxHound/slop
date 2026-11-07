@@ -4,7 +4,7 @@
 
 <p align="center">
   <a href="https://slaporslop.games"><img alt="Status: private testing" src="https://img.shields.io/badge/status-private%20testing-a3e635?style=for-the-badge&labelColor=151a21"></a>
-  <img alt="Windows and Linux" src="https://img.shields.io/badge/runs%20on-Windows%20%C2%B7%20Linux-60a5fa?style=for-the-badge&labelColor=151a21">
+  <img alt="Windows, Linux and the browser" src="https://img.shields.io/badge/runs%20on-Windows%20%C2%B7%20Linux%20%C2%B7%20browser-60a5fa?style=for-the-badge&labelColor=151a21">
   <a href="#license"><img alt="Open source" src="https://img.shields.io/badge/open%20source-AGPL%20%C2%B7%20MIT%20%C2%B7%20Apache-e7ecf2?style=for-the-badge&labelColor=151a21"></a>
   <img alt="Built with Rust and Tauri" src="https://img.shields.io/badge/built%20with-Rust%20%2B%20Tauri-f59e0b?style=for-the-badge&labelColor=151a21">
 </p>
@@ -45,10 +45,12 @@ update, fix and community branch.
 
 ## 🛡️ Checked before it reaches you
 
-Every app is open source, and every release is built from that source, scanned, and looked at by
+Every app is open source, and every download is built from that source, scanned, and looked at by
 a person before anyone can install it. The SLAPorSLOP app then checks every file against what SLAPorSLOP
-approved, when it installs and every time it starts. Free to download, always: no prices, no
-in-app purchases, no loot boxes.
+approved, when it installs and every time it starts. Games that play in your browser run on their
+maker's own website instead: SLAPorSLOP checks their address and a person plays them before Play
+opens them, but it can't check what the site serves, so they're never marked scanned. Free to
+download, always: no prices, no in-app purchases, no loot boxes.
 
 <p align="center">
   <img src="docs/images/checks.svg" alt="Every release: open-source code is built and signed in CI, scanned with ClamAV, YARA, capa and Microsoft Defender, reviewed by a person, and verified by the SLAPorSLOP app at install and every launch." width="100%">
@@ -59,7 +61,9 @@ in-app purchases, no loot boxes.
 ## 🛠️ Made something? Put it on SLAPorSLOP
 
 Link your repository and accept one ready-made pipeline file: **Slop Build** builds, signs and
-checks every release for you. Launch a *Coming soon* page before it's done, see who's
+checks every release for you. Made a game that runs on your own website? Give its address, and
+players press Play to open it in their browser. Dedicated servers for your game have a category
+of their own. Launch a *Coming soon* page before it's done, see who's
 *Interested*, read real bug reports and reviews, and let players fork it to fix, mod and port it.
 Players can donate, straight into your own Stripe account; SLAPorSLOP takes a flat 5% and never holds
 your money.
@@ -71,7 +75,8 @@ your money.
 ## Where it's at
 
 SLAPorSLOP is in **private testing** at [slaporslop.games](https://slaporslop.games). The desktop app runs on
-Windows and Linux and updates itself; macOS and phones come later.
+Windows and Linux and updates itself; macOS and phones come later. Browser games open from the
+website or the desktop app, in the player's own browser.
 
 How SLAPorSLOP's Windows app is built and signed: [Code signing policy](docs/CODE-SIGNING.md).
 

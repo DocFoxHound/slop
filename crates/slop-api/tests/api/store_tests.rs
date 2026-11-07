@@ -5346,6 +5346,7 @@ async fn browse_shows_the_top_of_each_category_and_each_tag(db: PgPool) {
             "tools",
             "creative",
             "utilities",
+            "servers",
             "learning",
             "play-style",
             "vibe"

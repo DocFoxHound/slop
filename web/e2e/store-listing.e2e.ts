@@ -3,7 +3,7 @@
 // store-browse.e2e.ts), Coming soon & beta,
 // Community builds, Made with people, and How ratings work.
 import type { Page } from "@playwright/test";
-import { expect, test } from "./fixtures";
+import { expect, ids, test } from "./fixtures";
 import { delist, failApi, listedApp } from "./store-helpers";
 
 // Vera's: a beta game with full controller support, and a coming-soon one.
@@ -61,7 +61,19 @@ test("search: each filter goes in the address and changes the results", async ({
   await select(page, "Runs on").selectOption("linux");
   await expect(page).toHaveURL(/[?&]runs_on=linux/);
   await expect(page.getByText("Includes apps that run on Linux through a community build.")).toBeVisible();
-  await shows(page, ["lantern-keep"], ["castle-rock", "neon-drift"]);
+  await shows(page, ["lantern-keep"], ["castle-rock", "neon-drift", ids.browserApp]);
+  await select(page, "Runs on").selectOption("windows");
+  await expect(page).toHaveURL(/[?&]runs_on=windows/);
+  await shows(page, ["castle-rock"], [ids.browserApp]);
+  // In the browser: games that play on their maker's website, nothing else, and its tiles say so.
+  await select(page, "Runs on").selectOption({ label: "In your browser (nothing to download)" });
+  await expect(page).toHaveURL(/[?&]runs_on=browser/);
+  await expect(page.getByText("Games that play on their maker's website: nothing to download or install.")).toBeVisible();
+  await expect(page.getByText(/through a community build/)).toHaveCount(0);
+  await shows(page, [ids.browserApp], ["castle-rock", "lantern-keep", "lantern-keep-linux", beta]);
+  const tileLabel = tile(page, ids.browserApp).locator(".in-browser");
+  await expect(tileLabel).toHaveText("In your browser");
+  await expect(tileLabel.locator('svg[data-icon="browser"]')).toHaveAttribute("aria-hidden", "true");
   await select(page, "Runs on").selectOption("");
 
   await select(page, "Slaps").selectOption({ label: "70% or more" });

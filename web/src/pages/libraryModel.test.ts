@@ -1,9 +1,22 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import type { AppSummary, AppUpdate } from "../api";
+import type { AppSummary, AppUpdate, Category } from "../api";
 import type { InstalledApp } from "../platform";
-import { buildEntries, countLabel, filtersFor, groupLabel, matchesFilter, sections, statusOf, type Live } from "./libraryModel";
+import {
+  buildEntries,
+  categoryFilter,
+  categoryFilters,
+  countLabel,
+  dimmed,
+  filtersFor,
+  groupLabel,
+  inCategory,
+  matchesFilter,
+  sections,
+  statusOf,
+  type Live,
+} from "./libraryModel";
 import { downloading, downloadsLabel } from "../components/Downloads";
 
 function app(slug: string, title: string, extra: Partial<AppSummary> = {}): AppSummary {
@@ -24,6 +37,7 @@ function app(slug: string, title: string, extra: Partial<AppSummary> = {}): AppS
     made_with_people: false,
     interested: 0,
     branch_of: null,
+    plays_in_browser: false,
     is_dead: false,
     stage_deadline: null,
     updated_at: "",
@@ -121,8 +135,147 @@ describe("the library's list", () => {
   it("names things for where it runs", () => {
     expect(groupLabel("library", true)).toBe("Not installed");
     expect(groupLabel("library", false)).toBe("In your library");
-    expect(filtersFor(false).map((f) => f.id)).toEqual(["all", "private", "interested", "community"]);
-    expect(filtersFor(true).map((f) => f.id)).toContain("updates");
+    expect(groupLabel("browser", true)).toBe("Plays in your browser");
+    expect(groupLabel("browser", false)).toBe("Plays in your browser");
+    expect(filtersFor(false).map((f) => f.id)).toEqual(["all", "browser", "private", "interested", "community"]);
+    expect(filtersFor(true).map((f) => f.id)).toEqual(["all", "installed", "updates", "browser", "private", "interested", "community"]);
+    expect(filtersFor(true).find((f) => f.id === "browser")?.label).toBe("Plays in your browser");
+  });
+});
+
+describe("games that play in the browser", () => {
+  const browser = (slug: string, title: string, extra: Partial<AppSummary> = {}) => app(slug, title, { plays_in_browser: true, ...extra });
+  const s = {
+    ...sources,
+    library: [...sources.library, browser("orbit", "Orbit"), browser("comet", "Comet")],
+    // One Pat is only waiting for (Interested, coming soon), and one both in the library and Interested.
+    interested: [...sources.interested, browser("later", "Later", { stage: "coming_soon" }), browser("comet", "Comet")],
+  };
+  const entries = buildEntries(s);
+  const group = (slug: string) => entries.find((e) => e.slug === slug)?.group;
+
+  it("sit in their own group after Installed, on the website and in the SLAPorSLOP app, never under Not installed", () => {
+    expect(group("orbit")).toBe("browser");
+    expect(group("comet")).toBe("browser");
+    // Waiting for one is still Interested; it isn't in the library yet.
+    expect(group("later")).toBe("interested");
+    for (const desktop of [true, false]) {
+      const shown = sections(entries, "all", "", desktop);
+      expect(shown.map((x) => x.group)).toEqual(["installed", "browser", "library", "private", "interested"]);
+      const own = shown.find((x) => x.group === "browser")!;
+      expect(own.label).toBe("Plays in your browser");
+      expect(own.entries.map((e) => e.slug)).toEqual(["comet", "orbit"]);
+      expect(countLabel(own)).toBe("(2)");
+      expect(shown.find((x) => x.group === "library")!.entries.map((e) => e.slug)).not.toContain("orbit");
+    }
+  });
+
+  it("aren't dimmed: they play from here, like installed apps", () => {
+    const of = (slug: string) => entries.find((e) => e.slug === slug)!;
+    expect(dimmed(of("orbit"))).toBe(false);
+    expect(dimmed(of("orig"))).toBe(false);
+    expect(dimmed(of("zeta"))).toBe(true);
+    expect(dimmed(of("later"))).toBe(true);
+  });
+
+  it("have their own filter, and none of the installed ones'", () => {
+    const slugs = (f: Parameters<typeof matchesFilter>[1]) => entries.filter((e) => matchesFilter(e, f)).map((e) => e.slug);
+    expect(slugs("browser")).toEqual(["comet", "orbit", "later"]);
+    expect(slugs("installed")).not.toContain("orbit");
+    expect(slugs("updates")).not.toContain("orbit");
+    // Filtered, the browser group shows whole and Interested keeps the one waiting (of Soon, Out Now, Later).
+    const filtered = sections(entries, "browser", "", true);
+    expect(filtered.map((x) => [x.group, countLabel(x)])).toEqual([
+      ["browser", "(2)"],
+      ["interested", "(1/3)"],
+    ]);
+  });
+
+  it("have no status: nothing downloads, updates or runs in SLAPorSLOP", () => {
+    const orbit = entries.find((e) => e.slug === "orbit")!;
+    expect(statusOf(orbit, { downloading: {}, running: [], autoUpdate: true })).toBeNull();
+    expect(orbit).toMatchObject({ inLibrary: true, available: false });
+    expect(orbit.installed).toBeUndefined();
+    expect(entries.find((e) => e.slug === "comet")).toMatchObject({ inLibrary: true, interested: true });
+  });
+});
+
+describe("the store's categories", () => {
+  const cat = (slug: string, name: string, tags: string[]): Category => ({
+    slug,
+    name,
+    description: "",
+    tags: tags.map((t) => ({ slug: t, name: t })),
+  });
+  // In the store's order (api.categories()): Servers right after Utilities.
+  const categories = [
+    cat("games", "Games", ["puzzle", "rpg"]),
+    cat("tools", "Tools", ["office"]),
+    cat("utilities", "Utilities", ["backup"]),
+    cat("servers", "Servers", ["dedicated-server"]),
+    cat("vibe", "Vibe", ["cozy"]),
+  ];
+  const entries = buildEntries({
+    library: [
+      app("relay", "Relay Server", { kind: "app", tags: ["dedicated-server", "backup"] }),
+      app("castle", "Castle", { tags: ["puzzle", "cozy"] }),
+      app("orbit", "Orbit", { plays_in_browser: true, tags: ["puzzle"] }),
+    ],
+    // Installed and no longer in the store: no tags to go by.
+    installed: [{ installed: inst("gone", "Gone"), available: false }],
+    interested: [app("soon", "Soon", { stage: "coming_soon", tags: ["rpg"] })],
+    privateMine: [],
+    privateShared: [],
+  });
+  const of = (slug: string) => entries.find((e) => e.slug === slug)!;
+
+  it("an entry is in a category when one of its app's tags is; one without store data is in none", () => {
+    expect(inCategory(of("relay"), categories[3])).toBe(true);
+    expect(inCategory(of("relay"), categories[2])).toBe(true);
+    expect(inCategory(of("castle"), categories[3])).toBe(false);
+    expect(of("gone").app).toBeUndefined();
+    for (const c of categories) expect(inCategory(of("gone"), c), c.slug).toBe(false);
+  });
+
+  it("lists each category the library has an entry in, in the store's order, by its name", () => {
+    expect(categoryFilters(entries, categories)).toEqual([
+      { id: "category:games", label: "Games" },
+      { id: "category:utilities", label: "Utilities" },
+      { id: "category:servers", label: "Servers" },
+      { id: "category:vibe", label: "Vibe" },
+    ]);
+    // A chosen category stays in the list, though nothing's in it any more.
+    expect(categoryFilters(entries, categories, categoryFilter("tools")).map((f) => f.label)).toEqual([
+      "Games",
+      "Tools",
+      "Utilities",
+      "Servers",
+      "Vibe",
+    ]);
+    expect(categoryFilters(entries, [])).toEqual([]);
+    expect(categoryFilters([], categories)).toEqual([]);
+  });
+
+  it("filters each group by category, beside search and the counts", () => {
+    const slugs = (f: Parameters<typeof matchesFilter>[1]) => entries.filter((e) => matchesFilter(e, f, categories)).map((e) => e.slug);
+    expect(slugs(categoryFilter("servers"))).toEqual(["relay"]);
+    // Browser games and Interested ones are in their categories too.
+    expect(slugs(categoryFilter("games"))).toEqual(["castle", "orbit", "soon"]);
+    expect(slugs(categoryFilter("tools"))).toEqual([]);
+    // Without the store's categories (not loaded, or a category it doesn't have), nothing matches.
+    expect(entries.filter((e) => matchesFilter(e, categoryFilter("servers")))).toEqual([]);
+    expect(slugs(categoryFilter("no-such-category"))).toEqual([]);
+    const shown = sections(entries, categoryFilter("games"), "", false, categories);
+    expect(shown.map((x) => [x.group, countLabel(x)])).toEqual([
+      ["browser", "(1)"],
+      ["library", "(1/2)"],
+      ["interested", "(1)"],
+    ]);
+    expect(sections(entries, categoryFilter("games"), "cast", false, categories).flatMap((x) => x.entries.map((e) => e.slug))).toEqual([
+      "castle",
+    ]);
+    // The kinds' filters are as before.
+    expect(slugs("all")).toHaveLength(entries.length);
   });
 });
 

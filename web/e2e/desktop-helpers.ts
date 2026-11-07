@@ -217,12 +217,25 @@ export async function asDesktop(page: Page, chat: FakeChat, library: FakeLibrary
             return autoUpdate;
           case "platform_info":
             return { platform: "linux", can_install: false };
+          // openExternal: the system browser opens it (openedUrls says what).
+          case "plugin:opener|open_url":
+            return null;
           default:
             return null;
         }
       },
     };
   }, { chat, library });
+}
+
+/** Everything the page asked the pretend app, in order: each command and its arguments. */
+export async function desktopCalls(page: Page): Promise<Array<{ cmd: string; args: Record<string, unknown> }>> {
+  return page.evaluate(() => (window as unknown as { __desktopCalls?: Array<{ cmd: string; args: Record<string, unknown> }> }).__desktopCalls ?? []);
+}
+
+/** The addresses the page had the pretend app open in the system browser (openExternal). */
+export async function openedUrls(page: Page): Promise<string[]> {
+  return (await desktopCalls(page)).filter((c) => c.cmd === "plugin:opener|open_url").map((c) => String(c.args.url));
 }
 
 /** What the page asked the pretend app's chat to do, in order. */

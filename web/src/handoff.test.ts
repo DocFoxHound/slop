@@ -180,6 +180,37 @@ describe("a new app's fill", () => {
     expect(appFill({ mods_folder: { base: "game", path: "" } }).left).toEqual([{ field: "mods_folder", why: "path is empty" }]);
   });
 
+  it("a game that plays in the browser: In the browser alone, and its play address", () => {
+    const fill = appFill({ platforms: ["browser"], play_address: " https://games.example.com/play/ ", kind: "game" }, TAGS);
+    expect(fill.values).toEqual({ kind: "game", platforms: ["browser"], play_address: "https://games.example.com/play/" });
+    expect(fill.filled).toEqual(["kind", "platforms", "play_address"]);
+    expect(fill.left).toEqual([]);
+
+    // Never with Windows or Linux.
+    const mixed = appFill({ platforms: ["browser", "windows"], play_address: "https://games.example.com/" });
+    expect(mixed.values).toEqual({});
+    expect(mixed.left).toEqual([
+      { field: "platforms", why: "can't put browser with windows or linux: a browser game plays only in the browser" },
+      { field: "play_address", why: 'only a game that plays in the browser has one: its platforms should be ["browser"]' },
+    ]);
+    // A play address for a download is left out; so are a browser game's sandbox mode and mods folder.
+    expect(appFill({ platforms: ["windows"], play_address: "https://games.example.com/" }).values).toEqual({ platforms: ["windows"] });
+    const extras = appFill({ platforms: ["browser"], sandbox_ready: true, mods_folder: { base: "game", path: "mods" } });
+    expect(extras.values).toEqual({ platforms: ["browser"] });
+    expect(extras.left.map((l) => l.why)).toEqual(["a browser game has no sandbox mode", "a browser game has no mods folder"]);
+  });
+
+  it("takes a play address only as https, with no user name or password, up to 2,000 characters", () => {
+    const address = (play_address: string) => appFill({ platforms: ["browser"], play_address }).values.play_address;
+    expect(address("http://games.example.com/")).toBeUndefined();
+    expect(address("https://me:pw@games.example.com/")).toBeUndefined();
+    expect(address("javascript:alert(1)")).toBeUndefined();
+    expect(address(`https://games.example.com/${"p".repeat(2000)}`)).toBeUndefined();
+    expect(appFill({ platforms: ["browser"], play_address: "ftp://x" }).left).toEqual([
+      { field: "play_address", why: "should be an https:// address" },
+    ]);
+  });
+
   it("a JSON __proto__ field changes nothing", () => {
     const fields = JSON.parse('{"__proto__": {"title": "polluted"}, "summary": "ok"}') as Record<string, unknown>;
     const fill = appFill(fields);

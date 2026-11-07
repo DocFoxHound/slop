@@ -10,6 +10,7 @@ import { api, ApiError, type AppDetail, type AppStage, type ManageOverview } fro
 import { daysUntil, formatDate, STAGE_LABEL } from "../format";
 import { useLoad } from "../hooks";
 import { AppIcon, appIconProps } from "./AppIcon";
+import { StoreIcon } from "./StoreIcons";
 
 export type MakerTab = "manage" | "page" | "releases";
 
@@ -46,6 +47,14 @@ export function moveEffects(to: AppStage, interested: number): string[] {
         ]
       : ["Its page shows it as released: no Beta label, and new votes count as released ones.", told];
   return [...lines, "Only forward: to move it back, you'd ask SLAPorSLOP."];
+}
+
+/** What a stage move waits for, and the link to it: for a browser game, an approved play address. */
+export function advanceHint(next: AppStage[], browser: boolean): { text: string; link: string } {
+  const moves = next.map((s) => MOVE_LABEL[s]).join(" or ");
+  return browser
+    ? { text: `${moves} once a play address is approved.`, link: "Add the play address" }
+    : { text: `${moves} once a release is approved.`, link: "Submit a release" };
 }
 
 export function MakerFrame({
@@ -90,6 +99,12 @@ export function MakerFrame({
             ) : (
               <span className="badge official">IN THE STORE</span>
             )}
+            {app.plays_in_browser && (
+              <span className="badge neutral">
+                <StoreIcon name="browser" size={12} />
+                PLAYS IN THE BROWSER
+              </span>
+            )}
             <span className="muted">slop/app/{app.slug}</span>
           </div>
         </div>
@@ -125,7 +140,7 @@ export function StageBar({
   onReleasesPage,
   onMoved,
 }: {
-  app: Pick<AppDetail, "slug" | "stage" | "stage_entered_at" | "stage_deadline" | "interested">;
+  app: Pick<AppDetail, "slug" | "stage" | "stage_entered_at" | "stage_deadline" | "interested"> & { plays_in_browser?: boolean };
   /** Undefined while it's being loaded. */
   canAdvance: boolean | undefined;
   onReleasesPage?: boolean;
@@ -138,6 +153,7 @@ export function StageBar({
   const next = STAGES.slice(at + 1);
   const due = app.stage_deadline;
   const late = due ? daysUntil(due) < 0 : false;
+  const hint = advanceHint(next, Boolean(app.plays_in_browser));
 
   const move = async (to: AppStage) => {
     setBusy(true);
@@ -188,8 +204,7 @@ export function StageBar({
           <p className="small muted">Released: the last stage.</p>
         ) : canAdvance === false ? (
           <p className="small">
-            {next.map((s) => MOVE_LABEL[s]).join(" or ")} once a release is approved.{" "}
-            {!onReleasesPage && <Link to={`/publish/${app.slug}/releases`}>Submit a release</Link>}
+            {hint.text} {!onReleasesPage && <Link to={`/publish/${app.slug}/releases`}>{hint.link}</Link>}
           </p>
         ) : (
           !confirm && (

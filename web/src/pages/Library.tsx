@@ -1,9 +1,11 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // The library (DESIGN §6), laid out like Steam's: a sidebar listing every app you have (installed,
-// not installed, Private, Interested) with a search and a filter, and the selected app on the
-// right: a wide banner, one big button (Play, Install, Update…), its activity (release notes and
-// your bug reports) and what friends thought of it. The address is /library/<app>. Installing
-// happens in the SLAPorSLOP app; the website shows the same library and offers the app.
+// plays in your browser, not installed, Private, Interested) with a search and a filter (by kind,
+// or by the store's categories), and the selected app on the right: a wide banner, one big button
+// (Play, Install, Update…), its activity (release notes and your bug reports) and what friends
+// thought of it. The address is
+// /library/<app>. Installing happens in the SLAPorSLOP app; the website shows the same library and
+// offers the app. Games that play in the browser play from both.
 
 import { useEffect, useId, useMemo, useRef, useState, type KeyboardEvent, type ReactNode, type RefObject } from "react";
 import { Link, useLocation, useNavigate, useParams } from "react-router";
@@ -11,7 +13,7 @@ import { Link, useLocation, useNavigate, useParams } from "react-router";
 import { api, type AppDetail, type BugReport, type Release } from "../api";
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Avatar } from "../components/Avatar";
-import { checkUpdates, LIBRARY_CHANGED } from "../components/AppUpdates";
+import { checkUpdates, LIBRARY_CHANGED, useLaunched } from "../components/AppUpdates";
 import { BugReports } from "../components/BugReports";
 import { DonateButton } from "../components/Donate";
 import { downloading, DownloadsStatus, useDownloads } from "../components/Downloads";
@@ -21,7 +23,7 @@ import { RatePrompt, RatingBadge } from "../components/RatingPanel";
 import { Reviews } from "../components/Reviews";
 import { isOn, useSandboxStatus } from "../components/Sandbox";
 import { ErrorState, ExternalLink, Loading, StageBadge } from "../components/ui";
-import { artFor, formatDate } from "../format";
+import { addressHost, artFor, formatDate, playsInBrowser } from "../format";
 import { useChosen, useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { desktop, detectOs, isDesktop, type InstalledApp, type SaveCopy } from "../platform";
@@ -29,7 +31,9 @@ import { useSession } from "../session";
 import { fragmentId } from "../browsing";
 import {
   buildEntries,
+  categoryFilters,
   countLabel,
+  dimmed,
   filtersFor,
   matchesFilter,
   sections,
@@ -63,6 +67,8 @@ export function Library() {
     [me?.id],
   );
   const autoUpdate = useLoad(() => (isDesktop ? desktop.autoUpdateSetting() : Promise.resolve(false)), []);
+  // For the filter's Categories; the library shows without them.
+  const categories = useLoad(() => api.categories(), []);
   const running = useRunning();
   const downloads = useDownloads();
   const [filter, setFilter] = useState<Filter>("all");
@@ -128,7 +134,9 @@ export function Library() {
         <div className="empty-state lib-empty">
           <p>
             <b>Nothing here yet.</b> Apps you add from the store show up here,
-            {isDesktop ? " ready to install and play." : " ready to install from the SLAPorSLOP app."}
+            {isDesktop
+              ? " ready to install and play."
+              : " ready to install from the SLAPorSLOP app. Games that play in your browser play from here too."}
           </p>
           <Link className="btn slime" to="/">
             Find something in the store
@@ -138,10 +146,11 @@ export function Library() {
     );
   }
 
-  const shown = sections(entries, filter, query, isDesktop);
+  const shown = sections(entries, filter, query, isDesktop, categories.data);
   const filters = filtersFor(isDesktop).filter(
     (f) => f.id === "all" || f.id === filter || entries.some((e) => matchesFilter(e, f.id)),
   );
+  const inCategories = categoryFilters(entries, categories.data ?? [], filter);
 
   // Arrow keys move through the list, like Steam's; the app follows on a wide screen.
   const onListKey = (e: KeyboardEvent) => {
@@ -181,6 +190,15 @@ export function Library() {
                 {f.label}
               </option>
             ))}
+            {inCategories.length > 0 && (
+              <optgroup label="Categories">
+                {inCategories.map((f) => (
+                  <option key={f.id} value={f.id}>
+                    {f.label}
+                  </option>
+                ))}
+              </optgroup>
+            )}
           </select>
           <input
             type="search"
@@ -221,7 +239,7 @@ export function Library() {
                         <li key={e.slug}>
                           <Link
                             to={`/library/${encodeURIComponent(e.slug)}`}
-                            className={`lib-row${on ? " on" : ""}${e.group === "installed" ? "" : " dim"}${e.buildOf ? " nested" : ""}`}
+                            className={`lib-row${on ? " on" : ""}${dimmed(e) ? " dim" : ""}${e.buildOf ? " nested" : ""}`}
                             aria-current={on ? "page" : undefined}
                             tabIndex={tabbable ? 0 : -1}
                             data-slug={e.slug}
@@ -328,11 +346,15 @@ function Details({
     () => (signedIn && !upcoming ? api.bugReports.list(entry.slug, "all").catch(() => null) : Promise.resolve(null)),
     [entry.slug, signedIn],
   );
+  // Played just now (Play on a browser game): reporting bugs opens up.
+  useLaunched(entry.slug, bugs.reload);
   const sandbox = useLoad(() => (isDesktop ? desktop.sandboxStatus().catch(() => null) : Promise.resolve(null)), []);
   const [tab, setTab] = useState<Tab>("activity");
   const tabsId = useId();
   const d = detail.data ?? undefined;
   const installedHere = isDesktop && Boolean(entry.installed);
+  // Plays on its maker's website: Play opens the store page's address, whatever runs this page.
+  const inBrowser = playsInBrowser(entry.app) || playsInBrowser(d);
   const isPrivate = Boolean(entry.owner) || Boolean(d?.private);
   const hasCommunity =
     (d?.community.length ?? 0) > 0 ||
@@ -366,7 +388,7 @@ function Details({
   const maker = d?.maker.display_name ?? entry.installed?.maker;
   const latest = releases.data?.find((r) => r.status === "approved");
   const waiting = entry.interested && !entry.installed && !entry.inLibrary && entry.app?.stage !== "released";
-  const info = <AppInfo entry={entry} detail={d} latest={latest} />;
+  const info = <AppInfo entry={entry} detail={d} latest={latest} inBrowser={inBrowser} />;
   // Donate next to Play, as on the store page (not for Coming soon or Private).
   const donate = !isPrivate && !upcoming && (
     <DonateButton key={entry.slug} slug={entry.slug} title={entry.title} isMine={Boolean(d?.is_mine)} />
@@ -417,7 +439,7 @@ function Details({
 
       <div className="lib-body">
         {entry.interested && !entry.inLibrary && !entry.installed && entry.app?.stage === "released" && (
-          <p className="notice small">Released: add it to your library to install it.</p>
+          <p className="notice small">Released: add it to your library to {inBrowser ? "play it" : "install it"}.</p>
         )}
         {waiting ? (
           <InterestedBar entry={entry} info={info} donate={donate} onRemoved={onInterestRemoved} />
@@ -427,6 +449,7 @@ function Details({
             slug={entry.slug}
             title={entry.title}
             inLibrary={entry.inLibrary}
+            browser={inBrowser ? { address: d?.play_address ?? null, loading: detail.loading && !detail.data } : undefined}
             sandbox={
               entry.update
                 ? {
@@ -450,7 +473,7 @@ function Details({
         )}
 
         {!isPrivate && !upcoming && (
-          <RatePrompt slug={entry.slug} title={entry.title} signedIn={signedIn} isMine={Boolean(d?.is_mine)} />
+          <RatePrompt slug={entry.slug} title={entry.title} signedIn={signedIn} isMine={Boolean(d?.is_mine)} browser={inBrowser} />
         )}
 
         <div className="lib-tabbar">
@@ -498,9 +521,13 @@ function Details({
           {current === "bugs" && (
             <>
               {bugs.data && !bugs.data.can_report && !bugs.data.is_maker && (
-                <p className="muted small">You can report bugs once you've played it from the SLAPorSLOP app.</p>
+                <p className="muted small">
+                  {inBrowser
+                    ? "You can report bugs once you've played it with Play here."
+                    : "You can report bugs once you've played it from the SLAPorSLOP app."}
+                </p>
               )}
-              <BugReports slug={entry.slug} version={entry.installed?.version} />
+              <BugReports slug={entry.slug} version={entry.installed?.version} browser={inBrowser} />
             </>
           )}
           {current === "reviews" && (
@@ -571,8 +598,8 @@ function InterestedBar({
   );
 }
 
-/** The info button: what the app is, its versions, size, licence and source. */
-function AppInfo({ entry, detail, latest }: { entry: Entry; detail?: AppDetail; latest?: Release }) {
+/** The info button: what the app is, its versions, size (or where it plays), licence and source. */
+function AppInfo({ entry, detail, latest, inBrowser }: { entry: Entry; detail?: AppDetail; latest?: Release; inBrowser: boolean }) {
   const platform = useLoad(() => (isDesktop ? desktop.platformInfo().catch(() => null) : Promise.resolve(null)), []);
   const os = platform.data?.platform ?? detectOs();
   const file = latest?.files.find((f) => f.platform === os) ?? latest?.files.find((f) => f.platform === "any");
@@ -605,6 +632,12 @@ function AppInfo({ entry, detail, latest }: { entry: Entry; detail?: AppDetail; 
           <>
             <dt>Download size</dt>
             <dd>{formatSize(file.size_bytes)}</dd>
+          </>
+        )}
+        {inBrowser && detail && (
+          <>
+            <dt>Plays at</dt>
+            <dd>{addressHost(detail.play_address) || "Not playable yet"}</dd>
           </>
         )}
         {detail?.license_spdx && (

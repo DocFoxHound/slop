@@ -1391,6 +1391,64 @@ async fn withdrawing_the_address_play_opens_stops_play(db: PgPool) {
     assert_eq!(page_for(&app, None).await["play_address"], a);
 }
 
+/// Staff are alerted when a release is withdrawn: for a play address, that Play stops opening it
+/// (the audit log names the address); for a download, that it stops launching.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn staff_hear_that_play_stops_opening_a_withdrawn_address(db: PgPool) {
+    let app = test_app(db).await;
+    let (maker_id, _, address) =
+        listed_browser_game(&app, "released", "https://games.example.com/play/").await;
+    listed_with(
+        &app,
+        maker_id,
+        "castle",
+        "released",
+        "platforms = '{windows}'",
+    )
+    .await;
+    approved_release(&app, "castle", maker_id).await;
+    let download: Uuid = sqlx::query_scalar(
+        "select r.id from releases r join apps a on a.id = r.app_id where a.slug = 'castle'",
+    )
+    .fetch_one(&app.db)
+    .await
+    .unwrap();
+    // The first look at the audit log starts from now.
+    slop_api::ops::collect(&app.state).await.unwrap();
+    admin::revoke(&app.db, address, "rev", "The site now asks for passwords")
+        .await
+        .unwrap();
+    admin::revoke(&app.db, download, "rev", "Ships a miner.")
+        .await
+        .unwrap();
+    let alerts = slop_api::ops::collect(&app.state).await.unwrap();
+    let withdrawn: Vec<&str> = alerts
+        .iter()
+        .filter(|a| a.title == "A release was withdrawn")
+        .map(|a| a.detail.as_str())
+        .collect();
+    assert_eq!(
+        withdrawn,
+        [
+            format!("rev withdrew {address}. Play stops opening its address for everyone."),
+            format!("rev withdrew {download}. It stops launching for everyone."),
+        ]
+    );
+    let details: Vec<Value> = sqlx::query_scalar(
+        "select detail from audit_log where action = 'release.revoke' order by id",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        details,
+        [
+            json!({ "reason": "The site now asks for passwords", "play_address": "https://games.example.com/play/" }),
+            json!({ "reason": "Ships a miner." }),
+        ]
+    );
+}
+
 // ---------------------------------------------------------------------------------------------
 // What only downloads have
 
@@ -1891,6 +1949,49 @@ async fn browser_players_vote_by_the_days_they_played(db: PgPool) {
     assert_eq!(breakdown["by_version"][0]["key"], "1.0.0");
 }
 
+/// A vote on a browser game carries the version of the release Play opens, and none once that
+/// address is withdrawn (Play opens nothing then): never an older approved address's version.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn votes_on_a_browser_game_carry_the_version_play_opens(db: PgPool) {
+    let app = test_app(db).await;
+    listed_browser_game(&app, "released", "https://games.example.com/play/").await;
+    let newest =
+        approved_play_address(&app, "game", "1.1.0", "https://games.example.com/v2/").await;
+    let (pat_id, pat) = app.user("Pat", "US").await;
+    assert_eq!(
+        launch(&app, &pat, "game", "?platform=browser")
+            .await
+            .status(),
+        StatusCode::OK
+    );
+    let vote = |v: &str| {
+        req(Method::POST, "/v1/apps/game/vote")
+            .cookie(&pat)
+            .json(json!({ "vote": v }))
+    };
+    let versions = || async {
+        sqlx::query_scalar::<_, Option<String>>(
+            "select release_version from vote_events where user_id = $1 order by created_at, id",
+        )
+        .bind(pat_id)
+        .fetch_all(&app.db)
+        .await
+        .unwrap()
+    };
+    assert_eq!(app.send(vote("not_slop")).await.status(), StatusCode::OK);
+    assert_eq!(versions().await, [Some("1.1.0".to_string())]);
+
+    admin::revoke(&app.db, newest, "rev", "The site changed hands")
+        .await
+        .unwrap();
+    assert_eq!(app.send(vote("slop")).await.status(), StatusCode::OK);
+    assert_eq!(
+        versions().await,
+        [Some("1.1.0".to_string()), None],
+        "not 1.0.0, which Play doesn't open"
+    );
+}
+
 /// A bug report on a browser game says it was played in the browser, whatever was sent, on the
 /// version Play opens unless the player names one, and carries no game output (nothing of it
 /// runs in the SLAPorSLOP app). Downloads' reports don't take "browser".
@@ -2201,6 +2302,16 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     assert_eq!(queued["app"]["platforms"], json!(["browser"]));
     assert_eq!(queued["play_address"], second);
     assert_eq!(queued["address_checks"]["ok"], true);
+    // Beside it, where Play goes now, so the card can say it's a new site.
+    assert_eq!(queued["current_play_address"], first);
+    // A draft with an approved address waits to be listed, with where Play will go.
+    let ready = queue["ready_to_list"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .find(|a| a["slug"] == "game")
+        .unwrap();
+    assert_eq!(ready["play_address"], first);
     let apps = admin_get("/v1/admin/apps?q=game").await;
     let row = &apps[0];
     assert_eq!(row["platforms"], json!(["browser"]));
@@ -2231,7 +2342,8 @@ async fn staff_see_a_browser_games_play_address_to_open_and_play(db: PgPool) {
     assert!(apps[0]["serving_version"].is_null());
 }
 
-/// Reports on a browser game are offered in its own words where a download's don't fit, but only
+/// Reports on a browser game are offered in its own words where a download's don't fit, and
+/// without "Runs code or mods from outside SLAPorSLOP" (a rule that doesn't cover it), but only
 /// to who can see it: anyone else gets the usual words, so they learn nothing about a draft.
 #[sqlx::test(migrator = "slop_api::MIGRATOR")]
 async fn browser_games_are_reported_in_their_own_words(db: PgPool) {
@@ -2293,7 +2405,13 @@ async fn browser_games_are_reported_in_their_own_words(db: PgPool) {
         "The build doesn't match its source"
     );
     assert_eq!(usual["broken"], "The build is broken");
-    assert_eq!(browser.len(), usual.len(), "the same reasons");
+    assert!(usual.contains_key("outside_code"));
+    assert!(!browser.contains_key("outside_code"));
+    assert_eq!(
+        browser.len(),
+        usual.len() - 1,
+        "the same reasons, but outside code"
+    );
     assert_eq!(labels("kind=app&app=castle", None).await, usual);
     assert_eq!(labels("kind=app&app=nothing-here", None).await, usual);
     assert_eq!(

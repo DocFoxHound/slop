@@ -1,7 +1,8 @@
 # SLAPorSLOP
 
-> A store for open-source apps and games made with AI. Free to download, builds checked before
-> they're offered, rated by people who play them.
+> A store for open-source apps and games made with AI. Free to download or to play in the
+> browser, checked before they're offered (the builds, or a browser game's address), rated by
+> people who play them.
 
 ## Start here
 
@@ -14,9 +15,10 @@
 - [How to publish on SLAPorSLOP](/publishing.md): requirements, store pages, releases, Slop Build
   (GitHub Actions), maker signatures, Slop Pulse player counts (with code for Python, JS, Rust,
   Go, C# and Godot), where to keep saves (SLOP_SAVE_DIR, for sandbox mode), rules for online
-  play and mods (copy them into your project's agent instructions), and a step-by-step
-  checklist for agents. This one Markdown file is the whole guide; the page at /publish/guide
-  shows the same text.
+  play and mods (copy them into your project's agent instructions), browser games (a game on
+  your own website publishes an https play address instead of builds), dedicated servers (the
+  Servers category), and a step-by-step checklist for agents. This one Markdown file is the
+  whole guide; the page at /publish/guide shows the same text.
 
 - Checks without an account: `/v1/check/store-address?slug=…`, `/v1/check/repository?url=…`,
   `/v1/check/portfolio?url=…` (GET, JSON with a `summary` first; dry runs, nothing saved).

@@ -13,4 +13,11 @@ describe("releases not reviewed yet", () => {
       "Waiting for review, picked up from GitHub",
     );
   });
+
+  it("a browser game's is its play address being checked", () => {
+    expect(describeWaiting({ status: "fetching", source: "maker" }, true)).toBe("Checking the address, submitted from your account");
+    expect(describeWaiting({ status: "awaiting_review", source: "maker" }, true)).toBe(
+      "Waiting for review, submitted from your account",
+    );
+  });
 });

@@ -84,10 +84,12 @@ export async function draftApp(slug: string, title: string, o: AppOptions = {}):
   return slug;
 }
 
-/** An approved release, unless the app has one already. */
-export async function released(slug: string, who: Who = "maker2"): Promise<void> {
+/** An approved release (for a browser game, an approved play address), unless the app has one already. */
+export async function released(slug: string, who: Who = "maker2", browser = false): Promise<void> {
   const releases = await call<Array<{ status: string }>>(who, "GET", `/v1/apps/${slug}/releases`);
-  if (!releases.some((r) => r.status === "approved")) await approvedRelease(slug, "1.0.0", who);
+  if (releases.some((r) => r.status === "approved")) return;
+  if (browser) await approvedPlayAddress(slug, "1.0.0", who);
+  else await approvedRelease(slug, "1.0.0", who);
 }
 
 /** Submits a release from the fake GitHub, waits for SLAPorSLOP to fetch it, and has staff approve it. */
@@ -104,17 +106,37 @@ export async function approvedRelease(slug: string, version = "1.0.0", who: Who 
       },
     ],
   });
+  await checked(who, slug, version, release.id);
+  await call("admin", "POST", `/v1/admin/releases/${release.id}/approve`);
+  return release.id;
+}
+
+/** Where a test's browser game plays: a page on the fake GitHub (e2e_server/main.rs serves `/<owner>/<repo>/play/`). */
+export const playAddress = (slug: string) => `${server.fake}bo/${slug}/play/`;
+
+/** Submits a browser game's play address, waits for SLAPorSLOP to check it, and has staff approve it. */
+export async function approvedPlayAddress(slug: string, version = "1.0.0", who: Who = "maker2"): Promise<string> {
+  const release = await call<{ id: string }>(who, "POST", `/v1/apps/${slug}/releases`, {
+    version,
+    commit_sha: "c".repeat(40),
+    play_address: playAddress(slug),
+  });
+  await checked(who, slug, version, release.id);
+  await call("admin", "POST", `/v1/admin/releases/${release.id}/approve`);
+  return release.id;
+}
+
+/** Waits until SLAPorSLOP has fetched and checked a release, and it waits for review. */
+async function checked(who: Who, slug: string, version: string, id: string) {
   for (let i = 0; ; i++) {
-    const releases = await call<Array<{ id: string; status: string }>>(who, "GET", `/v1/apps/${slug}/releases`);
-    const status = releases.find((r) => r.id === release.id)?.status;
-    if (status === "awaiting_review") break;
-    if (i > 100 || (status && !["fetching", "scanning"].includes(status))) {
-      throw new Error(`release ${slug} ${version} is ${status}`);
+    const releases = await call<Array<{ id: string; status: string; status_reason?: string }>>(who, "GET", `/v1/apps/${slug}/releases`);
+    const release = releases.find((r) => r.id === id);
+    if (release?.status === "awaiting_review") return;
+    if (i > 100 || (release && !["fetching", "scanning"].includes(release.status))) {
+      throw new Error(`release ${slug} ${version} is ${release?.status}${release?.status_reason ? `: ${release.status_reason}` : ""}`);
     }
     await new Promise((r) => setTimeout(r, 200));
   }
-  await call("admin", "POST", `/v1/admin/releases/${release.id}/approve`);
-  return release.id;
 }
 
 /** Staff put a draft in the store. */
@@ -122,12 +144,13 @@ export async function list(slug: string) {
   await call("admin", "POST", `/v1/admin/apps/${slug}/list`);
 }
 
-/** A game in the store: Bo's unless said, released with an approved 1.0.0 unless said. Picks
- * up where it left off when it's there already (and lists it again if a test took it out). */
+/** A game in the store: Bo's unless said, released with an approved 1.0.0 unless said (with
+ * `platforms: ["browser"]`, an approved play address, playAddress). Picks up where it left off
+ * when it's there already (and lists it again if a test took it out). */
 export async function listedApp(slug: string, title: string, o: AppOptions = {}): Promise<string> {
   const who = o.who ?? "maker2";
   await draftApp(slug, title, o);
-  if ((o.stage ?? "released") !== "coming_soon") await released(slug, who);
+  if ((o.stage ?? "released") !== "coming_soon") await released(slug, who, o.platforms?.includes("browser"));
   if ((await mine(who, slug))?.status !== "listed") await list(slug);
   return slug;
 }
@@ -143,8 +166,8 @@ export async function delist(...slugs: string[]) {
 }
 
 /** `who` played it through SLAPorSLOP (needed to vote, review and confirm accessibility). */
-export async function played(who: Who, slug: string) {
-  await call(who, "POST", `/v1/apps/${slug}/launch?platform=windows`);
+export async function played(who: Who, slug: string, platform: "windows" | "linux" | "browser" = "windows") {
+  await call(who, "POST", `/v1/apps/${slug}/launch?platform=${platform}`);
 }
 
 type Match = string | RegExp | ((u: URL) => boolean);

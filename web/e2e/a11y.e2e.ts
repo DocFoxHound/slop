@@ -12,6 +12,10 @@ const pages: Array<[string, "player" | "maker" | "admin" | null]> = [
   ["/tag/puzzle", null],
   ["/app/castle-rock", null],
   ["/app/neon-drift", "player"],
+  // A game that plays in the browser (Orbit Tap): Play, its hint and the trust panel.
+  ["/app/orbit-tap", null],
+  ["/app/orbit-tap", "player"],
+  ["/search?runs_on=browser", null],
   ["/library", "player"],
   ["/publish", "maker"],
   ["/publish/new", "maker"],

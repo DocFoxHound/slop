@@ -7,7 +7,9 @@
 //! the check results: SLAPorSLOP calls no AI model. The guide sections they point to are readable with
 //! `GET /v1/maker/publishing-guide/{section}`. A browser game gets no fixes about what only the
 //! SLAPorSLOP app's installs have (`SLOP_SAVE_DIR`, Slop Pulse), and its releases are play
-//! addresses.
+//! addresses. The Content Policy's rule on code from outside SLAPorSLOP covers neither browser
+//! games nor dedicated servers ("Browser games and dedicated servers"), so code loading is never a
+//! `must` for them (`AppType`).
 
 use axum::{
     Json, Router,
@@ -16,9 +18,10 @@ use axum::{
 };
 use serde::Serialize;
 use serde_json::Value;
+use sqlx::PgPool;
 use uuid::Uuid;
 
-use crate::{AppState, auth::session::CurrentUser, error::ApiResult};
+use crate::{AppState, auth::session::CurrentUser, catalog, error::ApiResult};
 
 pub fn routes() -> Router<AppState> {
     Router::new().route("/apps/{slug}/fixes", get(fixes))
@@ -61,6 +64,41 @@ struct ReleaseRef {
     status_reason: Option<String>,
 }
 
+/// Which of the Content Policy's rules an app's checks are read against ("Browser games and
+/// dedicated servers").
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum AppType {
+    /// A download: every rule.
+    Download,
+    /// A download in the Servers category (`catalog::IS_DEDICATED_SERVER`): it may load mods,
+    /// maps and plugins from other places, which the rule on code from outside SLAPorSLOP doesn't
+    /// cover. It's still built from its source and checked like any other release.
+    DedicatedServer,
+    /// It runs on its maker's website: the rules on builds and on code from outside SLAPorSLOP
+    /// don't cover it, and it never gets what only the SLAPorSLOP app's installs have
+    /// (`SLOP_SAVE_DIR`, a Pulse token).
+    BrowserGame,
+}
+
+impl AppType {
+    pub async fn of(db: &PgPool, app_id: Uuid) -> sqlx::Result<Self> {
+        let (browser, server): (bool, bool) = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select 'browser' = any(a.platforms), {} from apps a where a.id = $1",
+            catalog::IS_DEDICATED_SERVER
+        )))
+        .bind(app_id)
+        .fetch_one(db)
+        .await?;
+        Ok(if browser {
+            Self::BrowserGame
+        } else if server {
+            Self::DedicatedServer
+        } else {
+            Self::Download
+        })
+    }
+}
+
 type Row = (
     Uuid,
     String,
@@ -76,7 +114,8 @@ async fn fixes(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Fixes>> {
     let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
-    let in_browser = crate::catalog::plays_in_browser(&state.db, app_id).await?;
+    let app_type = AppType::of(&state.db, app_id).await?;
+    let in_browser = app_type == AppType::BrowserGame;
     let mut recommendations = crate::media::recommendations(&state.db, app_id).await?;
     recommendations.extend(crate::catalog::tag_recommendations(&state.db, app_id).await?);
     let row: Option<Row> = sqlx::query_as(
@@ -108,7 +147,7 @@ async fn fixes(
     let mut list = from_checks(
         repo_scan.as_ref().unwrap_or(&Value::Null),
         source_checks.as_ref().unwrap_or(&Value::Null),
-        in_browser,
+        app_type,
     );
     list.extend(from_advisories(&advisories));
     if status == "failed" || status == "rejected" {
@@ -171,10 +210,22 @@ fn labels(v: &Value) -> String {
         .join("; ")
 }
 
-/// Fixes from SLAPorSLOP's source check (source_scan.rs) and Slop Build's checks. A browser game
-/// (`in_browser`) runs on its maker's site: it never gets `SLOP_SAVE_DIR` or a Pulse token, so
-/// saves and Pulse fixes don't apply to it.
-pub fn from_checks(scan: &Value, build: &Value, in_browser: bool) -> Vec<Fix> {
+/// The hits whose rule is (or, with `not`, isn't) `rule`, as a check's list.
+fn with_rule(v: &Value, rule: &str, not: bool) -> Value {
+    Value::Array(
+        hits(v)
+            .filter(|h| (h["rule"] == rule) != not)
+            .cloned()
+            .collect(),
+    )
+}
+
+/// Fixes from SLAPorSLOP's source check (source_scan.rs) and Slop Build's checks, read against
+/// the rules that cover `app_type`. A browser game runs on its maker's site: it never gets
+/// `SLOP_SAVE_DIR` or a Pulse token, so saves and Pulse fixes don't apply to it, and neither does
+/// the rule on code from outside SLAPorSLOP, which doesn't cover dedicated servers either.
+pub fn from_checks(scan: &Value, build: &Value, app_type: AppType) -> Vec<Fix> {
+    let in_browser = app_type == AppType::BrowserGame;
     let mut out = Vec::new();
     let mut fix = |kind: String, severity, problem: String, instruction: String, guide| {
         out.push(Fix {
@@ -267,30 +318,67 @@ pub fn from_checks(scan: &Value, build: &Value, in_browser: bool) -> Vec<Fix> {
             None,
         );
     }
-    if hits(&scan["code_loading"]).next().is_some() {
-        fix(
-            "code_loading".into(),
-            "must",
-            format!(
-                "The code loads or replaces code from outside SLAPorSLOP: {}.",
-                labels(&scan["code_loading"])
-            ),
-            if in_browser {
-                "Remove code the game loads at run time from other sites, and unsafe data formats (e.g. pickle, BinaryFormatter): a reviewer reads the code in this repository, and can't check code fetched from elsewhere.".into()
-            } else {
-                "Remove run-time code loading from the network, self-updaters and unsafe data formats (e.g. pickle, BinaryFormatter). SLAPorSLOP delivers every update itself, after checking it. Mods are fine when they come from SLAPorSLOP: read them from SLOP_MODS or your mods folder.".into()
-            },
-            Some("Rules for the code"),
-        );
+    match app_type {
+        // Loading code from its own site is how a web page works, and the rule doesn't cover it.
+        AppType::BrowserGame => {}
+        // Allowed for a server; players are told on its store page. An unsafe data format is
+        // still worth replacing: it's what lets a message run code where the server runs.
+        AppType::DedicatedServer => {
+            let loading = with_rule(&scan["code_loading"], "unsafe_format", true);
+            if hits(&loading).next().is_some() {
+                fix(
+                    "code_loading".into(),
+                    "should",
+                    format!("The server loads code from outside SLAPorSLOP: {}.", labels(&loading)),
+                    "Nothing here is against the Content Policy: dedicated servers may load mods, maps and plugins from other places, and the store page tells players so. SLAPorSLOP checks only what's in the release, so say in the store page's description (update_store_page) what the server loads and from where.".into(),
+                    Some("Dedicated servers"),
+                );
+            }
+            let unsafe_formats = with_rule(&scan["code_loading"], "unsafe_format", false);
+            if hits(&unsafe_formats).next().is_some() {
+                fix(
+                    "unsafe_format".into(),
+                    "should",
+                    format!("The server uses a data format that can rebuild any object: {}.", labels(&unsafe_formats)),
+                    "For anything from players, other servers or files people send, use a format that can't rebuild objects (JSON, MessagePack, protobuf or your own plain format) instead of BinaryFormatter, pickle and the like, so a message can't run code on the computer the server runs on. Reading only the server's own bundled files that way is fine.".into(),
+                    Some("Rules for the code"),
+                );
+            }
+        }
+        AppType::Download => {
+            if hits(&scan["code_loading"]).next().is_some() {
+                fix(
+                    "code_loading".into(),
+                    "must",
+                    format!(
+                        "The code loads or replaces code from outside SLAPorSLOP: {}.",
+                        labels(&scan["code_loading"])
+                    ),
+                    "Remove run-time code loading from the network, self-updaters and unsafe data formats (e.g. pickle, BinaryFormatter). SLAPorSLOP delivers every update itself, after checking it. Mods are fine when they come from SLAPorSLOP: read them from SLOP_MODS or your mods folder.".into(),
+                    Some("Rules for the code"),
+                );
+            }
+        }
     }
     if scan["online_undeclared"] == true {
-        fix(
-            "online_undeclared".into(),
-            "must",
-            format!("The code goes online ({}), but the store page doesn't say so.", labels(&scan["network"])),
-            "Either declare it on the store page (update_store_page: online, and online_hosts with every host it connects to), or remove the networking code if it isn't needed.".into(),
-            Some("Online play and mods"),
-        );
+        if in_browser {
+            // A site is on the web anyway: only other hosts are worth telling players about.
+            fix(
+                "online_undeclared".into(),
+                "should",
+                format!("The game's code connects online ({}), but the store page doesn't say so.", labels(&scan["network"])),
+                "If the game connects to servers besides its own site (multiplayer, leaderboards, online services), say so on the store page (update_store_page: online, and online_hosts with each host), so players know. If it only loads its own files from its site, leave it.".into(),
+                Some("Online play and mods"),
+            );
+        } else {
+            fix(
+                "online_undeclared".into(),
+                "must",
+                format!("The code goes online ({}), but the store page doesn't say so.", labels(&scan["network"])),
+                "Either declare it on the store page (update_store_page: online, and online_hosts with every host it connects to), or remove the networking code if it isn't needed.".into(),
+                Some("Online play and mods"),
+            );
+        }
     }
     if scan["save_folder"] == "elsewhere" && !in_browser {
         fix(
@@ -366,7 +454,7 @@ mod tests {
             "pulse": "start_only",
         });
         let build = json!({ "secrets": [{ "file": ".env", "line": 3, "rule": "aws-access-token" }], "vulnerabilities": [] });
-        let fixes = from_checks(&scan, &build, false);
+        let fixes = from_checks(&scan, &build, AppType::Download);
         let kinds: Vec<&str> = fixes.iter().map(|f| f.kind.as_str()).collect();
         assert_eq!(
             kinds,
@@ -380,6 +468,11 @@ mod tests {
                 "pulse"
             ]
         );
+        let online = fixes
+            .iter()
+            .find(|f| f.kind == "online_undeclared")
+            .unwrap();
+        assert_eq!(online.severity, "must");
         assert!(fixes[0].problem.contains(".env:3"));
         assert!(fixes[1].instruction.contains("spdx.org/licenses/MIT.html"));
         assert!(fixes[3].problem.contains("src/shop.rs:12"));
@@ -388,10 +481,15 @@ mod tests {
         assert_eq!(saves.guide_section, Some("Saves and sandbox mode"));
 
         // A browser game never gets SLOP_SAVE_DIR or a Pulse token: no fixes asking for them,
-        // and none saying SLAPorSLOP delivers its updates.
+        // and none saying SLAPorSLOP delivers its updates. The rule on code from outside
+        // SLAPorSLOP doesn't cover it, so its code loading needs no fix; and it's on the web
+        // anyway, so going online unsaid is only a `should`.
         let mut scan = scan;
-        scan["code_loading"] = json!([{ "rule": "eval", "label": "Runs code from text", "count": 1, "examples": ["src/game.js:7"] }]);
-        let fixes = from_checks(&scan, &build, true);
+        scan["code_loading"] = json!([
+            { "rule": "load_script", "label": "Runs code from text", "count": 1, "examples": ["src/game.js:7"] },
+            { "rule": "unsafe_format", "label": "A data format that can rebuild any object", "count": 1, "examples": ["src/save.js:2"] }
+        ]);
+        let fixes = from_checks(&scan, &build, AppType::BrowserGame);
         let kinds: Vec<&str> = fixes.iter().map(|f| f.kind.as_str()).collect();
         assert_eq!(
             kinds,
@@ -400,16 +498,16 @@ mod tests {
                 "licence:no_file",
                 "licence:closed:nvidia_cg",
                 "purchases",
-                "code_loading",
                 "online_undeclared"
             ]
         );
-        let code = fixes.iter().find(|f| f.kind == "code_loading").unwrap();
-        assert!(
-            code.instruction.contains("other sites"),
-            "{}",
-            code.instruction
-        );
+        let online = fixes
+            .iter()
+            .find(|f| f.kind == "online_undeclared")
+            .unwrap();
+        assert_eq!(online.severity, "should");
+        assert!(online.instruction.contains("online_hosts"));
+        assert!(online.problem.contains("HTTP requests"));
         for f in &fixes {
             for app_only in [
                 "SLOP_SAVE_DIR",
@@ -427,6 +525,89 @@ mod tests {
         }
     }
 
+    /// A dedicated server may load mods, maps and plugins from other places: its code loading is
+    /// a `should` (say what it loads), never a `must`, and its unsafe formats a `should` of their
+    /// own. Everything else is read as for any download.
+    #[test]
+    fn a_dedicated_servers_code_loading_is_never_a_must() {
+        let scan = json!({
+            "status": "checked",
+            "licence": { "declared": "MIT", "kinds": [], "problems": [] },
+            "monetization": [{ "rule": "loot_box", "label": "Loot boxes or gacha", "count": 1, "examples": ["src/shop.rs:12"] }],
+            "code_loading": [
+                { "rule": "load_native", "label": "Loads native libraries at run time", "count": 2, "examples": ["src/plugins.rs:40"] },
+                { "rule": "unsafe_format", "label": "A data format that can rebuild any object", "count": 1, "examples": ["src/net.cs:9"] }
+            ],
+            "online_undeclared": true,
+            "network": [{ "rule": "sockets", "label": "Network sockets (TCP, UDP)", "count": 1, "examples": ["src/net.rs:3"] }],
+            "save_folder": "slop",
+            "pulse": "heartbeat",
+        });
+        let build = json!({ "secrets": [], "vulnerabilities": [] });
+        let fixes = from_checks(&scan, &build, AppType::DedicatedServer);
+        let got: Vec<(&str, &str)> = fixes
+            .iter()
+            .map(|f| (f.kind.as_str(), f.severity))
+            .collect();
+        assert_eq!(
+            got,
+            [
+                ("purchases", "must"),
+                ("code_loading", "should"),
+                ("unsafe_format", "should"),
+                ("online_undeclared", "must")
+            ]
+        );
+        let code = &fixes[1];
+        assert!(
+            code.problem.contains("src/plugins.rs:40"),
+            "{}",
+            code.problem
+        );
+        assert!(!code.problem.contains("src/net.cs"), "{}", code.problem);
+        assert!(code.instruction.contains("mods, maps and plugins"));
+        assert!(code.instruction.contains("only what's in the release"));
+        assert_eq!(code.guide_section, Some("Dedicated servers"));
+        assert!(fixes[2].problem.contains("src/net.cs:9"));
+        // The same scan on a download: code loading is a must, as before.
+        let download = from_checks(&scan, &build, AppType::Download);
+        let code = download.iter().find(|f| f.kind == "code_loading").unwrap();
+        assert_eq!(code.severity, "must");
+        assert!(code.problem.contains("src/net.cs:9"));
+        assert!(download.iter().all(|f| f.kind != "unsafe_format"));
+        // Only code loading: no unsafe-format fix, and the other way round.
+        let mut only = scan.clone();
+        only["code_loading"] = json!([scan["code_loading"][1]]);
+        let kinds: Vec<String> = from_checks(&only, &build, AppType::DedicatedServer)
+            .into_iter()
+            .map(|f| f.kind)
+            .collect();
+        assert!(kinds.contains(&"unsafe_format".to_string()));
+        assert!(!kinds.contains(&"code_loading".to_string()));
+    }
+
+    /// The guide sections fixes point to are headings in the publishing guide, which agents read
+    /// by name (`GET /v1/maker/publishing-guide/{section}`).
+    #[test]
+    fn the_guide_sections_fixes_name_are_there() {
+        let guide = include_str!("../../../web/public/publishing.md");
+        for section in [
+            "Rules for the code",
+            "Dedicated servers",
+            "Online play and mods",
+            "Saves and sandbox mode",
+            "Slop Pulse (player counts)",
+            "Publishing a mod",
+        ] {
+            assert!(
+                guide
+                    .lines()
+                    .any(|l| l == format!("## {section}") || l == format!("### {section}")),
+                "{section}"
+            );
+        }
+    }
+
     #[test]
     fn a_clean_check_needs_nothing() {
         let scan = json!({ "status": "checked", "licence": { "declared": "MIT", "kinds": [], "problems": [] }, "save_folder": "slop", "pulse": "heartbeat" });
@@ -434,10 +615,18 @@ mod tests {
             from_checks(
                 &scan,
                 &json!({ "secrets": [], "vulnerabilities": [] }),
-                false
+                AppType::Download
             )
             .is_empty()
         );
-        assert!(from_checks(&json!({ "status": "not_checked" }), &Value::Null, false).is_empty());
+        for app_type in [
+            AppType::Download,
+            AppType::DedicatedServer,
+            AppType::BrowserGame,
+        ] {
+            assert!(
+                from_checks(&json!({ "status": "not_checked" }), &Value::Null, app_type).is_empty()
+            );
+        }
     }
 }

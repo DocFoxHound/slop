@@ -4,14 +4,19 @@
 // Desktop: the Rust side downloads the maker's file, checks it against SLAPorSLOP's signed manifest,
 // and installs it into the library folder (docs/ARCHITECTURE.md §6.3). The website can only add
 // apps to the library; installing happens in the desktop app.
+//
+// A game that plays in the browser is never installed, on the website or in the desktop app
+// (BrowserControls): Play opens its address on the maker's website, in a new tab or the system
+// browser, and SLAPorSLOP records the day it was played, which voting needs.
 
-import { useCallback, useEffect, useId, useRef, useState, type ReactNode } from "react";
+import { useCallback, useEffect, useId, useRef, useState, type MouseEvent as ReactMouseEvent, type ReactNode } from "react";
 import { Link, useLocation } from "react-router";
 
-import { api } from "../api";
+import { api, ApiError } from "../api";
+import { addressHost } from "../format";
 import { useLoad } from "../hooks";
-import { LIBRARY_CHANGED } from "./AppUpdates";
-import { desktop, isDesktop, type InstalledApp, type Launched } from "../platform";
+import { announceLaunch, LIBRARY_CHANGED } from "./AppUpdates";
+import { canOpenPlayAddress, desktop, isDesktop, openExternal, type InstalledApp, type Launched } from "../platform";
 import {
   decided,
   isOn,
@@ -49,6 +54,14 @@ export interface BarInfo {
   onShowSaves?: () => void;
 }
 
+/** Where a browser game's Play goes (AppDetail.play_address), for InstallControls. */
+export interface BrowserPlay {
+  /** Null: no play address is approved, so there's nothing to play yet. */
+  address: string | null;
+  /** The store page's details are still loading (the library), so where Play goes isn't known yet. */
+  loading?: boolean;
+}
+
 export function InstallControls({
   slug,
   title,
@@ -56,6 +69,7 @@ export function InstallControls({
   sandbox,
   bar,
   donate,
+  browser,
 }: {
   slug: string;
   title: string;
@@ -66,7 +80,10 @@ export function InstallControls({
   bar?: BarInfo;
   /** The Donate button (DonateButton), in the row with Play, Install or Download. */
   donate?: ReactNode;
+  /** A game that plays in the browser: Play opens this, on the website and in the desktop app alike. */
+  browser?: BrowserPlay;
 }) {
+  if (browser) return <BrowserControls slug={slug} inLibrary={inLibrary} play={browser} bar={bar} donate={donate} />;
   return isDesktop ? (
     <DesktopControls slug={slug} title={title} sandbox={sandbox} bar={bar} donate={donate} />
   ) : (
@@ -148,13 +165,11 @@ export function Popover({
   );
 }
 
-function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary?: boolean; bar?: BarInfo; donate?: ReactNode }) {
-  const { me } = useSession();
-  const location = useLocation();
+/** Add to library and take it out again, for apps nothing installs yet (the website, browser games). */
+function useLibraryToggle(slug: string, inLibrary?: boolean) {
   const [added, setAdded] = useState(inLibrary ?? false);
   const [error, setError] = useState<string>();
   useEffect(() => setAdded(inLibrary ?? false), [inLibrary]);
-
   const toggle = async () => {
     setError(undefined);
     try {
@@ -165,6 +180,267 @@ function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary
       setError(err instanceof Error ? err.message : String(err));
     }
   };
+  return { added, error, toggle };
+}
+
+/** How long the desktop app waits for SLAPorSLOP to record Play before it opens the game anyway. */
+const LAUNCH_WAIT_MS = 3000;
+const NOT_COUNTED = "SLAPorSLOP couldn't count this play, so it may not let you rate the game yet. The game opened anyway.";
+
+/** `promise`'s value, or null once `ms` have passed without one. */
+function within<T>(ms: number, promise: Promise<T>): Promise<T | null> {
+  return new Promise((resolve, reject) => {
+    const timer = window.setTimeout(() => resolve(null), ms);
+    promise.then(
+      (value) => {
+        window.clearTimeout(timer);
+        resolve(value);
+      },
+      (err: unknown) => {
+        window.clearTimeout(timer);
+        reject(err);
+      },
+    );
+  });
+}
+
+/**
+ * What Play on a browser game does here. On the website the link opens the tab itself, in the
+ * click, so popup blockers leave it alone; SLAPorSLOP records the play alongside, never awaited.
+ * In the desktop app the system browser opens it once SLAPorSLOP has recorded the play (or after
+ * a few seconds), at the address the server gives then. A play that isn't recorded never stops
+ * the game: it only says so. Signed out, nothing is recorded.
+ */
+function useBrowserPlay(slug: string, address: string | null) {
+  const { me } = useSession();
+  const signedIn = Boolean(me);
+  const [opening, setOpening] = useState(false);
+  /** The game opened, but something about it is worth saying (role=status). */
+  const [note, setNote] = useState<string>();
+  /** Nothing opened, and why (role=alert). */
+  const [error, setError] = useState<string>();
+
+  const recordAlongside = () => {
+    setNote(undefined);
+    setError(undefined);
+    if (!signedIn) return;
+    api.launch(slug).then(
+      () => announceLaunch(slug),
+      () => setNote(NOT_COUNTED),
+    );
+  };
+
+  const openFromApp = async () => {
+    if (opening) return;
+    setOpening(true);
+    setNote(undefined);
+    setError(undefined);
+    try {
+      let to = address;
+      if (signedIn) {
+        try {
+          const launched = await within(LAUNCH_WAIT_MS, api.launch(slug));
+          if (launched) {
+            to = launched.play_address ?? to;
+            announceLaunch(slug);
+          } else {
+            setNote(NOT_COUNTED);
+          }
+        } catch (err) {
+          // SLAPorSLOP says there's nothing to play now (its address was withdrawn since this page
+          // loaded, say): that's an answer, not a failure, so the old address isn't opened.
+          if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
+            setError(`Not opened: ${err.message}.`);
+            return;
+          }
+          setNote(NOT_COUNTED);
+        }
+      }
+      if (!canOpenPlayAddress(to, true)) {
+        setError("Not opened: the SLAPorSLOP app opens only https addresses.");
+        return;
+      }
+      await openExternal(to);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : String(err));
+    } finally {
+      setOpening(false);
+    }
+  };
+
+  const onClick = (e: ReactMouseEvent) => {
+    if (isDesktop) {
+      e.preventDefault();
+      void openFromApp();
+    } else {
+      recordAlongside();
+    }
+  };
+  // A middle click opens a tab too.
+  const onAuxClick = (e: ReactMouseEvent) => {
+    if (e.button !== 1) return;
+    onClick(e);
+  };
+  return { opening, note, error, onClick, onAuxClick };
+}
+
+type BrowserPlayState = ReturnType<typeof useBrowserPlay>;
+
+/** Play: a real link to the game's address, so keyboards, screen readers and middle clicks treat it as one. */
+function PlayAnchor({ play, address, className, describedBy }: { play: BrowserPlayState; address: string; className: string; describedBy?: string }) {
+  return (
+    <a
+      className={className}
+      href={address}
+      target="_blank"
+      rel="noopener noreferrer"
+      aria-describedby={describedBy}
+      onClick={play.onClick}
+      onAuxClick={play.onAuxClick}
+    >
+      <span aria-hidden="true">▶ </span>
+      {play.opening ? "Opening…" : "Play"}
+      <span aria-hidden="true"> ↗</span>
+    </a>
+  );
+}
+
+function PlayNotices({ play }: { play: BrowserPlayState }) {
+  return (
+    <>
+      {play.note && (
+        <p className="muted small" role="status">
+          {play.note}
+        </p>
+      )}
+      {play.error && (
+        <p className="form-error" role="alert">
+          {play.error}
+        </p>
+      )}
+    </>
+  );
+}
+
+/** Where Play takes the player, for the hint beside it. */
+function playHint(address: string): string {
+  const host = addressHost(address);
+  return `Opens ${host || "the maker's website"} ${isDesktop ? "in your browser" : "in a new tab"}. Nothing to download or install.`;
+}
+
+/**
+ * Play on its own, for "Press Play to rate it" (RatingPanel), beside the page's main controls.
+ * Null when there's nothing to play yet.
+ */
+export function BrowserPlayLink({ slug, address }: { slug: string; address: string | null }) {
+  const play = useBrowserPlay(slug, address);
+  const hint = useId();
+  if (!canOpenPlayAddress(address, false)) return null;
+  return (
+    <div className="browser-play">
+      <PlayAnchor play={play} address={address} className="btn slime" describedBy={hint} />
+      <span className="muted small" id={hint}>
+        {playHint(address)}
+      </span>
+      <PlayNotices play={play} />
+    </div>
+  );
+}
+
+/**
+ * A game that plays in the browser, on the website and in the desktop app: Play (a link to its
+ * address), Add to library, and Donate. Nothing to install, so no saves, sandbox mode or settings.
+ */
+function BrowserControls({
+  slug,
+  inLibrary,
+  play: where,
+  bar,
+  donate,
+}: {
+  slug: string;
+  inLibrary?: boolean;
+  play: BrowserPlay;
+  bar?: BarInfo;
+  donate?: ReactNode;
+}) {
+  const { me } = useSession();
+  const location = useLocation();
+  const library = useLibraryToggle(slug, inLibrary);
+  // A web address only (the server checks it too); in the desktop app, https is checked again before opening.
+  const address = canOpenPlayAddress(where.address, false) ? where.address : null;
+  const play = useBrowserPlay(slug, address);
+  const hint = useId();
+  const signIn = `/signin?return_to=${encodeURIComponent(location.pathname)}`;
+  const toggle = (slime: boolean) =>
+    me ? (
+      <button className={`btn${slime && !library.added ? " slime" : ""}`} onClick={() => void library.toggle()} aria-pressed={library.added}>
+        {library.added ? "✓ In your library" : "+ Add to library"}
+      </button>
+    ) : (
+      <Link className="btn" to={signIn}>
+        Sign in to add to your library
+      </Link>
+    );
+  const libraryError = library.error && (
+    <p className="form-error" role="alert">
+      {library.error}
+    </p>
+  );
+
+  if (bar) {
+    return (
+      <div className="lib-controls">
+        <div className="lib-bar">
+          {address ? (
+            <PlayAnchor play={play} address={address} className="btn big slime lib-primary" describedBy={hint} />
+          ) : (
+            <button type="button" className="btn big lib-primary" disabled>
+              {where.loading ? "Checking…" : "Not playable yet"}
+            </button>
+          )}
+          {donate}
+          <div className="lib-bar-status">
+            <span className="lib-bar-label">Plays in your browser</span>
+            <span className="muted small" id={hint}>
+              {address ? playHint(address) : where.loading ? "" : "No play address is approved yet."}
+            </span>
+          </div>
+          <div className="lib-bar-icons">
+            {toggle(false)}
+            {bar.extra}
+          </div>
+        </div>
+        <PlayNotices play={play} />
+        {libraryError}
+      </div>
+    );
+  }
+
+  return (
+    <div className="install-controls">
+      <div className="get-row">
+        {address ? (
+          <PlayAnchor play={play} address={address} className="btn big slime" describedBy={hint} />
+        ) : (
+          <p className="muted">{where.loading ? "Checking…" : "Not playable yet."}</p>
+        )}
+        {toggle(!address)}
+        {donate}
+      </div>
+      <p className="muted small" id={hint}>
+        {address ? playHint(address) : "No play address is approved yet."}
+      </p>
+      <PlayNotices play={play} />
+      {libraryError}
+    </div>
+  );
+}
+
+function WebControls({ slug, inLibrary, bar, donate }: { slug: string; inLibrary?: boolean; bar?: BarInfo; donate?: ReactNode }) {
+  const { me } = useSession();
+  const location = useLocation();
+  const { added, error, toggle } = useLibraryToggle(slug, inLibrary);
 
   if (bar) {
     return (

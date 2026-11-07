@@ -1,19 +1,23 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Makers' releases: submit builds from your own release page, and follow them through review
 // (docs/ARCHITECTURE.md §6.3-6.4). SLAPorSLOP never stores builds; it hashes them and signs a manifest.
+// A browser game's release is a play address instead (§6.8): SLAPorSLOP checks the address, a
+// person opens it and plays it, and Play opens it once approved. Nothing is built, signed or scanned.
 
 import {
+  AddressCheckList,
   FileChecks,
   RepoScanList,
   SourceCheckList,
 } from "../components/Checks";
 import { useEffect, useState, type FormEvent } from "react";
-import { Link, useParams } from "react-router";
+import { Link, useLocation, useNavigate, useParams } from "react-router";
 
 import {
   api,
   ApiError,
   type AppPlatform,
+  type BuildPlatform,
   type FileKind,
   type Fix,
   type GithubRelease,
@@ -27,7 +31,7 @@ import { MakerFrame } from "../components/MakerFrame";
 import { PublishProgress, refreshEvery } from "../components/PublishProgress";
 import { useTermsGate } from "../components/Terms";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
-import { CONTENT_LABEL, formatDate } from "../format";
+import { CONTENT_LABEL, formatDate, playsInBrowser } from "../format";
 import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
 import { useSession } from "../session";
@@ -74,6 +78,61 @@ const STATUS: Record<
   },
 };
 
+/** A browser game's release is a play address: the same statuses, in its own words (never
+ *  "signed", "scanned" or "files"). */
+const ADDRESS_STATUS: typeof STATUS = {
+  fetching: {
+    label: "CHECKING THE ADDRESS",
+    badge: "neutral",
+    help: "SLAPorSLOP is checking the address: https, a public site, the bad-link lists, and that the page loads.",
+  },
+  awaiting_review: {
+    label: "IN REVIEW",
+    badge: "soon",
+    help: "It passed the checks. Waiting for a person at SLAPorSLOP, who opens it and plays it.",
+  },
+  approved: {
+    label: "APPROVED",
+    badge: "official",
+    help: "Approved: Play opens this address.",
+  },
+  rejected: STATUS.rejected,
+  failed: {
+    label: "FAILED",
+    badge: "bad",
+    help: "SLAPorSLOP couldn't check the address. See the reason below.",
+  },
+  revoked: {
+    label: "WITHDRAWN",
+    badge: "bad",
+    help: "Withdrawn by SLAPorSLOP: Play no longer opens it.",
+  },
+  withdrawn: STATUS.withdrawn,
+};
+
+/** A release's status in words: a download's, or a browser game's play address. Exported for tests. */
+export function statusText(status: Release["status"], browser: boolean): { label: string; badge: string; help: string } {
+  return (browser ? ADDRESS_STATUS : STATUS)[status];
+}
+
+/**
+ * A version to suggest for the next release: the newest one's last number plus one ("1.0.0" →
+ * "1.0.1", "v2" → "v3"), "1.0.0" for the first, and never one already used (versions are unique,
+ * whatever became of the release). `taken`: every release's version, newest first. Exported for tests.
+ */
+export function nextVersion(taken: string[]): string {
+  const used = new Set(taken);
+  let version = taken[0];
+  if (!version) return "1.0.0";
+  for (let i = 0; i < 100; i++) {
+    const m = /^(.*?)(\d+)$/.exec(version);
+    version = m ? `${m[1]}${Number(m[2]) + 1}` : `${version}.1`;
+    if (version.length > 40) return "";
+    if (!used.has(version)) return version;
+  }
+  return "";
+}
+
 const PLATFORMS: Array<{ value: Platform; label: string }> = [
   { value: "windows", label: "Windows" },
   { value: "linux", label: "Linux" },
@@ -86,7 +145,7 @@ const PLATFORMS: Array<{ value: Platform; label: string }> = [
 
 /** What each platform's build is (the server checks the same, releases.rs). */
 const BUILD: Record<
-  AppPlatform,
+  BuildPlatform,
   { kind: FileKind; extensions: string[]; describe: string }
 > = {
   windows: {
@@ -117,23 +176,37 @@ const BUILD: Record<
 };
 
 /** Archives name a program to start; a mod has none (the game loads it). */
-const startsProgram = (p: AppPlatform) => BUILD[p].kind === "archive" && p !== "any";
+const startsProgram = (p: BuildPlatform) => BUILD[p].kind === "archive" && p !== "any";
 
-export function fitsPlatform(platform: AppPlatform, fileName: string): boolean {
+/** The store page's platforms that take a file: all but "browser" (a browser game's release is a play address). */
+const fileBuilds = (platforms: AppPlatform[]): BuildPlatform[] =>
+  platforms.filter((p): p is BuildPlatform => p !== "browser");
+
+export function fitsPlatform(platform: BuildPlatform, fileName: string): boolean {
   const name = fileName.toLowerCase();
   return BUILD[platform].extensions.some((e) => name.endsWith(e));
 }
 
 interface FileRow {
-  platform: AppPlatform;
+  platform: BuildPlatform;
   url: string;
   exec: string;
   args: string;
 }
 
+/** The first play address sent with a new store page (Publish.tsx), when it didn't go through. */
+export interface FirstAddress {
+  address: string;
+  message: string;
+  field?: string;
+}
+
 export function Releases() {
   const { slug = "" } = useParams();
   const { me } = useSession();
+  const location = useLocation();
+  const navigate = useNavigate();
+  const first = (location.state as { firstAddress?: FirstAddress } | null)?.firstAddress;
   const app = useLoad(
     () => (me ? api.app(slug) : Promise.resolve(undefined)),
     [slug, me?.id],
@@ -174,34 +247,64 @@ export function Releases() {
   if (!app.data) return <Loading />;
 
   const isGithub = app.data.repo_url.startsWith("https://github.com/");
+  const browser = playsInBrowser(app.data);
   const onSubmitted = () => {
     releases.reload();
     setSettingsNonce((n) => n + 1);
+    // Sent now: a reload doesn't bring back the first address's problem.
+    if (first) navigate(location.pathname, { replace: true, state: null });
   };
+  const status = (r: Release) => statusText(r.status, browser);
 
   return (
     <MakerFrame app={app.data} tab="releases" onStageMoved={app.reload}>
       <div className="maker-cols">
         <div className="maker-main">
-          <p className="muted">
-            A release is one version of your app: a GitHub release with your builds
-            attached. SLAPorSLOP downloads each file once to record its size and SHA-256,
-            checks it, and signs it. Players' apps then download from your release
-            page and refuse any file that doesn't match.
-          </p>
+          {browser ? (
+            <p className="muted">
+              Your game runs on your own website. Here a release is its play address:
+              where Play sends players. SLAPorSLOP checks it (https, a public site, the
+              bad-link lists, and that the page loads), and a person opens it and plays
+              it before players see it, and again whenever it changes. SLAPorSLOP doesn't
+              host, build or scan your site.
+            </p>
+          ) : (
+            <p className="muted">
+              A release is one version of your app: a GitHub release with your builds
+              attached. SLAPorSLOP downloads each file once to record its size and SHA-256,
+              checks it, and signs it. Players' apps then download from your release
+              page and refuse any file that doesn't match.
+            </p>
+          )}
 
           {app.data.platforms.length === 0 ? (
             <section className="panel panel-pad">
               <h2>Submit a release</h2>
               <p className="notice">
-                First choose what your app runs on (Windows, Linux or both) on its
-                store page. <Link to={`/publish/${slug}`}>Edit store page</Link>
+                First choose what your app runs on (Windows, Linux or both, or In the
+                browser) on its store page. <Link to={`/publish/${slug}`}>Edit store page</Link>
               </p>
             </section>
+          ) : browser ? (
+            releases.data ? (
+              <PlayAddressForm
+                slug={slug}
+                current={app.data.play_address}
+                // Starts from where Play goes, else the newest address sent.
+                start={first?.address ?? app.data.play_address ?? releases.data.find((r) => r.play_address)?.play_address ?? ""}
+                versions={releases.data.map((r) => r.version)}
+                rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
+                isGithub={isGithub}
+                first={first}
+                onSubmitted={onSubmitted}
+              />
+            ) : (
+              <Loading />
+            )
           ) : isGithub ? (
             <ReleasePicker
               slug={slug}
-              platforms={app.data.platforms}
+              platforms={fileBuilds(app.data.platforms)}
               rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
               lastRuntimes={lastRuntimes}
               onSubmitted={onSubmitted}
@@ -210,14 +313,14 @@ export function Releases() {
             <ReleaseForm
               repoUrl={app.data.repo_url}
               slug={slug}
-              platforms={app.data.platforms}
+              platforms={fileBuilds(app.data.platforms)}
               rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
               lastRuntimes={lastRuntimes}
               onSubmitted={onSubmitted}
             />
           )}
 
-          {isGithub && app.data.platforms.length > 0 && (
+          {isGithub && !browser && app.data.platforms.length > 0 && (
             <details className="panel panel-pad help">
               <summary>
                 <b>Enter a release by hand</b>{" "}
@@ -226,7 +329,7 @@ export function Releases() {
               <ReleaseForm
                 repoUrl={app.data.repo_url}
                 slug={slug}
-                platforms={app.data.platforms}
+                platforms={fileBuilds(app.data.platforms)}
                 rating={{ min_age: app.data.min_age, content_labels: app.data.content_labels }}
                 lastRuntimes={lastRuntimes}
                 onSubmitted={onSubmitted}
@@ -256,10 +359,10 @@ export function Releases() {
                           ` · ${r.rating.content_labels.map((l) => CONTENT_LABEL[l]).join(", ")}`}
                       </span>
                     )}
-                    <span className={`badge ${STATUS[r.status].badge}`}>
+                    <span className={`badge ${status(r).badge}`}>
                       {r.auto_approved && r.status === "approved"
                         ? "APPROVED AUTOMATICALLY"
-                        : STATUS[r.status].label}
+                        : status(r).label}
                     </span>
                     {r.source !== "maker" && (
                       <span className="muted small">
@@ -271,12 +374,25 @@ export function Releases() {
                   </div>
                   <span className="muted small">{formatDate(r.created_at)}</span>
                 </div>
-                <p className="muted small">{STATUS[r.status].help}</p>
+                <p className="muted small">
+                  {/* An approved address that isn't the one Play opens any more says so (the server knows). */}
+                  {browser && r.status === "approved" && r.progress?.summary.includes("no longer the address Play opens")
+                    ? r.progress.summary
+                    : status(r).help}
+                </p>
                 {r.status_reason && <p className="notice">{r.status_reason}</p>}
                 {r.notes && (
                   <div className="release-notes doc" dangerouslySetInnerHTML={{ __html: renderMarkdown(r.notes) }} />
                 )}
                 <dl className="kv">
+                  {r.play_address && (
+                    <>
+                      <dt>Play address</dt>
+                      <dd>
+                        <ExternalLink href={r.play_address}>{r.play_address}</ExternalLink>
+                      </dd>
+                    </>
+                  )}
                   <dt>Commit</dt>
                   <dd>
                     <code>{r.commit_sha.slice(0, 12)}</code>{" "}
@@ -290,11 +406,13 @@ export function Releases() {
                     <FileDetail key={f.platform} file={f} />
                   ))}
                 </dl>
+                {r.play_address && <AddressCheckList checks={r.address_checks} status={r.status} audience="maker" />}
                 <SourceCheckList checks={r.source_checks} audience="maker" />
                 <RepoScanList
                   scan={r.repo_scan}
                   advisories={r.advisories}
                   audience="maker"
+                  browser={browser}
                 />
               </li>
             ))}
@@ -308,9 +426,10 @@ export function Releases() {
               server={server.data}
             />
           )}
-          <UpdatesPanel key={settingsNonce} slug={slug} />
-          <SlopBuildSetup slug={slug} />
-          <SigningHelp />
+          <UpdatesPanel key={settingsNonce} slug={slug} browser={browser} />
+          {/* Slop Build makes downloads, and nothing of a browser game is signed. */}
+          {!browser && <SlopBuildSetup slug={slug} />}
+          {!browser && <SigningHelp />}
         </div>
       </div>
     </MakerFrame>
@@ -545,6 +664,151 @@ function SigningHelp() {
   );
 }
 
+/**
+ * A browser game's release: its play address, a version (one is suggested: SLAPorSLOP can't see
+ * what a site serves, so it's the maker's word), and the commit the site is built from (left out
+ * on GitHub: SLAPorSLOP takes the newest on the default branch). No files, runtimes or signature.
+ */
+function PlayAddressForm({
+  slug,
+  current,
+  start,
+  versions,
+  rating: storeRating,
+  isGithub,
+  first,
+  onSubmitted,
+}: {
+  slug: string;
+  /** The address Play opens now, if any. */
+  current: string | null;
+  /** The address the field starts with. */
+  start: string;
+  /** Every release's version, newest first: a suggestion is never one of them. */
+  versions: string[];
+  rating: ReleaseRating;
+  isGithub: boolean;
+  /** The first address, sent with the new store page, if it didn't go through: it waits here. */
+  first?: FirstAddress;
+  onSubmitted: () => void;
+}) {
+  const [address, setAddress] = useState(start);
+  // Suggested; the maker can type another.
+  const [version, setVersion] = useState(() => nextVersion(versions));
+  const [commit, setCommit] = useState("");
+  const [rating, setRating] = useState(storeRating);
+  const [notes, setNotes] = useState("");
+  const [error, setError] = useState<ApiError | undefined>(
+    first ? new ApiError(422, "invalid", first.message, first.field) : undefined,
+  );
+  const [busy, setBusy] = useState(false);
+  const [done, setDone] = useState<string>();
+  const gate = useTermsGate();
+
+  const submit = async (e: FormEvent) => {
+    e.preventDefault();
+    setBusy(true);
+    setError(undefined);
+    setDone(undefined);
+    const release: NewRelease = {
+      version: version.trim(),
+      play_address: address.trim(),
+      ...(commit.trim() ? { commit_sha: commit.trim().toLowerCase() } : {}),
+      rating,
+      notes: notes.trim() || undefined,
+    };
+    try {
+      await gate.guard(() => api.submitRelease(slug, release));
+      setDone(release.version);
+      setVersion(nextVersion([release.version, ...versions]));
+      setCommit("");
+      setNotes("");
+      onSubmitted();
+    } catch (err) {
+      setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
+    } finally {
+      setBusy(false);
+    }
+  };
+  const fieldError = (name: string) =>
+    error?.field === name && (
+      <span className="field-error" role="alert">
+        {error.message}
+      </span>
+    );
+
+  return (
+    <form className="panel panel-pad form" onSubmit={(e) => void submit(e)} aria-labelledby="play-address-title">
+      {gate.prompt}
+      <h2 id="play-address-title">{current ? "A new play address or version" : "Your play address"}</h2>
+      {first && !done && (
+        <p className="notice" role="alert">
+          Your store page is made, but its play address didn't go through. Fix it below and send it again.
+        </p>
+      )}
+      {done && (
+        <p className="notice" role="status">
+          Version {done} sent. SLAPorSLOP is checking the address; then a person opens it and plays it, unless it's the address
+          Play opens now and your updates are approved automatically.
+        </p>
+      )}
+      <label>
+        Play address
+        <input
+          type="url"
+          value={address}
+          maxLength={2000}
+          required
+          placeholder="https://yourgame.example/"
+          onChange={(e) => setAddress(e.target.value)}
+        />
+        <span className="hint">
+          Where Play sends players: https, on a site of yours. A person at SLAPorSLOP checks every new address before Play opens
+          it.
+        </span>
+        {fieldError("play_address")}
+      </label>
+      <div className="row-2">
+        <label>
+          Version
+          <input value={version} placeholder="1.0.0" maxLength={40} required onChange={(e) => setVersion(e.target.value)} />
+          <span className="hint">Yours to choose: players see it beside their votes and bug reports.</span>
+          {fieldError("version")}
+        </label>
+        <label>
+          Commit{isGithub && <span className="muted"> (optional)</span>}
+          <input
+            value={commit}
+            placeholder="Full 40-character SHA"
+            maxLength={40}
+            minLength={40}
+            required={!isGithub}
+            onChange={(e) => setCommit(e.target.value)}
+          />
+          <span className="hint">
+            {isGithub
+              ? "The commit your site is built from. Leave it empty and SLAPorSLOP takes the newest on your default branch."
+              : "The commit your site is built from: SLAPorSLOP reads your source there."}
+          </span>
+          {fieldError("commit_sha")}
+        </label>
+      </div>
+      <RatingFields value={rating} storeRating={storeRating} onChange={setRating} />
+      <NotesField value={notes} onChange={setNotes} />
+      {error && !["play_address", "version", "commit_sha"].includes(error.field ?? "") && (
+        <p className="form-error" role="alert">
+          {error.message}
+        </p>
+      )}
+      <div className="actions">
+        <button className="btn slime" disabled={busy}>
+          {busy ? "Sending…" : "Send the address"}
+        </button>
+      </div>
+    </form>
+  );
+}
+
 function ReleaseForm({
   repoUrl,
   slug,
@@ -555,7 +819,7 @@ function ReleaseForm({
 }: {
   repoUrl: string;
   slug: string;
-  platforms: AppPlatform[];
+  platforms: BuildPlatform[];
   rating: ReleaseRating;
   lastRuntimes: string[];
   onSubmitted: () => void;
@@ -741,16 +1005,16 @@ interface PickRow {
   include: boolean;
   name: string;
   url: string;
-  platform: AppPlatform;
+  platform: BuildPlatform;
   exec: string;
 }
 
 /** Starts from SLAPorSLOP's guesses: the first file that fits each of the app's platforms is ticked. */
 export function pickRows(
   release: GithubRelease,
-  platforms: AppPlatform[],
+  platforms: BuildPlatform[],
 ): PickRow[] {
-  const taken = new Set<AppPlatform>();
+  const taken = new Set<BuildPlatform>();
   return release.assets.map((a) => {
     const guess =
       platforms.find((p) => p === a.platform) ??
@@ -776,7 +1040,7 @@ function ReleasePicker({
   onSubmitted,
 }: {
   slug: string;
-  platforms: AppPlatform[];
+  platforms: BuildPlatform[];
   rating: ReleaseRating;
   lastRuntimes: string[];
   onSubmitted: () => void;
@@ -948,7 +1212,7 @@ function ReleasePicker({
                   <select
                     value={row.platform}
                     onChange={(e) =>
-                      update(i, { platform: e.target.value as AppPlatform })
+                      update(i, { platform: e.target.value as BuildPlatform })
                     }
                   >
                     {platforms.map((p) => (
@@ -1029,7 +1293,7 @@ function ReleasePicker({
  * Automatic pickup of new GitHub releases, and automatic approval of updates. `onChanged` tells
  * the page after a change (Manage's release choice says whether a person checks it first).
  */
-export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: () => void }) {
+export function UpdatesPanel({ slug, browser = false, onChanged }: { slug: string; browser?: boolean; onChanged?: () => void }) {
   const loaded = useLoad(() => api.updateSettings(slug), [slug]);
   const [settings, setSettings] = useState<UpdateSettings>();
   const [error, setError] = useState<string>();
@@ -1051,23 +1315,26 @@ export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: ()
   return (
     <section className="panel panel-pad form updates-panel">
       <h2>Updates</h2>
-      <label className="check">
-        <input
-          type="checkbox"
-          checked={s.watch_releases}
-          onChange={(e) => void change({ watch_releases: e.target.checked })}
-        />
-        <span>
-          <b>Pick up new GitHub releases</b>
-          <span className="muted small" style={{ display: "block" }}>
-            When you publish a new release on GitHub (not a draft or
-            pre-release), SLAPorSLOP sends it for you, usually within 10 minutes
-            (longer for apps that haven't updated in a while). It expects the
-            same files as last time, with the new version in their names.
+      {/* A browser game has no GitHub releases to pick up: its releases are play addresses. */}
+      {!browser && (
+        <label className="check">
+          <input
+            type="checkbox"
+            checked={s.watch_releases}
+            onChange={(e) => void change({ watch_releases: e.target.checked })}
+          />
+          <span>
+            <b>Pick up new GitHub releases</b>
+            <span className="muted small" style={{ display: "block" }}>
+              When you publish a new release on GitHub (not a draft or
+              pre-release), SLAPorSLOP sends it for you, usually within 10 minutes
+              (longer for apps that haven't updated in a while). It expects the
+              same files as last time, with the new version in their names.
+            </span>
           </span>
-        </span>
-      </label>
-      {s.watch_releases && (
+        </label>
+      )}
+      {!browser && s.watch_releases && (
         <p className="muted small updates-status">
           {s.watch_note ??
             (s.watch_checked_at
@@ -1075,8 +1342,8 @@ export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: ()
               : "Not checked yet.")}
         </p>
       )}
-      {s.watch_problem && <p className="notice">{s.watch_problem}</p>}
-      {s.watch_releases && s.github_app && (
+      {!browser && s.watch_problem && <p className="notice">{s.watch_problem}</p>}
+      {!browser && s.watch_releases && s.github_app && (
         <div className="muted small updates-status">
           {s.github_app.installed ? (
             <>
@@ -1106,9 +1373,9 @@ export function UpdatesPanel({ slug, onChanged }: { slug: string; onChanged?: ()
         <span>
           <b>Approve updates automatically</b>
           <span className="muted small" style={{ display: "block" }}>
-            After a person at SLAPorSLOP approves your first release, new versions
-            that pass every check go out to players straight away. Players get a
-            notice and update when they want.
+            {browser
+              ? "After a person at SLAPorSLOP approves your first address, new versions at the same address that pass every check go out straight away. A new address always waits for a person."
+              : "After a person at SLAPorSLOP approves your first release, new versions that pass every check go out to players straight away. Players get a notice and update when they want."}
           </span>
         </span>
       </label>

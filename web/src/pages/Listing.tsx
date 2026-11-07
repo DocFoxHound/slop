@@ -39,7 +39,8 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
   const upcoming = show === "upcoming" ? true : undefined;
   const sort = (params.get("sort") ?? (base.q ? "relevance" : sorts[0])) as NonNullable<AppQuery["sort"]>;
   const platformParam = params.get("runs_on");
-  const platform = platformParam === "windows" || platformParam === "linux" ? platformParam : undefined;
+  const platform =
+    platformParam === "windows" || platformParam === "linux" || platformParam === "browser" ? platformParam : undefined;
   const minParam = Number(params.get("not_slop"));
   const min_not_slop = minParam > 0 && minParam <= 100 ? minParam : undefined;
   const accessibility = params.get("accessibility") ?? undefined;
@@ -121,6 +122,7 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
                 {p === mine ? " (this computer)" : ""}
               </option>
             ))}
+            <option value="browser">In your browser (nothing to download)</option>
           </select>
         </label>
         <label>
@@ -144,7 +146,11 @@ function AppGrid({ base, sorts = DEFAULT_SORTS }: { base: AppQuery; sorts?: Arra
           </select>
         </label>
       </div>
-      {platform && <p className="muted small">Includes apps that run on {OS_LABEL[platform]} through a community build.</p>}
+      {platform === "browser" ? (
+        <p className="muted small">Games that play on their maker's website: nothing to download or install.</p>
+      ) : (
+        platform && <p className="muted small">Includes apps that run on {OS_LABEL[platform]} through a community build.</p>
+      )}
       {first.error ? (
         <ErrorState error={first.error} onRetry={first.reload} />
       ) : (

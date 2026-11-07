@@ -1,7 +1,7 @@
 # SLAPorSLOP — Technical Architecture
 
 **Status:** Built and running as a test deployment (§0); the cloud setup below is still the plan · companion to [`DESIGN.md`](DESIGN.md)
-**Last updated:** 2026-10-21
+**Last updated:** 2026-11-07
 **Related:** [`PAYMENTS.md`](PAYMENTS.md) · [`SECURITY.md`](SECURITY.md) · [`METRICS.md`](METRICS.md) · `LEGAL.md` (private)
 
 ---
@@ -29,7 +29,7 @@ The diagram in §2 is the target. Today everything runs on **one server** (detai
 | API and website | One Rust program (`crates/slop-api`) behind Caddy, deployed by a systemd timer: the test server from `dev`, production from the `production` tag after GitHub's checks and the owner's approval | The same program on a cloud container service |
 | Database | Postgres in podman on the same server, nightly backups with a weekly restore check | Managed Postgres with point-in-time recovery |
 | Job queue, search | In Postgres (as planned) | The same |
-| Files | None stored: builds stay on makers' release pages; store-page pictures and videos are read from the repository (`GITHUB_RAW_BASE`); profile pictures are small re-encoded copies in Postgres (`avatars.rs`) | Object storage + CDN for manifests and reports |
+| Files | None stored: builds stay on makers' release pages, and browser games on their makers' own sites (§6.8); store-page pictures and videos are read from the repository (`GITHUB_RAW_BASE`); profile pictures are small re-encoded copies in Postgres (`avatars.rs`) | Object storage + CDN for manifests and reports |
 | Scanning | A locked-down container per file on the same server (ClamAV, YARA, capa), plus Microsoft Defender results from makers' GitHub runs (§6.7) | A separate cloud account, signed verdicts |
 | Desktop app | Windows (production's built on GitHub, the test server's "Slop Dev" cross-compiled on it; signed updates) and Linux (`.deb`, `.rpm`, built on each server) | Plus macOS, Android, and iOS if it goes ahead |
 | Slop Build | GitHub Actions on makers' repositories (§6.2) | Plus SLAPorSLOP-run builders for other hosts |
@@ -43,7 +43,7 @@ production (`slaporslop.games`, its own server set up the same way) runs only co
 
 | Goal | Consequence for the architecture |
 |---|---|
-| Nothing reaches a player without being scanned | Every build passes through one pipeline. The CDN only serves files listed in a manifest SLAPorSLOP has signed. |
+| Nothing reaches a player without being scanned | Every build passes through one pipeline. The CDN only serves files listed in a manifest SLAPorSLOP has signed. A browser game sends nothing through SLAPorSLOP: it plays from its maker's site, whose address is checked and approved by a person instead (§6.8). |
 | A stolen SLAPorSLOP account can't push malware | Builds must carry the **pipeline's or maker's** signature as well as SLAPorSLOP's (§6.3). |
 | SLAPorSLOP never holds money | Payments run on makers' own Stripe accounts. SLAPorSLOP only records them (`PAYMENTS.md`). |
 | Small budget | Builds are made on GitHub's free runners (§6.2) and stay on the **maker's own release pages**. SLAPorSLOP stores only small signed manifests (§6.4). A single modular application, managed Postgres and a container service with autoscaling. No Kafka, no self-run Kubernetes, no own servers. |
@@ -101,13 +101,13 @@ production (`slaporslop.games`, its own server set up the same way) runs only co
 | Module | Owns |
 |---|---|
 | **Identity** | Accounts (16+), country detection, the UK under-18 view, third-party age checks to unlock 18+ content in the UK, sign-in through providers, sessions, devices, passkeys and maker signing identities |
-| **Catalog** | Apps, store pages, tags, stages (Coming soon → Beta → Released), delisting, dead-project status, branches |
-| **Publishing** | Repo links (GitHub, GitLab, Bitbucket, self-hosted), build uploads, release candidates |
+| **Catalog** | Apps, store pages, categories and tags (including Servers), stages (Coming soon → Beta → Released), delisting, dead-project status, branches, and where a browser game's Play goes (`PLAY_ADDRESS`) |
+| **Publishing** | Repo links (GitHub, GitLab, Bitbucket, self-hosted), build uploads, release candidates, browser games' play addresses and their checks |
 | **Scan orchestrator** | Sends jobs to the isolated scan environment, stores verdicts and public reports |
 | **Distribution** | Signed manifests, chunk storage, the revocation list |
 | **Library** | Library, Interested, sharing private apps |
 | **Ratings** | Votes, weights, reviews, rollups (`METRICS.md`) |
-| **Pulse** | Launch tokens, heartbeats, live and peak counts (Postgres counters at first) |
+| **Pulse** | Launch tokens, heartbeats, live and peak counts (Postgres counters at first); launches of browser games, which get no token |
 | **Payment records** | Mirror of Stripe charges, server donations, People payments (`PAYMENTS.md` §8) |
 | **People** | Profiles, quotes, Service Agreements, jobs, completion |
 | **Teams** | Player teams, and official teams verified through GitHub organizations (`DESIGN.md` §14) |
@@ -239,6 +239,8 @@ SLAPorSLOP never holds the file, and the link is useless after a few minutes.
 2. The Pulse SDK in the game sends `start` and then heartbeats.
 3. The first valid `start` marks the account as **launched**, which allows voting. Playtime from the heartbeats feeds the vote weighting (`METRICS.md` §2).
 
+**Browser games** (§6.8): the website and the desktop app call `POST /v1/apps/{slug}/launch?platform=browser`. It records the day (`user_app_usage`, `last_platform` 'browser'), issues no token (`Launched.token` is null) and answers the address to open (`Launched.play_address`), or 409 "nothing to play yet". The website opens the store page's `play_address` itself in a new tab, at once, with `noopener noreferrer`, and sends the launch without waiting for it; the desktop app waits for the launch (about 3 seconds at most), checks the address is https and hands it to the system browser (`openExternal`). Votes are then weighted by days played.
+
 ### 6.7 The scan step today (2026-10-21)
 Each release file gets a result on DESIGN §10's scale (passed, note, on hold, rejected, blocked) from
 `crates/slop-api/src/scan.rs`. With `SLOP_SCANNER=local` (the test deployment), the API starts a
@@ -251,6 +253,42 @@ see "not scanned", and nothing claims a file was scanned.
 
 Still to do (SECURITY §5.2): moving the scanner to its own cloud account, signing its verdicts, and
 running builds in a sandbox VM to watch what they do.
+
+A browser game's release has no files, so nothing of it is scanned (§6.8).
+
+### 6.8 Browser games: a play address instead of a build (built 2026-11-07)
+A browser game (`apps.platforms = ['browser']`, alone; migration 0092) runs on its maker's own
+website. There's nothing to build, sign, store or install, so none of §6.2 to §6.5 applies:
+
+```
+ Maker's site ◄── built from the repository by the maker
+      │
+ Maker gives the play address (version, commit) ─► POST /v1/apps/{slug}/releases ─► checked at once: https, a
+      public name, not SLAPorSLOP's own site, not on a bad-link list (else 422)
+                                                         │
+ Fetcher (releases.rs check_play_address) ◄──────────────┘ loads the page once (page_http: public addresses
+      only, 20 s, ≤ 5 redirects each checked, ≤ 2 MB read, nothing kept) ─► releases.address_checks
+                                                         │
+ Source check of the repository at the commit ─► waits for a person ─► approved (no manifest, nothing signed)
+                                                         │
+ Store page play_address (catalog::PLAY_ADDRESS) ─► Play: launch recorded, the player's browser opens it
+```
+
+- `releases.play_address` and `releases.address_checks` (JSON: https, public host, bad-link list and
+  whether any lists are loaded, status, final address, redirects, content type, when, ok, problem);
+  `release_files` stays empty, and `slop_manifest::Platform` never includes browser. A database
+  check refuses a signed manifest on an address release.
+- `releases::SERVING` includes approved address releases, so votes, bounties, the label, the
+  admin panel and the dependency watch see them. What needs a manifest (`/manifest`, library
+  updates, sandbox info, re-scans, the revocation list) still takes only releases with a signed
+  manifest (`releases::SERVING_SIGNED`, or the same condition written out).
+- Where Play goes is `catalog::PLAY_ADDRESS` (and `PLAY_RELEASE`): the newest reviewed approved
+  address, or none once that one is withdrawn. Holds, Slop Build, the GitHub picker and watcher,
+  demos, mods, branches, sandbox reports and save sync refuse browser games.
+- Automatic approval (`updates::try_auto_approve`) applies only to a release with the address Play
+  opens now; a new address waits for a person.
+- The hourly abuse checks (`abuse.rs`) look for current and pending addresses, and where they
+  led, on the bad-link lists.
 
 ## 7. Running it
 - **Separate environments:** production, staging and development, with separate keys. Staging uses Stripe's test mode.

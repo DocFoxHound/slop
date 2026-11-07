@@ -562,6 +562,11 @@ main .muted a:not(.btn):not(.chip), main .empty-state a:not(.btn):not(.chip), ma
 .platform-picker { border: 0; padding: 0; margin: 0; display: flex; flex-direction: column; gap: 8px; }
 .platform-picker legend { font-weight: 700; margin-bottom: 4px; }
 .platform-picker .sub-options { margin-left: 28px; display: flex; flex-direction: column; gap: 6px; }
+/* A download or a browser game: chosen first, then the builds (or the note on what's checked). */
+.platform-picker .delivery-choice { display: flex; flex-direction: column; gap: 6px; padding-bottom: 8px; border-bottom: 1px solid var(--line); }
+.platform-picker .browser-note { margin: 0; }
+/* A play address in full, as text: long ones wrap rather than push the page wide. */
+.play-address, .play-address-line { overflow-wrap: anywhere; }
 .choice-list { display: flex; flex-direction: column; gap: 10px; }
 .form .choice-list label.check { align-items: flex-start; }
 .form .choice-list label.check input { margin-top: 2px; flex: none; }
@@ -802,6 +807,8 @@ img.pixelated { image-rendering: pixelated; object-fit: contain !important; }
 
 .credits { display: flex; gap: 10px; align-items: center; flex-wrap: wrap; }
 .made-with-people { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--slime); }
+/* A game that plays in the browser, on its tile: words beside the icon, never the icon alone. */
+.in-browser { display: flex; align-items: center; gap: 4px; font-size: 11px; font-weight: 700; color: var(--muted); }
 .since-work { margin: 10px 0; padding: 10px 12px; border: 1px solid var(--line); border-radius: 8px; background: var(--panel-2); }
 .rating-mid { font-size: 18px; font-weight: 900; }
 .rating-mid.good { color: var(--good); }
@@ -1368,6 +1375,8 @@ pre.record { white-space: pre-wrap; max-height: 420px; overflow: auto; font-size
 .rate-callout:not(.can-rate) p { flex: 1 1 260px; font-size: 13px; }
 .rate-callout .interested { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; }
 .rate-callout .install-controls { flex: 0 1 auto; }
+/* Play on its own (a browser game), with where it opens beside it. */
+.browser-play { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 10px; flex: 0 1 auto; }
 .beta-note { margin-top: 2px; }
 .rating-panel:focus { outline: none; }
 .rating-panel:focus-visible { outline: 2px solid var(--slime); outline-offset: 2px; }

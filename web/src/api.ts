@@ -112,6 +112,11 @@ export interface AppSummary {
   interested: number;
   /** A community branch of this app (DESIGN §9). */
   branch_of: string | null;
+  /**
+   * A game that plays in the browser, on its maker's website: nothing to download or install.
+   * Where Play goes is only on the store page (`AppDetail.play_address`).
+   */
+  plays_in_browser: boolean;
   is_dead: boolean;
   stage_deadline: string | null;
   updated_at: string;
@@ -631,7 +636,14 @@ export interface AppDetail extends AppSummary {
   description_md: string;
   repo_url: string;
   license_spdx: string;
+  /** The builds every release must include, or ["browser"] alone for a game that plays in the browser. */
   platforms: AppPlatform[];
+  /**
+   * A browser game: the address Play opens, for a viewer who may play it (in Beta or Released;
+   * in Coming soon only its maker). Null when no address is approved yet, after the newest was
+   * withdrawn, and for everything else.
+   */
+  play_address: string | null;
   maker: { display_name: string };
   stage_entered_at: string;
   last_commit_at: string | null;
@@ -1525,6 +1537,8 @@ export interface AdminAppRef {
   status: AppStatus;
   repo_url: string;
   maker: string;
+  /** What it runs on; ["browser"] for a game that plays in the browser, whose releases are play addresses. */
+  platforms: AppPlatform[];
 }
 
 /** A maker's request to change what players download (crates/slop-api/src/manage.rs). */
@@ -1556,6 +1570,8 @@ export interface ApprovedRelease {
   version: string;
   reviewed_at: string | null;
   automatic: boolean;
+  /** A browser game's release: the address it plays at. */
+  play_address?: string | null;
 }
 
 export interface ManageOverview {
@@ -1703,7 +1719,14 @@ export interface AdminQueue {
     slug: string;
     title: string;
   }>;
-  releases: Array<Release & { app: AdminAppRef; notes: ReviewNote[] }>;
+  releases: Array<
+    Release & {
+      app: AdminAppRef;
+      /** A browser game's: the address Play opens now, to compare with (a new site?); null for downloads. */
+      current_play_address?: string | null;
+      notes: ReviewNote[];
+    }
+  >;
   changes: Array<
     AppChange & {
       app: AdminAppRef;
@@ -1766,6 +1789,8 @@ export interface AdminQueue {
   ready_to_list: Array<
     AdminAppRef & {
       approved_releases: number;
+      /** A browser game's: where Play will go once it's listed. */
+      play_address?: string | null;
       pictures_pending: boolean;
       going_public: boolean;
       /** Taken out of the store, then reinstated on appeal while it couldn't be listed. */
@@ -2045,9 +2070,14 @@ export interface SessionInfo {
 
 export type Platform =
   "windows" | "mac" | "linux" | "android" | "linux-deb" | "linux-rpm" | "any";
-/** What an app's store page says it runs on: the builds every release must include. */
-/** "any": a mod, one .zip for every platform. */
-export type AppPlatform = "windows" | "linux" | "linux-deb" | "linux-rpm" | "any";
+/**
+ * What an app's store page says it runs on: the builds every release must include. "any": a mod,
+ * one .zip for every platform. "browser", always alone: a game that plays on its maker's website,
+ * whose releases are a play address instead of files.
+ */
+export type AppPlatform = "windows" | "linux" | "linux-deb" | "linux-rpm" | "any" | "browser";
+/** The platforms a release's files can be built for: every AppPlatform but "browser". */
+export type BuildPlatform = Exclude<AppPlatform, "browser">;
 export type FileKind = "archive" | "installer" | "apk";
 export type ReleaseStatus =
   | "fetching"
@@ -2102,7 +2132,17 @@ export type FileCheckStage = "downloading" | "signature" | "scanning";
 
 /** Where a release is in SLAPorSLOP's checks, file by file (crates/slop-api/src/release_progress.rs). */
 export interface ReleaseProgress {
-  stage: "queued" | "checking_files" | "waiting_for_review" | "approved" | "rejected" | "failed" | "revoked" | "withdrawn";
+  /** checking_address: a browser game's play address is being checked (it has no files). */
+  stage:
+    | "queued"
+    | "checking_files"
+    | "checking_address"
+    | "waiting_for_review"
+    | "approved"
+    | "rejected"
+    | "failed"
+    | "revoked"
+    | "withdrawn";
   files_total: number;
   files_checked: number;
   current?: {
@@ -2217,6 +2257,35 @@ export interface Advisory {
   found_at: string;
 }
 
+/**
+ * What SLAPorSLOP's automatic checks of a browser game's play address found (crates/slop-api/src/
+ * releases.rs AddressChecks). The page itself isn't kept, and nothing is said about what it serves.
+ */
+export interface AddressChecks {
+  /** The address, and every address it redirected to, is https. */
+  https: boolean;
+  /** Its site, and every one it redirected to, has only public addresses; null where that isn't checked (test setups). */
+  public_host: boolean | null;
+  bad_links: {
+    /** The list that names the address, or one it redirected to. */
+    listed_by: string | null;
+    /** False: this server has no bad-link list loaded. Say "no bad-link lists are loaded on this server", never "not on any list". */
+    lists_loaded: boolean;
+  };
+  /** The HTTP status of the page it ended at; null when nothing answered. */
+  status: number | null;
+  /** Where it ended up, after redirects. */
+  final_address: string | null;
+  redirects: number;
+  /** The kind of page it ended at (text/html), as the site said. */
+  content_type: string | null;
+  checked_at: string;
+  /** Every check passed. */
+  ok: boolean;
+  /** What didn't pass, in words for the maker; null when `ok`. */
+  problem: string | null;
+}
+
 export interface Release {
   id: string;
   version: string;
@@ -2235,7 +2304,15 @@ export interface Release {
   runtimes?: string[];
   /** What changed, for players (Markdown). */
   notes?: string | null;
+  /** Empty for a browser game's release, which is a play address instead. */
   files: ReleaseFile[];
+  /**
+   * A browser game's release: the address it plays at. Everyone but the maker sees only the one
+   * Play opens now, and only in Beta or Released.
+   */
+  play_address?: string | null;
+  /** What SLAPorSLOP's automatic checks of the play address found; null until they've run. */
+  address_checks?: AddressChecks | null;
   /** Slop Build's source checks. */
   source_checks: SourceChecks | null;
   /** SLAPorSLOP's own source check: licence, monetization notes, packages (makers and reviewers). */
@@ -2351,18 +2428,32 @@ export interface UpdateSettings {
   watch_problem: string | null;
 }
 
+/** One build in a new release: a file on the maker's release page. */
+export interface NewReleaseFile {
+  platform: Platform;
+  kind: FileKind;
+  url: string;
+  exec?: string;
+  args?: string[];
+}
+
+/**
+ * A new release: files for a download, or a play address for a browser game (exactly one of
+ * them, by the store page's platforms).
+ */
 export interface NewRelease {
   version: string;
-  commit_sha: string;
+  /**
+   * The commit it's built from. A browser game on GitHub may leave it out: SLAPorSLOP takes the
+   * default branch's newest commit.
+   */
+  commit_sha?: string;
   /** What changed, for players (Markdown). */
   notes?: string;
-  files: Array<{
-    platform: Platform;
-    kind: FileKind;
-    url: string;
-    exec?: string;
-    args?: string[];
-  }>;
+  /** One build per platform on the store page; none for a browser game. */
+  files?: NewReleaseFile[];
+  /** A browser game's release: the https address it plays at, instead of files. */
+  play_address?: string;
   /** This release's rating (AGE-7); the store page's when left out. */
   rating?: ReleaseRating;
   /** Shared runtimes it needs; the last approved release's when left out. */
@@ -2377,6 +2468,16 @@ export interface ReleaseRating {
 
 export interface LibraryEntry extends AppSummary {
   added_at: string;
+}
+
+/** A launch SLAPorSLOP recorded (crates/slop-api/src/pulse.rs). */
+export interface Launched {
+  /** Slop Pulse's token for an installed game; always null for a browser game. */
+  token: string | null;
+  pulse_url: string;
+  heartbeat_seconds: number;
+  /** A browser game: where Play goes now (it may have changed since the page loaded). */
+  play_address: string | null;
 }
 
 export interface NewApp {
@@ -2460,8 +2561,8 @@ export interface AppQuery {
   made_with_people?: boolean;
   /** Has every one of these accessibility features (comma-separated). */
   accessibility?: string;
-  /** Runs on this platform, directly or through a community build. */
-  platform?: "windows" | "linux";
+  /** Runs on this platform, directly or through a community build; "browser": games that play in the browser. */
+  platform?: "windows" | "linux" | "browser";
   /** Only upcoming (Coming soon and Beta) or only released. */
   upcoming?: boolean;
   /** At least this weighted % Slaps. */
@@ -2846,7 +2947,7 @@ export const api = {
   submitGithubRelease: (
     slug: string,
     tag: string,
-    files: NewRelease["files"],
+    files: NewReleaseFile[],
     rating?: ReleaseRating,
     runtimes?: string[],
     notes?: string,
@@ -2896,6 +2997,13 @@ export const api = {
         throw err;
       },
     ),
+  /**
+   * Play on a browser game (signed in): records the day, which voting needs, and answers where
+   * Play goes now. No Pulse token: a browser game has nowhere to receive one. 409 when there's
+   * nothing to play yet. Installed apps are launched by the desktop app's Rust side instead.
+   */
+  launch: (slug: string) =>
+    request<Launched>("POST", `/v1/apps/${encodeURIComponent(slug)}/launch?platform=browser`),
   slopBuildSetup: (slug: string) =>
     request<{
       supported: boolean;
@@ -3896,8 +4004,9 @@ export const api = {
       request<void>("POST", "/v1/me/legal/accept", { kind, version }),
   },
   reports: {
-    reasons: (kind: ReportKind) =>
-      request<ReportReason[]>("GET", `/v1/reports/reasons${query({ kind })}`),
+    /** The reasons for reporting `kind`; with `app` (an app's address), worded for it (a browser game's, say). */
+    reasons: (kind: ReportKind, app?: string) =>
+      request<ReportReason[]>("GET", `/v1/reports/reasons${query({ kind, app })}`),
     send: (body: ReportBody) =>
       request<{ reference: string; due_at: string }>(
         "POST",

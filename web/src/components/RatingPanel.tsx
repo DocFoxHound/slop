@@ -3,13 +3,14 @@
 // one beside it), the vote buttons, and the rating, votes and players over time
 // (crates/slop-api/src/votes.rs, pulse.rs; DESIGN §7, METRICS §2).
 
-import { useEffect, useState, type FormEvent, type ReactNode } from "react";
+import { useCallback, useEffect, useState, type FormEvent, type ReactNode } from "react";
 import { Link } from "react-router";
 
 import { api, ApiError, type Ratings } from "../api";
 import { formatDate } from "../format";
 import { useLoad } from "../hooks";
 import { isDesktop } from "../platform";
+import { useLaunched } from "./AppUpdates";
 import { LineChart, UpDownBars } from "./Charts";
 import { InlineIcon, VoteLabel } from "./StoreIcons";
 
@@ -30,7 +31,10 @@ export function BetaNote({ ratings }: { ratings: Ratings }) {
   );
 }
 
-export function RatingSummary({ ratings }: { ratings: Ratings }) {
+/** What votes are weighted by: playtime where the game reports it; a browser game can't, so days played. */
+const weightedBy = (browser?: boolean) => (browser ? "weighted by days played" : "weighted by playtime");
+
+export function RatingSummary({ ratings, browser }: { ratings: Ratings; browser?: boolean }) {
   const total = ratings.not_slop + ratings.slop;
   if (ratings.percent_weighted === null) {
     return (
@@ -51,7 +55,7 @@ export function RatingSummary({ ratings }: { ratings: Ratings }) {
       <span className={`rating-big ${good ? "good" : bad ? "bad" : "mixed"}`}>{ratings.percent_weighted}% Slaps</span>{" "}
       <b>{ratings.label}</b>
       <div className="muted small">
-        <Link to="/ratings">weighted by playtime</Link> · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()} Slaps / {ratings.slop.toLocaleString()} Slop)
+        <Link to="/ratings">{weightedBy(browser)}</Link> · {ratings.percent}% unweighted · {total.toLocaleString()} votes ({ratings.not_slop.toLocaleString()} Slaps / {ratings.slop.toLocaleString()} Slop)
       </div>
       <BetaNote ratings={ratings} />
     </div>
@@ -103,7 +107,8 @@ function changed(slug: string) {
   window.dispatchEvent(new CustomEvent(RATINGS_CHANGED, { detail: slug }));
 }
 
-/** An app's ratings, reloaded when the viewer votes somewhere else on the page. */
+/** An app's ratings, reloaded when the viewer votes somewhere else on the page, or once Play on a
+ * browser game is recorded (they may vote now). */
 function useRatings(slug: string, signedIn: boolean) {
   const loaded = useLoad(() => api.ratings(slug), [slug, signedIn]);
   const reload = loaded.reload;
@@ -114,6 +119,7 @@ function useRatings(slug: string, signedIn: boolean) {
     window.addEventListener(RATINGS_CHANGED, onChange);
     return () => window.removeEventListener(RATINGS_CHANGED, onChange);
   }, [slug, reload]);
+  useLaunched(slug, reload);
   return loaded;
 }
 
@@ -146,7 +152,7 @@ export function rateStep(r: Ratings, isMine: boolean, signedIn: boolean): RateSt
   const mine = r.mine;
   if (!mine) return { kind: "none" };
   if (mine.can_vote) return { kind: "rate", vote: mine.vote, beta: r.stage === "beta" };
-  if (mine.played === false || mine.reason?.startsWith("Launch it")) return { kind: "play" };
+  if (mine.played === false || mine.reason?.startsWith("Launch it") || mine.reason?.startsWith("Play it")) return { kind: "play" };
   return mine.reason ? { kind: "other", reason: mine.reason } : { kind: "none" };
 }
 
@@ -154,7 +160,8 @@ export function rateStep(r: Ratings, isMine: boolean, signedIn: boolean): RateSt
  * The rating at the top of an app's page: "96% Slaps · Overwhelmingly Slaps · 2,914 votes",
  * and what the viewer can do about it, plainly: a Rate it button (jumping to the panel), or why
  * they can't yet with the step to take right there (sign in; play it from the SLAPorSLOP app, with
- * `play`, the page's Play/Install control, in the desktop app; Interested while it's Coming soon).
+ * `play`, the page's Play/Install control, in the desktop app; Play itself for a game that plays
+ * in the browser, on the website too; Interested while it's Coming soon).
  */
 export function RatingHeader({
   slug,
@@ -163,15 +170,18 @@ export function RatingHeader({
   signedIn,
   play,
   interested,
+  browser,
 }: {
   slug: string;
   title: string;
   isMine: boolean;
   signedIn: boolean;
-  /** The app's Play/Install control, offered in the desktop app to players who haven't played. */
+  /** The app's Play/Install control, offered in the desktop app (and for a browser game, everywhere) to players who haven't played. */
   play?: ReactNode;
   /** The Interested button, offered while it's Coming soon. */
   interested?: ReactNode;
+  /** A game that plays in the browser: pressing Play here is how to play it, on the website too. */
+  browser?: boolean;
 }) {
   const loaded = useRatings(slug, signedIn);
   const r = loaded.data;
@@ -212,7 +222,7 @@ export function RatingHeader({
           </>
         )}
       </div>
-      <RateCallout step={step} slug={slug} title={title} play={play} interested={interested} />
+      <RateCallout step={step} slug={slug} title={title} play={play} interested={interested} browser={browser} />
     </div>
   );
 }
@@ -223,13 +233,17 @@ function RateCallout({
   title,
   play,
   interested,
+  browser,
 }: {
   step: RateStep;
   slug: string;
   title: string;
   play?: ReactNode;
   interested?: ReactNode;
+  browser?: boolean;
 }) {
+  // Played "from the SLAPorSLOP app", or for a browser game "through SLAPorSLOP" (Play, anywhere).
+  const where = browser ? "through SLAPorSLOP" : "from the SLAPorSLOP app";
   switch (step.kind) {
     case "none":
       return null;
@@ -252,7 +266,7 @@ function RateCallout({
       return (
         <div className="rate-callout" role="group" aria-label="Rate it">
           <p>
-            <b>Played {title}? Sign in to rate it.</b> Ratings come from players who played it from the SLAPorSLOP app.
+            <b>Played {title}? Sign in to rate it.</b> Ratings come from players who played it {where}.
           </p>
           <Link className="btn slime" to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>
             Sign in to rate
@@ -260,6 +274,16 @@ function RateCallout({
         </div>
       );
     case "play":
+      if (browser)
+        return (
+          <div className="rate-callout" role="group" aria-label="Rate it">
+            <p>
+              <b>Press Play to rate it.</b> Only players who played it through SLAPorSLOP can rate, which keeps ratings honest.{" "}
+              {play ? "Then come back here." : "Then rate it here."}
+            </p>
+            {play}
+          </div>
+        );
       return (
         <div className="rate-callout" role="group" aria-label="Rate it">
           <p>
@@ -284,7 +308,7 @@ function RateCallout({
       return (
         <div className="rate-callout" role="group" aria-label="Rate it">
           <p>
-            <b>Makers can't rate their own app.</b> Players who play it from the SLAPorSLOP app rate it here.
+            <b>Makers can't rate their own app.</b> Players who play it {where} rate it here.
           </p>
         </div>
       );
@@ -330,11 +354,14 @@ export function RatePrompt({
   title,
   signedIn = true,
   isMine = false,
+  browser = false,
 }: {
   slug: string;
   title: string;
   signedIn?: boolean;
   isMine?: boolean;
+  /** A game that plays in the browser: the library's Play, just above, is the step to take. */
+  browser?: boolean;
 }) {
   const loaded = useRatings(slug, signedIn);
   const [busy, setBusy] = useState(false);
@@ -355,7 +382,7 @@ export function RatePrompt({
   if (step.kind === "sign_in" || step.kind === "play" || step.kind === "other") {
     return (
       <div className="rate-prompt-callout">
-        <RateCallout step={step} slug={slug} title={title} />
+        <RateCallout step={step} slug={slug} title={title} browser={browser} />
       </div>
     );
   }
@@ -430,13 +457,31 @@ export function RatePrompt({
   );
 }
 
-export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: boolean; signedIn: boolean }) {
+export function RatingPanel({
+  slug,
+  isMine,
+  signedIn,
+  browser = false,
+}: {
+  slug: string;
+  isMine: boolean;
+  signedIn: boolean;
+  /** A game that plays in the browser: weighted by days played, and played with Play on this page. */
+  browser?: boolean;
+}) {
   const loaded = useLoad(() => api.ratings(slug), [slug, signedIn]);
   const players = useLoad(() => api.players(slug), [slug]);
   const [ratings, setRatings] = useState<Ratings>();
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState<string>();
   const [weighted, setWeighted] = useState(true);
+  // Played just now (Play on a browser game): whether they may vote is asked again.
+  const reload = loaded.reload;
+  const relaunched = useCallback(() => {
+    setRatings(undefined);
+    reload();
+  }, [reload]);
+  useLaunched(slug, relaunched);
   const r = ratings ?? loaded.data;
   if (!r) return null;
 
@@ -462,7 +507,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
   return (
     <section className="panel panel-pad rating-panel" aria-label="Ratings" id="rating" tabIndex={-1}>
       <h2>Slap or Slop?</h2>
-      <RatingSummary ratings={r} />
+      <RatingSummary ratings={r} browser={browser} />
       {r.since_new_work && <SinceNewWork s={r.since_new_work} min={r.min_votes} />}
 
       {!r.open ? (
@@ -471,8 +516,8 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
         <p className="muted small">Makers can't vote on their own apps.</p>
       ) : !signedIn ? (
         <p className="muted small">
-          <Link to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>Sign in</Link> and play it from the SLAPorSLOP app to
-          vote.
+          <Link to={`/signin?return_to=${encodeURIComponent(`/app/${slug}`)}`}>Sign in</Link>
+          {browser ? " and press Play here to vote." : " and play it from the SLAPorSLOP app to vote."}
         </p>
       ) : mine?.can_vote ? (
         <div className="vote-row">
@@ -522,7 +567,7 @@ export function RatingPanel({ slug, isMine, signedIn }: { slug: string; isMine: 
         <>
           <div className="seg" role="group" aria-label="Rating shown">
             <button type="button" className={weighted ? "on" : ""} aria-pressed={weighted} onClick={() => setWeighted(true)}>
-              Weighted by playtime
+              {browser ? "Weighted by days played" : "Weighted by playtime"}
             </button>
             <button type="button" className={!weighted ? "on" : ""} aria-pressed={!weighted} onClick={() => setWeighted(false)}>
               One account, one vote

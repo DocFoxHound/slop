@@ -7,15 +7,19 @@
 // are). The apps are Sec Security's, made here (admin-helpers.ts).
 import type { Page } from "@playwright/test";
 
+import AxeBuilder from "@axe-core/playwright";
+
 import {
   approveRelease,
   closePages,
+  fakePlay,
   fakeRepo,
   githubRepo,
   inbox,
   inboxRow,
   newApp,
   newPage,
+  newPlayAddress,
   newRelease,
   ok,
   openItem,
@@ -96,6 +100,75 @@ test("releases: refused while the app is frozen, a scan hold cleared, approved; 
   const rejected = maker.getByRole("listitem").filter({ hasText: "0.1.0" });
   await expect(rejected.getByText("REJECTED", { exact: true })).toBeVisible();
   await expect(rejected.getByText("The zip has no program in it.").first()).toBeVisible();
+});
+
+test("a browser game's release: its play address to open and play, a new site, approved; then it waits to be listed", async ({ page, context }) => {
+  const t = tag();
+  const app = { slug: `adm-web-${t}`, title: `Comet Trail ${t}`, platforms: ["browser"] };
+  await newApp(app, MAKER);
+  // Its first address is approved; the next one is on another site (the fake GitHub by another
+  // name), so the card says so.
+  await approveRelease(await newPlayAddress(app.slug, "1.0.0", fakePlay(app.slug), MAKER));
+  const next = fakePlay(app.slug).replace("127.0.0.1", "localhost");
+  const id = await newPlayAddress(app.slug, "1.1.0", next, MAKER);
+
+  await signIn(page, "admin");
+  // Its line: where it plays and what the checks found, never files or signing; no quick Approve.
+  await page.goto(inbox("releases"));
+  const line = inboxRow(page, `${app.title} 1.1.0`);
+  await expect(line.locator(".inbox-blurb")).toHaveText(
+    `Plays in the browser · ${new URL(next).host} · address checks passed · new site`,
+  );
+  await expect(line.getByRole("button", { name: `Approve ${app.title} 1.1.0` })).toBeDisabled();
+  await expect(line.getByRole("button", { name: `Approve ${app.title} 1.1.0` })).toHaveAttribute(
+    "title",
+    "Open it and play it first: a play address is approved from its card.",
+  );
+
+  await openItem(page, "releases", `${app.title} 1.1.0`);
+  const card = item(page, app.title, "Reject");
+  await expect(card.getByText("PLAY ADDRESS", { exact: true })).toBeVisible();
+  await expect(card.locator("code.play-address")).toHaveText(next);
+  await expect(card.getByText("Open it in a private window; don't sign in or type anything there.")).toBeVisible();
+  await expect(card.getByText(fakePlay(app.slug), { exact: true })).toBeVisible();
+  await expect(card.getByText("NEW SITE", { exact: true })).toBeVisible();
+  await expect(card.getByText("SLAPorSLOP can't check that the site runs this code.")).toBeVisible();
+  await expect(card.getByRole("list", { name: "SLAPorSLOP's checks of the address" }).getByRole("listitem")).toHaveText([
+    /https: No: plain http/,
+    /A public site: Not checked/,
+    /Bad-link lists: Not on them/,
+    /The page loads: Yes \(HTTP 200\)/,
+  ]);
+  await expect(card).not.toContainText(/SHA-256|NOT SIGNED|SCAN|Defender/);
+  await expect(card.getByRole("button", { name: "Approve and sign" })).toHaveCount(0);
+  const results = await new AxeBuilder({ page }).include(".inbox-detail").withTags(["wcag2a", "wcag2aa", "wcag21a", "wcag21aa", "wcag22aa"]).analyze();
+  expect(results.violations.filter((v) => v.impact === "serious" || v.impact === "critical").map((v) => v.id)).toEqual([]);
+
+  // Copy, and Open the game: a new tab with no way back to this page and no referrer.
+  await context.grantPermissions(["clipboard-read", "clipboard-write"]);
+  await card.getByRole("button", { name: "Copy address" }).click();
+  await expect(card.getByRole("status").filter({ hasText: "Copied." })).toBeVisible();
+  expect(await page.evaluate(() => navigator.clipboard.readText())).toBe(next);
+  const open = card.getByRole("link", { name: "Open the game" });
+  await expect(open).toHaveAttribute("rel", "noopener noreferrer");
+  await expect(open).toHaveAttribute("target", "_blank");
+  const [game] = await Promise.all([context.waitForEvent("page"), open.click()]);
+  await game.waitForLoadState();
+  expect(game.url()).toBe(next);
+  expect(await game.evaluate(() => [window.opener === null, document.referrer])).toEqual([true, ""]);
+  await game.close();
+
+  await card.getByRole("button", { name: "Approve address" }).click();
+  await expect(card).toHaveCount(0);
+  const releases = await ok(MAKER, "GET", `/v1/apps/${app.slug}/releases`);
+  expect(releases.find((r: { id: string }) => r.id === id).status).toBe("approved");
+  expect((await ok(MAKER, "GET", `/v1/apps/${app.slug}`)).play_address).toBe(next);
+
+  // A draft with an approved address waits to be listed, with where Play will go.
+  await openItem(page, "listing", app.title);
+  const ready = page.locator(".inbox-detail").getByRole("listitem").filter({ hasText: app.title }).first();
+  await expect(ready).toContainText(`Plays at ${next}: a last look at the site before it goes in the store.`);
+  await expect(ready.getByRole("link", { name: next })).toHaveAttribute("rel", "noopener noreferrer");
 });
 
 test("changes: a repository move turned down, then approved", async ({ page }) => {

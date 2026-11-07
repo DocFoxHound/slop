@@ -103,6 +103,46 @@ test("an assistant's link fills in a new app; the maker checks it and creates th
   await expect(notice(page)).toHaveCount(0);
 });
 
+test("a browser game's link: In the browser and its play address, for the maker to check", async ({ page }) => {
+  await signIn(page, "finance");
+  const address = "https://games.example.com/comet/";
+  await page.goto(
+    fillLink({
+      title: "Comet Catcher",
+      kind: "game",
+      stage: "beta",
+      platforms: ["browser"],
+      play_address: address,
+      // A browser game has none of these: left out, with why.
+      sandbox_ready: true,
+      mods_folder: { base: "game", path: "mods" },
+    }),
+  );
+  const told = notice(page);
+  await expect(told).toContainText(
+    "Check everything, especially the age rating, content labels, licence, source repository and play address (it decides where Play sends players), then press Create draft.",
+  );
+  await expect(told.locator(".handoff-filled")).toHaveText("Filled in: Name, Type, Stage, Runs on and Play address.");
+  await expect(told.getByRole("listitem")).toHaveText([
+    "Works in sandbox mode: a browser game has no sandbox mode",
+    "Mods: a browser game has no mods folder",
+  ]);
+  const runsOn = page.getByRole("group", { name: "Runs on" });
+  await expect(runsOn.getByRole("radio", { name: /^In the browser/ })).toBeChecked();
+  await expect(page.getByRole("textbox", { name: /^Play address/ })).toHaveValue(address);
+  await expect(page.getByRole("checkbox", { name: /Works in sandbox mode/ })).toHaveCount(0);
+
+  // With Windows or Linux it can't be: the choice stays the person's, and the address waits.
+  await page.goto(fillLink({ title: "Comet Catcher", platforms: ["browser", "windows"], play_address: address }));
+  await expect(told.getByRole("listitem")).toHaveText([
+    "Runs on: can't put browser with windows or linux: a browser game plays only in the browser",
+    'Play address: only a game that plays in the browser has one: its platforms should be ["browser"]',
+  ]);
+  await expect(runsOn.getByRole("radio", { name: /^Download/ })).toBeChecked();
+  await expect(page.getByRole("textbox", { name: /^Play address/ })).toHaveCount(0);
+  await page.getByRole("button", { name: "Clear the form" }).click();
+});
+
 test("a reload doesn't fill it in again, and Clear the form empties it", async ({ page }) => {
   await signIn(page, "finance");
   await page.goto(fillLink({ title: "Tide Clock", summary: "Tells the tides." }));
