@@ -1,7 +1,7 @@
 ---
 title: Terms of Service
-version: 2026-10-27
-summary: The platform is now called SLAPorSLOP. Nothing else changes.
+version: 2026-11-07
+summary: Games that play in your browser run on their maker's website: SLAPorSLOP checks their address, not what the site serves, so they're never marked scanned.
 ---
 > **Draft for legal review.** These terms haven't been reviewed by a lawyer yet. They'll change before SLAPorSLOP opens to the public; you'll get 15 days' notice of any change.
 
@@ -18,9 +18,9 @@ These terms are an agreement between you and **IronPoint Development LLC** ("SLA
 - Keep your sign-in safe. You're responsible for what's done with your account.
 
 ## 2. What SLAPorSLOP is
-SLAPorSLOP is a directory of open-source apps and games, a way to install them, and a place to find people to make things with.
+SLAPorSLOP is a directory of open-source apps and games, a way to install them (or, for games that play in your browser, to open them), and a place to find people to make things with.
 - **Apps are made by their makers, not by SLAPorSLOP.** Each store page names its maker. The maker is responsible for their app.
-- **SLAPorSLOP scans apps, but scanning can't catch everything.** "Scanned" means the app passed the checks we describe in "What scanning means". It doesn't mean an app is harmless.
+- **SLAPorSLOP scans apps, but scanning can't catch everything.** "Scanned" means the app passed the checks we describe in "What scanning means". It doesn't mean an app is harmless. Games that play in your browser run on their maker's website: SLAPorSLOP checks their address, not what the site serves, so they're never marked scanned.
 - Votes, reviews and profiles are other users' opinions.
 
 ## 3. Your content

@@ -90,7 +90,7 @@ test("the new app form: the address follows the name, errors show where they bel
   // No platform ticked.
   await create.click();
   const platforms = page.getByRole("group", { name: "Runs on" });
-  await expect(platforms.getByRole("alert")).toHaveText("choose Windows, Linux or both");
+  await expect(platforms.getByRole("alert")).toHaveText("choose Windows, Linux or both, or In the browser");
   await platforms.getByRole("checkbox", { name: /Linux/ }).check();
   // Linux comes with a package; .deb is ticked for it, and one must stay.
   await expect(platforms.getByRole("checkbox", { name: /\.deb/ })).toBeChecked();
@@ -168,7 +168,7 @@ test("the agreement gate stops the draft until it's accepted, and keeps what was
     // First the agreement; then (accepted) a refusal the test can see, so nothing is made.
     return attempts === 1
       ? route.fulfill({ status: 409, json: apiError("terms_required", "accept the current Publisher Agreement first", "publisher") })
-      : route.fulfill({ status: 400, json: apiError("invalid", "choose Windows, Linux or both", "platforms") });
+      : route.fulfill({ status: 400, json: apiError("invalid", "choose Windows, Linux or both, or In the browser", "platforms") });
   });
   await page.goto("/publish/new");
   await page.getByLabel("Name", { exact: true }).fill("Gate Keeper");
@@ -191,7 +191,7 @@ test("the agreement gate stops the draft until it's accepted, and keeps what was
   await dialog.getByRole("checkbox", { name: /I've read and accept/ }).check();
   await dialog.getByRole("button", { name: "Accept and continue" }).click();
   // Accepted, the draft is sent again by itself.
-  await expect(page.getByRole("group", { name: "Runs on" }).getByRole("alert")).toHaveText("choose Windows, Linux or both");
+  await expect(page.getByRole("group", { name: "Runs on" }).getByRole("alert")).toHaveText("choose Windows, Linux or both, or In the browser");
   expect(attempts).toBe(2);
 });
 

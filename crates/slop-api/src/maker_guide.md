@@ -44,7 +44,29 @@ and links, in plain words.
    a screenshot); never one that shows something the app doesn't have or suggests another game.
    No icon yet is fine (never a blocker): `get_fixes` lists it under `recommendations`. Guide
    section "Pictures and videos".
-5. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`.
+5. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`. A game that plays on the maker's own website works differently: see the next section.
+
+## A game that plays in the browser
+
+A game that runs entirely on the maker's own website, with nothing to download, is a browser
+game. Play opens its address in the player's browser.
+
+1. `create_store_page` with `kind` game and `platforms` `["browser"]`, alone. It's public, with no
+   `sandbox_ready` and no `mods_folder`. The repository is still public and open source. Once it
+   has releases, it can't change to a download or back: that's a new store page.
+2. Put the game on the maker's site over https (for example GitHub Pages), built from the
+   repository.
+3. `submit_play_address` with the address and a version. Give `commit_sha`, the commit the site is
+   built from; on GitHub you may leave it out, and SLAPorSLOP takes the default branch's newest.
+4. SLAPorSLOP checks the address in seconds: https, a public site, the bad-link lists, and that it
+   loads as a web page, not a download. `list_releases` shows what it found (`address_checks`)
+   and why it failed if it did. Then a person opens it and plays it.
+5. Every new address waits for a person. Giving the same address again (with new notes or a new
+   rating) can be approved automatically.
+
+There's no Slop Build, GitHub release, browser demo, mod, community build, sandbox mode, save
+sync or Slop Pulse for a browser game; votes count the days players played it. Never say it's
+scanned: SLAPorSLOP checks the address, not what the site serves. Guide section "Browser games".
 
 If a tool answers `terms_required` (field `publisher`: the Publisher Agreement changed since your
 maker accepted it), tell them it's waiting for them on SLAPorSLOP under **Account → AI agents** (the
@@ -53,12 +75,12 @@ website also shows it when they next publish). Carry on once they've accepted it
 ## Every release
 
 1. Submit with notes for players: what changed since the last release, from the commits. Plain, short, no hype.
-2. `list_releases` shows its progress: fetching, then awaiting_review, then approved (or rejected or failed, with the reason). Its `progress.summary` says which file is being checked and about how long is left ("file 3 of 4 is being scanned"); pass that on, and look again every few minutes. A first release then waits for a person at SLAPorSLOP, usually a day or two. If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
+2. `list_releases` shows its progress: fetching, then awaiting_review, then approved (or rejected or failed, with the reason). Its `progress.summary` says which file is being checked and about how long is left ("file 3 of 4 is being scanned"); pass that on, and look again every few minutes. A browser game's play address is checked in seconds. A first release then waits for a person at SLAPorSLOP, usually a day or two. If your maker didn't send a release, or asks you to take one back before it's reviewed, `withdraw_release`; the next release is then reviewed by a person.
 3. `get_fixes`: every problem SLAPorSLOP's checks found, with what to do. Fix the `must` ones first. The checks run on each release, so a new release shows whether the fixes worked.
-4. Fix, commit, push, and release again with a new version.
+4. Fix, commit, push, and release again with a new version (a browser game: put the fixed game on its site, then `submit_play_address`).
 
 Stages go Coming soon → Beta → Released, and the maker moves the app on when they decide to, once
-a release has been approved: on the website (the stage bar at the top of the app's Manage, Edit
+a release (a browser game: its play address) has been approved: on the website (the stage bar at the top of the app's Manage, Edit
 store page and Releases pages) or with `move_to_stage` when they ask you. Only forward; Coming soon has a
 year to reach Beta and Beta a year to be released, or the page leaves the store until it does.
 
@@ -77,6 +99,7 @@ or reward a better vote.
 - **Community build** (a fix, translation, port or modded version of someone's app): fork their repository, then `register_community_build` with `kind` fix, translation, port, mod or other. Read "Publishing a community build".
 - **Mod** for a game: its own repository, `register_community_build` with `kind` addon; each release is one `.zip` of the mod's files with platform `any`. Read "Publishing a mod" and "Loading mods in your game".
 - Then submit releases for it like any app. Mods with code are checked closely; mods that go online are flagged to players.
+- A browser game can't have community builds or mods yet, and a community build can't play in the browser.
 
 ## Offering a fix back to the original
 

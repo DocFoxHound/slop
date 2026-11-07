@@ -8,8 +8,9 @@
 //! - Every action is a `vote_events` row; `votes` holds the current vote, updated in the same
 //!   transaction.
 //! - Each vote is **weighted** by the voter's use at the time: playtime from Slop Pulse when the
-//!   app reports it, otherwise the days they launched it. Store pages show the weighted % Slaps
-//!   with the unweighted one beside it, and both over time.
+//!   app reports it, otherwise the days they launched it (a browser game's always: it has no
+//!   Pulse). Store pages show the weighted % Slaps with the unweighted one beside it, and both
+//!   over time.
 
 use axum::{
     Json, Router,
@@ -43,8 +44,8 @@ pub fn routes() -> Router<AppState> {
 ///
 /// - With Pulse playtime: `log10(1 + minutes) / log10(601)`, so 10 hours or more counts fully
 ///   and anything under 2 minutes counts 0.1.
-/// - Without (tools, games that don't ping): days launched, `log10(1 + days) / log10(11)`, so
-///   10 days or more counts fully.
+/// - Without (tools, games that don't ping, browser games): days launched,
+///   `log10(1 + days) / log10(11)`, so 10 days or more counts fully.
 pub fn vote_weight(playtime_seconds: i64, days_launched: i32) -> f32 {
     let w = if playtime_seconds > 0 {
         let minutes = playtime_seconds as f64 / 60.0;
@@ -254,8 +255,8 @@ pub async fn daily(db: &sqlx::PgPool, app_id: Uuid) -> sqlx::Result<Vec<Day>> {
 /// One group of current votes in the maker's breakdown.
 #[derive(Serialize)]
 pub struct Group {
-    /// A version, a platform (windows, linux) or a stage (beta, released); null when it wasn't
-    /// recorded.
+    /// A version, a platform (windows, linux, browser) or a stage (beta, released); null when it
+    /// wasn't recorded.
     pub key: Option<String>,
     #[serde(flatten)]
     pub tally: Tally,
@@ -463,7 +464,12 @@ async fn my_vote(
     } else if !open {
         Some(NOT_OPEN)
     } else if usage.is_none() {
-        Some("Launch it from the SLAPorSLOP app first: only players can vote.")
+        // A browser game is played from SLAPorSLOP too, on the website as well as in the app.
+        Some(if catalog::plays_in_browser(&state.db, app_id).await? {
+            "Play it from SLAPorSLOP first: only players can vote."
+        } else {
+            "Launch it from the SLAPorSLOP app first: only players can vote."
+        })
     } else {
         None
     };

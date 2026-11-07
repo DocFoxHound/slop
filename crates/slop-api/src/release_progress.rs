@@ -8,6 +8,10 @@
 //! started and finished (migrations/0083_release_file_progress.sql), so the maker sees "checking
 //! file 2 of 4: Linux (.deb), scanning for malware" with an estimate from how long recent files
 //! took, instead of one step that looks stuck.
+//!
+//! A browser game's release has no files: its play address is checked in seconds (releases.rs,
+//! `check_play_address`), then waits for a person. Its words never say signed, scanned or files,
+//! since none of that happens to an address.
 
 use serde::Serialize;
 use time::OffsetDateTime;
@@ -98,8 +102,8 @@ pub struct CurrentFile {
 
 #[derive(Debug, Serialize)]
 pub struct ReleaseProgress {
-    /// queued, checking_files, waiting_for_review, approved, rejected, failed, revoked or
-    /// withdrawn.
+    /// queued, checking_files (a browser game's release: checking_address), waiting_for_review,
+    /// approved, rejected, failed, revoked or withdrawn.
     pub stage: &'static str,
     pub files_total: usize,
     pub files_checked: usize,
@@ -124,6 +128,71 @@ pub struct Inputs<'a> {
     pub files: &'a [FileState<'a>],
     pub now: OffsetDateTime,
     pub seconds_per_file: Option<i64>,
+    /// A browser game's release, a play address instead of files.
+    pub address: Option<Address>,
+}
+
+/// A browser game's release.
+#[derive(Clone, Copy, Debug)]
+pub struct Address {
+    /// It's the address Play opens now (`catalog::PLAY_RELEASE`).
+    pub plays_now: bool,
+}
+
+/// A browser game's release (a play address): its stage and words.
+fn address_progress(i: &Inputs, plays_now: bool) -> (&'static str, String) {
+    let reason = || {
+        i.status_reason
+            .unwrap_or("no reason given")
+            .trim_end_matches('.')
+            .to_string()
+    };
+    match i.status {
+        "fetching" => (
+            "checking_address",
+            "Checking the play address: https, a public site, the bad-link lists, and that the page loads."
+                .into(),
+        ),
+        "awaiting_review" => (
+            "waiting_for_review",
+            "The play address passed SLAPorSLOP's checks. Waiting for review by a person at SLAPorSLOP, who opens it and plays it, usually within a day or two; you'll get a notification when it's decided."
+                .into(),
+        ),
+        "approved" => (
+            "approved",
+            match (plays_now, i.auto_approved) {
+                (true, true) => "Approved automatically: a person approved this play address before. Play opens this address.".into(),
+                (true, false) => "Approved by a person at SLAPorSLOP: Play opens this address.".into(),
+                (false, true) => "Approved automatically; it's no longer the address Play opens.".into(),
+                (false, false) => "Approved by a person at SLAPorSLOP; it's no longer the address Play opens.".into(),
+            },
+        ),
+        "rejected" => (
+            "rejected",
+            format!(
+                "Not approved: {}. get_fixes (or \"To fix\" on the Releases page) says what to change; then submit the address again with a new version.",
+                reason()
+            ),
+        ),
+        "failed" => (
+            "failed",
+            format!(
+                "SLAPorSLOP couldn't check the play address: {}. Fix it and submit the address again.",
+                reason()
+            ),
+        ),
+        "revoked" => (
+            "revoked",
+            format!(
+                "Withdrawn by SLAPorSLOP: {}. Play no longer opens this address.",
+                reason()
+            ),
+        ),
+        _ => (
+            "withdrawn",
+            "Withdrawn before review; it never reached players.".to_string(),
+        ),
+    }
 }
 
 fn plural(n: usize, one: &str, many: &str) -> String {
@@ -177,6 +246,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
     let files_word = plural(total, "file", "files");
     let mut remaining_seconds = None;
     let (stage, summary) = match i.status {
+        _ if let Some(a) = i.address => address_progress(i, a.plays_now),
         "fetching" if started_at.is_none() && files_checked == 0 => (
             "queued",
             // How many releases come first is not told: only that this one waits its turn.
@@ -285,7 +355,9 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
         files_checked,
         current,
         started_at,
-        seconds_per_file: i.seconds_per_file.filter(|_| i.status == "fetching"),
+        seconds_per_file: i
+            .seconds_per_file
+            .filter(|_| i.status == "fetching" && i.address.is_none()),
         remaining_seconds,
         summary,
     }
@@ -348,6 +420,7 @@ mod tests {
             files,
             now: NOW,
             seconds_per_file: Some(300),
+            address: None,
         }
     }
 
@@ -485,5 +558,66 @@ mod tests {
         );
         i.status = "withdrawn";
         assert_eq!(build(&i).stage, "withdrawn");
+    }
+
+    #[test]
+    fn a_play_address_is_checked_then_reviewed_and_never_said_to_be_signed() {
+        let mut i = inputs("fetching", &[]);
+        i.address = Some(Address { plays_now: false });
+        let mut said = Vec::new();
+        let p = build(&i);
+        assert_eq!(p.stage, "checking_address");
+        assert_eq!((p.files_total, p.files_checked), (0, 0));
+        assert_eq!((p.seconds_per_file, p.remaining_seconds), (None, None));
+        assert_eq!(
+            p.summary,
+            "Checking the play address: https, a public site, the bad-link lists, and that the page loads."
+        );
+        said.push(p.summary);
+        i.status = "awaiting_review";
+        let p = build(&i);
+        assert_eq!(p.stage, "waiting_for_review");
+        assert!(
+            p.summary.contains("Waiting for review by a person"),
+            "{}",
+            p.summary
+        );
+        said.push(p.summary);
+        i.status = "approved";
+        i.address = Some(Address { plays_now: true });
+        let p = build(&i);
+        assert_eq!(
+            p.summary,
+            "Approved by a person at SLAPorSLOP: Play opens this address."
+        );
+        said.push(p.summary);
+        i.auto_approved = true;
+        said.push(build(&i).summary);
+        i.address = Some(Address { plays_now: false });
+        let p = build(&i);
+        assert!(
+            p.summary.contains("no longer the address Play opens"),
+            "{}",
+            p.summary
+        );
+        said.push(p.summary);
+        i.status_reason = Some("The page asks for a password.");
+        for status in ["rejected", "failed", "revoked", "withdrawn"] {
+            i.status = status;
+            let p = build(&i);
+            assert_eq!(p.stage, status);
+            said.push(p.summary);
+        }
+        assert!(
+            said[7].contains("Play no longer opens this address"),
+            "{}",
+            said[7]
+        );
+        assert!(said[6].starts_with("SLAPorSLOP couldn't check the play address: The page asks"));
+        for s in &said {
+            for word in ["signed", "scanned", "files", "file "] {
+                assert!(!s.contains(word), "{s:?} says {word}");
+            }
+        }
     }
 }

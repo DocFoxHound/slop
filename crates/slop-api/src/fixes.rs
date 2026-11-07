@@ -5,7 +5,9 @@
 //! Each fix says what's wrong, where (file and line, from the checks), and exactly what to do, as
 //! an instruction a coding agent can follow in the repository. They're built from fixed text and
 //! the check results: SLAPorSLOP calls no AI model. The guide sections they point to are readable with
-//! `GET /v1/maker/publishing-guide/{section}`.
+//! `GET /v1/maker/publishing-guide/{section}`. A browser game gets no fixes about what only the
+//! SLAPorSLOP app's installs have (`SLOP_SAVE_DIR`, Slop Pulse), and its releases are play
+//! addresses.
 
 use axum::{
     Json, Router,
@@ -74,6 +76,7 @@ async fn fixes(
     Path(slug): Path<String>,
 ) -> ApiResult<Json<Fixes>> {
     let (app_id, _) = crate::updates::owned(&state, &slug, &user).await?;
+    let in_browser = crate::catalog::plays_in_browser(&state.db, app_id).await?;
     let mut recommendations = crate::media::recommendations(&state.db, app_id).await?;
     recommendations.extend(crate::catalog::tag_recommendations(&state.db, app_id).await?);
     let row: Option<Row> = sqlx::query_as(
@@ -88,7 +91,11 @@ async fn fixes(
             release: None,
             fixes: vec![],
             recommendations,
-            next: "Submit a release first (submit_release, or add Slop Build with slop_build_setup).",
+            next: if in_browser {
+                "Give its play address first (submit_play_address, or the Releases page)."
+            } else {
+                "Submit a release first (submit_release, or add Slop Build with slop_build_setup)."
+            },
         }));
     };
     let advisories: Vec<(String, String, String, Option<String>, bool)> = sqlx::query_as(
@@ -101,6 +108,7 @@ async fn fixes(
     let mut list = from_checks(
         repo_scan.as_ref().unwrap_or(&Value::Null),
         source_checks.as_ref().unwrap_or(&Value::Null),
+        in_browser,
     );
     list.extend(from_advisories(&advisories));
     if status == "failed" || status == "rejected" {
@@ -113,7 +121,11 @@ async fn fixes(
                     "Release {version} was {status}: {}",
                     status_reason.as_deref().unwrap_or("no reason given")
                 ),
-                instruction: "Read the reason, fix what it names in the repository (or the release's files), then submit a new release with a new version.".into(),
+                instruction: if in_browser {
+                    "Read the reason, fix what it names on the site or in the repository, then give the play address again with a new version (submit_play_address).".into()
+                } else {
+                    "Read the reason, fix what it names in the repository (or the release's files), then submit a new release with a new version.".into()
+                },
                 guide_section: None,
             },
         );
@@ -127,7 +139,11 @@ async fn fixes(
         }),
         fixes: list,
         recommendations,
-        next: "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). SLAPorSLOP's checks run again on the new release.",
+        next: if in_browser {
+            "Fix the `must` items, then the `should` items; commit and push, and put the fixed game on your site; then give its play address again with a new version (submit_play_address). SLAPorSLOP's checks run again on it."
+        } else {
+            "Fix the `must` items, then the `should` items; commit and push; then submit a new release (Slop Build does it on push). SLAPorSLOP's checks run again on the new release."
+        },
     }))
 }
 
@@ -155,8 +171,10 @@ fn labels(v: &Value) -> String {
         .join("; ")
 }
 
-/// Fixes from SLAPorSLOP's source check (source_scan.rs) and Slop Build's checks.
-pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
+/// Fixes from SLAPorSLOP's source check (source_scan.rs) and Slop Build's checks. A browser game
+/// (`in_browser`) runs on its maker's site: it never gets `SLOP_SAVE_DIR` or a Pulse token, so
+/// saves and Pulse fixes don't apply to it.
+pub fn from_checks(scan: &Value, build: &Value, in_browser: bool) -> Vec<Fix> {
     let mut out = Vec::new();
     let mut fix = |kind: String, severity, problem: String, instruction: String, guide| {
         out.push(Fix {
@@ -253,8 +271,15 @@ pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
         fix(
             "code_loading".into(),
             "must",
-            format!("The code loads or replaces code from outside SLAPorSLOP: {}.", labels(&scan["code_loading"])),
-            "Remove run-time code loading from the network, self-updaters and unsafe data formats (e.g. pickle, BinaryFormatter). SLAPorSLOP delivers every update itself, after checking it. Mods are fine when they come from SLAPorSLOP: read them from SLOP_MODS or your mods folder.".into(),
+            format!(
+                "The code loads or replaces code from outside SLAPorSLOP: {}.",
+                labels(&scan["code_loading"])
+            ),
+            if in_browser {
+                "Remove code the game loads at run time from other sites, and unsafe data formats (e.g. pickle, BinaryFormatter): a reviewer reads the code in this repository, and can't check code fetched from elsewhere.".into()
+            } else {
+                "Remove run-time code loading from the network, self-updaters and unsafe data formats (e.g. pickle, BinaryFormatter). SLAPorSLOP delivers every update itself, after checking it. Mods are fine when they come from SLAPorSLOP: read them from SLOP_MODS or your mods folder.".into()
+            },
             Some("Rules for the code"),
         );
     }
@@ -267,7 +292,7 @@ pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
             Some("Online play and mods"),
         );
     }
-    if scan["save_folder"] == "elsewhere" {
+    if scan["save_folder"] == "elsewhere" && !in_browser {
         fix(
             "saves".into(),
             if scan["sandbox_mismatch"] == true { "must" } else { "should" },
@@ -276,7 +301,7 @@ pub fn from_checks(scan: &Value, build: &Value) -> Vec<Fix> {
             Some("Saves and sandbox mode"),
         );
     }
-    if scan["pulse_missing"] == true || scan["pulse"] == "start_only" {
+    if (scan["pulse_missing"] == true || scan["pulse"] == "start_only") && !in_browser {
         fix(
             "pulse".into(),
             "should",
@@ -341,7 +366,7 @@ mod tests {
             "pulse": "start_only",
         });
         let build = json!({ "secrets": [{ "file": ".env", "line": 3, "rule": "aws-access-token" }], "vulnerabilities": [] });
-        let fixes = from_checks(&scan, &build);
+        let fixes = from_checks(&scan, &build, false);
         let kinds: Vec<&str> = fixes.iter().map(|f| f.kind.as_str()).collect();
         assert_eq!(
             kinds,
@@ -361,12 +386,58 @@ mod tests {
         let saves = fixes.iter().find(|f| f.kind == "saves").unwrap();
         assert_eq!(saves.severity, "must", "the store page says sandbox-ready");
         assert_eq!(saves.guide_section, Some("Saves and sandbox mode"));
+
+        // A browser game never gets SLOP_SAVE_DIR or a Pulse token: no fixes asking for them,
+        // and none saying SLAPorSLOP delivers its updates.
+        let mut scan = scan;
+        scan["code_loading"] = json!([{ "rule": "eval", "label": "Runs code from text", "count": 1, "examples": ["src/game.js:7"] }]);
+        let fixes = from_checks(&scan, &build, true);
+        let kinds: Vec<&str> = fixes.iter().map(|f| f.kind.as_str()).collect();
+        assert_eq!(
+            kinds,
+            [
+                "secret",
+                "licence:no_file",
+                "licence:closed:nvidia_cg",
+                "purchases",
+                "code_loading",
+                "online_undeclared"
+            ]
+        );
+        let code = fixes.iter().find(|f| f.kind == "code_loading").unwrap();
+        assert!(
+            code.instruction.contains("other sites"),
+            "{}",
+            code.instruction
+        );
+        for f in &fixes {
+            for app_only in [
+                "SLOP_SAVE_DIR",
+                "SLOP_PULSE_TOKEN",
+                "SLOP_MODS",
+                "delivers every update",
+            ] {
+                assert!(
+                    !f.instruction.contains(app_only),
+                    "{}: {}",
+                    f.kind,
+                    f.instruction
+                );
+            }
+        }
     }
 
     #[test]
     fn a_clean_check_needs_nothing() {
         let scan = json!({ "status": "checked", "licence": { "declared": "MIT", "kinds": [], "problems": [] }, "save_folder": "slop", "pulse": "heartbeat" });
-        assert!(from_checks(&scan, &json!({ "secrets": [], "vulnerabilities": [] })).is_empty());
-        assert!(from_checks(&json!({ "status": "not_checked" }), &Value::Null).is_empty());
+        assert!(
+            from_checks(
+                &scan,
+                &json!({ "secrets": [], "vulnerabilities": [] }),
+                false
+            )
+            .is_empty()
+        );
+        assert!(from_checks(&json!({ "status": "not_checked" }), &Value::Null, false).is_empty());
     }
 }

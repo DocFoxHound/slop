@@ -67,6 +67,8 @@ struct AppRow {
     media_pending: bool,
     has_icon: bool,
     public_requested: bool,
+    /// A browser game: its releases are play addresses.
+    in_browser: bool,
     latest_version: Option<String>,
     latest_status: Option<String>,
     latest_reason: Option<String>,
@@ -106,7 +108,7 @@ async fn next_steps(
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.icon is not null
                           and (ms.status = 'pending' or ms.id = a.media_set_id)) as has_icon,
                 a.public_requested_at is not null as public_requested,
-                r.version as latest_version, r.status::text as latest_status, r.status_reason as latest_reason
+                'browser' = any(a.platforms) as in_browser, r.version as latest_version, r.status::text as latest_status, r.status_reason as latest_reason
          from apps a
          left join lateral (select version, status, status_reason from releases
                             where app_id = a.id order by created_at desc limit 1) r on true
@@ -159,7 +161,19 @@ async fn next_steps(
                 false,
             );
         }
+        // A browser game's release is its play address: checked in seconds, and every new one
+        // reviewed by a person.
+        let releases = site(&format!("/publish/{}/releases", a.slug));
         match (a.latest_status.as_deref(), a.latest_version.as_deref()) {
+            (None, _) if a.in_browser => step(
+                Who::Assistant,
+                app,
+                format!(
+                    "Give {name}'s play address: the https address it plays at on your site (submit_play_address, or the Releases page). The guide's \"Browser games\" says how."
+                ),
+                site("/publish/guide#browser-games"),
+                false,
+            ),
             (None, _) => step(
                 Who::Assistant,
                 app,
@@ -172,17 +186,31 @@ async fn next_steps(
             (Some("fetching"), Some(v)) => step(
                 Who::Slaporslop,
                 app,
-                format!(
-                    "SLAPorSLOP is checking the files of {name} {v}: it takes minutes per file (list_releases shows how far it is)."
-                ),
-                site(&format!("/publish/{}/releases", a.slug)),
+                if a.in_browser {
+                    format!(
+                        "SLAPorSLOP is checking the play address of {name} {v}: it takes a few seconds (list_releases shows the result)."
+                    )
+                } else {
+                    format!(
+                        "SLAPorSLOP is checking the files of {name} {v}: it takes minutes per file (list_releases shows how far it is)."
+                    )
+                },
+                releases,
                 false,
             ),
             (Some("awaiting_review"), Some(v)) => step(
                 Who::Slaporslop,
                 app,
-                format!("{name} {v} passed SLAPorSLOP's checks and waits for a person's review."),
-                site(&format!("/publish/{}/releases", a.slug)),
+                if a.in_browser {
+                    format!(
+                        "{name} {v}'s play address passed SLAPorSLOP's checks and waits for a person, who opens it and plays it."
+                    )
+                } else {
+                    format!(
+                        "{name} {v} passed SLAPorSLOP's checks and waits for a person's review."
+                    )
+                },
+                releases,
                 false,
             ),
             (Some("rejected" | "failed"), Some(v)) => {
@@ -190,9 +218,15 @@ async fn next_steps(
                 step(
                     Who::Assistant,
                     app,
-                    format!(
-                        "{name} {v} didn't go through ({why}). Fix what SLAPorSLOP found (get_fixes lists each problem with exact instructions), then submit a new release."
-                    ),
+                    if a.in_browser {
+                        format!(
+                            "{name} {v}'s play address didn't go through ({why}). Fix what SLAPorSLOP found on the site or in the repository (get_fixes lists each problem), then give the play address again with a new version (submit_play_address)."
+                        )
+                    } else {
+                        format!(
+                            "{name} {v} didn't go through ({why}). Fix what SLAPorSLOP found (get_fixes lists each problem with exact instructions), then submit a new release."
+                        )
+                    },
                     site(&format!("/publish/{}/releases#fixes", a.slug)),
                     false,
                 );
@@ -200,10 +234,16 @@ async fn next_steps(
             (Some("revoked"), Some(v)) => step(
                 Who::You,
                 app,
-                format!(
-                    "SLAPorSLOP withdrew {name} {v}: the reason is on the Releases page. Submit a fixed release, or appeal from your account's Moderation page."
-                ),
-                site(&format!("/publish/{}/releases", a.slug)),
+                if a.in_browser {
+                    format!(
+                        "SLAPorSLOP withdrew {name} {v}'s play address, so Play opens nothing: the reason is on the Releases page. Fix the site and give its address again, or appeal from your account's Moderation page."
+                    )
+                } else {
+                    format!(
+                        "SLAPorSLOP withdrew {name} {v}: the reason is on the Releases page. Submit a fixed release, or appeal from your account's Moderation page."
+                    )
+                },
+                releases,
                 false,
             ),
             _ => {}

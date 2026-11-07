@@ -1,7 +1,7 @@
 ---
 title: Content Policy
-version: 2026-10-27
-summary: The platform is now called SLAPorSLOP. Nothing else changes.
+version: 2026-11-07
+summary: Browser games (which play on their maker's website) and dedicated servers (apps in the new Servers category) aren't covered by the rule on code from outside SLAPorSLOP; browser games, which have no build, aren't covered by the rule on builds either. Every other rule applies to them.
 ---
 > **Draft for legal review.** This policy hasn't been reviewed by a lawyer yet.
 
@@ -25,10 +25,14 @@ Nobody can pay SLAPorSLOP, or anyone else, to rank higher, be featured, be recom
 No malware, hidden crypto-mining, data theft, or collecting data without telling people.
 
 ### Builds must match their source
-A build must be made from the source code it points to. Nothing hidden, added or swapped.
+A build must be made from the source code it points to. Nothing hidden, added or swapped. Browser games have no build, so this rule doesn't cover them (see "Browser games and dedicated servers").
 
 ### Code from outside SLAPorSLOP
-An app may only run code that came in a release or mod SLAPorSLOP checked. It mustn't download and run programs, libraries, scripts or mods from anywhere else, including its own servers or other players' servers, and mustn't update itself outside SLAPorSLOP. Mods must be published on SLAPorSLOP and approved there. Data the app reads with its own code (maps, levels, pictures, sounds, settings) may come from anywhere.
+An app may only run code that came in a release or mod SLAPorSLOP checked. It mustn't download and run programs, libraries, scripts or mods from anywhere else, including its own servers or other players' servers, and mustn't update itself outside SLAPorSLOP. Mods must be published on SLAPorSLOP and approved there. Data the app reads with its own code (maps, levels, pictures, sounds, settings) may come from anywhere. This rule doesn't cover browser games or dedicated servers (see the next section).
+
+### Browser games and dedicated servers
+- **Browser games** play on their maker's own website instead of being downloaded. SLAPorSLOP checks the address before players see it and again whenever it changes, but not what the site serves. The rules on builds and on code from outside SLAPorSLOP don't apply to them. Every other rule does: the site must match its store page, mustn't sell anything in the game, and mustn't carry malware, scams, phishing or anything else this policy bans.
+- **Dedicated servers** are apps in the Servers category that people run on their own computer or host so others can play a game. A server may download and run mods, maps and plugins from other places, so the rule on code from outside SLAPorSLOP doesn't cover it. It's still built from its source and checked like any other release, and every other rule applies.
 
 ### Scams and fraud
 No scams, phishing, impersonation or fake offers.

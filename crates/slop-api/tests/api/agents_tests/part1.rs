@@ -1108,7 +1108,10 @@ async fn the_review_feed_shows_every_kind_with_the_requests_that_decide_it(db: P
     assert_eq!(all["guide"], "/v1/admin/review/guide");
     assert_eq!(
         all["checks"],
-        json!({ "scanning": false, "maker_signatures_required": false })
+        json!({
+            "scanning": false, "maker_signatures_required": false,
+            "bad_link_lists_loaded": false, "bad_link_lists_refreshed_at": null,
+        })
     );
     let items = all["items"].as_array().unwrap();
     let kinds: Vec<&str> = items.iter().map(|i| i["kind"].as_str().unwrap()).collect();

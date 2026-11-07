@@ -164,6 +164,12 @@ async fn upload(
         crate::policy::ViewerPolicy::resolve(&state.db, &state.config, Some(&user), &headers)
             .await?;
     let (app, _) = crate::catalog::visible_app(&state, &slug, Some(&user), policy).await?;
+    if crate::catalog::plays_in_browser(&state.db, app).await? {
+        return Err(ApiError::Conflict(
+            "a browser game keeps its saves on its maker's website or in your browser, not in SLAPorSLOP"
+                .into(),
+        ));
+    }
     let mut tx = state.db.begin().await?;
     // One upload at a time per player and app.
     sqlx::query("select pg_advisory_xact_lock(hashtextextended($1::text || $2::text, 0))")

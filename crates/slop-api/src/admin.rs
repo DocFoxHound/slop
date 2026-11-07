@@ -49,12 +49,15 @@ pub struct PendingRelease {
     pub commit_verified: bool,
     pub repo_url: String,
     pub created_at: OffsetDateTime,
+    /// A browser game's release: the address to open and play before approving it.
+    pub play_address: Option<String>,
 }
 
 /// Releases waiting for a reviewer, oldest first.
 pub async fn pending(db: &PgPool) -> anyhow::Result<Vec<PendingRelease>> {
     Ok(sqlx::query_as(
-        "select r.id, a.slug as app_slug, r.version, r.commit_sha, r.commit_verified, a.repo_url, r.created_at
+        "select r.id, a.slug as app_slug, r.version, r.commit_sha, r.commit_verified, a.repo_url, r.created_at,
+                r.play_address
          from releases r join apps a on a.id = r.app_id
          where r.status = 'awaiting_review' order by r.created_at",
     )
@@ -79,6 +82,10 @@ struct ReleaseRow {
     game_id: Option<Uuid>,
     game_slug: Option<String>,
     game_title: Option<String>,
+    /// A browser game's release: its address and what the automatic checks found.
+    play_address: Option<String>,
+    /// What the automatic checks found (releases.rs `AddressChecks`).
+    address_checks: Option<serde_json::Value>,
 }
 
 #[derive(sqlx::FromRow)]
@@ -127,21 +134,31 @@ impl ReviewRules {
     }
 }
 
-/// Approves a release and signs its manifest, if every file meets `rules`.
+/// What approving a release did.
+#[derive(Clone, Copy, Debug, PartialEq, Eq)]
+pub enum Approval {
+    /// Its manifest is signed: players can install it.
+    Signed,
+    /// A browser game's play address: nothing is signed, and Play opens it.
+    PlayAddress,
+}
+
+/// Approves a release and signs its manifest, if every file meets `rules`. A browser game's
+/// release is its play address instead: approved once its automatic checks passed and no
+/// bad-link list names it, with nothing to sign.
 pub async fn approve(
     db: &PgPool,
     key: Option<&slop_manifest::ed25519_dalek::SigningKey>,
     rules: ReviewRules,
     release_id: Uuid,
     reviewer: &str,
-) -> anyhow::Result<()> {
+) -> anyhow::Result<Approval> {
     check_reviewer(reviewer)?;
-    let key = key.context("SLOP_SIGNING_KEY isn't set, so nothing can be signed")?;
     let mut tx = db.begin().await?;
     let release: ReleaseRow = sqlx::query_as(
         "select r.status::text as status, a.id as app_id, a.slug, a.title, u.display_name as maker,
                 a.repo_url, r.version, r.commit_sha, a.branch_kind, a.mods_folder, r.runtimes, g.id as game_id, g.slug as game_slug,
-                g.title as game_title
+                g.title as game_title, r.play_address, r.address_checks
          from releases r join apps a on a.id = r.app_id join users u on u.id = a.maker_id
               left join apps g on g.id = a.parent_app_id
          where r.id = $1 for update of r",
@@ -158,6 +175,12 @@ pub async fn approve(
     if let Some(reason) = crate::frozen::frozen_reason(&mut *tx, release.app_id).await? {
         bail!("the app is frozen ({reason}), so its releases can't be checked or approved");
     }
+    if let Some(address) = &release.play_address {
+        approve_address(db, &mut tx, &release, address, release_id, reviewer).await?;
+        tx.commit().await?;
+        return Ok(Approval::PlayAddress);
+    }
+    let key = key.context("SLOP_SIGNING_KEY isn't set, so nothing can be signed")?;
 
     let rows: Vec<FileRow> = sqlx::query_as(
         "select platform, kind, url, file_name, exec, args, size_bytes, sha256, attestation, provenance_problem,
@@ -295,6 +318,70 @@ pub async fn approve(
     .bind(reviewer)
     .execute(&mut *tx)
     .await?;
+    approved(
+        &mut tx,
+        release_id,
+        reviewer,
+        json!({ "app": release.slug, "version": release.version, "key_id": signed.key_id }),
+    )
+    .await?;
+    tx.commit().await?;
+    Ok(Approval::Signed)
+}
+
+/// A browser game's release (its play address), in `approve`'s transaction: its automatic checks
+/// passed, and no bad-link list names the address or where it led, checked again now since days
+/// may have passed. Nothing is signed (signed_manifest stays null).
+async fn approve_address(
+    db: &PgPool,
+    tx: &mut sqlx::PgConnection,
+    release: &ReleaseRow,
+    address: &str,
+    release_id: Uuid,
+    reviewer: &str,
+) -> anyhow::Result<()> {
+    let Some(checks) = &release.address_checks else {
+        bail!("the play address hasn't been checked yet");
+    };
+    ensure!(
+        checks["ok"].as_bool() == Some(true),
+        "the play address didn't pass its checks: {}",
+        checks["problem"].as_str().unwrap_or("no details")
+    );
+    let mut addresses = vec![address.to_string()];
+    addresses.extend(checks["final_address"].as_str().map(String::from));
+    if let Some((on, list)) = crate::bad_links::find(db, &addresses)
+        .await?
+        .into_iter()
+        .next()
+    {
+        bail!("{on} is on {list}, a list of known-bad links, since it was checked");
+    }
+    sqlx::query(
+        "update releases set status = 'approved', reviewed_at = now(), status_reason = null, reviewed_by = $2
+         where id = $1",
+    )
+    .bind(release_id)
+    .bind(reviewer)
+    .execute(&mut *tx)
+    .await?;
+    approved(
+        tx,
+        release_id,
+        reviewer,
+        json!({ "app": release.slug, "version": release.version, "play_address": address }),
+    )
+    .await
+}
+
+/// What every approval does once the release is approved: the store page takes its rating, the
+/// audit log and the maker hear of it.
+async fn approved(
+    tx: &mut sqlx::PgConnection,
+    release_id: Uuid,
+    reviewer: &str,
+    detail: serde_json::Value,
+) -> anyhow::Result<()> {
     // The store page shows the rating of the release players get (AGE-7).
     sqlx::query(
         "update apps a set min_age = r.min_age, content_labels = r.content_labels, updated_at = now()
@@ -304,22 +391,21 @@ pub async fn approve(
     .execute(&mut *tx)
     .await?;
     audit(
-        &mut tx,
+        &mut *tx,
         reviewer,
         "release.approve",
         &release_id.to_string(),
-        json!({ "app": release.slug, "version": release.version, "key_id": signed.key_id }),
+        detail,
     )
     .await?;
     crate::releases::tell_maker(
-        &mut tx,
+        &mut *tx,
         release_id,
         crate::releases::ReleaseEvent::Approved {
             automatically: reviewer == crate::updates::AUTO_REVIEWER,
         },
     )
     .await?;
-    tx.commit().await?;
     Ok(())
 }
 
@@ -405,7 +491,10 @@ pub async fn reject(
     Ok(())
 }
 
-/// The kill switch (SECURITY §5.5): a revoked release stops launching on every client.
+/// The kill switch (SECURITY §5.5): a revoked release stops launching on every client. For a
+/// browser game, Play stops opening the address: its review time is kept, so if it was the
+/// newest reviewed address, Play opens none until a person approves a new one
+/// (`catalog::PLAY_ADDRESS`), rather than an older address that may be the same site.
 pub async fn revoke(
     db: &PgPool,
     release_id: Uuid,
@@ -469,6 +558,8 @@ pub(crate) enum NotListable {
     Frozen(String),
     NoPulse,
     NoRelease(AppStage),
+    /// A browser game's release is its play address.
+    NoAddress(AppStage),
     PicturesWaiting,
 }
 
@@ -490,6 +581,11 @@ impl NotListable {
                  yet. The maker submits one from Releases & progress, then it waits under \
                  Releases for review. A Coming soon page can be listed without one."
             ),
+            Self::NoAddress(stage) => format!(
+                "approve its play address before listing a {stage:?} browser game: it has no \
+                 approved address yet. The maker gives one on Releases & progress, then it waits \
+                 under Releases for review. A Coming soon page can be listed without one."
+            ),
             Self::PicturesWaiting => {
                 "review the app's pictures first: a new set is waiting under Pictures to review"
                     .into()
@@ -510,6 +606,9 @@ impl NotListable {
                 .into(),
             Self::NoRelease(_) => "It stays out of the store until a release is approved: submit \
                                    one from Releases & progress. A reviewer then puts it back."
+                .into(),
+            Self::NoAddress(_) => "It stays out of the store until its play address is approved: \
+                                   give it on Releases & progress. A reviewer then puts it back."
                 .into(),
             Self::PicturesWaiting => "It stays out of the store until its new pictures are \
                                       reviewed. A reviewer then puts it back."
@@ -534,7 +633,13 @@ pub(crate) async fn not_listable(
         return Ok(Some(NotListable::NoPulse));
     }
     if stage != AppStage::ComingSoon && !has_approved_release(tx, id).await? {
-        return Ok(Some(NotListable::NoRelease(stage)));
+        return Ok(Some(
+            if crate::catalog::plays_in_browser(&mut *tx, id).await? {
+                NotListable::NoAddress(stage)
+            } else {
+                NotListable::NoRelease(stage)
+            },
+        ));
     }
     if crate::media::has_pending(tx, id).await? {
         return Ok(Some(NotListable::PicturesWaiting));

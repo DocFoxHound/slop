@@ -13,7 +13,8 @@
 //! - **Malicious dependencies:** a release using a package OSV lists as malware (dep_watch.rs).
 //! - **Known-bad links:** a store page, creative profile or review linking to an address a public
 //!   malware or phishing list names (bad_links.rs): new and changed ones every hour, everything
-//!   after the lists are refreshed (daily).
+//!   after the lists are refreshed (daily). A browser game's play addresses (the one Play opens,
+//!   ones waiting for review, and where each was found to lead) are matched every hour.
 
 use axum::{
     Json, Router,
@@ -301,6 +302,46 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
                 subject_id: id,
                 label: label.clone(),
                 detail: json!({ "link": url, "listed_by": source }),
+            });
+        }
+    }
+    // Browser games' play addresses, every hour: a site can be listed any day after it was
+    // approved, and Play keeps opening it until a person withdraws it.
+    #[derive(sqlx::FromRow)]
+    struct Address {
+        app_id: Uuid,
+        title: String,
+        release_id: Uuid,
+        version: String,
+        play_address: String,
+        final_address: Option<String>,
+        plays_now: bool,
+    }
+    let addresses: Vec<Address> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
+        "select a.id as app_id, a.title, r.id as release_id, r.version, r.play_address,
+                r.address_checks ->> 'final_address' as final_address,
+                r.id is not distinct from {play} as plays_now
+         from releases r join apps a on a.id = r.app_id
+         where r.play_address is not null
+           and (r.status in ('fetching', 'awaiting_review') or r.id is not distinct from {play})",
+        play = crate::catalog::PLAY_RELEASE
+    )))
+    .fetch_all(db)
+    .await?;
+    for a in addresses {
+        let mut urls = vec![a.play_address.clone()];
+        urls.extend(a.final_address.filter(|f| *f != a.play_address));
+        for (url, source) in crate::bad_links::find(db, &urls).await? {
+            found.push(Found {
+                kind: "bad_link",
+                key: format!("bad_link:{}:{url}", a.app_id),
+                subject_kind: "app",
+                subject_id: a.app_id,
+                label: a.title.clone(),
+                detail: json!({
+                    "link": url, "listed_by": source, "play_address": true,
+                    "release": a.release_id, "version": a.version, "plays_now": a.plays_now,
+                }),
             });
         }
     }

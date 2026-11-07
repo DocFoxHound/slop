@@ -119,12 +119,14 @@ const EXPORT: &[(&str, &str)] = &[
          from apps a where a.maker_id = $1",
     ),
     (
-        // Every release of the maker's apps, with SLAPorSLOP's signed manifest: what a maker needs to
-        // take their app elsewhere (the Publisher Agreement's "Leaving SLAPorSLOP").
+        // Every release of the maker's apps, with SLAPorSLOP's signed manifest (a browser game's:
+        // its play address and what the checks found): what a maker needs to take their app
+        // elsewhere (the Publisher Agreement's "Leaving SLAPorSLOP").
         "app_releases",
         "select coalesce(jsonb_agg(jsonb_build_object('app', a.slug, 'version', r.version, 'commit', r.commit_sha,
                 'status', r.status, 'submitted_at', r.created_at, 'reviewed_at', r.reviewed_at,
-                'revoked_at', r.revoked_at, 'signed_manifest', r.signed_manifest) order by r.created_at), '[]')
+                'revoked_at', r.revoked_at, 'signed_manifest', r.signed_manifest,
+                'play_address', r.play_address, 'address_checks', r.address_checks) order by r.created_at), '[]')
          from releases r join apps a on a.id = r.app_id where a.maker_id = $1",
     ),
     (

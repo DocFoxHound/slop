@@ -48,11 +48,13 @@ pub fn routes() -> Router<AppState> {
 
 /// Whether this is a community build of a game whose original counts players with Slop Pulse.
 /// Such builds must include Pulse too (DESIGN §9), so player counts and playtime-weighted votes
-/// mean the same on both; a reviewer can't list one before its first Pulse handshake.
+/// mean the same on both; a reviewer can't list one before its first Pulse handshake. Never for
+/// a browser game, which can't send one (and has no community builds yet, `register`).
 pub async fn needs_pulse(conn: &mut PgConnection, app_id: Uuid) -> sqlx::Result<bool> {
     sqlx::query_scalar(
         "select exists (select 1 from apps b join apps p on p.id = b.parent_app_id
                         where b.id = $1 and p.kind = 'game' and b.branch_kind <> 'addon'
+                          and not ('browser' = any(b.platforms))
                           and exists (select 1 from pulse_sessions s where s.app_id = p.id and s.started_at is not null))",
     )
     .bind(app_id)
@@ -269,6 +271,14 @@ async fn register(
     if catalog::is_private(&state.db, parent).await? {
         return Err(ApiError::NotFound);
     }
+    // A browser game runs on its maker's website: there's no game to install a mod into, or a
+    // build of it to change (not yet, DESIGN §9).
+    if catalog::plays_in_browser(&state.db, parent).await? {
+        return Err(ApiError::Conflict(
+            "a browser game can't have community builds or mods yet: it plays on its maker's website"
+                .into(),
+        ));
+    }
     crate::legal::require(&state.db, user.id, "publisher").await?;
     catalog::validate_slug(&b.slug)?;
     let title = catalog::validate_text("title", &b.title, 80, false)?;
@@ -289,6 +299,12 @@ async fn register(
     } else {
         catalog::validate_platforms(&b.platforms)?
     };
+    if platforms == ["browser"] {
+        return Err(ApiError::invalid(
+            "platforms",
+            "a community build can't play in the browser yet: choose Windows, Linux or both",
+        ));
+    }
     let same_repo: bool =
         sqlx::query_scalar("select lower(repo_url) = lower($2) from apps where id = $1")
             .bind(parent)
