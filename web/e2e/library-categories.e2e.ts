@@ -2,8 +2,9 @@
 // The library's Show filter by store category (pages/Library.tsx, libraryModel.ts
 // `categoryFilters`): after the kinds, a Categories group with each store category, in the store's
 // order, that an app in the library is in (one of its tags is the category's); choosing one shows
-// only those apps. On the website and in the SLAPorSLOP app, where an installed app the store no
-// longer lists is in none. Relay Rig (a dedicated server: the Servers category, migration 0093)
+// only those apps. On the website and in the SLAPorSLOP app, where an installed app is in its
+// categories whether or not it's in the account library, and one the store no longer lists is in
+// none. Relay Rig (a dedicated server: the Servers category, migration 0093)
 // and Quarry Nap (a cozy puzzle game) are this file's own: they're added to Pat's library and
 // taken out again, and leave the store at the end.
 import AxeBuilder from "@axe-core/playwright";
@@ -95,33 +96,41 @@ test("on the website: Show lists the categories the library has apps in, in the 
   await expect(rows(page)).toHaveCount(apps.length);
 });
 
-test("in the SLAPorSLOP app: installed apps are in their categories too, and one the store no longer lists in none", async ({ page }) => {
+test("in the SLAPorSLOP app: an installed app is in its categories though it isn't in the account library; one the store no longer lists is in none", async ({ page }) => {
   await page.setViewportSize({ width: 1440, height: 900 });
-  await asDesktop(
-    page,
-    { state: "none" },
-    {
-      installed: [
-        { slug: relay, title: "Relay Rig", maker: "Bo Builder" },
-        { slug: "long-gone-server", title: "Long Gone Server", maker: "Someone" },
-      ],
-    },
-  );
-  await page.route(
-    (u) => u.pathname === "/v1/library/updates",
-    (route) => route.fulfill({ json: [] }),
-  );
-  const { names } = await patsCategories();
-  await signIn(page, "player");
-  await page.goto("/library");
-  await expect(side(page).getByRole("heading", { name: /Installed/ })).toContainText("(2)");
-  // The app's own filters, then the categories.
-  await expect(show(page).locator(":scope > option")).toContainText(["All", "Installed"]);
-  await expect(categoriesGroup(page).locator("option")).toHaveText(names);
+  // Relay Rig is installed here but not in Pat's library (installed signed out, say): the store's
+  // data for it is looked up on its own.
+  await call("player", "DELETE", `/v1/me/library/${relay}`);
+  try {
+    await asDesktop(
+      page,
+      { state: "none" },
+      {
+        installed: [
+          { slug: relay, title: "Relay Rig", maker: "Bo Builder" },
+          { slug: "long-gone-server", title: "Long Gone Server", maker: "Someone" },
+        ],
+      },
+    );
+    await page.route(
+      (u) => u.pathname === "/v1/library/updates",
+      (route) => route.fulfill({ json: [] }),
+    );
+    const { names } = await patsCategories([{ slug: relay, title: "Relay Rig", tags: ["dedicated-server", "multiplayer"] }]);
+    expect(names).toContain("Servers");
+    await signIn(page, "player");
+    await page.goto("/library");
+    await expect(side(page).getByRole("heading", { name: /Installed/ })).toContainText("(2)");
+    // The app's own filters, then the categories.
+    await expect(show(page).locator(":scope > option")).toContainText(["All", "Installed"]);
+    await expect(categoriesGroup(page).locator("option")).toHaveText(names);
 
-  await show(page).selectOption({ label: "Servers" });
-  await expect(rows(page)).toHaveText(["Relay Rig"]);
-  await expect(side(page).getByRole("heading", { name: /Installed/ })).toContainText("(1/2)");
-  await expect(side(page).getByRole("link", { name: /^Long Gone Server/ })).toHaveCount(0);
-  await axe(page);
+    await show(page).selectOption({ label: "Servers" });
+    await expect(rows(page)).toHaveText(["Relay Rig"]);
+    await expect(side(page).getByRole("heading", { name: /Installed/ })).toContainText("(1/2)");
+    await expect(side(page).getByRole("link", { name: /^Long Gone Server/ })).toHaveCount(0);
+    await axe(page);
+  } finally {
+    await call("player", "PUT", `/v1/me/library/${relay}`);
+  }
 });

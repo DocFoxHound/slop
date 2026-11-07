@@ -516,10 +516,12 @@ async fn browser_game(ctx: &Ctx, admin: &Who, sam: &Who) -> anyhow::Result<Strin
     let checks = json!({
         "https": false,
         "public_host": null,
+        "public_host_skipped": "test_setup",
         "bad_links": { "listed_by": null, "lists_loaded": true },
         "status": 200,
         "final_address": address,
         "redirects": 0,
+        "hops": [address],
         "content_type": "text/html; charset=utf-8",
         "checked_at": checked_at,
         "ok": true,

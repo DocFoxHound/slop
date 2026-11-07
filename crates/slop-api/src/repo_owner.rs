@@ -634,7 +634,11 @@ async fn run(mut cmd: tokio::process::Command) -> anyhow::Result<std::process::O
         .map_err(Into::into)
 }
 
+/// How long looking up a site's name may take (`public_host`).
+const LOOKUP_TIMEOUT: Duration = Duration::from_secs(5);
+
 /// Refuses hosts on private networks (SLAPorSLOP mustn't be used to reach its own neighbours).
+/// A name that can't be looked up, in `LOOKUP_TIMEOUT` or at all, is an `std::io::Error`.
 pub async fn public_host(state: &AppState, url: &Url) -> anyhow::Result<()> {
     if state.config.releases.allow_http_downloads {
         return Ok(());
@@ -642,7 +646,15 @@ pub async fn public_host(state: &AppState, url: &Url) -> anyhow::Result<()> {
     anyhow::ensure!(url.scheme() == "https", "only https addresses");
     let host = url.host_str().unwrap_or("");
     let port = url.port_or_known_default().unwrap_or(443);
-    for addr in tokio::net::lookup_host((host, port)).await? {
+    let found = tokio::time::timeout(LOOKUP_TIMEOUT, tokio::net::lookup_host((host, port)))
+        .await
+        .map_err(|_| {
+            std::io::Error::new(
+                std::io::ErrorKind::TimedOut,
+                "looking up its name took too long",
+            )
+        })??;
+    for addr in found {
         anyhow::ensure!(
             !private_ip(addr.ip()),
             "that address is on a private network"

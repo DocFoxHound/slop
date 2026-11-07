@@ -2,7 +2,18 @@
 import { describe, expect, it } from "vitest";
 
 import type { AdminApp, AdminAppFlag } from "../../api";
-import { cantListReason, flagFact, pageQuery, quietLine, readShow, readSort, rowFacts, span } from "./appFacts";
+import {
+  cantListReason,
+  flagFact,
+  pageQuery,
+  playReleaseId,
+  quietLine,
+  readShow,
+  readSort,
+  rowFacts,
+  span,
+  withdrawWords,
+} from "./appFacts";
 
 const NOW = Date.parse("2026-10-25T12:00:00Z");
 const daysAgo = (n: number) => new Date(NOW - n * 86_400_000).toISOString();
@@ -123,6 +134,85 @@ describe("cantListReason", () => {
     expect(cantListReason(app({ status: "delisted", stage: "beta", releases: [] }))).toMatch(
       /the maker hasn't submitted a release\. Set the stage to Coming soon/,
     );
+  });
+});
+
+describe("a browser game", () => {
+  const game = (over: Partial<AdminApp> = {}) =>
+    app({
+      platforms: ["browser"],
+      play_address: "https://games.example.com/play/",
+      releases: [{ id: "r1", version: "1.0.0", reviewed_at: daysAgo(10), play_address: "https://games.example.com/play/" }],
+      ...over,
+    });
+  // SLAPorSLOP withdrew 1.1.0, the address Play opened: 1.0.0 is still approved, but Play opens nothing.
+  const withdrawn = {
+    play_address: null,
+    serving_version: null,
+    newest_release: { version: "1.1.0", status: "revoked", status_reason: "it asks for passwords" },
+  };
+
+  it("says where Play goes, or that it opens nothing, never what players get installed", () => {
+    expect(quietLine(game(), NOW)).toBe("Play opens 1.0.0 on games.example.com");
+    expect(quietLine(game(withdrawn), NOW)).toBe("Play opens nothing: its address was withdrawn");
+    expect(quietLine(game({ ...withdrawn, releases: [] }), NOW)).toBe("Play opens nothing: its address was withdrawn");
+    expect(quietLine(game({ stage: "coming_soon", play_address: null, serving_version: null, releases: [], newest_release: null }), NOW)).toBe(
+      "No play address yet",
+    );
+    expect(
+      quietLine(
+        game({ play_address: null, serving_version: null, releases: [], newest_release: { version: "0.3.0", status: "awaiting_review", status_reason: null } }),
+        NOW,
+      ),
+    ).toBe("0.3.0 awaiting review");
+    expect(quietLine(game(withdrawn), NOW)).not.toMatch(/Players get/);
+  });
+
+  it("can't be listed with nothing for Play to open, approved releases or not", () => {
+    expect(cantListReason(game({ status: "draft" }))).toBeNull();
+    expect(cantListReason(game({ status: "draft", ...withdrawn }))).toBe(
+      "Can't list yet: its play address was withdrawn, so Play opens nothing. The maker sends a new one on Releases & progress.",
+    );
+    expect(cantListReason(game({ status: "draft", ...withdrawn, pending_releases: 1 }))).toMatch(/approve its play address under Review queue/);
+    expect(cantListReason(game({ status: "draft", play_address: null, serving_version: null, releases: [], newest_release: null }))).toMatch(
+      /the maker hasn't given a play address\. Set the stage to Coming soon/,
+    );
+    expect(cantListReason(game({ status: "draft", stage: "coming_soon", ...withdrawn }))).toBeNull();
+  });
+
+  it("withdrawing says what happens to Play, and that the reason goes to the maker", () => {
+    expect(withdrawWords("Orbit Tap", "1.1.0", true, true)).toEqual({
+      what: "Withdraw 1.1.0 of “Orbit Tap”: Play stops opening its address for everyone, and opens nothing until a person approves a new one. Anyone who saved the address can still visit the site.",
+      placeholder: "Reason, shown to the maker (Play stops opening it)",
+    });
+    expect(withdrawWords("Orbit Tap", "1.0.0", true, false)).toEqual({
+      what: "Withdraw 1.0.0 of “Orbit Tap”: Play doesn't open this address now, so nothing changes for players.",
+      placeholder: "Reason, shown to the maker",
+    });
+    for (const playsNow of [true, false]) expect(withdrawWords("Orbit Tap", "1.0.0", true, playsNow).what).not.toMatch(/launch|installed/);
+    // A download's are as they were.
+    expect(withdrawWords("Harbour Lights", "1.0.0", false, true)).toEqual({
+      what: "Withdraw 1.0.0 of “Harbour Lights”: it stops launching for everyone who has it.",
+      placeholder: "Reason, shown to players (stops it launching)",
+    });
+  });
+
+  it("finds the release Play opens in a record, as the server does", () => {
+    const r = (id: string, status: string, reviewed: number | null, created: number, play_address: string | null = "https://g.example/") => ({
+      id,
+      status,
+      reviewed_at: reviewed === null ? null : daysAgo(reviewed),
+      created_at: daysAgo(created),
+      play_address,
+    });
+    // The newest reviewed, not the newest sent: 1.0.0 was approved after 1.1.0.
+    expect(playReleaseId([r("b", "approved", 5, 6), r("a", "approved", 2, 9)])).toBe("a");
+    // Withdrawn since: nothing, never the older one.
+    expect(playReleaseId([r("b", "revoked", 1, 6), r("a", "approved", 2, 9)])).toBeNull();
+    // Withdrawing an older one leaves Play where it was; waiting and rejected ones never count.
+    expect(playReleaseId([r("c", "awaiting_review", null, 1), r("b", "approved", 1, 6), r("a", "revoked", 3, 9)])).toBe("b");
+    expect(playReleaseId([r("b", "rejected", 1, 6), r("a", "approved", 3, 9)])).toBe("a");
+    expect(playReleaseId([r("a", "approved", 3, 9, null)])).toBeNull();
   });
 });
 

@@ -101,6 +101,13 @@ export function Manage() {
   );
 }
 
+/** What players keep while an app is frozen: installed copies keep working wherever it is, but a
+ *  browser game's Play opens nothing for players once it has left the store. Exported for tests. */
+export function stillWorks(browser: boolean, outOfStore: boolean): string {
+  if (!browser) return "Copies people installed keep working.";
+  return outOfStore ? "Players can't open it from SLAPorSLOP while it's out of the store." : "Play keeps opening the approved address.";
+}
+
 /** SLAPorSLOP can't read the repository (SECURITY §12.2): no new releases, and out after 14 days. */
 function Frozen({
   slug,
@@ -115,7 +122,8 @@ function Frozen({
   browser: boolean;
   onChanged: () => void;
 }) {
-  const keeps = browser ? "Play keeps opening the approved address." : "Copies people installed keep working.";
+  const past = new Date(frozen.until).getTime() < Date.now();
+  const keeps = stillWorks(browser, past && !isPrivate);
   const [busy, setBusy] = useState(false);
   const [still, setStill] = useState(false);
   const [error, setError] = useState<string>();
@@ -143,7 +151,6 @@ function Frozen({
         <p>It stays in the store. {keeps} SLAPorSLOP lifts the freeze once it's dealt with.</p>
       </section>
     );
-  const past = new Date(frozen.until).getTime() < Date.now();
   return (
     <section className="panel panel-pad notice-panel" role="status">
       <h2>Frozen: SLAPorSLOP can't check the repository</h2>

@@ -14,7 +14,7 @@ import { api, type AdminApp, type AppStage } from "../../api";
 import { AppIcon, appIconProps } from "../../components/AppIcon";
 import { MenuButton, type MenuSection } from "../../components/MenuButton";
 import { ErrorState, Loading } from "../../components/ui";
-import { formatDate, timeAgo } from "../../format";
+import { formatDate, playsInBrowser, timeAgo } from "../../format";
 import { useLoad } from "../../hooks";
 import {
   cantListReason,
@@ -26,6 +26,7 @@ import {
   SHOWS,
   SORTS,
   STAGE_LABEL,
+  withdrawWords,
   type Show,
   type Sort,
 } from "./appFacts";
@@ -144,6 +145,7 @@ function AppRow({ app, rules, onDone }: { app: AdminApp; rules: Array<[string, s
     });
 
   const cantList = cantListReason(app);
+  const withdraw = (version: string) => withdrawWords(app.title, version, playsInBrowser(app), version === app.serving_version);
   const sections: MenuSection[] = [
     {
       items: [
@@ -246,12 +248,13 @@ function AppRow({ app, rules, onDone }: { app: AdminApp; rules: Array<[string, s
       {asking?.kind === "withdraw" && (
         <div className="apps-confirm">
           <p>
-            <b>Are you sure?</b> Withdraw {asking.version} of “{app.title}”: it stops launching for everyone who has it.
+            {/* A browser game's serving version is the one whose address Play opens (admin_web.rs). */}
+            <b>Are you sure?</b> {withdraw(asking.version).what}
           </p>
           <ReasonButton
             key={asking.id}
             label={`Withdraw ${asking.version}`}
-            placeholder="Reason, shown to players (stops it launching)"
+            placeholder={withdraw(asking.version).placeholder}
             danger
             disabled={disabled}
             startOpen

@@ -502,7 +502,120 @@ describe("progressSteps", () => {
       expect(textOf(auto.find((s) => s.title === "Review by a person")!.detail)).toContain("a person approved this address before");
       const revoked = progressSteps(game(), [address({ status: "revoked", status_reason: "it asks for passwords" })], testServer);
       expect(textOf(revoked.find((s) => s.title === "Review by a person")!.detail)).toBe(
-        "Withdrawn by SLAPorSLOP: it asks for passwords. Play no longer opens it.",
+        "Withdrawn by SLAPorSLOP: it asks for passwords. Play opens nothing until a person approves a new address: submit one on the Releases page.",
+      );
+    });
+
+    // SLAPorSLOP withdrew the newest approved address: Play opens nothing, never the older one.
+    const withdrawn = (over: Partial<Release> = {}) =>
+      address({
+        id: "r2",
+        version: "1.1.0",
+        status: "revoked",
+        status_reason: "it asks for passwords.",
+        play_address: "https://other.example.net/",
+        plays_now: false,
+        ...over,
+      });
+    const older = address({ status: "approved", plays_now: false });
+
+    it("after the newest address is withdrawn, isn't done or in the store, and says Play opens nothing", () => {
+      for (const releases of [
+        [withdrawn(), older],
+        // A server that doesn't say which plays: the newest decided one, withdrawn, decides.
+        [withdrawn({ plays_now: undefined }), address({ status: "approved" })],
+      ]) {
+        const steps = progressSteps(game({ status: "listed" }), releases, testServer);
+        expect(states(steps)).toMatchObject({ "Review by a person": "problem", "In the store": "problem" });
+        const review = steps.find((s) => s.title === "Review by a person")!;
+        expect(review.stateLabel).toBe("Withdrawn");
+        expect(textOf(review.detail)).toBe(
+          "Withdrawn by SLAPorSLOP: it asks for passwords. Play opens nothing until a person approves a new address: submit one on the Releases page.",
+        );
+        const store = steps.find((s) => s.title === "In the store")!;
+        expect(store.stateLabel).toBe("Play opens nothing");
+        expect(store.detail).toBe("Players can find it, but Play opens nothing until a person at SLAPorSLOP approves a new play address.");
+        expect(currentStep(steps).title).toBe("Review by a person");
+        expect(all(steps)).not.toContain("Players can find it.");
+      }
+    });
+
+    it("a rejected or waiting address after a withdrawal says Play opens nothing meanwhile", () => {
+      const rejected = progressSteps(
+        game({ status: "listed" }),
+        [address({ id: "r3", version: "1.2.0", status: "rejected", status_reason: "it's another game", plays_now: false }), withdrawn(), older],
+        testServer,
+      );
+      const review = rejected.find((s) => s.title === "Review by a person")!;
+      expect(review.state).toBe("problem");
+      expect(textOf(review.detail)).toContain(
+        "Not approved: it's another game. Fix it and submit the address again with a new version. Play opens nothing meanwhile: SLAPorSLOP withdrew version 1.1.0 (it asks for passwords).",
+      );
+      expect(states(rejected)["In the store"]).toBe("problem");
+
+      const waiting = progressSteps(
+        game({ status: "listed" }),
+        [address({ id: "r3", version: "1.2.0", plays_now: false }), withdrawn(), older],
+        testServer,
+      );
+      expect(textOf(waiting.find((s) => s.title === "Review by a person")!.more)).toContain(
+        "Play opens nothing meanwhile: SLAPorSLOP withdrew version 1.1.0 (it asks for passwords).",
+      );
+    });
+
+    it("follows the address Play opens, not the newest approved one", () => {
+      // An older address is the one Play opens (approved after the newer one, then that was withdrawn).
+      const steps = progressSteps(
+        game({ status: "listed" }),
+        [withdrawn({ status: "approved", status_reason: undefined }), address({ status: "approved", plays_now: true })],
+        testServer,
+      );
+      expect(states(steps)).toMatchObject({ "Review by a person": "done", "In the store": "done" });
+      // Withdrawing an older address leaves Play on the current one: still done.
+      const current = progressSteps(
+        game({ status: "listed" }),
+        [address({ id: "r2", version: "1.1.0", status: "approved", plays_now: true }), address({ status: "revoked", plays_now: false })],
+        testServer,
+      );
+      expect(states(current)).toMatchObject({ "Review by a person": "done", "In the store": "done" });
+    });
+
+    it("Coming soon: the address is approved before Beta, and Play opens it once the game is in Beta", () => {
+      const none = progressSteps(game({ stage: "coming_soon" }), [], testServer);
+      expect(none.find((s) => s.title === "Play address")!.detail).toBe(
+        "Coming soon pages go in the store without a play address. Add it, and have it approved, before you move to Beta.",
+      );
+      const waiting = progressSteps(game({ stage: "coming_soon" }), [address()], testServer);
+      expect(textOf(waiting.find((s) => s.title === "Review by a person")!.more)).toContain(
+        "if it's approved, Play opens this address once the game is in Beta;",
+      );
+      // A Coming soon page in the store with nothing approved yet is where it should be.
+      expect(states(progressSteps(game({ stage: "coming_soon", status: "listed" }), [], testServer))["In the store"]).toBe("done");
+    });
+  });
+
+  describe("a dedicated server", () => {
+    const repo_scan = {
+      status: "checked" as const,
+      licence: { declared: "MIT", files: [{ path: "LICENSE", spdx: "MIT" }], headers: [], problems: [] },
+      monetization: [],
+      code_loading: [{ rule: "load_native", label: "Loads native libraries at run time", count: 1, examples: ["plugins.c:4"] }],
+    };
+    const detail = (over: Partial<AppDetail>, scan: Partial<Release["repo_scan"] & object> = {}) =>
+      textOf(
+        progressSteps(app(over), [release({ repo_scan: { ...repo_scan, ...scan } })], testServer).find((s) => s.title === "Source check")!
+          .detail,
+      );
+
+    it("calls its code loading a note, not a problem; a download's notes read as before", () => {
+      for (const said of [detail({ tags: ["dedicated-server"] }), detail({}, { dedicated_server: true })]) {
+        expect(said).toContain("1 note about the licence, selling or code loading in the app, for you and the reviewer");
+        expect(said).toContain(
+          "A dedicated server may load mods, maps and plugins from other places: the Content Policy's rule on outside code doesn't cover it, so that's a note, not a problem.",
+        );
+      }
+      expect(detail({ tags: ["puzzle"] })).toBe(
+        "1 note about the licence or selling in the app, for you and the reviewer: see the release below. See what to fix (with \"Copy for your AI\"), or ask your AI agent to run get_fixes.",
       );
     });
   });

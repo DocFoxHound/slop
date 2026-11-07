@@ -392,14 +392,26 @@ export function appFill(fields: Record<string, unknown>, tags?: ReadonlySet<stri
     },
   );
   // A play address belongs to a game that plays in the browser, which has no sandbox mode or
-  // mods folder: what doesn't fit the platforms is left out, with why.
-  const browser = fill.values.platforms?.includes("browser") ?? false;
+  // mods folder: what doesn't fit the platforms is left out, with why. Only a public game plays in
+  // the browser: with kind app or Private, In the browser (and its address) is left out instead.
+  let browser = fill.values.platforms?.includes("browser") ?? false;
   const drop = (field: keyof AppFields & string, why: string) => {
     if (!fill.filled.includes(field)) return;
     delete fill.values[field];
     fill.filled = fill.filled.filter((f) => f !== field);
     fill.left.push({ field, why });
   };
+  const notBrowser =
+    fill.values.kind === "app"
+      ? "only games can play in the browser for now"
+      : fill.values.visibility === "private"
+        ? "a browser game's address is public on the web, so it can't be private"
+        : null;
+  if (browser && notBrowser) {
+    drop("platforms", notBrowser);
+    drop("play_address", notBrowser);
+    browser = false;
+  }
   if (!browser) drop("play_address", "only a game that plays in the browser has one: its platforms should be [\"browser\"]");
   if (browser && fill.values.sandbox_ready) drop("sandbox_ready", "a browser game has no sandbox mode");
   if (browser && fill.values.mods_folder) drop("mods_folder", "a browser game has no mods folder");

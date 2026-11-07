@@ -157,9 +157,11 @@ struct QueuedRelease {
     app: AppRef,
     #[serde(flatten)]
     release: ReleaseInfo,
-    /// A browser game's: the address Play opens now (`catalog::PLAY_ADDRESS`), if any, so a
-    /// reviewer sees whether this one is a new site. Null for downloads.
-    current_play_address: Option<String>,
+    /// A browser game's: the address Play opens now, so a reviewer sees whether this one is a
+    /// new site; the one withdrawn, when that's why Play opens none; and a newer approved
+    /// address this one would take over from (releases.rs `AddressContext`). Null for downloads.
+    #[serde(flatten)]
+    address: releases::AddressContext,
     notes: Vec<Note>,
 }
 
@@ -274,18 +276,10 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         .bind(&slug)
         .fetch_one(&state.db)
         .await?;
-        let current_play_address: Option<String> =
-            sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                "select {} from apps a where a.slug = $1",
-                crate::catalog::PLAY_ADDRESS
-            )))
-            .bind(&slug)
-            .fetch_one(&state.db)
-            .await?;
         releases.push(QueuedRelease {
             app,
             release: releases::load_release(&state, id).await?,
-            current_play_address,
+            address: releases::address_context(&state.db, id).await?,
             notes: review::notes(&state.db, "release", id).await?,
         });
     }
@@ -300,9 +294,10 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
          from apps a join users u on u.id = a.maker_id
          where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal))
            and (a.visibility = 'public' or a.public_requested_at is not null)
-           and (a.stage = 'coming_soon' or exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved'))
+           and (a.stage = 'coming_soon' or {playable})
          order by a.updated_at",
-        play = crate::catalog::PLAY_ADDRESS
+        play = crate::catalog::PLAY_ADDRESS,
+        playable = crate::admin::playable_sql()
     )))
     .fetch_all(&state.db)
     .await?;

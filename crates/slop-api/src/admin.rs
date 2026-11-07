@@ -330,8 +330,9 @@ pub async fn approve(
 }
 
 /// A browser game's release (its play address), in `approve`'s transaction: its automatic checks
-/// passed, and no bad-link list names the address or where it led, checked again now since days
-/// may have passed. Nothing is signed (signed_manifest stays null).
+/// passed, and no bad-link list names the address, any address it redirected through or where it
+/// ended up, checked again now since days may have passed. Nothing is signed (signed_manifest
+/// stays null).
 async fn approve_address(
     db: &PgPool,
     tx: &mut sqlx::PgConnection,
@@ -349,7 +350,15 @@ async fn approve_address(
         checks["problem"].as_str().unwrap_or("no details")
     );
     let mut addresses = vec![address.to_string()];
-    addresses.extend(checks["final_address"].as_str().map(String::from));
+    let hops = checks["hops"].as_array().into_iter().flatten();
+    for hop in hops
+        .chain([&checks["final_address"]])
+        .filter_map(|h| h.as_str())
+    {
+        if !addresses.iter().any(|a| a == hop) {
+            addresses.push(hop.to_string());
+        }
+    }
     if let Some((on, list)) = crate::bad_links::find(db, &addresses)
         .await?
         .into_iter()
@@ -546,13 +555,26 @@ pub async fn revoke(
     Ok(())
 }
 
-pub(crate) async fn has_approved_release(
+/// Whether app `a` (`apps`) has something to play, as SQL: an approved release, and for a browser
+/// game an address Play opens (`catalog::PLAY_RELEASE`). With its newest address withdrawn, a
+/// browser game has none, even with older ones approved. What Beta, Released and listing need.
+pub(crate) fn playable_sql() -> String {
+    format!(
+        "(case when 'browser' = any(a.platforms) then {} is not null
+               else exists (select 1 from releases pr where pr.app_id = a.id and pr.status = 'approved') end)",
+        crate::catalog::PLAY_RELEASE
+    )
+}
+
+/// `playable_sql` for one app.
+pub(crate) async fn has_playable_release(
     tx: &mut sqlx::PgConnection,
     app_id: Uuid,
 ) -> anyhow::Result<bool> {
-    Ok(sqlx::query_scalar(
-        "select exists (select 1 from releases where app_id = $1 and status = 'approved')",
-    )
+    Ok(sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+        "select {} from apps a where a.id = $1",
+        playable_sql()
+    )))
     .bind(app_id)
     .fetch_one(&mut *tx)
     .await?)
@@ -638,7 +660,7 @@ pub(crate) async fn not_listable(
     if crate::branches::needs_pulse(tx, id).await? && !crate::branches::has_pulse(tx, id).await? {
         return Ok(Some(NotListable::NoPulse));
     }
-    if stage != AppStage::ComingSoon && !has_approved_release(tx, id).await? {
+    if stage != AppStage::ComingSoon && !has_playable_release(tx, id).await? {
         return Ok(Some(
             if crate::catalog::plays_in_browser(&mut *tx, id).await? {
                 NotListable::NoAddress(stage)
@@ -812,10 +834,14 @@ pub async fn set_stage(
             .await?;
     let (id, from) = row.context("no such app")?;
     ensure!(from != stage, "already in that stage");
-    if stage != AppStage::ComingSoon {
-        ensure!(
-            has_approved_release(&mut tx, id).await?,
-            "approve a release first: Beta and Released apps need an approved release"
+    if stage != AppStage::ComingSoon && !has_playable_release(&mut tx, id).await? {
+        bail!(
+            "{}",
+            if crate::catalog::plays_in_browser(&mut *tx, id).await? {
+                "approve a play address first: a Beta or Released browser game needs an address Play opens"
+            } else {
+                "approve a release first: Beta and Released apps need an approved release"
+            }
         );
     }
     move_stage(&mut tx, id, slug, from, stage, reviewer).await?;

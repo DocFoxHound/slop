@@ -15,6 +15,7 @@ import {
   matchesFilter,
   sections,
   statusOf,
+  unknownInstalled,
   type Live,
 } from "./libraryModel";
 import { downloading, downloadsLabel } from "../components/Downloads";
@@ -276,6 +277,59 @@ describe("the store's categories", () => {
     ]);
     // The kinds' filters are as before.
     expect(slugs("all")).toHaveLength(entries.length);
+  });
+
+  it("keeps out what the store keeps out of a category: Kids & Family takes only apps rated for children", () => {
+    const family: Category = { ...cat("family", "Kids & Family", ["kids"]), max_age: 7, excluded_labels: ["violence"] };
+    const kids = buildEntries({
+      library: [
+        app("bricks", "Bricks", { tags: ["kids"], min_age: 3 }),
+        // Tagged Kids by its maker, but rated 16+: the store doesn't list it there, so neither does this.
+        app("raid", "Raid Night", { tags: ["kids"], min_age: 16 }),
+        app("brawl", "Brawl Pals", { tags: ["kids"], min_age: 7, content_labels: ["violence"] }),
+        app("spooky", "Spooky Hats", { tags: ["kids"], min_age: 7, content_labels: ["horror"] }),
+      ],
+      installed: [],
+      interested: [],
+      privateMine: [],
+      privateShared: [],
+    });
+    const at = (slug: string) => kids.find((e) => e.slug === slug)!;
+    expect(inCategory(at("bricks"), family)).toBe(true);
+    expect(inCategory(at("raid"), family)).toBe(false);
+    expect(inCategory(at("brawl"), family)).toBe(false);
+    expect(inCategory(at("spooky"), family)).toBe(true);
+    expect(kids.filter((e) => matchesFilter(e, categoryFilter("family"), [family])).map((e) => e.slug)).toEqual(["bricks", "spooky"]);
+    // Without limits (any other category), the age and labels don't matter.
+    expect(inCategory(at("raid"), cat("games", "Games", ["kids"]))).toBe(true);
+    // Only Raid Night in the library: Kids & Family isn't offered at all.
+    expect(categoryFilters([at("raid")], [family])).toEqual([]);
+  });
+
+  it("an installed app the account library doesn't have is looked up, and then in its categories", () => {
+    const lists = {
+      library: [app("castle", "Castle", { tags: ["puzzle"] })],
+      // Installed signed out, or taken out of the library on the website; and one the store no longer lists.
+      installed: [
+        { installed: inst("castle", "Castle"), available: false },
+        { installed: inst("relay", "Relay Server"), available: false },
+        { installed: inst("gone", "Gone"), available: false },
+      ],
+      interested: [],
+      privateMine: [],
+      privateShared: [],
+    };
+    expect(unknownInstalled(lists)).toEqual(["relay", "gone"]);
+    // Before the store answers (or where it doesn't know the app), no store data: in no category.
+    const before = buildEntries(lists);
+    expect(before.find((e) => e.slug === "relay")!.app).toBeUndefined();
+    expect(inCategory(before.find((e) => e.slug === "relay")!, categories[3])).toBe(false);
+    const after = buildEntries({ ...lists, store: [app("relay", "Relay Server", { kind: "app", tags: ["dedicated-server"] })] });
+    const relay = after.find((e) => e.slug === "relay")!;
+    expect(relay).toMatchObject({ group: "installed", inLibrary: false });
+    expect(inCategory(relay, categories[3])).toBe(true);
+    expect(after.find((e) => e.slug === "gone")!.app).toBeUndefined();
+    expect(categoryFilters(after, categories).map((f) => f.label)).toEqual(["Games", "Servers"]);
   });
 });
 

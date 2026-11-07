@@ -124,14 +124,34 @@ describe("the review inbox", () => {
         app: { slug: "tap", title: "Orbit Tap", stage: "beta", status: "draft", repo_url: "https://github.com/o/tap", maker: "Sam", platforms: ["browser"] },
         ...over,
       });
-    expect(releaseBlurb(address({}))).toBe("Plays in the browser · games.example.com · address checks passed · first address");
+    expect(releaseBlurb(address({}))).toBe("Plays in the browser · games.example.com · address checks passed · no address approved before");
+    // Another address on the same host isn't "the same site": it can be someone else's game.
     expect(releaseBlurb(address({ current_play_address: "https://games.example.com/play/" }))).toBe(
-      "Plays in the browser · games.example.com · address checks passed · same site",
+      "Plays in the browser · games.example.com · address checks passed · same host",
+    );
+    expect(releaseBlurb(address({ current_play_address: "https://games.example.com/v2/" }))).toBe(
+      "Plays in the browser · games.example.com · address checks passed · same address",
     );
     expect(releaseBlurb(address({ current_play_address: "https://old.example.net/", notes: [{}] }))).toBe(
       "Plays in the browser · games.example.com · address checks passed · new site · 1 note",
     );
-    expect(releaseBlurb(address({ status: "fetching", address_checks: null }))).toBe("Plays in the browser · games.example.com · still checking · first address");
+    expect(releaseBlurb(address({ status: "fetching", address_checks: null }))).toBe(
+      "Plays in the browser · games.example.com · still checking · no address approved before",
+    );
+    // After SLAPorSLOP withdrew the address Play opened, it's never a first address.
+    expect(releaseBlurb(address({ withdrawn_play_address: "https://games.example.com/v2/" }))).toBe(
+      "Plays in the browser · games.example.com · address checks passed · the withdrawn address again",
+    );
+    expect(releaseBlurb(address({ withdrawn_play_address: "https://games.example.com/old/" }))).toContain("same host as a withdrawn address");
+    expect(releaseBlurb(address({ withdrawn_play_address: "https://old.example.net/" }))).toContain("new site after a withdrawal");
+    expect(
+      releaseBlurb(
+        address({
+          current_play_address: "https://games.example.com/v3/",
+          newer_approved: { version: "1.3.0", play_address: "https://games.example.com/v3/", note: "Version 1.3.0 is approved and newer" },
+        }),
+      ),
+    ).toBe("Plays in the browser · games.example.com · address checks passed · same host · older than approved 1.3.0");
     expect(
       releaseBlurb(address({ status: "failed", address_checks: { ...checks, ok: false, bad_links: { listed_by: "URLhaus", lists_loaded: true } } })),
     ).toContain("on URLhaus");

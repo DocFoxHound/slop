@@ -15,7 +15,7 @@ import { Link, useLocation } from "react-router";
 import { api, ApiError } from "../api";
 import { addressHost } from "../format";
 import { useLoad } from "../hooks";
-import { announceLaunch, LIBRARY_CHANGED } from "./AppUpdates";
+import { announceLaunch, announcePlayStopped, LIBRARY_CHANGED } from "./AppUpdates";
 import { canOpenPlayAddress, desktop, isDesktop, openExternal, type InstalledApp, type Launched } from "../platform";
 import {
   decided,
@@ -56,7 +56,7 @@ export interface BarInfo {
 
 /** Where a browser game's Play goes (AppDetail.play_address), for InstallControls. */
 export interface BrowserPlay {
-  /** Null: no play address is approved, so there's nothing to play yet. */
+  /** Null: SLAPorSLOP has no address to open (none approved yet, withdrawn, or out of the store). */
   address: string | null;
   /** The store page's details are still loading (the library), so where Play goes isn't known yet. */
   loading?: boolean;
@@ -186,6 +186,20 @@ function useLibraryToggle(slug: string, inLibrary?: boolean) {
 /** How long the desktop app waits for SLAPorSLOP to record Play before it opens the game anyway. */
 const LAUNCH_WAIT_MS = 3000;
 const NOT_COUNTED = "SLAPorSLOP couldn't count this play, so it may not let you rate the game yet. The game opened anyway.";
+/** Said where Play has no address to open: nothing approved yet, withdrawn, or out of the store. */
+const NOT_PLAYABLE = "Not playable right now";
+const NO_ADDRESS = "SLAPorSLOP has no address for it to open right now.";
+
+/** SLAPorSLOP answered Play with nothing to open: the address was withdrawn (409), or the game is
+ *  no longer there (404), since the page loaded. An answer, not a failure. */
+const playGone = (err: unknown): err is ApiError => err instanceof ApiError && (err.status === 404 || err.status === 409);
+
+/** For a tab that opened before SLAPorSLOP said it no longer opens the game. */
+function goneNote(err: ApiError): string {
+  return err.status === 409
+    ? "SLAPorSLOP no longer opens this game: its address was withdrawn. Close that tab."
+    : "SLAPorSLOP no longer opens this game. Close that tab.";
+}
 
 /** `promise`'s value, or null once `ms` have passed without one. */
 function within<T>(ms: number, promise: Promise<T>): Promise<T | null> {
@@ -208,8 +222,10 @@ function within<T>(ms: number, promise: Promise<T>): Promise<T | null> {
  * What Play on a browser game does here. On the website the link opens the tab itself, in the
  * click, so popup blockers leave it alone; SLAPorSLOP records the play alongside, never awaited.
  * In the desktop app the system browser opens it once SLAPorSLOP has recorded the play (or after
- * a few seconds), at the address the server gives then. A play that isn't recorded never stops
- * the game: it only says so. Signed out, nothing is recorded.
+ * a few seconds, while SLAPorSLOP goes on counting it), at the address the server gives then. A
+ * play that isn't recorded never stops the game: it only says so. When SLAPorSLOP answers that it
+ * no longer opens the game, the page loads it again (`PLAY_STOPPED`), so Play goes away; a tab
+ * that already opened is to be closed. Signed out, nothing is recorded.
  */
 function useBrowserPlay(slug: string, address: string | null) {
   const { me } = useSession();
@@ -219,38 +235,60 @@ function useBrowserPlay(slug: string, address: string | null) {
   const [note, setNote] = useState<string>();
   /** Nothing opened, and why (role=alert). */
   const [error, setError] = useState<string>();
+  /** Each press of Play: a late answer to an earlier one says nothing over a newer one's. */
+  const presses = useRef(0);
+
+  /** The game is open already; what SLAPorSLOP answered comes after. */
+  const recorded = (press: number, launch: Promise<unknown>) =>
+    launch.then(
+      () => {
+        announceLaunch(slug);
+        // Counted after all: what was said about it no longer holds.
+        if (presses.current === press) setNote((n) => (n === NOT_COUNTED ? undefined : n));
+      },
+      (err: unknown) => {
+        if (presses.current !== press) return;
+        if (playGone(err)) {
+          setNote(goneNote(err));
+          if (err.status === 409) announcePlayStopped(slug);
+        } else setNote(NOT_COUNTED);
+      },
+    );
 
   const recordAlongside = () => {
+    const press = ++presses.current;
     setNote(undefined);
     setError(undefined);
     if (!signedIn) return;
-    api.launch(slug).then(
-      () => announceLaunch(slug),
-      () => setNote(NOT_COUNTED),
-    );
+    void recorded(press, api.launch(slug));
   };
 
   const openFromApp = async () => {
     if (opening) return;
+    const press = ++presses.current;
     setOpening(true);
     setNote(undefined);
     setError(undefined);
     try {
       let to = address;
       if (signedIn) {
+        const launch = api.launch(slug);
         try {
-          const launched = await within(LAUNCH_WAIT_MS, api.launch(slug));
+          const launched = await within(LAUNCH_WAIT_MS, launch);
           if (launched) {
             to = launched.play_address ?? to;
             announceLaunch(slug);
           } else {
+            // Slow: the game opens now, and SLAPorSLOP goes on counting the play.
             setNote(NOT_COUNTED);
+            void recorded(press, launch);
           }
         } catch (err) {
           // SLAPorSLOP says there's nothing to play now (its address was withdrawn since this page
           // loaded, say): that's an answer, not a failure, so the old address isn't opened.
-          if (err instanceof ApiError && (err.status === 404 || err.status === 409)) {
+          if (playGone(err)) {
             setError(`Not opened: ${err.message}.`);
+            if (err.status === 409) announcePlayStopped(slug);
             return;
           }
           setNote(NOT_COUNTED);
@@ -335,7 +373,8 @@ function playHint(address: string): string {
 export function BrowserPlayLink({ slug, address }: { slug: string; address: string | null }) {
   const play = useBrowserPlay(slug, address);
   const hint = useId();
-  if (!canOpenPlayAddress(address, false)) return null;
+  // Gone since it was pressed (withdrawn): what SLAPorSLOP said stays.
+  if (!canOpenPlayAddress(address, false)) return play.note || play.error ? <PlayNotices play={play} /> : null;
   return (
     <div className="browser-play">
       <PlayAnchor play={play} address={address} className="btn slime" describedBy={hint} />
@@ -396,14 +435,14 @@ function BrowserControls({
             <PlayAnchor play={play} address={address} className="btn big slime lib-primary" describedBy={hint} />
           ) : (
             <button type="button" className="btn big lib-primary" disabled>
-              {where.loading ? "Checking…" : "Not playable yet"}
+              {where.loading ? "Checking…" : NOT_PLAYABLE}
             </button>
           )}
           {donate}
           <div className="lib-bar-status">
             <span className="lib-bar-label">Plays in your browser</span>
             <span className="muted small" id={hint}>
-              {address ? playHint(address) : where.loading ? "" : "No play address is approved yet."}
+              {address ? playHint(address) : where.loading ? "" : NO_ADDRESS}
             </span>
           </div>
           <div className="lib-bar-icons">
@@ -423,13 +462,13 @@ function BrowserControls({
         {address ? (
           <PlayAnchor play={play} address={address} className="btn big slime" describedBy={hint} />
         ) : (
-          <p className="muted">{where.loading ? "Checking…" : "Not playable yet."}</p>
+          <p className="muted">{where.loading ? "Checking…" : `${NOT_PLAYABLE}.`}</p>
         )}
         {toggle(!address)}
         {donate}
       </div>
       <p className="muted small" id={hint}>
-        {address ? playHint(address) : "No play address is approved yet."}
+        {address ? playHint(address) : NO_ADDRESS}
       </p>
       <PlayNotices play={play} />
       {libraryError}

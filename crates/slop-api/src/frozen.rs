@@ -6,7 +6,8 @@
 //!
 //! - **Lost access** (the repository is gone, SLAPorSLOP's access was removed, or a public app's
 //!   repository was made private): the app is **frozen**. It takes no new releases, because they
-//!   couldn't be checked. Installed copies keep working. The owner is told straight away.
+//!   couldn't be checked. Installed copies keep working (a browser game's Play keeps opening its
+//!   address). The owner is told straight away.
 //! - **After 14 days frozen**, a public app is delisted and a private app is no longer shared
 //!   (`catalog::push_shared_with` leaves it out).
 //! - **Access back:** the freeze ends, and an app delisted only for being frozen is listed again.
@@ -150,17 +151,18 @@ pub async fn check(state: &AppState, repo_url: &str, public: bool) -> Access {
 pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Result<()> {
     let mut tx = state.db.begin().await?;
     // A freeze staff placed by hand (admin_tools.rs) is theirs to lift: the check leaves it.
-    let (maker, slug, title, frozen, frozen_delisted, by_staff): (
+    let (maker, slug, title, frozen, frozen_delisted, by_staff, browser): (
         Uuid,
         String,
         String,
         bool,
         bool,
         bool,
+        bool,
     ) = sqlx::query_as(
         "update apps set repo_checked_at = now() where id = $1
          returning maker_id, slug, title, frozen_at is not null and frozen_by is null, frozen_delisted,
-                   frozen_by is not null",
+                   frozen_by is not null, 'browser' = any(platforms)",
     )
     .bind(app_id)
     .fetch_one(&mut *tx)
@@ -192,10 +194,15 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
                     title: format!("{title} is frozen: SLAPorSLOP can't check its repository"),
                     body: format!(
                         "SLAPorSLOP checked {title}'s repository and {reason}. Until it can read it again, \
-                         {title} takes no new releases; copies people installed keep working. \
+                         {title} takes no new releases; {}. \
                          If nothing changes within 14 days, it leaves the store (or stops being \
                          shared, for a private app). Restore access and SLAPorSLOP picks it up at the \
-                         next daily check, or press Check now on the app's Manage page."
+                         next daily check, or press Check now on the app's Manage page.",
+                        if browser {
+                            "Play keeps opening its address until then"
+                        } else {
+                            "copies people installed keep working"
+                        }
                     ),
                     link: format!("/publish/{slug}/manage"),
                     collapse_key: Some(format!("frozen:{app_id}")),
@@ -244,15 +251,15 @@ pub async fn apply(state: &AppState, app_id: Uuid, access: Access) -> anyhow::Re
 /// `catalog::push_shared_with` stops sharing it by itself.
 pub async fn end_grace(state: &AppState) -> anyhow::Result<usize> {
     let mut tx = state.db.begin().await?;
-    let gone: Vec<(Uuid, Uuid, String, String)> = sqlx::query_as(
+    let gone: Vec<(Uuid, Uuid, String, String, bool)> = sqlx::query_as(
         "update apps set status = 'delisted', frozen_delisted = true, updated_at = now()
          where frozen_at < now() - $1 and frozen_by is null and status = 'listed' and visibility = 'public'
-         returning id, maker_id, slug, title",
+         returning id, maker_id, slug, title, 'browser' = any(platforms)",
     )
     .bind(GRACE)
     .fetch_all(&mut *tx)
     .await?;
-    for (id, maker, slug, title) in &gone {
+    for (id, maker, slug, title, browser) in &gone {
         notify::send(
             &mut tx,
             Notice {
@@ -261,7 +268,13 @@ pub async fn end_grace(state: &AppState) -> anyhow::Result<usize> {
                 title: format!("{title} left the store"),
                 body: format!(
                     "SLAPorSLOP still can't read {title}'s repository after 14 days, so it's out of the \
-                     store. Installed copies keep working. Restore access and it's listed again."
+                     store. {} Restore access and it's listed again.",
+                    // Out of the store, a browser game's Play opens nothing for anyone but its maker.
+                    if *browser {
+                        "Players can't open it from SLAPorSLOP until it's back."
+                    } else {
+                        "Installed copies keep working."
+                    }
                 ),
                 link: format!("/publish/{slug}/manage"),
                 collapse_key: Some(format!("frozen:{id}")),

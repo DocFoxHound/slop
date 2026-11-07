@@ -1,7 +1,7 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 import { describe, expect, it } from "vitest";
 
-import { addressCheckItems, addressChecksLine, isNewSite, NO_LISTS } from "./addressChecks";
+import { addressCheckItems, addressChecksLine, compareAddress, NO_LISTS } from "./addressChecks";
 import type { AddressChecks } from "./api";
 
 const checks = (over: Partial<AddressChecks> = {}): AddressChecks => ({
@@ -55,6 +55,37 @@ describe("a play address's checks in words", () => {
     expect(JSON.stringify(none)).not.toMatch(/not on any/i);
   });
 
+  it("says a site's name couldn't be looked up, never that a test setup skipped it, on a real server", () => {
+    const lookup = addressCheckItems(
+      checks({
+        ok: false,
+        public_host: null,
+        public_host_skipped: "lookup_failed",
+        status: null,
+        final_address: null,
+        problem: "SLAPorSLOP can't find the site no-such-site.invalid (failed to lookup address information)",
+      }),
+    );
+    expect(lookup[1]).toMatchObject({ state: "problem", status: "No: the site's name couldn't be looked up" });
+    expect(JSON.stringify(lookup)).not.toContain("test setup");
+    expect(lookup[3]).toMatchObject({ state: "problem", status: "No answer", detail: expect.stringContaining("can't find the site") });
+    // A test setup says so, whether its page loaded or not.
+    for (const ok of [true, false]) {
+      expect(addressCheckItems(checks({ ok, public_host: null, public_host_skipped: "test_setup", status: ok ? 200 : 404 }))[1]).toMatchObject({
+        state: "skipped",
+        status: "Not checked",
+        detail: "A test setup of SLAPorSLOP doesn't look up where a site is.",
+      });
+    }
+    // An older check that doesn't say why, and didn't pass, claims neither.
+    expect(addressCheckItems(checks({ ok: false, public_host: null, status: null }))[1]).toEqual({
+      key: "public",
+      label: "A public site",
+      state: "skipped",
+      status: "Not known",
+    });
+  });
+
   it("names the list an address is on, and why a page didn't pass", () => {
     const listed = addressCheckItems(checks({ ok: false, bad_links: { listed_by: "URLhaus", lists_loaded: true }, problem: "on URLhaus" }));
     expect(listed[2]).toMatchObject({ state: "problem", status: "On URLhaus" });
@@ -80,10 +111,20 @@ describe("a play address's checks in words", () => {
     expect(moved.detail).toBe("After 2 redirects, at https://cdn.example.com/game/; a text/html page");
   });
 
-  it("knows a new site from the same one", () => {
-    expect(isNewSite("https://games.example.com/v2/", "https://games.example.com/play/")).toBe(false);
-    expect(isNewSite("https://other.example.net/", "https://games.example.com/play/")).toBe(true);
-    // A first address isn't a "new site": there's nothing to compare it with.
-    expect(isNewSite("https://games.example.com/", null)).toBe(false);
+  it("knows a new site, the same host and the same address apart", () => {
+    expect(compareAddress("https://other.example.net/", "https://games.example.com/play/")).toBe("new_site");
+    // Another page on the same host is never "the same site": on a shared host it can be another
+    // person's game.
+    expect(compareAddress("https://games.example.com/v2/", "https://games.example.com/play/")).toBe("same_host");
+    expect(compareAddress("https://html.itch.zone/html/222/", "https://html.itch.zone/html/111/")).toBe("same_host");
+    expect(compareAddress("https://games.example.com/play/?level=2", "https://games.example.com/play/")).toBe("same_host");
+    expect(compareAddress("https://games.example.com/play/#b", "https://games.example.com/play/#a")).toBe("same_host");
+    expect(compareAddress("https://games.example.com/play/", "https://games.example.com/play/")).toBe("same_address");
+    // Hosts as the server stores them: case and a dot at the end don't matter; a port does.
+    expect(compareAddress("https://Games.Example.com./play/", "https://games.example.com/play/")).toBe("same_address");
+    expect(compareAddress("https://games.example.com:8443/play/", "https://games.example.com/play/")).toBe("new_site");
+    // With nothing to compare it with, there's no answer.
+    expect(compareAddress("https://games.example.com/", null)).toBeNull();
+    expect(compareAddress("not an address", "https://games.example.com/")).toBeNull();
   });
 });

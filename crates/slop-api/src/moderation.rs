@@ -250,11 +250,17 @@ const BROWSER_LABELS: &[(&str, &str)] = &[
     ("broken", "Its site doesn't load, or the game doesn't work"),
 ];
 
+/// For a browser game, the rule a reason points to where the usual one doesn't cover it: its
+/// site not being its repository's game is under "Browser games and dedicated servers", not
+/// "Builds must match their source" (it has no build).
+const BROWSER_RULES: &[(&str, &str)] = &[("source_mismatch", "browser_server")];
+
 /// Content Policy sections. Each title is a heading in `legal/content.md`.
 pub const RULES: &[(&str, &str)] = &[
     ("malware", "Malware and data theft"),
     ("source_mismatch", "Builds must match their source"),
     ("outside_code", "Code from outside SLAPorSLOP"),
+    ("browser_server", "Browser games and dedicated servers"),
     ("scam", "Scams and fraud"),
     ("illegal", "Illegal content"),
     ("child_abuse", "Child sexual abuse material"),
@@ -286,6 +292,24 @@ fn reason(code: &str) -> Option<&'static Reason> {
 
 fn reason_label(code: &str) -> &'static str {
     reason(code).map_or("Other", |r| r.label)
+}
+
+/// `reason_label`, in a browser game's words when it's about one (`BROWSER_LABELS`).
+fn reason_label_for(code: &str, in_browser: bool) -> &'static str {
+    BROWSER_LABELS
+        .iter()
+        .find(|(c, _)| in_browser && *c == code)
+        .map_or_else(|| reason_label(code), |(_, label)| label)
+}
+
+/// The rule a reason usually breaks, for an app that plays in the browser or not
+/// (`BROWSER_RULES`).
+fn suggested_rule(code: &str, in_browser: bool) -> Option<&'static str> {
+    BROWSER_RULES
+        .iter()
+        .find(|(c, _)| in_browser && *c == code)
+        .map(|(_, rule)| *rule)
+        .or_else(|| reason(code).and_then(|r| r.rule))
 }
 
 pub fn action_label(action: &str) -> &'static str {
@@ -403,10 +427,7 @@ async fn reasons(
             })
             .map(|r| ReasonView {
                 code: r.code,
-                label: BROWSER_LABELS
-                    .iter()
-                    .find(|(code, _)| in_browser && *code == r.code)
-                    .map_or(r.label, |(_, label)| label),
+                label: reason_label_for(r.code, in_browser),
                 urgent: r.priority < 2,
             })
             .collect(),
@@ -745,6 +766,19 @@ async fn report(
         .await?;
     if user.as_ref().is_some_and(|u| Some(u.id) == subject.user_id) && !reply_under_own_review {
         return Err(ApiError::invalid("subject", "you can't report your own"));
+    }
+    // A reason whose rule doesn't cover the app isn't taken (it isn't offered either, `reasons`).
+    // Only for an app the reporter can see, as `find_subject` checked.
+    if body.kind == "app"
+        && NOT_FOR_BROWSER_GAMES_OR_SERVERS.contains(&reason.code)
+        && (catalog::plays_in_browser(&state.db, subject.id).await?
+            || catalog::is_dedicated_server(&state.db, subject.id).await?)
+    {
+        return Err(ApiError::invalid(
+            "reason",
+            "the rule on code from outside SLAPorSLOP doesn't cover browser games or dedicated \
+             servers: choose another reason, such as a misleading page or malware",
+        ));
     }
     let due = if reason.priority < 2 {
         Duration::hours(24)
@@ -1504,6 +1538,14 @@ pub async fn queued(db: &sqlx::PgPool) -> ApiResult<Vec<QueuedReport>> {
     let now = OffsetDateTime::now_utc();
     let mut out = Vec::with_capacity(rows.len());
     for r in rows {
+        // A browser game's reports are worded, and point to the rule, as for one.
+        let in_browser = r.subject_kind == "app"
+            && sqlx::query_scalar::<_, bool>(
+                "select coalesce((select 'browser' = any(platforms) from apps where id = $1), false)",
+            )
+            .bind(r.subject_id)
+            .fetch_one(db)
+            .await?;
         out.push(QueuedReport {
             link: link(db, &r.subject_kind, r.subject_id).await?,
             account: match r.subject_user_id {
@@ -1511,8 +1553,8 @@ pub async fn queued(db: &sqlx::PgPool) -> ApiResult<Vec<QueuedReport>> {
                 None => None,
             },
             actions: actions_for(&r.subject_kind),
-            suggested_rule: reason(&r.reason).and_then(|x| x.rule),
-            reason_label: reason_label(&r.reason),
+            suggested_rule: suggested_rule(&r.reason, in_browser),
+            reason_label: reason_label_for(&r.reason, in_browser),
             overdue: r.due_at < now,
             id: r.id,
             reference: r.reference,

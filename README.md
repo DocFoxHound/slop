@@ -53,7 +53,7 @@ opens them, but it can't check what the site serves, so they're never marked sca
 download, always: no prices, no in-app purchases, no loot boxes.
 
 <p align="center">
-  <img src="docs/images/checks.svg" alt="Every release: open-source code is built and signed in CI, scanned with ClamAV, YARA, capa and Microsoft Defender, reviewed by a person, and verified by the SLAPorSLOP app at install and every launch." width="100%">
+  <img src="docs/images/checks.svg" alt="Every download: open-source code is built and signed in CI, scanned with ClamAV, YARA, capa and Microsoft Defender, reviewed by a person, and verified by the SLAPorSLOP app at install and every launch." width="100%">
 </p>
 
 <br>

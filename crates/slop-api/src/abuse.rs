@@ -306,7 +306,8 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
         }
     }
     // Browser games' play addresses, every hour: a site can be listed any day after it was
-    // approved, and Play keeps opening it until a person withdraws it.
+    // approved, and Play keeps opening it until a person withdraws it. Every address it
+    // redirected through when it was checked, and where it ended up, too.
     #[derive(sqlx::FromRow)]
     struct Address {
         app_id: Uuid,
@@ -314,11 +315,15 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
         release_id: Uuid,
         version: String,
         play_address: String,
+        hops: Vec<String>,
         final_address: Option<String>,
         plays_now: bool,
     }
     let addresses: Vec<Address> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select a.id as app_id, a.title, r.id as release_id, r.version, r.play_address,
+                case when jsonb_typeof(r.address_checks -> 'hops') = 'array'
+                     then array(select jsonb_array_elements_text(r.address_checks -> 'hops'))
+                     else '{{}}' end as hops,
                 r.address_checks ->> 'final_address' as final_address,
                 r.id is not distinct from {play} as plays_now
          from releases r join apps a on a.id = r.app_id
@@ -330,7 +335,11 @@ pub async fn run_once(state: &AppState) -> anyhow::Result<usize> {
     .await?;
     for a in addresses {
         let mut urls = vec![a.play_address.clone()];
-        urls.extend(a.final_address.filter(|f| *f != a.play_address));
+        for hop in a.hops.into_iter().chain(a.final_address) {
+            if !urls.contains(&hop) {
+                urls.push(hop);
+            }
+        }
         for (url, source) in crate::bad_links::find(db, &urls).await? {
             found.push(Found {
                 kind: "bad_link",

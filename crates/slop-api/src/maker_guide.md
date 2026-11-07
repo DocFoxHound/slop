@@ -13,7 +13,7 @@ and links, in plain words.
 
 - **Open source:** a public repository with an OSI licence file (LICENSE), and nothing closed-source the app needs.
 - **Free:** no purchases, payment links, loot boxes or premium currencies. Players support makers with SLAPorSLOP's donate button, which gives nothing back.
-- **No code from outside SLAPorSLOP:** no self-updaters, no downloading code to run. Mods come from SLAPorSLOP. This rule doesn't cover browser games, or dedicated servers (tag `dedicated-server`, the Servers category), which may load mods, maps and plugins from other places: say in a server's description what it loads.
+- **No code from outside SLAPorSLOP:** no self-updaters, no downloading code to run. Mods come from SLAPorSLOP. This rule doesn't cover browser games, or dedicated servers (tag `dedicated-server`, the Servers category), which may load mods, maps and plugins from other places: say in a server's description what it loads. Only a real server counts (a program people run so others can play a game), and a reviewer checks: never tag anything else Dedicated Server.
 - **Saves** go under `SLOP_SAVE_DIR` when it's set ("Saves and sandbox mode").
 - **Online:** say on the store page if the app goes online, and to which hosts.
 - **Words:** say "scanned" or "checked", never "safe". Never invent features the code doesn't have.
@@ -46,7 +46,7 @@ and links, in plain words.
    section "Pictures and videos".
 5. Releases: best is Slop Build (`slop_build_setup`): commit the workflow it gives, and every push builds, signs and submits a release. Otherwise attach builds to a release on the repository and use `submit_github_release` or `submit_release`. A game that plays on the maker's own website works differently: see the next section.
 
-A **dedicated server** for a game is an app of its own: a Windows and/or Linux download, published as above, with the tag `dedicated-server` (category Servers). Name the game it's for in its summary and description; SLAPorSLOP doesn't link a server to its game.
+A **dedicated server** for a game is an app of its own: a Windows and/or Linux download, published as above, with the tag `dedicated-server` (category Servers). Name the game it's for in its summary and description; SLAPorSLOP doesn't link a server to its game. A reviewer checks it really is a server people run so others can play: a game or tool with the tag is turned down as a misleading store page. When the tag is added to an app that already has an approved release, its next release waits for a person.
 
 ## A game that plays in the browser
 
@@ -63,8 +63,14 @@ game. Play opens its address in the player's browser.
 4. SLAPorSLOP checks the address in seconds: https, a public site, the bad-link lists, and that it
    loads as a web page, not a download. `list_releases` shows what it found (`address_checks`)
    and why it failed if it did. Then a person opens it and plays it.
-5. Every new address waits for a person. Giving the same address again (with new notes or a new
-   rating) can be approved automatically.
+5. Every new address waits for a person. Giving exactly the same address again (with new notes or
+   a new rating) can be approved automatically; `www.`, the path, the query and the `#` part all
+   count, so any change waits for a person.
+
+What the reviewer turns down (how they apply the Content Policy, not its words): a page that asks
+for the password of another service (SLAPorSLOP, Google, Discord…) or for payment details, a page
+that's only there to download a program, and anything sold. A sign-in of the game's own is fine
+if the store page says the game needs an account.
 
 There's no Slop Build, GitHub release, browser demo, mod, community build, sandbox mode, save
 sync or Slop Pulse for a browser game; votes count the days players played it. Never say it's

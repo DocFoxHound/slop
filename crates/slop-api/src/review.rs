@@ -491,14 +491,10 @@ async fn feed(
             // it, and compares it with the address Play opens now.
             let question = match &play_address {
                 Some(address) => {
-                    let now: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-                        "select {} from apps a where a.id = $1",
-                        crate::catalog::PLAY_ADDRESS
-                    )))
-                    .bind(app_id)
-                    .fetch_one(&state.db)
-                    .await?;
-                    detail["current_play_address"] = json!(now);
+                    let context = releases::address_context(&state.db, id).await?;
+                    detail["current_play_address"] = json!(context.current_play_address);
+                    detail["withdrawn_play_address"] = json!(context.withdrawn_play_address);
+                    detail["newer_approved"] = json!(context.newer_approved);
                     detail["page_is_untrusted"] = json!(PAGE_IS_UNTRUSTED);
                     format!(
                         "Approve the play address {address} for {} ({version})?",

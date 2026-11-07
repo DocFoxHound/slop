@@ -546,8 +546,13 @@ site into a desktop window players download.
 - **The Content Policy.** Its rules on builds and on code from outside SLAPorSLOP don't cover
   browser games: your page loads its code from your site, as any web page does. Every other rule
   does. The game on your site must match its store page and age rating, sell nothing, and carry
-  no malware, scams or phishing. Don't ask players for a sign-in, a password or payment details,
-  and don't offer a program to download.
+  no malware, scams or phishing.
+- **What a reviewer checks.** A person plays every new address (see
+  [What happens to a play address](#what-happens-to-a-play-address)). They reject a page that
+  asks for the password of another service (SLAPorSLOP, Google, Discord…) or for payment
+  details, or that's only a page to download a program rather than a game that plays in the
+  browser. A sign-in of your game's own is fine: say on the store page that the game needs an
+  account.
 - **Say where else it connects.** A site is on the web anyway, so networking code in its source
   is only a note; if the game talks to servers besides its own site (multiplayer, leaderboards,
   online services), tick **Online** on the store page and name them. The fix for that is a
@@ -582,22 +587,24 @@ The **Publishing progress** checklist has these steps for a browser game:
 1. **Store page:** saved.
 2. **Play address:** received.
 3. **Address checked**, usually within seconds (addresses go ahead of files waiting to be
-   checked). SLAPorSLOP loads the address once (it reads the page, it
-   doesn't run it) and keeps nothing of it. It follows at most 5 redirects, each of them https, on a
-   public site, not SLAPorSLOP's own and not on a bad-link list. The page it ends at must answer
-   within 20 seconds (HTTP 2xx) with a web page (`text/html` or `application/xhtml+xml`), not a
-   file to download. Your Releases page shows each check in words. If one fails, so does the
-   release, with the reason ("the page didn't load: the site answered HTTP 404", "it downloads a
-   file instead of opening a page", "it leads to a private network"): fix it and give the address
-   again. If this server has no bad-link lists loaded, the check says so, never "not on any
-   list".
+   checked). SLAPorSLOP loads the address once (it reads the page, it doesn't run it) and keeps
+   nothing of it. It follows at most 5 redirects, each of them https, a site's name (not an IP
+   address) on a public site, not SLAPorSLOP's own and not on a bad-link list. The page it ends
+   at must answer within 20 seconds (HTTP 2xx) with a web page (`text/html` or
+   `application/xhtml+xml`), not a file to download, and the whole check, every redirect
+   included, must be done within 45 seconds ("the page didn't load in time"). Your Releases page
+   shows each check in words. If one fails, so does the release, with the reason ("the page
+   didn't load: the site answered HTTP 404", "it downloads a file instead of opening a page", "it
+   leads to a private network"): fix it and give the address again. If this server has no
+   bad-link lists loaded, the check says so, never "not on any list".
 4. **Source check:** your repository at the release's commit, as for every release: the licence,
    anything that looks like selling, and pay-to-win design. Saves, Slop Pulse and sandbox mode
    don't apply.
 5. **Review by a person:** every new address is looked at by a person, who opens it in a private
    window and plays it. It should be the game in your repository and on your store page, with a
-   fitting age rating. A page that asks for a sign-in, a password or payment details, offers a
-   program to download, or sells anything is rejected.
+   fitting age rating. A page that asks for another service's password or for payment details,
+   that's only a page to download a program, or that sells anything is rejected (see
+   [What a reviewer checks](#browser-games)).
 6. **In the store:** SLAPorSLOP staff put the app in the store, as for every app. A Beta or
    released browser game needs an approved address first, and so do **Move to Beta** and
    **Release it**; a Coming soon page can be listed without one.
@@ -611,9 +618,11 @@ Once a person approves it, the Releases page says **Approved: Play opens this ad
 
 **Changing your game:** the site is yours, so change what it serves whenever you like;
 SLAPorSLOP doesn't load it again. Give a new release when the address changes, or to give players
-a new version, new notes or a new rating. A release with the address Play opens now can be
-approved automatically (with **Approve updates automatically** on, when it passes every check);
-a new address always waits for a person, and Play keeps opening the old one until it's approved.
+a new version, new notes or a new rating. A release with exactly the address Play opens now can
+be approved automatically (with **Approve updates automatically** on, when it passes every
+check); a new address always waits for a person, and Play keeps opening the old one until it's
+approved. "Exactly" means as SLAPorSLOP keeps it: adding or dropping `www.`, or changing the path,
+the query or the `#` part, makes a new address.
 
 **Withdrawn addresses:** you can withdraw a release before it's reviewed. If SLAPorSLOP withdraws
 an approved address (say, because a bad-link list has named it since), Play stops opening it,
@@ -862,8 +871,8 @@ browser games or dedicated servers (see [Dedicated servers](#dedicated-servers))
   (code loading, self-updaters, unsafe data formats). A reviewer looks at each. An update with a
   new note waits for a person.
 - Anyone can report an app that **runs code from outside SLAPorSLOP**; reports are reviewed within
-  24 hours. That reason isn't offered for browser games or dedicated servers, which the rule
-  doesn't cover.
+  24 hours. That reason isn't offered, or taken, for browser games or dedicated servers, which the
+  rule doesn't cover.
 - The source check also notes **networking code**. If your code goes online but your store
   page doesn't say so, that's a note, and an update waits for a person.
 - Store pages of apps that go online tell players that SLAPorSLOP can't check the servers, and
@@ -878,6 +887,12 @@ and/or Linux, built and checked like any other app (Slop Build works as usual), 
 **Dedicated Server**, which puts it in the **Servers** category. Name the game it's for in its
 summary and description: SLAPorSLOP doesn't link a server to its game.
 
+It has to really be a dedicated server: a server or headless program people run so others can
+play, for a game its summary and description name. A reviewer checks. Anything else with the tag
+(a playable game, a launcher, a tool) is reviewed as an ordinary download, rules 1 and 2
+included, and turned down as a misleading store page until the tag comes off. When the tag is
+added to an app that already has an approved release, its next release waits for a person.
+
 What's different for a server:
 
 - It may download and run **mods, maps and plugins from other places**, such as a mod site or
@@ -890,7 +905,9 @@ What's different for a server:
   must. Say in the description what the server loads, and from where.
 - Everything else applies: it's built from its source and checked like every other release,
   and every other Content Policy rule covers it. Rules 3 to 8 protect whoever runs the server and
-  everyone who connects to it: follow them.
+  everyone who connects to it: follow them. For a server, an unsafe data format (rule 3) is a
+  suggestion in your fix list: a reviewer asks you to replace it, but doesn't reject the server
+  for that alone.
 
 ## Saves and sandbox mode
 

@@ -36,7 +36,7 @@ vi.mock("../api", async (actual) => {
 
 import { api, ApiError, type Launched } from "../api";
 import { desktop, openExternal } from "../platform";
-import { APP_LAUNCHED } from "./AppUpdates";
+import { APP_LAUNCHED, PLAY_STOPPED } from "./AppUpdates";
 import { BrowserPlayLink, InstallControls, type BrowserPlay } from "./InstallControls";
 
 const ADDRESS = "https://play.example.com/orbit/";
@@ -57,19 +57,24 @@ const settle = () => act(async () => {});
 
 describe("Play on a browser game", () => {
   let launches: string[];
+  let stopped: string[];
   const onLaunch = (e: Event) => launches.push((e as CustomEvent<string>).detail);
+  const onStopped = (e: Event) => stopped.push((e as CustomEvent<string>).detail);
 
   beforeEach(() => {
     state.desktop = false;
     state.me = { id: "pat" };
     launches = [];
+    stopped = [];
     window.addEventListener(APP_LAUNCHED, onLaunch);
+    window.addEventListener(PLAY_STOPPED, onStopped);
     vi.mocked(api.launch).mockReset().mockResolvedValue(launched());
     vi.mocked(openExternal).mockClear();
     vi.mocked(api.addToLibrary).mockClear();
   });
   afterEach(() => {
     window.removeEventListener(APP_LAUNCHED, onLaunch);
+    window.removeEventListener(PLAY_STOPPED, onStopped);
     cleanup();
     vi.useRealTimers();
   });
@@ -124,10 +129,47 @@ describe("Play on a browser game", () => {
     expect(launches).toEqual([]);
   });
 
-  it("with nothing approved to play, or an address that isn't a web page, has no Play", () => {
+  it("on the website, an address withdrawn since the page loaded: the tab is open, so it says to close it, and the page loads again", async () => {
+    vi.mocked(api.launch).mockRejectedValue(new ApiError(409, "conflict", "nothing to play yet"));
+    controls();
+    expect(fireEvent.click(play())).toBe(true);
+    await settle();
+    expect(screen.getByRole("status").textContent).toBe("SLAPorSLOP no longer opens this game: its address was withdrawn. Close that tab.");
+    expect(screen.queryByText(/couldn't count this play/)).toBeNull();
+    expect(stopped).toEqual(["orbit"]);
+    expect(launches).toEqual([]);
+    cleanup();
+    // Gone from the store since: the same, without the address.
+    vi.mocked(api.launch).mockRejectedValue(new ApiError(404, "not_found", "not found"));
+    controls();
+    fireEvent.click(play());
+    await settle();
+    expect(screen.getByRole("status").textContent).toBe("SLAPorSLOP no longer opens this game. Close that tab.");
+  });
+
+  it("the rating's Play keeps what SLAPorSLOP said once the page drops the address", async () => {
+    vi.mocked(api.launch).mockRejectedValue(new ApiError(409, "conflict", "nothing to play yet"));
+    const view = (address: string | null) => (
+      <MemoryRouter>
+        <BrowserPlayLink slug="orbit" address={address} />
+      </MemoryRouter>
+    );
+    const { rerender } = render(view(ADDRESS));
+    fireEvent.click(play());
+    await settle();
+    // The page loaded again (PLAY_STOPPED): no address now.
+    rerender(view(null));
+    expect(screen.queryByRole("link", { name: "Play" })).toBeNull();
+    expect(screen.getByRole("status").textContent).toBe("SLAPorSLOP no longer opens this game: its address was withdrawn. Close that tab.");
+  });
+
+  it("with nothing to play, or an address that isn't a web page, has no Play, in words true whatever the reason", () => {
     controls({ address: null });
     expect(screen.queryByRole("link", { name: "Play" })).toBeNull();
-    expect(screen.getByText("Not playable yet.")).toBeTruthy();
+    // Not approved yet, withdrawn, or out of the store: never "yet".
+    expect(screen.getByText("Not playable right now.")).toBeTruthy();
+    expect(screen.getByText("SLAPorSLOP has no address for it to open right now.")).toBeTruthy();
+    expect(screen.queryByText(/approved yet/)).toBeNull();
     cleanup();
     controls({ address: "javascript:alert(1)" });
     expect(screen.queryByRole("link", { name: "Play" })).toBeNull();
@@ -137,8 +179,9 @@ describe("Play on a browser game", () => {
     expect((screen.getByRole("button", { name: "Checking…" }) as HTMLButtonElement).disabled).toBe(true);
     cleanup();
     controls({ address: null }, true);
-    expect((screen.getByRole("button", { name: "Not playable yet" }) as HTMLButtonElement).disabled).toBe(true);
+    expect((screen.getByRole("button", { name: "Not playable right now" }) as HTMLButtonElement).disabled).toBe(true);
     expect(screen.getByText("Plays in your browser")).toBeTruthy();
+    expect(screen.getByText("SLAPorSLOP has no address for it to open right now.")).toBeTruthy();
   });
 
   it("in the desktop app, records the play first, then opens the address SLAPorSLOP gives in the system browser", async () => {
@@ -179,6 +222,39 @@ describe("Play on a browser game", () => {
     expect(openExternal).toHaveBeenCalledWith(ADDRESS);
   });
 
+  it("in the desktop app, a slow launch goes on being counted: once it is, the note goes and the page is told", async () => {
+    state.desktop = true;
+    vi.useFakeTimers();
+    let finish: (l: Launched) => void = () => {};
+    vi.mocked(api.launch).mockReturnValue(new Promise((done) => (finish = done)));
+    controls();
+    fireEvent.click(play());
+    await act(async () => vi.advanceTimersByTime(3100));
+    expect(openExternal).toHaveBeenCalledWith(ADDRESS);
+    expect(screen.getByRole("status").textContent).toMatch(/^SLAPorSLOP couldn't count this play/);
+    expect(launches).toEqual([]);
+    // SLAPorSLOP answers after all: counted, so the rating and bug reports can open up.
+    await act(async () => finish(launched()));
+    expect(launches).toEqual(["orbit"]);
+    expect(screen.queryByRole("status")).toBeNull();
+    expect(openExternal).toHaveBeenCalledTimes(1);
+  });
+
+  it("in the desktop app, a slow launch that turns out withdrawn says to close the game it opened", async () => {
+    state.desktop = true;
+    vi.useFakeTimers();
+    let fail: (e: unknown) => void = () => {};
+    vi.mocked(api.launch).mockReturnValue(new Promise((_, no) => (fail = no)));
+    controls();
+    fireEvent.click(play());
+    await act(async () => vi.advanceTimersByTime(3100));
+    expect(openExternal).toHaveBeenCalledWith(ADDRESS);
+    await act(async () => fail(new ApiError(409, "conflict", "nothing to play yet")));
+    expect(screen.getByRole("status").textContent).toBe("SLAPorSLOP no longer opens this game: its address was withdrawn. Close that tab.");
+    expect(stopped).toEqual(["orbit"]);
+    expect(launches).toEqual([]);
+  });
+
   it("in the desktop app, opens nothing when SLAPorSLOP says there's nothing to play, or the address isn't https", async () => {
     state.desktop = true;
     vi.mocked(api.launch).mockRejectedValue(new ApiError(409, "conflict", "nothing to play yet"));
@@ -187,6 +263,8 @@ describe("Play on a browser game", () => {
     await settle();
     expect(openExternal).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toBe("Not opened: nothing to play yet.");
+    // The page loads again, so Play goes away.
+    expect(stopped).toEqual(["orbit"]);
     cleanup();
 
     vi.mocked(api.launch).mockResolvedValue(launched(null));
@@ -195,6 +273,38 @@ describe("Play on a browser game", () => {
     await settle();
     expect(openExternal).not.toHaveBeenCalled();
     expect(screen.getByRole("alert").textContent).toBe("Not opened: the SLAPorSLOP app opens only https addresses.");
+  });
+
+  it("in the desktop app, opens nothing when SLAPorSLOP's own answer isn't an https address", async () => {
+    state.desktop = true;
+    // The store page's address is https; the one the launch answers with decides, and is checked too.
+    for (const answer of ["http://evil.example/", "javascript:alert(1)", "file:///etc/passwd"]) {
+      vi.mocked(openExternal).mockClear();
+      vi.mocked(api.launch).mockResolvedValue(launched(answer));
+      controls();
+      fireEvent.click(play());
+      await settle();
+      expect(openExternal, answer).not.toHaveBeenCalled();
+      expect(screen.getByRole("alert").textContent).toBe("Not opened: the SLAPorSLOP app opens only https addresses.");
+      cleanup();
+    }
+    // Signed out, nothing is asked of SLAPorSLOP, and a plain http address isn't opened either.
+    state.me = null;
+    vi.mocked(api.launch).mockClear();
+    vi.mocked(openExternal).mockClear();
+    controls({ address: "http://play.example.com/orbit/" });
+    fireEvent.click(play());
+    await settle();
+    expect(api.launch).not.toHaveBeenCalled();
+    expect(openExternal).not.toHaveBeenCalled();
+    expect(screen.getByRole("alert").textContent).toBe("Not opened: the SLAPorSLOP app opens only https addresses.");
+    // Signed out with an https address, it opens straight away.
+    cleanup();
+    controls();
+    fireEvent.click(play());
+    await settle();
+    expect(api.launch).not.toHaveBeenCalled();
+    expect(openExternal).toHaveBeenCalledWith(ADDRESS);
   });
 
   it("adds it to the library in the desktop app too, where nothing installs it", async () => {

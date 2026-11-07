@@ -44,7 +44,10 @@ export function HowRatings() {
 
       <h2>Who can vote</h2>
       <ul>
-        <li>Anyone signed in who has launched the app through SLAPorSLOP. You can't rate what you haven't tried.</li>
+        <li>
+          Anyone signed in who has launched the app through SLAPorSLOP, or pressed Play on SLAPorSLOP for a game that plays in
+          your browser. You can't rate what you haven't tried.
+        </li>
         <li>
           Apps you can play: Beta and released apps. Coming soon apps have nothing to play yet, so they collect Interested marks
           instead. A vote given while the app was in Beta is marked <b>Rated in Beta</b>.
@@ -77,7 +80,8 @@ export function HowRatings() {
       </table>
       <p>
         Tools and games that don't report playtime use the number of separate days you launched them instead, with ten days or
-        more counting fully: <code>min(1, log10(1 + days) / log10(11))</code>.
+        more counting fully: <code>min(1, log10(1 + days) / log10(11))</code>. Games that play in your browser always count this
+        way: each day you pressed Play on SLAPorSLOP is a day played.
       </p>
       <table className="kv-table">
         <caption className="sr-only">Vote weight by days launched</caption>

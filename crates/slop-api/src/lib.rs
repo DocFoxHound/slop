@@ -118,6 +118,12 @@ pub struct AppState {
     pub page_http: reqwest::Client,
     /// Wakes the release fetcher when a release is submitted.
     pub fetch_wakeup: Arc<tokio::sync::Notify>,
+    /// Whether the fetcher's last claim was a play address, so the next one is a file release if
+    /// any is waiting (releases.rs `fetch_next`).
+    pub fetched_address_last: Arc<std::sync::atomic::AtomicBool>,
+    /// How long one play address's check may take in all, every redirect and name lookup
+    /// included (releases.rs `check_play_address`). Tests shorten it.
+    pub page_check_deadline: Duration,
     /// Wakes the bounty charger when a delivery is confirmed (bounties.rs).
     pub bounty_wakeup: Arc<tokio::sync::Notify>,
     /// Wakes the GitHub release watcher when a maker changes its settings.
@@ -229,6 +235,8 @@ impl AppState {
             avatar_http,
             page_http,
             fetch_wakeup: Arc::new(tokio::sync::Notify::new()),
+            fetched_address_last: Arc::default(),
+            page_check_deadline: Duration::from_secs(45),
             bounty_wakeup: Arc::new(tokio::sync::Notify::new()),
             watch_wakeup: Arc::new(tokio::sync::Notify::new()),
             provenance: Arc::new(slop_provenance::ProvenanceVerifier::public_good()?),

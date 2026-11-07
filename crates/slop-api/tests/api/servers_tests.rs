@@ -335,4 +335,89 @@ async fn outside_code_isnt_a_reason_to_report_a_server_or_a_browser_game(db: PgP
         codes("kind=review&app=relay", None).await,
         codes("kind=review", None).await
     );
+
+    // Nor taken if it's sent anyway (an older app, an agent): a moderator would only dismiss it.
+    // Who can't see the app learns nothing (404, as for any report on it).
+    let (_, pat) = app.user("Pat Player", "US").await;
+    let report = |subject: &str| {
+        app.send(req(Method::POST, "/v1/reports").cookie(&pat).json(json!({
+            "kind": "app", "subject": subject, "reason": "outside_code",
+            "details": "It downloads plugins from a mod site.", "good_faith": true
+        })))
+    };
+    for subject in ["relay", "web-game"] {
+        let res = report(subject).await;
+        assert_eq!(res.status(), StatusCode::UNPROCESSABLE_ENTITY, "{subject}");
+        let body = body_json(res).await;
+        assert_eq!(body["error"]["field"], "reason", "{subject}");
+        assert!(
+            body["error"]["message"]
+                .as_str()
+                .unwrap()
+                .contains("doesn't cover browser games or dedicated servers"),
+            "{body}"
+        );
+    }
+    assert_eq!(report("secret-relay").await.status(), StatusCode::NOT_FOUND);
+    assert_eq!(report("castle").await.status(), StatusCode::OK);
+    let reasons: Vec<String> = sqlx::query_scalar("select reason from reports")
+        .fetch_all(&app.db)
+        .await
+        .unwrap();
+    assert_eq!(reasons, ["outside_code"], "only castle's");
+}
+
+/// The maker chooses the Dedicated Server tag, and the rule on code from outside SLAPorSLOP
+/// doesn't cover servers, so an app that has become one since its last approved release waits for
+/// a person, who checks it really is a server. Each release's source check records whether it was
+/// one; once a person approved it as one, updates go through on their own as before.
+#[sqlx::test(migrator = "slop_api::MIGRATOR")]
+async fn an_app_that_becomes_a_dedicated_server_waits_for_a_person(db: PgPool) {
+    let app = test_app(db).await;
+    let (_, maker) = maker_with_app(&app, "beta").await;
+    let approve = |id: &str| {
+        admin::approve(
+            &app.db,
+            Some(&app.signing_key),
+            lax(),
+            id.parse().unwrap(),
+            "rev",
+        )
+    };
+    let first = submit_and_fetch(&app, &maker, "1.0.0").await;
+    approve(&first).await.unwrap();
+    let update = submit_and_fetch(&app, &maker, "1.1.0").await;
+    assert_eq!(release_status(&app, &update).await.0, "approved");
+
+    tag_app(&app, "game", &["dedicated-server"]).await;
+    let server = submit_and_fetch(&app, &maker, "1.2.0").await;
+    assert_eq!(
+        release_status(&app, &server).await,
+        (
+            "awaiting_review".into(),
+            Some(
+                "Waiting for a person: it's now in the Servers category, so a person checks it really is a dedicated server"
+                    .into()
+            ),
+            None
+        )
+    );
+    let recorded: Vec<(String, Value)> = sqlx::query_as(
+        "select version, repo_scan -> 'dedicated_server' from releases order by version",
+    )
+    .fetch_all(&app.db)
+    .await
+    .unwrap();
+    assert_eq!(
+        recorded,
+        [
+            ("1.0.0".to_string(), json!(false)),
+            ("1.1.0".to_string(), json!(false)),
+            ("1.2.0".to_string(), json!(true)),
+        ]
+    );
+
+    approve(&server).await.unwrap();
+    let next = submit_and_fetch(&app, &maker, "1.3.0").await;
+    assert_eq!(release_status(&app, &next).await.0, "approved");
 }

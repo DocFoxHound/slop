@@ -8,8 +8,9 @@ import { Link } from "react-router";
 
 import { api, type AdminAppRecord, type AppStage } from "../../api";
 import { ErrorState, ExternalLink, Loading } from "../../components/ui";
-import { formatDate, money, STAGE_LABEL } from "../../format";
+import { formatDate, money, playsInBrowser, STAGE_LABEL } from "../../format";
 import { useLoad } from "../../hooks";
+import { playReleaseId, withdrawWords } from "./appFacts";
 import { HoldCard, HoldForm } from "./DonationHolds";
 import { ActionMessages, DelistButton, ReasonButton, useAction } from "./shared";
 
@@ -30,6 +31,9 @@ export function AppRecord({ slug }: { slug: string }) {
   const appHolds = (holds.data ?? []).filter((h) => h.slug === slug);
   const open = appHolds.find((h) => !h.lifted_at);
   const approved = record.data.releases.filter((r) => r.status === "approved");
+  // A browser game's releases are play addresses: which one Play opens decides what withdrawing does.
+  const browser = playsInBrowser(app);
+  const playing = browser ? playReleaseId(record.data.releases) : null;
 
   return (
     <div className="admin-record">
@@ -130,7 +134,7 @@ export function AppRecord({ slug }: { slug: string }) {
             <ReasonButton
               key={r.id}
               label={`Withdraw ${r.version}`}
-              placeholder="Reason, shown to players (stops it launching)"
+              placeholder={withdrawWords(app.title, r.version, browser, r.id === playing).placeholder}
               danger
               disabled={action.busy !== undefined}
               onSubmit={(reason) => void action.run(r.id, () => api.admin.revoke(r.id, reason))}
@@ -138,8 +142,11 @@ export function AppRecord({ slug }: { slug: string }) {
           ))}
         </div>
         <p className="muted small">
-          Freezing stops new releases while you look into something; the app stays in the store and installed copies
-          keep working. The daily repository check never lifts a staff freeze.
+          Freezing stops new releases while you look into something; the app stays in the store and{" "}
+          {browser ? "Play keeps opening its address" : "installed copies keep working"}. The daily repository check never lifts a
+          staff freeze.
+          {browser &&
+            " Withdrawing the address Play opens stops Play for everyone until a person approves a new one (anyone who saved it can still visit the site); withdrawing an older one changes nothing for players."}
         </p>
         <ActionMessages {...action} />
       </section>
@@ -227,6 +234,7 @@ export function AppRecord({ slug }: { slug: string }) {
             <thead>
               <tr>
                 <th>Version</th>
+                {browser && <th>Play address</th>}
                 <th>Status</th>
                 <th>Submitted</th>
                 <th>Reviewed</th>
@@ -236,6 +244,17 @@ export function AppRecord({ slug }: { slug: string }) {
               {record.data.releases.map((r) => (
                 <tr key={r.id}>
                   <td>{r.version}</td>
+                  {browser && (
+                    <td>
+                      {r.play_address ? <code className="play-address">{r.play_address}</code> : "—"}
+                      {r.id === playing && (
+                        <>
+                          {" "}
+                          <span className="badge official">PLAY OPENS IT</span>
+                        </>
+                      )}
+                    </td>
+                  )}
                   <td>{r.status}</td>
                   <td>{formatDate(r.created_at)}</td>
                   <td>{r.reviewed_at ? formatDate(r.reviewed_at) : "—"}</td>

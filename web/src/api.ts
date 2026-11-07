@@ -1724,6 +1724,13 @@ export interface AdminQueue {
       app: AdminAppRef;
       /** A browser game's: the address Play opens now, to compare with (a new site?); null for downloads. */
       current_play_address?: string | null;
+      /**
+       * A browser game's: the address Play opened until SLAPorSLOP withdrew it, when that's why Play
+       * opens none now. Null with `current_play_address` null too: it never had an approved address.
+       */
+      withdrawn_play_address?: string | null;
+      /** A newer address release that's already approved: approving this one moves Play back to this older address. */
+      newer_approved?: { version: string; play_address: string; note: string } | null;
       notes: ReviewNote[];
     }
   >;
@@ -1825,7 +1832,8 @@ export type AdminAppFlag =
   | "low_rating";
 
 export interface AdminApp extends AdminAppRef {
-  releases: Array<{ id: string; version: string; reviewed_at: string | null }>;
+  /** Approved releases, newest first, for withdrawing one; a browser game's carry their play address. */
+  releases: Array<{ id: string; version: string; reviewed_at: string | null; play_address?: string | null }>;
   /** Releases still being checked or waiting for review. */
   pending_releases: number;
   /** What needs staff, most urgent first; empty for a healthy app. */
@@ -1841,8 +1849,10 @@ export interface AdminApp extends AdminAppRef {
   updated_at: string;
   /** The newest release submitted, whatever became of it. */
   newest_release: { version: string; status: string; status_reason: string | null } | null;
-  /** The version players get. */
+  /** The version players get; a browser game's is the one whose address Play opens (none after it was withdrawn). */
   serving_version: string | null;
+  /** A browser game's: the address Play opens now, if any. */
+  play_address?: string | null;
   /** Live release files a re-scan flagged, and ones whose download changed or went away. */
   rescan_flags: number;
   downloads_lost: number;
@@ -1904,7 +1914,16 @@ export interface AdminAppRecord {
     created_at: string;
     updated_at: string;
   };
-  releases: Array<{ id: string; version: string; status: string; created_at: string; reviewed_at: string | null }>;
+  /** A browser game's releases carry their play address and its checks. */
+  releases: Array<{
+    id: string;
+    version: string;
+    status: string;
+    created_at: string;
+    reviewed_at: string | null;
+    play_address?: string | null;
+    address_checks?: AddressChecks | null;
+  }>;
   donations: Array<{ currency: string; donations: number; donated_minor: number; slop_fee_minor: number; refunded_minor: number }>;
   active_server_donations: number;
   reports: Array<{ id: string; reference: string; reason: string; details: string; status: string; created_at: string }>;
@@ -2242,6 +2261,11 @@ export interface RepoScan {
   pulse_missing?: boolean;
   /** It goes online, but the store page didn't say so when this release was checked. */
   online_undeclared?: boolean;
+  /**
+   * It was a dedicated server (in the Servers category) when it was checked: the Content
+   * Policy's rule on code from outside SLAPorSLOP doesn't cover it.
+   */
+  dedicated_server?: boolean;
 }
 
 /** An advisory OSV lists for one of the release's packages (crates/slop-api/src/dep_watch.rs). */
@@ -2264,8 +2288,13 @@ export interface Advisory {
 export interface AddressChecks {
   /** The address, and every address it redirected to, is https. */
   https: boolean;
-  /** Its site, and every one it redirected to, has only public addresses; null where that isn't checked (test setups). */
+  /** Its site, and every one it redirected to, has only public addresses; null where that isn't known (`public_host_skipped` says why). */
   public_host: boolean | null;
+  /**
+   * Why `public_host` is null: a test setup doesn't look names up (`test_setup`), or a site's name
+   * couldn't be looked up (`lookup_failed`, and the check failed). Older checks may not say.
+   */
+  public_host_skipped?: "test_setup" | "lookup_failed" | null;
   bad_links: {
     /** The list that names the address, or one it redirected to. */
     listed_by: string | null;
@@ -2277,6 +2306,8 @@ export interface AddressChecks {
   /** Where it ended up, after redirects. */
   final_address: string | null;
   redirects: number;
+  /** Every address on the way: the play address first, `final_address` last (older checks may not have it). */
+  hops?: string[];
   /** The kind of page it ended at (text/html), as the site said. */
   content_type: string | null;
   checked_at: string;
@@ -2313,6 +2344,11 @@ export interface Release {
   play_address?: string | null;
   /** What SLAPorSLOP's automatic checks of the play address found; null until they've run. */
   address_checks?: AddressChecks | null;
+  /**
+   * A browser game's release, for its maker only: whether it's the one whose address Play opens
+   * (or will, once a Coming soon game is in Beta). None of them is after the newest was withdrawn.
+   */
+  plays_now?: boolean;
   /** Slop Build's source checks. */
   source_checks: SourceChecks | null;
   /** SLAPorSLOP's own source check: licence, monetization notes, packages (makers and reviewers). */

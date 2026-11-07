@@ -49,7 +49,8 @@ const SHARED_HOSTS: &[&str] = &[
 ];
 
 /// An address as the lists and SLAPorSLOP compare them: lower-case scheme and site, no fragment, no
-/// trailing slash, `www.` dropped. Returns (address, site).
+/// trailing slash, `www.` and a dot after the site's name (`evil.example.`, the same site)
+/// dropped. Returns (address, site).
 pub fn normalize(raw: &str) -> Option<(String, String)> {
     let mut url = Url::parse(raw.trim()).ok()?;
     if !matches!(url.scheme(), "http" | "https") {
@@ -57,7 +58,8 @@ pub fn normalize(raw: &str) -> Option<(String, String)> {
     }
     url.set_fragment(None);
     let host = url.host_str()?.to_ascii_lowercase();
-    let host = host.strip_prefix("www.").unwrap_or(&host).to_string();
+    let host = host.trim_end_matches('.');
+    let host = host.strip_prefix("www.").unwrap_or(host).to_string();
     let mut path = url.path().trim_end_matches('/').to_string();
     if let Some(q) = url.query() {
         path = format!("{path}?{q}");
@@ -187,6 +189,15 @@ mod tests {
             Some(("evil.example/Payload.exe".into(), "evil.example".into()))
         );
         assert_eq!(normalize("ftp://evil.example/x"), None);
+        // A dot after the name is the same site, however it's written.
+        assert_eq!(
+            normalize("https://evil.example./"),
+            Some(("evil.example".into(), "evil.example".into()))
+        );
+        assert_eq!(
+            normalize("https://WWW.evil.example.:443/x"),
+            Some(("evil.example/x".into(), "evil.example".into()))
+        );
         assert_eq!(
             urls_in(
                 "See [the site](https://a.example/x). Or https://b.example/y, and https://a.example/x again"

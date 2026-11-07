@@ -340,6 +340,14 @@ pub(crate) const PLAY_ADDRESS: &str = concat!(
     ")"
 );
 
+/// The address Play opened for browser game `a` (`apps`) until SLAPorSLOP withdrew it, when
+/// that's why Play opens none now (`PLAY_ADDRESS` is null); null otherwise.
+pub(crate) const WITHDRAWN_PLAY_ADDRESS: &str = concat!(
+    "(select q.play_address from releases q where q.status = 'revoked' and q.id = ",
+    newest_address_release!(),
+    ")"
+);
+
 async fn list_apps(
     State(state): State<AppState>,
     MaybeUser(user): MaybeUser,

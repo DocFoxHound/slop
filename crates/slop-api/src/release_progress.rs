@@ -137,10 +137,21 @@ pub struct Inputs<'a> {
 pub struct Address {
     /// It's the address Play opens now (`catalog::PLAY_RELEASE`).
     pub plays_now: bool,
+    /// The game is Coming soon: Play opens nothing for players until it's in Beta.
+    pub coming_soon: bool,
+}
+
+/// " once the game is in Beta" while it's Coming soon, when Play opens nothing for players yet.
+fn once_in_beta(a: Address) -> &'static str {
+    if a.coming_soon {
+        " once the game is in Beta"
+    } else {
+        ""
+    }
 }
 
 /// A browser game's release (a play address): its stage and words.
-fn address_progress(i: &Inputs, plays_now: bool) -> (&'static str, String) {
+fn address_progress(i: &Inputs, a: Address) -> (&'static str, String) {
     let reason = || {
         i.status_reason
             .unwrap_or("no reason given")
@@ -160,9 +171,15 @@ fn address_progress(i: &Inputs, plays_now: bool) -> (&'static str, String) {
         ),
         "approved" => (
             "approved",
-            match (plays_now, i.auto_approved) {
-                (true, true) => "Approved automatically: a person approved this play address before. Play opens this address.".into(),
-                (true, false) => "Approved by a person at SLAPorSLOP: Play opens this address.".into(),
+            match (a.plays_now, i.auto_approved) {
+                (true, true) => format!(
+                    "Approved automatically: a person approved this play address before. Play opens this address{}.",
+                    once_in_beta(a)
+                ),
+                (true, false) => format!(
+                    "Approved by a person at SLAPorSLOP: Play opens this address{}.",
+                    once_in_beta(a)
+                ),
                 (false, true) => "Approved automatically; it's no longer the address Play opens.".into(),
                 (false, false) => "Approved by a person at SLAPorSLOP; it's no longer the address Play opens.".into(),
             },
@@ -246,7 +263,7 @@ pub fn build(i: &Inputs) -> ReleaseProgress {
     let files_word = plural(total, "file", "files");
     let mut remaining_seconds = None;
     let (stage, summary) = match i.status {
-        _ if let Some(a) = i.address => address_progress(i, a.plays_now),
+        _ if let Some(a) = i.address => address_progress(i, a),
         "fetching" if started_at.is_none() && files_checked == 0 => (
             "queued",
             // How many releases come first is not told: only that this one waits its turn.
@@ -563,7 +580,10 @@ mod tests {
     #[test]
     fn a_play_address_is_checked_then_reviewed_and_never_said_to_be_signed() {
         let mut i = inputs("fetching", &[]);
-        i.address = Some(Address { plays_now: false });
+        i.address = Some(Address {
+            plays_now: false,
+            coming_soon: false,
+        });
         let mut said = Vec::new();
         let p = build(&i);
         assert_eq!(p.stage, "checking_address");
@@ -584,7 +604,10 @@ mod tests {
         );
         said.push(p.summary);
         i.status = "approved";
-        i.address = Some(Address { plays_now: true });
+        i.address = Some(Address {
+            plays_now: true,
+            coming_soon: false,
+        });
         let p = build(&i);
         assert_eq!(
             p.summary,
@@ -593,7 +616,10 @@ mod tests {
         said.push(p.summary);
         i.auto_approved = true;
         said.push(build(&i).summary);
-        i.address = Some(Address { plays_now: false });
+        i.address = Some(Address {
+            plays_now: false,
+            coming_soon: false,
+        });
         let p = build(&i);
         assert!(
             p.summary.contains("no longer the address Play opens"),
@@ -619,5 +645,27 @@ mod tests {
                 assert!(!s.contains(word), "{s:?} says {word}");
             }
         }
+    }
+
+    /// Coming soon, Play opens nothing for players, so an approved address waits for Beta.
+    #[test]
+    fn an_approved_address_of_a_coming_soon_game_opens_once_it_is_in_beta() {
+        let mut i = inputs("approved", &[]);
+        i.address = Some(Address {
+            plays_now: true,
+            coming_soon: true,
+        });
+        assert_eq!(
+            build(&i).summary,
+            "Approved by a person at SLAPorSLOP: Play opens this address once the game is in Beta."
+        );
+        i.auto_approved = true;
+        assert!(
+            build(&i)
+                .summary
+                .ends_with("Play opens this address once the game is in Beta."),
+            "{}",
+            build(&i).summary
+        );
     }
 }
