@@ -34,8 +34,11 @@ optional.
 - **Installs and updates handled for you.** The SLAPorSLOP desktop app (Windows, Ubuntu/Debian,
   RHEL/Rocky/Alma 10) installs your app, checks every file against SLAPorSLOP's signature first, and
   updates it when you publish a new release.
+- **Or nothing to install.** A game that runs on your own website can be on SLAPorSLOP too: players
+  press Play and it opens in their browser. See [Browser games](#browser-games).
 - **Trust.** Every app links its source code. Every build is tied to the exact commit it came from
-  and checked before it's offered to players.
+  and checked before it's offered to players. A browser game's address is checked, and played by
+  a person, before Play opens it.
 - **Player counts.** Add a few lines of code ([Slop Pulse](#slop-pulse-player-counts)) and your
   store page shows how many people are playing now and the peak this month.
 - *(coming)* **Slaps / Slop ratings** from people who actually launched your app.
@@ -73,8 +76,10 @@ optional.
 4. **The rules.** No sexual content, no gambling or loot boxes, no pay-to-win, nothing for sale,
    no malware, no hidden tracking, nothing stolen, and no code from outside SLAPorSLOP: an app only
    runs code that came in its release or in a mod SLAPorSLOP approved, never code or mods a server
-   sends. See [Online play and mods](#online-play-and-mods). Rate your app honestly (Everyone, 3+, 7+, 12+,
-   16+ or 18+; 18+ apps are hidden from players in the UK's under-18 view).
+   sends. See [Online play and mods](#online-play-and-mods). (That last rule doesn't cover
+   [browser games](#browser-games) or [dedicated servers](#dedicated-servers).) Rate your app
+   honestly (Everyone, 3+, 7+, 12+, 16+ or 18+; 18+ apps are hidden from players in the UK's
+   under-18 view).
 5. **Local saves in SLAPorSLOP's save folder.** If your app keeps saves, settings or logs on the
    player's computer, keep them in the folder named by `SLOP_SAVE_DIR` when it's set. See
    [Saves and sandbox mode](#saves-and-sandbox-mode). Saves on your own server are fine too.
@@ -85,29 +90,35 @@ optional.
    may not require it (`/v1/server` says); GitHub only makes attestations for private repositories
    on its Enterprise plan.*
 
+**A browser game** (one that plays on your own website) needs 1, 3 (the commit your site is built
+from) and 4, and an https address instead of 2, 5 and 6: see [Browser games](#browser-games).
+
 ### Recommended
 
 - **Slop Pulse** in games, so SLAPorSLOP can show player counts. See
-  [Slop Pulse](#slop-pulse-player-counts).
+  [Slop Pulse](#slop-pulse-player-counts). (Not for browser games.)
 - **Slop Build**, so releases build, sign and submit themselves. See
-  [Option B](#option-b-slop-build).
+  [Option B](#option-b-slop-build). (Not for browser games.)
 
 ## Release stages
 
 | Stage | What it means | Time limit |
 |---|---|---|
-| **Coming soon** | A store page with no build yet. Players can mark it Interested. | 12 months, then it must reach Beta |
+| **Coming soon** | A store page with no build (or approved play address) yet. Players can mark it Interested. | 12 months, then it must reach Beta |
 | **Beta** | Playable builds, still changing. Players can rate it (marked "Rated in Beta") and donate. | 12 months, then it must be released |
 | **Released** | Finished (and still updated) | none |
 
 **Moving on** is up to you: the stage bar at the top of your app's Manage, Edit store page and
 Releases tabs has **Move to Beta** and **Release it** (straight from Coming soon to Released is fine). It
-needs an approved release, since that's what players get; it happens at once, and everyone who
-marked the app Interested is told. Stages only move forward: to go back, contact SLAPorSLOP.
+needs an approved release (for a browser game, an approved play address), since that's what
+players get; it happens at once, and everyone who marked the app Interested is told. Stages only
+move forward: to go back, contact SLAPorSLOP.
 
 A Coming soon or Beta project with **no commits for 90 days** is labelled a dead project. It stays
 visible but isn't recommended, and comes back with your next commit. Missing a stage deadline
-takes the page out of the store until you reach the next stage; existing installs keep working.
+takes the page out of the store until you reach the next stage; existing installs keep working
+(a browser game can't be played from SLAPorSLOP while it's out of the store: nothing was
+installed).
 
 ## Step by step
 
@@ -133,19 +144,22 @@ Go to **Publish → New app** and fill in:
 | Stage | Coming soon, Beta or Released |
 | Source repository | `https://github.com/<owner>/<repo>` (or your GitLab, Bitbucket or own server) |
 | Licence | Detected from the repository; pick one or choose Other for any SPDX ID |
-| Runs on | Windows and/or Linux; for Linux, also `.deb` and/or `.rpm` (see the table above) |
+| Runs on | **Download (Windows and/or Linux)**: for Linux, also `.deb` and/or `.rpm` (see the table above). Or **In the browser (it runs on your own website; nothing to download)**: games only, never private, and not with Windows or Linux (see [Browser games](#browser-games)) |
+| Play address | In the browser only: the `https://` address your game plays at. It's sent as your first release |
 | Age rating | Everyone, 3+, 7+, 12+, 16+ or 18+ |
 | Tags | Up to 10 (see below) |
 
 It's saved as a draft that only you can see.
 
-**Tags** come from SLAPorSLOP's categories: Games, Kids & Family, Tools, Creative, Utilities, Learning,
-Play style and Vibe. `GET /v1/categories` (`list_categories` for AI agents) lists each one with
-its tags. Pick the few that describe the app best: what it is (Puzzle, RPG, Tower Defense, Note-taking…),
+**Tags** come from SLAPorSLOP's categories: Games, Kids & Family, Tools, Creative, Utilities,
+Servers, Learning, Play style and Vibe. `GET /v1/categories` (`list_categories` for AI agents)
+lists each one with its tags. Pick the few that describe the app best: what it is (Puzzle, RPG, Tower Defense, Note-taking…),
 who it's for, how it plays (Co-op, Turn-based, Keyboard Only…) and how it feels (Cozy, Spooky…).
 **Kids & Family** (Kids, Family, All Ages, Educational) lists only apps rated **7+ or under**,
 without suggestive themes, horror, strong language or gambling themes. Saving an older app with
 those tags still works, but it won't show there; the editor and `get_fixes` say so.
+**Servers** (Dedicated Server) is for dedicated servers people run on their own computer or host,
+for games in the store: see [Dedicated servers](#dedicated-servers).
 
 ### Pictures and videos
 
@@ -214,7 +228,8 @@ Rules:
 
 A release is one version of your app. On SLAPorSLOP it's a **GitHub release** on your repository with
 your builds attached. Open your app's **Releases** page (from **Publish**, choose **Releases &
-progress**) and use one of the options below.
+progress**) and use one of the options below. (A browser game's release is a play address
+instead: see [Browser games](#browser-games).)
 
 #### Option A: pick a GitHub release (simplest)
 
@@ -423,7 +438,8 @@ Builds made by Slop Build are labelled **Built by Slop Build from source**.
 ### 4. What happens next
 
 Your app's **Releases** page shows a **Publishing progress** checklist, and refreshes itself while
-anything is under way, so there's no need to reload it:
+anything is under way, so there's no need to reload it (a browser game's checklist has other
+steps: see [Browser games](#browser-games)):
 
 1. **Store page:** saved.
 2. **Release:** received.
@@ -483,7 +499,8 @@ Each app has a **Manage** page (Publish → **Manage**):
 - **What players get.** By default players get the newest approved release. You can instead hold
   them at any approved release, to roll back a bad update or to wait before sending a new one out,
   and switch back later. New releases are still checked and approved while you hold; they just
-  don't go out until you switch.
+  don't go out until you switch. A browser game has no hold: Manage shows **Where Play goes**,
+  and Play always opens the newest approved address.
 - **Repository.** Before anyone has your app you can change it freely. Once players have it, a
   move to another repository is always checked by a person, and the first release from the new
   repository is reviewed by a person too. Players who installed from the old repository reinstall
@@ -496,7 +513,128 @@ Each app has a **Manage** page (Publish → **Manage**):
 Changes that would have players download something different are checked before they happen.
 Switching to another approved release follows the same rule as updates: it goes through straight
 away when automatic approval applies (the release already passed every check), otherwise a person
-looks. Everything else, like the store page, platforms and settings, changes straight away.
+looks. Everything else, like the store page, platforms and settings, changes straight away (but
+once an app has releases, it can't switch between a download and a browser game).
+
+## Browser games
+
+A **browser game** runs entirely on your own website: nothing to download, nothing to install.
+Players add it to their library and press **Play**, which opens your site in their browser (a
+new tab on the SLAPorSLOP website; the system browser from the SLAPorSLOP app). It isn't a
+[browser demo](#browser-demos-for-new-games), which is a web build of a downloadable game that
+SLAPorSLOP hosts for its first 14 days, and it isn't Slop Build's `web` project type, which packs a
+site into a desktop window players download.
+
+**What it needs:**
+
+- **A public game that plays only in the browser.** On the store page, choose **Type: Game** and,
+  under **Runs on**, **In the browser (it runs on your own website; nothing to download)**. It
+  can't also be a Windows or Linux download, and it can't be private: its address is public on
+  the web. Once it has releases it can't become a download, or the reverse; make a new store page
+  for that.
+- **Open source, like every app.** A public repository you own, with an OSI-approved licence
+  (see [Required](#required)). Each release names the commit your site is built from.
+- **An https address on a public site you run**, such as GitHub Pages, Netlify, Cloudflare Pages
+  or your own server. The address must:
+  - start with `https://`;
+  - use the site's full name (`mygame.example.com`), not an IP address or `localhost`;
+  - have no user name or password in it;
+  - be up to 2,000 characters;
+  - not be SLAPorSLOP's own site;
+  - not be on a list of known-bad links. An address on one is refused when you give it, and the
+    answer names the list.
+- **The Content Policy.** Its rules on builds and on code from outside SLAPorSLOP don't cover
+  browser games: your page loads its code from your site, as any web page does. Every other rule
+  does. The game on your site must match its store page and age rating, sell nothing, and carry
+  no malware, scams or phishing. Don't ask players for a sign-in, a password or payment details,
+  and don't offer a program to download.
+- **Say where else it connects.** A site is on the web anyway, so networking code in its source
+  is only a note; if the game talks to servers besides its own site (multiplayer, leaderboards,
+  online services), tick **Online** on the store page and name them. The fix for that is a
+  suggestion, not a must.
+
+**What a browser game doesn't have:** Slop Build, picking or watching GitHub releases, maker
+signatures, file scans, holding players at an older release, browser demos, mods, community builds,
+sandbox mode, `SLOP_SAVE_DIR`, save sync and Slop Pulse. Its saves and settings are your site's
+business (the browser's storage, or your server).
+
+### Giving the play address
+
+- **A new store page:** in **Publish → New app**, after choosing **In the browser**, fill in
+  **Play address**. When you press Create, SLAPorSLOP submits it as your first release, version
+  `1.0.0`. On GitHub, SLAPorSLOP takes the newest commit on your default branch as the commit your
+  site is built from; on other hosts (or if that fails), give the commit on the Releases page.
+- **Later:** your app's **Releases** page has a **Play address** form instead of the release
+  picker: the address (filled in with the one Play opens now), a version (a next one is
+  suggested), the commit (optional on GitHub), the age rating and notes for players.
+- **AI agents:** `submit_play_address` with `slug`, `play_address` and `version` (and optionally
+  `commit_sha`, `notes` and `rating`), or `POST /v1/apps/{slug}/releases` with
+  `{"version": "1.0.0", "play_address": "https://…"}` and no `files`.
+
+SLAPorSLOP keeps the address in a standard form (for example, with a `/` after the site's name).
+The usual limits apply: a version can't be used twice, and up to three releases can wait for
+review at once.
+
+### What happens to a play address
+
+The **Publishing progress** checklist has these steps for a browser game:
+
+1. **Store page:** saved.
+2. **Play address:** received.
+3. **Address checked**, usually within seconds (addresses go ahead of files waiting to be
+   checked). SLAPorSLOP loads the address once (it reads the page, it
+   doesn't run it) and keeps nothing of it. It follows at most 5 redirects, each of them https, on a
+   public site, not SLAPorSLOP's own and not on a bad-link list. The page it ends at must answer
+   within 20 seconds (HTTP 2xx) with a web page (`text/html` or `application/xhtml+xml`), not a
+   file to download. Your Releases page shows each check in words. If one fails, so does the
+   release, with the reason ("the page didn't load: the site answered HTTP 404", "it downloads a
+   file instead of opening a page", "it leads to a private network"): fix it and give the address
+   again. If this server has no bad-link lists loaded, the check says so, never "not on any
+   list".
+4. **Source check:** your repository at the release's commit, as for every release: the licence,
+   anything that looks like selling, and pay-to-win design. Saves, Slop Pulse and sandbox mode
+   don't apply.
+5. **Review by a person:** every new address is looked at by a person, who opens it in a private
+   window and plays it. It should be the game in your repository and on your store page, with a
+   fitting age rating. A page that asks for a sign-in, a password or payment details, offers a
+   program to download, or sells anything is rejected.
+6. **In the store:** SLAPorSLOP staff put the app in the store, as for every app. A Beta or
+   released browser game needs an approved address first, and so do **Move to Beta** and
+   **Release it**; a Coming soon page can be listed without one.
+
+One more step is shown as skipped: **What SLAPorSLOP can't check.** SLAPorSLOP checks the address,
+not what your site serves, and it can't check that your site runs the code in your repository.
+That's why a person plays it, and why players are never told a browser game is scanned, signed or
+built from source.
+
+Once a person approves it, the Releases page says **Approved: Play opens this address.**
+
+**Changing your game:** the site is yours, so change what it serves whenever you like;
+SLAPorSLOP doesn't load it again. Give a new release when the address changes, or to give players
+a new version, new notes or a new rating. A release with the address Play opens now can be
+approved automatically (with **Approve updates automatically** on, when it passes every check);
+a new address always waits for a person, and Play keeps opening the old one until it's approved.
+
+**Withdrawn addresses:** you can withdraw a release before it's reviewed. If SLAPorSLOP withdraws
+an approved address (say, because a bad-link list has named it since), Play stops opening it,
+and opens no older address instead, until a person approves a new one. SLAPorSLOP can't take your
+site down: anyone who saved the address can still visit it. Every hour, SLAPorSLOP looks for each
+browser game's addresses on the bad-link lists and tells its staff about any it finds.
+
+**What players see:** **Plays in your browser** on the store page and on tiles, and **Runs on:
+Your browser**. Instead of scans and signatures, the store page says "Runs on the maker's
+website. SLAPorSLOP checked the address, not what the site serves." Anyone can press Play,
+signed in or not. Signed in, it records that the player played it that day, so they can rate
+it; their vote counts the days they played, as there's no Slop Pulse. Bug reports say
+**browser** and the version Play opens. When a browser game leaves the store (a missed deadline, a moderation decision, a frozen
+repository), players can't open it from SLAPorSLOP until it's back: nothing was installed for
+them to keep.
+
+**Your site and players' data:** Play opens your site with no `Referer` and no link back to the
+page it came from, and SLAPorSLOP sends your site nothing about the player. What players do on
+your site is between them and you, under your own privacy policy. Under **Online** on the store
+page, say what the game connects to besides its own site (your game servers, other players,
+other services).
 
 ## Donations
 
@@ -528,6 +666,11 @@ change at any time. A game that runs whatever a server sends would let anyone wh
 breaks into) a server take over players' computers. So these are rules, and SLAPorSLOP's source check
 looks for code that breaks them. What it finds goes to a reviewer as a note: a note isn't a
 rejection, but a real break is.
+
+These rules are for games and apps players download. The Content Policy's rule on code from
+outside SLAPorSLOP doesn't cover [browser games](#browser-games), whose pages load code from their
+own site as any web page does, or [dedicated servers](#dedicated-servers), which may load mods,
+maps and plugins from other places.
 
 **Agents:** copy this section into the project's own instructions (`AGENTS.md`, `CLAUDE.md` or
 similar) and follow it whenever you write networking, save files or mod support.
@@ -660,7 +803,8 @@ A mod **may contain code**. Then the source check marks it **mod with code** and
 reads all of it. A mod with networking code is marked **goes online**: that can still be
 approved, but players see it, and sandbox mode is suggested for the game it's added to. Say in
 your description what the code does and what it connects to. A mod may only add to its game:
-no program to start, no code from a server, no updating itself, no loading other mods.
+no program to start, no code from a server, no updating itself, no loading other mods. Browser
+games can't have mods yet.
 
 ### Publishing a community build
 
@@ -676,6 +820,8 @@ Players install it beside the original and can pick it from the list on the orig
 **Play** button. It's an app of its own, so it gets **its own save folder** (`SLOP_SAVE_DIR`
 names it). Keep the original's save format if you can: players are offered to copy their saves
 across when they pick your build.
+
+Browser games can't have community builds yet, and a community build can't play in the browser.
 
 ### Rules for the code
 
@@ -707,18 +853,44 @@ across when they pick your build.
    to (your servers or database, servers players host, direct connections between players,
    other online services) and name your servers. Slop Pulse doesn't count.
 
+Rules 1 and 2 are the Content Policy's rule on code from outside SLAPorSLOP. It doesn't cover
+browser games or dedicated servers (see [Dedicated servers](#dedicated-servers)).
+
 ### What SLAPorSLOP does
 
 - The **source check** reads your code at each release's commit and notes the patterns above
   (code loading, self-updaters, unsafe data formats). A reviewer looks at each. An update with a
   new note waits for a person.
 - Anyone can report an app that **runs code from outside SLAPorSLOP**; reports are reviewed within
-  24 hours.
+  24 hours. That reason isn't offered for browser games or dedicated servers, which the rule
+  doesn't cover.
 - The source check also notes **networking code**. If your code goes online but your store
   page doesn't say so, that's a note, and an update waits for a person.
 - Store pages of apps that go online tell players that SLAPorSLOP can't check the servers, and
   suggest running the app in **sandbox mode** in the SLAPorSLOP app; see
   [Saves and sandbox mode](#saves-and-sandbox-mode).
+
+### Dedicated servers
+
+A **dedicated server** is a program people run on their own computer, or on a host they rent, so
+others can play a game together. Publish it as a store page of its own: a download for Windows
+and/or Linux, built and checked like any other app (Slop Build works as usual), with the tag
+**Dedicated Server**, which puts it in the **Servers** category. Name the game it's for in its
+summary and description: SLAPorSLOP doesn't link a server to its game.
+
+What's different for a server:
+
+- It may download and run **mods, maps and plugins from other places**, such as a mod site or
+  its own plugin list. The Content Policy's rule on code from outside SLAPorSLOP doesn't cover
+  dedicated servers, so rules 1 and 2 above aren't asked of it, and reviewers don't reject a
+  server for loading code that way.
+- SLAPorSLOP checks only what's in the release, and says so. When the source check finds code
+  loading, the server's store page says **Loads code from outside SLAPorSLOP**: "Dedicated
+  servers may load mods, maps and plugins from other places." Its fix is a suggestion, not a
+  must. Say in the description what the server loads, and from where.
+- Everything else applies: it's built from its source and checked like every other release,
+  and every other Content Policy rule covers it. Rules 3 to 8 protect whoever runs the server and
+  everyone who connects to it: follow them.
 
 ## Saves and sandbox mode
 
@@ -726,6 +898,9 @@ Players can run any app in **sandbox mode** in the SLAPorSLOP app: the app can u
 files, mods and **save folder**, plus the screen, sound, graphics card and controllers. SLAPorSLOP
 suggests it for apps that go online. So players can switch between sandbox and normal mode
 without losing anything, **local saves must live in SLAPorSLOP's save folder**.
+
+None of this applies to a [browser game](#browser-games): it runs in the player's browser, not
+in the SLAPorSLOP app.
 
 When the SLAPorSLOP app starts your app, it sets **`SLOP_SAVE_DIR`**: a folder that belongs to your
 app, the same in both modes, outside the installed files (updates never touch it), and kept when
@@ -1259,6 +1434,10 @@ separate address until the 14 days are up, then deletes it.
 - There are a limited number of demo slots, and a daily traffic limit; when it's reached,
   players are asked to install the game instead.
 
+A demo isn't a [browser game](#browser-games). A demo is a scanned web build of a game players
+download, hosted by SLAPorSLOP for 14 days. A browser game plays on your own site for as long as
+it's on SLAPorSLOP, and has no demo: it already plays in the browser.
+
 ## Hand the person one link
 
 Without a connection to SLAPorSLOP (or before the person has an account), you can still fill in
@@ -1284,14 +1463,15 @@ out, and the form tells the person which ones and why.
 | `license_spdx` | string | an SPDX ID such as `MIT` or `GPL-3.0-only`, up to 64 characters |
 | `min_age` | number | 0, 3, 7, 12, 16 or 18 |
 | `content_labels` | list | `romance`, `suggestive`, `violence`, `horror`, `strong_language`, `gambling_themes` |
-| `platforms` | list | `windows`, `linux`, `linux-deb`, `linux-rpm` (Linux needs `linux-deb` and/or `linux-rpm` too) |
+| `platforms` | list | `windows`, `linux`, `linux-deb`, `linux-rpm` (Linux needs `linux-deb` and/or `linux-rpm` too), or `browser` alone for a [browser game](#browser-games) (`kind` `game`, `visibility` `public`) |
+| `play_address` | string | a browser game's `https://` address, up to 2,000 characters; only with `platforms` `["browser"]`. It's sent as the first release when the person presses Create |
 | `tags` | list of tag slugs | up to 10, from `/v1/categories` |
 | `online` | list | `own_servers`, `player_servers`, `peer_to_peer`, `other_services` (empty if it never goes online) |
 | `online_hosts` | list of strings | up to 10 server names, like `play.example.com` or `play.example.com:7777` |
-| `sandbox_ready` | true/false | it keeps saves only in `SLOP_SAVE_DIR` |
+| `sandbox_ready` | true/false | it keeps saves only in `SLOP_SAVE_DIR` (not for a browser game) |
 | `bug_reports` | true/false | take bug reports from players on SLAPorSLOP |
 | `accessibility` | list | `remap_controls`, `colorblind`, `subtitles`, `text_size`, `one_handed`, `difficulty`, `no_flashing`, `screen_reader`, `controller` |
-| `mods_folder` | object or null | `{"base": "game" or "saves", "path": "mods" (up to 200 characters), "layout": "folder" or "flat"}`; null if it reads `SLOP_MODS` or has no mods |
+| `mods_folder` | object or null | `{"base": "game" or "saves", "path": "mods" (up to 200 characters), "layout": "folder" or "flat"}`; null if it reads `SLOP_MODS` or has no mods (and for a browser game) |
 
 Never put in a link (they're ignored): agreements, repository tokens, or anything about payments.
 The person accepts the Publisher Agreement themselves when they press Create. If the repository
@@ -1509,7 +1689,9 @@ hand, so expect a longer wait.
 ## Slop Pulse (player counts)
 
 Optional, recommended for games. With Pulse, your store page shows **N playing now** and the
-**peak this month**, and players' playtime makes their ratings count more.
+**peak this month**, and players' playtime makes their ratings count more. Not for
+[browser games](#browser-games): Play gets no Pulse token, and their players' votes count the days
+they played.
 
 **How it works.** When a signed-in player starts your game from the SLAPorSLOP desktop app, the app sets
 three environment variables for your game:
@@ -1778,6 +1960,13 @@ answer is JSON with a one-line `summary`, and nothing is saved:
 GitHub repositories only so far (other hosts are checked after the store page is created). Each
 client gets 20 repository checks an hour; a 429 or 503 answer says when to try again.
 
+**A browser game** (it runs on the person's own website; see [Browser games](#browser-games)):
+steps 0, 1, 3, 7, 9 and 10 apply, and the repository check's findings about builds don't. Instead
+of steps 2, 4, 5, 6 and 8: put the game on an https site built from the repository (GitHub Pages
+is free), create the store page with `kind` `game` and `platforms` `["browser"]`, and give its
+address with `submit_play_address` (or, in a [handoff link](#hand-the-person-one-link),
+`play_address`). Every new address waits for a person, who plays it.
+
 0. **Get connected first** if you don't have SLAPorSLOP's tools (`maker_guide`, `create_store_page`…).
    Ask the owner to add SLAPorSLOP to your tool at this site's `/mcp` address (e.g.
    `https://slaporslop.games/mcp`); Account → AI agents (`/account/agents`), "Connect your AI tool:
@@ -1858,7 +2047,7 @@ Facts an agent may need:
   or number (e.g. `1.2.0`, `build.17`).
 - Store page platforms (the `platforms` field): `windows`, `linux`, `linux-deb`, `linux-rpm`.
   `linux` needs `linux-deb` and/or `linux-rpm`. Every release includes one file for each, and no
-  others.
+  others. Or `browser` alone: a browser game, whose releases have no files, only a `play_address`.
 - Files by platform: `windows` → `archive`, a `.zip`; `linux` → `archive`, a `.tar.gz` (or
   `.tgz`); `linux-deb` → `installer`, a `.deb`; `linux-rpm` → `installer`, an `.rpm`. Archives
   need the program path; packages don't.
@@ -1879,6 +2068,9 @@ and players' apps download from you and check it.
 
 **What if I don't use GitHub?** Use Option B with your host's releases. Slop Build and maker
 signatures are GitHub-only for now.
+
+**Can my game play in the browser instead of being downloaded?** Yes, if it runs on your own
+website: see [Browser games](#browser-games).
 
 **Do I need Pulse?** No. It's what powers player counts, and players' playtime makes their votes
 count more, so it's worth the few lines.

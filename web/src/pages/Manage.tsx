@@ -3,7 +3,9 @@
 // that change them (crates/slop-api/src/manage.rs), with ratings and bug reports beside them, in
 // the maker's workspace (components/MakerFrame.tsx: the stage bar and the tabs). Anything that
 // would have players download something different is checked before it happens; everything else
-// the maker changes directly.
+// the maker changes directly. A browser game has no release to hold players at: Play always opens
+// its newest approved address (crates/slop-api/src/catalog.rs PLAY_ADDRESS), so Manage only says
+// where Play goes.
 
 import { useState, type FormEvent } from "react";
 import { Link, useParams } from "react-router";
@@ -13,7 +15,7 @@ import { OffersPanel } from "../components/Offers";
 import { DemoPanel } from "../components/Demo";
 import { BugReportsPanel, ReleaseFeedbackPanel } from "../components/BugReports";
 import { ErrorState, ExternalLink, Loading } from "../components/ui";
-import { formatDate } from "../format";
+import { formatDate, playsInBrowser } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { DonationsPanel } from "../components/DonationsManage";
@@ -58,6 +60,7 @@ export function Manage() {
   }
   if (!app.data || !overview.data) return <Loading />;
   const m = overview.data;
+  const browser = playsInBrowser(app.data);
   const changed = () => {
     overview.reload();
     setSettingsNonce((n) => n + 1);
@@ -73,23 +76,24 @@ export function Manage() {
         changed();
       }}
     >
-      {m.frozen && <Frozen slug={slug} frozen={m.frozen} isPrivate={app.data.private} onChanged={changed} />}
+      {m.frozen && <Frozen slug={slug} frozen={m.frozen} isPrivate={app.data.private} browser={browser} onChanged={changed} />}
       {m.pulse_required !== null && <PulseNeeded received={m.pulse_required} />}
-      <WaitingReleases slug={slug} waiting={m.waiting} onChanged={changed} />
+      <WaitingReleases slug={slug} waiting={m.waiting} browser={browser} onChanged={changed} />
       <div className="maker-cols">
         <div className="maker-main">
-          <ReleaseChoice slug={slug} overview={m} onChanged={changed} />
+          {browser ? <WherePlayGoes slug={slug} overview={m} /> : <ReleaseChoice slug={slug} overview={m} onChanged={changed} />}
           {!app.data.private && app.data.stage !== "coming_soon" && <RatingBreakdown slug={slug} />}
           <BugReportsPanel slug={slug} repoUrl={app.data.repo_url} accepting={app.data.bug_reports} />
           {!app.data.private && <ReleaseFeedbackPanel slug={slug} />}
           <Requests slug={slug} changes={m.changes} onChanged={changed} />
         </div>
         <div className="maker-side">
-          <UpdatesPanel key={settingsNonce} slug={slug} onChanged={overview.reload} />
+          <UpdatesPanel key={settingsNonce} slug={slug} browser={browser} onChanged={overview.reload} />
           {app.data.private ? <GoPublic slug={slug} requested={m.public_requested} onChanged={changed} /> : <DonationsPanel slug={slug} />}
-          <RepoMove slug={slug} overview={m} onChanged={changed} />
+          <RepoMove slug={slug} overview={m} browser={browser} onChanged={changed} />
           {app.data.private && <RepoAccessPanel slug={slug} repoUrl={app.data.repo_url} />}
-          <DemoPanel slug={slug} />
+          {/* A browser game already plays in the browser: a demo is for downloads. */}
+          {!browser && <DemoPanel slug={slug} />}
           <OffersPanel slug={slug} originalSlug={app.data.branch_of} />
         </div>
       </div>
@@ -102,13 +106,16 @@ function Frozen({
   slug,
   frozen,
   isPrivate,
+  browser,
   onChanged,
 }: {
   slug: string;
   frozen: NonNullable<ManageOverview["frozen"]>;
   isPrivate: boolean;
+  browser: boolean;
   onChanged: () => void;
 }) {
+  const keeps = browser ? "Play keeps opening the approved address." : "Copies people installed keep working.";
   const [busy, setBusy] = useState(false);
   const [still, setStill] = useState(false);
   const [error, setError] = useState<string>();
@@ -133,7 +140,7 @@ function Frozen({
         <p>
           Since {formatDate(frozen.since)}, this app takes no new releases: {frozen.reason}
         </p>
-        <p>It stays in the store and copies people installed keep working. SLAPorSLOP lifts the freeze once it's dealt with.</p>
+        <p>It stays in the store. {keeps} SLAPorSLOP lifts the freeze once it's dealt with.</p>
       </section>
     );
   const past = new Date(frozen.until).getTime() < Date.now();
@@ -141,8 +148,8 @@ function Frozen({
     <section className="panel panel-pad notice-panel" role="status">
       <h2>Frozen: SLAPorSLOP can't check the repository</h2>
       <p>
-        Since {formatDate(frozen.since)}, {frozen.reason}. Until SLAPorSLOP can read it again, this app takes no new releases.
-        Copies people installed keep working.
+        Since {formatDate(frozen.since)}, {frozen.reason}. Until SLAPorSLOP can read it again, this app takes no new releases.{" "}
+        {keeps}
       </p>
       <p>
         {past
@@ -168,7 +175,7 @@ function Frozen({
   );
 }
 
-const PLATFORM_NAME: Record<string, string> = { windows: "Windows", linux: "Linux" };
+const PLATFORM_NAME: Record<string, string> = { windows: "Windows", linux: "Linux", browser: "In the browser" };
 
 function GroupTable({ caption, groups, name }: { caption: string; groups: RatingGroup[]; name: (key: string | null) => string }) {
   return (
@@ -325,9 +332,9 @@ function Outcome({ change }: { change: AppChange }) {
   );
 }
 
-/** Where a release not reviewed yet is, and where it came from. Exported for tests. */
-export function describeWaiting(r: Pick<WaitingRelease, "status" | "source">): string {
-  const where = r.status === "fetching" ? "Checking files" : "Waiting for review";
+/** Where a release not reviewed yet is, and where it came from; a browser game's is a play address. Exported for tests. */
+export function describeWaiting(r: Pick<WaitingRelease, "status" | "source">, browser = false): string {
+  const where = r.status === "fetching" ? (browser ? "Checking the address" : "Checking files") : "Waiting for review";
   const from = { maker: "submitted from your account", slop_build: "from Slop Build", github_release: "picked up from GitHub" }[
     r.source
   ];
@@ -335,7 +342,17 @@ export function describeWaiting(r: Pick<WaitingRelease, "status" | "source">): s
 }
 
 /** Releases not reviewed yet: one the maker didn't send, or sent by mistake, can be withdrawn. */
-function WaitingReleases({ slug, waiting, onChanged }: { slug: string; waiting: WaitingRelease[]; onChanged: () => void }) {
+function WaitingReleases({
+  slug,
+  waiting,
+  browser,
+  onChanged,
+}: {
+  slug: string;
+  waiting: WaitingRelease[];
+  browser: boolean;
+  onChanged: () => void;
+}) {
   const { busy, error, submit } = useSubmit(onChanged);
   if (waiting.length === 0) return null;
   const withdraw = (r: WaitingRelease) => {
@@ -356,7 +373,7 @@ function WaitingReleases({ slug, waiting, onChanged }: { slug: string; waiting: 
         {waiting.map((r) => (
           <li key={r.id} className="title-row spread">
             <span>
-              <b>v{r.version}</b> <span className="muted small">{describeWaiting(r)}, {formatDate(r.created_at)}</span>
+              <b>v{r.version}</b> <span className="muted small">{describeWaiting(r, browser)}, {formatDate(r.created_at)}</span>
             </span>
             <button type="button" className="btn small" disabled={busy} onClick={() => withdraw(r)}>
               Withdraw
@@ -364,6 +381,39 @@ function WaitingReleases({ slug, waiting, onChanged }: { slug: string; waiting: 
           </li>
         ))}
       </ul>
+    </section>
+  );
+}
+
+/**
+ * Where Play goes for a browser game: the address of its newest approved release, which can't be
+ * held at another (one approved long ago may have lapsed or changed hands). After the newest was
+ * withdrawn, nothing, until a person approves a new one.
+ */
+function WherePlayGoes({ slug, overview: m }: { slug: string; overview: ManageOverview }) {
+  const releases = <Link to={`/publish/${slug}/releases`}>Releases</Link>;
+  return (
+    <section className="panel panel-pad" aria-labelledby="where-play-goes">
+      <h2 id="where-play-goes">Where Play goes</h2>
+      {m.serving?.play_address ? (
+        <>
+          <p>
+            Play opens <ExternalLink href={m.serving.play_address}>{m.serving.play_address}</ExternalLink>{" "}
+            <span className="muted">(v{m.serving.version})</span>
+          </p>
+          <p className="muted small">
+            Always the newest approved address. To send players somewhere else, submit the new address on {releases}: a
+            person checks every new address before Play opens it.
+          </p>
+        </>
+      ) : m.approved.length > 0 ? (
+        <p className="notice">
+          Play opens nothing now: SLAPorSLOP withdrew the newest approved address. Submit a new one on {releases}; Play opens it
+          once a person approves it.
+        </p>
+      ) : (
+        <p className="muted">Nothing yet: no play address has been approved. Add it on {releases}.</p>
+      )}
     </section>
   );
 }
@@ -473,7 +523,17 @@ function ReleaseChoice({ slug, overview: m, onChanged }: { slug: string; overvie
 }
 
 /** Moving the app to another repository. */
-function RepoMove({ slug, overview: m, onChanged }: { slug: string; overview: ManageOverview; onChanged: () => void }) {
+function RepoMove({
+  slug,
+  overview: m,
+  browser,
+  onChanged,
+}: {
+  slug: string;
+  overview: ManageOverview;
+  browser: boolean;
+  onChanged: () => void;
+}) {
   const [repo, setRepo] = useState("");
   const [note, setNote] = useState("");
   const { busy, error, result, submit } = useSubmit(() => {
@@ -497,8 +557,10 @@ function RepoMove({ slug, overview: m, onChanged }: { slug: string; overview: Ma
       ) : (
         <p className="muted small">
           Players already have this app, so a move is always checked by a person, and the first release from the new
-          repository is reviewed by a person too. Players who installed it from the old repository will be asked to
-          reinstall before their SLAPorSLOP app takes updates from the new one.
+          repository is reviewed by a person too.
+          {/* Nothing of a browser game is installed, so there's nothing to reinstall. */}
+          {!browser &&
+            " Players who installed it from the old repository will be asked to reinstall before their SLAPorSLOP app takes updates from the new one."}
         </p>
       )}
       {pending && <p className="notice">Waiting for review: move to {pending.repo_url}.</p>}

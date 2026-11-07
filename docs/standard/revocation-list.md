@@ -29,4 +29,6 @@ Each entry:
 | `revoked_at` | string | When (RFC 3339) |
 
 Releases of private apps are listed too, by ID and address only, so a player who installed one
-is protected.
+is protected. Only releases that had a signed manifest are listed: a browser game's release is a
+play address, with no manifest and nothing installed, so withdrawing one doesn't put it here
+(SLAPorSLOP's Play just stops opening it).

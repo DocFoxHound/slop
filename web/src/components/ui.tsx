@@ -76,6 +76,12 @@ export function AppTile({ app, reason }: { app: AppSummary; reason?: string }) {
             Made with people
           </span>
         )}
+        {app.plays_in_browser && (
+          <span className="in-browser" title="Plays on its maker's website: nothing to download">
+            <StoreIcon name="browser" size={13} />
+            In your browser
+          </span>
+        )}
         <span className="d">{app.summary}</span>
         {app.not_slop_percent !== null && (
           <span className={`tile-rating ${app.not_slop_percent >= 70 ? "good" : app.not_slop_percent < 40 ? "bad" : "mixed"}`}>

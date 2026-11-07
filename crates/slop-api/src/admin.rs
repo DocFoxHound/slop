@@ -507,27 +507,33 @@ pub async fn revoke(
         "say why with --reason; it's shown to players"
     );
     let mut tx = db.begin().await?;
-    let updated = sqlx::query(
+    let updated: Option<Option<String>> = sqlx::query_scalar(
         "update releases set status = 'revoked', status_reason = $2, revoked_at = now()
-         where id = $1 and status = 'approved'",
+         where id = $1 and status = 'approved' returning play_address",
     )
     .bind(release_id)
     .bind(reason.trim())
-    .execute(&mut *tx)
-    .await?
-    .rows_affected();
-    ensure!(updated == 1, "no approved release with that ID");
+    .fetch_optional(&mut *tx)
+    .await?;
+    let Some(play_address) = updated else {
+        anyhow::bail!("no approved release with that ID");
+    };
     // An app held at this release goes back to its newest approved one.
     sqlx::query("update apps set pinned_release_id = null where pinned_release_id = $1")
         .bind(release_id)
         .execute(&mut *tx)
         .await?;
+    // A play address is named, so the alert (ops.rs) says Play stops opening it.
+    let mut detail = json!({ "reason": reason });
+    if let Some(address) = play_address {
+        detail["play_address"] = json!(address);
+    }
     audit(
         &mut tx,
         reviewer,
         "release.revoke",
         &release_id.to_string(),
-        json!({ "reason": reason }),
+        detail,
     )
     .await?;
     crate::releases::tell_maker(

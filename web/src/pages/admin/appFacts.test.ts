@@ -14,6 +14,7 @@ const app = (over: Partial<AdminApp> = {}): AdminApp => ({
   status: "listed",
   repo_url: "https://github.com/x/y",
   maker: "Fin",
+  platforms: ["windows"],
   releases: [{ id: "r1", version: "1.0.0", reviewed_at: daysAgo(10) }],
   pending_releases: 0,
   flags: [],

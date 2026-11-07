@@ -382,13 +382,20 @@ pub async fn cast(
         .await?;
     let weight = vote_weight(playtime, days);
     let at = at.unwrap_or_else(OffsetDateTime::now_utc);
-    let version: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
-        "select r.version {} limit 1",
-        crate::releases::SERVING
-    )))
-    .bind(app_id)
-    .fetch_optional(&mut *tx)
-    .await?;
+    // The version players get: for a browser game, the one whose address Play opens, or none
+    // once that's withdrawn (never an older address SERVING would fall back to).
+    let sql = if catalog::plays_in_browser(&mut *tx, app_id).await? {
+        format!(
+            "select r.version from apps a join releases r on r.id = {} where a.id = $1",
+            catalog::PLAY_RELEASE
+        )
+    } else {
+        format!("select r.version {} limit 1", crate::releases::SERVING)
+    };
+    let version: Option<String> = sqlx::query_scalar(sqlx::AssertSqlSafe(sql))
+        .bind(app_id)
+        .fetch_optional(&mut *tx)
+        .await?;
     sqlx::query(
         "insert into vote_events (id, user_id, app_id, vote, prev_vote, release_version, playtime_seconds, days_launched, weight, created_at, platform, stage)
          values ($1, $2, $3, $4, $5, $6, $7, $8, $9, $10, $11, $12::app_stage)",

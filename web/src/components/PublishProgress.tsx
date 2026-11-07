@@ -1,11 +1,14 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Where an app is on its way into the store, step by step, for its maker.
 // Built from the app, its releases (with each file's check, crates/slop-api/src/release_progress.rs)
-// and what this server checks (GET /v1/server).
+// and what this server checks (GET /v1/server). A browser game's release is a play address
+// instead of files: its steps are the address and its checks, with no signature or scan, and a
+// step that says plainly what SLAPorSLOP can't check (the site itself).
 
 import type { ReactNode } from "react";
 import { Link } from "react-router";
 
+import { addressCheckItems } from "../addressChecks";
 import type { AppSummary, FileCheckStage, Release, ReleaseFile } from "../api";
 import { useNow } from "../hooks";
 
@@ -30,6 +33,8 @@ export interface Step {
   /** A second line: an estimate, or what happens next. */
   more?: ReactNode;
   items?: SubItem[];
+  /** What the items are, for their list's name: "file" (the default) or "check". */
+  itemName?: "file" | "check";
 }
 
 const ICON: Record<State, string> = {
@@ -57,7 +62,7 @@ const STAGE_LABEL: Record<FileCheckStage, string> = {
 const LONGEST_SCAN_MINUTES = 30;
 
 type Server = { scanning: boolean; maker_signatures_required: boolean };
-type ProgressApp = Pick<AppSummary, "stage" | "status"> & { slug?: string };
+type ProgressApp = Pick<AppSummary, "stage" | "status"> & { slug?: string; plays_in_browser?: boolean };
 
 /** "Windows (.zip)", "Linux (.deb)": the platform and the kind of file (as the API says it). */
 export function fileLabel(f: Pick<ReleaseFile, "platform" | "file_name">): string {
@@ -261,7 +266,9 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     },
   ];
 
-  if (comingSoon) {
+  if (app.plays_in_browser) {
+    steps.push(...addressSteps(app, releases));
+  } else if (comingSoon) {
     steps.push({
       title: "Release",
       state: "skipped",
@@ -371,12 +378,7 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     }
 
     const source = latest.repo_scan;
-    const notes =
-      (source?.licence?.problems.length ?? 0) +
-      (source?.monetization?.length ?? 0) +
-      (source?.code_loading?.length ?? 0) +
-      (source?.saves?.length ?? 0) +
-      (source?.online_undeclared ? 1 : 0);
+    const notes = sourceNotes(source, false);
     const waitingForPerson = latest.status === "awaiting_review";
     if (fetching) {
       steps.push({
@@ -501,7 +503,179 @@ export function progressSteps(app: ProgressApp, releases: Release[], server: Ser
     steps.push({
       title: "In the store",
       state: "waiting",
-      detail: "After a release is approved.",
+      detail: app.plays_in_browser ? "After the play address is approved." : "After a release is approved.",
+    });
+  }
+  return steps;
+}
+
+/** The source check's notes that apply: for a browser game, not the save folder, code loading or
+ *  going online (a site is online by nature; the Content Policy's rules on builds and outside code
+ *  don't cover it). */
+function sourceNotes(source: Release["repo_scan"], browser: boolean): number {
+  return (
+    (source?.licence?.problems.length ?? 0) +
+    (source?.monetization?.length ?? 0) +
+    (browser ? 0 : (source?.code_loading?.length ?? 0) + (source?.saves?.length ?? 0) + (source?.online_undeclared ? 1 : 0))
+  );
+}
+
+/** A browser game's steps between its store page and the store: its play address, its checks,
+ *  what SLAPorSLOP can't check, the source check and a person's review. */
+function addressSteps(app: ProgressApp, releases: Release[]): Step[] {
+  const latest = releases[0];
+  const approved = releases.find((r) => r.status === "approved");
+  if (!latest) {
+    return [
+      app.stage === "coming_soon"
+        ? {
+            title: "Play address",
+            state: "skipped",
+            detail: "Coming soon pages go in the store without a play address. Add it when you move to Beta.",
+          }
+        : { title: "Play address", state: "waiting", detail: "Add your game's play address on the Releases page." },
+    ];
+  }
+  const steps: Step[] = [
+    {
+      title: "Play address",
+      state: "done",
+      detail: `Version ${latest.version}: ${latest.play_address ?? "an address"} received.`,
+    },
+  ];
+  const fetching = latest.status === "fetching";
+  const items = addressCheckItems(latest.address_checks, latest.status).map(
+    (i): SubItem => ({ key: i.key, label: i.label, state: i.state, status: i.status, detail: i.detail }),
+  );
+  if (fetching) {
+    steps.push({
+      title: "Address checked",
+      state: "active",
+      stateLabel: "Checking",
+      detail: "SLAPorSLOP is checking it: https, a public site, the bad-link lists, and that the page loads. It usually takes seconds.",
+      items,
+      itemName: "check",
+    });
+  } else if (latest.status === "failed") {
+    steps.push({
+      title: "Address checked",
+      state: "problem",
+      detail: (
+        <>
+          SLAPorSLOP couldn't check the address: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit the
+          address again.
+          <FixesLink slug={app.slug} />
+        </>
+      ),
+      items,
+      itemName: "check",
+    });
+  } else {
+    steps.push({
+      title: "Address checked",
+      state: "done",
+      detail: "It passed SLAPorSLOP's checks.",
+      items,
+      itemName: "check",
+    });
+  }
+  steps.push({
+    title: "What SLAPorSLOP can't check",
+    state: "skipped",
+    stateLabel: "Not checked",
+    detail:
+      "Your game runs on your website. SLAPorSLOP checked the address, not what the site serves, so it never says your game is scanned or built from source.",
+  });
+
+  const source = latest.repo_scan;
+  const notes = sourceNotes(source, true);
+  const waitingForPerson = latest.status === "awaiting_review";
+  if (fetching) {
+    steps.push({ title: "Source check", state: "waiting", detail: "Runs once the address is checked." });
+  } else if (latest.status === "failed") {
+    steps.push({ title: "Source check", state: "waiting", detail: "Runs once the address passes its checks." });
+  } else if (!source) {
+    steps.push({ title: "Source check", state: "active", detail: "SLAPorSLOP is reading the source at this release's commit." });
+  } else if (source.status === "not_checked") {
+    steps.push({ title: "Source check", state: "skipped", detail: source.detail });
+  } else if (source.status === "failed") {
+    steps.push({
+      title: "Source check",
+      state: "active",
+      detail: `SLAPorSLOP couldn't read the source (${source.detail}); it tries again within the hour.`,
+    });
+  } else if (notes > 0) {
+    steps.push({
+      title: "Source check",
+      state: waitingForPerson ? "problem" : "done",
+      stateLabel: waitingForPerson ? "Notes for you and the reviewer" : undefined,
+      detail: (
+        <>
+          {notes} note{notes === 1 ? "" : "s"} about the licence or selling in the game, for you and the reviewer: see the release
+          below.
+          {waitingForPerson && <FixesLink slug={app.slug} />}
+        </>
+      ),
+    });
+  } else {
+    steps.push({
+      title: "Source check",
+      state: "done",
+      detail: "The licence file matches, and there are no signs of selling in the game's source.",
+    });
+  }
+
+  if (latest.status === "approved" || (approved && !waitingForPerson && !fetching)) {
+    const r = latest.status === "approved" ? latest : (approved ?? latest);
+    steps.push({
+      title: "Review by a person",
+      state: "done",
+      detail: r.auto_approved
+        ? `Version ${r.version} approved automatically: a person approved this address before.`
+        : `Version ${r.version} approved by a person at SLAPorSLOP.`,
+      more: r.progress?.summary,
+    });
+  } else if (waitingForPerson) {
+    const why = latest.status_reason?.replace(/^Waiting for a person: /, "").replace(/\.$/, "");
+    steps.push({
+      title: "Review by a person",
+      state: "active",
+      stateLabel: "Waiting for a person",
+      detail: "Waiting for review by a person at SLAPorSLOP, who opens the address and plays it. It usually takes a day or two.",
+      more: (
+        <>
+          {why && <>Why a person: {why}. </>}
+          What happens next: if it's approved, Play opens this address; if something needs changing, you're told what. Either way you
+          get a notification, in SLAPorSLOP and by email. Nothing to do meanwhile.
+        </>
+      ),
+    });
+  } else if (latest.status === "rejected") {
+    steps.push({
+      title: "Review by a person",
+      state: "problem",
+      stateLabel: "Not approved",
+      detail: (
+        <>
+          Not approved: {latest.status_reason?.replace(/\.$/, "") ?? "no reason given"}. Fix it and submit the address again with a new
+          version.
+          <FixesLink slug={app.slug} />
+        </>
+      ),
+    });
+  } else if (latest.status === "revoked") {
+    steps.push({
+      title: "Review by a person",
+      state: "problem",
+      detail: `Withdrawn by SLAPorSLOP: ${latest.status_reason ?? "no reason given"}. Play no longer opens it.`,
+    });
+  } else {
+    steps.push({
+      title: "Review by a person",
+      state: "waiting",
+      detail: approved
+        ? "Comes after the checks above. Play keeps opening your approved address meanwhile."
+        : "Comes after the checks above: a person at SLAPorSLOP opens and plays every new address.",
     });
   }
   return steps;
@@ -562,7 +736,8 @@ export function PublishProgress(props: { app: ProgressApp; releases: Release[]; 
         {steps.map((s) => {
           const items = s.items ?? [];
           // Files that all went fine fold away; anything under way or wrong shows.
-          const open = items.some((i) => i.state !== "done");
+          const open = items.some((i) => i.state !== "done" && i.state !== "skipped");
+          const each = s.itemName === "check" ? "each check" : "each file";
           return (
             <li key={s.title} className={`step ${s.state}`}>
               <span className="step-icon" aria-hidden="true">
@@ -574,11 +749,11 @@ export function PublishProgress(props: { app: ProgressApp; releases: Release[]; 
                 {s.more && <div className="muted small step-more">{s.more}</div>}
                 {items.length > 0 &&
                   (open ? (
-                    <StepItems items={items} label={`${s.title}: each file`} />
+                    <StepItems items={items} label={`${s.title}: ${each}`} />
                   ) : (
                     <details className="step-details">
-                      <summary className="small">Each file</summary>
-                      <StepItems items={items} label={`${s.title}: each file`} />
+                      <summary className="small">{each.charAt(0).toUpperCase() + each.slice(1)}</summary>
+                      <StepItems items={items} label={`${s.title}: ${each}`} />
                     </details>
                   ))}
               </div>

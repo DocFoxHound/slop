@@ -2,7 +2,9 @@
 // The review queue's items in full (crates/slop-api/src/admin_web.rs): what the inbox
 // (Inbox.tsx) opens when a row is clicked. Each card shows everything there is to judge it by
 // (files, checks, scan reports, pictures, notes from AI reviewers, the job record) and every way
-// to decide it, and tells `onDone` once something changed.
+// to decide it, and tells `onDone` once something changed. A browser game's release is its play
+// address: the card gives the address to open and play (never in a frame here), what the
+// automatic checks found, and where Play goes now, with nothing about files, scans or signing.
 
 import { useState } from "react";
 import { Link } from "react-router";
@@ -20,7 +22,8 @@ import {
   type ScanReport,
   type StaffActions,
 } from "../../api";
-import { FileChecks, RepoScanList, ScanFindings, SourceCheckList } from "../../components/Checks";
+import { isNewSite } from "../../addressChecks";
+import { AddressCheckList, FileChecks, RepoScanList, ScanFindings, SourceCheckList } from "../../components/Checks";
 import { ItemThumb } from "../../components/MediaEditor";
 import { DesignPreview, portfolioWork } from "../../components/PeopleDesign";
 import { ExternalLink } from "../../components/ui";
@@ -44,6 +47,7 @@ type Q = AdminQueue;
 
 export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: () => void }) {
   const { busy, error, notice, run } = useAction(onDone);
+  if (r.play_address) return <AddressCard r={r} address={r.play_address} onDone={onDone} />;
   return (
     <li className="panel panel-pad">
       <div className="title-row spread">
@@ -97,6 +101,115 @@ export function ReleaseCard({ r, onDone }: { r: Q["releases"][number]; onDone: (
           onClick={() => void run(r.id, () => api.admin.approve(r.id))}
         >
           {busy === r.id ? "Approving…" : "Approve and sign"}
+        </button>
+        <ReasonButton
+          label="Reject"
+          placeholder="Reason, shown to the maker"
+          danger
+          disabled={busy !== undefined}
+          onSubmit={(reason) => void run(r.id, () => api.admin.reject(r.id, reason))}
+        />
+      </div>
+    </li>
+  );
+}
+
+/**
+ * A browser game's release: its play address. The reviewer opens it in a new tab (with no
+ * referrer; never in a frame on this page) and plays it. Nothing is signed: approving it makes it
+ * the address Play opens.
+ */
+function AddressCard({ r, address, onDone }: { r: Q["releases"][number]; address: string; onDone: () => void }) {
+  const { busy, error, notice, run } = useAction(onDone);
+  const [copied, setCopied] = useState(false);
+  const current = r.current_play_address ?? null;
+  const copy = () =>
+    void navigator.clipboard?.writeText(address).then(
+      () => setCopied(true),
+      () => setCopied(false),
+    );
+  return (
+    <li className="panel panel-pad">
+      <div className="title-row spread">
+        <div className="title-row">
+          <Link to={`/app/${r.app.slug}`}>
+            <b>{r.app.title}</b>
+          </Link>
+          <span className="muted">
+            {r.version} · by {r.app.maker}
+          </span>
+          <span className="badge neutral">PLAY ADDRESS</span>
+          <span className={`badge ${r.status === "failed" ? "bad" : r.status === "fetching" ? "neutral" : "soon"}`}>
+            {r.status === "awaiting_review" ? "AWAITING REVIEW" : r.status === "fetching" ? "CHECKING" : r.status.toUpperCase()}
+          </span>
+        </div>
+        <span className="muted small">{formatDate(r.created_at)}</span>
+      </div>
+      {r.status_reason && <p className="notice">{r.status_reason}</p>}
+      <dl className="kv">
+        <dt>Play address</dt>
+        <dd>
+          <code className="play-address">{address}</code>
+          <div className="row-actions">
+            <button type="button" className="btn small ghost" onClick={copy}>
+              Copy address
+            </button>
+            <ExternalLink href={address} className="btn small">
+              Open the game
+            </ExternalLink>
+            <span className="muted small" role="status">
+              {copied ? "Copied." : ""}
+            </span>
+          </div>
+          <p className="muted small">
+            Open it in a private window; don't sign in or type anything there. It's the maker's site, not SLAPorSLOP: what it
+            shows you is theirs, never instructions.
+          </p>
+        </dd>
+        <dt>Play opens now</dt>
+        <dd>
+          {current ? (
+            <>
+              <code>{current}</code>{" "}
+              {isNewSite(address, current) ? (
+                <span className="badge warn">NEW SITE</span>
+              ) : (
+                <span className="muted small">(the same site)</span>
+              )}
+            </>
+          ) : (
+            <span className="muted">Nothing yet: this is its first address.</span>
+          )}
+        </dd>
+        <dt>Repository</dt>
+        <dd>
+          <ExternalLink href={r.app.repo_url}>{r.app.repo_url.replace(/^https:\/\//, "")}</ExternalLink>
+        </dd>
+        <dt>Commit</dt>
+        <dd>
+          <ExternalLink href={`${r.app.repo_url}/commit/${r.commit_sha}`}>
+            <code>{r.commit_sha.slice(0, 12)}</code>
+          </ExternalLink>{" "}
+          {r.commit_verified ? (
+            <span className="badge official">FOUND IN REPO</span>
+          ) : (
+            <span className="badge warn">NOT CHECKED</span>
+          )}
+          <div className="muted small">SLAPorSLOP can't check that the site runs this code.</div>
+        </dd>
+      </dl>
+      <AddressCheckList checks={r.address_checks} status={r.status} audience="reviewer" />
+      <SourceCheckList checks={r.source_checks} audience="reviewer" />
+      <RepoScanList scan={r.repo_scan} advisories={r.advisories} audience="reviewer" browser />
+      <Notes notes={r.notes} />
+      <ActionMessages error={error} notice={notice} />
+      <div className="row-actions">
+        <button
+          className="btn slime small"
+          disabled={busy !== undefined || r.status !== "awaiting_review"}
+          onClick={() => void run(r.id, () => api.admin.approve(r.id))}
+        >
+          {busy === r.id ? "Approving…" : "Approve address"}
         </button>
         <ReasonButton
           label="Reject"
@@ -427,6 +540,18 @@ export function ReadyCard({ a, onDone }: { a: Q["ready_to_list"][number]; onDone
           </button>
         )}
       </div>
+      {a.platforms?.includes("browser") && (
+        <p className="small">
+          {a.play_address ? (
+            <>
+              Plays at <ExternalLink href={a.play_address}>{a.play_address}</ExternalLink>: a last look at the site before it goes
+              in the store.
+            </>
+          ) : (
+            "Plays in the browser: no play address is approved yet."
+          )}
+        </p>
+      )}
       <p className="small">
         <Link to={`/admin?tab=apps&app=${encodeURIComponent(a.slug)}`}>Open its record</Link>
       </p>

@@ -1,5 +1,8 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
 // Makers' side: their apps with where each one is on its way into the store, and the draft editor.
+// A store page either offers downloads (Windows and/or Linux builds) or plays in the browser, on
+// the maker's own website (DESIGN §8): a new browser game's page takes its first play address,
+// sent as its first release once the draft is made.
 
 import { useEffect, useMemo, useState, type FormEvent, type ReactNode } from "react";
 import { Link, useNavigate, useParams } from "react-router";
@@ -35,13 +38,14 @@ import { guessKind, isGithub, TokenFields } from "../components/RepoToken";
 import { MediaEditor } from "../components/MediaEditor";
 import { MakerFrame } from "../components/MakerFrame";
 import { currentStep, progressSteps, STEP_ICON, STEP_LABEL, type Step } from "../components/PublishProgress";
-import { ErrorState, Loading } from "../components/ui";
-import { CONTENT_LABEL, ONLINE_LABEL } from "../format";
+import { ErrorState, ExternalLink, Loading } from "../components/ui";
+import { CONTENT_LABEL, ONLINE_LABEL, playsInBrowser } from "../format";
 import { useDocumentTitle, useInterval, useLoad } from "../hooks";
 import { useSession } from "../session";
 import { PasskeyNotice } from "../components/PasskeyNotice";
 import { useTermsGate } from "../components/Terms";
-import { APP_LABELS, appFill, forgetHandoff, type Fill, type HandoffLink } from "../handoff";
+import { APP_LABELS, appFill, forgetHandoff, type AppFields, type Fill, type HandoffLink } from "../handoff";
+import type { FirstAddress } from "./Releases";
 
 function SignInFirst({ what, handoff = null }: { what: string; handoff?: HandoffLink | null }) {
   return (
@@ -103,8 +107,8 @@ export function Publish() {
       <PasskeyNotice />
       </div>
       <p className="muted">
-        Each app goes through the same steps: a store page, a release, file checks, a review by a person, then the store.
-        This is where each one is.
+        Each app goes through the same steps: a store page, a release (for a browser game, its play address), SLAPorSLOP's
+        checks, a review by a person, then the store. This is where each one is.
       </p>
       {mine.error && <ErrorState error={mine.error} onRetry={mine.reload} />}
       {mine.data && mine.data.length === 0 && (
@@ -203,6 +207,7 @@ function statusHeadline(step: Step): string {
   if (step.state === "problem") return `Stuck at: ${step.title}`;
   if (step.state === "done") return "In the store";
   if (step.title === "Release") return "Next: submit a release";
+  if (step.title === "Play address") return "Next: add the play address";
   return `Waiting on: ${step.title}`;
 }
 
@@ -284,11 +289,14 @@ function EditorForm({
   existing?: AppDetail;
   categories: Category[];
   /** What the person's AI assistant filled in (a new app only). */
-  fill?: Fill<NewApp>;
+  fill?: Fill<AppFields>;
   linkError?: string;
   onClearFill?: () => void;
 }) {
   const navigate = useNavigate();
+  // A play address from the link isn't part of the store page: it's sent as the first release.
+  const { play_address: filledAddress, ...filled } = fill?.values ?? {};
+  const [playAddress, setPlayAddress] = useState(filledAddress ?? "");
   const [form, setForm] = useState<NewApp>(
     existing
       ? {
@@ -313,8 +321,8 @@ function EditorForm({
         }
       : {
           ...EMPTY,
-          ...fill?.values,
-          slug: fill?.values.slug ?? slugify(fill?.values.title ?? ""),
+          ...filled,
+          slug: filled.slug ?? slugify(filled.title ?? ""),
         },
   );
   // In the form now: a reload shows it empty again, not the link's fill over the person's changes.
@@ -324,6 +332,11 @@ function EditorForm({
   // Once players have the app, moving it to another repository is reviewed first (Manage).
   const repoLocked = useLoad(
     () => (existing ? api.manage(existing.slug).then((m) => m.repo_locked) : Promise.resolve(false)),
+    [existing?.slug],
+  ).data;
+  // An app with releases keeps its kind of release: files, or play addresses (catalog.rs update_app).
+  const hasReleases = useLoad(
+    () => (existing ? api.releases(existing.slug).then((r) => r.length > 0) : Promise.resolve(false)),
     [existing?.slug],
   ).data;
   const [slugTouched, setSlugTouched] = useState(Boolean(existing) || Boolean(fill?.values.slug));
@@ -353,6 +366,15 @@ function EditorForm({
   const set = <K extends keyof NewApp>(key: K, value: NewApp[K]) => setForm((f) => ({ ...f, [key]: value }));
   // A mod's own page has no mods folder.
   const isMod = existing?.branch?.kind === "addon";
+  const inBrowser = form.platforms.includes("browser");
+  // A browser game is a public game of its own: not an app, not private, not a community build.
+  const isPrivate = existing ? existing.private : form.visibility === "private";
+  const noBrowser =
+    form.kind === "app"
+      ? "Only games can play in the browser for now."
+      : isPrivate
+        ? "A browser game's address is public on the web, so it can't be private."
+        : undefined;
   const [hostsText, setHostsText] = useState((existing?.online_hosts ?? fill?.values.online_hosts ?? []).join("\n"));
   const hosts = () => parseHosts(form.online ?? [], hostsText);
   // A private app from a private repository outside GitHub: a read-only token (repo_tokens.rs).
@@ -384,29 +406,54 @@ function EditorForm({
     setBusy(true);
     setError(undefined);
     try {
-      const saved = existing
-        ? await api.updateApp(existing.slug, {
-            title: form.title,
-            summary: form.summary,
-            description_md: form.description_md,
-            repo_url: form.repo_url,
-            license_spdx: form.license_spdx,
-            min_age: form.min_age,
-            content_labels: form.content_labels,
-            tags: form.tags,
-            platforms: form.platforms,
-            online: form.online,
-            online_hosts: hosts(),
-            sandbox_ready: form.sandbox_ready,
-            accessibility: form.accessibility,
-            bug_reports: form.bug_reports,
-            ...(isMod ? {} : { mods_folder: form.mods_folder ?? null }),
-          })
-        : await terms.guard(() => {
-            const app = { ...form, online_hosts: hosts() };
-            return api.createApp(needsToken && token.token.trim() ? { ...app, repo_token: token } : app);
-          });
-      navigate(`/app/${saved.slug}`);
+      if (existing) {
+        const saved = await api.updateApp(existing.slug, {
+          title: form.title,
+          summary: form.summary,
+          description_md: form.description_md,
+          repo_url: form.repo_url,
+          license_spdx: form.license_spdx,
+          min_age: form.min_age,
+          content_labels: form.content_labels,
+          tags: form.tags,
+          // Only when they change: switching between a download and a browser game is refused
+          // once the app has releases, which saving the same choice again mustn't trip over.
+          ...(samePlatforms(form.platforms, existing.platforms) ? {} : { platforms: form.platforms }),
+          online: form.online,
+          online_hosts: hosts(),
+          // A browser game has no sandbox mode or mods folder.
+          ...(inBrowser ? {} : { sandbox_ready: form.sandbox_ready }),
+          accessibility: form.accessibility,
+          bug_reports: form.bug_reports,
+          ...(isMod || inBrowser ? {} : { mods_folder: form.mods_folder ?? null }),
+        });
+        navigate(`/app/${saved.slug}`);
+        return;
+      }
+      const saved = await terms.guard(() => {
+        const app = { ...form, online_hosts: hosts(), ...(inBrowser ? { sandbox_ready: false, mods_folder: null } : {}) };
+        return api.createApp(needsToken && token.token.trim() ? { ...app, repo_token: token } : app);
+      });
+      const address = playAddress.trim();
+      if (!inBrowser || !address) {
+        navigate(`/app/${saved.slug}`);
+        return;
+      }
+      // The page is made: its first release is the play address (the commit is left out, so
+      // SLAPorSLOP takes the repository's newest on GitHub). If that's refused, the Releases page
+      // shows why, with the address filled in to fix and send again.
+      const releases = `/publish/${saved.slug}/releases`;
+      try {
+        await api.submitRelease(saved.slug, { version: "1.0.0", play_address: address });
+        navigate(releases);
+      } catch (err) {
+        const firstAddress: FirstAddress = {
+          address,
+          message: err instanceof ApiError ? err.message : String(err),
+          field: err instanceof ApiError ? err.field : undefined,
+        };
+        navigate(releases, { state: { firstAddress } });
+      }
     } catch (err) {
       setError(err instanceof ApiError ? err : new ApiError(0, "unknown", String(err)));
     } finally {
@@ -437,7 +484,11 @@ function EditorForm({
         <HandoffNotice
           fill={fill}
           labels={APP_LABELS}
-          check="the age rating, content labels, licence and source repository"
+          check={
+            filledAddress || filled.platforms?.includes("browser")
+              ? "the age rating, content labels, licence, source repository and play address (it decides where Play sends players)"
+              : "the age rating, content labels, licence and source repository"
+          }
           button="Create draft"
           onClear={onClearFill}
           clearLabel="Clear the form"
@@ -535,12 +586,19 @@ function EditorForm({
                     </span>
                   </label>
                   <label className="check">
-                    <input type="radio" name="visibility" checked={form.visibility === "private"} onChange={() => set("visibility", "private")} />
+                    <input
+                      type="radio"
+                      name="visibility"
+                      checked={form.visibility === "private"}
+                      disabled={inBrowser}
+                      onChange={() => set("visibility", "private")}
+                    />
                     <span>
                       <b>Private</b>{" "}
                       <span className="muted small">
                         — only you and people you share it with. Never in the store; no donations or voting. The repository can be
                         private: on GitHub, install SLAPorSLOP's GitHub App on it; elsewhere, give SLAPorSLOP a read-only token.
+                        {inBrowser && " Not for a game that plays in the browser: its address is public on the web."}
                       </span>
                     </span>
                   </label>
@@ -552,7 +610,14 @@ function EditorForm({
                   {field(
                     "kind",
                     "Type",
-                    <select value={form.kind} onChange={(e) => set("kind", e.target.value as AppKind)}>
+                    <select
+                      value={form.kind}
+                      onChange={(e) => {
+                        const kind = e.target.value as AppKind;
+                        // Only games play in the browser: an app goes back to the download choice.
+                        setForm((f) => ({ ...f, kind, platforms: kind === "app" ? chooseDelivery(f.platforms, false) : f.platforms }));
+                      }}
+                    >
                       <option value="game">Game</option>
                       <option value="app">App</option>
                     </select>,
@@ -561,7 +626,7 @@ function EditorForm({
                     "stage",
                     "Stage",
                     <select value={form.stage} onChange={(e) => set("stage", e.target.value as AppStage)}>
-                      <option value="coming_soon">Coming soon (no build yet)</option>
+                      <option value="coming_soon">{inBrowser ? "Coming soon (not playable yet)" : "Coming soon (no build yet)"}</option>
                       <option value="beta">Beta</option>
                       <option value="released">Released</option>
                     </select>,
@@ -646,18 +711,63 @@ function EditorForm({
             </section>
 
             <section className="panel panel-pad form" aria-label="Runs on">
-              <PlatformPicker value={form.platforms} onChange={(p) => set("platforms", p)} error={error?.field === "platforms" ? error.message : undefined} />
+              <PlatformPicker
+                value={form.platforms}
+                onChange={(p) => set("platforms", p)}
+                error={error?.field === "platforms" ? error.message : undefined}
+                allowBrowser={!existing?.branch}
+                browserUnavailable={noBrowser}
+                locked={
+                  hasReleases
+                    ? "It has releases, so it can't switch between a download and a browser game: for the other, make a new store page."
+                    : undefined
+                }
+              />
+              {inBrowser && !existing && (
+                <label>
+                  Play address{form.stage === "coming_soon" && <span className="muted"> (optional for Coming soon)</span>}
+                  <input
+                    type="url"
+                    value={playAddress}
+                    maxLength={2000}
+                    required={form.stage !== "coming_soon"}
+                    placeholder="https://yourgame.example/"
+                    onChange={(e) => setPlayAddress(e.target.value)}
+                  />
+                  <span className="hint">
+                    Where Play sends players: https, on a site of yours. It's sent as version 1.0.0 once the draft is made. A person
+                    at SLAPorSLOP checks it before players see it, and again whenever it changes.
+                  </span>
+                </label>
+              )}
+              {inBrowser &&
+                existing &&
+                (playsInBrowser(existing) ? (
+                  <p className="small play-address-line">
+                    Play address:{" "}
+                    {existing.play_address ? (
+                      <ExternalLink href={existing.play_address}>{existing.play_address}</ExternalLink>
+                    ) : (
+                      <span className="muted">none approved yet</span>
+                    )}{" "}
+                    · <Link to={`/publish/${existing.slug}/releases`}>change it on Releases</Link>
+                  </p>
+                ) : (
+                  <p className="small muted">Save, then give its play address on the Releases page.</p>
+                ))}
             </section>
 
-            <section className="panel panel-pad form" aria-label="Online and sandbox mode">
+            <section className="panel panel-pad form" aria-label={inBrowser ? "Online" : "Online and sandbox mode"}>
               <OnlinePicker
                 value={form.online ?? []}
                 onChange={(v) => set("online", v)}
                 hostsText={hostsText}
                 onHostsText={setHostsText}
+                browser={inBrowser}
                 error={error?.field === "online" || error?.field === "online_hosts" ? error : undefined}
               />
-              <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />
+              {/* A website has no sandbox mode: nothing of it runs in the SLAPorSLOP app. */}
+              {!inBrowser && <SandboxReadyCheck checked={form.sandbox_ready ?? false} onChange={(v) => set("sandbox_ready", v)} />}
             </section>
 
             <section className="panel panel-pad form" aria-labelledby="players-title">
@@ -690,7 +800,7 @@ function EditorForm({
               </fieldset>
             </section>
 
-            {!isMod && (
+            {!isMod && !inBrowser && (
               <section className="panel panel-pad form" aria-label="Mods">
                 <ModsFolderPicker
                   value={form.mods_folder ?? null}
@@ -845,23 +955,33 @@ export function OnlinePicker({
   onChange,
   hostsText,
   onHostsText,
+  browser = false,
   error,
 }: {
   value: OnlineKind[];
   onChange: (v: OnlineKind[]) => void;
   hostsText: string;
   onHostsText: (t: string) => void;
+  /** A browser game: it's on the web anyway, so this is about what else it connects to. */
+  browser?: boolean;
   error?: ApiError;
 }) {
   return (
     <fieldset className="tag-picker">
       <legend>Online</legend>
-      <p className="muted small">
-        Tick everything your app connects to. SLAPorSLOP checks your code but can't check servers, so players see this on your
-        store page with a suggestion to use sandbox mode. Leave it empty if your app never goes online (Slop Pulse doesn't
-        count). The source check notes networking code an app doesn't declare. See{" "}
-        <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
-      </p>
+      {browser ? (
+        <p className="muted small">
+          Beyond your own site, tick everything your game connects to: other servers, or other players. Players see this on
+          your store page. Leave it empty if it only uses your site.
+        </p>
+      ) : (
+        <p className="muted small">
+          Tick everything your app connects to. SLAPorSLOP checks your code but can't check servers, so players see this on your
+          store page with a suggestion to use sandbox mode. Leave it empty if your app never goes online (Slop Pulse doesn't
+          count). The source check notes networking code an app doesn't declare. See{" "}
+          <Link to="/publish/guide#online-play-and-mods">Online play and mods</Link>.
+        </p>
+      )}
       <div className="chips">
         {(Object.keys(ONLINE_LABEL) as OnlineKind[]).map((k) => {
           const on = value.includes(k);
@@ -982,27 +1102,120 @@ export function ModsFolderPicker({
   );
 }
 
-/** Windows and/or Linux. Linux builds come as a .tar.gz plus a .deb and/or .rpm package. */
+/** Whether two platform lists say the same, in any order. */
+export function samePlatforms(a: readonly AppPlatform[], b: readonly AppPlatform[]): boolean {
+  return a.length === b.length && a.every((p) => b.includes(p));
+}
+
+/**
+ * The store page's platforms after choosing how players get it: In the browser alone (a browser
+ * game plays only there), or a download, which starts from the Windows/Linux builds ticked so far.
+ * Exported for tests.
+ */
+export function chooseDelivery(value: readonly AppPlatform[], browser: boolean): AppPlatform[] {
+  return browser ? ["browser"] : value.filter((p) => p !== "browser");
+}
+
+/**
+ * Windows and/or Linux. Linux builds come as a .tar.gz plus a .deb and/or .rpm package. With
+ * `allowBrowser` (a store page of its own, not a community build), first an exclusive choice: a
+ * download, or a game that plays in the browser on the maker's website.
+ */
 export function PlatformPicker({
   value,
   onChange,
   error,
+  allowBrowser = false,
+  browserUnavailable,
+  locked,
 }: {
   value: AppPlatform[];
   onChange: (p: AppPlatform[]) => void;
   error?: string;
+  allowBrowser?: boolean;
+  /** Why In the browser can't be chosen now (an app, or a private page). */
+  browserUnavailable?: string;
+  /** Why it can't switch between a download and a browser game (it has releases). */
+  locked?: string;
 }) {
   const has = (p: AppPlatform) => value.includes(p);
+  const browser = has("browser");
+  const linuxNeedsPackage = has("linux") && !has("linux-deb") && !has("linux-rpm");
+  return (
+    <fieldset className="platform-picker">
+      <legend>Runs on</legend>
+      {allowBrowser && (
+        <div className="delivery-choice">
+          <label className="check">
+            <input
+              type="radio"
+              name="delivery"
+              checked={!browser}
+              disabled={Boolean(locked) && browser}
+              onChange={() => onChange(chooseDelivery(value, false))}
+            />
+            <span>
+              <b>Download</b> <span className="muted small">(Windows and/or Linux)</span>
+            </span>
+          </label>
+          <label className="check">
+            <input
+              type="radio"
+              name="delivery"
+              checked={browser}
+              disabled={!browser && Boolean(locked || browserUnavailable)}
+              onChange={() => onChange(chooseDelivery(value, true))}
+            />
+            <span>
+              <b>In the browser</b> <span className="muted small">(it runs on your own website; nothing to download)</span>
+            </span>
+          </label>
+          {locked ? (
+            <p className="hint">{locked}</p>
+          ) : (
+            !browser && browserUnavailable && <p className="hint">{browserUnavailable}</p>
+          )}
+        </div>
+      )}
+      {browser ? (
+        <p className="notice small browser-note">
+          Players press Play and your website opens in their browser. SLAPorSLOP checks the address, not what the site serves:
+          it can't build, sign or scan a website, so your store page never says scanned or built from source. Votes count by the
+          days people played. No sandbox mode, save folder or mods. See{" "}
+          <Link to="/publish/guide#browser-games">Browser games</Link>.
+        </p>
+      ) : (
+        <PlatformBoxes value={value} onChange={onChange} has={has} linuxNeedsPackage={linuxNeedsPackage} />
+      )}
+      {error && (
+        <span className="field-error" role="alert">
+          {error}
+        </span>
+      )}
+    </fieldset>
+  );
+}
+
+/** The Windows and Linux boxes of a download, with Linux's packages. */
+function PlatformBoxes({
+  value,
+  onChange,
+  has,
+  linuxNeedsPackage,
+}: {
+  value: AppPlatform[];
+  onChange: (p: AppPlatform[]) => void;
+  has: (p: AppPlatform) => boolean;
+  linuxNeedsPackage: boolean;
+}) {
   const toggle = (p: AppPlatform, on: boolean) => {
     let next = on ? [...value, p] : value.filter((x) => x !== p);
     if (p === "linux" && on && !next.includes("linux-deb") && !next.includes("linux-rpm")) next.push("linux-deb");
     if (p === "linux" && !on) next = next.filter((x) => x !== "linux-deb" && x !== "linux-rpm");
     onChange(next);
   };
-  const linuxNeedsPackage = has("linux") && !has("linux-deb") && !has("linux-rpm");
   return (
-    <fieldset className="platform-picker">
-      <legend>Runs on</legend>
+    <>
       <p className="hint">Every release must include a build for each one you tick.</p>
       <label className="check">
         <input type="checkbox" checked={has("windows")} onChange={(e) => toggle("windows", e.target.checked)} />
@@ -1034,12 +1247,7 @@ export function PlatformPicker({
         </div>
       )}
       {linuxNeedsPackage && <span className="field-error">Pick .deb, .rpm or both.</span>}
-      {error && (
-        <span className="field-error" role="alert">
-          {error}
-        </span>
-      )}
-    </fieldset>
+    </>
   );
 }
 

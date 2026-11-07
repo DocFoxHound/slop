@@ -14,10 +14,10 @@ import { BugReports } from "../components/BugReports";
 import { Reviews } from "../components/Reviews";
 import { AppIcon, appIconProps } from "../components/AppIcon";
 import { Art, ErrorState, ExternalLink, Loading, SectionHeader, Shelf, StageBadge, StatusBadge } from "../components/ui";
-import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, STAGE_LABEL } from "../format";
+import { ageLabel, CONTENT_LABEL, daysSince, deadlineText, formatDate, ONLINE_LABEL, playsInBrowser, STAGE_LABEL } from "../format";
 import { useDocumentTitle, useLoad } from "../hooks";
 import { renderMarkdown } from "../markdown";
-import { InstallControls } from "../components/InstallControls";
+import { BrowserPlayLink, InstallControls } from "../components/InstallControls";
 import { StoreNav } from "../components/StoreNav";
 import { InlineIcon, StoreIcon } from "../components/StoreIcons";
 import { ModControls } from "../components/ModControls";
@@ -45,17 +45,22 @@ export function AppPage() {
 
 function AppView({ app }: { app: AppDetail }) {
   const { me } = useSession();
-  const library = useLoad(() => (me && !isDesktop ? api.library() : Promise.resolve([])), [me?.id]);
+  // A game that plays on its maker's website: nothing to install, here or in the SLAPorSLOP app.
+  const inBrowser = playsInBrowser(app);
+  // The desktop app adds to the library by installing; a browser game is added with its own button there too.
+  const library = useLoad(() => (me && (!isDesktop || inBrowser) ? api.library() : Promise.resolve([])), [me?.id, inBrowser]);
   const inLibrary = library.data?.some((e) => e.slug === app.slug);
   const sandboxHint = { suggested: app.sandbox_suggested, offline: !app.sandbox_suggested };
   const players = useLoad(() => (app.kind === "game" ? api.players(app.slug) : Promise.resolve(undefined)), [app.slug]);
   const counted = players.data && (players.data.playing_now > 0 || players.data.peak_this_month > 0);
   const releases = useLoad(() => (app.stage === "coming_soon" ? Promise.resolve([]) : api.releases(app.slug)), [app.slug]);
   const latest = releases.data?.find((r) => r.status === "approved");
-  const provenance = latest && latest.files.length > 0 && latest.files.every((f) => f.provenance) ? latest.files[0].provenance : null;
-  const scannedWith = latest ? engines(latest.files.find((f) => f.scan_report)?.scan_report) : "";
-  const windowsFile = latest?.files.find((f) => f.platform === "windows" && f.defender);
-  const packages = latest?.files.filter((f) => f.platform === "linux-deb" || f.platform === "linux-rpm") ?? [];
+  // What the files of the newest release show: a browser game has none, and is never built, signed or scanned by SLAPorSLOP.
+  const files = (!inBrowser && latest?.files) || [];
+  const provenance = files.length > 0 && files.every((f) => f.provenance) ? files[0].provenance : null;
+  const scannedWith = files.length > 0 ? engines(files.find((f) => f.scan_report)?.scan_report) : "";
+  const windowsFile = files.find((f) => f.platform === "windows" && f.defender);
+  const packages = files.filter((f) => f.platform === "linux-deb" || f.platform === "linux-rpm");
   const upcoming = app.stage !== "released";
   const deadline = deadlineText(app);
   const age = ageLabel(app.min_age);
@@ -65,9 +70,11 @@ function AppView({ app }: { app: AppDetail }) {
   const donate =
     app.stage !== "coming_soon" && !app.private ? <DonateButton slug={app.slug} title={app.title} isMine={app.is_mine} /> : null;
   // The Play/Install control: in the Get it box with Donate, and offered again (without it) by the
-  // rating to players who haven't played yet (in the desktop app).
+  // rating to players who haven't played yet (in the desktop app; a browser game's Play everywhere).
   const getItWith = (donate: ReactNode) =>
-    app.stage === "coming_soon" ? null : app.platforms.includes("any") && app.branch ? (
+    app.stage === "coming_soon" ? null : inBrowser ? (
+      <InstallControls slug={app.slug} title={app.title} inLibrary={inLibrary} browser={{ address: app.play_address }} donate={donate} />
+    ) : app.platforms.includes("any") && app.branch ? (
       <>
         <ModControls slug={app.slug} game={{ slug: app.branch.parent_slug, title: app.branch.parent_title }} />
         {donate && <div className="get-row">{donate}</div>}
@@ -105,7 +112,10 @@ function AppView({ app }: { app: AppDetail }) {
       {app.is_mine && app.status && app.status !== "listed" && (
         <div className="notice">
           <StatusBadge app={app} /> Only you can see this page.{" "}
-          {app.status === "draft" && "It goes in the store once it's published and passes every scan."}{" "}
+          {app.status === "draft" &&
+            (inBrowser
+              ? "It goes in the store once it's published and a person has approved its play address."
+              : "It goes in the store once it's published and passes every scan.")}{" "}
           <Link to={`/publish/${app.slug}`}>Edit draft</Link>
         </div>
       )}
@@ -129,7 +139,8 @@ function AppView({ app }: { app: AppDetail }) {
         </div>
       )}
 
-      {app.online.length > 0 && <OnlineNotice app={app} />}
+      {/* A browser game runs on its maker's website, which the trust panel says; no sandbox advice for it. */}
+      {app.online.length > 0 && !inBrowser && <OnlineNotice app={app} />}
 
       <div className="app-head">
         {hasGallery ? <Gallery items={app.gallery} title={app.title} /> : <Art app={app} withName={false} className="hero-art" />}
@@ -141,6 +152,12 @@ function AppView({ app }: { app: AppDetail }) {
               <h1>{app.title}</h1>
               <StageBadge app={app} />
               {age && <span className="badge neutral" title={`Rated ${age}`}>{age}</span>}
+              {inBrowser && (
+                <span className="badge official">
+                  <StoreIcon name="browser" size={12} />
+                  PLAYS IN YOUR BROWSER
+                </span>
+              )}
             </div>
             {app.content_labels.length > 0 && (
               <div className="label-chips" aria-label="Content labels">
@@ -170,8 +187,9 @@ function AppView({ app }: { app: AppDetail }) {
                 title={app.title}
                 isMine={app.is_mine}
                 signedIn={Boolean(me)}
-                play={getItWith(null)}
+                play={inBrowser ? <BrowserPlayLink slug={app.slug} address={app.play_address} /> : getItWith(null)}
                 interested={app.stage === "coming_soon" ? interested : undefined}
+                browser={inBrowser}
               />
             )}
           </div>
@@ -279,19 +297,24 @@ function AppView({ app }: { app: AppDetail }) {
           ) : (
             <p className="muted">The maker hasn't written a description yet.</p>
           )}
-          {!app.private && <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} />}
+          {!app.private && <RatingPanel slug={app.slug} isMine={app.is_mine} signedIn={Boolean(me)} browser={inBrowser} />}
           {!app.private && <Reviews slug={app.slug} />}
           <AppLabel slug={app.slug} />
-          {me && app.stage !== "coming_soon" && <BugReports slug={app.slug} />}
+          {me && app.stage !== "coming_soon" && <BugReports slug={app.slug} browser={inBrowser} />}
           {!app.private && !app.platforms.includes("any") && <AppBounties slug={app.slug} title={app.title} />}
         </div>
         <aside className="side-col">
           <div className="panel panel-pad install-box">
-            <h3>{app.stage === "coming_soon" ? "Coming soon" : "Get it"}</h3>
-            {app.stage === "coming_soon" ? <p className="muted">No builds yet. This is a Coming soon page.</p> : getIt}
-            {app.stage !== "coming_soon" && !app.platforms.includes("any") && <SandboxNote app={app} />}
-            <DemoButton demo={app.demo} />
-            {app.stage !== "coming_soon" && <LabelNotes slug={app.slug} />}
+            <h3>{app.stage === "coming_soon" ? "Coming soon" : inBrowser ? "Play it" : "Get it"}</h3>
+            {app.stage === "coming_soon" ? (
+              <p className="muted">{inBrowser ? "Not playable yet." : "No builds yet."} This is a Coming soon page.</p>
+            ) : (
+              getIt
+            )}
+            {/* Sandbox mode and demos are for what the SLAPorSLOP app installs; a browser game already plays in the browser. */}
+            {app.stage !== "coming_soon" && !app.platforms.includes("any") && !inBrowser && <SandboxNote app={app} />}
+            {!inBrowser && <DemoButton demo={app.demo} />}
+            {app.stage !== "coming_soon" && <LabelNotes slug={app.slug} browser={inBrowser} />}
             {app.stage !== "coming_soon" && interested}
             {packages.length > 0 && (
               <p className="muted small packages">
@@ -307,6 +330,18 @@ function AppView({ app }: { app: AppDetail }) {
             )}
           </div>
           <div className="panel panel-pad trust">
+            {/* A browser game: SLAPorSLOP checks its address, never what the site serves, so no build,
+                scan or sale claims for it (DESIGN A6). */}
+            {inBrowser && (
+              <div className="trust-row">
+                <span className="ic">
+                  <StoreIcon name="browser" />
+                </span>
+                <span>
+                  <b>Runs on the maker's website.</b> SLAPorSLOP checked the address, not what the site serves.
+                </span>
+              </div>
+            )}
             {provenance && (
               <div className="trust-row">
                 <span className="ic">
@@ -344,16 +379,19 @@ function AppView({ app }: { app: AppDetail }) {
                 <b>Open source</b> · {app.license_spdx} · <ExternalLink href={app.repo_url}>view code</ExternalLink>
               </span>
             </div>
-            <div className="trust-row">
-              <span className="ic">
-                <StoreIcon name="bag" />
-              </span>
-              <span>
-                <b>Nothing for sale</b> · donations never unlock anything
-              </span>
-            </div>
+            {!inBrowser && (
+              <div className="trust-row">
+                <span className="ic">
+                  <StoreIcon name="bag" />
+                </span>
+                <span>
+                  <b>Nothing for sale</b> · donations never unlock anything
+                </span>
+              </div>
+            )}
           </div>
-          {!app.branch && !app.private && <CommunityBuilds app={app} />}
+          {/* Mods and community builds are installed beside a game: a browser game can't have them yet. */}
+          {!app.branch && !app.private && !inBrowser && <CommunityBuilds app={app} />}
           {!app.is_mine && (
             <p className="report-row">
               <ReportButton kind="app" subject={app.slug} label="this app" />
@@ -400,7 +438,9 @@ export function creditsByRole(credits: Credit[]): Array<[string, Credit[]]> {
   return roles;
 }
 
-function runsOn(platforms: AppPlatform[]): string {
+/** What the store page's "Runs on" says: "Windows · Linux (also as .deb)", or "Your browser". */
+export function runsOn(platforms: AppPlatform[]): string {
+  if (platforms.includes("browser")) return "Your browser";
   const parts: string[] = [];
   if (platforms.includes("windows")) parts.push("Windows");
   if (platforms.includes("linux")) {

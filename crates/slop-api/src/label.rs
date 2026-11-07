@@ -6,7 +6,9 @@
 //!   found by SLAPorSLOP's checks or said by the maker. Built from the store page and the newest
 //!   approved release's checks; SLAPorSLOP calls no AI. Says "checked" or "scanned", never "safe".
 //!   A browser game's label says it runs on its maker's website, where SLAPorSLOP checked the
-//!   address, not what the site serves: nothing is claimed about what the site does.
+//!   address, not what the site serves: nothing is claimed about what the site does. A dedicated
+//!   server that loads code from outside SLAPorSLOP says that servers may (the Content Policy's
+//!   rule on outside code doesn't cover them).
 //! - **Accessibility:** the features the maker says it has, and players who launched it
 //!   confirming or disputing each (`PUT`/`DELETE /v1/apps/{slug}/accessibility/{feature}`).
 //! - **Glow-ups** (`GET /v1/shelves/glow-ups`): apps whose % Slaps rose clearly since 60 days
@@ -114,6 +116,9 @@ pub struct AppFacts {
     pub kind_is_mod: bool,
     /// A browser game (platforms ['browser']): it runs on its maker's website.
     pub in_browser: bool,
+    /// A dedicated server (`catalog::IS_DEDICATED_SERVER`): it may load mods, maps and plugins
+    /// from other places.
+    pub dedicated_server: bool,
     pub online: Vec<String>,
     pub online_hosts: Vec<String>,
     pub sandbox_ready: bool,
@@ -254,10 +259,14 @@ pub fn items(app: &AppFacts, release: Option<&ReleaseFacts>, scanning: bool) -> 
             push(
                 "outside_code",
                 "Loads code from outside SLAPorSLOP".into(),
-                Some(format!(
-                    "{}. A person reviewed it before approving.",
-                    code.join(", ")
-                )),
+                Some(if app.dedicated_server {
+                    "Dedicated servers may load mods, maps and plugins from other places.".into()
+                } else {
+                    format!(
+                        "{}. A person reviewed it before approving.",
+                        code.join(", ")
+                    )
+                }),
                 true,
                 "note",
             );
@@ -379,6 +388,7 @@ async fn label(
     type AppRow = (
         bool,
         bool,
+        bool,
         Vec<String>,
         Vec<String>,
         bool,
@@ -386,11 +396,13 @@ async fn label(
         String,
         Vec<String>,
     );
-    let (kind_is_mod, in_browser, online, online_hosts, sandbox_ready, takes_mods, license, declared): AppRow = sqlx::query_as(
-        "select branch_kind is not distinct from 'addon', 'browser' = any(platforms), online, online_hosts, sandbox_ready,
-                mods_folder is not null, license_spdx, accessibility
-         from apps where id = $1",
-    )
+    let (kind_is_mod, in_browser, dedicated_server, online, online_hosts, sandbox_ready, takes_mods, license, declared): AppRow =
+        sqlx::query_as(sqlx::AssertSqlSafe(format!(
+            "select a.branch_kind is not distinct from 'addon', 'browser' = any(a.platforms), {}, a.online, a.online_hosts,
+                    a.sandbox_ready, a.mods_folder is not null, a.license_spdx, a.accessibility
+             from apps a where a.id = $1",
+            catalog::IS_DEDICATED_SERVER
+        )))
     .bind(app_id)
     .fetch_one(&state.db)
     .await?;
@@ -437,6 +449,7 @@ async fn label(
     let facts = AppFacts {
         kind_is_mod,
         in_browser,
+        dedicated_server,
         online,
         online_hosts,
         sandbox_ready,
@@ -626,6 +639,7 @@ mod tests {
         AppFacts {
             kind_is_mod: false,
             in_browser: false,
+            dedicated_server: false,
             online: vec![],
             online_hosts: vec![],
             sandbox_ready: true,
@@ -756,6 +770,53 @@ mod tests {
             let title = i.title.to_lowercase();
             !title.contains("safe") && !title.contains("scanned")
         }));
+    }
+
+    /// A dedicated server may load mods, maps and plugins from other places (the Content Policy's
+    /// rule on outside code doesn't cover it): its label says so when the check finds code
+    /// loading, found by SLAPorSLOP's check, and the clean case reads as for any app.
+    #[test]
+    fn a_dedicated_server_says_servers_may_load_code() {
+        let mut a = app();
+        a.dedicated_server = true;
+        let loads = ReleaseFacts {
+            repo_scan: json!({ "status": "checked", "save_folder": "slop",
+                "code_loading": [{ "label": "Loads native libraries at run time", "examples": [] }],
+                "monetization": [], "network": [] }),
+            runtimes: vec![],
+            has_installer: false,
+            scans: vec![Some("passed".into())],
+        };
+        let all = items(&a, Some(&loads), true);
+        let code = all.iter().find(|i| i.key == "outside_code").unwrap();
+        assert_eq!(code.title, "Loads code from outside SLAPorSLOP");
+        assert_eq!(
+            code.detail.as_deref(),
+            Some("Dedicated servers may load mods, maps and plugins from other places.")
+        );
+        assert!(code.checked);
+        assert_eq!(code.tone, "note");
+        // The same check on any other app names what was found.
+        let other = items(&app(), Some(&loads), true);
+        let code = other.iter().find(|i| i.key == "outside_code").unwrap();
+        assert_eq!(
+            code.detail.as_deref(),
+            Some("Loads native libraries at run time. A person reviewed it before approving.")
+        );
+
+        let clean = ReleaseFacts {
+            repo_scan: json!({ "status": "checked", "save_folder": "slop", "code_loading": [], "monetization": [], "network": [] }),
+            ..loads
+        };
+        let all = items(&a, Some(&clean), true);
+        assert_eq!(
+            all,
+            items(&app(), Some(&clean), true),
+            "a clean server reads like any app"
+        );
+        let code = all.iter().find(|i| i.key == "outside_code").unwrap();
+        assert_eq!(code.title, "Loads no code from outside SLAPorSLOP");
+        assert_eq!(code.tone, "good");
     }
 
     #[test]

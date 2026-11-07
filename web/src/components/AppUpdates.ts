@@ -11,6 +11,27 @@ import { desktop, isDesktop, type InstalledApp } from "../platform";
 const EVERY_MS = 30 * 60 * 1000;
 /** Fired on window when installed apps changed, so the library can reload. */
 export const LIBRARY_CHANGED = "slop-library-changed";
+/**
+ * Fired on window (a CustomEvent, detail: the app's address) once SLAPorSLOP has recorded Play on
+ * a browser game, so the rating, bug reports and label can ask again what the player may do.
+ */
+export const APP_LAUNCHED = "slop-app-launched";
+
+/** Tells the page that Play on browser game `slug` was recorded. */
+export function announceLaunch(slug: string) {
+  window.dispatchEvent(new CustomEvent(APP_LAUNCHED, { detail: slug }));
+}
+
+/** Calls `then` (keep it stable, e.g. useLoad's reload) each time Play on `slug` is recorded. */
+export function useLaunched(slug: string, then: () => void) {
+  useEffect(() => {
+    const on = (e: Event) => {
+      if ((e as CustomEvent<string>).detail === slug) then();
+    };
+    window.addEventListener(APP_LAUNCHED, on);
+    return () => window.removeEventListener(APP_LAUNCHED, on);
+  }, [slug, then]);
+}
 
 export interface InstalledWithUpdate {
   installed: InstalledApp;

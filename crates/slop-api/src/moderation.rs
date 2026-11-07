@@ -235,6 +235,11 @@ pub const REASONS: &[Reason] = &[
     },
 ];
 
+/// Reasons not offered for an app the rule behind them doesn't cover: the rule on code from
+/// outside SLAPorSLOP covers neither browser games nor dedicated servers (Content Policy,
+/// "Browser games and dedicated servers").
+const NOT_FOR_BROWSER_GAMES_OR_SERVERS: &[&str] = &["outside_code"];
+
 /// For a browser game, which has no build and runs on its maker's site: the reasons whose
 /// download wording doesn't fit, as players reporting one would put them.
 const BROWSER_LABELS: &[(&str, &str)] = &[
@@ -354,7 +359,8 @@ pub fn routes() -> Router<AppState> {
 #[derive(Deserialize)]
 struct ReasonsQuery {
     kind: String,
-    /// The app being reported, for its own wording (a browser game's); optional.
+    /// The app being reported, for its own wording and reasons (a browser game's or a dedicated
+    /// server's); optional.
     app: Option<String>,
 }
 
@@ -371,24 +377,30 @@ async fn reasons(
     headers: HeaderMap,
     Query(q): Query<ReasonsQuery>,
 ) -> ApiResult<Json<Vec<ReasonView>>> {
-    // Only an app the viewer can see says what it is: anything else gets the usual words, so
-    // this tells nobody about a draft.
-    let in_browser = match q.app.as_deref().filter(|_| q.kind == "app") {
+    // Only an app the viewer can see says what it is: anything else gets the usual reasons and
+    // words, so this tells nobody about a draft.
+    let (in_browser, server) = match q.app.as_deref().filter(|_| q.kind == "app") {
         Some(slug) => {
             let policy =
                 ViewerPolicy::resolve(&state.db, &state.config, user.as_ref(), &headers).await?;
             match catalog::visible_app(&state, slug, user.as_ref(), policy).await {
-                Ok((id, _)) => catalog::plays_in_browser(&state.db, id).await?,
-                Err(ApiError::NotFound) => false,
+                Ok((id, _)) => (
+                    catalog::plays_in_browser(&state.db, id).await?,
+                    catalog::is_dedicated_server(&state.db, id).await?,
+                ),
+                Err(ApiError::NotFound) => (false, false),
                 Err(e) => return Err(e),
             }
         }
-        None => false,
+        None => (false, false),
     };
     Ok(Json(
         REASONS
             .iter()
             .filter(|r| r.kinds.contains(&q.kind.as_str()))
+            .filter(|r| {
+                !((in_browser || server) && NOT_FOR_BROWSER_GAMES_OR_SERVERS.contains(&r.code))
+            })
             .map(|r| ReasonView {
                 code: r.code,
                 label: BROWSER_LABELS

@@ -3,6 +3,7 @@
 // line each item gets (what it is, a short blurb, its status and how long it has waited). Kept
 // free of React so it can be tested on its own (queue.test.ts).
 
+import { isNewSite } from "../../addressChecks";
 import type {
   AdminDonationHold,
   AdminQueue,
@@ -11,6 +12,7 @@ import type {
   ReleaseFile,
   StaffActions,
 } from "../../api";
+import { addressHost } from "../../format";
 
 export type BoxKey =
   | "releases"
@@ -43,7 +45,7 @@ export const BOXES: BoxDef[] = [
     key: "releases",
     label: "New releases",
     group: "Releases and apps",
-    help: "Approving a release signs it for players. A Beta or Released app needs one approved release before it can go in the store. Community builds and mods come here too.",
+    help: "Approving a release signs it for players. A Beta or Released app needs one approved release before it can go in the store. Community builds and mods come here too. A browser game's release is its play address: open it and play it before approving; nothing is signed.",
   },
   {
     key: "changes",
@@ -224,8 +226,10 @@ export function sortRows<T extends { since: string }>(rows: T[], order: Order): 
 
 const plural = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 
-/** "1 file · scans passed · Defender clean · signed", from the release's checks. */
+/** "1 file · scans passed · Defender clean · signed", from the release's checks; for a browser game,
+ *  "Plays in the browser · games.example.com · address checks passed · new site". */
 export function releaseBlurb(r: AdminQueue["releases"][number]): string {
+  if (r.play_address) return addressBlurb(r);
   const parts = [plural(r.files.length, "file")];
   if (r.status === "fetching") return [...parts, "still fetching"].join(" · ");
   const scans = r.files.map((f) => f.scan_result);
@@ -239,6 +243,21 @@ export function releaseBlurb(r: AdminQueue["releases"][number]): string {
   const windows = r.files.filter((f) => f.platform === "windows");
   if (windows.length > 0) parts.push(defender(windows));
   parts.push(r.files.length > 0 && r.files.every((f) => f.provenance) ? "signed" : "not signed");
+  if (r.notes.length > 0) parts.push(plural(r.notes.length, "note"));
+  return parts.join(" · ");
+}
+
+/** A browser game's release, a play address: where it is, what the checks found, and whether it's
+ *  a new site (a different one from where Play goes now). Never "signed" or "scanned". */
+function addressBlurb(r: AdminQueue["releases"][number]): string {
+  const parts = ["Plays in the browser", addressHost(r.play_address) || (r.play_address ?? "")];
+  const checks = r.address_checks;
+  if (r.status === "fetching" || !checks) parts.push("still checking");
+  else if (checks.bad_links.listed_by) parts.push(`on ${checks.bad_links.listed_by}`);
+  else if (checks.ok) parts.push("address checks passed");
+  else parts.push("address checks failed");
+  if (r.current_play_address) parts.push(isNewSite(r.play_address, r.current_play_address) ? "new site" : "same site");
+  else parts.push("first address");
   if (r.notes.length > 0) parts.push(plural(r.notes.length, "note"));
   return parts.join(" · ");
 }
@@ -277,7 +296,7 @@ export function rowsFor(box: BoxKey, d: InboxData, now: number = Date.now()): Ro
           blurb: releaseBlurb(r),
           status:
             r.status === "failed" ? { label: "Failed", tone: "bad" }
-            : r.status === "fetching" ? { label: "Fetching", tone: "neutral" }
+            : r.status === "fetching" ? { label: r.play_address ? "Checking" : "Fetching", tone: "neutral" }
             : held ? { label: "Scan hold", tone: "warn" }
             : { label: "Awaiting review", tone: "soon" },
           since: r.created_at,
@@ -328,6 +347,7 @@ export function rowsFor(box: BoxKey, d: InboxData, now: number = Date.now()): Ro
         blurb: [
           stageLabel(a.stage),
           plural(a.approved_releases, "approved release"),
+          a.play_address ? `plays at ${addressHost(a.play_address)}` : "",
           a.going_public ? "Private app going public" : "",
           a.after_appeal ? "reinstated on appeal" : "",
         ]

@@ -124,6 +124,14 @@ const SHAPES = {
   ],
   /** Utilities: a cog with a slime hub. */
   utilities: COG,
+  /** Servers: a rack of two servers, one status light slime. */
+  servers: [
+    accent(circle(16.8, 7.3, 1.3)),
+    body(rect(3.5, 3.8, 17, 7, 1.8)),
+    body(rect(3.5, 13.2, 17, 7, 1.8)),
+    line("M6.8 7.3h5M6.8 16.7h5"),
+    dot(circle(16.8, 16.7, 1.1)),
+  ],
   /** Creative: a paintbrush dipped in slime. */
   creative: [
     accent("M10.6 10.6 13.4 13.4c.3 3.6-2.6 6.6-8.9 7.3.6-6.2 3.5-9.3 6.1-10.1Z"),
@@ -328,6 +336,14 @@ const SHAPES = {
   ],
   /** On a phone: a phone, its home bar slime. */
   phone: [accentLine("M10.5 18.5h3"), body(rect(6.5, 2.5, 11, 19, 2.4))],
+  /** Plays in your browser (a game on its maker's website): a browser window with a slime Play triangle. */
+  browser: [
+    accent("M10.2 11.2v6l5.2-3Z"),
+    body(rect(2.8, 4.2, 18.4, 15.6, 2.2)),
+    line("M2.8 8.6h18.4"),
+    dot(circle(5.6, 6.4, 0.75)),
+    dot(circle(8, 6.4, 0.75)),
+  ],
   /** Download: a slime arrow down into a tray. */
   download: [accentLine("M12 3.8v10.7M7.6 10.1 12 14.5l4.4-4.4"), body("M4 14v4a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-4")],
   /** Edit: the pencil. */
@@ -429,7 +445,17 @@ export function iconPaths(parts: readonly Part[], style: StoreIconStyle = STORE_
 }
 
 /** Category slugs with an icon of their own; any other category gets `category`. */
-export const CATEGORY_ICON_SLUGS: readonly StoreIconName[] = ["games", "family", "tools", "creative", "utilities", "learning", "play-style", "vibe"];
+export const CATEGORY_ICON_SLUGS: readonly StoreIconName[] = [
+  "games",
+  "family",
+  "tools",
+  "creative",
+  "utilities",
+  "servers",
+  "learning",
+  "play-style",
+  "vibe",
+];
 const CATEGORY_ICONS = new Set<string>(CATEGORY_ICON_SLUGS);
 
 /** The icon for a category, by its slug. Categories come from the API, so an unknown one gets a neutral icon. */

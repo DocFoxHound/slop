@@ -166,6 +166,7 @@ describe("the admin panel", () => {
         status: "listed",
         repo_url: "https://github.com/x/y",
         maker: "Mia",
+        platforms: ["windows"],
         releases: [],
         pending_releases: 0,
         flags: n === 0 ? ["reports"] : [],

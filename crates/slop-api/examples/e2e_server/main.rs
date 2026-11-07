@@ -2,8 +2,8 @@
 //! A throwaway SLAPorSLOP for the browser tests (web/e2e). Never for real use.
 //!
 //! Makes a new database (`slop_e2e_<random>_sim`) on the test Postgres, migrates it, starts a
-//! fake GitHub (release files, repository and account pictures, and a stand-in Google sign-in)
-//! and a fake Stripe (fake_stripe.rs), runs the
+//! fake GitHub (release files, browser games' pages, repository and account pictures, and a
+//! stand-in Google sign-in) and a fake Stripe (fake_stripe.rs), runs the
 //! API with the release fetcher on a free port, serving the built website (`web/dist`), and
 //! seeds it (seed.rs: accounts for every kind of person, apps, money, People, teams, chat and
 //! admin queues). Prints one line of JSON (`url`, `fake`, `stripe`, `cookie_name`, `cookies`,
@@ -194,7 +194,8 @@ h3 { color: #ffd166; font-family: "Pixelify Sans", monospace; }
     })
 }
 
-/// Stands in for GitHub: release files under any `/<owner>/<repo>/releases/download/...`.
+/// Stands in for GitHub: release files under any `/<owner>/<repo>/releases/download/...`, and a
+/// browser game's page at `/<owner>/<repo>/play/`.
 async fn fake_github() -> anyhow::Result<String> {
     let zip = Bytes::from(release_zip());
     let app = Router::new()
@@ -261,10 +262,35 @@ async fn fake_github() -> anyhow::Result<String> {
                 })))
             }),
         )
-        // The newest commit, for store pictures (media.rs).
+        // The newest commit, for store pictures (media.rs) and a browser game's release that
+        // leaves its commit out (releases.rs site_commit); and that commit itself, which the
+        // fetcher then finds in the repository (check_commit). Other commits aren't found.
         .route(
-            "/repos/{owner}/{repo}/commits/HEAD",
-            get(|| async { axum::Json(serde_json::json!({ "sha": MEDIA_COMMIT })) }),
+            "/repos/{owner}/{repo}/commits/{commit}",
+            get(|Path((_, _, commit)): Path<(String, String, String)>| async move {
+                if commit != "HEAD" && commit != MEDIA_COMMIT {
+                    return Err(axum::http::StatusCode::NOT_FOUND);
+                }
+                Ok(axum::Json(serde_json::json!({ "sha": MEDIA_COMMIT })))
+            }),
+        )
+        // A browser game's page (releases.rs check_play_address, and Play in the browser tests):
+        // `/<owner>/<repo>/play/` for any repository, a small web page. Other addresses stay 404.
+        .route(
+            "/{owner}/{repo}/play/",
+            get(|Path((_, repo)): Path<(String, String)>| async move {
+                if repo.is_empty() || !repo.chars().all(|c| c.is_ascii_alphanumeric() || c == '-') {
+                    return Err(axum::http::StatusCode::NOT_FOUND);
+                }
+                Ok((
+                    [("content-type", "text/html; charset=utf-8")],
+                    format!(
+                        "<!doctype html><html lang=\"en\"><head><meta charset=\"utf-8\">\
+                         <title>{repo}, a browser game</title></head>\
+                         <body><h1>{repo}</h1><p>A game that plays in the browser, for SLAPorSLOP's tests.</p></body></html>"
+                    ),
+                ))
+            }),
         )
         .route(
             "/{owner}/{repo}/releases/download/{tag}/{file}",

@@ -103,7 +103,12 @@ Also read SLAPorSLOP's source check, `repo_scan` (`status` is `checked`, `not_ch
     SLAPorSLOP, is a rejection;
   - an unsafe format reading anything from a server, another player or a shared file (saves,
     levels) is a rejection until it's replaced; one that only reads the app's own bundled files
-    is fine.
+    is fine;
+  - the rule doesn't cover **dedicated servers** (`dedicated-server` in `app.tags`, the Servers
+    category): a server may download and run mods, maps and plugins from other places. Don't
+    reject a server for that: its store page tells players it may. If its description doesn't
+    say what it loads and from where, ask the maker to add it. The rule doesn't cover browser
+    games either (below).
 - `network`: networking code (multiplayer, sockets, HTTP and WebSocket clients, online
   services). `online_undeclared: true` means the store page didn't say the app goes online when
   the release was checked. Players are shown a notice for apps that do, so ask the maker to tick
@@ -189,7 +194,9 @@ When you open it:
   - doesn't plausibly belong to the maker (the repository's owner).
 - The source check (`repo_scan`) still applies to the repository: licence, purchases, design.
   `save_folder`, `sandbox_mismatch` and `pulse` don't apply (a browser game gets no
-  `SLOP_SAVE_DIR` or Pulse token), and loading code from its own site is how a web page works.
+  `SLOP_SAVE_DIR` or Pulse token), and neither does `code_loading`: the Content Policy's rules on
+  builds and on code from outside SLAPorSLOP don't cover browser games, and loading code from its
+  own site is how a web page works.
 - Never call it safe: SLAPorSLOP checked the address, not what the site serves.
 
 Every new address waits for a person; a release with the address Play opens now may be approved

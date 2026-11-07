@@ -2,7 +2,7 @@
 import { describe, expect, it } from "vitest";
 
 import type { GithubRelease } from "../api";
-import { fitsPlatform, pickRows } from "./Releases";
+import { fitsPlatform, nextVersion, pickRows, statusText } from "./Releases";
 
 const release = (names: string[]): GithubRelease => ({
   tag: "v0.1.0",
@@ -46,5 +46,34 @@ describe("release picking", () => {
   it("leaves out builds for platforms the app doesn't list", () => {
     const rows = pickRows(release(["Game-windows.zip", "Game-linux.tar.gz"]), ["windows"]);
     expect(rows.filter((r) => r.include).map((r) => r.name)).toEqual(["Game-windows.zip"]);
+  });
+});
+
+describe("a browser game's releases", () => {
+  it("suggests the next version, never one already used", () => {
+    expect(nextVersion([])).toBe("1.0.0");
+    expect(nextVersion(["1.0.0"])).toBe("1.0.1");
+    expect(nextVersion(["1.0.9", "1.0.8"])).toBe("1.0.10");
+    expect(nextVersion(["v2"])).toBe("v3");
+    expect(nextVersion(["2.0-beta3"])).toBe("2.0-beta4");
+    // Versions stay unique whatever became of a release (a withdrawn 1.0.1 still counts).
+    expect(nextVersion(["1.0.0", "1.0.1"])).toBe("1.0.2");
+    expect(nextVersion(["1.0.0", "1.0.2", "1.0.1"])).toBe("1.0.3");
+    expect(nextVersion(["beta"])).toBe("beta.1");
+    expect(nextVersion(["x".repeat(40)])).toBe("");
+  });
+
+  it("words a play address's status without signing, scanning or files", () => {
+    const statuses = ["fetching", "awaiting_review", "approved", "rejected", "failed", "revoked", "withdrawn"] as const;
+    for (const s of statuses) {
+      const t = statusText(s, true);
+      expect(`${t.label} ${t.help}`).not.toMatch(/sign|scan|files|install/i);
+    }
+    expect(statusText("fetching", true).label).toBe("CHECKING THE ADDRESS");
+    expect(statusText("approved", true).help).toBe("Approved: Play opens this address.");
+    expect(statusText("revoked", true).help).toContain("Play no longer opens it");
+    // Downloads keep theirs.
+    expect(statusText("fetching", false).label).toBe("CHECKING FILES");
+    expect(statusText("approved", false).help).toContain("Signed by SLAPorSLOP");
   });
 });

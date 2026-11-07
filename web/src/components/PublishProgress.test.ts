@@ -390,6 +390,123 @@ describe("progressSteps", () => {
     expect(refreshEvery(undefined)).toBeNull();
   });
 
+  describe("a browser game, whose release is a play address", () => {
+    const game = (over: Partial<AppDetail> = {}) => app({ plays_in_browser: true, ...over });
+    const address = (over: Partial<Release> = {}) =>
+      release({
+        files: [],
+        play_address: "https://games.example.com/play/",
+        address_checks: {
+          https: true,
+          public_host: true,
+          bad_links: { listed_by: null, lists_loaded: false },
+          status: 200,
+          final_address: "https://games.example.com/play/",
+          redirects: 0,
+          content_type: "text/html",
+          checked_at: "2026-11-07T10:00:00Z",
+          ok: true,
+          problem: null,
+        },
+        ...over,
+      });
+    // Every step's words but the one that says what isn't checked (which names it to say so).
+    const all = (steps: ReturnType<typeof progressSteps>) =>
+      steps
+        .filter((s) => s.title !== "What SLAPorSLOP can't check")
+        .map((s) => `${textOf(s.detail)} ${textOf(s.more)}`)
+        .join(" ");
+
+    it("asks for the play address, and none for a Coming soon page", () => {
+      const none = progressSteps(game(), [], testServer);
+      expect(states(none)).toEqual({ "Store page": "done", "Play address": "waiting", "In the store": "waiting" });
+      expect(currentStep(none).title).toBe("Play address");
+      expect(none.find((s) => s.title === "In the store")!.detail).toBe("After the play address is approved.");
+      expect(states(progressSteps(game({ stage: "coming_soon" }), [], testServer))).toEqual({
+        "Store page": "done",
+        "Play address": "skipped",
+        "In the store": "active",
+      });
+    });
+
+    it("has no file, signature or scan steps, and says what SLAPorSLOP can't check", () => {
+      const steps = progressSteps(game(), [address()], { scanning: true, maker_signatures_required: true });
+      expect(states(steps)).toEqual({
+        "Store page": "done",
+        "Play address": "done",
+        "Address checked": "done",
+        "What SLAPorSLOP can't check": "skipped",
+        "Source check": "done",
+        "Review by a person": "active",
+        "In the store": "waiting",
+      });
+      expect(steps.find((s) => s.title === "Play address")!.detail).toBe("Version 1.0.0: https://games.example.com/play/ received.");
+      expect(textOf(steps.find((s) => s.title === "What SLAPorSLOP can't check")!.detail)).toContain(
+        "SLAPorSLOP checked the address, not what the site serves",
+      );
+      const checked = steps.find((s) => s.title === "Address checked")!;
+      expect(checked.itemName).toBe("check");
+      expect(checked.items!.map((i) => [i.label, i.status])).toEqual([
+        ["https", "Yes"],
+        ["A public site", "Yes"],
+        ["Bad-link lists", "Not checked"],
+        ["The page loads", "Yes (HTTP 200)"],
+      ]);
+      expect(checked.items![2].detail).toContain("No bad-link lists are loaded on this server");
+      const words = all(steps);
+      expect(words).not.toMatch(/\bsigned\b|\bscanned\b|downloaded|hashed/i);
+      expect(textOf(steps.find((s) => s.title === "Review by a person")!.more)).toContain("Play opens this address");
+    });
+
+    it("shows the checks under way, and a failure with its reason and what to fix", () => {
+      const checking = progressSteps(game(), [address({ status: "fetching", address_checks: null, repo_scan: null })], testServer);
+      const step = checking.find((s) => s.title === "Address checked")!;
+      expect(step).toMatchObject({ state: "active", stateLabel: "Checking" });
+      expect(step.items!.every((i) => i.state === "active")).toBe(true);
+      expect(currentStep(checking).title).toBe("Address checked");
+      expect(refreshEvery([address({ status: "fetching" })])).toBe(10_000);
+
+      const failed = progressSteps(
+        game(),
+        [address({ status: "failed", status_reason: "the page didn't load: the site answered HTTP 404", address_checks: null })],
+        testServer,
+      );
+      const problem = failed.find((s) => s.title === "Address checked")!;
+      expect(problem.state).toBe("problem");
+      expect(textOf(problem.detail)).toContain(
+        "SLAPorSLOP couldn't check the address: the page didn't load: the site answered HTTP 404. Fix it and submit the address again.",
+      );
+      expect(textOf(problem.detail)).toContain("See what to fix");
+      expect(currentStep(failed).title).toBe("Address checked");
+    });
+
+    it("doesn't count a site's networking or code loading as notes", () => {
+      const repo_scan = {
+        status: "checked" as const,
+        licence: { declared: "MIT", files: [], headers: [], problems: [] },
+        monetization: [],
+        code_loading: [{ rule: "load_script", label: "Runs code from text", count: 1, examples: ["game.js:4"] }],
+        saves: [{ rule: "appdata", label: "Writes to AppData", count: 1, examples: ["game.js:9"] }],
+        online_undeclared: true,
+      };
+      const steps = progressSteps(game(), [address({ repo_scan: repo_scan as Release["repo_scan"] })], testServer);
+      expect(states(steps)["Source check"]).toBe("done");
+    });
+
+    it("once approved, says Play opens it, and never that it's signed", () => {
+      const done = progressSteps(game({ status: "listed" }), [address({ status: "approved" })], testServer);
+      expect(states(done)).toMatchObject({ "Review by a person": "done", "In the store": "done" });
+      expect(textOf(done.find((s) => s.title === "Review by a person")!.detail)).toBe("Version 1.0.0 approved by a person at SLAPorSLOP.");
+      expect(all(done)).not.toMatch(/\bsigned\b|\bscanned\b/i);
+      const auto = progressSteps(game(), [address({ status: "approved", auto_approved: true })], testServer);
+      expect(textOf(auto.find((s) => s.title === "Review by a person")!.detail)).toContain("a person approved this address before");
+      const revoked = progressSteps(game(), [address({ status: "revoked", status_reason: "it asks for passwords" })], testServer);
+      expect(textOf(revoked.find((s) => s.title === "Review by a person")!.detail)).toBe(
+        "Withdrawn by SLAPorSLOP: it asks for passwords. Play no longer opens it.",
+      );
+    });
+  });
+
   it("words times and files plainly", () => {
     expect(fileLabel({ platform: "linux-rpm", file_name: "Game.RPM" })).toBe("Linux (.rpm)");
     expect(fileLabel({ platform: "any", file_name: "mod.zip" })).toBe("Mod (.zip)");

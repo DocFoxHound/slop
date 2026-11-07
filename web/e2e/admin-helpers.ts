@@ -99,6 +99,8 @@ export interface NewApp {
   repo?: string;
   visibility?: "public" | "private";
   summary?: string;
+  /** ["windows"] unless said; ["browser"] for a game that plays in the browser. */
+  platforms?: string[];
 }
 
 /**
@@ -121,7 +123,7 @@ export async function newApp(app: NewApp, who: Who = MAKER) {
     license_spdx: "MIT",
     min_age: 12,
     tags: [],
-    platforms: ["windows"],
+    platforms: app.platforms ?? ["windows"],
     ...(app.visibility ? { visibility: app.visibility } : {}),
   });
 }
@@ -140,6 +142,25 @@ export async function newRelease(slug: string, version: string, who: Who = MAKER
       },
     ],
   });
+  const id: string = r.id;
+  await expect
+    .poll(
+      async () => {
+        const all = await ok(who, "GET", `/v1/apps/${slug}/releases`);
+        return (all as Array<{ id: string; status: string }>).find((x) => x.id === id)?.status;
+      },
+      { timeout: 20_000 },
+    )
+    .toBe("awaiting_review");
+  return id;
+}
+
+/** A page on the fake GitHub a browser game's play address can lead to (e2e_server/main.rs). */
+export const fakePlay = (slug: string) => `${server.fake}bo/${slug}/play/`;
+
+/** Submits a browser game's play address and waits until it's waiting for review. */
+export async function newPlayAddress(slug: string, version: string, address: string, who: Who = MAKER): Promise<string> {
+  const r = await ok(who, "POST", `/v1/apps/${slug}/releases`, { version, commit_sha: "b".repeat(40), play_address: address });
   const id: string = r.id;
   await expect
     .poll(

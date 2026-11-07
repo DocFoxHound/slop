@@ -413,8 +413,9 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
 
     // Events from the audit log.
     let after = cursor(db, "audit", "select coalesce(max(id), 0) from audit_log").await?;
-    let events: Vec<(i64, String, String, String, String)> = sqlx::query_as(
-        "select id, actor, action, subject, coalesce(detail->>'role', '') from audit_log
+    let events: Vec<(i64, String, String, String, String, bool)> = sqlx::query_as(
+        "select id, actor, action, subject, coalesce(detail->>'role', ''),
+                detail ? 'play_address' from audit_log
          where id > $1 and action in ('release.revoke', 'admin.grant', 'admin.revoke', 'payments.mismatch',
                                       'release.rescan_flagged', 'staff.grant_role')
          order by id",
@@ -425,8 +426,13 @@ pub async fn collect(state: &AppState) -> anyhow::Result<Vec<Alert>> {
     let last: Option<i64> = sqlx::query_scalar("select max(id) from audit_log")
         .fetch_one(db)
         .await?;
-    for (id, actor, action, subject, role) in events {
+    for (id, actor, action, subject, role, play_address) in events {
         let (title, detail) = match action.as_str() {
+            // A browser game's release is its play address (admin::revoke names it).
+            "release.revoke" if play_address => (
+                "A release was withdrawn",
+                format!("{actor} withdrew {subject}. Play stops opening its address for everyone."),
+            ),
             "release.revoke" => (
                 "A release was withdrawn",
                 format!("{actor} withdrew {subject}. It stops launching for everyone."),

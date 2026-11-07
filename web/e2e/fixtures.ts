@@ -45,11 +45,21 @@
 //                   People Terms yet), no apps.
 //   bystander       Bea Bystander: nothing done, and no test may change that: for the empty
 //                   states ("No donations yet", no reports sent) in any order of the files.
-// Without a sign-in: Sam Seed (castle-rock; neon-drift, which plays online), and players Kai
-// Kestrel, Lu Lark and Noor Nightjar (votes, a review and bug reports on Lantern Keep, bounty
-// pledges, reports).
+//   sam             Sam Seed: castle-rock; neon-drift, which plays online; orbit-tap, which plays
+//                   in the browser. Signed in only on Orbit Tap's Releases tab
+//                   (publishing-browser.e2e.ts), which withdraws the address it sends.
+// Without a sign-in: players Kai Kestrel, Lu Lark and Noor Nightjar (votes, a review and bug
+// reports on Lantern Keep, bounty pledges, reports).
 //
 // Objects (server.ids):
+//   browserApp "orbit-tap": Sam's game that plays in the browser, listed and released, tag
+//     arcade. Its 1.0.0 is a play address, browserPlayAddress (an http page on the fake GitHub,
+//     which only a test server allows), checked and approved by staff. Nobody has played it and
+//     it's in nobody's library: a test that presses Play on it as someone answers the launch
+//     itself (page.route), so that stays true; tests that need a recorded play make their own
+//     browser game (store-helpers.ts listedApp with platforms ["browser"]).
+//   A bad-link list with one site, bad-games.example (the e2e test list): a play address there
+//     is refused.
 //   listedApp "lantern-keep" (listedAppId): signed release 1.0.0, store pictures, 7 votes,
 //     3 reviews (Mia answered crashReview), 2 open bug reports (bugReport has a "me too") and a
 //     fixed one (fixedBugReport), donations on (server donations too): Pat's paid donation
@@ -105,11 +115,14 @@ export type Who =
   | "suspended"
   | "pictured"
   | "newcomer"
-  | "bystander";
+  | "bystander"
+  | "sam";
 
 export type Id =
   | Who
   | "sam"
+  | "browserApp"
+  | "browserPlayAddress"
   | "listedApp"
   | "listedAppId"
   | "crashReview"

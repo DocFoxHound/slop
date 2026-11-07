@@ -660,6 +660,14 @@ const TAG_SHAPES = {
     line("M8.4 20.8h7.2M12 16.6v4.2"),
   ],
 
+  // ---- servers -----------------------------------------------------------
+  /** Dedicated Server: a tower server with drive bays, its power light slime. */
+  "dedicated-server": [
+    accent(circle(12, 17.2, 1.5)),
+    body(rect(6.5, 2.8, 11, 18.4, 2.2)),
+    line("M9.4 6.6h5.2M9.4 9.6h5.2M9.4 12.6h5.2"),
+  ],
+
   // ---- learning ----------------------------------------------------------
   /** Coding: a laptop with code on it, one line slime. */
   coding: [

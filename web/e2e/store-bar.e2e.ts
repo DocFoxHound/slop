@@ -42,6 +42,7 @@ test("More opens the rest of the store, closes with Escape, and is marked for it
   for (const [name, href] of [
     ["Tools", "/browse/tools"],
     ["Creative", "/browse/creative"],
+    ["Servers", "/browse/servers"],
     ["Learning", "/browse/learning"],
     ["Coming soon & beta", "/upcoming"],
     ["Everything", "/search"],

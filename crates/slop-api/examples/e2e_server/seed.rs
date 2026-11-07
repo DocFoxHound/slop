@@ -248,6 +248,7 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
         "online = '{player_servers}'",
     )
     .await?;
+    let play_address = browser_game(ctx, &admin, &sam).await.context("Orbit Tap")?;
     listed(ctx, maker.id, "mias-first", "Mia's First Game", "").await?;
     // Messages Mia's AI agent wrote to the admins (admin_messages.rs), for the AI messages tab.
     agent_message(
@@ -284,11 +285,14 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
         "A dark theme for the store page would help.",
     )
     .await?;
+    // Sam signs in only for his browser game's Releases tab (publishing-browser.e2e.ts), which
+    // withdraws whatever it sends: Orbit Tap's approved address stays the one Play opens.
     for (name, who) in [
         ("maker", &maker),
         ("player", &player),
         ("admin", &admin),
         ("overdue", &overdue),
+        ("sam", &sam),
     ] {
         s.cookies.insert(name, who.cookie.clone());
     }
@@ -297,6 +301,8 @@ pub async fn seed(ctx: &Ctx) -> anyhow::Result<Seeded> {
     s.ids.insert("admin", json!(admin.id));
     s.ids.insert("sam", json!(sam.id));
     s.ids.insert("overdue", json!(overdue.id));
+    s.ids.insert("browserApp", json!("orbit-tap"));
+    s.ids.insert("browserPlayAddress", json!(play_address));
 
     // More people: a teen (the under-18 view comes from the country: GB), a second maker, staff
     // with one role each, and players who don't sign in (their votes make the ratings show).
@@ -477,6 +483,82 @@ async fn listed(
     )
     .await?;
     Ok(id)
+}
+
+/// Sam's "Orbit Tap", a listed game that plays in the browser: its 1.0.0 is a play address on the
+/// fake GitHub (main.rs serves the page), checked as the fetcher leaves one and approved by staff
+/// through the review queue. Nobody has played it. Also a bad-link list with one site on it,
+/// `bad-games.example`, so a play address there is refused without the network. Returns the
+/// play address.
+async fn browser_game(ctx: &Ctx, admin: &Who, sam: &Who) -> anyhow::Result<String> {
+    ctx.sql(
+        "insert into bad_links (url, host, source) values ('bad-games.example/play', 'bad-games.example', 'the e2e test list')",
+        &[],
+    )
+    .await?;
+    let app = new_app(
+        ctx,
+        sam,
+        "orbit-tap",
+        "Orbit Tap",
+        "Tap to keep the moon in orbit. Plays in your browser.",
+        "released",
+        &["arcade"],
+        &["browser"],
+    )
+    .await?;
+    let address = format!("{}e2e/orbit-tap/play/", ctx.fake);
+    let checked_at = time::OffsetDateTime::now_utc()
+        .replace_nanosecond(0)?
+        .format(&time::format_description::well_known::Rfc3339)?;
+    // What the fetcher's checks find on this test server (releases.rs AddressChecks): plain http
+    // and a page on this machine, which only a test setup allows, so neither is claimed.
+    let checks = json!({
+        "https": false,
+        "public_host": null,
+        "bad_links": { "listed_by": null, "lists_loaded": true },
+        "status": 200,
+        "final_address": address,
+        "redirects": 0,
+        "content_type": "text/html; charset=utf-8",
+        "checked_at": checked_at,
+        "ok": true,
+        "problem": null,
+    });
+    let release = Uuid::now_v7();
+    sqlx::query(
+        "insert into releases (id, app_id, version, commit_sha, status, submitted_by, commit_verified, play_address, address_checks)
+         values ($1, $2, '1.0.0', repeat('a', 40), 'awaiting_review', $3, true, $4, $5)",
+    )
+    .bind(release)
+    .bind(app)
+    .bind(sam.id)
+    .bind(&address)
+    .bind(sqlx::types::Json(&checks))
+    .execute(&ctx.db)
+    .await
+    .context("Orbit Tap's release")?;
+    ctx.post(
+        admin,
+        &format!("/v1/admin/releases/{release}/approve"),
+        json!({}),
+    )
+    .await?;
+    ctx.post(admin, "/v1/admin/apps/orbit-tap/list", json!({}))
+        .await?;
+    // Listing touched it; keep the store's "recent" order the browser tests expect.
+    ctx.sql(
+        "update apps set updated_at = created_at where slug = 'orbit-tap'",
+        &[],
+    )
+    .await?;
+    // Play opens it for anyone, signed in or not.
+    let page = ctx.get(None, "/v1/apps/orbit-tap").await?;
+    anyhow::ensure!(
+        page["play_address"] == json!(address) && page["plays_in_browser"] == json!(true),
+        "Orbit Tap doesn't play at {address}: {page}"
+    );
+    Ok(address)
 }
 
 /// A thread an account's AI agent started with every admin, with a token made 12 days before.
@@ -1982,6 +2064,20 @@ async fn verify(ctx: &Ctx) -> anyhow::Result<()> {
         (
             "select count(*)::text from releases where status = 'awaiting_review'",
             "1",
+        ),
+        // The one browser game: listed, its play address approved, played by nobody yet.
+        (
+            "select string_agg(slug || ':' || status::text, ',' order by slug) from apps where 'browser' = any(platforms)",
+            "orbit-tap:listed",
+        ),
+        (
+            "select string_agg(a.slug || ':' || r.status::text, ',') from releases r join apps a on a.id = r.app_id
+             where r.play_address is not null and r.signed_manifest is null",
+            "orbit-tap:approved",
+        ),
+        (
+            "select count(*)::text from user_app_usage u join apps a on a.id = u.app_id where a.slug = 'orbit-tap'",
+            "0",
         ),
         (
             "select string_agg(kind::text, ',' order by kind::text) from chat_conversations where kind <> 'self'",

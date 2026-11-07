@@ -157,6 +157,9 @@ struct QueuedRelease {
     app: AppRef,
     #[serde(flatten)]
     release: ReleaseInfo,
+    /// A browser game's: the address Play opens now (`catalog::PLAY_ADDRESS`), if any, so a
+    /// reviewer sees whether this one is a new site. Null for downloads.
+    current_play_address: Option<String>,
     notes: Vec<Note>,
 }
 
@@ -188,6 +191,9 @@ struct ReadyApp {
     #[serde(flatten)]
     app: AppRef,
     approved_releases: i64,
+    /// A browser game's: the address Play will open once it's listed (`catalog::PLAY_ADDRESS`),
+    /// for a last look at the site. Null for downloads and Coming soon pages without one.
+    play_address: Option<String>,
     /// New pictures wait for review before the app can be listed.
     pictures_pending: bool,
     /// A private app its owner asked to make public: listing it makes it public (SECURITY §12.3),
@@ -268,15 +274,25 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
         .bind(&slug)
         .fetch_one(&state.db)
         .await?;
+        let current_play_address: Option<String> =
+            sqlx::query_scalar(sqlx::AssertSqlSafe(format!(
+                "select {} from apps a where a.slug = $1",
+                crate::catalog::PLAY_ADDRESS
+            )))
+            .bind(&slug)
+            .fetch_one(&state.db)
+            .await?;
         releases.push(QueuedRelease {
             app,
             release: releases::load_release(&state, id).await?,
+            current_play_address,
             notes: review::notes(&state.db, "release", id).await?,
         });
     }
     let mut ready_to_list: Vec<ReadyApp> = sqlx::query_as(sqlx::AssertSqlSafe(format!(
         "select {APP_COLUMNS},
                 (select count(*) from releases r where r.app_id = a.id and r.status = 'approved') as approved_releases,
+                {play} as play_address,
                 exists (select 1 from media_sets ms where ms.app_id = a.id and ms.status = 'pending') as pictures_pending,
                 a.visibility = 'private' as going_public,
                 a.relist_after_appeal as after_appeal,
@@ -285,7 +301,8 @@ async fn queue(State(state): State<AppState>, _admin: AdminUser) -> ApiResult<Js
          where (a.status = 'draft' or (a.status = 'delisted' and a.relist_after_appeal))
            and (a.visibility = 'public' or a.public_requested_at is not null)
            and (a.stage = 'coming_soon' or exists (select 1 from releases r where r.app_id = a.id and r.status = 'approved'))
-         order by a.updated_at"
+         order by a.updated_at",
+        play = crate::catalog::PLAY_ADDRESS
     )))
     .fetch_all(&state.db)
     .await?;

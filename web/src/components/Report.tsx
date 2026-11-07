@@ -77,8 +77,9 @@ export function ReportForm({
   const [done, setDone] = useState<{ reference: string; due_at: string }>();
 
   useEffect(() => {
-    api.reports.reasons(kind).then(setReasons, (e: unknown) => e instanceof ApiError && setError(e));
-  }, [kind]);
+    // An app's reasons fit what it is: a browser game's site, not a build (the server decides).
+    api.reports.reasons(kind, kind === "app" ? subject : undefined).then(setReasons, (e: unknown) => e instanceof ApiError && setError(e));
+  }, [kind, subject]);
 
   const chosen = reasons?.find((r) => r.code === reason);
   const signedOut = me === null;

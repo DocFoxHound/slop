@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { cleanup, render } from "@testing-library/react";
 import { afterEach, describe, expect, it } from "vitest";
 
-import { CATEGORY_ICON_SLUGS, storeIconPaths } from "./storeIcons";
+import { CATEGORY_ICON_SLUGS, STORE_ICON_NAMES, storeIconPaths } from "./storeIcons";
 import { TAG_ICON_NAMES, tagIconName, tagIconPaths } from "./tagIcons";
 import { TagIcon } from "./components/StoreIcons";
 
@@ -155,6 +155,22 @@ describe("tag icons", () => {
     const out: string[] = [];
     for (const name of TAG_ICON_NAMES) {
       const pts = tagIconPaths(name, "drip").flatMap((p) => pathPoints(p.d));
+      const xs = pts.map(([x]) => x);
+      const ys = pts.map(([, y]) => y);
+      const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => Math.round(v * 10) / 10);
+      if (box[0] < 1.5 || box[1] < 1.5 || box[2] > 22.5 || box[3] > 22.5) out.push(`${name} [${box.join(", ")}]`);
+    }
+    expect(out).toEqual([]);
+  });
+
+  it("the newest store icons (browser games, Servers) stay inside the box too", () => {
+    // Only the newest store icons are held to it: older ones' drips (recommended, signing, star)
+    // hang a little past the bottom edge, as drawn.
+    const out: string[] = [];
+    const newest = ["browser", "servers"];
+    expect(STORE_ICON_NAMES.filter((n) => newest.includes(n))).toHaveLength(newest.length);
+    for (const name of STORE_ICON_NAMES.filter((n) => newest.includes(n))) {
+      const pts = storeIconPaths(name, "drip").flatMap((p) => pathPoints(p.d));
       const xs = pts.map(([x]) => x);
       const ys = pts.map(([, y]) => y);
       const box = [Math.min(...xs), Math.min(...ys), Math.max(...xs), Math.max(...ys)].map((v) => Math.round(v * 10) / 10);

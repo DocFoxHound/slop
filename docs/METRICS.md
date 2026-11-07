@@ -1,7 +1,7 @@
 # SLAPorSLOP — Donation, Payment & Vote History (Metrics)
 
 **Status:** Draft · companion to [`DESIGN.md`](DESIGN.md) §7 (ratings) and §12 (money)
-**Last updated:** 2026-10-17
+**Last updated:** 2026-11-07
 **Related:** [`PAYMENTS.md`](PAYMENTS.md) · `LEGAL.md` (private) §7 · [`SECURITY.md`](SECURITY.md) §10 · [`ARCHITECTURE.md`](ARCHITECTURE.md)
 
 ---
@@ -34,12 +34,12 @@ Every vote action is stored as an **event**. A vote is never just overwritten.
 | **playtime at the time of the vote** (from Pulse) | **Weighted ratings** (§2) |
 | previous vote, if changed | Shows people changing their mind after updates |
 | review ID (if any) | Links to the written review |
-| platform | "Mostly Slop on Linux" |
+| platform (windows, linux, or browser for a game that plays in the browser) | "Mostly Slop on Linux" |
 
 The current vote per account and app is kept as well. It's updated in the same database transaction.
 
 ### 1.3 Other activity
-Library adds, installs and Interested. These feed "Popular this month", "For you", Discover and maker dashboards. SLAPorSLOP keeps no per-account download count: a desktop install while signed in adds the app to the library, which is what Discover's "keep most in your library" reel reads.
+Library adds, installs and Interested, and launches (playtime and the days an app was launched; pressing Play on a browser game counts as a launch that day, recorded with platform `browser`). These feed "Popular this month", "For you", Discover and maker dashboards. SLAPorSLOP keeps no per-account download count: a desktop install while signed in adds the app to the library, which is what Discover's "keep most in your library" reel reads.
 
 ## 2. Weighted and unweighted ratings (decided)
 
@@ -50,6 +50,7 @@ Library adds, installs and Interested. These feed "Popular this month", "For you
 - **Unweighted:** one account = one vote.
 - Store pages show **both**: "**84% Slaps** (weighted by playtime) · 79% unweighted", with a toggle on the rating-over-time chart.
 - Apps that aren't games (tools with no Pulse playtime) use launches instead: the number of separate days the user launched the app, with 10 days or more counting fully.
+- **Browser games** (2026-11-07) have no Pulse, so their votes are always weighted by days launched only: the days the player pressed Play while signed in (`votes::vote_weight(0, days)`). Their rating panel says "weighted by days played".
 
 **Built 2026-10-20:** the "How ratings work" page (`/ratings`) publishes the formula and the tables of weights.
 
@@ -63,7 +64,7 @@ Library adds, installs and Interested. These feed "Popular this month", "For you
 | **SLAPorSLOP staff** | Full detail by role, with access logged | Full detail for abuse checks, with access logged |
 | **Public** | Nothing | Rating-over-time charts |
 
-**Built 2026-10-20 (votes):** the maker's Manage page shows each player's current vote grouped by the version and platform it was cast on (the desktop app reports the platform at launch), and "update impact" per version (👎 → 👍 and 👍 → 👎 changes, new votes). Branches are separate apps with their own ratings.
+**Built 2026-10-20 (votes):** the maker's Manage page shows each player's current vote grouped by the version and platform it was cast on (the desktop app reports the platform at launch; a browser game's is always `browser`, shown as "In the browser"), and "update impact" per version (👎 → 👍 and 👍 → 👎 changes, new votes). Branches are separate apps with their own ratings.
 
 ## 4. Architecture
 

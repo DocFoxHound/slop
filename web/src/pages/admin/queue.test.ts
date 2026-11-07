@@ -103,6 +103,65 @@ describe("the review inbox", () => {
     expect(row).toMatchObject({ key: "r", title: "Pocket Golf 1.0.0", by: "by Bo", status: { label: "Scan hold", tone: "warn" } });
   });
 
+  it("sums up a browser game's release by its play address: never files or signing", () => {
+    const checks = {
+      https: true,
+      public_host: true,
+      bad_links: { listed_by: null, lists_loaded: true },
+      status: 200,
+      final_address: "https://games.example.com/v2/",
+      redirects: 0,
+      content_type: "text/html",
+      checked_at: "2026-10-20T00:00:00Z",
+      ok: true,
+      problem: null,
+    };
+    const address = (over: object) =>
+      release("p", "2026-10-20T00:00:00Z", [], {
+        play_address: "https://games.example.com/v2/",
+        address_checks: checks,
+        current_play_address: null,
+        app: { slug: "tap", title: "Orbit Tap", stage: "beta", status: "draft", repo_url: "https://github.com/o/tap", maker: "Sam", platforms: ["browser"] },
+        ...over,
+      });
+    expect(releaseBlurb(address({}))).toBe("Plays in the browser · games.example.com · address checks passed · first address");
+    expect(releaseBlurb(address({ current_play_address: "https://games.example.com/play/" }))).toBe(
+      "Plays in the browser · games.example.com · address checks passed · same site",
+    );
+    expect(releaseBlurb(address({ current_play_address: "https://old.example.net/", notes: [{}] }))).toBe(
+      "Plays in the browser · games.example.com · address checks passed · new site · 1 note",
+    );
+    expect(releaseBlurb(address({ status: "fetching", address_checks: null }))).toBe("Plays in the browser · games.example.com · still checking · first address");
+    expect(
+      releaseBlurb(address({ status: "failed", address_checks: { ...checks, ok: false, bad_links: { listed_by: "URLhaus", lists_loaded: true } } })),
+    ).toContain("on URLhaus");
+    for (const r of [address({}), address({ status: "failed", address_checks: { ...checks, ok: false } })]) {
+      expect(releaseBlurb(r)).not.toMatch(/file|sign|scan|Defender/);
+    }
+    const [checking] = rowsFor("releases", { queue: queue({ releases: [address({ status: "fetching", address_checks: null })] }) });
+    expect(checking.status).toEqual({ label: "Checking", tone: "neutral" });
+    const [ready] = rowsFor("listing", {
+      queue: queue({
+        ready_to_list: [
+          {
+            slug: "tap",
+            title: "Orbit Tap",
+            stage: "beta",
+            maker: "Sam",
+            platforms: ["browser"],
+            play_address: "https://games.example.com/play/",
+            approved_releases: 1,
+            pictures_pending: false,
+            going_public: false,
+            after_appeal: false,
+            waiting_since: "2026-10-20T00:00:00Z",
+          },
+        ] as never,
+      }),
+    });
+    expect(ready.blurb).toBe("Beta · 1 approved release · plays at games.example.com");
+  });
+
   it("says how long something waited, and sorts by it", () => {
     expect(waited("2026-10-25T11:59:40Z", NOW)).toBe("just now");
     expect(waited("2026-10-25T11:48:00Z", NOW)).toBe("12 min");

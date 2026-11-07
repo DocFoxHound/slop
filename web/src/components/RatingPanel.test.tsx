@@ -1,9 +1,10 @@
 // SPDX-License-Identifier: AGPL-3.0-or-later
-import { cleanup, fireEvent, render, screen } from "@testing-library/react";
+import { act, cleanup, fireEvent, render, screen } from "@testing-library/react";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { MemoryRouter } from "react-router";
 
 import { api, type Ratings } from "../api";
+import { announceLaunch } from "./AppUpdates";
 import { LineChart, UpDownBars } from "./Charts";
 import { RatePrompt, RatingHeader, RatingSummary, rateStep, SinceNewWork } from "./RatingPanel";
 
@@ -38,6 +39,15 @@ describe("RatingSummary", () => {
     expect(screen.getByText("91% Slaps")).toBeTruthy();
     expect(screen.getByText("Really Slaps")).toBeTruthy();
     expect(screen.getByText(/80% unweighted · 10 votes/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "weighted by playtime" })).toBeTruthy();
+  });
+
+  it("weighs a browser game's votes by days played: it can't report playtime", () => {
+    render(<RatingSummary ratings={{ ...base, not_slop: 8, slop: 2, percent: 80, percent_weighted: 91, label: "Really Slaps" }} browser />, {
+      wrapper: MemoryRouter,
+    });
+    expect(screen.getByRole("link", { name: "weighted by days played" }).getAttribute("href")).toBe("/ratings");
+    expect(screen.queryByText(/playtime/)).toBeNull();
   });
 });
 
@@ -124,6 +134,38 @@ describe("RatingHeader", () => {
     expect(screen.getByRole("link", { name: "Get the SLAPorSLOP app" }).getAttribute("href")).toBe("/download");
   });
 
+  it("for a game that plays in the browser, offers Play right there, on the website too, and asks again once it's recorded", async () => {
+    const notPlayed = { vote: null, can_vote: false, reason: "Play it from SLAPorSLOP first: only players can vote.", played: false, weight: 0.1 } as const;
+    const ratings = vi.spyOn(api, "ratings").mockResolvedValue({ ...base, stage: "released", mine: notPlayed });
+    render(
+      <MemoryRouter>
+        <RatingHeader slug="orbit" title="Orbit Tap" isMine={false} signedIn play={<a href="https://play.example.com/">Play</a>} browser />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Press Play to rate it.")).toBeTruthy();
+    expect(screen.getByText(/Only players who played it through SLAPorSLOP can rate/)).toBeTruthy();
+    expect(screen.getByRole("link", { name: "Play" })).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Get the SLAPorSLOP app" })).toBeNull();
+    expect(screen.queryByText(/from the SLAPorSLOP app/)).toBeNull();
+    // Play recorded (InstallControls tells the page): Rate it, without waiting for the window's focus.
+    ratings.mockResolvedValue({ ...base, stage: "released", mine: { ...notPlayed, can_vote: true, reason: null, played: true } });
+    await act(async () => announceLaunch("orbit"));
+    expect(await screen.findByRole("button", { name: "Rate it" })).toBeTruthy();
+    // Another app's Play changes nothing here.
+    const calls = ratings.mock.calls.length;
+    await act(async () => announceLaunch("castle-rock"));
+    expect(ratings.mock.calls.length).toBe(calls);
+    cleanup();
+    // Signed out: played through SLAPorSLOP, not "from the SLAPorSLOP app".
+    vi.spyOn(api, "ratings").mockResolvedValue({ ...base, stage: "beta" });
+    render(
+      <MemoryRouter>
+        <RatingHeader slug="orbit" title="Orbit Tap" isMine={false} signedIn={false} browser />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText(/Ratings come from players who played it through SLAPorSLOP\./)).toBeTruthy();
+  });
+
   it("tells the maker, and offers Interested while it's Coming soon", async () => {
     await show({ ...base, stage: "beta" }, { isMine: true });
     expect(screen.getByText("Makers can't rate their own app.")).toBeTruthy();
@@ -168,6 +210,21 @@ describe("RatePrompt (the library)", () => {
     show({ ...base, mine: { vote: null, can_vote: false, reason: "Launch it from the SLAPorSLOP app first: only players can vote.", played: false, weight: 0.1 } });
     expect(await screen.findByText("Play it from the SLAPorSLOP app to rate it.")).toBeTruthy();
     expect(screen.getByRole("link", { name: "Get the SLAPorSLOP app" }).className).toContain("slime");
+  });
+
+  it("for a game that plays in the browser, points to the Play above, never to the SLAPorSLOP app", async () => {
+    vi.spyOn(api, "ratings").mockResolvedValue({
+      ...base,
+      mine: { vote: null, can_vote: false, reason: "Play it from SLAPorSLOP first: only players can vote.", played: false, weight: 0.1 },
+    });
+    render(
+      <MemoryRouter>
+        <RatePrompt slug="orbit" title="Orbit Tap" browser />
+      </MemoryRouter>,
+    );
+    expect(await screen.findByText("Press Play to rate it.")).toBeTruthy();
+    expect(screen.getByText(/Then rate it here\./)).toBeTruthy();
+    expect(screen.queryByRole("link", { name: "Get the SLAPorSLOP app" })).toBeNull();
   });
 
   it("stays out of the way for the maker and before it's playable", async () => {

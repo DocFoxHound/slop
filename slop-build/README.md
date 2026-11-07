@@ -31,7 +31,7 @@ SLAPorSLOP then fetches and hashes the files, verifies the attestations, and the
 | `python` | PyInstaller `--onedir` of `python-entry`, after `requirements.txt` |
 | `electron` | `npm ci`, electron-builder `--dir`; ships the unpacked folder |
 | `tauri` | `npm ci` (if any), `tauri build --no-bundle`; ships the program |
-| `web` | Builds the site, then wraps `output-dir` in a minimal Tauri shell generated in the run |
+| `web` | Builds the site, then wraps `output-dir` in a minimal Tauri shell generated in the run: a desktop download players install. A game played on the maker's own website doesn't use Slop Build: its store page chooses In the browser and each release is its play address |
 | `custom` | Runs `build-command`, ships `output-dir`, starts `exec` (`{ext}` becomes `.exe` on Windows) |
 
 An optional `slop.toml` (`[launch]` and `[launch.<platform>]`, with `exec` and `args`) sets the

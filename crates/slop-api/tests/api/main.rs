@@ -39,6 +39,7 @@ mod oauth_tests;
 mod people_tests;
 mod pictures_tests;
 mod publishing_tests;
+mod servers_tests;
 mod store_tests;
 
 // ---------------------------------------------------------------------------------------------
@@ -1059,6 +1060,7 @@ async fn categories_include_their_tags(db: PgPool) {
             "tools",
             "creative",
             "utilities",
+            "servers",
             "learning",
             "play-style",
             "vibe"
@@ -1080,6 +1082,7 @@ async fn categories_include_their_tags(db: PgPool) {
         ("tools", "ai-assistant"),
         ("creative", "game-making"),
         ("utilities", "security"),
+        ("servers", "dedicated-server"),
         ("learning", "coding"),
         ("play-style", "turn-based"),
         ("vibe", "wholesome"),

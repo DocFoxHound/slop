@@ -312,9 +312,35 @@ const AGREEMENTS: Record<string, string> = {
 
 // ---- New app (Publish → New app) -----------------------------------------------------------------
 
-export const APP_LIMITS = { title: 80, slug: 60, summary: 200, description_md: 20_000, license_spdx: 64, tags: 10, online_hosts: 10, mods_path: 200, repo_url: 300 } as const;
+export const APP_LIMITS = {
+  title: 80,
+  slug: 60,
+  summary: 200,
+  description_md: 20_000,
+  license_spdx: 64,
+  tags: 10,
+  online_hosts: 10,
+  mods_path: 200,
+  repo_url: 300,
+  play_address: 2000,
+} as const;
 
-const PLATFORMS: AppPlatform[] = ["windows", "linux", "linux-deb", "linux-rpm"];
+/**
+ * The new app form's fields: the store page (the API's `NewApp`) and, for a game that plays in
+ * the browser, its first play address, which the form sends as its first release.
+ */
+export type AppFields = NewApp & { play_address?: string };
+
+const PLATFORMS: AppPlatform[] = ["windows", "linux", "linux-deb", "linux-rpm", "browser"];
+
+/** What a store page runs on: Windows and/or Linux, or In the browser alone (as the API takes it). */
+const platformList: Check<AppPlatform[]> = (v) => {
+  const r = list<AppPlatform>((x) => (PLATFORMS as string[]).includes(x), PLATFORMS.length)(v);
+  if (Array.isArray(r) && r.includes("browser") && r.length > 1) {
+    return new Skip("can't put browser with windows or linux: a browser game plays only in the browser");
+  }
+  return r;
+};
 const AGES = [0, 3, 7, 12, 16, 18];
 const ACCESSIBILITY_KEYS = new Set(ACCESSIBILITY.map(([k]) => k));
 
@@ -334,9 +360,9 @@ const host = /^[A-Za-z0-9.-]{1,253}(:\d{1,5})?$/;
  * A new app's fields (the API's `NewApp`), checked against the form's limits. `tags`: the tags
  * the store has, when known; others are left out.
  */
-export function appFill(fields: Record<string, unknown>, tags?: ReadonlySet<string>): Fill<NewApp> {
+export function appFill(fields: Record<string, unknown>, tags?: ReadonlySet<string>): Fill<AppFields> {
   const slug = /^[a-z0-9]+(-[a-z0-9]+)*$/;
-  return read<NewApp>(
+  const fill = read<AppFields>(
     fields,
     {
       title: text(APP_LIMITS.title, { required: true }),
@@ -356,7 +382,8 @@ export function appFill(fields: Record<string, unknown>, tags?: ReadonlySet<stri
       bug_reports: flag,
       accessibility: list<string>((x) => ACCESSIBILITY_KEYS.has(x), ACCESSIBILITY.length),
       mods_folder: modsFolder,
-      platforms: list<AppPlatform>((x) => (PLATFORMS as string[]).includes(x), PLATFORMS.length),
+      platforms: platformList,
+      play_address: httpsUrl(APP_LIMITS.play_address),
       tags: list<string>((x) => (tags ? tags.has(x) : slug.test(x)), APP_LIMITS.tags, true),
     },
     {
@@ -364,6 +391,19 @@ export function appFill(fields: Record<string, unknown>, tags?: ReadonlySet<stri
       repo_token: "a token never goes in a link: if the repository is private, paste a read-only token yourself",
     },
   );
+  // A play address belongs to a game that plays in the browser, which has no sandbox mode or
+  // mods folder: what doesn't fit the platforms is left out, with why.
+  const browser = fill.values.platforms?.includes("browser") ?? false;
+  const drop = (field: keyof AppFields & string, why: string) => {
+    if (!fill.filled.includes(field)) return;
+    delete fill.values[field];
+    fill.filled = fill.filled.filter((f) => f !== field);
+    fill.left.push({ field, why });
+  };
+  if (!browser) drop("play_address", "only a game that plays in the browser has one: its platforms should be [\"browser\"]");
+  if (browser && fill.values.sandbox_ready) drop("sandbox_ready", "a browser game has no sandbox mode");
+  if (browser && fill.values.mods_folder) drop("mods_folder", "a browser game has no mods folder");
+  return fill;
 }
 
 /** The new app form's labels, for saying what was filled in. */
@@ -386,6 +426,7 @@ export const APP_LABELS: Record<string, string> = {
   accessibility: "Accessibility",
   mods_folder: "Mods",
   platforms: "Runs on",
+  play_address: "Play address",
   tags: "Tags",
   repo_token: "Repository token",
 };

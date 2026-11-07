@@ -63,4 +63,23 @@ describe("ReportForm", () => {
     expect(screen.getByLabelText(/penalty of perjury/)).toBeTruthy();
     expect(screen.getByLabelText(/as your signature/)).toBeTruthy();
   });
+
+  it("asks for an app's own reasons (a browser game's are about its site), and only an app's", async () => {
+    const asked = vi.spyOn(api.reports, "reasons").mockResolvedValue(reasons);
+    render(
+      <MemoryRouter>
+        <ReportForm kind="app" subject="orbit-tap" label="this app" onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await screen.findByLabelText(/Malware/);
+    expect(asked).toHaveBeenLastCalledWith("app", "orbit-tap");
+    cleanup();
+    render(
+      <MemoryRouter>
+        <ReportForm kind="review" subject="r-1" label="this review" onClose={() => {}} />
+      </MemoryRouter>,
+    );
+    await screen.findByLabelText(/Malware/);
+    expect(asked).toHaveBeenLastCalledWith("review", undefined);
+  });
 });

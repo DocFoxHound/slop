@@ -28,10 +28,6 @@ export const OS_LABEL: Record<Os, string> = {
   ios: "iOS",
 };
 
-/**
- * Opens a link outside SLAPorSLOP. In the desktop app links must go to the system browser; following
- * them inside the app's window would navigate away from SLAPorSLOP.
- */
 /** Saves text as a file the user downloads (job records, conversation copies, data exports). */
 export function saveFile(name: string, text: string, type: string) {
   const url = URL.createObjectURL(new Blob([text], { type }));
@@ -42,6 +38,27 @@ export function saveFile(name: string, text: string, type: string) {
   URL.revokeObjectURL(url);
 }
 
+/**
+ * Whether Play may open a browser game's address here. The desktop app opens only https in the
+ * system browser (its opener scope, crates/slop-desktop/capabilities/default.json). The website
+ * opens http too, which the server allows only on test setups; never anything but a web address
+ * (no javascript: or file:).
+ */
+export function canOpenPlayAddress(address: string | null | undefined, desktop: boolean = isDesktop): address is string {
+  if (!address) return false;
+  try {
+    const { protocol } = new URL(address);
+    return protocol === "https:" || (!desktop && protocol === "http:");
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Opens a link outside SLAPorSLOP. In the desktop app links must go to the system browser; following
+ * them inside the app's window would navigate away from SLAPorSLOP. On the website it opens a tab,
+ * so call it in the click itself, before anything is awaited, or popup blockers stop it.
+ */
 export async function openExternal(url: string): Promise<void> {
   if (isDesktop) {
     const { openUrl } = await import("@tauri-apps/plugin-opener");
