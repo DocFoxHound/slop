@@ -314,7 +314,22 @@ impl ApiClient {
 
     /// Swaps the stored refresh token for new tokens. `stale` is the access token the caller
     /// saw fail; if another task already refreshed past it, that result is reused.
+    ///
+    /// The swap runs in its own task, so it finishes and saves the new tokens even when the
+    /// caller stops waiting (the app's launch check gives up after a few seconds). Dropped
+    /// halfway, SLAPorSLOP would already have rotated the token while the new one was lost, and
+    /// the next refresh would reuse the old one, which ends the session.
     async fn refresh(&self, stale: Option<&str>) -> Result<Option<String>> {
+        let client = self.clone();
+        let stale = stale.map(str::to_string);
+        match tokio::spawn(async move { client.refresh_now(stale.as_deref()).await }).await {
+            Ok(result) => result,
+            Err(e) if e.is_panic() => std::panic::resume_unwind(e.into_panic()),
+            Err(e) => Err(Error::Network(format!("sign-in refresh stopped: {e}"))),
+        }
+    }
+
+    async fn refresh_now(&self, stale: Option<&str>) -> Result<Option<String>> {
         let _guard = self.inner.refresh_lock.lock().await;
         if let Some((token, expires)) = self.inner.access.lock().unwrap().clone()
             && Some(token.as_str()) != stale
@@ -369,6 +384,12 @@ impl ApiClient {
         }
         self.store_tokens(res.body)?;
         Ok(())
+    }
+
+    /// Waits for a refresh under way to save its tokens, and holds off new ones while the guard
+    /// lives: before the app ends itself for an update, so it doesn't stop halfway through one.
+    pub async fn hold_refreshes(&self) -> tokio::sync::MutexGuard<'_, ()> {
+        self.inner.refresh_lock.lock().await
     }
 
     /// Signs this device out on the server (best effort) and forgets its tokens.
