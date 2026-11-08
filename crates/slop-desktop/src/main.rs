@@ -203,9 +203,11 @@ async fn sign_out(app: AppHandle, desktop: State<'_, Desktop>) -> CommandResult<
     Ok(())
 }
 
-/// Opens the sign-in window (from "Sign in" in the store).
+/// Opens the sign-in window (from "Sign in" in the store). Async, like every command that makes a
+/// window: made from a plain command, the new window stays white and the app freezes on Windows
+/// (Tauri's "Create a window in a command", wry#583).
 #[tauri::command]
-fn show_login(app: AppHandle) {
+async fn show_login(app: AppHandle) {
     open_login(&app);
 }
 
@@ -276,18 +278,20 @@ async fn update_status(desktop: State<'_, Desktop>) -> CommandResult<Option<Upda
 
 /// The player chose to update: download, verify, install and restart.
 #[tauri::command]
-async fn install_update(app: AppHandle) -> CommandResult<()> {
+async fn install_update(app: AppHandle, desktop: State<'_, Desktop>) -> CommandResult<()> {
     let update = check_for_update(&app).await.ok_or(CommandError {
         code: "update",
         message: "No update is available right now.".into(),
     })?;
-    update
-        .download_and_install(|_, _| {}, || {})
-        .await
-        .map_err(|e| CommandError {
-            code: "update",
-            message: format!("couldn't install the update: {e}"),
-        })?;
+    let failed = |e: tauri_plugin_updater::Error| CommandError {
+        code: "update",
+        message: format!("couldn't install the update: {e}"),
+    };
+    let bytes = update.download(|_, _| {}, || {}).await.map_err(failed)?;
+    // The installer ends this process: a sign-in refresh stopped halfway would lose its new
+    // token, and the next launch would be signed out.
+    let _refreshes = desktop.api.hold_refreshes().await;
+    update.install(bytes).map_err(failed)?;
     // On Windows the installer has already closed the app; elsewhere, start the new version.
     app.restart();
 }

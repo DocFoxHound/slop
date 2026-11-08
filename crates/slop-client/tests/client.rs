@@ -41,6 +41,8 @@ struct Fake {
     revoked: Mutex<Vec<String>>,
     /// Hand out an approve URL on some other site.
     foreign_approve_url: std::sync::atomic::AtomicBool,
+    /// Rotate the tokens, then wait this long before answering.
+    token_delay_ms: std::sync::atomic::AtomicU64,
     files: Mutex<Vec<(String, Vec<u8>)>>,
 }
 
@@ -102,6 +104,8 @@ async fn fake_api() -> (String, Arc<Fake>) {
         let n = f.refreshes.load(Ordering::SeqCst);
         *f.access.lock().unwrap() = format!("access-{n}");
         *f.refresh.lock().unwrap() = format!("refresh-{n}");
+        let delay = f.token_delay_ms.load(Ordering::SeqCst);
+        tokio::time::sleep(Duration::from_millis(delay)).await;
         (
             StatusCode::OK,
             Json(json!({
@@ -284,6 +288,55 @@ async fn concurrent_requests_share_one_refresh() {
     // Rotating refresh tokens: a second refresh with the old token would have signed us out.
     assert_eq!(fake.refreshes.load(Ordering::SeqCst), 1);
     assert_eq!(store.load().as_deref(), Some("refresh-1"));
+}
+
+#[tokio::test]
+async fn a_refresh_its_caller_stops_waiting_for_still_keeps_the_new_token() {
+    let (base, fake) = fake_api().await;
+    let (api, store) = signed_in(&base, &fake).await;
+    // SLAPorSLOP rotates the tokens but is slow to answer, and the caller (the app's launch
+    // check) gives up first.
+    fake.token_delay_ms.store(300, Ordering::SeqCst);
+    let gave_up = tokio::time::timeout(
+        Duration::from_millis(50),
+        api.request(reqwest::Method::GET, "/v1/me", None),
+    )
+    .await;
+    assert!(gave_up.is_err());
+    // The refresh finished anyway and kept the new tokens; sending the old refresh token again
+    // would have been a reuse, which signs the device out.
+    let res = api
+        .request(reqwest::Method::GET, "/v1/me", None)
+        .await
+        .unwrap();
+    assert_eq!(res.status, 200);
+    assert_eq!(fake.refreshes.load(Ordering::SeqCst), 1);
+    assert_eq!(store.load().as_deref(), Some("refresh-1"));
+}
+
+#[tokio::test]
+async fn refreshes_wait_while_the_app_installs_an_update() {
+    let (base, fake) = fake_api().await;
+    let (api, _store) = signed_in(&base, &fake).await;
+    let held = api.hold_refreshes().await;
+    let waiting = tokio::spawn({
+        let api = api.clone();
+        async move {
+            api.request(reqwest::Method::GET, "/v1/me", None)
+                .await
+                .unwrap()
+                .status
+        }
+    });
+    tokio::time::sleep(Duration::from_millis(100)).await;
+    assert_eq!(
+        fake.refreshes.load(Ordering::SeqCst),
+        0,
+        "no refresh starts while held"
+    );
+    drop(held);
+    assert_eq!(waiting.await.unwrap(), 200);
+    assert_eq!(fake.refreshes.load(Ordering::SeqCst), 1);
 }
 
 #[tokio::test]
